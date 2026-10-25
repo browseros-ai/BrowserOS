@@ -1,14 +1,14 @@
-import { ArrowUpRight, Check } from 'lucide-react'
+import { ArrowUpRight } from 'lucide-react'
 import { useEffect } from 'react'
-import { Button } from '@/components/ui/button'
+import { CodeBlock } from '@/components/agents/code-block'
+import { Button, ButtonLink } from '@/components/motion/button/base'
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '@/components/ui/dialog'
+  CenterMorphModal,
+  CenterMorphModalClose,
+  CenterMorphModalContent,
+} from '@/components/motion/center-morph-modal'
+import { Skeleton } from '@/components/ui/skeleton'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
-import { CommandBlock } from './CommandBlock'
 import { MANUAL_SETUP_DOCS_URL, MANUAL_SETUP_STEPS } from './install-guide.data'
 
 interface ManualSetupDialogProps {
@@ -19,93 +19,101 @@ interface ManualSetupDialogProps {
 }
 
 /**
- * Manual setup for an agent that is not in the Connected agents list.
- *
- * Both steps are shown at once rather than as a walkthrough. The install
- * guide next door is paged because it is six screenshots inside another
- * application; this is two commands, and the point of the dialog is that a
- * reader sees both of them together. Hiding step two behind a Next button
- * would rebuild the exact gap this screen is here to close.
- *
- * `DialogContent` hardcodes `sm:max-w-md` and a base-only `max-w` is ignored
- * at >=640px, so the width override sets the `sm:` variant too.
+ * Connecting an agent that is not listed, by hand. Both steps show at once:
+ * they are two copy and paste actions, and seeing them together is the point.
  */
 export function ManualSetupDialog({
   open,
   onOpenChange,
   endpointUrl,
 }: ManualSetupDialogProps) {
+  // Counts opens from any opener, not one call site.
   useEffect(() => {
     if (open) track(AnalyticsEvent.ManualSetupOpened)
   }, [open])
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] w-[min(38rem,94vw)] max-w-[94vw] overflow-y-auto p-0 sm:max-w-[min(38rem,94vw)]">
-        <div className="border-border-2 border-b px-6 pt-5 pb-4">
-          <DialogTitle className="pr-10 font-semibold text-[17px] text-ink leading-snug">
-            Connect any other agent
-          </DialogTitle>
-          <DialogDescription className="mt-1.5 text-[13.5px] text-ink-2 leading-relaxed">
-            Connecting a listed agent does two things, so doing it by hand means
-            doing both. The MCP server lets your agent reach the browser. The
-            skill teaches it how to use it.
-          </DialogDescription>
+    <CenterMorphModal open={open} onOpenChange={onOpenChange}>
+      <CenterMorphModalContent
+        ariaLabel="Connect another agent by hand"
+        showCloseButton
+        className="max-w-[600px] rounded-[22px] border-border-2 bg-card"
+      >
+        <div className="flex max-h-[min(760px,calc(100dvh-64px))] flex-col">
+          <header className="flex flex-col gap-1 px-6 pt-6 pr-16 pb-4">
+            <h2 className="font-bold text-[20px] text-cyanotype-ink tracking-[-0.015em]">
+              Connect another agent by hand
+            </h2>
+            <p className="text-[14px] text-ink-2">
+              Two copy and paste steps. If you get stuck, the guide has pictures
+              for each agent.
+            </p>
+          </header>
+
+          <ol className="flex min-h-0 flex-col gap-6 overflow-y-auto border-border-2 border-y px-6 py-5">
+            {MANUAL_SETUP_STEPS.map((step, index) => (
+              <li key={step.id} className="flex gap-3.5">
+                <span className="grid size-7 shrink-0 place-items-center rounded-full bg-accent-tint font-semibold text-[13px] text-accent-ink tabular-nums">
+                  {index + 1}
+                </span>
+                <div className="flex min-w-0 flex-1 flex-col gap-2.5">
+                  <h3 className="pt-0.5 font-bold text-[15.5px] text-cyanotype-ink">
+                    {step.title}
+                  </h3>
+                  <p className="text-[14px] text-ink-2">{step.body}</p>
+                  {step.id === 'add-mcp' ? (
+                    endpointUrl ? (
+                      <CodeBlock
+                        code={endpointUrl}
+                        language="text"
+                        showLineNumbers={false}
+                        copyable
+                      />
+                    ) : (
+                      <Skeleton
+                        role="status"
+                        aria-label="Finding the address"
+                        className="h-11 rounded-xl"
+                      />
+                    )
+                  ) : null}
+                  {step.command !== undefined ? (
+                    <CodeBlock
+                      code={step.command}
+                      language="bash"
+                      showLineNumbers={false}
+                      copyable
+                      onCopy={() =>
+                        track(AnalyticsEvent.ManualSetupCommandCopied)
+                      }
+                    />
+                  ) : null}
+                  {step.note !== undefined ? (
+                    <p className="text-[13px] text-ink-3">{step.note}</p>
+                  ) : null}
+                </div>
+              </li>
+            ))}
+          </ol>
+
+          <footer className="flex items-center justify-between gap-3 px-6 py-4">
+            <ButtonLink
+              href={MANUAL_SETUP_DOCS_URL}
+              target="_blank"
+              rel="noreferrer"
+              variant="ghost"
+              size="sm"
+              className="font-semibold"
+            >
+              Open the guide
+              <ArrowUpRight aria-hidden className="size-4" />
+            </ButtonLink>
+            <CenterMorphModalClose>
+              <Button className="font-semibold">Done</Button>
+            </CenterMorphModalClose>
+          </footer>
         </div>
-
-        <ol className="flex flex-col gap-6 px-6 py-5">
-          {MANUAL_SETUP_STEPS.map((step, index) => (
-            <li key={step.id} className="flex gap-3.5">
-              <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-accent font-mono text-[11px] text-white tabular-nums">
-                {index + 1}
-              </span>
-              <div className="min-w-0 flex-1 space-y-2.5">
-                <h3 className="font-semibold text-[15px] text-ink leading-snug">
-                  {step.title}
-                </h3>
-                <p className="text-[13.5px] text-ink-2 leading-relaxed">
-                  {step.body}
-                </p>
-
-                {step.id === 'add-mcp' && (
-                  <CommandBlock command={endpointUrl} />
-                )}
-
-                {step.command !== undefined && (
-                  <CommandBlock
-                    command={step.command}
-                    onCopied={() =>
-                      track(AnalyticsEvent.ManualSetupCommandCopied)
-                    }
-                  />
-                )}
-
-                {step.note !== undefined && (
-                  <p className="text-[12px] text-ink-3 leading-relaxed">
-                    {step.note}
-                  </p>
-                )}
-              </div>
-            </li>
-          ))}
-        </ol>
-
-        <div className="flex items-center justify-between gap-3 border-border-2 border-t px-6 py-4">
-          <a
-            href={MANUAL_SETUP_DOCS_URL}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1 text-[12.5px] text-accent underline-offset-4 transition-colors hover:underline"
-          >
-            Full setup guide
-            <ArrowUpRight aria-hidden className="size-3.5" />
-          </a>
-          <Button size="sm" onClick={() => onOpenChange(false)}>
-            <Check aria-hidden />
-            Done
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
+      </CenterMorphModalContent>
+    </CenterMorphModal>
   )
 }

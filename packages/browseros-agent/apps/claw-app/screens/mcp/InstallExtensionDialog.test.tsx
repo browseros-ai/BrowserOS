@@ -1,25 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { parseHTML } from 'linkedom'
-import { act, type ComponentProps, type ReactNode } from 'react'
+import { act, type ReactNode } from 'react'
 import type { Root } from 'react-dom/client'
-import * as _dialog from '@/components/ui/dialog'
 
-// Flatten the portal so the popup lands in the linkedom container.
-mock.module('@/components/ui/dialog', () => ({
-  ..._dialog,
-  Dialog: ({ children, open }: { children?: ReactNode; open?: boolean }) =>
-    open ? children : null,
-  DialogContent: ({
+// Flatten the modal so the current view renders straight into the container.
+mock.module('@/components/motion/morphing-modal', () => ({
+  MorphingModal: ({
     children,
-    showCloseButton: _showCloseButton,
-    ...props
-  }: ComponentProps<'div'> & { showCloseButton?: boolean }) => (
-    <div data-slot="dialog-content" {...props}>
-      {children}
-    </div>
-  ),
-  DialogTitle: (props: ComponentProps<'h2'>) => <h2 {...props} />,
-  DialogDescription: (props: ComponentProps<'p'>) => <p {...props} />,
+    viewId,
+  }: {
+    children?: ReactNode
+    viewId: string | null
+  }) => (viewId ? <div data-view={viewId}>{children}</div> : null),
 }))
 
 const globalDescriptors = new Map(
@@ -202,14 +194,5 @@ describe('InstallExtensionDialog', () => {
     await open()
 
     expect(paneText()).toContain(`step 1 of ${INSTALL_STEPS.length}`)
-  })
-
-  it('overrides the dialog width clamp at the sm breakpoint', async () => {
-    await open()
-    const surface = container.querySelector('[data-slot="dialog-content"]')
-    const classes = surface?.getAttribute('class') ?? ''
-    // A base-only max-w is silently ignored at >=640px, so both must be set.
-    expect(classes).toContain('max-w-[94vw]')
-    expect(classes).toContain('sm:max-w-[min(58rem,94vw)]')
   })
 })
