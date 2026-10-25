@@ -139,9 +139,9 @@ export function StorageSettings() {
               aria-label="Days to keep task history"
               value={customDays}
               onChange={setCustomDays}
-              rightIcon={<span className="text-[13px] text-ink-3">days</span>}
-              className="w-40"
+              className="w-28"
             />
+            <span className="text-[14px] text-ink-2">days</span>
             <Button
               type="submit"
               variant="secondary"
