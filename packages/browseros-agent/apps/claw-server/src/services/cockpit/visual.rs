@@ -10,18 +10,20 @@ use crate::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use browseros_core::{
-    PageId, TargetId,
+    CoreError, PageId, TargetId,
     pages::PageInfo,
     screenshot::{ScreenshotCaptureOptions, ScreenshotFormat},
 };
 use std::{
     collections::{HashMap, HashSet},
+    future::Future,
     sync::Arc,
     time::Duration,
 };
 use tokio::{sync::Mutex, time::timeout};
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
+const CAPTURE_WORKER_TIMEOUT: Duration = Duration::from_secs(10);
 const CAPTURE_TASK_CONCURRENCY_LIMIT: usize = 2;
 
 #[derive(Clone)]
@@ -57,6 +59,23 @@ impl InFlightCaptures {
 
     async fn finish(&self, page_id: u32) {
         self.page_ids.lock().await.remove(&page_id);
+    }
+
+    async fn run_capture<T>(
+        &self,
+        page_id: u32,
+        capture: impl Future<Output = Result<T, CoreError>>,
+    ) -> Result<T, CoreError> {
+        // The preview caller gives up after two seconds, but a stuck CDP call must
+        // not hold the shared screenshot lock and an in-flight slot indefinitely.
+        // Keep the worker alive briefly for slow captures, then cancel its future.
+        let result = timeout(CAPTURE_WORKER_TIMEOUT, capture)
+            .await
+            .unwrap_or_else(|_| {
+                Err(CoreError::Message("preview screenshot worker timed out".into()))
+            });
+        self.finish(page_id).await;
+        result
     }
 }
 
@@ -170,19 +189,17 @@ impl SessionVisualService {
         let target_id = TargetId::from(candidate.target_id);
         let options = capture_options();
         let capture_browser = browser.clone();
-        let worker = tokio::spawn(async move {
-            capture_browser
-                .screenshot_for_target(page_id, &target_id, options)
-                .await
-        });
         // The HTTP handler can disappear when a card hides or changes tabs.
-        // A detached supervisor owns cleanup: keep the slot until CDP finishes,
-        // then release it even if the requester is gone or the worker panics.
+        // The detached worker owns the slot after caller timeout, but has its own
+        // hard deadline so an unresponsive CDP capture cannot block future shots.
         let in_flight = self.in_flight.clone();
         let mut capture = tokio::spawn(async move {
-            let result = worker.await;
-            in_flight.finish(candidate.page_id).await;
-            result
+            in_flight
+                .run_capture(
+                    candidate.page_id,
+                    capture_browser.screenshot_for_target(page_id, &target_id, options),
+                )
+                .await
         });
         let result = match timeout(CAPTURE_TIMEOUT, &mut capture).await {
             Ok(result) => result.map_err(AppError::from)?.map_err(AppError::from)?,
@@ -293,8 +310,9 @@ fn capture_options() -> ScreenshotCaptureOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::{InFlightCaptures, capture_options};
-    use browseros_core::screenshot::ScreenshotFormat;
+    use super::{CAPTURE_WORKER_TIMEOUT, InFlightCaptures, capture_options};
+    use browseros_core::{CoreError, screenshot::ScreenshotFormat};
+    use std::{future::pending, sync::Arc};
 
     #[test]
     fn preview_capture_is_viewport_jpeg_without_annotations() {
@@ -316,5 +334,24 @@ mod tests {
 
         captures.finish(7).await;
         assert!(captures.begin(9).await);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stuck_preview_worker_releases_its_capture_slot_after_the_deadline() {
+        let captures = Arc::new(InFlightCaptures::default());
+        assert!(captures.begin(7).await);
+
+        let running = captures.clone();
+        let worker = tokio::spawn(async move {
+            running
+                .run_capture(7, pending::<Result<(), CoreError>>())
+                .await
+        });
+        tokio::task::yield_now().await;
+        assert!(!captures.begin(7).await);
+
+        tokio::time::advance(CAPTURE_WORKER_TIMEOUT).await;
+        assert!(worker.await.expect("preview worker panicked").is_err());
+        assert!(captures.begin(7).await);
     }
 }
