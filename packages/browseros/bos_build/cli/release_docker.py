@@ -41,7 +41,7 @@ def docker_command(
     ),
     revision: str = typer.Option(
         "", "--revision",
-        help="Full commit sha the servers and Docker context come from; adds the <version>-<commit> tag. Required with --push",
+        help="Full commit sha the servers and Docker context come from; adds the <version>-<commit> tag. Needs --server-dir; required with --push",
     ),
     capsolver_key_file: Optional[Path] = typer.Option(
         None, "--capsolver-key-file", envvar="BROWSEROS_CAPSOLVER_API_KEY_FILE",

@@ -140,6 +140,14 @@ class PushTest(unittest.TestCase):
             )
         self.assertEqual(ops.builds, [])
 
+    def test_a_commit_tag_requires_that_commits_server(self):
+        # A local build would otherwise run the package's older server under the commit tag.
+        ops = FakeOperations(release=_release("arm64_deb"))
+
+        with self.assertRaisesRegex(ImageError, "--server-dir"):
+            build_image(ImageRequest(version="0.52.0.1", revision=REVISION), ops, CONTEXT)
+        self.assertEqual(ops.builds, [])
+
     def test_push_requires_a_full_commit_revision(self):
         ops = FakeOperations(release=_release("x64_deb", "arm64_deb"))
         for revision in ("", "169e41f", "main"):

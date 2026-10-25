@@ -75,8 +75,9 @@ class ImageRequest:
     explicit platform (or a .deb's own) may differ from the host on purpose,
     e.g. to test an amd64 package on Apple silicon under emulation. Optional
     server binaries override the package's server. `revision` is the full sha of
-    the commit those servers and the Docker context come from; pushing requires
-    both, so every published commit tag runs that commit's server. Key paths are
+    the commit those servers and the Docker context come from. A revision
+    requires the servers and pushing requires both, so every commit tag runs
+    that commit's server. Key paths are
     BuildKit inputs; their contents are intentionally installed in the image,
     never read here."""
 
@@ -186,8 +187,8 @@ def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> I
 
     Raises ImageError, before running buildx, for a request that would publish
     the wrong thing: a malformed version, an architecture the version never
-    shipped, :latest on an image that is not being pushed, or a push without
-    this commit's server and full revision. A local .deb replaces the CDN lookup
+    shipped, :latest on an image that is not being pushed, or a commit tag or
+    push without that commit's servers and full revision. A local .deb replaces the CDN lookup
     and is only ever loaded into local Docker.
     """
     if request.deb is not None:
@@ -196,8 +197,8 @@ def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> I
         raise ImageError(f"Invalid Neo version '{request.version}'; expected e.g. 0.52.0.1")
     if request.latest and not request.push:
         raise ImageError("--latest requires --push")
-    if request.push and request.server_dir is None:
-        raise ImageError("Publishing needs this commit's servers; pass --server-dir")
+    if (request.push or request.revision) and request.server_dir is None:
+        raise ImageError("A commit-tagged build needs that commit's servers; pass --server-dir")
     if (request.push or request.revision) and not _REVISION.match(request.revision):
         raise ImageError(
             f"Invalid revision '{request.revision}'; pass the full 40-character commit sha with --revision"
