@@ -30,6 +30,21 @@ export const TOOL_TO_VERB: Record<string, ReplayVerb> = {
   wait: 'read',
   run: 'type',
   evaluate: 'type',
+  pursue: 'click',
+  'pages.newPage': 'navigate',
+  'nav.goto': 'navigate',
+  'nav.back': 'navigate',
+  'nav.forward': 'navigate',
+  'nav.reload': 'navigate',
+  'observe.snapshot': 'read',
+  'observe.diff': 'read',
+  'input.click': 'click',
+  'input.hover': 'click',
+  'input.selectOption': 'click',
+  'input.scroll': 'click',
+  'input.fill': 'type',
+  'input.type': 'type',
+  'input.press': 'type',
 }
 
 export function verbForTool(toolName: string): ReplayVerb {
@@ -44,6 +59,15 @@ const ALWAYS_HIDDEN = new Set([
   'wait',
   'screenshot',
   'helpers',
+  'helpers.save',
+  'helpers.list',
+  'helpers.read',
+  'pages.list',
+  'pages.getInfo',
+  'pages.close',
+  'observe.resolveRef',
+  'cdp',
+  'cdpJsonForPage',
 ])
 
 const LISTING_TOOLS = new Set(['tabs', 'windows', 'tab_groups'])
@@ -53,16 +77,95 @@ const MAX_PAGE_LABEL = 60
 
 type Args = Record<string, unknown>
 
-function parseArgs(argsJson: string | undefined | null): Args {
-  if (!argsJson) return {}
+function parseJson(json: string | undefined | null): unknown {
+  if (!json) return undefined
   try {
-    const parsed: unknown = JSON.parse(argsJson)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Args)
-      : {}
+    return JSON.parse(json)
   } catch {
-    return {}
+    return undefined
   }
+}
+
+function isArgs(value: unknown): value is Args {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function parseArgs(argsJson: string | undefined | null): Args {
+  const parsed = parseJson(argsJson)
+  return isArgs(parsed) ? parsed : {}
+}
+
+/** The `act` kind each script input call performs. */
+const INPUT_KINDS: Record<string, string> = {
+  'input.click': 'click',
+  'input.fill': 'fill',
+  'input.type': 'type',
+  'input.press': 'press',
+  'input.hover': 'hover',
+  'input.selectOption': 'select',
+  'input.scroll': 'scroll',
+}
+
+interface Call {
+  tool: string
+  args: Args
+}
+
+/**
+ * A call as the sentence rules see it. Calls made inside a `run` script are
+ * recorded under their wire names with positional args, usually
+ * `[pageId, ...]`; each maps onto the tool it mirrors.
+ */
+function normalizeCall(
+  dispatch: Pick<ToolDispatchRow, 'toolName' | 'argsJson'>,
+): Call {
+  const tool = dispatch.toolName
+  const raw = parseJson(dispatch.argsJson)
+  if (!Array.isArray(raw)) return { tool, args: isArgs(raw) ? raw : {} }
+  const kind = INPUT_KINDS[tool]
+  if (kind === 'press') return { tool: 'act', args: { kind, key: raw[1] } }
+  if (kind === 'scroll') {
+    return { tool: 'act', args: { kind, direction: raw[1] } }
+  }
+  if (kind) return { tool: 'act', args: { kind } }
+  switch (tool) {
+    case 'pages.newPage':
+      return { tool: 'navigate', args: { url: raw[0] } }
+    case 'nav.goto':
+      return { tool: 'navigate', args: { url: raw[1] } }
+    case 'observe.snapshot':
+      return { tool: 'snapshot', args: {} }
+    case 'observe.diff':
+      return { tool: 'diff', args: {} }
+    default:
+      // Tool-shaped calls such as `evaluate` take `[pageId, options]`.
+      return { tool, args: isArgs(raw[1]) ? raw[1] : {} }
+  }
+}
+
+/** The page a call ran on, ignoring query and hash, else its title. */
+function pageKeyOf(dispatch: ToolDispatchRow, call: Call): string | undefined {
+  const url = dispatch.url ?? stringArg(call.args, 'url')
+  if (url) {
+    try {
+      const parsed = new URL(url)
+      return `${parsed.origin}${parsed.pathname}`
+    } catch {}
+  }
+  return dispatch.title?.trim() || undefined
+}
+
+/** Whether a call was made from inside a `run` script. */
+function isScriptCall(
+  dispatch: Pick<ToolDispatchRow, 'argsJson'> | undefined,
+): boolean {
+  return Array.isArray(parseJson(dispatch?.argsJson))
+}
+
+/** Page code that clicks something, the common way scripts press a button. */
+function clicksInPage(args: Args): boolean {
+  const source = stringArg(args, 'func') ?? stringArg(args, 'code') ?? ''
+  return /\.click\(\s*\)/.test(source)
 }
 
 function parseMeta(resultMeta: string | undefined | null): Args {
@@ -103,12 +206,28 @@ function pageLabel(
 export function isBehindTheScenes(
   dispatch: Pick<ToolDispatchRow, 'toolName' | 'argsJson'>,
 ): boolean {
-  if (ALWAYS_HIDDEN.has(dispatch.toolName)) return true
-  if (LISTING_TOOLS.has(dispatch.toolName)) {
-    const action = stringArg(parseArgs(dispatch.argsJson), 'action') ?? 'list'
+  const { tool, args } = normalizeCall(dispatch)
+  if (ALWAYS_HIDDEN.has(tool)) return true
+  if (LISTING_TOOLS.has(tool)) {
+    const action = stringArg(args, 'action') ?? 'list'
     return LISTING_ACTIONS.has(action)
   }
   return false
+}
+
+/** The icon family for one call, matching what its sentence says it did. */
+export function verbForCall(
+  dispatch: Pick<ToolDispatchRow, 'toolName' | 'argsJson'>,
+): ReplayVerb {
+  const { tool, args } = normalizeCall(dispatch)
+  if (tool === 'act') {
+    const kind = stringArg(args, 'kind')
+    return kind && ['type', 'type_at', 'fill', 'press'].includes(kind)
+      ? 'type'
+      : 'click'
+  }
+  if (tool === 'evaluate') return clicksInPage(args) ? 'click' : 'read'
+  return verbForTool(tool)
 }
 
 function describeAct(args: Args, onPage: string): string {
@@ -164,9 +283,15 @@ export function describeStep(dispatch: ToolDispatchRow): string {
     return where ? `Something went wrong on ${where}` : 'Something went wrong'
   }
 
-  const args = parseArgs(dispatch.argsJson)
+  const { tool, args } = normalizeCall(dispatch)
   const onPage = page ?? 'the page'
-  const tool = dispatch.toolName
+
+  if (
+    LISTING_TOOLS.has(tool) &&
+    LISTING_ACTIONS.has(stringArg(args, 'action') ?? 'list')
+  ) {
+    return 'Checked the open tabs'
+  }
 
   switch (tool) {
     case 'tabs': {
@@ -180,9 +305,49 @@ export function describeStep(dispatch: ToolDispatchRow): string {
       const target = page ?? hostOf(stringArg(args, 'url'))
       return target ? `Opened ${target}` : 'Opened a new page'
     }
+    case 'nav.back':
+      return `Went back to ${onPage}`
+    case 'nav.forward':
+      return `Went forward to ${onPage}`
+    case 'nav.reload':
+      return `Reloaded ${onPage}`
     case 'snapshot':
     case 'read':
       return `Read ${onPage}`
+    case 'evaluate':
+      return clicksInPage(args) ? `Clicked on ${onPage}` : `Read ${onPage}`
+    case 'pursue': {
+      const goal = stringArg(args, 'goal')?.replace(/[.\s]+$/, '')
+      return goal ? `Set out to ${goal}` : `Worked on ${onPage}`
+    }
+    case 'history':
+      return 'Looked through your browsing history'
+    // Behind-the-scenes calls, seen only when the person asks to show them.
+    case 'name_session':
+      return 'Named the task'
+    case 'browser_profiles':
+    case 'browser_target':
+      return 'Checked which browser profile to use'
+    case 'wait':
+      return `Waited for ${onPage}`
+    case 'screenshot':
+      return `Took a picture of ${onPage}`
+    case 'pages.list':
+    case 'pages.getInfo':
+      return 'Checked the open pages'
+    case 'pages.close':
+      return 'Closed a page it had opened'
+    case 'helpers':
+    case 'helpers.save':
+    case 'helpers.list':
+    case 'helpers.read':
+      return 'Used its saved shortcuts'
+    case 'observe.resolveRef':
+      return `Found an item on ${onPage}`
+    case 'cdp':
+    case 'cdpJsonForPage':
+      return 'Sent the browser a direct command'
+
     case 'grep':
       return `Searched ${onPage}`
     case 'diff':
@@ -220,6 +385,8 @@ export interface DescribedStep {
   cancelled: boolean
   /** True for behind-the-scenes work, present only when asked to include it. */
   hidden: boolean
+  /** The page the step ran on (origin and path), when known. */
+  pageKey?: string
 }
 
 export interface DescribedSteps {
@@ -229,9 +396,10 @@ export interface DescribedSteps {
 }
 
 /**
- * The visible steps of a task: behind-the-scenes calls are dropped and
+ * The visible steps of a task: behind-the-scenes calls are dropped,
  * consecutive calls that read the same ("Read Google Flights" five times)
- * collapse into one step.
+ * collapse into one step, and a read of the page the previous step worked on
+ * folds into that step.
  */
 export function describeSteps(
   dispatches: readonly ToolDispatchRow[],
@@ -239,33 +407,48 @@ export function describeSteps(
 ): DescribedSteps {
   const steps: DescribedStep[] = []
   let hiddenCount = 0
-  for (const dispatch of dispatches) {
-    const hidden = isBehindTheScenes(dispatch)
+  for (const [index, dispatch] of dispatches.entries()) {
+    // A script whose own calls were recorded is told through those calls.
+    const hidden =
+      isBehindTheScenes(dispatch) ||
+      (dispatch.toolName === 'run' && isScriptCall(dispatches[index + 1]))
     if (hidden) {
       hiddenCount += 1
       if (!options.includeHidden) continue
     }
     const sentence = describeStep(dispatch)
+    const verb = verbForCall(dispatch)
+    const pageKey = pageKeyOf(dispatch, normalizeCall(dispatch))
     const meta = parseMeta(dispatch.resultMeta)
     const isError = meta.isError === true
     const cancelled = meta.cancellationKind === 'cockpit.operator-cancelled'
     const previous = steps.at(-1)
-    if (
-      previous &&
-      previous.sentence === sentence &&
-      previous.hidden === hidden
-    ) {
+    const repeats =
+      previous?.sentence === sentence && previous.hidden === hidden
+    // Reading the page it just worked on is the agent checking its own work,
+    // not a step of its own.
+    const checksPrevious =
+      verb === 'read' &&
+      !hidden &&
+      !isError &&
+      !cancelled &&
+      previous !== undefined &&
+      !previous.hidden &&
+      pageKey !== undefined &&
+      previous.pageKey === pageKey
+    if (previous && (repeats || checksPrevious)) {
       previous.dispatchIds.push(dispatch.dispatchId)
       continue
     }
     steps.push({
       sentence,
-      verb: verbForTool(dispatch.toolName),
+      verb,
       dispatchIds: [dispatch.dispatchId],
       firstAt: dispatch.createdAt,
       isError,
       cancelled,
       hidden,
+      pageKey,
     })
   }
   return { steps, hiddenCount }

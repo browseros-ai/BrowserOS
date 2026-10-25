@@ -130,7 +130,6 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
           steps={steps}
           activeIndex={activeIndex}
           startedAt={session.startedAt}
-          playing={hasRecording && replay.playback.isPlaying}
           hiddenCount={data.hiddenCount}
           showHidden={showHidden}
           onShowHiddenChange={setShowHidden}

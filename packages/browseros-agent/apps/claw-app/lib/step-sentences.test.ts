@@ -6,6 +6,7 @@ import {
   describeSteps,
   hostOf,
   isBehindTheScenes,
+  verbForCall,
 } from './step-sentences'
 
 let nextId = 1
@@ -13,7 +14,7 @@ let nextId = 1
 function call(
   toolName: string,
   options: {
-    args?: Record<string, unknown>
+    args?: Record<string, unknown> | unknown[]
     title?: string
     url?: string
     meta?: Record<string, unknown>
@@ -195,6 +196,23 @@ describe('describeSteps', () => {
     expect(steps[0]?.firstAt).toBe(5_000)
   })
 
+  it('folds a read of the page the previous step worked on into that step', () => {
+    const cart = {
+      title: 'Amazon.in Shopping Cart',
+      url: 'https://www.amazon.in/gp/cart/view.html',
+    }
+    const { steps } = describeSteps([
+      call('act', { args: { kind: 'click' }, ...cart }),
+      call('read', { ...cart, url: `${cart.url}?ref=nav` }),
+      call('read', FLIGHTS),
+    ])
+    expect(steps.map((step) => step.sentence)).toEqual([
+      'Clicked on Amazon.in Shopping Cart',
+      'Read San Francisco to New York | Google Flights',
+    ])
+    expect(steps[0]?.dispatchIds).toHaveLength(2)
+  })
+
   it('flags error and cancelled steps', () => {
     const { steps } = describeSteps([
       call('act', { args: { kind: 'click' }, meta: { isError: true } }),
@@ -206,6 +224,98 @@ describe('describeSteps', () => {
       [true, false],
       [false, true],
     ])
+  })
+})
+
+describe('calls made inside a run script', () => {
+  const CART = {
+    title: 'Amazon.in Shopping Cart',
+    url: 'https://www.amazon.in/gp/cart/view.html',
+  }
+
+  it('reads them like the tools they mirror', () => {
+    expect(
+      describeStep(
+        call('pages.newPage', { args: ['https://www.amazon.in/', null] }),
+      ),
+    ).toBe('Opened amazon.in')
+    expect(
+      describeStep(call('nav.goto', { args: [3, CART.url], ...CART })),
+    ).toBe('Opened Amazon.in Shopping Cart')
+    expect(
+      describeStep(call('input.fill', { args: [3, 'e12', 'secret'] })),
+    ).toBe('Typed into the page')
+    expect(
+      describeStep(call('input.press', { args: [3, 'Enter'], ...CART })),
+    ).toBe('Pressed Enter on Amazon.in Shopping Cart')
+    expect(describeStep(call('nav.reload', { args: [3], ...CART }))).toBe(
+      'Reloaded Amazon.in Shopping Cart',
+    )
+  })
+
+  it('reads page code as reading, unless it clicks', () => {
+    const read = call('evaluate', {
+      args: [3, { func: '() => document.title' }],
+      ...CART,
+    })
+    const click = call('evaluate', {
+      args: [3, { func: "() => document.querySelector('#buy').click()" }],
+      ...CART,
+    })
+    expect(describeStep(read)).toBe('Read Amazon.in Shopping Cart')
+    expect(verbForCall(read)).toBe('read')
+    expect(describeStep(click)).toBe('Clicked on Amazon.in Shopping Cart')
+    expect(verbForCall(click)).toBe('click')
+  })
+
+  it('hides script plumbing', () => {
+    for (const tool of ['pages.close', 'pages.list', 'helpers.save', 'cdp']) {
+      expect(isBehindTheScenes(call(tool, { args: [3] }))).toBe(true)
+    }
+    expect(
+      isBehindTheScenes(call('wait', { args: [3, { for: 'text' }] })),
+    ).toBe(true)
+  })
+
+  it('tells a script through its own calls, and keeps one that recorded none', () => {
+    const { steps, hiddenCount } = describeSteps([
+      call('run', { args: { code: 'await browser.open(url)' } }),
+      call('pages.newPage', { args: ['https://www.amazon.in/', null] }),
+      call('run', { args: { code: 'return 1 + 1' }, ...CART }),
+    ])
+    expect(hiddenCount).toBe(1)
+    expect(steps.map((step) => step.sentence)).toEqual([
+      'Opened amazon.in',
+      'Worked on Amazon.in Shopping Cart',
+    ])
+  })
+
+  it('gives behind-the-scenes calls plain words for when they are shown', () => {
+    expect(describeStep(call('name_session'))).toBe('Named the task')
+    expect(describeStep(call('tabs', { args: { action: 'list' } }))).toBe(
+      'Checked the open tabs',
+    )
+    expect(describeStep(call('pages.close', { args: [3] }))).toBe(
+      'Closed a page it had opened',
+    )
+  })
+
+  it('names a decision-model goal in its own words', () => {
+    expect(
+      describeStep(
+        call('pursue', {
+          args: { goal: 'add a Sensodyne toothpaste to the cart.', page: 3 },
+        }),
+      ),
+    ).toBe('Set out to add a Sensodyne toothpaste to the cart')
+  })
+
+  it('picks the typing icon for typing and the click icon for other input', () => {
+    expect(verbForCall(call('act', { args: { kind: 'fill' } }))).toBe('type')
+    expect(verbForCall(call('input.click', { args: [3, 'e1'] }))).toBe('click')
+    expect(verbForCall(call('nav.goto', { args: [3, 'https://x.y'] }))).toBe(
+      'navigate',
+    )
   })
 })
 

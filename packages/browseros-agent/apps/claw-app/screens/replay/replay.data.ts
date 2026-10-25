@@ -7,7 +7,7 @@
 import type { RecordingMetadata } from '@browseros/claw-api'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { RunStatus } from '@/lib/status'
-import { describeStep, verbForTool } from '@/lib/step-sentences'
+import { describeStep, verbForCall } from '@/lib/step-sentences'
 import {
   type TaskDetail,
   type ToolDispatchRow,
@@ -327,7 +327,7 @@ export function mapDispatchToFrame(
   const kind: ReplayKind = cancelled ? 'block' : isError ? 'block' : 'action'
   const note = cancelled ? 'Cancelled' : isError ? 'Errored' : undefined
   const node = row.title || row.url || row.toolName
-  const verb = verbForTool(row.toolName)
+  const verb = verbForCall(row)
   const caption = describeStep(row)
   return {
     t,
