@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
-index 3741ba7671d225e307800a48c23c4c4bd1fd121c..f1b100f99c11c3821456157bcdeec51163e388c5 100644
+index 3741ba7671d225e307800a48c23c4c4bd1fd121c..59946bd501fd49e768c055fc062ba77bb7257d69 100644
 --- a/chrome/browser/ui/browser_command_controller.cc
 +++ b/chrome/browser/ui/browser_command_controller.cc
 @@ -7,7 +7,9 @@
@@ -132,7 +132,22 @@ index 3741ba7671d225e307800a48c23c4c4bd1fd121c..f1b100f99c11c3821456157bcdeec511
      case IDC_SHOW_APP_MENU:
        base::RecordAction(base::UserMetricsAction("Accel_Show_App_Menu"));
        ShowAppMenu(browser_);
-@@ -2013,6 +2079,15 @@ void BrowserCommandController::InitCommandState() {
+@@ -1751,7 +1817,13 @@ void BrowserCommandController::InitCommandState() {
+   UpdateTabRestoreCommandState();
+   command_updater_->UpdateCommandEnabled(IDC_EXIT, true);
+   command_updater_->UpdateCommandEnabled(IDC_NAME_WINDOW, true);
+-  command_updater_->UpdateCommandEnabled(IDC_TOGGLE_VERTICAL_TABS, true);
++  // BrowserOS: off while the layout pref can't change, e.g. when
++  // --disable-browseros-features=VerticalTabs forces it. Forced values hold
++  // for the whole run, so checking once per window is enough.
++  command_updater_->UpdateCommandEnabled(
++      IDC_TOGGLE_VERTICAL_TABS,
++      profile()->GetPrefs()->IsUserModifiablePreference(
++          prefs::kVerticalTabsEnabled));
+   command_updater_->UpdateCommandEnabled(IDC_VERTICAL_TABS_SEND_FEEDBACK, true);
+   command_updater_->UpdateCommandEnabled(
+       IDC_TOGGLE_VERTICAL_TABS_EXPAND_ON_HOVER, true);
+@@ -2013,6 +2085,15 @@ void BrowserCommandController::InitCommandState() {
    }
  
    command_updater_->UpdateCommandEnabled(IDC_SHOW_BOOKMARK_SIDE_PANEL, true);

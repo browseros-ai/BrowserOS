@@ -1,12 +1,14 @@
 diff --git a/chrome/browser/prefs/BUILD.gn b/chrome/browser/prefs/BUILD.gn
-index 817cd91bdac667c3165d33c55d01ca16842b75a7..422e2338a5794f6f1b4f1b87d7e67bcb0c4d1d11 100644
+index 817cd91bdac667c3165d33c55d01ca16842b75a7..54e75dada3220f38ec05e478c6c6ddfa0200d820 100644
 --- a/chrome/browser/prefs/BUILD.gn
 +++ b/chrome/browser/prefs/BUILD.gn
-@@ -60,6 +60,7 @@ source_set("impl") {
+@@ -60,6 +60,9 @@ source_set("impl") {
    deps = [
      ":prefs",
      ":util",
 +    "//chrome/browser/browseros/core:prefs",
++    "//chrome/browser/browseros/customization:command_line_prefs",
++    "//chrome/browser/browseros/customization:prefs",
      "//chrome/browser:browser_process",
      "//chrome/browser:browser_process_impl",
      "//chrome/browser:chrome_content_browser_client",
