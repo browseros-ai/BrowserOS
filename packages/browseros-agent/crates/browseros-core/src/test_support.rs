@@ -29,7 +29,7 @@ impl TestConnection {
                 .or_default()
                 .push_back(response);
         }
-        let (events, _receiver) = broadcast::channel(1);
+        let (events, _receiver) = broadcast::channel(4);
         Arc::new(Self {
             calls: Mutex::new(Vec::new()),
             responses: Mutex::new(queued),
@@ -42,6 +42,10 @@ impl TestConnection {
             .lock()
             .map(|calls| calls.clone())
             .map_err(|_error| test_state_error())
+    }
+
+    pub fn publish_event(&self, event: CdpEvent) {
+        let _ = self.events.send(event);
     }
 
     fn reply(&self, expected: Option<u64>, method: &str, params: Value) -> Result<Value, CdpError> {

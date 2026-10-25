@@ -152,6 +152,15 @@ fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
         "Page.navigateToHistoryEntry" => Some(&["entryId"]),
         "Page.getFrameTree" => Some(&[]),
         "Page.getLayoutMetrics" => Some(&[]),
+        "Page.startScreencast" => Some(&[
+            "format",
+            "quality",
+            "maxWidth",
+            "maxHeight",
+            "everyNthFrame",
+            "maxFramesInFlight",
+        ]),
+        "Page.stopScreencast" => Some(&[]),
         "Page.captureScreenshot" => Some(&[
             "format",
             "quality",
