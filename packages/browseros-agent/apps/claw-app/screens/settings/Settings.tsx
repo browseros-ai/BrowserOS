@@ -7,12 +7,16 @@
 import type { AgentSettings } from '@browseros/claw-api'
 import { JevTokenSource } from '@browseros/claw-api'
 import { useQueryClient } from '@tanstack/react-query'
+import { Monitor, Moon, Sun } from 'lucide-react'
 import { useRef, useState, useSyncExternalStore } from 'react'
 import { Page } from '@/components/layout/Page'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { Switch } from '@/components/motion/switch'
+import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
+import { useTheme } from '@/components/theme-provider'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
+import { normalizeTheme } from '@/lib/theme/theme-storage'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { isFlagEnabled, subscribeToFlags } from '@/modules/analytics/posthog'
 import {
@@ -21,13 +25,11 @@ import {
   useSaveJevToken,
   useUpdateAgentSettings,
 } from '@/modules/api/agent-settings.hooks'
+import { SettingRow, SettingsSection } from './settings.components'
 
-const HUMAN_HELP_SWITCH_ID = 'human-help-switch'
-const HUMAN_HELP_TITLE_ID = 'human-help-title'
-const HUMAN_HELP_DESCRIPTION_ID = 'human-help-description'
-const CLEANUP_TIP_SWITCH_ID = 'task-cleanup-tip-switch'
-const CLEANUP_TIP_TITLE_ID = 'task-cleanup-tip-title'
-const CLEANUP_TIP_DESCRIPTION_ID = 'task-cleanup-tip-description'
+const HUMAN_HELP_ID = 'human-help'
+const CLEANUP_TIP_ID = 'task-cleanup-tip'
+const THEME_ID = 'theme'
 /**
  * The flag that reveals the token field.
  *
@@ -39,9 +41,7 @@ const JEV_INPUT_ID = 'jev-token-input'
 const JEV_TITLE_ID = 'jev-token-title'
 const JEV_DESCRIPTION_ID = 'jev-token-description'
 
-/**
- * Server-owned agent settings. Switches show the server's saved values.
- */
+/** Every setting in one place, each in plain words. */
 export function Settings() {
   const settings = useAgentSettings()
   // false as the server snapshot, so a static render and a cold open agree:
@@ -51,6 +51,28 @@ export function Settings() {
     () => isFlagEnabled(TOKEN_FIELD_FLAG),
     () => false,
   )
+
+  return (
+    <Page>
+      <PageHeader title="Settings" />
+      <AgentSwitches />
+      <Appearance />
+      {tokenFieldEnabled && settings.data ? (
+        <SettingsSection title="Advanced">
+          <JevToken
+            source={settings.data.jevTokenSource ?? JevTokenSource.None}
+          />
+        </SettingsSection>
+      ) : null}
+    </Page>
+  )
+}
+
+// ---------------------------------------------------------------------------
+
+/** Server-owned switches that change what agents are told while they work. */
+function AgentSwitches() {
+  const settings = useAgentSettings()
   const updateSettings = useUpdateAgentSettings()
   const queryClient = useQueryClient()
 
@@ -79,94 +101,102 @@ export function Settings() {
     )
   }
 
-  return (
-    <Page>
-      <PageHeader
-        title="Settings"
-        lede="Choose the tools and tips your agents receive."
-      />
+  if (settings.isError) {
+    return (
+      <SettingsSection title="While your AI works">
+        <p role="alert" className="px-5 py-4 text-[14.5px] text-ink-2">
+          Couldn’t load these settings. Check that BrowserOS is running, then
+          open this page again.
+        </p>
+      </SettingsSection>
+    )
+  }
 
-      {settings.isError ? (
-        <div className="rounded-9 border border-ledger-border bg-card px-6 py-10 text-center text-ink-2 text-sm">
-          Could not load settings. Check that BrowserOS neo is running and try
-          again.
-        </div>
-      ) : (
-        <div className="rounded-9 border border-ledger-border bg-card">
-          <label
-            htmlFor={HUMAN_HELP_SWITCH_ID}
-            className="flex items-center justify-between gap-6 px-5 py-4"
+  const busy = !settings.data || updateSettings.isPending
+
+  return (
+    <SettingsSection title="While your AI works">
+      <SettingRow
+        id={HUMAN_HELP_ID}
+        title="Ask me when it gets stuck"
+        description="neo pauses and asks you to sign in, enter a code, or solve a captcha. When this is off, your AI agents ask you in their own chat instead."
+        control={
+          <Switch
+            ariaLabel="Ask me when it gets stuck"
+            ariaDescribedBy={`${HUMAN_HELP_ID}-description`}
+            // The server's default (on) until it answers, so the switch
+            // does not flip on load unless the user turned it off.
+            checked={settings.data?.humanHelpEnabled ?? true}
+            onCheckedChange={handleHumanHelpChange}
+            disabled={busy}
+          />
+        }
+      />
+      <SettingRow
+        id={CLEANUP_TIP_ID}
+        title="Tidy up when a task finishes"
+        description="Your AI agents close the pages they opened once they’re done."
+        control={
+          <Switch
+            ariaLabel="Tidy up when a task finishes"
+            ariaDescribedBy={`${CLEANUP_TIP_ID}-description`}
+            checked={settings.data?.taskCleanupTipEnabled ?? false}
+            onCheckedChange={handleCleanupTipChange}
+            disabled={busy}
+          />
+        }
+      >
+        {updateSettings.isError ? (
+          <p role="alert" className="text-[13.5px] text-red-ink">
+            Couldn’t save that setting. Try again.
+          </p>
+        ) : null}
+      </SettingRow>
+    </SettingsSection>
+  )
+}
+
+const THEME_OPTIONS = [
+  { value: 'light', label: 'Light', Icon: Sun },
+  { value: 'dark', label: 'Dark', Icon: Moon },
+  { value: 'system', label: 'Match browser', Icon: Monitor },
+] as const
+
+/** Light, dark, or whatever BrowserOS itself is set to. */
+function Appearance() {
+  const { theme, setTheme } = useTheme()
+  return (
+    <SettingsSection title="Appearance">
+      <SettingRow
+        id={THEME_ID}
+        title="Theme"
+        description="Match browser follows your BrowserOS appearance setting."
+        control={
+          <Tabs
+            variant="segment"
+            value={theme}
+            onValueChange={(value) => setTheme(normalizeTheme(value))}
           >
-            <span className="flex flex-col gap-1">
-              <span
-                id={HUMAN_HELP_TITLE_ID}
-                className="font-medium text-ink text-sm"
-              >
-                Ask for human help
-              </span>
-              <span
-                id={HUMAN_HELP_DESCRIPTION_ID}
-                className="text-[13px] text-ink-2 leading-snug"
-              >
-                Lets agents pause and ask you to take over the page for a
-                sign-in, a code, or a captcha. When off, agents tell you what
-                they need in their own chat instead.
-              </span>
-            </span>
-            <Switch
-              id={HUMAN_HELP_SWITCH_ID}
-              aria-labelledby={HUMAN_HELP_TITLE_ID}
-              aria-describedby={HUMAN_HELP_DESCRIPTION_ID}
-              // The server's default (on) until it answers, so the switch
-              // does not flip on load unless the user turned it off.
-              checked={settings.data?.humanHelpEnabled ?? true}
-              onCheckedChange={handleHumanHelpChange}
-              disabled={!settings.data || updateSettings.isPending}
-            />
-          </label>
-          <label
-            htmlFor={CLEANUP_TIP_SWITCH_ID}
-            className="flex items-center justify-between gap-6 border-ledger-divider border-t px-5 py-4"
-          >
-            <span className="flex flex-col gap-1">
-              <span
-                id={CLEANUP_TIP_TITLE_ID}
-                className="font-medium text-ink text-sm"
-              >
-                Include tab group cleanup tip
-              </span>
-              <span
-                id={CLEANUP_TIP_DESCRIPTION_ID}
-                className="text-[13px] text-ink-2 leading-snug"
-              >
-                When you finish this task, close your task’s tab group.
-              </span>
-            </span>
-            <Switch
-              id={CLEANUP_TIP_SWITCH_ID}
-              aria-labelledby={CLEANUP_TIP_TITLE_ID}
-              aria-describedby={CLEANUP_TIP_DESCRIPTION_ID}
-              checked={settings.data?.taskCleanupTipEnabled ?? false}
-              onCheckedChange={handleCleanupTipChange}
-              disabled={!settings.data || updateSettings.isPending}
-            />
-          </label>
-          {updateSettings.isError && (
-            <p
-              role="alert"
-              className="border-ledger-divider border-t px-5 py-3 text-[13px] text-destructive"
+            <TabsList
+              aria-label="Theme"
+              aria-describedby={`${THEME_ID}-description`}
+              className="border border-border-2"
             >
-              Could not save this setting. Try again.
-            </p>
-          )}
-          {tokenFieldEnabled && (
-            <JevToken
-              source={settings.data?.jevTokenSource ?? JevTokenSource.None}
-            />
-          )}
-        </div>
-      )}
-    </Page>
+              {THEME_OPTIONS.map(({ value, label, Icon }) => (
+                <TabsTrigger
+                  key={value}
+                  value={value}
+                  icon={<Icon className="size-4" />}
+                  className="px-3 font-semibold text-[13.5px]"
+                >
+                  {label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        }
+      />
+    </SettingsSection>
   )
 }
 

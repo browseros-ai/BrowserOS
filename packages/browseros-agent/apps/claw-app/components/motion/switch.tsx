@@ -14,6 +14,8 @@ export interface SwitchProps {
   disabled?: boolean;
   label?: string;
   ariaLabel?: string;
+  // claw-app: settings rows point the switch at their explanation.
+  ariaDescribedBy?: string;
   className?: string;
 }
 
@@ -23,6 +25,7 @@ export function Switch({
   disabled,
   label,
   ariaLabel,
+  ariaDescribedBy,
   className,
 }: SwitchProps) {
   const id = useId();
@@ -54,6 +57,7 @@ export function Switch({
           role="switch"
           aria-checked={checked}
           aria-label={ariaLabel}
+          aria-describedby={ariaDescribedBy}
           disabled={disabled}
           onClick={() => !disabled && onCheckedChange(!checked)}
           onPointerDown={(e) => {

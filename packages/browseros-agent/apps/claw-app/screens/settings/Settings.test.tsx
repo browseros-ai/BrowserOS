@@ -91,26 +91,45 @@ function setFlag(key: string, enabled: boolean): void {
 
 const TOKEN_FIELD_FLAG = 'ultrafast-token-field'
 
-// base-ui's switch toggles a hidden checkbox with a PointerEvent, which
-// linkedom lacks. A plain button keeps the props the screen relies on.
-mock.module('@/components/ui/switch', () => ({
+// The beUI switch animates through motion, which linkedom cannot drive. A
+// plain button keeps the props the screen relies on.
+mock.module('@/components/motion/switch', () => ({
   Switch: ({
     checked,
     onCheckedChange,
-    ...props
-  }: ComponentProps<'button'> & {
+    disabled,
+    ariaLabel,
+    ariaDescribedBy,
+  }: {
     checked: boolean
     onCheckedChange: (checked: boolean) => void
+    disabled?: boolean
+    ariaLabel?: string
+    ariaDescribedBy?: string
   }) => (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-label={ariaLabel}
+      aria-describedby={ariaDescribedBy}
+      disabled={disabled}
       onClick={() => onCheckedChange(!checked)}
-      {...props}
     />
   ),
 }))
+
+// The theme lives in a provider that reads browser storage; the screen only
+// needs its value and setter.
+mock.module('@/components/theme-provider', () => ({
+  useTheme: () => ({
+    theme: 'system',
+    resolvedTheme: 'light',
+    setTheme: () => undefined,
+  }),
+}))
+
+const CLEANUP_SWITCH = '[aria-label="Tidy up when a task finishes"]'
 
 const { useAgentSettings } = await import('@/modules/api/agent-settings.hooks')
 const { Settings } = await import('./Settings')
@@ -141,10 +160,10 @@ function switchIn(
 describe('Settings screen', () => {
   it('tests that the cleanup tip switch is off by default and explains the tip', () => {
     const page = renderPage(settingsOf())
-    const toggle = switchIn(page, '#task-cleanup-tip-switch')
+    const toggle = switchIn(page, CLEANUP_SWITCH)
     expect(toggle.getAttribute('aria-checked')).toBe('false')
     expect(page.body.textContent).toContain(
-      'When you finish this task, close your task’s tab group.',
+      'Your AI agents close the pages they opened once they’re done.',
     )
   })
 
@@ -163,20 +182,24 @@ describe('Settings screen', () => {
     const textOf = (id: string | null) =>
       id ? page.getElementById(id)?.textContent : undefined
 
-    expect(page.querySelector(`label[for="${toggle.id}"]`)).not.toBeNull()
-    expect(textOf(toggle.getAttribute('aria-labelledby'))).toBe(
-      'Ask for human help',
-    )
+    expect(toggle.getAttribute('aria-label')).toBe('Ask me when it gets stuck')
     expect(textOf(toggle.getAttribute('aria-describedby'))).toBe(
-      'Lets agents pause and ask you to take over the page for a sign-in, a code, or a captcha. When off, agents tell you what they need in their own chat instead.',
+      'neo pauses and asks you to sign in, enter a code, or solve a captcha. When this is off, your AI agents ask you in their own chat instead.',
     )
   })
 })
 
 const globalDescriptors = new Map(
-  ['window', 'document', 'navigator', 'HTMLElement', 'Node', 'Event'].map(
-    (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)],
-  ),
+  [
+    'window',
+    'document',
+    'navigator',
+    'HTMLElement',
+    'Node',
+    'Event',
+    'ResizeObserver',
+    'getComputedStyle',
+  ].map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]),
 )
 
 describe('Settings screen interactions', () => {
@@ -208,6 +231,12 @@ describe('Settings screen interactions', () => {
       HTMLElement: dom.window.HTMLElement,
       Node: dom.window.Node,
       Event: dom.window.Event,
+      // linkedom has no layout; the theme tabs only measure with this.
+      ResizeObserver: class {
+        observe() {}
+        disconnect() {}
+      },
+      getComputedStyle: () => ({ getPropertyValue: () => '' }),
     }
     for (const [name, value] of Object.entries(globals)) {
       Object.defineProperty(globalThis, name, {
@@ -284,7 +313,7 @@ describe('Settings screen interactions', () => {
     ] as const) {
       // The other page changes human help after this page loaded its value.
       saved = { ...saved, humanHelpEnabled }
-      await clickSwitch('#task-cleanup-tip-switch')
+      await clickSwitch(CLEANUP_SWITCH)
 
       expect(server.saves.at(-1)).toEqual({ taskCleanupTipEnabled })
       expect(saved).toMatchObject({ humanHelpEnabled, taskCleanupTipEnabled })
@@ -292,9 +321,7 @@ describe('Settings screen interactions', () => {
         String(humanHelpEnabled),
       )
       expect(
-        switchIn(container, '#task-cleanup-tip-switch').getAttribute(
-          'aria-checked',
-        ),
+        switchIn(container, CLEANUP_SWITCH).getAttribute('aria-checked'),
       ).toBe(String(taskCleanupTipEnabled))
     }
   })
@@ -322,7 +349,7 @@ describe('Settings screen interactions', () => {
     await mount()
 
     expect(container.textContent).toContain(
-      'Could not load settings. Check that BrowserOS neo is running and try again.',
+      'Couldn’t load these settings. Check that BrowserOS is running, then open this page again.',
     )
     expect(container.querySelector('[role="switch"]')).toBeNull()
   })
@@ -373,7 +400,7 @@ describe('Settings screen interactions', () => {
     await mount()
     await clickSwitch()
 
-    expect(saveError()).toBe('Could not save this setting. Try again.')
+    expect(saveError()).toBe('Couldn’t save that setting. Try again.')
     expect(switchIn(container).getAttribute('aria-checked')).toBe('true')
     expect(switchIn(container).hasAttribute('disabled')).toBe(false)
     expect(captured).toEqual([])
@@ -385,7 +412,7 @@ describe('Settings screen interactions', () => {
     }
     await mount()
     await clickSwitch()
-    expect(saveError()).toBe('Could not save this setting. Try again.')
+    expect(saveError()).toBe('Couldn’t save that setting. Try again.')
 
     server.save = async (body) => settingsOf(body)
     await clickSwitch()
