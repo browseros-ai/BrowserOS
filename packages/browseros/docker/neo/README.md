@@ -61,6 +61,10 @@ NEO_VNC_PORT=7080 NEO_MCP_PORT=7010 NEO_DATA=/mnt/neo docker compose up -d --wai
 
 Ports inside the container are always 6080 and 9010; change only the host side.
 
+Image tags: `latest` and browser versions such as `0.52.0.1` move when a newer build is published. To stay
+on one source commit, use its `<version>-<commit>` tag (e.g. `0.52.0.1-169e41f`); a rebuild of that commit
+replaces it. To pin exact image contents, use the digest.
+
 `BROWSERCLAW_HOSTED_MODE=1` gives agents the browser tools only. Skills (`save_skill`,
 `mark_skill_run`) and human help (`request_human_help`, `await_human_help`) are hidden, since
 your agent's own harness keeps its workflows and asks you for help itself. Instead of calling

@@ -7,9 +7,21 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 
-from bos_build.release.docker_image import ImageError, ImageRequest, build_image
+from bos_build.release.docker_image import ImageError, ImageRequest, ImageResult, build_image
 
 CONTEXT = Path("/repo/packages/browseros/docker/neo")
+REVISION = "169e41f5a0eb9a507a5b976c65ee644733cdc900"
+
+
+@contextmanager
+def _servers(*arches: str, version: str = "0.0.77") -> Iterator[Path]:
+    """A --server-dir holding fake binaries that embed claw-server's version marker."""
+    with tempfile.TemporaryDirectory() as directory:
+        for arch in arches:
+            binary = Path(directory) / arch / "browseros-claw-server-rs"
+            binary.parent.mkdir()
+            binary.write_bytes(b"\x7fELF...browseros-claw-server-version=" + version.encode() + b";...")
+        yield Path(directory)
 
 
 def _release(*keys: str) -> dict:
@@ -51,13 +63,22 @@ class FakeOperations:
 
 
 class PushTest(unittest.TestCase):
-    def test_push_builds_both_published_architectures_under_the_version_tag(self):
+    def _push(self, ops: "FakeOperations", **request) -> "ImageResult":
+        with _servers("amd64", "arm64") as servers:
+            self.servers = servers
+            return build_image(
+                ImageRequest(version="0.52.0.1", push=True, server_dir=servers,
+                             revision=REVISION, **request),
+                ops, CONTEXT,
+            )
+
+    def test_push_tags_the_commit_and_moves_the_version_alias(self):
         ops = FakeOperations(
             release=_release("x64_deb", "arm64_deb"),
             metadata={"containerimage.digest": "sha256:abc"},
         )
 
-        result = build_image(ImageRequest(version="0.52.0.1", push=True), ops, CONTEXT)
+        result = self._push(ops)
 
         self.assertEqual(
             ops.builds,
@@ -65,17 +86,25 @@ class PushTest(unittest.TestCase):
                 [
                     "--platform", "linux/amd64,linux/arm64",
                     "--build-arg", "NEO_VERSION=0.52.0.1",
+                    "--tag", "ghcr.io/browseros-ai/neo:0.52.0.1-169e41f",
                     "--tag", "ghcr.io/browseros-ai/neo:0.52.0.1",
+                    "--label", "org.opencontainers.image.version=0.52.0.1-169e41f",
+                    "--label", f"org.opencontainers.image.revision={REVISION}",
+                    "--label", "com.browseros.claw-server.version=0.0.77",
                     "--push",
                     "--provenance", "mode=min",
                     "--annotation",
                     "index:org.opencontainers.image.source=https://github.com/browseros-ai/BrowserOS",
+                    "--build-context", f"neo-server={self.servers}",
                     "--no-cache-filter", "neo",
                     str(CONTEXT),
                 ]
             ],
         )
-        self.assertEqual(result.tags, ("ghcr.io/browseros-ai/neo:0.52.0.1",))
+        self.assertEqual(
+            result.tags,
+            ("ghcr.io/browseros-ai/neo:0.52.0.1-169e41f", "ghcr.io/browseros-ai/neo:0.52.0.1"),
+        )
         self.assertEqual(result.platforms, ("linux/amd64", "linux/arm64"))
         self.assertEqual(result.digest, "sha256:abc")
 
@@ -83,28 +112,45 @@ class PushTest(unittest.TestCase):
         ops = FakeOperations(release=_release("x64_deb"))
 
         with self.assertRaisesRegex(ImageError, r"0\.52\.0\.1 has no arm64_deb"):
-            build_image(ImageRequest(version="0.52.0.1", push=True), ops, CONTEXT)
+            self._push(ops)
         self.assertEqual(ops.builds, [])
 
     def test_push_refuses_a_version_without_a_linux_release(self):
         ops = FakeOperations(release=None)
 
         with self.assertRaisesRegex(ImageError, "no Linux release"):
-            build_image(ImageRequest(version="0.52.0.1", push=True), ops, CONTEXT)
+            self._push(ops)
         self.assertEqual(ops.builds, [])
 
     def test_latest_adds_the_latest_tag(self):
         ops = FakeOperations(release=_release("x64_deb", "arm64_deb"))
 
-        result = build_image(
-            ImageRequest(version="0.52.0.1", push=True, latest=True), ops, CONTEXT
-        )
+        result = self._push(ops, latest=True)
 
-        self.assertEqual(
-            result.tags,
-            ("ghcr.io/browseros-ai/neo:0.52.0.1", "ghcr.io/browseros-ai/neo:latest"),
-        )
+        self.assertEqual(result.tags[-1], "ghcr.io/browseros-ai/neo:latest")
         self.assertIn("ghcr.io/browseros-ai/neo:latest", ops.builds[0])
+
+    def test_push_requires_this_commits_server(self):
+        # Without it the image would run the package's server under a commit tag.
+        ops = FakeOperations(release=_release("x64_deb", "arm64_deb"))
+
+        with self.assertRaisesRegex(ImageError, "--server-dir"):
+            build_image(
+                ImageRequest(version="0.52.0.1", push=True, revision=REVISION), ops, CONTEXT
+            )
+        self.assertEqual(ops.builds, [])
+
+    def test_push_requires_a_full_commit_revision(self):
+        ops = FakeOperations(release=_release("x64_deb", "arm64_deb"))
+        for revision in ("", "169e41f", "main"):
+            with self.subTest(revision=revision), _servers("amd64", "arm64") as servers:
+                with self.assertRaisesRegex(ImageError, "revision"):
+                    build_image(
+                        ImageRequest(version="0.52.0.1", push=True, server_dir=servers,
+                                     revision=revision),
+                        ops, CONTEXT,
+                    )
+        self.assertEqual(ops.builds, [])
 
 
 class LoadTest(unittest.TestCase):
@@ -119,6 +165,7 @@ class LoadTest(unittest.TestCase):
                 "--platform", "linux/arm64",
                 "--build-arg", "NEO_VERSION=0.52.0.1",
                 "--tag", "ghcr.io/browseros-ai/neo:0.52.0.1",
+                "--label", "org.opencontainers.image.version=0.52.0.1",
                 "--load",
                 "--no-cache-filter", "neo",
                 str(CONTEXT),
@@ -172,6 +219,7 @@ class LocalDebTest(unittest.TestCase):
                 "--platform", "linux/arm64",
                 "--build-arg", "NEO_VERSION=0.51.1.4",
                 "--tag", "ghcr.io/browseros-ai/neo:0.51.1.4",
+                "--label", "org.opencontainers.image.version=0.51.1.4",
                 "--load",
                 "--no-cache-filter", "neo",
                 "--build-context", "neo-deb=/staged",
@@ -239,21 +287,58 @@ class ImageContentsTest(unittest.TestCase):
 
     def test_server_override_supplies_only_the_requested_architectures(self):
         ops = FakeOperations(release=_release("arm64_deb"))
-        with tempfile.TemporaryDirectory() as directory:
-            servers = Path(directory)
-            (servers / "arm64").mkdir()
-            (servers / "arm64/browseros-claw-server-rs").write_bytes(b"fake-server")
-
+        with _servers("arm64") as servers:
             build_image(ImageRequest(version="0.52.0.1", server_dir=servers), ops, CONTEXT)
 
             self.assertIn(f"neo-server={servers}", ops.builds[0])
+            self.assertIn("com.browseros.claw-server.version=0.0.77", ops.builds[0])
 
             with self.assertRaisesRegex(ImageError, "amd64"):
                 build_image(
-                    ImageRequest(version="0.52.0.1", server_dir=servers, push=True),
+                    ImageRequest(version="0.52.0.1", server_dir=servers, push=True,
+                                 revision=REVISION),
                     FakeOperations(release=_release("x64_deb", "arm64_deb")), CONTEXT,
                 )
 
+    def test_local_build_with_a_revision_gets_the_commit_tag(self):
+        ops = FakeOperations(release=_release("arm64_deb"))
+        with _servers("arm64") as servers:
+            result = build_image(
+                ImageRequest(version="0.52.0.1", server_dir=servers, revision=REVISION),
+                ops, CONTEXT,
+            )
+
+        self.assertEqual(
+            result.tags,
+            ("ghcr.io/browseros-ai/neo:0.52.0.1-169e41f", "ghcr.io/browseros-ai/neo:0.52.0.1"),
+        )
+        self.assertIn(f"org.opencontainers.image.revision={REVISION}", ops.builds[0])
+
+    def test_server_without_a_version_marker_is_rejected(self):
+        ops = FakeOperations(release=_release("arm64_deb"))
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "arm64/browseros-claw-server-rs"
+            binary.parent.mkdir()
+            binary.write_bytes(b"not a claw-server")
+
+            with self.assertRaisesRegex(ImageError, "version marker"):
+                build_image(ImageRequest(version="0.52.0.1", server_dir=Path(directory)), ops, CONTEXT)
+        self.assertEqual(ops.builds, [])
+
+    def test_architectures_must_carry_the_same_server_version(self):
+        ops = FakeOperations(release=_release("x64_deb", "arm64_deb"))
+        with _servers("amd64") as servers:
+            arm64 = servers / "arm64/browseros-claw-server-rs"
+            arm64.parent.mkdir()
+            arm64.write_bytes(b"browseros-claw-server-version=0.0.78;")
+
+            with self.assertRaisesRegex(ImageError, "0.0.77.*0.0.78|0.0.78.*0.0.77"):
+                build_image(
+                    ImageRequest(version="0.52.0.1", push=True, server_dir=servers,
+                                 revision=REVISION),
+                    ops, CONTEXT,
+                )
+        self.assertEqual(ops.builds, [])
 
 if __name__ == "__main__":
     unittest.main()

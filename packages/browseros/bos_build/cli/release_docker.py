@@ -36,7 +36,12 @@ def docker_command(
         None, "--deb", help="Local .deb to test instead of the CDN; loaded locally, never pushed"
     ),
     server_dir: Optional[Path] = typer.Option(
-        None, "--server-dir", help="Override servers from <dir>/<arch>/browseros-claw-server-rs"
+        None, "--server-dir",
+        help="Override servers from <dir>/<arch>/browseros-claw-server-rs; required with --push",
+    ),
+    revision: str = typer.Option(
+        "", "--revision",
+        help="Full commit sha the servers and Docker context come from; adds the <version>-<commit> tag. Required with --push",
     ),
     capsolver_key_file: Optional[Path] = typer.Option(
         None, "--capsolver-key-file", envvar="BROWSEROS_CAPSOLVER_API_KEY_FILE",
@@ -58,6 +63,7 @@ def docker_command(
         platforms=tuple(platform or ()),
         deb=deb.resolve() if deb else None,
         server_dir=server_dir.resolve() if server_dir else None,
+        revision=revision,
         capsolver_key_file=capsolver_key_file.resolve() if capsolver_key_file else None,
         twocaptcha_key_file=twocaptcha_key_file.resolve() if twocaptcha_key_file else None,
     )

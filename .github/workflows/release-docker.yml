@@ -4,6 +4,10 @@ name: "Release: Neo Docker image"
 # server, and optional provider key files. Keys are intentionally embedded and
 # extractable by anyone who can pull the image. Both native smoke jobs must pass
 # before publication; use latest only for a promoted browser version.
+#
+# The image is tagged <version>-<commit> (one per source commit) and <version>
+# (moves to the newest run). Rerun on a newer commit with the same version to ship server or packaging
+# changes without a new browser build.
 on:
   workflow_dispatch:
     inputs:
@@ -140,9 +144,11 @@ jobs:
       - name: Build native image
         run: |
           uv run --directory packages/browseros browseros release docker \
-            --version "$VERSION" --platform "linux/$ARCH" --server-dir "$RUNNER_TEMP/neo-servers"
+            --version "$VERSION" --platform "linux/$ARCH" --server-dir "$RUNNER_TEMP/neo-servers" \
+            --revision "$GITHUB_SHA"
           # Derived images must not inherit an implicit anonymous data volume.
           test "$(docker image inspect -f '{{len .Config.Volumes}}' "ghcr.io/browseros-ai/neo:$VERSION")" = 0
+          test "$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "ghcr.io/browseros-ai/neo:$VERSION-${GITHUB_SHA::7}")" = "$GITHUB_SHA"
       - name: Verify viewer, MCP, and hosted CAPTCHA on and off
         id: smoke
         env:
@@ -267,7 +273,7 @@ jobs:
           LATEST: ${{ inputs.latest }}
         run: |
           set -euo pipefail
-          args=(--version "$VERSION" --push --server-dir "$RUNNER_TEMP/neo-servers")
+          args=(--version "$VERSION" --push --server-dir "$RUNNER_TEMP/neo-servers" --revision "$GITHUB_SHA")
           if [ "$LATEST" = true ]; then args+=(--latest); fi
           uv run --directory packages/browseros browseros release docker "${args[@]}"
       - name: Remove secret files
