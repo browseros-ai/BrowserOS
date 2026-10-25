@@ -4,31 +4,39 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { AgentSettings } from '@browseros/claw-api'
 import { JevTokenSource } from '@browseros/claw-api'
 import { useQueryClient } from '@tanstack/react-query'
-import { Monitor, Moon, Sun } from 'lucide-react'
-import { useRef, useState, useSyncExternalStore } from 'react'
+import {
+  ChevronDown,
+  Monitor,
+  Moon,
+  SlidersHorizontal,
+  Sun,
+} from 'lucide-react'
+import { useSyncExternalStore } from 'react'
 import { Page } from '@/components/layout/Page'
 import { PageHeader } from '@/components/layout/PageHeader'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleIndicator,
+  CollapsibleTrigger,
+} from '@/components/motion/collapsible'
 import { Switch } from '@/components/motion/switch'
 import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { useTheme } from '@/components/theme-provider'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { normalizeTheme } from '@/lib/theme/theme-storage'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { isFlagEnabled, subscribeToFlags } from '@/modules/analytics/posthog'
 import {
   useAgentSettings,
-  useRemoveJevToken,
-  useSaveJevToken,
   useUpdateAgentSettings,
 } from '@/modules/api/agent-settings.hooks'
 import { HelpSettings } from './HelpSettings'
 import { PrivacySettings } from './PrivacySettings'
 import { StorageSettings } from './StorageSettings'
 import { SettingRow, SettingsSection } from './settings.components'
+import { UltrafastKey } from './UltrafastKey'
 
 const HUMAN_HELP_ID = 'human-help'
 const CLEANUP_TIP_ID = 'task-cleanup-tip'
@@ -40,9 +48,6 @@ const THEME_ID = 'theme'
  * install with analytics turned off gets: no evaluation, so no field.
  */
 const TOKEN_FIELD_FLAG = 'ultrafast-token-field'
-const JEV_INPUT_ID = 'jev-token-input'
-const JEV_TITLE_ID = 'jev-token-title'
-const JEV_DESCRIPTION_ID = 'jev-token-description'
 
 /** Every setting in one place, each in plain words. */
 export function Settings() {
@@ -64,11 +69,20 @@ export function Settings() {
       <PrivacySettings />
       <HelpSettings />
       {tokenFieldEnabled && settings.data ? (
-        <SettingsSection title="Advanced">
-          <JevToken
-            source={settings.data.jevTokenSource ?? JevTokenSource.None}
-          />
-        </SettingsSection>
+        <Collapsible className="rounded-2xl border border-border-2 bg-card shadow-card">
+          <CollapsibleTrigger className="flex w-full items-center gap-2.5 rounded-2xl px-[18px] py-3.5 text-left font-semibold text-[15px] text-ink-2 outline-none hover:text-cyanotype-ink focus-visible:ring-2 focus-visible:ring-ring">
+            <SlidersHorizontal aria-hidden className="size-[15px]" />
+            <span className="flex-1">Advanced</span>
+            <CollapsibleIndicator>
+              <ChevronDown aria-hidden className="size-4" />
+            </CollapsibleIndicator>
+          </CollapsibleTrigger>
+          <CollapsibleContent contentClassName="px-[18px] pb-[18px]">
+            <UltrafastKey
+              source={settings.data.jevTokenSource ?? JevTokenSource.None}
+            />
+          </CollapsibleContent>
+        </Collapsible>
       ) : null}
     </Page>
   )
@@ -203,124 +217,5 @@ function Appearance() {
         }
       />
     </SettingsSection>
-  )
-}
-
-/**
- * The decision model credential, which is the one thing that decides whether
- * agents are offered `pursue` at all.
- *
- * Three states rather than two: a saved token, a token in the server's
- * environment, or neither. Naming the environment case is what stops a user
- * pasting a token they did not need.
- */
-function JevToken({ source }: { source: JevTokenSource }) {
-  // Uncontrolled on purpose: the credential lives in the field the user typed
-  // it into and is read once on submit, rather than being mirrored into React
-  // state and re-rendered.
-  const field = useRef<HTMLInputElement>(null)
-  const [replacing, setReplacing] = useState(false)
-  const save = useSaveJevToken()
-  const remove = useRemoveJevToken()
-  const queryClient = useQueryClient()
-
-  const publish = (saved: AgentSettings) => {
-    queryClient.setQueryData(useAgentSettings.getKey(), saved)
-    if (field.current) field.current.value = ''
-    setReplacing(false)
-  }
-
-  const saved = source === JevTokenSource.Settings
-  const showField = !saved || replacing
-  const busy = save.isPending || remove.isPending
-
-  return (
-    <div className="border-ledger-divider border-t px-5 py-4">
-      <div className="flex flex-col gap-1">
-        <span id={JEV_TITLE_ID} className="font-medium text-ink text-sm">
-          Ultrafast decision loop
-        </span>
-        <span
-          id={JEV_DESCRIPTION_ID}
-          className="text-[13px] text-ink-2 leading-snug"
-        >
-          {saved
-            ? 'A token is saved, so agents are offered pursue, which decides each step with a typed model instead of a prompt.'
-            : source === JevTokenSource.Environment
-              ? 'Using the token in the server’s environment. A token saved here takes precedence over it.'
-              : 'Paste a token to offer agents pursue, which decides each step with a typed model instead of a prompt. Without one the tool is not offered at all.'}
-        </span>
-      </div>
-
-      {showField ? (
-        <form
-          className="mt-3 flex items-start gap-2"
-          onSubmit={(event) => {
-            event.preventDefault()
-            const token = field.current?.value.trim()
-            if (!token) return
-            save.mutate({ token }, { onSuccess: publish })
-          }}
-        >
-          <Input
-            ref={field}
-            id={JEV_INPUT_ID}
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            aria-labelledby={JEV_TITLE_ID}
-            aria-describedby={JEV_DESCRIPTION_ID}
-            placeholder="Paste your token"
-            disabled={busy}
-          />
-          <Button type="submit" disabled={busy}>
-            Save
-          </Button>
-          {saved && (
-            <Button
-              type="button"
-              variant="ghost"
-              disabled={busy}
-              onClick={() => {
-                if (field.current) field.current.value = ''
-                setReplacing(false)
-              }}
-            >
-              Cancel
-            </Button>
-          )}
-        </form>
-      ) : (
-        <div className="mt-3 flex items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={busy}
-            onClick={() => setReplacing(true)}
-          >
-            Replace
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={busy}
-            onClick={() => remove.mutate(undefined, { onSuccess: publish })}
-          >
-            Remove
-          </Button>
-        </div>
-      )}
-
-      <p className="mt-2 text-[12px] text-ink-3 leading-snug">
-        Agents pick up the change on their next tool list. An already installed
-        skill follows after BrowserOS neo restarts.
-      </p>
-
-      {(save.isError || remove.isError) && (
-        <p role="alert" className="mt-2 text-[13px] text-destructive">
-          Could not save that. Try again.
-        </p>
-      )}
-    </div>
   )
 }

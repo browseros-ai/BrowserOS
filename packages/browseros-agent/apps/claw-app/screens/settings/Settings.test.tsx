@@ -430,7 +430,7 @@ describe('Settings screen interactions', () => {
       { event: 'human_help_toggled', properties: { enabled: false } },
     ])
   })
-  // --- the decision model credential ---------------------------------------
+  // --- the Ultrafast access key ---------------------------------------------
 
   function tokenField(): HTMLInputElement | null {
     return container.querySelector(
@@ -475,7 +475,7 @@ describe('Settings screen interactions', () => {
     expect(tokenField()).not.toBeNull()
     expect(tokenField()?.getAttribute('type')).toBe('password')
     expect(container.textContent).toContain(
-      'Without one the tool is not offered',
+      'Without a key, your AI agents don’t get Ultrafast.',
     )
     expect(buttonNamed('Remove')).toBeNull()
   })
@@ -498,7 +498,7 @@ describe('Settings screen interactions', () => {
     expect(server.tokenSaves).toEqual([{ token: 'jev-a-token' }])
     // The reply said a token is saved, so the field gives way to it.
     expect(tokenField()).toBeNull()
-    expect(container.textContent).toContain('A token is saved')
+    expect(container.textContent).toContain('A key is saved')
   })
 
   it('tests that a saved token can be removed', async () => {
@@ -531,7 +531,7 @@ describe('Settings screen interactions', () => {
       settingsOf({ jevTokenSource: JevTokenSource.Environment })
     await mount()
 
-    expect(container.textContent).toContain('token in the server')
+    expect(container.textContent).toContain('BrowserOS already has a key')
     expect(container.textContent).toContain('takes precedence')
     // And a token may still be pasted over it.
     expect(tokenField()).not.toBeNull()
@@ -545,7 +545,7 @@ describe('Settings screen interactions', () => {
     await type('jev-a-token')
     await submitToken()
 
-    expect(container.textContent).toContain('Could not save that')
+    expect(container.textContent).toContain('Couldn’t save that')
     expect(tokenField()?.value).toBe('jev-a-token')
   })
 
@@ -568,7 +568,7 @@ describe('Settings screen interactions', () => {
 
     expect(tokenField()).toBeNull()
     expect(buttonNamed('Save')).toBeNull()
-    expect(container.textContent).not.toContain('Ultrafast decision loop')
+    expect(container.textContent).not.toContain('Ultrafast access key')
     // The rest of the page is unaffected.
     expect(switchIn(container)).not.toBeNull()
   })
@@ -588,9 +588,9 @@ describe('Settings screen interactions', () => {
     })
 
     // Read before settling, so this is the first paint and not the steady state.
-    expect(container.textContent).not.toContain('Ultrafast decision loop')
+    expect(container.textContent).not.toContain('Ultrafast access key')
     await settle()
-    expect(container.textContent).not.toContain('Ultrafast decision loop')
+    expect(container.textContent).not.toContain('Ultrafast access key')
   })
 
   it('tests that the field appears when the flag turns on without a reload', async () => {
