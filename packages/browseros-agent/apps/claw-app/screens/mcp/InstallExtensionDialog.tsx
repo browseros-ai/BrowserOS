@@ -20,7 +20,6 @@ interface InstallExtensionDialogProps {
 /**
  * Walks through installing the BrowserOS neo extension in the Claude desktop
  * app, one step at a time, with a picture of the real control at each stop.
- * Each step is its own view of the morphing modal.
  */
 export function InstallExtensionDialog({
   open,
@@ -43,7 +42,9 @@ export function InstallExtensionDialog({
 
   return (
     <MorphingModal
-      viewId={open ? `step-${index}` : null}
+      // One view for the whole guide: a view per step swapped the rail and
+      // resized the panel on every step, which shook the dialog.
+      viewId={open ? 'guide' : null}
       onClose={() => onOpenChange(false)}
       placement="center"
       ariaLabel="Set up the Claude desktop app"
@@ -107,7 +108,8 @@ export function InstallExtensionDialog({
           <h3 className="mt-1 pr-10 font-semibold text-[17px] text-ink leading-snug">
             {step.title}
           </h3>
-          <p className="mt-1.5 text-[13.5px] text-ink-2 leading-relaxed">
+          {/* Room for the longest step, so the picture below never moves. */}
+          <p className="mt-1.5 min-h-[3lh] text-[13.5px] text-ink-2 leading-relaxed">
             {step.body}
           </p>
 
