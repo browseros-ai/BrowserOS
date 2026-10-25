@@ -55,7 +55,7 @@ NEO_VNC_PORT=7080 NEO_MCP_PORT=7010 NEO_DATA=/mnt/neo docker compose up -d --wai
 | Owner of files in the data folder | `-e PUID=… -e PGID=…` | `PUID`, `PGID` | 1000 / 1000 |
 | Starting screen size | `-e NEO_SCREEN=1920x1080` | `NEO_SCREEN` | `1600x1000` |
 | Hosted mode (see below) | `-e BROWSERCLAW_HOSTED_MODE=0` | `BROWSERCLAW_HOSTED_MODE` | `1` |
-| Server behaviour file (see [Behaviour file](#behaviour-file)) | `-v ./neo.toml:/etc/neo/neo.toml:ro` | `BROWSERCLAW_CONFIG_FILE` | `/etc/neo/neo.toml` |
+| Server behaviour (see [Behaviour file](#behaviour-file)) | `-v ./neo.toml:/etc/neo/neo.toml:ro` | the `neo.toml` volume in `compose.yaml` | the image's `/etc/neo/neo.toml` |
 | Chromium sandbox (see [Security](#security)) | `-e NEO_SANDBOX=true` | `NEO_SANDBOX` | `false` |
 | Disable bundled BrowserOS extensions | `-e NEO_DISABLE_BROWSEROS_EXTENSIONS=true` | `NEO_DISABLE_BROWSEROS_EXTENSIONS` | `false` |
 | Extra Neo command-line flags | `-e NEO_ARGS="--lang=de"` | `NEO_ARGS` | empty |
