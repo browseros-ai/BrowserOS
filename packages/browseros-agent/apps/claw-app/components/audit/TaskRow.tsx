@@ -12,16 +12,18 @@ import {
   taskScreenshotUrl,
   useTaskScreenshotBaseUrl,
 } from '@/modules/api/audit.hooks'
-import { taskWhen, tookLabel } from '@/screens/audit/audit.helpers'
+import { taskTime, taskWhen, tookLabel } from '@/screens/audit/audit.helpers'
 import { SessionStatusBadge } from './SessionStatusBadge'
 
 interface TaskRowProps {
   task: TaskSummary
   now: number
+  /** Under a day heading the day is already said, so show only the time. */
+  timeOnly?: boolean
 }
 
 /** One finished or running task: picture, name, summary, agent, when and status. */
-export function TaskRow({ task, now }: TaskRowProps) {
+export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
   const location = useLocation()
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
   const shot =
@@ -69,7 +71,11 @@ export function TaskRow({ task, now }: TaskRowProps) {
             color={task.color}
           />
           <span aria-hidden>·</span>
-          <span>{taskWhen(task.startedAt, now)}</span>
+          <span>
+            {timeOnly
+              ? taskTime(task.startedAt)
+              : taskWhen(task.startedAt, now)}
+          </span>
           <span aria-hidden>·</span>
           <span>{tookLabel(task.durationMs)}</span>
         </span>

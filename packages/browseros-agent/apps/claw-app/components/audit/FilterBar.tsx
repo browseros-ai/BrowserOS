@@ -1,229 +1,114 @@
-import { Check, ChevronDown, Search, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
-import { Button } from '@/components/ui/button'
+import { Search } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Input } from '@/components/motion/input'
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Input } from '@/components/ui/input'
-import type { TaskStatus } from '@/modules/api/audit.hooks'
-import type { AgentChip } from '@/screens/audit/audit.helpers'
-import { AgentDot } from './AgentDot'
-import { StatusBadge } from './StatusBadge'
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/motion/select'
+import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
+import type { AgentOption } from '@/screens/audit/audit.helpers'
+import type { HistoryView } from '@/screens/audit/audit.search-params'
 
 const SEARCH_DEBOUNCE_MS = 250
+const ALL_AGENTS = 'all'
 
 interface FilterBarProps {
-  agentOptions: AgentChip[]
-  statusOptions: { status: TaskStatus; count: number }[]
-  siteOptions: { site: string; count: number }[]
-  selectedAgentSlug: string | null
-  selectedStatus: TaskStatus | null
-  selectedSite: string | null
   search: string
+  view: HistoryView
+  agentSlug: string | null
+  agentOptions: AgentOption[]
+  onSearchChange: (search: string) => void
+  onViewChange: (view: HistoryView) => void
   onAgentChange: (slug: string | null) => void
-  onStatusChange: (status: TaskStatus | null) => void
-  onSiteChange: (site: string | null) => void
-  onSearchChange: (q: string) => void
 }
 
+/** Search, All or Needs a look, and which agent: the only ways to narrow History. */
 export function FilterBar({
-  agentOptions,
-  statusOptions,
-  siteOptions,
-  selectedAgentSlug,
-  selectedStatus,
-  selectedSite,
   search,
-  onAgentChange,
-  onStatusChange,
-  onSiteChange,
+  view,
+  agentSlug,
+  agentOptions,
   onSearchChange,
+  onViewChange,
+  onAgentChange,
 }: FilterBarProps) {
-  const selectedAgent = agentOptions.find((a) => a.slug === selectedAgentSlug)
-  // Local search state so each keystroke updates the input
-  // immediately, but the URL + refetch only fires after the operator
-  // has paused typing. Without this every character triggered a
-  // re-render + network request, stacking up while the user typed.
-  const [localSearch, setLocalSearch] = useState(search)
-  useEffect(() => {
-    setLocalSearch(search)
-  }, [search])
-  useEffect(() => {
-    if (localSearch === search) return
-    const id = setTimeout(() => onSearchChange(localSearch), SEARCH_DEBOUNCE_MS)
-    return () => clearTimeout(id)
-  }, [localSearch, search, onSearchChange])
+  const [draft, setDraft] = useState(search)
+  const [lastSearch, setLastSearch] = useState(search)
+  const timer = useRef<number | undefined>(undefined)
 
-  const clearSearch = (): void => {
-    setLocalSearch('')
-    onSearchChange('')
+  // "Show all tasks" clears the search from outside; follow it.
+  if (search !== lastSearch) {
+    setLastSearch(search)
+    setDraft(search)
+  }
+
+  // A search still waiting to apply must not rewrite the next page's URL.
+  useEffect(() => () => window.clearTimeout(timer.current), [])
+
+  const typeSearch = (next: string) => {
+    setDraft(next)
+    window.clearTimeout(timer.current)
+    timer.current = window.setTimeout(
+      () => onSearchChange(next.trim()),
+      SEARCH_DEBOUNCE_MS,
+    )
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-1 border-border-2 border-y py-2.5">
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 gap-1.5 rounded-9 px-2.5 font-medium text-[13px] text-ink-2 hover:bg-card-tint"
-            />
+    <div className="flex flex-wrap items-center gap-2.5">
+      <Input
+        type="search"
+        aria-label="Search tasks"
+        placeholder="Search tasks"
+        value={draft}
+        onChange={typeSearch}
+        leftIcon={<Search className="size-[18px]" />}
+        className="min-w-[240px] flex-1"
+        classNames={{
+          field:
+            'h-11 rounded-full border-border-strong bg-card focus-within:border-primary',
+          input: 'text-[15px]',
+        }}
+      />
+      <Tabs
+        value={view}
+        onValueChange={(next) =>
+          onViewChange(next === 'attention' ? 'attention' : 'all')
+        }
+      >
+        <TabsList aria-label="Which tasks" className="border border-border-2">
+          <TabsTrigger value="all" className="font-semibold text-[14px]">
+            All
+          </TabsTrigger>
+          <TabsTrigger value="attention" className="font-semibold text-[14px]">
+            Needs a look
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+      {agentOptions.length > 1 || agentSlug ? (
+        <Select
+          value={agentSlug ?? ALL_AGENTS}
+          onValueChange={(next) =>
+            onAgentChange(next === ALL_AGENTS ? null : next)
           }
+          className="w-48"
         >
-          {selectedAgent ? (
-            <>
-              <AgentDot slug={selectedAgent.slug} />
-              {selectedAgent.slug}
-            </>
-          ) : (
-            'Agent'
-          )}
-          <ChevronDown className="size-3 text-ink-3" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="start"
-          className="ph-no-capture min-w-52 bg-popover before:hidden"
-        >
-          <DropdownMenuItem onClick={() => onAgentChange(null)}>
-            <span className="flex-1">All</span>
-            {selectedAgentSlug === null && <Check className="size-3.5" />}
-          </DropdownMenuItem>
-          {agentOptions.map((opt) => (
-            <DropdownMenuItem
-              key={opt.slug}
-              onClick={() => onAgentChange(opt.slug)}
-            >
-              <AgentDot slug={opt.slug} className="mr-1.5" />
-              <span className="flex-1">{opt.slug}</span>
-              <span className="ml-2 text-[11.5px] text-ink-3">{opt.count}</span>
-              {selectedAgentSlug === opt.slug && (
-                <Check className="ml-2 size-3.5" />
-              )}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 gap-1.5 rounded-9 px-2.5 font-medium text-[13px] text-ink-2 hover:bg-card-tint"
-            />
-          }
-        >
-          {selectedStatus ? <StatusPill status={selectedStatus} /> : 'Status'}
-          <ChevronDown className="size-3 text-ink-3" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="start"
-          className="ph-no-capture min-w-44 bg-popover before:hidden"
-        >
-          <DropdownMenuItem onClick={() => onStatusChange(null)}>
-            <span className="flex-1">All</span>
-            {selectedStatus === null && <Check className="size-3.5" />}
-          </DropdownMenuItem>
-          {statusOptions.map((opt) => (
-            <DropdownMenuItem
-              key={opt.status}
-              onClick={() => onStatusChange(opt.status)}
-            >
-              <StatusBadge status={opt.status} className="mr-2" />
-              <span className="ml-1 text-[11.5px] text-ink-3">{opt.count}</span>
-              {selectedStatus === opt.status && (
-                <Check className="ml-auto size-3.5" />
-              )}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      {siteOptions.length > 0 && (
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 gap-1.5 rounded-9 px-2.5 font-medium text-[13px] text-ink-2 hover:bg-card-tint"
-              />
-            }
-          >
-            {selectedSite ?? 'Site'}
-            <ChevronDown className="size-3 text-ink-3" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="start"
-            className="ph-no-capture max-h-64 min-w-52 overflow-y-auto bg-popover before:hidden"
-          >
-            <DropdownMenuItem onClick={() => onSiteChange(null)}>
-              <span className="flex-1">All</span>
-              {selectedSite === null && <Check className="size-3.5" />}
-            </DropdownMenuItem>
-            {siteOptions.map((opt) => (
-              <DropdownMenuItem
-                key={opt.site}
-                onClick={() => onSiteChange(opt.site)}
-              >
-                <span className="flex-1 truncate">{opt.site}</span>
-                <span className="ml-2 text-[11.5px] text-ink-3">
-                  {opt.count}
-                </span>
-                {selectedSite === opt.site && (
-                  <Check className="ml-2 size-3.5" />
-                )}
-              </DropdownMenuItem>
+          <SelectTrigger className="h-10 font-semibold text-[14px] text-ink-2">
+            <SelectValue placeholder="All agents" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL_AGENTS}>All agents</SelectItem>
+            {agentOptions.map((agent) => (
+              <SelectItem key={agent.slug} value={agent.slug}>
+                {agent.name}
+              </SelectItem>
             ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
-
-      <div className="relative ml-auto flex items-center">
-        <Search
-          className="absolute left-2.5 z-10 size-3.5 text-ink-3"
-          aria-hidden
-        />
-        <Input
-          value={localSearch}
-          onChange={(e) => setLocalSearch(e.target.value)}
-          placeholder="search sessions, summaries..."
-          // pr-7 reserves space for the inline clear button so the
-          // text never sits under the icon.
-          className="h-8 w-64 rounded-9 border-none bg-card pr-7 pl-8 font-mono text-[13px] text-ink shadow-xs placeholder:text-ink-3 focus-visible:ring-0"
-        />
-        {localSearch.length > 0 && (
-          <button
-            type="button"
-            onClick={clearSearch}
-            aria-label="Clear search"
-            data-testid="filter-search-clear"
-            className="absolute right-1.5 inline-flex size-5 items-center justify-center rounded text-ink-3 transition-colors hover:bg-card-tint hover:text-ink"
-          >
-            <X className="size-3.5" />
-          </button>
-        )}
-      </div>
+          </SelectContent>
+        </Select>
+      ) : null}
     </div>
   )
-}
-
-function StatusPill({ status }: { status: TaskStatus }) {
-  if (status === 'live') {
-    return (
-      <span className="inline-flex items-center rounded-full bg-cyanotype-live px-2.5 py-[3px] font-semibold text-[11px] text-cyanotype-live-ink leading-[14px]">
-        Live
-      </span>
-    )
-  }
-  if (status === 'failed') {
-    return <span className="text-red-500">Failed</span>
-  }
-  if (status === 'cancelled') return <span>Stopped</span>
-  return <span>Done</span>
 }

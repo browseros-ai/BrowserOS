@@ -1,180 +1,5 @@
-import type { TaskStatus, TaskSummary } from '@/modules/api/audit.hooks'
-
-/**
- * LIVE runs always float to the top of the list regardless of
- * `startedAt`; within each status group we sort newest-first. This
- * is the input sort applied BEFORE tanstack-table's own sorting
- * state so operator-triggered column sorts still work naturally
- * (an operator sort override replaces this pre-sort at render).
- */
-export function orderByLiveThenRecency(tasks: TaskSummary[]): TaskSummary[] {
-  return [...tasks].sort((a, b) => {
-    if (a.status === 'live' && b.status !== 'live') return -1
-    if (b.status === 'live' && a.status !== 'live') return 1
-    return b.startedAt - a.startedAt
-  })
-}
-
-const DAY_HEADING_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  weekday: 'long',
-  day: 'numeric',
-  month: 'long',
-})
-
-/** `Wednesday, July 2` style label used as an audit-list day band. */
-export function formatDayHeading(ts: number): string {
-  return DAY_HEADING_FORMATTER.format(new Date(ts))
-}
-
-/** Local calendar-day equality (year + month + date), timezone-aware. */
-export function isSameLocalDay(a: number, b: number): boolean {
-  const da = new Date(a)
-  const db = new Date(b)
-  return (
-    da.getFullYear() === db.getFullYear() &&
-    da.getMonth() === db.getMonth() &&
-    da.getDate() === db.getDate()
-  )
-}
-
-const NINE_SECONDS = 9_000
-const ONE_MINUTE = 60_000
-const ONE_HOUR = 3_600_000
-const ONE_DAY = 86_400_000
-
-export function formatRelative(createdAt: number, now: number): string {
-  const delta = now - createdAt
-  if (delta < NINE_SECONDS) return 'just now'
-  if (delta < ONE_MINUTE) return `${Math.floor(delta / 1000)}s ago`
-  if (delta < ONE_HOUR) return `${Math.floor(delta / ONE_MINUTE)}m ago`
-  if (delta < ONE_DAY) return `${Math.floor(delta / ONE_HOUR)}h ago`
-  return `${Math.floor(delta / ONE_DAY)}d ago`
-}
-
-export function siteOf(url: string | null): string {
-  if (!url) return ''
-  try {
-    return new URL(url).hostname.replace(/^www\./, '')
-  } catch {
-    return url
-  }
-}
-
-export function formatDuration(ms: number): string {
-  const v = ms < 0 ? 0 : ms
-  if (v < 1000) return `${v}ms`
-  const seconds = Math.floor(v / 1000)
-  if (seconds < 60) return `${seconds}s`
-  const mins = Math.floor(seconds / 60)
-  const remSec = seconds % 60
-  if (mins < 60) return `${mins}m ${remSec}s`
-  const hours = Math.floor(mins / 60)
-  const remMin = mins % 60
-  return `${hours}h ${remMin}m`
-}
-
-const TOKEN_COMPACT_FORMAT = new Intl.NumberFormat('en-US', {
-  notation: 'compact',
-  compactDisplay: 'short',
-  maximumFractionDigits: 1,
-})
-const TOKEN_WHOLE_FORMAT = new Intl.NumberFormat('en-US', {
-  maximumFractionDigits: 0,
-})
-
-/** Compact token count for dense rows: `948`, `12.3k`, `1.2m` (lowercase suffix). */
-export function formatTokensCompact(tokens: number): string {
-  return TOKEN_COMPACT_FORMAT.format(Math.max(0, tokens)).toLowerCase()
-}
-
-/** Grouped exact token count for the detail card: `12,345`. */
-export function formatTokensFull(tokens: number): string {
-  return TOKEN_WHOLE_FORMAT.format(Math.max(0, tokens))
-}
-
-/**
- * Short trail of tool names with an ellipsis when the sequence is
- * longer than `cap`. Mirrors the abbreviated trail shown on each
- * task card / row.
- */
-export function abbreviateSequence(seq: string[], cap = 5): string {
-  if (seq.length <= cap) return seq.join(' → ')
-  return `${seq.slice(0, cap).join(' → ')} → …`
-}
-
-export interface AgentChip {
-  slug: string
-  count: number
-}
-
-/**
- * Chips render the slug, not the session label. The label is whatever the client
- * typed, so two sessions announcing "Claude Code" and "claude-code" group into one
- * chip whose displayed name would otherwise depend on which arrived first. The slug
- * is also what the tab strip shows, so both surfaces name the agent identically.
- */
-export function agentChipsFor(tasks: TaskSummary[]): AgentChip[] {
-  const map = new Map<string, AgentChip>()
-  for (const t of tasks) {
-    const existing = map.get(t.slug)
-    if (existing) {
-      existing.count += 1
-      continue
-    }
-    map.set(t.slug, { slug: t.slug, count: 1 })
-  }
-  return [...map.values()].sort((a, b) => b.count - a.count)
-}
-
-export function statusOptions(
-  tasks: TaskSummary[],
-): { status: TaskStatus; count: number }[] {
-  const counts: Record<TaskStatus, number> = {
-    live: 0,
-    done: 0,
-    failed: 0,
-    cancelled: 0,
-  }
-  for (const t of tasks) counts[t.status] += 1
-  return (['live', 'done', 'failed', 'cancelled'] as TaskStatus[])
-    .filter((s) => counts[s] > 0)
-    .map((s) => ({ status: s, count: counts[s] }))
-}
-
-export function siteOptions(
-  tasks: TaskSummary[],
-): { site: string; count: number }[] {
-  const map = new Map<string, number>()
-  for (const t of tasks) {
-    if (!t.site) continue
-    map.set(t.site, (map.get(t.site) ?? 0) + 1)
-  }
-  return [...map.entries()]
-    .map(([site, count]) => ({ site, count }))
-    .sort((a, b) => b.count - a.count)
-}
-
-export function parseResultMeta(raw: string | null | undefined): {
-  isError: boolean
-  contentSummary: string
-  structuredKeys: string[]
-} | null {
-  if (!raw) return null
-  try {
-    const v = JSON.parse(raw) as {
-      isError?: boolean
-      contentSummary?: string
-      structuredKeys?: string[]
-    }
-    return {
-      isError: Boolean(v.isError),
-      contentSummary: v.contentSummary ?? 'unknown',
-      structuredKeys: Array.isArray(v.structuredKeys) ? v.structuredKeys : [],
-    }
-  } catch {
-    return null
-  }
-}
+import { agentIdentity } from '@/components/harness/harness.types'
+import type { TaskSummary } from '@/modules/api/audit.hooks'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -184,15 +9,108 @@ function startOfDay(ms: number): number {
   return day.getTime()
 }
 
-/** "2:41 PM" for today, "Yesterday", then "Oct 21" in the reader's locale. */
-export function taskWhen(startedAt: number, now: number): string {
-  const days = Math.round((startOfDay(now) - startOfDay(startedAt)) / DAY_MS)
-  if (days <= 0) {
-    return new Date(startedAt).toLocaleTimeString(undefined, {
-      hour: 'numeric',
-      minute: '2-digit',
+function daysBefore(startedAt: number, now: number): number {
+  return Math.round((startOfDay(now) - startOfDay(startedAt)) / DAY_MS)
+}
+
+/** A task worth a second look: it did not finish, or someone stopped it. */
+export function needsALook(task: Pick<TaskSummary, 'status'>): boolean {
+  return task.status === 'failed' || task.status === 'cancelled'
+}
+
+export interface AgentOption {
+  slug: string
+  name: string
+}
+
+/**
+ * The agents seen in the loaded tasks, most active first, named the way the
+ * task rows name them. Grouped by slug, since two sessions can announce the
+ * same agent with different labels. A selected agent with no loaded task is
+ * kept so the picker can still show and clear it.
+ */
+export function agentOptionsFor(
+  tasks: readonly TaskSummary[],
+  selectedSlug: string | null,
+): AgentOption[] {
+  const seen = new Map<string, AgentOption & { count: number }>()
+  for (const task of tasks) {
+    const existing = seen.get(task.slug)
+    if (existing) {
+      existing.count += 1
+      continue
+    }
+    seen.set(task.slug, {
+      slug: task.slug,
+      name: agentIdentity(task.harness, task.label || task.slug).name,
+      count: 1,
     })
   }
+  const options = [...seen.values()]
+    .sort((left, right) => right.count - left.count)
+    .map(({ slug, name }) => ({ slug, name }))
+  if (selectedSlug && !seen.has(selectedSlug)) {
+    options.push({
+      slug: selectedSlug,
+      name: agentIdentity(undefined, selectedSlug).name,
+    })
+  }
+  return options
+}
+
+const DAY_HEADING = new Intl.DateTimeFormat(undefined, {
+  weekday: 'long',
+  month: 'long',
+  day: 'numeric',
+})
+
+/** "Today", "Yesterday", then "Wednesday, October 21". */
+export function dayLabel(startedAt: number, now: number): string {
+  const days = daysBefore(startedAt, now)
+  if (days <= 0) return 'Today'
+  if (days === 1) return 'Yesterday'
+  return DAY_HEADING.format(new Date(startedAt))
+}
+
+export interface DayGroup {
+  key: number
+  label: string
+  tasks: TaskSummary[]
+}
+
+/** Tasks newest first, split into one group per local calendar day. */
+export function groupByDay(
+  tasks: readonly TaskSummary[],
+  now: number,
+): DayGroup[] {
+  const groups: DayGroup[] = []
+  const ordered = [...tasks].sort(
+    (left, right) => right.startedAt - left.startedAt,
+  )
+  for (const task of ordered) {
+    const key = startOfDay(task.startedAt)
+    const current = groups.at(-1)
+    if (current?.key === key) {
+      current.tasks.push(task)
+      continue
+    }
+    groups.push({ key, label: dayLabel(task.startedAt, now), tasks: [task] })
+  }
+  return groups
+}
+
+/** "2:41 PM" in the reader's locale. */
+export function taskTime(startedAt: number): string {
+  return new Date(startedAt).toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+/** "2:41 PM" for today, "Yesterday", then "Oct 21" in the reader's locale. */
+export function taskWhen(startedAt: number, now: number): string {
+  const days = daysBefore(startedAt, now)
+  if (days <= 0) return taskTime(startedAt)
   if (days === 1) return 'Yesterday'
   return new Date(startedAt).toLocaleDateString(undefined, {
     month: 'short',
@@ -212,11 +130,7 @@ export function tookLabel(durationMs: number): string {
 
 /** "Today at 2:41 PM", "Yesterday at 9:05 AM", then "Oct 21 at 4:10 PM". */
 export function taskDayAndTime(startedAt: number, now: number): string {
-  const time = new Date(startedAt).toLocaleTimeString(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-  })
-  const days = Math.round((startOfDay(now) - startOfDay(startedAt)) / DAY_MS)
+  const days = daysBefore(startedAt, now)
   const day = days <= 0 ? 'Today' : taskWhen(startedAt, now)
-  return `${day} at ${time}`
+  return `${day} at ${taskTime(startedAt)}`
 }
