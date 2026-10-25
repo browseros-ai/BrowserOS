@@ -1,9 +1,9 @@
 import { CircleCheck, FileText, Unplug } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { RowMenu } from '@/components/actions/RowMenu'
 import { HarnessIcon } from '@/components/harness/HarnessIcon'
 import type { Harness } from '@/components/harness/harness.types'
 import { StatefulButton } from '@/components/motion/button/stateful'
-import { OverflowActions } from '@/components/motion/overflow-actions'
 import { cn } from '@/lib/utils'
 import type { ConnectionState } from '@/modules/api/connections.hooks'
 import { toast } from '@/modules/toast/toast'
@@ -39,12 +39,9 @@ export function ConnectionRow({
               <CircleCheck aria-hidden className="size-4" />
               Connected
             </span>
-            <OverflowActions
-              size="sm"
-              openLabel={`More for ${name}`}
-              closeLabel="Close"
-              primaryActions={[]}
-              overflowActions={[
+            <RowMenu
+              label={name}
+              actions={[
                 ...(state.configPath
                   ? [
                       {
@@ -69,12 +66,6 @@ export function ConnectionRow({
                   onClick: onDisconnect,
                 },
               ]}
-              collapseOnAction
-              classNames={{
-                track: 'border-border-strong',
-                toggle: 'bg-transparent text-ink-2 hover:bg-bg-sunken',
-                action: 'font-semibold text-ink-2',
-              }}
             />
           </span>
         ) : (

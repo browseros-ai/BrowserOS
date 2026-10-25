@@ -7,7 +7,7 @@
 import type { Skill } from '@browseros/claw-api'
 import { Pencil, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import { OverflowActions } from '@/components/motion/overflow-actions'
+import { RowMenu } from '@/components/actions/RowMenu'
 import { useSkill } from '@/modules/api/skills.hooks'
 import { DeleteSkillDialog } from './DeleteSkillDialog'
 import { SkillFormDialog } from './SkillFormDialog'
@@ -26,12 +26,9 @@ export function SkillActions({ skill, body, onDeleted }: SkillActionsProps) {
 
   return (
     <>
-      <OverflowActions
-        size="sm"
-        openLabel={`More for ${skill.description}`}
-        closeLabel="Close"
-        primaryActions={[]}
-        overflowActions={[
+      <RowMenu
+        label={skill.description}
+        actions={[
           {
             id: 'edit',
             label: 'Edit',
@@ -45,13 +42,6 @@ export function SkillActions({ skill, body, onDeleted }: SkillActionsProps) {
             onClick: () => setDeleting(true),
           },
         ]}
-        collapseOnAction
-        classNames={{
-          root: 'shrink-0',
-          track: 'border-border-strong',
-          toggle: 'bg-transparent text-ink-2 hover:bg-bg-sunken',
-          action: 'font-semibold text-ink-2',
-        }}
       />
       {editing ? (
         body === undefined ? (
