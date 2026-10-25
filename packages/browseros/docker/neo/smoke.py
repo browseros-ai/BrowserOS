@@ -153,13 +153,11 @@ def main() -> None:
     tools = {tool["name"] for tool in listed}
     check("MCP lists the tabs tool", "tabs" in tools, f"{len(tools)} tools")
     check("human help disabled", not tools & HUMAN_HELP_TOOLS)
-    hosted = "name_session" not in tools
+    tabs = next(tool for tool in listed if tool["name"] == "tabs")
+    hosted = "taskName" in tabs["inputSchema"].get("properties", {})
     if hosted:
         hidden = tools & HOSTED_HIDDEN_TOOLS
         check("hosted mode hides server-only tools", not hidden, ", ".join(sorted(hidden)))
-        check("hosted tools do not request task names", all(
-            "taskName" not in tool["inputSchema"].get("properties", {}) for tool in listed
-        ))
     else:
         check(
             "claw-server is not in desktop mode",
@@ -169,6 +167,8 @@ def main() -> None:
         print("skip hosted mode: this Neo's claw-server predates hosted-mode support")
 
     new_tab = {"action": "new", "url": args.url}
+    if hosted:
+        new_tab["taskName"] = "docker smoke"
     opened = client.tool("tabs", new_tab)
     check("agent opened a tab", "opened page" in opened, opened.splitlines()[0] if opened else "")
 

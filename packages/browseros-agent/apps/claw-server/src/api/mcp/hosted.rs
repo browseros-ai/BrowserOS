@@ -4,11 +4,12 @@
 //! brings its own harness. Two groups of server tools assume things that are not true there:
 //! `save_skill` and `mark_skill_run` link skills into agents installed beside the browser, and
 //! `request_human_help`/`await_human_help` wait on a person watching the cockpit. A hosted
-//! server does not offer them. Hosted agents also manage their own tabs and task labels:
-//! the server neither groups their tabs nor asks them to name tasks.
+//! server does not offer them. Naming moves off the `name_session` tool onto an optional
+//! `taskName` argument that rides on any call, so naming a task costs no extra round trip.
 //!
-//! Both modes strip legacy `taskName` before a catalog tool sees its strict arguments.
-//! Desktop keeps accepting it; hosted ignores it, including malformed values.
+//! Desktop is untouched: it lists the same tools as before and never advertises `taskName`.
+//! Both modes still accept and strip `taskName`, because a catalog tool rejects unknown fields
+//! and a stray one would otherwise fail the call it rode on.
 
 use super::{
     naming::{SESSION_NAME_INPUT_MAX_LEN, normalize_small_name},
@@ -18,12 +19,15 @@ use super::{
     },
 };
 use crate::config::ServerMode;
-use rmcp::model::Tool;
-use serde_json::Value;
+use rmcp::model::{JsonObject, Tool};
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 pub const TASK_NAME_ARG: &str = "taskName";
-const NAME_SESSION_REFUSAL: &str = "name_session is not available on this hosted BrowserOS neo server. Continue with the browser tools; task naming is not required.";
+// Repeated in every listed tool's schema, so it stays short; the instructions carry the rest.
+const TASK_NAME_ARG_DESCRIPTION: &str = "Optional 2-3 word label for this task, e.g. \"invoice processing\". Send it once, early; your tabs are grouped as <client>/<label>.";
+
+const NAME_SESSION_REFUSAL: &str = "name_session is not available on this hosted BrowserOS neo server. Pass taskName=\"<2-3 word task label>\" on any tool call instead.";
 const SKILLS_REFUSAL: &str = "Skills are not available on this hosted BrowserOS neo server: nothing was saved or recorded. Keep repeatable workflows in your own agent instead.";
 const HUMAN_HELP_REFUSAL: &str = "Human help is not available on this hosted BrowserOS neo server. Do not wait for a human here: stop and tell the user in your chat what you need.";
 
@@ -45,42 +49,22 @@ pub fn refusal(mode: ServerMode, tool: &str) -> Option<&'static str> {
     }
 }
 
-/// Hosted tool guidance describes explicit grouping without requiring task groups.
+/// Adds the optional `taskName` property to a listed tool's input schema.
 #[must_use]
-pub fn with_tool_guidance(mut tool: Tool) -> Tool {
+pub fn with_task_name_arg(mut tool: Tool) -> Tool {
     let mut schema = tool.input_schema.as_ref().clone();
-    if let Some(Value::Object(properties)) = schema.get_mut("properties") {
-        if let Some(Value::Object(session)) = properties.get_mut("session") {
-            session.insert("description".into(), Value::String(
-                "Opaque logical task handle, including its browser_target binding. If returned under com.browseros.neo/session in a tool result, pass it as session on later calls. Omit on the first call or to start a separate task. Stopped handles stay stopped; stale browser targets require explicit reselection or clear.".into()
-            ));
-        }
-        if tool.name == "tabs" {
-            if let Some(Value::Object(group)) = properties.get_mut("groupId") {
-                group.insert("description".into(), Value::String(
-                    "Optional destination tab group for action=\"new\". Omit to open an ungrouped tab.".into()
-                ));
-            }
-            let mut description = "Manage browser tabs: list open pages and their page ids, show the active page, open a new background page, or close one. New pages are ready once they stop changing; do not pause afterwards. Use returned page ids with snapshot/act/navigate. Tabs stay ungrouped unless you explicitly request a group.".to_string();
-            // The catalog appends native capability guidance after the base description.
-            if let Some((_, note)) = tool
-                .description
-                .as_deref()
-                .and_then(|text| text.split_once("\n\n"))
-            {
-                description.push_str("\n\n");
-                description.push_str(note);
-            }
-            tool.description = Some(description.into());
-        }
-    }
-    if tool.name == "tab_groups"
-        && let Some(description) = tool.description.as_deref()
-    {
-        tool.description = Some(description.replace(
-            " To resume earlier work after a reconnect, pass the remembered group id as groupId on tabs action=\"new\" instead, which also makes that group's tabs read as yours again.",
-            "",
-        ).into());
+    let properties = schema
+        .entry("properties")
+        .or_insert_with(|| Value::Object(JsonObject::new()));
+    if let Value::Object(properties) = properties {
+        properties.insert(
+            TASK_NAME_ARG.to_string(),
+            json!({
+                "type": "string",
+                "maxLength": SESSION_NAME_INPUT_MAX_LEN,
+                "description": TASK_NAME_ARG_DESCRIPTION,
+            }),
+        );
     }
     tool.input_schema = Arc::new(schema);
     tool
@@ -88,19 +72,15 @@ pub fn with_tool_guidance(mut tool: Tool) -> Tool {
 
 /// Removes `taskName` from a call's arguments and returns the session label it asks for.
 ///
-/// Hosted ignores the legacy argument. On desktop a missing or blank value is no request.
-/// A desktop value that cannot become a label is an error,
+/// A missing or blank value is no request. A value that cannot become a label is an error,
 /// returned before the tool runs, the same as any other invalid argument.
-pub fn take_task_name(args: &mut Value, mode: ServerMode) -> Result<Option<String>, &'static str> {
+pub fn take_task_name(args: &mut Value) -> Result<Option<String>, &'static str> {
     let Some(raw) = args
         .as_object_mut()
         .and_then(|map| map.remove(TASK_NAME_ARG))
     else {
         return Ok(None);
     };
-    if mode.is_hosted() {
-        return Ok(None);
-    }
     let Value::String(raw) = raw else {
         return Err("taskName must be a string");
     };
@@ -117,10 +97,22 @@ pub fn take_task_name(args: &mut Value, mode: ServerMode) -> Result<Option<Strin
     Ok(Some(label))
 }
 
+/// The reminder appended to tool results while a session still carries its generated name.
+#[must_use]
+pub fn rename_tip(mode: ServerMode, title: &str) -> String {
+    match mode {
+        ServerMode::Desktop => format!(
+            "Tip: this session is \"{title}\" — rename it with name_session name=\"<2-3 word task label>\""
+        ),
+        ServerMode::Hosted => format!(
+            "Tip: this session is \"{title}\" — name it by passing taskName=\"<2-3 word task label>\" on your next call"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     const HIDDEN: [&str; 5] = [
         NAME_SESSION_TOOL_NAME,
@@ -149,16 +141,16 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_hosted_name_refusal_does_not_request_a_name() {
+    fn a_refused_name_session_points_at_task_name() {
         let message = refusal(ServerMode::Hosted, NAME_SESSION_TOOL_NAME).unwrap_or_default();
-        assert!(!message.contains(TASK_NAME_ARG), "{message}");
+        assert!(message.contains(TASK_NAME_ARG), "{message}");
     }
 
     #[test]
     fn task_name_is_stripped_and_normalized() {
         let mut args = json!({ "action": "list", "taskName": "  Invoice Processing! " });
         assert_eq!(
-            take_task_name(&mut args, ServerMode::Desktop),
+            take_task_name(&mut args),
             Ok(Some("invoice-processing".to_string()))
         );
         assert_eq!(args, json!({ "action": "list" }));
@@ -167,40 +159,51 @@ mod tests {
     #[test]
     fn absent_or_blank_task_name_is_no_request_and_still_stripped() {
         let mut args = json!({ "action": "list" });
-        assert_eq!(take_task_name(&mut args, ServerMode::Desktop), Ok(None));
+        assert_eq!(take_task_name(&mut args), Ok(None));
         let mut blank = json!({ "taskName": "   " });
-        assert_eq!(take_task_name(&mut blank, ServerMode::Desktop), Ok(None));
+        assert_eq!(take_task_name(&mut blank), Ok(None));
         assert_eq!(blank, json!({}));
         let mut not_an_object = json!(null);
-        assert_eq!(
-            take_task_name(&mut not_an_object, ServerMode::Desktop),
-            Ok(None)
-        );
+        assert_eq!(take_task_name(&mut not_an_object), Ok(None));
     }
 
     #[test]
     fn unusable_task_name_is_an_error_and_still_stripped() {
         for bad in [json!(7), json!("!!!"), json!("x".repeat(65))] {
             let mut args = json!({ "taskName": bad });
-            assert!(
-                take_task_name(&mut args, ServerMode::Desktop).is_err(),
-                "{bad}"
-            );
+            assert!(take_task_name(&mut args).is_err(), "{bad}");
             assert_eq!(args, json!({}));
         }
     }
 
     #[test]
-    fn tests_that_hosted_task_name_is_ignored_and_stripped() {
-        for old in [
-            json!("Invoice Processing"),
-            json!(7),
-            json!("!!!"),
-            json!("x".repeat(65)),
-        ] {
-            let mut args = json!({"action":"list", "taskName":old});
-            assert_eq!(take_task_name(&mut args, ServerMode::Hosted), Ok(None));
-            assert_eq!(args, json!({"action":"list"}));
-        }
+    fn task_name_property_is_optional_and_bounded() {
+        let tool = Tool::new(
+            "tabs",
+            "Manage tabs.",
+            Arc::new(JsonObject::from_iter([(
+                "type".to_string(),
+                json!("object"),
+            )])),
+        );
+        let schema = Value::Object(with_task_name_arg(tool).input_schema.as_ref().clone());
+        assert_eq!(schema["properties"][TASK_NAME_ARG]["type"], "string");
+        assert_eq!(
+            schema["properties"][TASK_NAME_ARG]["maxLength"],
+            SESSION_NAME_INPUT_MAX_LEN
+        );
+        assert_eq!(schema["required"], Value::Null);
+    }
+
+    #[test]
+    fn the_tip_names_the_channel_each_mode_offers() {
+        let desktop = rename_tip(ServerMode::Desktop, "codex/agile-alpaca");
+        assert_eq!(
+            desktop,
+            "Tip: this session is \"codex/agile-alpaca\" — rename it with name_session name=\"<2-3 word task label>\""
+        );
+        let hosted = rename_tip(ServerMode::Hosted, "codex/agile-alpaca");
+        assert!(hosted.contains("taskName=\""), "{hosted}");
+        assert!(!hosted.contains("name_session"), "{hosted}");
     }
 }

@@ -29,35 +29,6 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         if context.result.is_error {
             return Ok(None);
         }
-        if context.call.state.config.mode.is_hosted() {
-            // The shared tool's stale-group note assumes desktop automatic grouping.
-            let Some((index, text)) =
-                context
-                    .result
-                    .content
-                    .iter()
-                    .enumerate()
-                    .find_map(|(index, block)| {
-                        block
-                            .as_text()
-                            .filter(|text| {
-                                text.text.starts_with("note: tab group ")
-                                    && text.text.contains(
-                                        "was not added to it and will go to your own group.",
-                                    )
-                            })
-                            .map(|text| (index, &text.text))
-                    })
-            else {
-                return Ok(None);
-            };
-            let mut result = context.result.clone();
-            result.content[index] = ContentBlock::text(text.replace(
-                "was not added to it and will go to your own group.",
-                "was not added to it and stays ungrouped.",
-            ));
-            return Ok(Some(result));
-        }
         if context.call.identity.is_none() || context.call.browser_session.is_none() {
             return Ok(None);
         }
@@ -187,10 +158,6 @@ pub struct CreatedPage {
 }
 
 pub(crate) async fn created_page(call: &ToolCall, page_id: u32) -> Option<CreatedPage> {
-    // Script-created pages share this entry point with the ordinary tab effect.
-    if call.state.config.mode.is_hosted() {
-        return None;
-    }
     // The shared registry can reconcile another incarnation while ownership or
     // response work awaits. Core validates this candidate against the creating
     // view's immutable receipt; the registry alone cannot prove creation identity.
@@ -224,9 +191,6 @@ fn spawn_tab_group_work(call: ToolCall, created: Option<CreatedPage>) -> JoinHan
 /// script hook so a page a script opens joins the agent's group the same way a
 /// `tabs new` page does.
 pub(crate) async fn run_tab_group_work(call: ToolCall, created: Option<CreatedPage>) {
-    if call.state.config.mode.is_hosted() {
-        return;
-    }
     let (Some(identity), Some(browser), Some(tab_groups)) = (
         call.identity.as_ref(),
         call.view.as_ref(),
