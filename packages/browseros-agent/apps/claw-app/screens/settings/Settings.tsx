@@ -25,6 +25,8 @@ import {
   useSaveJevToken,
   useUpdateAgentSettings,
 } from '@/modules/api/agent-settings.hooks'
+import { HelpSettings } from './HelpSettings'
+import { PrivacySettings } from './PrivacySettings'
 import { StorageSettings } from './StorageSettings'
 import { SettingRow, SettingsSection } from './settings.components'
 
@@ -59,6 +61,8 @@ export function Settings() {
       <AgentSwitches />
       <Appearance />
       <StorageSettings />
+      <PrivacySettings />
+      <HelpSettings />
       {tokenFieldEnabled && settings.data ? (
         <SettingsSection title="Advanced">
           <JevToken
