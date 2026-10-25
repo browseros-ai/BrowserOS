@@ -215,7 +215,8 @@ pub(super) const GROUP_TITLE_CLAUSE: &str = ";\n  tabs group as <client>/<name>.
 /// The server instructions, with the blocked-by-a-person paragraph chosen by the setting and
 /// the profile paragraph only for natives that implement profile targeting. Instructions go out
 /// once at initialize, so they use the process-fixed native identity. A hosted server never
-/// names a tool it does not offer, so callers pass the effective help setting (off there).
+/// names a tool it does not offer, so callers pass the effective help setting (off there), and
+/// no server promises tab groups it does not make (see `tab_grouping`).
 #[must_use]
 pub fn mcp_instructions(
     mode: ServerMode,

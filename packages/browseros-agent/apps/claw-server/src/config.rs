@@ -118,7 +118,7 @@ impl ServerMode {
 ///
 /// [`ServerMode`] supplies every default and the file named by [`BEHAVIOR_FILE_ENV`] may
 /// override any of them. Code asks these fields, not the mode, so a new knob is one field here,
-/// one key in [`BehaviorFile`] and one commented line in the Docker image's `neo.toml`, rather
+/// one key in `BehaviorFile` and one commented line in the Docker image's `neo.toml`, rather
 /// than another environment variable for every deployment to carry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Behavior {

@@ -29,9 +29,9 @@ use tracing::warn;
 /// through: this effect (every dispatched call, pursue's moves included) and
 /// [`run_tab_group_work`], which the script hook also spawns. Nothing else records a session
 /// group, so with both closed the session never has one, and the rest falls away on its own:
-/// core gets no default group to open pages into,
-/// renames have no group to retitle, and retention has nothing to collapse or close. An agent's
-/// own `groupId` placement is core's and still works.
+/// core gets no default group to open pages into, renames have no group to retitle, and
+/// retention has nothing to collapse or close. An agent's own `groupId` placement is core's
+/// and still works.
 fn groups_automatically(call: &ToolCall) -> bool {
     call.state.config.behavior.tab_grouping.is_automatic()
 }
