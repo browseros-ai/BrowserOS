@@ -1,6 +1,5 @@
 import { AuditEmpty } from '@/components/audit/AuditEmpty'
 import { FilterBar } from '@/components/audit/FilterBar'
-import { ManageAuditFilesDialog } from '@/components/audit/ManageAuditFilesDialog'
 import { TaskRow } from '@/components/audit/TaskRow'
 import { Page } from '@/components/layout/Page'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -22,7 +21,6 @@ export function Audit() {
       <PageHeader
         title="History"
         lede="Everything your AI agents did with neo, newest first. Open a task to see what happened."
-        actions={<ManageAuditFilesDialog />}
       />
 
       {showFilters ? (

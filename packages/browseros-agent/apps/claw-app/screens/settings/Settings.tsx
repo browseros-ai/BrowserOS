@@ -25,6 +25,7 @@ import {
   useSaveJevToken,
   useUpdateAgentSettings,
 } from '@/modules/api/agent-settings.hooks'
+import { StorageSettings } from './StorageSettings'
 import { SettingRow, SettingsSection } from './settings.components'
 
 const HUMAN_HELP_ID = 'human-help'
@@ -57,6 +58,7 @@ export function Settings() {
       <PageHeader title="Settings" />
       <AgentSwitches />
       <Appearance />
+      <StorageSettings />
       {tokenFieldEnabled && settings.data ? (
         <SettingsSection title="Advanced">
           <JevToken

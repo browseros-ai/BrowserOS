@@ -54,12 +54,12 @@ export function SettingRow({
           >
             {title}
           </span>
-          <span
+          <div
             id={`${id}-description`}
             className="max-w-[62ch] text-[14px] text-ink-2"
           >
             {description}
-          </span>
+          </div>
         </div>
         {control ? <div className="shrink-0">{control}</div> : null}
       </div>

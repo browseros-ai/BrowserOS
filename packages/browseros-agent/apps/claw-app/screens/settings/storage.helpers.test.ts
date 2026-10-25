@@ -4,7 +4,7 @@ import {
   cleanupConfirmText,
   formatBytes,
   retentionRequest,
-} from './manage-audit-files.helpers'
+} from './storage.helpers'
 
 describe('formatBytes', () => {
   it('renders MB below a gigabyte and GB above', () => {
@@ -53,10 +53,12 @@ describe('retention <-> choice mapping', () => {
 })
 
 describe('cleanupConfirmText', () => {
-  it('mentions the window for deleteAfterDays and orphans for never', () => {
+  it('names the window, or says only leftovers go when keeping everything', () => {
     expect(cleanupConfirmText({ mode: 'deleteAfterDays', days: 30 })).toContain(
       'older than 30 days',
     )
-    expect(cleanupConfirmText({ mode: 'keepForever' })).toContain('Never')
+    expect(cleanupConfirmText({ mode: 'keepForever' })).toContain(
+      'leftover files',
+    )
   })
 })

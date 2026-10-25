@@ -3,8 +3,9 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Helpers for the "Manage audit files" dialog: human-readable byte sizes and
- * the mapping between the retention Select and the API policy.
+ * Helpers for Settings' history and storage section: human-readable sizes,
+ * the mapping between the retention choice and the API policy, and the
+ * clean-up confirmation in plain words.
  */
 
 import type { AuditRetention } from '@browseros/claw-api'
@@ -53,11 +54,11 @@ export function retentionRequest(
   }
 }
 
-/** Confirmation copy for the "Clean up now" gate. */
+/** Confirmation copy for "Clean up now". */
 export function cleanupConfirmText(retention: AuditRetention): string {
   if (retention.mode === 'keepForever') {
-    return 'Retention is set to Never, so this only removes orphaned audit files and reclaims disk space. Continue?'
+    return 'Your history is set to keep everything, so this only clears out leftover files and frees up the space they use.'
   }
   const days = retention.days ?? 7
-  return `This permanently deletes all audit data, screenshots, and replays older than ${days} days, then reclaims the disk space. Continue?`
+  return `Tasks older than ${days} days, with their pictures and recordings, are deleted from this computer. This can’t be undone.`
 }
