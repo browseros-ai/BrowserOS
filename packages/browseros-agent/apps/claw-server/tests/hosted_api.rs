@@ -42,6 +42,7 @@ async fn app(mode: ServerMode) -> anyhow::Result<TestApp> {
         dev_mode: false,
         native: Default::default(),
         mode,
+        behavior: claw_server::config::Behavior::defaults(mode),
     });
     let state = AppState::new_with_home(config, dir.path().join("home")).await?;
     Ok(TestApp {

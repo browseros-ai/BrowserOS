@@ -96,6 +96,7 @@ async fn test_app_with_native_and_mode(
             asserted: false,
         },
         mode,
+        behavior: claw_server::config::Behavior::defaults(mode),
     });
     let state = AppState::new_with_home(config, dir.path().join("home")).await?;
     let browser_task = if start_browser {

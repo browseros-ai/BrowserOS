@@ -1,3 +1,4 @@
+use anyhow::Context;
 use browseros_core::NativeCapabilities;
 use clap::Parser;
 use serde::Deserialize;
@@ -22,6 +23,10 @@ const BROWSERCLAW_DIR_NAME: &str = ".browserclaw";
 pub const NATIVE_VERSION_ENV: &str = "CLAW_NATIVE_BROWSEROS_VERSION";
 /// Selects the [`ServerMode`]: `1` enables hosted; `0`, unset or empty means desktop.
 pub const HOSTED_MODE_ENV: &str = "BROWSERCLAW_HOSTED_MODE";
+/// Names the optional TOML file that tunes this server's [`Behavior`]. Unset or blank keeps the
+/// mode's defaults. Once set, the file must exist: a mistyped mount path would otherwise fall
+/// back to the defaults without a word.
+pub const BEHAVIOR_FILE_ENV: &str = "BROWSERCLAW_CONFIG_FILE";
 const DEV_BROWSERCLAW_DIR_NAME: &str = ".browserclaw-dev";
 
 #[derive(Debug, Parser)]
@@ -76,6 +81,8 @@ pub struct Config {
     pub native: NativeIdentity,
     /// Read once per process from [`HOSTED_MODE_ENV`]; the MCP surface follows it.
     pub mode: ServerMode,
+    /// Read once per process: `mode`'s defaults, overridden by [`BEHAVIOR_FILE_ENV`].
+    pub behavior: Behavior,
 }
 
 /// How this server is deployed, fixed for the process by [`HOSTED_MODE_ENV`].
@@ -105,6 +112,80 @@ impl ServerMode {
     pub fn is_hosted(self) -> bool {
         self == Self::Hosted
     }
+}
+
+/// What a deployment can tune about how this server behaves, fixed for the process.
+///
+/// [`ServerMode`] supplies every default and the file named by [`BEHAVIOR_FILE_ENV`] may
+/// override any of them. Code asks these fields, not the mode, so a new knob is one field here,
+/// one key in [`BehaviorFile`] and one commented line in the Docker image's `neo.toml`, rather
+/// than another environment variable for every deployment to carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Behavior {
+    pub tab_grouping: TabGrouping,
+}
+
+impl Behavior {
+    #[must_use]
+    pub fn defaults(mode: ServerMode) -> Self {
+        Self {
+            tab_grouping: match mode {
+                ServerMode::Desktop => TabGrouping::Automatic,
+                ServerMode::Hosted => TabGrouping::Explicit,
+            },
+        }
+    }
+}
+
+/// The desktop defaults, matching [`ServerMode`]'s own default.
+impl Default for Behavior {
+    fn default() -> Self {
+        Self::defaults(ServerMode::Desktop)
+    }
+}
+
+/// Who decides which tab group an agent's page joins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TabGrouping {
+    /// The server keeps each session's pages in a `<client>/<task>` group that it creates,
+    /// titles, collapses and closes. The desktop app's behaviour.
+    #[serde(rename = "auto")]
+    Automatic,
+    /// The server never creates, moves, titles or closes a group: a page joins one only when the
+    /// call names `groupId`. For hosts whose own harness owns the tab layout.
+    Explicit,
+}
+
+impl TabGrouping {
+    /// The spelling the behaviour file uses.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Automatic => "auto",
+            Self::Explicit => "explicit",
+        }
+    }
+
+    #[must_use]
+    pub fn is_automatic(self) -> bool {
+        self == Self::Automatic
+    }
+}
+
+/// The behaviour file as written. Every key is optional; unknown keys are rejected, so a typo
+/// stops startup instead of being ignored while the default it meant to change stays on.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BehaviorFile {
+    #[serde(default)]
+    tabs: TabsSection,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TabsSection {
+    grouping: Option<TabGrouping>,
 }
 
 /// The connected browser's native identity as this process learned it.
@@ -230,6 +311,7 @@ impl Config {
         let browserclaw_dir = resolve_browserclaw_dir(env, dev_mode, &cwd);
         let native = resolve_native_identity(env, sidecar.instance.as_ref());
         let mode = resolve_mode(env)?;
+        let behavior = resolve_behavior(env, mode)?;
 
         Ok(Self {
             server_port,
@@ -259,6 +341,7 @@ impl Config {
             dev_mode,
             native,
             mode,
+            behavior,
         })
     }
 
@@ -318,6 +401,22 @@ fn resolve_mode(env: &ConfigEnv) -> anyhow::Result<ServerMode> {
         "1" => Ok(ServerMode::Hosted),
         raw => anyhow::bail!("{HOSTED_MODE_ENV} must be \"0\" or \"1\", got {raw:?}"),
     }
+}
+
+/// The mode's defaults with the behaviour file's keys applied. A file that cannot be read or
+/// parsed fails startup, naming the file; toml's error carries the offending line and key.
+fn resolve_behavior(env: &ConfigEnv, mode: ServerMode) -> anyhow::Result<Behavior> {
+    let defaults = Behavior::defaults(mode);
+    let Some(path) = env.get(BEHAVIOR_FILE_ENV).and_then(clean_string) else {
+        return Ok(defaults);
+    };
+    let raw = fs::read_to_string(&path)
+        .with_context(|| format!("{BEHAVIOR_FILE_ENV} names {path}, which cannot be read"))?;
+    let file: BehaviorFile =
+        toml::from_str(&raw).with_context(|| format!("invalid behaviour file {path}"))?;
+    Ok(Behavior {
+        tab_grouping: file.tabs.grouping.unwrap_or(defaults.tab_grouping),
+    })
 }
 
 fn resolve_path(cwd: &Path, path: PathBuf) -> PathBuf {
@@ -382,7 +481,8 @@ mod tests {
     }
 
     use super::{
-        Cli, CliAction, Config, ConfigEnv, HOSTED_MODE_ENV, NATIVE_VERSION_ENV, ServerMode,
+        BEHAVIOR_FILE_ENV, Cli, CliAction, Config, ConfigEnv, HOSTED_MODE_ENV, NATIVE_VERSION_ENV,
+        ServerMode, TabGrouping,
     };
     use browseros_core::{BrowserOsVersion, NativeFeature};
     use clap::{Parser, error::ErrorKind};
@@ -729,6 +829,103 @@ mod tests {
             ServerMode::Hosted
         );
         Ok(())
+    }
+
+    /// Writes `contents` as the behaviour file and loads a config that points at it.
+    fn load_with_behavior_file(mode: &str, contents: &str) -> anyhow::Result<Config> {
+        let dir = tempdir()?;
+        let file = dir.path().join("neo.toml");
+        fs::write(&file, contents)?;
+        let file = file.to_string_lossy().to_string();
+        load_native(
+            "{}",
+            &[(HOSTED_MODE_ENV, mode), (BEHAVIOR_FILE_ENV, file.as_str())],
+        )
+    }
+
+    #[test]
+    fn tab_grouping_defaults_to_automatic_on_desktop_and_explicit_when_hosted() -> anyhow::Result<()>
+    {
+        assert_eq!(
+            load_native("{}", &[])?.behavior.tab_grouping,
+            TabGrouping::Automatic
+        );
+        assert_eq!(
+            load_native("{}", &[(HOSTED_MODE_ENV, "1")])?
+                .behavior
+                .tab_grouping,
+            TabGrouping::Explicit
+        );
+        // A blank pointer is no pointer, the same as an unset one.
+        assert_eq!(
+            load_native("{}", &[(HOSTED_MODE_ENV, "1"), (BEHAVIOR_FILE_ENV, "  ")])?
+                .behavior
+                .tab_grouping,
+            TabGrouping::Explicit
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_behavior_file_overrides_the_mode_default_and_omitted_keys_keep_it() -> anyhow::Result<()>
+    {
+        let auto = "[tabs]\ngrouping = \"auto\"\n";
+        let explicit = "[tabs]\ngrouping = \"explicit\"\n";
+        assert_eq!(
+            load_with_behavior_file("1", auto)?.behavior.tab_grouping,
+            TabGrouping::Automatic
+        );
+        assert_eq!(
+            load_with_behavior_file("0", explicit)?
+                .behavior
+                .tab_grouping,
+            TabGrouping::Explicit
+        );
+        for unset in [
+            "",
+            "# every key commented out\n# [tabs]\n# grouping = \"auto\"\n",
+            "[tabs]\n",
+        ] {
+            assert_eq!(
+                load_with_behavior_file("1", unset)?.behavior.tab_grouping,
+                TabGrouping::Explicit,
+                "{unset:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_missing_behavior_file_fails_startup_instead_of_falling_back() {
+        let error = load_native(
+            "{}",
+            &[(BEHAVIOR_FILE_ENV, "/nonexistent/browserclaw/neo.toml")],
+        )
+        .err()
+        .map(|error| format!("{error:#}"))
+        .unwrap_or_default();
+        assert!(error.contains(BEHAVIOR_FILE_ENV), "{error}");
+        assert!(
+            error.contains("/nonexistent/browserclaw/neo.toml"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_or_value_in_the_behavior_file_fails_startup() {
+        for (contents, culprit) in [
+            ("[tabs]\ngrouping = \"off\"\n", "off"),
+            ("[tabs]\ngroupng = \"auto\"\n", "groupng"),
+            ("[tab]\ngrouping = \"auto\"\n", "tab"),
+            ("grouping = \"auto\"\n", "grouping"),
+        ] {
+            let error = load_with_behavior_file("1", contents)
+                .err()
+                .map(|error| format!("{error:#}"))
+                .unwrap_or_default();
+            assert!(error.contains("neo.toml"), "{contents:?}: {error}");
+            assert!(error.contains(culprit), "{contents:?}: {error}");
+        }
     }
 
     #[test]

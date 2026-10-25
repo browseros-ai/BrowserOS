@@ -56,6 +56,7 @@ pub async fn tool_call_in_mode(
             asserted: false,
         },
         mode,
+        behavior: crate::config::Behavior::defaults(mode),
     });
     let state = AppState::new_with_home(config, home).await?;
     let session = Session::new(
