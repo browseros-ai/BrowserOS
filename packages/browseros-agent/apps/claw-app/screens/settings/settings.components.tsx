@@ -17,9 +17,11 @@ export function SettingsSection({
       <h2 className="font-bold text-[19px] text-cyanotype-ink tracking-[-0.015em]">
         {title}
       </h2>
+      {/* No overflow clip: the beUI select draws its options inside the
+          field, so a clipped card would cut them off. */}
       <Card
         size="compact"
-        className="gap-0 overflow-hidden border-border-2 bg-card py-0 shadow-card"
+        className="gap-0 border-border-2 bg-card py-0 shadow-card"
       >
         <div className="flex flex-col divide-y divide-border-2">{children}</div>
       </Card>
