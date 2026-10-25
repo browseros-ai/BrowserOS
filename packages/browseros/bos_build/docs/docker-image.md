@@ -199,6 +199,11 @@ GitHub documents package Actions access in
   tools without skills, human help or `name_session`, and name tasks with a `taskName`
   argument. The entrypoint also turns human help off through `/api/v1/settings/agent` on
   every start, before the container reports healthy, for claw-servers that predate the mode.
+- **Server behaviour comes from `/etc/neo/neo.toml`** (`BROWSERCLAW_CONFIG_FILE`). The
+  shipped file only documents the defaults, all commented out; deployments mount or `COPY`
+  their own. Hosted mode defaults `[tabs] grouping` to `"explicit"`, so the server never
+  groups an agent's pages on its own. A key or value claw-server does not know stops it at
+  startup.
 - **The server updater is disabled by the entrypoint.** It cannot replace the
   packaged/overlaid server that passed the release checks, even when `NEO_ARGS` is
   overridden. Server changes ship through a rebuilt image.
