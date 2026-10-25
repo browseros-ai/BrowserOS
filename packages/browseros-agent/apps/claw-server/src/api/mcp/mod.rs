@@ -11,6 +11,7 @@ mod prompt;
 pub mod pursue;
 pub mod script_hook;
 mod service;
+mod tab_grouping;
 mod timeouts;
 
 #[cfg(test)]

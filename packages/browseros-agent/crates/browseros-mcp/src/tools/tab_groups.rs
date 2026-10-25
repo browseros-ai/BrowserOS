@@ -8,13 +8,28 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-const DESCRIPTION: &str = "\
+// One literal behind both the description and the exported span (see `tabs`).
+macro_rules! resume_guidance {
+    () => {
+        " To resume earlier work after a reconnect, pass the \
+remembered group id as groupId on tabs action=\"new\" instead, which also makes \
+that group's tabs read as yours again."
+    };
+}
+
+/// The description's closing sentence, on resuming a task through its tab group. It holds for
+/// a host that keeps each task's pages in a group of its own; a host that does not removes
+/// exactly this span.
+pub const RESUME_GUIDANCE: &str = resume_guidance!();
+
+const DESCRIPTION: &str = concat!(
+    "\
 Manage tab groups: list groups, group pages, update a group (title/color/collapsed), \
 ungroup pages, or close a group. Page ids come from the tabs tool. \
 Passing an existing groupId with action=\"create\" moves those pages into that \
-group, nothing more. To resume earlier work after a reconnect, pass the \
-remembered group id as groupId on tabs action=\"new\" instead, which also makes \
-that group's tabs read as yours again.";
+group, nothing more.",
+    resume_guidance!()
+);
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]

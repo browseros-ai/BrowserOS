@@ -26,6 +26,9 @@ use std::sync::Arc;
 pub const TASK_NAME_ARG: &str = "taskName";
 // Repeated in every listed tool's schema, so it stays short; the instructions carry the rest.
 const TASK_NAME_ARG_DESCRIPTION: &str = "Optional 2-3 word label for this task, e.g. \"invoice processing\". Send it once, early; your tabs are grouped as <client>/<label>.";
+/// The clause of [`TASK_NAME_ARG_DESCRIPTION`] that promises the server's own tab group.
+/// `tab_grouping` rewrites it under explicit grouping.
+pub(super) const TASK_NAME_GROUPING: &str = "; your tabs are grouped as <client>/<label>.";
 
 const NAME_SESSION_REFUSAL: &str = "name_session is not available on this hosted BrowserOS neo server. Pass taskName=\"<2-3 word task label>\" on any tool call instead.";
 const SKILLS_REFUSAL: &str = "Skills are not available on this hosted BrowserOS neo server: nothing was saved or recorded. Keep repeatable workflows in your own agent instead.";
