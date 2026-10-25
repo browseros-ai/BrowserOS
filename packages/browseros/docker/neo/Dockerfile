@@ -82,6 +82,10 @@ RUN userdel -r ubuntu \
  && useradd -m -u 1000 -s /bin/bash neo
 
 COPY openbox-rc.xml /etc/neo/openbox-rc.xml
+# Server behaviour knobs live in this file rather than in more environment
+# variables. The shipped copy only documents the defaults; deployments mount or
+# COPY their own over it (README).
+COPY neo.toml /etc/neo/neo.toml
 COPY novnc-index.html /usr/share/novnc/index.html
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/neo-entrypoint
 COPY --chmod=0755 healthcheck.sh /usr/local/bin/neo-healthcheck
@@ -90,6 +94,7 @@ COPY --chmod=0755 neo-quit.py /usr/local/bin/neo-quit
 ENV NEO_SCREEN=1600x1000 \
     NEO_DATA_DIR=/data \
     BROWSERCLAW_HOSTED_MODE=1 \
+    BROWSERCLAW_CONFIG_FILE=/etc/neo/neo.toml \
     NEO_SANDBOX=false \
     BROWSEROS_CAPSOLVER_API_KEY_FILE=/home/neo/.config/browseros/captcha/capsolver-api-key \
     BROWSEROS_2CAPTCHA_API_KEY_FILE=/home/neo/.config/browseros/captcha/2captcha-api-key \

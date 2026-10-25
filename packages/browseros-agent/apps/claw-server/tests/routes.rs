@@ -78,6 +78,24 @@ async fn test_app_with_native_and_mode(
     native: NativeCapabilities,
     mode: ServerMode,
 ) -> anyhow::Result<TestApp> {
+    test_app_with_behavior(
+        cdp_port,
+        start_browser,
+        native,
+        mode,
+        claw_server::config::Behavior::defaults(mode),
+    )
+    .await
+}
+
+/// A server whose behaviour differs from its mode's defaults, as a behaviour file sets it.
+async fn test_app_with_behavior(
+    cdp_port: u16,
+    start_browser: bool,
+    native: NativeCapabilities,
+    mode: ServerMode,
+    behavior: claw_server::config::Behavior,
+) -> anyhow::Result<TestApp> {
     let dir = tempfile::tempdir()?;
     let root = dir.path().join("browserclaw");
     let config = Arc::new(Config {
@@ -96,6 +114,7 @@ async fn test_app_with_native_and_mode(
             asserted: false,
         },
         mode,
+        behavior,
     });
     let state = AppState::new_with_home(config, dir.path().join("home")).await?;
     let browser_task = if start_browser {
@@ -783,6 +802,42 @@ async fn tests_that_cleanup_tip_is_included_only_when_enabled() -> anyhow::Resul
             }
         }
     }
+    Ok(())
+}
+
+/// The tip asks the agent to close the group the server made for it, so a server that makes
+/// none never sends it, even with the setting on.
+#[tokio::test]
+async fn tests_that_explicit_grouping_never_sends_the_cleanup_tip() -> anyhow::Result<()> {
+    use claw_server::config::{Behavior, TabGrouping};
+    let app = test_app_with_behavior(
+        49337,
+        false,
+        current_native(),
+        ServerMode::Desktop,
+        Behavior {
+            tab_grouping: TabGrouping::Explicit,
+        },
+    )
+    .await?;
+    let (status, _) = request_json(
+        &app.router,
+        "PUT",
+        "/api/v1/settings/agent",
+        Some(json!({ "taskCleanupTipEnabled": true })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let reply = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({ "name": "name_session", "arguments": { "name": "cleanup-test" } }),
+        Some("Codex"),
+    )
+    .await?;
+    assert_eq!(reply["result"]["isError"], false, "{reply}");
+    let text = reply["result"]["content"].to_string();
+    assert!(!text.contains("tab group"), "{reply}");
     Ok(())
 }
 

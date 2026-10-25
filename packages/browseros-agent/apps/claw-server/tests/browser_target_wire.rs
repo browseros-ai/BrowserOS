@@ -188,6 +188,7 @@ impl HttpPeer {
                 asserted: false,
             },
             mode: Default::default(),
+            behavior: Default::default(),
         });
         let state = AppState::new_with_home(config, dir.path().join("home")).await?;
         let native = NativeProfiles::new();

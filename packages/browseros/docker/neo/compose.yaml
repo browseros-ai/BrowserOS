@@ -17,6 +17,9 @@ services:
       - "127.0.0.1:${NEO_MCP_PORT:-9010}:9010"
     volumes:
       - "${NEO_DATA:-./neo-data}:/data"
+      # Server behaviour (README, "Behaviour file"): uncomment to use ./neo.toml
+      # instead of the defaults the image ships.
+      # - "./neo.toml:/etc/neo/neo.toml:ro"
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}

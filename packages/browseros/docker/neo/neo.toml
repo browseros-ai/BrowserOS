@@ -1,0 +1,18 @@
+# BrowserOS neo server behaviour, read at startup through BROWSERCLAW_CONFIG_FILE.
+#
+# Every key is optional. A commented-out key keeps the default for the server's
+# mode (BROWSERCLAW_HOSTED_MODE); the values shown are the hosted defaults.
+# Unknown keys or values stop the server at startup, with the reason in
+# `docker logs`.
+#
+# To change them, replace this file: mount your own over it with
+#   docker run -v ./neo.toml:/etc/neo/neo.toml:ro ...
+# or COPY one to /etc/neo/neo.toml in an image built FROM neo.
+
+[tabs]
+# Who decides which tab group an agent's page joins.
+#   "explicit"  A page joins a group only when the agent's call passes groupId.
+#               Neo never creates, titles, collapses or closes a group itself.
+#   "auto"      Neo keeps each task's pages in a <client>/<task> group that it
+#               titles, collapses and closes. The desktop app's behaviour.
+# grouping = "explicit"

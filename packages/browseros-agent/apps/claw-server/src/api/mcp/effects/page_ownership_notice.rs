@@ -28,10 +28,17 @@
 //!
 //! The rule: **ownership answers "whose is this", never "may I".**
 
-use crate::api::mcp::dispatch::{ToolEffect, ToolEffectContext, extract_page_id};
+use crate::api::mcp::{
+    dispatch::{ToolEffect, ToolEffectContext, extract_page_id},
+    tab_grouping,
+};
 use browseros_core::PageId;
 use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
+
+/// The same-client note's advice to rejoin the earlier task's tab group. `tab_grouping`
+/// rewrites it under explicit grouping, where that task never had a group to rejoin.
+pub(crate) const RECLAIM_ADVICE: &str = "If that was you and you are continuing that work, pass its tab group id as groupId on tabs action=\"new\" to take it back; tabs action=\"list\" reports the id.";
 
 /// Appends a one-line note when the acted-on page belongs to someone else.
 ///
@@ -98,14 +105,14 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
                         |session| session.agent().slug() == identity.agent.slug(),
                     );
                 if same_client {
-                    format!(
-                        "Note: page {} was opened by {label} in an earlier session. If that was \
-                         you and you are continuing that work, pass its tab group id as groupId \
-                         on tabs action=\"new\" to take it back; tabs action=\"list\" reports \
-                         the id. Otherwise you are still allowed to use it: leave it as you found \
-                         it unless the user asked you to change it.",
+                    let note = format!(
+                        "Note: page {} was opened by {label} in an earlier session. \
+                         {RECLAIM_ADVICE} Otherwise you are still allowed to use it: leave it as \
+                         you found it unless the user asked you to change it.",
                         page_id.0
-                    )
+                    );
+                    tab_grouping::text(&note, context.call.state.config.behavior.tab_grouping)
+                        .into_owned()
                 } else {
                     format!(
                         "Note: page {} belongs to another agent ({label}). You are allowed to use it; \
@@ -200,6 +207,40 @@ mod tests {
             serde_json::json!({ "page": 7, "code": "return 1" }),
         )
         .await?;
+        let text = note_on_own_earlier_page(&call).await?;
+        assert!(text.contains("earlier session"), "{text}");
+        assert!(text.contains("groupId"), "names the way back: {text}");
+        assert!(
+            !text.contains("belongs to another agent"),
+            "must not tell an agent its own work is someone else's: {text}"
+        );
+        Ok(())
+    }
+
+    /// Without server-made groups there is no group to take back, so the note keeps the
+    /// attribution and drops the way back through one.
+    #[tokio::test]
+    async fn an_own_earlier_session_names_no_group_under_explicit_grouping() -> anyhow::Result<()> {
+        use crate::config::{Behavior, ServerMode};
+        let call = crate::api::mcp::test_support::tool_call_with_behavior(
+            "evaluate",
+            serde_json::json!({ "page": 7, "code": "return 1" }),
+            ServerMode::Hosted,
+            Behavior::defaults(ServerMode::Hosted),
+        )
+        .await?;
+        let text = note_on_own_earlier_page(&call).await?;
+        assert!(text.contains("earlier session"), "{text}");
+        assert!(text.contains("If that was you, carry on in it."), "{text}");
+        assert!(!text.contains("group"), "{text}");
+        Ok(())
+    }
+
+    /// The note an agent gets on page 7, which an earlier conversation of its own client
+    /// opened: what a reconnect leaves behind.
+    async fn note_on_own_earlier_page(
+        call: &crate::api::mcp::dispatch::ToolCall,
+    ) -> anyhow::Result<String> {
         let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
         // Same client, earlier conversation: what a reconnect leaves behind.
         let earlier = crate::services::sessions::Session::new(
@@ -220,22 +261,14 @@ mod tests {
             .await;
         let result = ToolResult::text("script returned 1", None);
         let annotated = apply(ToolEffectContext {
-            call: &call,
+            call,
             result: &result,
             cancelled: false,
             duration_ms: 1,
         })
-        .await
-        .unwrap_or_else(|error| panic!("effect failed: {error}"))
-        .unwrap_or_else(|| panic!("expected a notice"));
-        let text = text_of(&annotated);
-        assert!(text.contains("earlier session"), "{text}");
-        assert!(text.contains("groupId"), "names the way back: {text}");
-        assert!(
-            !text.contains("belongs to another agent"),
-            "must not tell an agent its own work is someone else's: {text}"
-        );
-        Ok(())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("expected a notice"))?;
+        Ok(text_of(&annotated))
     }
 
     /// The retired case, which is the common one: the earlier session has left

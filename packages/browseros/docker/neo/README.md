@@ -55,6 +55,7 @@ NEO_VNC_PORT=7080 NEO_MCP_PORT=7010 NEO_DATA=/mnt/neo docker compose up -d --wai
 | Owner of files in the data folder | `-e PUID=… -e PGID=…` | `PUID`, `PGID` | 1000 / 1000 |
 | Starting screen size | `-e NEO_SCREEN=1920x1080` | `NEO_SCREEN` | `1600x1000` |
 | Hosted mode (see below) | `-e BROWSERCLAW_HOSTED_MODE=0` | `BROWSERCLAW_HOSTED_MODE` | `1` |
+| Server behaviour (see [Behaviour file](#behaviour-file)) | `-v ./neo.toml:/etc/neo/neo.toml:ro` | the `neo.toml` volume in `compose.yaml` | the image's `/etc/neo/neo.toml` |
 | Chromium sandbox (see [Security](#security)) | `-e NEO_SANDBOX=true` | `NEO_SANDBOX` | `false` |
 | Disable bundled BrowserOS extensions | `-e NEO_DISABLE_BROWSEROS_EXTENSIONS=true` | `NEO_DISABLE_BROWSEROS_EXTENSIONS` | `false` |
 | Extra Neo command-line flags | `-e NEO_ARGS="--lang=de"` | `NEO_ARGS` | empty |
@@ -69,12 +70,37 @@ replaces it. To pin exact image contents, use the digest.
 `mark_skill_run`) and human help (`request_human_help`, `await_human_help`) are hidden, since
 your agent's own harness keeps its workflows and asks you for help itself. Instead of calling
 `name_session`, an agent names its task with an optional `taskName` argument on any tool call.
+Neo also leaves tab layout to your agent: a page joins a tab group only when the agent passes
+`groupId`, and Neo never creates, titles, collapses or closes a group itself. The
+[behaviour file](#behaviour-file) can turn per-task groups back on.
 `BROWSERCLAW_HOSTED_MODE=0` restores the desktop tools and hides `solve_captcha`.
 Only exact `0` and `1` are accepted. After changing the flag, run
 `docker compose up -d --wait` to recreate the container with its new environment.
 With `docker run`, recreate it with the new flag and the existing data volume.
 The viewer's screen follows the browser tab's size once it connects, so `NEO_SCREEN`
 only matters until then.
+
+### Behaviour file
+
+Server behaviour that a deployment may want to change lives in one TOML file instead of
+more environment variables. The image ships `/etc/neo/neo.toml` with every key commented
+out, so it documents the defaults; replace it to change them. Mount your own over it:
+
+```sh
+docker run ... -v ./neo.toml:/etc/neo/neo.toml:ro ghcr.io/browseros-ai/neo
+```
+
+or uncomment the `neo.toml` line in `compose.yaml`, or `COPY` one to `/etc/neo/neo.toml` in
+an image built `FROM` Neo. A key you leave out keeps the default for the mode
+(`BROWSERCLAW_HOSTED_MODE`). Unknown keys or values stop the server at startup, and the
+reason is in `docker logs`; so does a `BROWSERCLAW_CONFIG_FILE` that names a missing file.
+Recreate the container after editing the file.
+
+| Key | Values | Hosted default | Desktop default |
+|---|---|---|---|
+| `[tabs] grouping` | `"explicit"`: a page joins a group only when the agent passes `groupId`. `"auto"`: Neo keeps each task's pages in a `<client>/<task>` group it titles, collapses and closes. | `"explicit"` | `"auto"` |
+
+The server logs the values it runs with at startup (`server behaviour`).
 
 Images built with a CapSolver or 2Captcha key also offer `solve_captcha` in hosted
 mode. Keyless builds omit that tool. Provider keys are embedded files: anyone who

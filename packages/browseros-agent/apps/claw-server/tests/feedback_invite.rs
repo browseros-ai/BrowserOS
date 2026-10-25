@@ -408,6 +408,7 @@ async fn test_app(root: &Path) -> anyhow::Result<TestApp> {
         dev_mode: false,
         native: Default::default(),
         mode: Default::default(),
+        behavior: Default::default(),
     });
     let state = AppState::new_with_home(config, root.join("home")).await?;
     Ok(TestApp {

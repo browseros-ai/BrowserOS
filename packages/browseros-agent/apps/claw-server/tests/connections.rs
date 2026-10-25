@@ -908,6 +908,7 @@ async fn test_router(browserclaw_dir: &Path, home: &Path) -> anyhow::Result<Rout
         dev_mode: false,
         native: Default::default(),
         mode: Default::default(),
+        behavior: Default::default(),
     });
     let state = AppState::new_with_home(config, home.to_path_buf()).await?;
     Ok(build_router(state))
