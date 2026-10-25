@@ -1,0 +1,43 @@
+diff --git a/chrome/browser/browseros/customization/BUILD.gn b/chrome/browser/browseros/customization/BUILD.gn
+new file mode 100644
+index 0000000000000000000000000000000000000000..07aaedd176d1c9cab3a7f36a9086f22ce46bf1c8
+--- /dev/null
++++ b/chrome/browser/browseros/customization/BUILD.gn
+@@ -0,0 +1,37 @@
++# Copyright 2026 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++
++# BrowserOS UI customization: BrowserOS-owned UI knobs, and the BrowserOS
++# switches that force prefs for one run (--disable-browseros-features).
++
++# Knobs for UI that Chromium gives no pref of its own.
++source_set("prefs") {
++  sources = [
++    "customization_pref_names.h",
++    "customization_prefs.cc",
++    "customization_prefs.h",
++  ]
++
++  deps = [ "//components/pref_registry" ]
++}
++
++# Linked into Chromium's command-line pref store, so it should depend on pref
++# names only.
++source_set("command_line_prefs") {
++  sources = [
++    "command_line_prefs.cc",
++    "command_line_prefs.h",
++  ]
++
++  deps = [
++    ":prefs",
++    "//base",
++
++    # For browseros.vertical_tabs_enabled.
++    "//chrome/browser/browseros/core:prefs",
++    "//chrome/common:constants",
++    "//components/bookmarks/common",
++    "//components/prefs",
++  ]
++}
