@@ -128,6 +128,7 @@ impl AppState {
         let skill = load_browserclaw_skill(
             &config.resources_dir,
             crate::config::PursueOffering::of(agent_settings.jev_token_source()),
+            config.behavior.tab_grouping,
         )?;
         let harness = Arc::new(HarnessService::new_with_managed_skill(
             config.browserclaw_dir.join("mcp-manager"),
