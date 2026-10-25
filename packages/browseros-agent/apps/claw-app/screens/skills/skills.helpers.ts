@@ -3,8 +3,11 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Pure formatters for the Skills list and detail. No React, no side effects.
+ * Pure formatters for the Saved tasks list and page. No React, no side effects.
  */
+
+import { verbForTool } from '@/lib/step-sentences'
+import type { ReplayVerb } from '@/modules/api/replay.hooks'
 
 /** Every skill is namespaced under this prefix so it never collides with a
  *  user's own agent skills and the whole set autocompletes on `/neo`. */
@@ -21,28 +24,6 @@ export function neoName(suffix: string): string {
 /** The command a user pastes into a coding agent to run a skill. */
 export function skillCommand(name: string): string {
   return `/${name}`
-}
-
-/** Compact token count, e.g. 14600 -> "14.6k". */
-export function formatTokens(tokens: number): string {
-  if (tokens < 1000) {
-    return String(tokens)
-  }
-  return `${(tokens / 1000).toFixed(1)}k`
-}
-
-/**
- * Percent change from the first run's tokens to the latest run's, so a negative
- * value means the skill got cheaper. `null` when there is nothing to compare.
- */
-export function tokenDeltaPercent(
-  first: number | undefined,
-  latest: number | undefined,
-): number | null {
-  if (first === undefined || latest === undefined || first === 0) {
-    return null
-  }
-  return Math.round(((latest - first) / first) * 100)
 }
 
 /**
@@ -86,21 +67,55 @@ export function parseSkillBody(body: string): {
   return { steps, learnedNotes }
 }
 
-/** A short "time ago" label from an epoch-ms timestamp. */
-export function formatRelativeTime(
-  epochMs: number,
-  now: number = Date.now(),
+/** What a person tells their AI agent, after a task, to save it here. */
+export const SAVE_PHRASE = 'save this as a skill in neo'
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+function startOfDay(ms: number): number {
+  const day = new Date(ms)
+  day.setHours(0, 0, 0, 0)
+  return day.getTime()
+}
+
+/** "today", "yesterday", then "on Oct 21" in the reader's locale. */
+export function lastUsedLabel(epochMs: number, now: number): string {
+  const days = Math.round((startOfDay(now) - startOfDay(epochMs)) / DAY_MS)
+  if (days <= 0) return 'today'
+  if (days === 1) return 'yesterday'
+  const date = new Date(epochMs).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  })
+  return `on ${date}`
+}
+
+/** "Used 4 times · last used yesterday", or "Not used yet". */
+export function usedLabel(
+  runCount: number,
+  lastRunAt: number | undefined,
+  now: number,
 ): string {
-  const minutes = Math.floor(Math.max(0, now - epochMs) / 60_000)
-  if (minutes < 1) {
-    return 'just now'
-  }
-  if (minutes < 60) {
-    return `${minutes}m ago`
-  }
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) {
-    return `${hours}h ago`
-  }
-  return `${Math.floor(hours / 24)}d ago`
+  if (runCount <= 0) return 'Not used yet'
+  const times = runCount === 1 ? 'Used once' : `Used ${runCount} times`
+  return lastRunAt === undefined
+    ? times
+    : `${times} · last used ${lastUsedLabel(lastRunAt, now)}`
+}
+
+const STUCK_WHILE: Record<ReplayVerb, string> = {
+  navigate: 'opening a page',
+  read: 'reading a page',
+  click: 'clicking on a page',
+  type: 'typing on a page',
+  attach: 'handling a file',
+  submit: 'sending a form',
+  done: 'finishing up',
+}
+
+/** Where a run that did not finish got stuck, in plain words. */
+export function stuckWhile(erroredTool: string | undefined): string {
+  return erroredTool
+    ? `Got stuck while ${STUCK_WHILE[verbForTool(erroredTool)]}.`
+    : 'Got stuck before it finished.'
 }

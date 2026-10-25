@@ -5,76 +5,83 @@
  */
 
 import { useQueryClient } from '@tanstack/react-query'
-import type { ReactElement } from 'react'
+import { Button } from '@/components/motion/button/base'
+import { StatefulButton } from '@/components/motion/button/stateful'
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
-import { Button } from '@/components/ui/button'
+  CenterMorphModal,
+  CenterMorphModalClose,
+  CenterMorphModalContent,
+} from '@/components/motion/center-morph-modal'
 import { useDeleteSkill, useSkills } from '@/modules/api/skills.hooks'
-import { toastPromise } from '@/modules/toast/toast'
+import { toastApiError, toastSuccess } from '@/modules/toast/toast'
+import { skillCommand } from '@/screens/skills/skills.helpers'
 
 interface DeleteSkillDialogProps {
   name: string
-  onDeleted: () => void
-  trigger?: ReactElement
+  description: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onDeleted?: () => void
 }
 
+/** Asks once before a saved task, its phrase and its runs go away. */
 export function DeleteSkillDialog({
   name,
+  description,
+  open,
+  onOpenChange,
   onDeleted,
-  trigger,
 }: DeleteSkillDialogProps) {
   const queryClient = useQueryClient()
-  const remove = useDeleteSkill()
-
-  const onConfirm = () => {
-    toastPromise(
-      remove.mutateAsync({ name }).then(() => {
-        void queryClient.invalidateQueries({ queryKey: useSkills.getKey() })
-        onDeleted()
-      }),
-      {
-        loading: `Deleting ${name}…`,
-        success: `Deleted ${name}`,
-        error: 'Could not delete the skill',
-      },
-    )
-  }
+  const remove = useDeleteSkill({
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: useSkills.getKey() })
+      toastSuccess('Deleted the saved task')
+      onOpenChange(false)
+      onDeleted?.()
+    },
+    onError: (error) => toastApiError('Couldn’t delete the saved task', error),
+  })
 
   return (
-    <AlertDialog>
-      <AlertDialogTrigger
-        render={
-          trigger ?? (
-            <Button variant="outline" size="sm" className="rounded-9 text-red">
+    <CenterMorphModal open={open} onOpenChange={onOpenChange}>
+      <CenterMorphModalContent
+        ariaLabel="Delete this saved task?"
+        showCloseButton={false}
+        className="max-w-[440px] rounded-[22px] border-border-2 bg-card"
+      >
+        <div className="flex flex-col gap-5 p-6">
+          <div className="flex flex-col gap-2">
+            <h2 className="font-bold text-[20px] text-cyanotype-ink tracking-[-0.015em]">
+              Delete this saved task?
+            </h2>
+            <p className="text-[14.5px] text-ink-2">
+              “{description}” and its phrase{' '}
+              <span className="font-mono text-[13.5px] text-accent-ink">
+                {skillCommand(name)}
+              </span>{' '}
+              go away from neo and from your AI agents, along with its past
+              runs.
+            </p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <CenterMorphModalClose>
+              <Button variant="ghost" disabled={remove.isPending}>
+                Cancel
+              </Button>
+            </CenterMorphModalClose>
+            <StatefulButton
+              state={remove.isPending ? 'loading' : 'idle'}
+              loadingText="Deleting"
+              disabled={remove.isPending}
+              onClick={() => remove.mutate({ name })}
+              className="bg-red font-semibold text-white hover:bg-red/90"
+            >
               Delete
-            </Button>
-          )
-        }
-      />
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete this skill?</AlertDialogTitle>
-          <AlertDialogDescription>
-            This removes {name} and unlinks its skill from your coding agents.
-            Its run history is discarded.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={onConfirm}>
-            Delete skill
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+            </StatefulButton>
+          </div>
+        </div>
+      </CenterMorphModalContent>
+    </CenterMorphModal>
   )
 }
