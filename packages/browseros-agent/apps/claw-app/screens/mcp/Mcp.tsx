@@ -1,152 +1,150 @@
-import { useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
-import {
-  type Harness,
-  isUserFacingHarness,
-} from '@/components/harness/harness.types'
+import { TriangleAlert } from 'lucide-react'
+import type { ReactNode } from 'react'
+import type { Harness } from '@/components/harness/harness.types'
 import { Page } from '@/components/layout/Page'
-import { EditorialEmpty } from '@/components/ui/EditorialEmpty'
-import {
-  useConnectHarness,
-  useConnections,
-  useDisconnectHarness,
-} from '@/modules/api/connections.hooks'
-import { resolveCanonicalMcpEndpointUrl } from '@/modules/api/mcp-endpoint'
+import { PageHeader } from '@/components/layout/PageHeader'
+import { Card } from '@/components/motion/card'
+import { Skeleton } from '@/components/ui/skeleton'
+import type { ConnectionState } from '@/modules/api/connections.hooks'
 import { ClaudeDesktopCard } from './ClaudeDesktopCard'
 import { ConnectionRow } from './ConnectionRow'
-import { HeroCard } from './HeroCard'
 import { ManualSetupCard } from './ManualSetupCard'
+import { type ConnectedAgentsData, useConnectedAgentsData } from './mcp.data'
 
+/** Which AI agents can use neo, and the one step to connect each. */
 export function Mcp() {
-  const [url, setUrl] = useState<string | null>(null)
-  const connections = useConnections({ refetchInterval: 5000 })
-  const connect = useConnectHarness()
-  const disconnect = useDisconnectHarness()
-  const queryClient = useQueryClient()
-  const [errors, setErrors] = useState<Partial<Record<Harness, string>>>({})
-
-  useEffect(() => {
-    let active = true
-    resolveCanonicalMcpEndpointUrl().then((resolved) => {
-      if (active) setUrl(resolved)
-    })
-    return () => {
-      active = false
-    }
-  }, [])
-
-  const isLoading = connections.isPending && !connections.data
-
-  const visibleRows = useMemo(() => {
-    const list = connections.data?.items ?? []
-    return list.filter((c) => isUserFacingHarness(c.harness))
-  }, [connections.data])
-
-  const connectedCount = visibleRows.filter((c) => c.installed).length
-  const totalCount = visibleRows.length
-
-  const onConnect = async (harness: Harness) => {
-    setErrors((prev) => ({ ...prev, [harness]: undefined }))
-    try {
-      const result = await connect.mutateAsync({ harness })
-      if (!result.installed) {
-        setErrors((prev) => ({ ...prev, [harness]: result.message }))
-      }
-      void queryClient.invalidateQueries({
-        queryKey: useConnections.getKey(),
-      })
-    } catch (err) {
-      setErrors((prev) => ({
-        ...prev,
-        [harness]: err instanceof Error ? err.message : 'Failed to connect.',
-      }))
-    }
-  }
-
-  const onDisconnect = async (harness: Harness) => {
-    setErrors((prev) => ({ ...prev, [harness]: undefined }))
-    try {
-      await disconnect.mutateAsync({ harness })
-      void queryClient.invalidateQueries({
-        queryKey: useConnections.getKey(),
-      })
-    } catch (err) {
-      setErrors((prev) => ({
-        ...prev,
-        [harness]: err instanceof Error ? err.message : 'Failed to disconnect.',
-      }))
-    }
-  }
-
-  const pendingHarness =
-    connect.isPending && connect.variables
-      ? connect.variables.harness
-      : disconnect.isPending && disconnect.variables
-        ? disconnect.variables.harness
-        : null
+  const data = useConnectedAgentsData()
 
   return (
     <Page>
-      <HeroCard url={url} />
-      <section className="space-y-2">
-        <header className="flex items-baseline justify-between gap-3">
-          <h2 className="font-semibold text-cyanotype-ink text-lg">
-            Connected agents
-          </h2>
-          {!isLoading && !connections.isError && (
-            <span className="text-[12px] text-cyanotype-muted tabular-nums">
-              {connectedCount} of {totalCount} connected
+      <PageHeader
+        title="Connected agents"
+        lede="These AI agents can use neo to browse for you. Connect one, then restart it once so it can see neo."
+      />
+
+      <RowsCard>
+        <ClaudeDesktopCard />
+      </RowsCard>
+
+      {data.isError ? (
+        <Card
+          size="compact"
+          className="flex-row items-center gap-4 border-border-2 bg-card px-[22px] py-5 shadow-card"
+        >
+          <span
+            aria-hidden
+            className="grid size-11 shrink-0 place-items-center rounded-full bg-red-tint text-red-ink"
+          >
+            <TriangleAlert className="size-5" />
+          </span>
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span className="font-bold text-[16px] text-cyanotype-ink">
+              Couldn’t check your agents
             </span>
-          )}
-        </header>
-        {isLoading ? (
-          <SkeletonList />
-        ) : connections.isError ? (
-          <EditorialEmpty
-            leading="could not"
-            accent="reach"
-            trailing="the cockpit."
-            hint="Check that the local claw-server is running."
-          />
-        ) : (
-          <div>
-            {visibleRows.map((state) => (
-              <ConnectionRow
-                key={state.harness}
-                state={state}
-                isPending={pendingHarness === state.harness}
-                errorMessage={errors[state.harness] ?? null}
-                onConnect={() => onConnect(state.harness)}
-                onDisconnect={() => onDisconnect(state.harness)}
-              />
-            ))}
-          </div>
-        )}
-      </section>
-      <ClaudeDesktopCard />
-      <ManualSetupCard endpointUrl={url} />
+            <span className="text-[14.5px] text-ink-2">
+              Check that BrowserOS is running, then open this page again.
+            </span>
+          </span>
+        </Card>
+      ) : data.isLoading ? (
+        <Group title="Connected">
+          <RowsSkeleton />
+        </Group>
+      ) : (
+        <>
+          <Group
+            title="Connected"
+            count={`${data.connected.length} of ${data.total}`}
+          >
+            {data.connected.length ? (
+              <AgentRows rows={data.connected} data={data} />
+            ) : (
+              <p className="px-[18px] py-4 text-[14.5px] text-ink-2">
+                No agents connected yet. Pick one below.
+              </p>
+            )}
+          </Group>
+          {data.notConnected.length ? (
+            <Group title="Not connected yet">
+              <AgentRows rows={data.notConnected} data={data} />
+            </Group>
+          ) : null}
+        </>
+      )}
+
+      <ManualSetupCard endpointUrl={data.endpointUrl} />
     </Page>
   )
 }
 
-/**
- * 6 hairline skeleton rows shaped like the real ConnectionRow so
- * the layout does not jump when the connections query resolves.
- */
-function SkeletonList() {
+// ---------------------------------------------------------------------------
+
+function Group({
+  title,
+  count,
+  children,
+}: {
+  title: string
+  count?: string
+  children: ReactNode
+}) {
   return (
-    <div>
-      {['s1', 's2', 's3', 's4', 's5', 's6'].map((id) => (
-        <div key={id} className="border-cyanotype-border border-t">
-          <div className="flex items-center gap-3 px-2 py-3">
-            <div className="size-5 shrink-0 animate-pulse rounded bg-card-tint" />
-            <div className="flex-1">
-              <div className="h-3 w-32 animate-pulse rounded bg-card-tint" />
-            </div>
-            <div className="h-3 w-16 animate-pulse rounded bg-card-tint" />
-          </div>
-        </div>
-      ))}
-    </div>
+    <section aria-label={title} className="flex flex-col gap-3.5">
+      <div className="flex items-baseline justify-between gap-4">
+        <h2 className="font-bold text-[19px] text-cyanotype-ink tracking-[-0.015em]">
+          {title}
+        </h2>
+        {count ? (
+          <span className="text-[13.5px] text-ink-3 tabular-nums">{count}</span>
+        ) : null}
+      </div>
+      <RowsCard>{children}</RowsCard>
+    </section>
   )
+}
+
+function RowsCard({ children }: { children: ReactNode }) {
+  return (
+    <Card
+      size="compact"
+      className="gap-0 overflow-hidden border-border-2 bg-card py-0 shadow-card"
+    >
+      <ul className="flex flex-col divide-y divide-border-2">{children}</ul>
+    </Card>
+  )
+}
+
+function AgentRows({
+  rows,
+  data,
+}: {
+  rows: ConnectionState[]
+  data: ConnectedAgentsData
+}) {
+  return rows.map((state) => {
+    const harness = state.harness as Harness
+    return (
+      <ConnectionRow
+        key={harness}
+        state={state}
+        isPending={data.pendingHarness === harness}
+        errorMessage={data.errorFor(harness)}
+        onConnect={() => data.connect(harness)}
+        onDisconnect={() => data.disconnect(harness)}
+      />
+    )
+  })
+}
+
+function RowsSkeleton() {
+  return ['s1', 's2', 's3'].map((id) => (
+    <li key={id} className="flex items-center gap-4 px-[18px] py-4">
+      <Skeleton className="size-11 rounded-xl" />
+      <div className="flex flex-1 flex-col gap-2">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-3.5 w-24" />
+      </div>
+      <Skeleton className="h-8 w-24 rounded-full" />
+    </li>
+  ))
 }

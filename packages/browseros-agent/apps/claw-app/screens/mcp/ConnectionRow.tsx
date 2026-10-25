@@ -1,7 +1,12 @@
-import { Loader2 } from 'lucide-react'
+import { CircleCheck, FileText, Unplug } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { HarnessIcon } from '@/components/harness/HarnessIcon'
+import type { Harness } from '@/components/harness/harness.types'
+import { StatefulButton } from '@/components/motion/button/stateful'
+import { OverflowActions } from '@/components/motion/overflow-actions'
 import { cn } from '@/lib/utils'
 import type { ConnectionState } from '@/modules/api/connections.hooks'
+import { toast } from '@/modules/toast/toast'
 
 interface ConnectionRowProps {
   state: ConnectionState
@@ -11,23 +16,7 @@ interface ConnectionRowProps {
   onDisconnect: () => void
 }
 
-/**
- * One row per supported harness in the editorial MCP install board.
- * Hairline-separated (parent applies `border-t`), no card frame, no
- * icon square. The whole row is a single click target: clicking
- * anywhere on the row fires the currently visible action.
- *
- *   Not connected   click row -> connect. Row shows `Connect →` as
- *                    the visual label, in cobalt.
- *   Connected       click row -> disconnect. Row shows
- *                    `Connected · Disconnect →` as the label. The green
- *                    word carries the state, so there is no status dot.
- *
- * The row highlights on hover / focus / active with `bg-card-tint`
- * so the affordance is unambiguous. Errors render as a red hairline
- * strip below the row (still inside the button so hovering the whole
- * thing keeps the highlight).
- */
+/** One AI agent: whether it can use neo, and the one thing to do about it. */
 export function ConnectionRow({
   state,
   isPending,
@@ -35,91 +24,124 @@ export function ConnectionRow({
   onConnect,
   onDisconnect,
 }: ConnectionRowProps) {
+  const name = state.harness as Harness
+
   return (
-    <button
-      type="button"
-      onClick={state.installed ? onDisconnect : onConnect}
-      disabled={isPending}
-      aria-label={
-        state.installed
-          ? `Disconnect ${state.harness}`
-          : `Connect ${state.harness}`
+    <AgentRow
+      logo={<HarnessIcon harness={name} className="size-[22px]" />}
+      name={name}
+      sub={state.installed ? 'Ready to use' : 'Not connected'}
+      error={errorMessage}
+      action={
+        state.installed ? (
+          <span className="flex items-center gap-2.5">
+            <span className="inline-flex items-center gap-1.5 font-semibold text-[14px] text-green-ink">
+              <CircleCheck aria-hidden className="size-4" />
+              Connected
+            </span>
+            <OverflowActions
+              size="sm"
+              openLabel={`More for ${name}`}
+              closeLabel="Close"
+              primaryActions={[]}
+              overflowActions={[
+                ...(state.configPath
+                  ? [
+                      {
+                        id: 'settings-file',
+                        label: 'Settings file',
+                        ariaLabel: `Show ${name}’s settings file`,
+                        icon: <FileText className="size-4" />,
+                        onClick: () =>
+                          toast({
+                            title: `${name} keeps its neo settings here`,
+                            description: state.configPath,
+                          }),
+                      },
+                    ]
+                  : []),
+                {
+                  id: 'disconnect',
+                  label: 'Disconnect',
+                  ariaLabel: `Disconnect ${name}`,
+                  icon: <Unplug className="size-4" />,
+                  disabled: isPending,
+                  onClick: onDisconnect,
+                },
+              ]}
+              collapseOnAction
+              classNames={{
+                track: 'border-border-strong',
+                toggle: 'bg-transparent text-ink-2 hover:bg-bg-sunken',
+                action: 'font-semibold text-ink-2',
+              }}
+            />
+          </span>
+        ) : (
+          <StatefulButton
+            variant="secondary"
+            size="sm"
+            state={isPending ? 'loading' : 'idle'}
+            loadingText="Connecting"
+            disabled={isPending}
+            onClick={onConnect}
+            aria-label={`Connect ${name}`}
+            className="font-semibold"
+          >
+            Connect
+          </StatefulButton>
+        )
       }
-      className={cn(
-        'group block w-full border-cyanotype-border border-t text-left transition-colors',
-        'hover:bg-card-tint focus-visible:bg-card-tint focus-visible:outline-none',
-        'disabled:cursor-not-allowed disabled:opacity-70',
-      )}
-    >
-      <div className="flex items-center gap-3 px-2 py-3">
-        <HarnessIcon harness={state.harness} className="size-5 shrink-0" />
-        <div className="min-w-0 flex-1">
-          <div className="font-semibold text-[14px] text-cyanotype-ink">
-            {state.harness}
-          </div>
-          {state.installed && state.configPath && (
-            <div className="truncate font-mono text-[12px] text-cyanotype-muted">
-              {state.configPath}
-            </div>
-          )}
-        </div>
-        <RowAction state={state} isPending={isPending} />
-      </div>
-      {errorMessage && (
-        <div className="px-10 pb-2 font-mono text-[11.5px] text-red-600">
-          {errorMessage}
-        </div>
-      )}
-    </button>
+    />
   )
 }
 
-function RowAction({
-  state,
-  isPending,
+/** The row shape every agent on this page shares, the Claude desktop app included. */
+export function AgentRow({
+  logo,
+  name,
+  sub,
+  action,
+  error,
+  className,
 }: {
-  state: ConnectionState
-  isPending: boolean
+  logo: ReactNode
+  name: string
+  sub: string
+  action: ReactNode
+  error?: string | null
+  className?: string
 }) {
-  if (isPending) {
-    return <Loader2 className="size-3.5 shrink-0 animate-spin text-ink-3" />
-  }
-  if (state.installed) {
-    return (
-      <div className="flex shrink-0 items-center gap-3">
-        <span className="font-semibold text-[12px] text-cyanotype-live-text">
-          Connected
-        </span>
-        <span aria-hidden className="text-[16px] text-cyanotype-border">
-          ·
-        </span>
-        <span className="inline-flex items-center gap-1 text-[12px] text-cyanotype-muted transition-colors group-hover:text-cyanotype-ink">
-          Disconnect
-          <ActionArrow />
-        </span>
-      </div>
-    )
-  }
   return (
-    <span
+    <li
       className={cn(
-        'inline-flex shrink-0 items-center gap-1.5 text-[12px] text-cyanotype-blue',
-        'transition-colors group-hover:text-cyanotype-blue-hover',
+        'grid grid-cols-[44px_minmax(0,1fr)] items-center gap-x-4 gap-y-2.5 px-[18px] py-4 sm:grid-cols-[44px_minmax(0,1fr)_auto]',
+        className,
       )}
     >
-      Connect
-      <ActionArrow />
-    </span>
-  )
-}
-
-function ActionArrow() {
-  return (
-    <span
-      aria-hidden
-      className="font-mono text-[11px] tracking-[0.08em] transition-transform group-hover:translate-x-0.5"
-    >
-      →
-    </span>
+      <span
+        aria-hidden
+        className="grid size-11 place-items-center rounded-xl border border-border-2 bg-card"
+      >
+        {logo}
+      </span>
+      <span className="flex min-w-0 flex-col">
+        <span className="font-semibold text-[15.5px] text-cyanotype-ink">
+          {name}
+        </span>
+        <span className="text-[13.5px] text-ink-3">{sub}</span>
+      </span>
+      <span className="col-start-2 justify-self-start sm:col-start-auto sm:justify-self-end">
+        {action}
+      </span>
+      {error ? (
+        <p
+          role="alert"
+          className="col-span-full text-[13.5px] text-red-ink sm:col-start-2"
+        >
+          {error}
+        </p>
+      ) : null}
+    </li>
   )
 }
