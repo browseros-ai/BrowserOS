@@ -190,7 +190,6 @@
         "rrweb": "2.1.6",
         "rrweb-player": "2.1.6",
         "shiki": "^4.2.0",
-        "sonner": "^2.0.8",
         "streamdown": "^2.6.0",
         "tailwind-merge": "^3.7.0",
         "tokenlens": "^1.3.1",
