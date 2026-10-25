@@ -1,5 +1,7 @@
 import { KeyRound } from 'lucide-react'
-import { useState } from 'react'
+import { type CSSProperties, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { SIDEBAR_WIDTH } from '@/components/layout/layout.constants'
 import { Button } from '@/components/motion/button/base'
 import { StatefulButton } from '@/components/motion/button/stateful'
 import { Card } from '@/components/motion/card'
@@ -30,8 +32,14 @@ export function InControlBar({
   const app = session.agentName
   const site = help ? helpRequestSite(help) : 'the'
 
-  return (
-    <div className="fixed inset-x-3 bottom-3 z-40 md:right-6 md:bottom-5 md:left-[calc(var(--sidebar-width)+24px)]">
+  // Portaled out of the page: the page enter transform would otherwise be this
+  // bar's containing block and pin it below the fold until the enter ends.
+  // The sidebar width variable does not reach the body, so it is set here.
+  return createPortal(
+    <div
+      style={{ '--sidebar-width': `${SIDEBAR_WIDTH}px` } as CSSProperties}
+      className="fixed inset-x-3 bottom-3 z-40 md:right-6 md:bottom-5 md:left-[calc(var(--sidebar-width)+24px)]"
+    >
       <Card
         role="region"
         aria-label="You are in control"
@@ -86,6 +94,7 @@ export function InControlBar({
           </Button>
         </div>
       </Card>
-    </div>
+    </div>,
+    document.body,
   )
 }

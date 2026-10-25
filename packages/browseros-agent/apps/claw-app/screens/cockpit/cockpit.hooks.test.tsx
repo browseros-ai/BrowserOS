@@ -221,7 +221,7 @@ async function render(sessions: LiveSessionCardRecord[]) {
 }
 
 function click(selector: string) {
-  const el = container.querySelector(selector)
+  const el = document.querySelector(selector)
   if (!el) throw new Error(`missing element: ${selector}`)
   return act(async () => {
     el.dispatchEvent(new window.Event('click', { bubbles: true }))
@@ -232,25 +232,23 @@ describe('cockpit human-help takeover', () => {
   it('flips a blocked session to the needs-you state with its reason and timer', async () => {
     await render([session()])
 
-    const card = container.querySelector(
-      '[data-session-card="session-blocked"]',
-    )
+    const card = document.querySelector('[data-session-card="session-blocked"]')
     expect(card?.getAttribute('data-needs-you')).toBe('session-blocked')
     expect(card?.textContent).toContain('Enter the LinkedIn verification code')
     expect(card?.textContent).toContain('Waiting for you')
     // The prominent banner also surfaces the request.
-    expect(container.querySelector('[data-needs-you-banner]')).not.toBeNull()
+    expect(document.querySelector('[data-needs-you-banner]')).not.toBeNull()
   })
 
   it('foregrounds the blocked tab and opens the in-control bar on Take over', async () => {
     await render([session()])
 
-    expect(container.querySelector('[data-hand-back]')).toBeNull()
+    expect(document.querySelector('[data-hand-back]')).toBeNull()
     await click('[data-session-card="session-blocked"] [data-take-over]')
 
     expect(focusCalls).toEqual([{ browserTabId: 77 }])
     expect(
-      container.querySelector('[data-hand-back="session-blocked"]'),
+      document.querySelector('[data-hand-back="session-blocked"]'),
     ).not.toBeNull()
   })
 
@@ -259,16 +257,16 @@ describe('cockpit human-help takeover', () => {
     await click('[data-session-card="session-blocked"] [data-take-over]')
 
     // The bar carries the resume hint and a note affordance for the agent.
-    const bar = container.querySelector('[data-hand-back]')?.closest('div')
-    expect(container.textContent).toContain('resume at profile 15 of 22')
-    expect(container.querySelector('#hand-back-note')).not.toBeNull()
+    const bar = document.querySelector('[data-hand-back]')?.closest('div')
+    expect(document.body.textContent).toContain('resume at profile 15 of 22')
+    expect(document.querySelector('#hand-back-note')).not.toBeNull()
     expect(bar).not.toBeNull()
 
     await click('[data-hand-back="session-blocked"]')
 
     expect(resolveCalls).toHaveLength(1)
     expect(resolveCalls[0]?.sessionId).toBe('session-blocked')
-    expect(container.querySelector('[data-hand-back]')).toBeNull()
+    expect(document.querySelector('[data-hand-back]')).toBeNull()
   })
 
   it('does not open the in-control bar when focusing the tab fails', async () => {
@@ -278,14 +276,14 @@ describe('cockpit human-help takeover', () => {
     await click('[data-session-card="session-blocked"] [data-take-over]')
 
     // The tab is gone, so there is nothing to take over and no Hand back.
-    expect(container.querySelector('[data-hand-back]')).toBeNull()
+    expect(document.querySelector('[data-hand-back]')).toBeNull()
   })
 
   it('hides the banner and cards when no session is waiting', async () => {
     await render([session({ helpRequest: undefined })])
 
-    expect(container.querySelector('[data-needs-you-banner]')).toBeNull()
-    expect(container.querySelector('[data-needs-you]')).toBeNull()
+    expect(document.querySelector('[data-needs-you-banner]')).toBeNull()
+    expect(document.querySelector('[data-needs-you]')).toBeNull()
     expect(container.textContent).toContain('Working')
   })
 })

@@ -25,6 +25,10 @@ export function pageKeyFor(pathname: string): string {
  * Renders the routed page with the prototype's enter transition: a short fade
  * and 8px rise on page change only. There is no exit animation, so navigation
  * never waits, and the sidebar outside this wrapper never re-mounts.
+ *
+ * The rise is a transform, which has two side effects the wrapper contains:
+ * it adds to the document's scrollable overflow, and it becomes the containing
+ * block of any `position: fixed` descendant. Fixed overlays must portal out.
  */
 export function PageTransition() {
   const { pathname } = useLocation()
@@ -38,15 +42,20 @@ export function PageTransition() {
   }, [pageKey, pathname])
 
   return (
-    <motion.div
-      key={pageKey}
-      data-page-key={pageKey}
-      initial={{ opacity: 0, y: reduce ? 0 : PAGE_ENTER_OFFSET_PX }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: PAGE_ENTER_DURATION_S, ease: PAGE_ENTER_EASE }}
-      className="flex min-w-0 flex-1 flex-col"
-    >
-      <Outlet />
-    </motion.div>
+    // Clips the rise's overhang so a page that fits the window never turns
+    // scrollable mid-enter: with classic scrollbars that flashed a scrollbar
+    // and reflowed the page 15px narrower and back on every navigation.
+    <div className="flex min-w-0 flex-1 flex-col overflow-y-clip">
+      <motion.div
+        key={pageKey}
+        data-page-key={pageKey}
+        initial={{ opacity: 0, y: reduce ? 0 : PAGE_ENTER_OFFSET_PX }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: PAGE_ENTER_DURATION_S, ease: PAGE_ENTER_EASE }}
+        className="flex min-w-0 flex-1 flex-col"
+      >
+        <Outlet />
+      </motion.div>
+    </div>
   )
 }
