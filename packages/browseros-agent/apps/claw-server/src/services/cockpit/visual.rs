@@ -72,7 +72,9 @@ impl InFlightCaptures {
         let result = timeout(CAPTURE_WORKER_TIMEOUT, capture)
             .await
             .unwrap_or_else(|_| {
-                Err(CoreError::Message("preview screenshot worker timed out".into()))
+                Err(CoreError::Message(
+                    "preview screenshot worker timed out".into(),
+                ))
             });
         self.finish(page_id).await;
         result
@@ -202,7 +204,7 @@ impl SessionVisualService {
                 .await
         });
         let result = match timeout(CAPTURE_TIMEOUT, &mut capture).await {
-            Ok(result) => result.map_err(AppError::from)?.map_err(AppError::from)?,
+            Ok(result) => result.map_err(AppError::from)?,
             Err(_) => {
                 return Err(AppError::Internal(
                     "session preview capture timed out".to_string(),
@@ -313,6 +315,7 @@ mod tests {
     use super::{CAPTURE_WORKER_TIMEOUT, InFlightCaptures, capture_options};
     use browseros_core::{CoreError, screenshot::ScreenshotFormat};
     use std::{future::pending, sync::Arc};
+    use tokio::sync::Mutex;
 
     #[test]
     fn preview_capture_is_viewport_jpeg_without_annotations() {
@@ -337,21 +340,28 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn stuck_preview_worker_releases_its_capture_slot_after_the_deadline() {
+    async fn stuck_preview_worker_releases_slot_and_screenshot_lock_after_the_deadline() {
         let captures = Arc::new(InFlightCaptures::default());
         assert!(captures.begin(7).await);
 
+        let screenshot_lock = Arc::new(Mutex::new(()));
+        let held_lock = screenshot_lock.clone();
         let running = captures.clone();
         let worker = tokio::spawn(async move {
             running
-                .run_capture(7, pending::<Result<(), CoreError>>())
+                .run_capture(7, async move {
+                    let _guard = held_lock.lock().await;
+                    pending::<Result<(), CoreError>>().await
+                })
                 .await
         });
         tokio::task::yield_now().await;
         assert!(!captures.begin(7).await);
+        assert!(screenshot_lock.try_lock().is_err());
 
         tokio::time::advance(CAPTURE_WORKER_TIMEOUT).await;
         assert!(worker.await.expect("preview worker panicked").is_err());
         assert!(captures.begin(7).await);
+        assert!(screenshot_lock.try_lock().is_ok());
     }
 }
