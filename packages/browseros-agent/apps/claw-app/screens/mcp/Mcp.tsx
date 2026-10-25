@@ -54,13 +54,15 @@ export function Mcp() {
         <>
           <Group
             title="Connected"
-            count={`${data.connected.length} of ${data.total}`}
+            count={`${data.connectedCount} of ${data.total}`}
           >
             {data.connected.length ? (
               <AgentRows rows={data.connected} data={data} />
             ) : (
               <p className="px-[18px] py-4 text-[14.5px] text-ink-2">
-                No agents connected yet. Pick one below.
+                {data.connectedCount === 0
+                  ? 'No agents connected yet. Pick one below.'
+                  : 'The ones you just connected stay below until you open this page again.'}
               </p>
             )}
           </Group>
