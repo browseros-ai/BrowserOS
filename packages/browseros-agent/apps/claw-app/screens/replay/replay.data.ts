@@ -75,10 +75,18 @@ export interface ReplayData {
   eventsForTab: (tabId: number) => readonly ReplayEvent[]
 }
 
+/**
+ * Whether a recording is still on its way: `checking` until the recording
+ * metadata answers, `loading` while a recording it reports is downloading,
+ * then `settled` whether or not one turned up.
+ */
+export type RecordingLoadState = 'checking' | 'loading' | 'settled'
+
 export interface UseReplayDataResult {
   replay: ReplayData | null
   sessionId: string
   isLoading: boolean
+  recordingState: RecordingLoadState
 }
 
 /** Loads task metadata and stable rrweb event buckets for one session's replay. */
@@ -194,10 +202,18 @@ export function useReplayData(sessionId: string): UseReplayDataResult {
     )
   }, [taskQuery.data, eventCatalog, eventsLoaded, metadataQuery.data])
 
+  const recordingState: RecordingLoadState =
+    sessionId.length > 0 && metadataQuery.isPending
+      ? 'checking'
+      : metadataQuery.data?.hasData && !hasCurrentSessionSnapshot
+        ? 'loading'
+        : 'settled'
+
   return {
     replay,
     sessionId,
     isLoading: taskQuery.isLoading,
+    recordingState,
   }
 }
 

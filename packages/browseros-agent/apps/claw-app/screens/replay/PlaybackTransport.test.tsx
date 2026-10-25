@@ -177,6 +177,10 @@ describe('PlaybackTransport', () => {
     const oneTimes = [...container.querySelectorAll('[role="tab"]')].find(
       (button) => button.textContent?.includes('1×'),
     )
+    // The task opens paused; playback starts only on request.
+    expect(toggle()).toBe('Play')
+    await click('[data-command-play]')
+
     // A speed change through the real picker never pauses playback.
     await act(async () => {
       oneTimes?.dispatchEvent(new window.Event('click', { bubbles: true }))
@@ -200,6 +204,11 @@ describe('PlaybackTransport', () => {
 
   it('bookmarks non-action tools at their activity start', async () => {
     await act(async () => root.render(<TransportHarness />))
+    await act(async () => {
+      container
+        .querySelector('[data-command-play]')
+        ?.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
 
     const marks = [...container.querySelectorAll('button[aria-label^="Jump"]')]
     expect(marks.map((mark) => mark.getAttribute('aria-label'))).toEqual([

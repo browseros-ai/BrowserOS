@@ -53,6 +53,9 @@ mock.module('./ReplayViewport', () => ({
       data-viewport-caption={action?.caption ?? ''}
     />
   ),
+  ReplayPoster: ({ src }: { src?: string }) => (
+    <div data-viewport-poster={src ?? ''} />
+  ),
 }))
 
 mock.module('./PlaybackTransport', () => ({
@@ -60,14 +63,17 @@ mock.module('./PlaybackTransport', () => ({
     playback,
     totalSeconds,
     onSeek,
+    disabled = false,
   }: {
     playback: Playback
     totalSeconds: number
     onSeek: (seconds: number) => void
+    disabled?: boolean
   }) => {
     const finished = playback.time >= totalSeconds
     return (
       <div
+        data-playback-disabled={disabled}
         data-playback-time={playback.time}
         data-playback-playing={playback.isPlaying}
         data-playback-speed={playback.speed}
@@ -325,6 +331,7 @@ beforeEach(async () => {
     replay: replayData([]),
     sessionId: 'session-1',
     isLoading: false,
+    recordingState: 'settled',
   }
   container = dom.document.getElementById('root') as unknown as HTMLElement
   const { createRoot } = await import('react-dom/client')
@@ -361,11 +368,17 @@ async function advanceTo(wallMs: number) {
   })
 }
 
+/** Presses Play; a task always opens paused. */
+async function startPlayback() {
+  await act(async () => click('[data-playback-toggle]'))
+}
+
 /** Plays from a standing start to `seconds` of activity at 1x. */
 async function playTo(seconds: number) {
   await act(async () => {
     click('[data-playback-speed-option="1"]')
   })
+  await startPlayback()
   await advanceTo(0)
   await advanceTo(seconds * 1000)
 }
@@ -401,7 +414,7 @@ function currentCaption(): string | undefined {
 }
 
 describe('Replay auto-follow', () => {
-  it('starts on the first playable tab and autoplays global activity', async () => {
+  it('starts paused on the first playable tab', async () => {
     replayResult.replay = replayData(
       [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
       [1, 2],
@@ -412,8 +425,9 @@ describe('Replay auto-follow', () => {
     expect(attr('[data-selected-tab]', 'data-selected-tab')).toBe('1')
     expect(viewport('tab')).toBe('1')
     expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
-      'true',
+      'false',
     )
+    expect(frames.size).toBe(0)
     expect(attr('[data-playback-speed]', 'data-playback-speed')).toBe('4')
     // Activity spans the first checkpoint (1s) to the last rrweb event (14s).
     expect(attr('[data-playback-time]', 'data-playback-total')).toBe('13')
@@ -547,6 +561,7 @@ describe('Replay auto-follow', () => {
       [toolFrame(1, 3), toolFrame(2, 12, { durationMs: 2_000 })],
     )
     await renderReplay()
+    await startPlayback()
     await clickAct('[data-action-dispatch="12000"]')
 
     // 12s completion minus a 2s tool, rebased on the 1s activity origin.
@@ -570,6 +585,7 @@ describe('Replay manual control', () => {
   it('keeps playing across scrubs and speed changes', async () => {
     replayResult.replay = twoTabs()
     await renderReplay()
+    await startPlayback()
     expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
       'true',
     )
@@ -691,6 +707,7 @@ describe('Replay manual control', () => {
     replayResult.replay = twoTabs()
     await renderReplay()
     await clickAct('[data-playback-speed-option="4"]')
+    await startPlayback()
     await advanceTo(0)
     await advanceTo(3_000)
 
@@ -774,9 +791,44 @@ describe('Replay recording states', () => {
     await renderReplay()
 
     expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
-      'true',
+      'false',
     )
     expect(attr('[data-playback-time]', 'data-playback-time')).toBe('0')
+  })
+
+  it('holds the player layout with a still and inert controls while the recording loads', async () => {
+    const loading = replayData([], [1], [toolFrame(1, 3)])
+    loading.eventsLoaded = false
+    replayResult = {
+      ...replayResult,
+      replay: loading,
+      recordingState: 'loading',
+    }
+    await renderReplay()
+
+    expect(attr('[data-viewport-poster]', 'data-viewport-poster')).toBe(
+      'poster.png',
+    )
+    expect(attr('[data-playback-disabled]', 'data-playback-disabled')).toBe(
+      'true',
+    )
+
+    replayResult = {
+      ...replayResult,
+      replay: replayData(visualEvents(1, 1_000), [1], [toolFrame(1, 3)]),
+      recordingState: 'settled',
+    }
+    await renderReplay()
+
+    expect(container.querySelector('[data-viewport-poster]')).toBeNull()
+    expect(viewport('tab')).toBe('1')
+    expect(attr('[data-playback-disabled]', 'data-playback-disabled')).toBe(
+      'false',
+    )
+    // Ready does not mean playing: the person presses Play.
+    expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
+      'false',
+    )
   })
 
   it('extends a live replay without rewinding accepted activity', async () => {
@@ -836,7 +888,7 @@ describe('Replay recording states', () => {
     expect(container.querySelector('[data-resume-follow]')).toBeNull()
     expect(attr('[data-playback-time]', 'data-playback-time')).toBe('0')
     expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
-      'true',
+      'false',
     )
     expect(viewport('tab')).toBe('2')
   })
@@ -851,7 +903,7 @@ describe('Replay recording states', () => {
 
     expect(container.querySelector('[data-selected-tab]')).toBeNull()
     expect(attr('[data-playback-playing]', 'data-playback-playing')).toBe(
-      'true',
+      'false',
     )
 
     await playTo(9)
@@ -866,6 +918,7 @@ describe('Replay recording states', () => {
       [toolFrame(1, 3)],
     )
     await renderReplay()
+    await startPlayback()
     await advanceTo(0)
     expect(frames.size).toBe(1)
 
@@ -945,7 +998,14 @@ function ReplayHarness() {
   if (session.isLoading || !session.replay) return null
   return (
     <>
-      <ReplayPanel session={session} />
+      <ReplayPanel
+        session={session}
+        loading={
+          session.plan.durationSeconds === 0 &&
+          session.recordingState === 'loading'
+        }
+        posterSrc="poster.png"
+      />
       <div data-event-timeline data-current-index={session.state.currentIndex}>
         {session.plan.actions.map((action: ReplayAction, index: number) => (
           <button

@@ -5,7 +5,11 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { type ReplayData, useReplayData } from './replay.data'
+import {
+  type RecordingLoadState,
+  type ReplayData,
+  useReplayData,
+} from './replay.data'
 import {
   buildSessionReplayPlan,
   EMPTY_SESSION_REPLAY_PLAN,
@@ -18,6 +22,7 @@ import { type Playback, usePlayback } from './use-playback'
 export interface ReplaySession {
   replay: ReplayData | null
   isLoading: boolean
+  recordingState: RecordingLoadState
   plan: SessionReplayPlan
   /** Playback whose Play also resumes automatic tab following. */
   playback: Playback
@@ -39,7 +44,7 @@ export interface ReplaySession {
  * Pinning a tab pins only the camera, never the clock.
  */
 export function useReplaySession(sessionId: string): ReplaySession {
-  const { replay, isLoading } = useReplayData(sessionId)
+  const { replay, isLoading, recordingState } = useReplayData(sessionId)
   const [pinnedTabId, setPinnedTabId] = useState<number | null>(null)
   const activeSessionRef = useRef<string | null>(null)
 
@@ -48,7 +53,7 @@ export function useReplaySession(sessionId: string): ReplaySession {
     [replay],
   )
   const playback = usePlayback(plan.durationSeconds)
-  const { pause, play, seek, togglePlay: togglePlayback } = playback
+  const { pause, seek, togglePlay: togglePlayback } = playback
 
   useEffect(() => {
     const replaySessionId = replay?.sessionId
@@ -60,9 +65,9 @@ export function useReplaySession(sessionId: string): ReplaySession {
     }
     activeSessionRef.current = replaySessionId
     setPinnedTabId(null)
+    pause()
     seek(0)
-    play()
-  }, [replay?.sessionId, play, seek])
+  }, [replay?.sessionId, pause, seek])
 
   const selectTab = useCallback(
     (value: string) => {
@@ -96,6 +101,7 @@ export function useReplaySession(sessionId: string): ReplaySession {
   return {
     replay,
     isLoading,
+    recordingState,
     plan,
     playback: { ...playback, togglePlay },
     state,

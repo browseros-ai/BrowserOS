@@ -79,9 +79,12 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
   const { replay } = data
   const steps = showHidden ? data.allSteps : data.steps
   const hasRecording = replay.plan.durationSeconds > 0
+  // A recording still downloading already drives the steps from the start, so
+  // the highlighted step does not jump when playback becomes ready.
+  const followsPlayer = hasRecording || replay.recordingState === 'loading'
 
   const currentDispatchId = replay.state.currentAction?.frame.dispatchId
-  const activeIndex = hasRecording
+  const activeIndex = followsPlayer
     ? activeStepIndex(
         steps,
         currentDispatchId != null
@@ -97,6 +100,8 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
     else setChosenDispatchId(step.dispatchIds[0] ?? null)
   }
 
+  // Before the first step, a loading recording shows the first step's picture.
+  const pictureStep = shownStep ?? steps[0]
   const lastPageUrl = data.pages.at(-1)?.url
 
   return (
@@ -116,8 +121,8 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
           replay={replay}
           step={shownStep}
           snapshotId={
-            shownStep
-              ? snapshotForStep(shownStep, dispatches, data.screenshots)
+            pictureStep
+              ? snapshotForStep(pictureStep, dispatches, data.screenshots)
               : null
           }
         />

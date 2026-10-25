@@ -56,7 +56,12 @@ export function useTaskDetailScreenData(
     pages: pagesVisited(dispatches),
     replay,
     humanHelpEnabled: settings.data?.humanHelpEnabled ?? true,
-    isPending: detailQuery.isPending || screenshotsQuery.isPending,
+    // Waiting on the recording check too means the player opens in its final
+    // shape, with or without controls, instead of growing them a moment later.
+    isPending:
+      detailQuery.isPending ||
+      screenshotsQuery.isPending ||
+      replay.recordingState === 'checking',
     isError: detailQuery.isError || screenshotsQuery.isError,
     error:
       (detailQuery.error as Error | null) ??

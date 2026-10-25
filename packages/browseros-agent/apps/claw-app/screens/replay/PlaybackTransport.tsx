@@ -16,6 +16,8 @@ interface PlaybackTransportProps {
   totalSeconds: number
   actions: readonly ReplayAction[]
   onSeek: (seconds: number) => void
+  /** Shown but inert, while the recording is still loading. */
+  disabled?: boolean
 }
 
 /**
@@ -28,6 +30,7 @@ export function PlaybackTransport({
   totalSeconds,
   actions,
   onSeek,
+  disabled = false,
 }: PlaybackTransportProps) {
   const { time, isPlaying, speed, setSpeed, togglePlay } = playback
   const finished = time >= totalSeconds
@@ -39,6 +42,7 @@ export function PlaybackTransport({
       <Button
         size="icon"
         onClick={togglePlay}
+        disabled={disabled}
         aria-label={
           finished ? 'Restart playback' : isPlaying ? 'Pause' : 'Play'
         }
@@ -65,6 +69,7 @@ export function PlaybackTransport({
           step={SCRUBBER_STEP}
           value={time}
           onValueChange={onSeek}
+          disabled={disabled}
           showTicks={false}
           className="h-9 bg-accent-tint [&>div:first-child>div]:bg-primary/25"
         />
@@ -111,6 +116,7 @@ export function PlaybackTransport({
             <TabsTrigger
               key={s}
               value={String(s)}
+              disabled={disabled}
               className="px-2.5 text-[13px]"
             >
               {s}×

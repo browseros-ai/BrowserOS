@@ -6,11 +6,23 @@
 
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { PlaybackTransport } from './PlaybackTransport'
-import { ReplayViewport } from './ReplayViewport'
+import { ReplayPoster, ReplayViewport } from './ReplayViewport'
 import type { ReplaySession } from './use-replay-session'
 
+interface ReplayPanelProps {
+  session: ReplaySession
+  /** The recording is still downloading: hold the layout with a still. */
+  loading?: boolean
+  /** The still shown in the viewport while loading. */
+  posterSrc?: string
+}
+
 /** The replay player: tab strip, recording warnings, viewport and transport. */
-export function ReplayPanel({ session }: { session: ReplaySession }) {
+export function ReplayPanel({
+  session,
+  loading = false,
+  posterSrc,
+}: ReplayPanelProps) {
   const {
     replay,
     plan,
@@ -83,7 +95,12 @@ export function ReplayPanel({ session }: { session: ReplaySession }) {
       )}
       <div className="relative flex min-h-0 flex-1 flex-col gap-3">
         <div className="flex min-h-0 flex-1">
-          {track ? (
+          {loading ? (
+            <ReplayPoster
+              url={replay.frames.find((frame) => frame.url)?.url ?? replay.site}
+              src={posterSrc}
+            />
+          ) : track ? (
             <ReplayViewport
               site={replay.site}
               action={state.currentAction?.frame}
@@ -100,14 +117,22 @@ export function ReplayPanel({ session }: { session: ReplaySession }) {
             </div>
           )}
         </div>
-        {plan.durationSeconds > 0 && (
+        {loading ? (
+          <PlaybackTransport
+            disabled
+            playback={playback}
+            totalSeconds={replay.totalSeconds}
+            actions={[]}
+            onSeek={seek}
+          />
+        ) : plan.durationSeconds > 0 ? (
           <PlaybackTransport
             playback={playback}
             totalSeconds={plan.durationSeconds}
             actions={plan.actions}
             onSeek={seek}
           />
-        )}
+        ) : null}
       </div>
     </div>
   )

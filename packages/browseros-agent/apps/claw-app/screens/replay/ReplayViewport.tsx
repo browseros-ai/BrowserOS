@@ -73,6 +73,30 @@ export function ReplayViewport({
   )
 }
 
+/**
+ * The same frame as the viewport around a still picture, shown while the
+ * recording downloads so the player keeps its size when playback is ready.
+ */
+export function ReplayPoster({ url, src }: { url: string; src?: string }) {
+  return (
+    <div
+      data-replay-poster
+      className="relative flex flex-1 flex-col overflow-hidden rounded-2xl border border-border-2 bg-card shadow-sm"
+    >
+      <Chrome url={url} />
+      <div className="relative flex flex-1 overflow-hidden bg-bg-sunken">
+        {src ? (
+          <img
+            src={src}
+            alt=""
+            className="absolute inset-0 h-full w-full object-contain"
+          />
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 function Chrome({ url }: { url: string }) {
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-border border-b bg-bg-sunken px-3">

@@ -19,7 +19,11 @@ interface TaskPlayerProps {
   snapshotId: number | null
 }
 
-/** The recording when there is one, else the picture for the chosen step. */
+/**
+ * The recording when there is one, else the picture for the chosen step.
+ * While a recording downloads, its picture sits inside the player's frame
+ * with the controls showing, so nothing moves when playback is ready.
+ */
 export function TaskPlayer({
   ref,
   sessionId,
@@ -29,6 +33,10 @@ export function TaskPlayer({
 }: TaskPlayerProps) {
   const baseUrl = useTaskScreenshotBaseUrl()
   const hasRecording = replay.plan.durationSeconds > 0
+  const pictureSrc =
+    snapshotId !== null && baseUrl !== null
+      ? taskScreenshotUrl(sessionId, snapshotId, baseUrl)
+      : undefined
 
   return (
     <Card
@@ -40,10 +48,12 @@ export function TaskPlayer({
     >
       {hasRecording ? (
         <ReplayPanel session={replay} />
-      ) : snapshotId !== null && baseUrl !== null ? (
+      ) : replay.recordingState === 'loading' ? (
+        <ReplayPanel session={replay} loading posterSrc={pictureSrc} />
+      ) : pictureSrc ? (
         <div className="relative min-h-0 flex-1 overflow-hidden rounded-[10px] bg-bg-sunken shadow-shot">
           <img
-            src={taskScreenshotUrl(sessionId, snapshotId, baseUrl)}
+            src={pictureSrc}
             alt={step ? `What the page looked like: ${step.sentence}` : ''}
             className="h-full w-full object-cover object-top-left"
           />
