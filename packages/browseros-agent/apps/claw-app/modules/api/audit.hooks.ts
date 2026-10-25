@@ -49,6 +49,8 @@ export interface UseSessionsVariables {
   profileId?: string
   slug?: string
   status?: SessionStatus
+  /** Only tasks that failed or were stopped, filtered before pagination. */
+  needsAttention?: boolean
   site?: string
   search?: string
   since?: number

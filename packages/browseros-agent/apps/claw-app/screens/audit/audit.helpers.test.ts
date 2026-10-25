@@ -3,7 +3,6 @@ import type { TaskStatus, TaskSummary } from '@/modules/api/audit.hooks'
 import {
   agentOptionsFor,
   groupByDay,
-  needsALook,
   taskWhen,
   tookLabel,
 } from './audit.helpers'
@@ -27,16 +26,6 @@ function task(
     ...overrides,
   }
 }
-
-describe('needsALook', () => {
-  it('flags failed and stopped tasks only', () => {
-    expect(
-      (['live', 'done', 'failed', 'cancelled'] as TaskStatus[]).map((status) =>
-        needsALook(task(status)),
-      ),
-    ).toEqual([false, false, true, true])
-  })
-})
 
 describe('groupByDay', () => {
   it('splits tasks by local day, newest first, with Today and Yesterday', () => {

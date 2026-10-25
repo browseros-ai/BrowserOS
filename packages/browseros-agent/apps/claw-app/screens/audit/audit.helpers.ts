@@ -13,11 +13,6 @@ function daysBefore(startedAt: number, now: number): number {
   return Math.round((startOfDay(now) - startOfDay(startedAt)) / DAY_MS)
 }
 
-/** A task worth a second look: it did not finish, or someone stopped it. */
-export function needsALook(task: Pick<TaskSummary, 'status'>): boolean {
-  return task.status === 'failed' || task.status === 'cancelled'
-}
-
 export interface AgentOption {
   slug: string
   name: string
