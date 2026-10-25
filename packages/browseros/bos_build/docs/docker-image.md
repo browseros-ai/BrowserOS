@@ -15,7 +15,7 @@ for building and publishing it.
 | `docker/neo/entrypoint.sh` | Container supervisor: Xvnc, openbox, websockify, Neo restart loop, profile setup, clean shutdown |
 | `docker/neo/smoke.py` | End-to-end check from the host: viewer, MCP from outside the container, hosted tool set, an agent tab |
 | `docker/neo/captcha_smoke.py` | Checks CAPTCHA tool availability with hosted mode on/off, including keyless builds |
-| `bos_build/release/docker_image.py` | `build_image`: preflight that each architecture was published, tag policy, buildx invocation |
+| `bos_build/release/docker_image.py` | `build_image`: preflight that each architecture was published, tag and label policy, buildx invocation |
 | `bos_build/cli/release_docker.py` | `browseros release docker`, a thin wrapper |
 | `.github/workflows/release-docker.yml` | Build servers, verify both native images, then push one multi-architecture image |
 
@@ -114,11 +114,36 @@ Publication rebuilds both architectures with the same server artifacts and key
 configuration, then pushes them with `GITHUB_TOKEN`. Tag `latest` only once the version has been
 promoted (`browseros release publish`); a draft should never become `latest`.
 
-From a workstation instead, after `docker login ghcr.io` with a token that has
-`write:packages`, and with a buildx builder that can build arm64 and amd64:
+### Tags
+
+An image is a released browser package plus one commit's claw-server and Docker
+packaging, so each run publishes:
+
+| Tag | Example | Points at |
+|---|---|---|
+| `<version>-<commit>` | `0.52.0.1-169e41f` | The newest run from that commit. A different commit always gets a different tag |
+| `<version>` | `0.52.0.1` | The newest run for that browser version |
+| `latest` | `latest` | The newest run with `latest=true` |
+
+To ship a claw-server or entrypoint change for a browser that is already released,
+run the workflow again from the newer commit with the same `version`. No browser
+build or claw-server version bump is needed. Each image is also labelled with
+`org.opencontainers.image.version` (`<version>-<commit>`),
+`org.opencontainers.image.revision` (the full commit) and
+`com.browseros.claw-server.version` (read from the server binaries):
 
 ```bash
-uv run browseros release docker --version 0.52.0.1 --push [--latest]
+docker image inspect -f '{{json .Config.Labels}}' ghcr.io/browseros-ai/neo:0.52.0.1
+```
+
+From a workstation instead, after `docker login ghcr.io` with a token that has
+`write:packages`, and with a buildx builder that can build arm64 and amd64. Publishing
+needs both architectures' servers built from the commit being tagged, as the
+workflow's `server` job builds them:
+
+```bash
+uv run browseros release docker --version 0.52.0.1 --push [--latest] \
+  --server-dir <dir> --revision "$(git rev-parse HEAD)"
 ```
 
 ## First publish
