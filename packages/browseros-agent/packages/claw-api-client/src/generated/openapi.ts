@@ -1543,6 +1543,8 @@ export interface operations {
         slug?: string
         /** @description Use `live` to request a complete current snapshot with live browser state. */
         status?: components['schemas']['SessionStatus']
+        /** @description Only tasks that failed or were stopped. Applied before pagination, so pages stay full. */
+        needsAttention?: boolean
         site?: string
         search?: string
         since?: number

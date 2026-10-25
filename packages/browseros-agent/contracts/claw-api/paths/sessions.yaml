@@ -16,6 +16,12 @@ collection:
         description: Use `live` to request a complete current snapshot with live browser state.
         schema:
           $ref: ../schemas/sessions.yaml#/SessionStatus
+      - name: needsAttention
+        in: query
+        description: Only tasks that failed or were stopped. Applied before pagination, so pages stay full.
+        schema:
+          type: boolean
+          default: false
       - name: site
         in: query
         schema:
