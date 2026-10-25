@@ -123,8 +123,7 @@ export function InstallExtensionDialog({
               failedImages.has(step.image.src) ? (
                 <div className="flex h-full items-center justify-center px-6 text-center">
                   <p className="text-[13px] text-ink-3 leading-snug">
-                    Screenshot could not be loaded — the steps above still
-                    apply.
+                    Couldn’t load this picture. The steps above still apply.
                   </p>
                 </div>
               ) : (
