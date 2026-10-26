@@ -44,6 +44,9 @@ pub struct BrowserService {
     /// service creates (one per CDP epoch) so views and discovery share one gate decision.
     native: NativeCapabilities,
     ownership: Arc<PageOwnership>,
+    /// Hosted servers keep the tabs they attach to in the fixed desktop viewport until a tab
+    /// is switched to mobile; the desktop app leaves tab sizing alone.
+    desktop_by_default: bool,
     state_tx: watch::Sender<BrowserConnectionState>,
     initial_attempt_tx: watch::Sender<bool>,
     session: Arc<RwLock<Option<Arc<browseros_core::BrowserSession>>>>,
@@ -61,6 +64,7 @@ impl BrowserService {
         ownership: Arc<PageOwnership>,
         tab_registry: Arc<TabRegistry>,
         native: NativeCapabilities,
+        desktop_by_default: bool,
     ) -> Arc<Self> {
         let (state_tx, _) = watch::channel(BrowserConnectionState {
             connected: false,
@@ -72,6 +76,7 @@ impl BrowserService {
             cdp_port,
             native,
             ownership,
+            desktop_by_default,
             state_tx,
             initial_attempt_tx,
             session: Arc::new(RwLock::new(None)),
@@ -189,6 +194,7 @@ impl BrowserService {
             BrowserSessionHooks {
                 page_manager: PageManagerHooks {
                     on_page_detached: Some(on_page_detached),
+                    desktop_by_default: self.desktop_by_default,
                     ..PageManagerHooks::default()
                 },
             },
@@ -445,6 +451,7 @@ mod tests {
                 sessions.ownership(),
                 TabRegistry::new(session_tabs),
                 NativeCapabilities::default(),
+                false,
             ),
             root,
         ))

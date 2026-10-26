@@ -4,8 +4,8 @@ use crate::framework::{
 use browseros_core::{
     PageId,
     mobile_mode::{
-        MOBILE_HEIGHT, MOBILE_WIDTH, MobileMode, MobileModeArgError, MobileModeOutcome,
-        MobileModeRequest, WindowBounds, WindowOutcome,
+        DESKTOP_HEIGHT, DESKTOP_WIDTH, MOBILE_HEIGHT, MOBILE_WIDTH, MobileMode, MobileModeArgError,
+        MobileModeOutcome, MobileModeRequest, WindowBounds, WindowOutcome,
     },
 };
 use futures_util::future::BoxFuture;
@@ -15,18 +15,20 @@ use serde_json::{Value, json};
 use std::borrow::Cow;
 
 const DESCRIPTION: &str = "\
-Switch one existing tab between desktop and a fixed mobile preset: Android Chrome user agent \
-and client hints, touch input, and a 400x906 CSS px viewport at 2x density. \
-zoom (25-400, default 100) is the DevTools device-preview scale and only changes how large \
-the tab draws the page; snapshots, screenshots, refs and act coordinates stay in CSS px. \
-The mode survives reloads and navigation in this tab until enabled:false. \
+Put one existing tab in one of two fixed viewports. enabled:true is mobile: Android Chrome \
+user agent and client hints, touch input, and a 400x906 CSS px viewport at 2x density. \
+enabled:false is desktop: a 1920x1080 CSS px viewport at 1x with the browser's own identity \
+and no touch. Tabs this server attaches to start in desktop. \
+zoom (mobile only, 25-400, default 100) is the DevTools device-preview scale and only changes \
+how large the tab draws the page; snapshots, screenshots, refs and act coordinates stay in \
+CSS px. Either viewport survives reloads, navigation and tab switches in this tab. \
 It affects everyone using this tab, including a tab the user is viewing. \
 It never reloads: the loaded document keeps its server-chosen content until you reload it \
-(reloadRequired). New tabs, popups, cross-site iframes and workers are not covered. \
+(reloadRequired). New tabs, popups, cross-site iframes and workers are not covered by mobile. \
 Raw page.cdp Input coordinates are in zoomed view space (CSS px x zoom/100). \
-resizeWindow:true (default false) also resizes this tab's whole Chrome window, shared by \
-every tab in it, so its content area fits the zoomed view. The window keeps its tab strip, \
-toolbar and frame, so its size is not the viewport size; the result reports the actual \
+resizeWindow:true (mobile only, default false) also resizes this tab's whole Chrome window, \
+shared by every tab in it, so its content area fits the zoomed view. The window keeps its tab \
+strip, toolbar and frame, so its size is not the viewport size; the result reports the actual \
 bounds and any axis Chrome's minimum size or the screen limited. A maximized or fullscreen \
 window is left alone. enabled:false restores the window unless something resized it since.";
 
@@ -36,7 +38,7 @@ struct ToggleMobileModeArgs {
     /// Page id from `tabs`.
     #[schemars(range(min = 1))]
     page: u32,
-    /// true switches this tab to the mobile preset; false restores desktop.
+    /// true selects the fixed mobile viewport; false the fixed 1920x1080 desktop viewport.
     enabled: bool,
     /// Device-preview zoom in percent (default 100): 150 draws the page at 1.5x. Only with
     /// enabled: true.
@@ -170,7 +172,9 @@ fn summary(outcome: &MobileModeOutcome) -> String {
                 number(zoom.percent())
             )
         }
-        MobileMode::Desktop => format!("Mobile mode off for page {page}."),
+        MobileMode::Desktop => format!(
+            "Desktop mode on for page {page}: fixed {DESKTOP_WIDTH}x{DESKTOP_HEIGHT} CSS px viewport at 1x."
+        ),
     };
     if !outcome.changed {
         text.push_str(" Settings were already in place and were re-sent.");
@@ -199,12 +203,12 @@ fn structured(outcome: &MobileModeOutcome) -> Value {
         "reloadRequired": outcome.reload_required,
     });
     if let MobileMode::Mobile(zoom) = outcome.mode {
-        let (width, height) = zoom.visible_size();
         value["zoom"] = number(zoom.percent());
-        value["viewport"] =
-            json!({"width":MOBILE_WIDTH,"height":MOBILE_HEIGHT,"deviceScaleFactor":2});
-        value["visibleSize"] = json!({"width":width,"height":height});
     }
+    let (width, height, density) = outcome.mode.viewport();
+    let (visible_width, visible_height) = outcome.mode.visible_size();
+    value["viewport"] = json!({"width":width,"height":height,"deviceScaleFactor":number(density)});
+    value["visibleSize"] = json!({"width":visible_width,"height":visible_height});
     if let Some(window) = &outcome.window {
         value["window"] = window_json(window);
     }

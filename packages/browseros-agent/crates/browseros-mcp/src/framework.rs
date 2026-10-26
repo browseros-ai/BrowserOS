@@ -129,6 +129,8 @@ pub struct ToolCtx {
     pub inner_call_hook: Option<Arc<dyn InnerCallHook>>,
     /// See [`BrowserToolOptions::preloaded_helpers`].
     pub preloaded_helpers: Vec<HelperSource>,
+    /// The host runs as a hosted server; hosted-only tools execute only then.
+    pub hosted: bool,
 }
 
 impl ToolCtx {
@@ -142,6 +144,7 @@ impl ToolCtx {
             output_files: options.output_files,
             inner_call_hook: options.inner_call_hook,
             preloaded_helpers: options.preloaded_helpers,
+            hosted: false,
         }
     }
 
@@ -325,6 +328,8 @@ pub struct ToolMetadata {
     /// Native feature the whole tool needs. Unsupported natives do not list the tool, and
     /// `execute_tool` refuses it before admission or its handler can send anything.
     pub requires: Option<NativeFeature>,
+    /// Offered and executed only when the host is hosted ([`ToolCtx::hosted`]).
+    pub hosted_only: bool,
 }
 
 /// Internal, host-only hints a tool emits so the claw-server audit layer can keep
@@ -474,6 +479,13 @@ async fn execute_tool_inner(
         && let Err(err) = ctx.browser.require(feature)
     {
         return Ok(ToolResult::error(format!("{} failed: {err}", def.name)));
+    }
+    // Also before admission: run's tool primitives and cached callers reach here unlisted.
+    if def.metadata.hosted_only && !ctx.hosted {
+        return Ok(ToolResult::error(format!(
+            "{} failed: hosted_only: it is only available on a hosted BrowserOS neo server; nothing was changed.",
+            def.name
+        )));
     }
     let primary_page = extract_page_id(def.metadata.accepts_page_arg, &raw_args).map(PageId);
     // Reject before invoking a handler or exposing page signals. Management is

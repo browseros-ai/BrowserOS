@@ -1966,7 +1966,8 @@ async fn toggle_mobile_mode_rejects_invalid_arguments_before_its_own_cdp() {
         json!({ "page": 1, "enabled": true, "width": 390 }),
     ];
     for args in invalid {
-        let (ctx, connection, _page) = harness_ctx().await;
+        let (mut ctx, connection, _page) = harness_ctx().await;
+        ctx.hosted = true;
         let before = connection.calls().len();
         let tool = tool_by_name("toggleMobileMode");
         let mut response = ToolResponse::new();
@@ -1990,7 +1991,8 @@ async fn toggle_mobile_mode_rejects_invalid_arguments_before_its_own_cdp() {
 
 #[tokio::test]
 async fn toggle_mobile_mode_reports_the_effective_preset() {
-    let (ctx, connection, page) = harness_ctx().await;
+    let (mut ctx, connection, page) = harness_ctx().await;
+    ctx.hosted = true;
     let tool = tool_by_name("toggleMobileMode");
     let result = execute_tool(
         &tool,
@@ -2027,7 +2029,10 @@ async fn toggle_mobile_mode_reports_the_effective_preset() {
         .unwrap_or_else(|| panic!("structured content missing"))
         .keys()
     {
-        assert!(schema["properties"].get(key).is_some(), "{key} is undeclared");
+        assert!(
+            schema["properties"].get(key).is_some(),
+            "{key} is undeclared"
+        );
     }
     let methods = mobile_calls(&connection, 0)
         .into_iter()
@@ -2049,13 +2054,55 @@ async fn toggle_mobile_mode_reports_the_effective_preset() {
         .unwrap_or_else(|err| panic!("disable failed: {err}"));
     assert_eq!(
         result.structured_content,
-        Some(json!({ "page": page, "enabled": false, "changed": true, "reloadRequired": true }))
+        Some(json!({
+            "page": page,
+            "enabled": false,
+            "viewport": { "width": 1920, "height": 1080, "deviceScaleFactor": 1 },
+            "visibleSize": { "width": 1920, "height": 1080 },
+            "changed": true,
+            "reloadRequired": true
+        }))
+    );
+    assert!(
+        result_text(&result).contains("1920x1080"),
+        "{}",
+        result_text(&result)
     );
 }
 
 #[tokio::test]
+async fn toggle_mobile_mode_runs_only_for_a_hosted_host() {
+    let (mut ctx, connection, page) = harness_ctx().await;
+    ctx.hosted = false;
+    let before = connection.calls().len();
+    let tool = tool_by_name("toggleMobileMode");
+    for args in [
+        json!({ "page": page, "enabled": true, "zoom": 150 }),
+        json!({ "page": page, "enabled": false }),
+    ] {
+        let result = execute_tool(&tool, args.clone(), &ctx)
+            .await
+            .unwrap_or_else(|err| panic!("{args}: {err}"));
+        assert!(result.is_error, "{args}");
+        assert!(
+            result_text(&result).contains("hosted"),
+            "{}",
+            result_text(&result)
+        );
+    }
+    assert_eq!(connection.calls().len(), before, "refused before any CDP");
+    let hosted_only = catalog()
+        .into_iter()
+        .filter(|tool| tool.metadata.hosted_only)
+        .map(|tool| tool.name)
+        .collect::<Vec<_>>();
+    assert_eq!(hosted_only, ["toggleMobileMode"]);
+}
+
+#[tokio::test]
 async fn toggle_mobile_mode_reports_the_actual_window_bounds() {
-    let (ctx, connection, page) = harness_ctx().await;
+    let (mut ctx, connection, page) = harness_ctx().await;
+    ctx.hosted = true;
     let result = execute_tool(
         &tool_by_name("toggleMobileMode"),
         json!({ "page": page, "enabled": true, "resizeWindow": true }),

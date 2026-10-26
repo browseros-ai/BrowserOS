@@ -310,7 +310,7 @@ impl ClawMcpService {
         let mut tools = self
             .catalog
             .iter()
-            .filter(|tool| tool.available(native))
+            .filter(|tool| tool.available(native) && hosted::refusal(mode, tool.name).is_none())
             .map(|tool| tool.to_mcp_tool(native))
             .map(&decorate)
             .collect::<Vec<_>>();
@@ -3532,6 +3532,27 @@ mod tests {
         Ok(())
     }
 
+    /// Only a hosted server offers the fixed-viewport tool; the desktop app keeps its sizing.
+    #[tokio::test]
+    async fn toggle_mobile_mode_is_listed_only_by_hosted_servers() -> anyhow::Result<()> {
+        for (mode, listed) in [(ServerMode::Desktop, false), (ServerMode::Hosted, true)] {
+            let call =
+                crate::api::mcp::test_support::tool_call_in_mode("tabs", json!({}), mode).await?;
+            let service = ClawMcpService::new(call.state);
+            let names = service
+                .listed_tools(true)
+                .iter()
+                .map(|tool| tool.name.to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                names.iter().any(|name| name == "toggleMobileMode"),
+                listed,
+                "{mode:?}: {names:?}"
+            );
+        }
+        Ok(())
+    }
+
     /// Hosted lists the browser catalog (plus pursue when credentialled) and nothing that
     /// assumes a local harness or a watching person, even with human help on in settings.
     #[tokio::test]
@@ -3721,7 +3742,10 @@ mod tests {
         let mut expected = service
             .catalog
             .iter()
-            .filter(|tool| tool.available(service.native()))
+            .filter(|tool| {
+                tool.available(service.native())
+                    && hosted::refusal(ServerMode::Desktop, tool.name).is_none()
+            })
             .map(|tool| tool.name.to_string())
             .collect::<Vec<_>>();
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
@@ -3732,6 +3756,7 @@ mod tests {
         expected.push(AWAIT_HELP_TOOL_NAME.to_string());
         assert_eq!(names, expected);
         assert!(names.contains(&"run".to_string()));
+        assert!(!names.contains(&hosted::MOBILE_MODE_TOOL_NAME.to_string()));
         assert!(names.contains(&"name_session".to_string()));
         assert!(names.contains(&"save_skill".to_string()));
         assert!(names.contains(&"mark_skill_run".to_string()));
@@ -3949,7 +3974,10 @@ mod tests {
         let mut expected = service
             .catalog
             .iter()
-            .filter(|tool| tool.available(service.native()))
+            .filter(|tool| {
+                tool.available(service.native())
+                    && hosted::refusal(ServerMode::Desktop, tool.name).is_none()
+            })
             .map(|tool| tool.name.to_string())
             .collect::<Vec<_>>();
         expected.push(NAME_SESSION_TOOL_NAME.to_string());

@@ -122,6 +122,7 @@ fn metadata_for_tool(name: &str) -> ToolMetadata {
             _ => None,
         },
         manages_target: matches!(name, "browser_target" | "browser_profiles"),
+        hosted_only: name == "toggleMobileMode",
         accepts_page_arg: matches!(
             name,
             "credentials"

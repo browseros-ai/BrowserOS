@@ -66,7 +66,7 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.evaluate(fn, arg?, opts?)     - runs INSIDE the page. Returns { changed } alongside the value: a script that mutated the page is settled before you get it back, so never pause afterwards. For an effect that is entirely asynchronous (a click whose result arrives over the network) pass { settle: true } to wait for quiet regardless. Pass a real function; a second argument is JSON-serialized and handed to it, e.g. page.evaluate((sel) => document.querySelectorAll(sel).length, '.row'). It does not close over script variables. A code string with a `return` also works: page.evaluate("return document.title").
   page.screenshot(opts?) / pdf(opts?)
     screenshot has no default cap; size caps CSS pixels, with omitted axes unconstrained
-  page.toggleMobileMode({ enabled, zoom?, resizeWindow? }) - this tab only: the toggleMobileMode tool's mobile preset at a device-preview zoom %
+  page.toggleMobileMode({ enabled, zoom?, resizeWindow? }) - hosted servers only: this tab's fixed mobile (400x906, zoom %) or desktop (1920x1080) viewport
   page.download(ref) / upload(ref, files)
   page.close() / info()
 Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers.<name>(browser, page) where page is the id NUMBER.
@@ -2998,9 +2998,33 @@ return seen;
     }
 
     #[tokio::test]
-    async fn page_toggle_mobile_mode_runs_the_tool_on_its_own_page() -> anyhow::Result<()> {
+    async fn page_toggle_mobile_mode_is_refused_unless_the_host_is_hosted() -> anyhow::Result<()> {
         let log = Arc::new(Mutex::new(HookLog::default()));
         let ctx = ctx_with_hook(log.clone());
+        let result = run_tool_with_ctx(
+            "return await browser.page(1).toggleMobileMode({ enabled: true, zoom: 150 });",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(result.is_error);
+        let structured = result
+            .structured_content
+            .ok_or_else(|| anyhow::anyhow!("structured content"))?;
+        assert!(
+            structured["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("hosted")),
+            "{structured}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn page_toggle_mobile_mode_runs_the_tool_on_its_own_page() -> anyhow::Result<()> {
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let mut ctx = ctx_with_hook(log.clone());
+        ctx.hosted = true;
         let result = run_tool_with_ctx(
             "return await browser.page(1).toggleMobileMode({ enabled: true, zoom: 150 });",
             None,
