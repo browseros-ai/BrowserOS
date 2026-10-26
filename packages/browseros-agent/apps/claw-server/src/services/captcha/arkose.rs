@@ -74,23 +74,40 @@ const APPLY: &str = r#"
 const current = snapshot();
 if (!current.loaded || current.failed || ['url','publicKey','blob','instance','session','frameSrc'].some(k => current[k] !== args[k]))
     return {written:false};
-// Keep the actual element across verification, including widgets in shadow roots.
-const mark = 'data-browseros-arkose-' + crypto.randomUUID();
-const wasVisible = visible(gate);
-if (gate) gate.setAttribute(mark, '');
-const beforeFrames = frames.filter(visible).length;
-let written = false, callbackRan = false, callbackDeclared = !!api;
+const mark = args.mark;
+const lightbox = config.mode !== 'inline';
+const wasVisible = visible(gate) && (!lightbox || (gate !== frame && gate !== st?.element));
+let written = false, callbackRan = false, callbackDeclared = !!api, sdkCompleted = false;
+const events = st?.events, previous = events?.onCompleted;
+let callbackWork, notify;
+const delivered = new Promise(resolve => { notify = resolve; });
+function observe(response) {
+    const value = previous.apply(this, arguments);
+    if (response?.token === args.token) {
+        sdkCompleted = true;
+        callbackRan = true;
+        callbackWork = Promise.resolve(value);
+        notify();
+    }
+    return value;
+}
+const observing = typeof previous === 'function';
 try {
+    if (gate) gate.setAttribute(mark, '');
+    document.documentElement.setAttribute('data-browseros-arkose-document', mark);
+    if (observing) events.onCompleted = observe;
     if (api && typeof api.onComplete === 'function') {
-        await api.onComplete({id:st.id, token:args.token});
-        written = st.completed === true && st.token === args.token;
+        const pending = Promise.resolve(api.onComplete({id:st.id, token:args.token}));
+        // Lightbox completion starts a new session; its network reset is not token delivery.
+        await (observing ? Promise.race([pending, delivered]) : pending);
+        if (callbackWork) await callbackWork;
+        written = sdkCompleted || (st.completed === true && st.token === args.token);
         callbackRan = written;
-    } else if (api && typeof st?.events?.onCompleted === 'function') {
+    } else if (api && observing) {
         st.token = args.token;
         st.completed = true;
-        await st.events.onCompleted({token:args.token});
-        written = true;
-        callbackRan = true;
+        await events.onCompleted({token:args.token});
+        written = sdkCompleted;
     } else {
         const name = widget?.getAttribute('data-callback');
         callbackDeclared = !!name;
@@ -109,18 +126,22 @@ try {
         written = true;
     }
 } catch { callbackDeclared = true; callbackRan = false; }
-return {written, callbackRan, callbackDeclared, wasVisible, mark, beforeFrames};
+finally { if (observing && events.onCompleted === observe) events.onCompleted = previous; }
+return {written, callbackRan, callbackDeclared, wasVisible, mark, lightbox, sdkCompleted};
 "#;
 const CHECK: &str = r#"
 /* arkose:verify */
-const marked = args.mark ? all('[' + args.mark + ']')[0] : null;
-const remaining = all('[data-pkey], [id*="funcaptcha"], iframe[src]')
+const marked = frame?.hasAttribute(args.mark) ? frame : (args.mark ? all('[' + args.mark + ']')[0] : null);
+const remaining = visible(frame) || all('[data-pkey], [id*="funcaptcha"], iframe[src]')
     .filter(el => !el.matches('iframe') || vendor(el.src)).some(visible);
-return {transition:args.wasVisible === true && !visible(marked) && !remaining,
+const arkosePresent = !!frame?.isConnected || widgets.length > 0 || scripts.length > 0
+    || apis.some(api => api.state.completed !== true);
+return {transition:args.wasVisible === true && (args.lightbox ? !marked : !visible(marked)) && !remaining,
+    sameDocument:document.documentElement.getAttribute('data-browseros-arkose-document') === args.mark,
     retained:(st?.completed === true && st?.token === args.token)
         || inputs.some(input => input.value === args.token),
     ready:document.readyState === 'complete',
-    captchaFree:!remaining && !all('.g-recaptcha, .h-captcha, .cf-turnstile, awswaf-captcha, [class*="geetest_"]').some(visible)
+    captchaFree:!arkosePresent && !all('.g-recaptcha, .h-captcha, .cf-turnstile, awswaf-captcha, [class*="geetest_"]').length
         && !all('iframe[src]').some(el => /recaptcha|hcaptcha|challenges\.cloudflare\.com/.test(el.src))};
 "#;
 
@@ -318,6 +339,7 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
     }
     let mut args = fresh;
     args["token"] = json!(token);
+    args["mark"] = json!(format!("data-browseros-arkose-{}", uuid::Uuid::new_v4()));
     ctx.lease
         .set_progress(Some(CaptchaKind::Arkose), SolveStep::Verifying);
     let until = (Instant::now() + VERIFY).min(ctx.deadline);
@@ -325,6 +347,7 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
     let applied = match tokio::time::timeout_at(until, evaluate(ctx, challenge, APPLY, &args)).await
     {
         Ok(value) => value?,
+        Err(_) if Instant::now() >= ctx.deadline => return Err(PageError::Timeout),
         Err(_) => return Ok(unconfirmed()),
     };
     result.callback_ran = flag(&applied, "callbackRan");
@@ -346,25 +369,44 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
         } else {
             challenge
         };
-        let evidence = evaluate(ctx, target, CHECK, &args).await?;
+        let evidence = match evaluate(ctx, target, CHECK, &args).await {
+            Ok(value) => value,
+            Err(error) => {
+                if let Some(frame) = &target.host_frame
+                    && matches!(&error, PageError::Browser(_))
+                {
+                    guard(ctx).await?;
+                    let frames = bounded(ctx, ctx.page.frames()).await?;
+                    if !frames
+                        .iter()
+                        .any(|current| current.frame_id == frame.frame_id)
+                    {
+                        return Err(PageError::Navigated);
+                    }
+                }
+                return Err(error);
+            }
+        };
         if bounded(ctx, ctx.page.document()).await? != document {
             return Err(PageError::Navigated);
         }
-        if document != ctx.document {
+        if document != ctx.document || !flag(&evidence, "sameDocument") {
             if !flag(&evidence, "ready") || !flag(&evidence, "captchaFree") {
                 return Err(PageError::Navigated);
             }
         } else if !flag(&evidence, "transition") {
             if Instant::now() >= until {
-                return Ok(if flag(&evidence, "retained") {
-                    (
-                        SolveStatus::TokenApplied,
-                        SolveReason::AwaitingSubmit,
-                        super::token_applied_message(result.callback_ran),
-                    )
-                } else {
-                    unconfirmed()
-                });
+                return Ok(
+                    if flag(&evidence, "retained") || flag(&args, "sdkCompleted") {
+                        (
+                            SolveStatus::TokenApplied,
+                            SolveReason::AwaitingSubmit,
+                            super::token_applied_message(result.callback_ran),
+                        )
+                    } else {
+                        unconfirmed()
+                    },
+                );
             }
             bounded(ctx, async {
                 sleep_until(until.min(Instant::now() + Duration::from_millis(250))).await;
@@ -467,6 +509,12 @@ mod tests {
         retained: bool,
         navigated: bool,
         frame_calls: usize,
+        same_document: bool,
+        ready: bool,
+        captcha_free: bool,
+        frame_gone: bool,
+        sdk_completed: bool,
+        apply_delay: Duration,
     }
 
     impl Default for State {
@@ -482,6 +530,12 @@ mod tests {
                 retained: true,
                 navigated: false,
                 frame_calls: 0,
+                same_document: true,
+                ready: true,
+                captcha_free: true,
+                frame_gone: false,
+                sdk_completed: false,
+                apply_delay: Duration::ZERO,
             }
         }
     }
@@ -497,15 +551,19 @@ mod tests {
 
     impl CaptchaPage for FakePage {
         async fn eval_main(&self, expression: &str) -> Result<Value, PageError> {
+            if expression.contains("arkose:apply") {
+                let delay = self.state().apply_delay;
+                tokio::time::sleep(delay).await;
+            }
             let mut state = self.state();
             if expression.contains("arkose:apply") {
                 state.applied = true;
                 Ok(json!({"written":true, "callbackRan":state.callback,
-                    "callbackDeclared":true, "wasVisible":true, "selector":"#gate"}))
+                    "callbackDeclared":true, "wasVisible":true, "selector":"#gate", "sdkCompleted":state.sdk_completed}))
             } else if expression.contains("arkose:verify") {
                 Ok(
                     json!({"transition":state.transition, "retained":state.retained,
-                    "ready":true, "captchaFree":state.transition}),
+                    "ready":state.ready, "captchaFree":state.captcha_free, "sameDocument":state.same_document}),
                 )
             } else {
                 Ok(state.read.clone())
@@ -517,7 +575,13 @@ mod tests {
             expr: &str,
         ) -> Result<Value, PageError> {
             assert_eq!(frame.frame_id, "host-frame");
-            self.state().frame_calls += 1;
+            {
+                let mut state = self.state();
+                state.frame_calls += 1;
+                if state.applied && state.frame_gone {
+                    return Err(PageError::Browser("frame removed".into()));
+                }
+            }
             self.eval_main(expr).await
         }
         async fn eval_in_frame(&self, _: &FrameRef, _: &str) -> Result<Value, PageError> {
@@ -611,6 +675,15 @@ mod tests {
         cancel: &CancellationToken,
         framed: bool,
     ) -> anyhow::Result<FlowResult> {
+        run_for(page, backend, cancel, framed, Duration::from_secs(30)).await
+    }
+    async fn run_for(
+        page: &FakePage,
+        backend: &FakeBackend<'_>,
+        cancel: &CancellationToken,
+        framed: bool,
+        budget: Duration,
+    ) -> anyhow::Result<FlowResult> {
         let reservations = Arc::<TabReservations>::default();
         let lease = reservations
             .try_reserve(42, "arkose-test")
@@ -623,7 +696,7 @@ mod tests {
                 events: &events,
                 lease: &lease,
                 cancel,
-                deadline: Instant::now() + Duration::from_secs(30),
+                deadline: Instant::now() + budget,
                 page_url: document().url,
                 document: document(),
                 user_agent: Some("BrowserOS test agent".into()),
@@ -869,6 +942,98 @@ mod tests {
                 (SolveStatus::Failed, SolveReason::AcceptanceUnconfirmed)
             );
         }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_sdk_reset_after_completion_keeps_the_delivered_token_result()
+    -> anyhow::Result<()> {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.transition = false;
+            state.retained = false;
+            state.sdk_completed = true;
+        }
+        let result = run(
+            &page,
+            &FakeBackend::new(&page),
+            &CancellationToken::new(),
+            false,
+        )
+        .await?;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::TokenApplied, SolveReason::AwaitingSubmit)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_host_frame_navigation_requires_ready_captcha_free_evidence()
+    -> anyhow::Result<()> {
+        for (ready, clear) in [(false, false), (true, false), (true, true)] {
+            let page = FakePage::default();
+            {
+                let mut state = page.state();
+                state.same_document = false;
+                state.ready = ready;
+                state.captcha_free = clear;
+            }
+            let result = run(
+                &page,
+                &FakeBackend::new(&page),
+                &CancellationToken::new(),
+                true,
+            )
+            .await?;
+            assert_eq!(
+                (result.status, result.reason),
+                if ready && clear {
+                    (SolveStatus::Solved, SolveReason::TokenAccepted)
+                } else {
+                    (SolveStatus::Cancelled, SolveReason::Navigated)
+                }
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_removed_host_frames_are_navigation_instead_of_browser_errors()
+    -> anyhow::Result<()> {
+        let page = FakePage::default();
+        page.state().frame_gone = true;
+        let result = run(
+            &page,
+            &FakeBackend::new(&page),
+            &CancellationToken::new(),
+            true,
+        )
+        .await?;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Cancelled, SolveReason::Navigated)
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_the_global_deadline_is_reported_during_apply() -> anyhow::Result<()> {
+        let page = FakePage::default();
+        page.state().apply_delay = Duration::from_secs(10);
+        let result = run_for(
+            &page,
+            &FakeBackend::new(&page),
+            &CancellationToken::new(),
+            false,
+            Duration::from_secs(2),
+        )
+        .await?;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Failed, SolveReason::DeadlineExceeded)
+        );
         Ok(())
     }
 
