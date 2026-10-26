@@ -2747,3 +2747,66 @@ async fn task_name_on_any_call_names_the_session() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn help_events_announce_each_change_to_the_open_requests() -> anyhow::Result<()> {
+    use claw_server::services::help::HelpOpenParams;
+
+    let app = test_app().await?;
+    let request = Request::builder()
+        .method("GET")
+        .uri("/api/v1/help/events")
+        .header(header::HOST, "localhost")
+        .header(header::ACCEPT, "text/event-stream")
+        .body(Body::empty())?;
+    let response = app.router.clone().oneshot(request).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/event-stream"))
+    );
+    let mut body = response.into_body().into_data_stream();
+    let mut pending = Vec::new();
+    let mut next_version = async || -> anyhow::Result<u64> {
+        loop {
+            if let Some(event) = take_sse_event(&mut pending) {
+                let event = std::str::from_utf8(&event)?;
+                if !event.lines().any(|line| line == "event: help") {
+                    continue;
+                }
+                return sse_json(event)?["version"]
+                    .as_u64()
+                    .ok_or_else(|| anyhow::anyhow!("no version in {event:?}"));
+            }
+            let chunk = tokio::time::timeout(Duration::from_secs(5), body.next())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("help stream ended"))??;
+            pending.extend_from_slice(&chunk);
+        }
+    };
+
+    // Sent at once, so a listener that connects mid-request reads straight away.
+    let first = next_version().await?;
+    let session = SessionId::new("help-events");
+    app.state
+        .help
+        .open(
+            &session,
+            HelpOpenParams {
+                request_id: "r1".to_string(),
+                reason: "Sign in".to_string(),
+                details: None,
+                resume_hint: None,
+                kind: None,
+                browser_tab_id: Some(3),
+                url: None,
+                title: None,
+            },
+        )
+        .await;
+    assert!(next_version().await? > first);
+    Ok(())
+}

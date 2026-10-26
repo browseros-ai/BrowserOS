@@ -21,6 +21,7 @@ pub(crate) mod audit;
 mod cockpit;
 mod connections;
 mod feedback;
+mod help_events;
 mod live;
 mod previews;
 mod recordings;
@@ -66,6 +67,7 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/api/v1/settings/agent/jev-token",
             put(settings::save_jev_token).delete(settings::remove_jev_token),
         )
+        .route("/api/v1/help/events", get(help_events::events))
         .route("/api/v1/sessions", get(sessions::list))
         .route("/api/v1/sessions/{session_id}", get(sessions::get))
         .route(

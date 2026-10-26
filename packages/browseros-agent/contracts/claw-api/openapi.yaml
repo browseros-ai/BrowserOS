@@ -28,6 +28,8 @@ paths:
     $ref: ./paths/settings.yaml#/agent
   /api/v1/settings/agent/jev-token:
     $ref: ./paths/settings.yaml#/jevToken
+  /api/v1/help/events:
+    $ref: ./paths/sessions.yaml#/helpEvents
   /api/v1/sessions:
     $ref: ./paths/sessions.yaml#/collection
   /api/v1/sessions/{sessionId}:

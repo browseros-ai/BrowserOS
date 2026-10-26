@@ -19,7 +19,7 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, watch};
 
 /// What the agent said when it opened the request, plus the tab it was blocked on, captured at
 /// request time so takeover targets the exact page even if the agent has several tabs open.
@@ -88,6 +88,9 @@ impl HelpEntry {
 pub struct HelpRegistry {
     max_wait: Duration,
     entries: Mutex<HashMap<SessionId, Arc<HelpEntry>>>,
+    /// Bumped whenever what the cockpit would show changes, so a listener can re-read instead of
+    /// polling: a request opened, resolved, removed, or reaching its cap.
+    changes: Arc<watch::Sender<u64>>,
 }
 
 impl HelpRegistry {
@@ -96,7 +99,19 @@ impl HelpRegistry {
         Self {
             max_wait,
             entries: Mutex::new(HashMap::new()),
+            changes: Arc::new(watch::Sender::new(0)),
         }
+    }
+
+    /// A receiver whose value changes whenever the open help requests may have changed.
+    #[must_use]
+    pub fn subscribe(&self) -> watch::Receiver<u64> {
+        self.changes.subscribe()
+    }
+
+    fn announce_change(&self) {
+        self.changes
+            .send_modify(|version| *version = version.wrapping_add(1));
     }
 
     #[must_use]
@@ -132,6 +147,15 @@ impl HelpRegistry {
             notify: Notify::new(),
         });
         entries.insert(session.clone(), entry.clone());
+        drop(entries);
+        self.announce_change();
+        // An expired request disappears from the snapshot without any call, so say so when the
+        // cap passes; a listener re-reads and drops it.
+        let changes = self.changes.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(max_wait).await;
+            changes.send_modify(|version| *version = version.wrapping_add(1));
+        });
         entry
     }
 
@@ -145,6 +169,7 @@ impl HelpRegistry {
         match entry {
             Some(entry) => {
                 entry.mark_resolved(note);
+                self.announce_change();
                 true
             }
             None => false,
@@ -160,6 +185,8 @@ impl HelpRegistry {
             .is_some_and(|current| Arc::ptr_eq(current, entry))
         {
             entries.remove(session);
+            drop(entries);
+            self.announce_change();
         }
     }
 
@@ -260,6 +287,37 @@ fn now_ms() -> i64 {
 mod tests {
     use super::*;
     use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn listeners_hear_open_resolve_and_removal() {
+        let registry = HelpRegistry::new(Duration::from_secs(60));
+        let session = SessionId::new("s1".to_string());
+        let mut changes = registry.subscribe();
+        let start = *changes.borrow_and_update();
+
+        let entry = registry.open(&session, params("r1")).await;
+        assert!(changes.has_changed().is_ok_and(|changed| changed));
+        assert_eq!(*changes.borrow_and_update(), start + 1);
+
+        assert!(registry.resolve(&session, None).await);
+        assert_eq!(*changes.borrow_and_update(), start + 2);
+
+        let outcome = wait(&registry, &session, &entry, Duration::from_millis(10)).await;
+        assert_eq!(outcome, HelpWaitOutcome::Resolved { note: None });
+        assert_eq!(*changes.borrow_and_update(), start + 3);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn listeners_hear_a_request_reach_its_cap() {
+        let registry = HelpRegistry::new(Duration::from_secs(60));
+        let session = SessionId::new("s1".to_string());
+        let mut changes = registry.subscribe();
+        registry.open(&session, params("r1")).await;
+        changes.borrow_and_update();
+
+        tokio::time::sleep(Duration::from_secs(61)).await;
+        assert!(changes.has_changed().is_ok_and(|changed| changed));
+    }
 
     fn params(id: &str) -> HelpOpenParams {
         HelpOpenParams {
