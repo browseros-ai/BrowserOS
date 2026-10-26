@@ -8,7 +8,7 @@
  * funnel's denominator.
  */
 
-import { Zap } from 'lucide-react'
+import { ArrowRight, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useHref } from 'react-router'
 import { ButtonLink } from '@/components/motion/button/base'
@@ -57,18 +57,24 @@ export function UltrafastBanner({ onClosed }: { onClosed?: () => void }) {
     <PromoCard
       aria-label="Ultrafast mode"
       icon={<Zap />}
-      title="Ultrafast mode is coming"
-      description="Faster browser tasks for your AI agents."
+      title={
+        <>
+          <em className="text-accent-ink">Ultrafast</em> mode
+        </>
+      }
+      description="Faster browser tasks, with far less AI usage."
       dismissLabel="Dismiss this banner"
       onDismiss={dismiss}
       action={
         <ButtonLink
           href={waitlistHref}
           size="sm"
+          variant="ghost"
           onClick={() => track(AnalyticsEvent.UltrafastBannerClicked)}
-          className="h-[34px] px-3.5 font-semibold text-[13.5px]"
+          className="h-8 px-2.5 font-semibold text-[13.5px] text-accent-ink hover:bg-card/70 hover:text-accent-ink"
         >
           Join the waitlist
+          <ArrowRight aria-hidden className="size-[15px]" />
         </ButtonLink>
       }
     />

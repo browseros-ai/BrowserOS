@@ -1,3 +1,4 @@
+import { ArrowRight } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/motion/button/base'
 import { ProductHuntIcon } from '@/components/ui/svgs/productHuntIcon'
@@ -68,11 +69,13 @@ export function ProductHuntBanner({ onClosed }: { onClosed?: () => void }) {
       action={
         <Button
           size="sm"
+          variant="ghost"
           onClick={handleOpen}
           aria-label="Support BrowserOS on Product Hunt"
-          className="h-[34px] px-3.5 font-semibold text-[13.5px]"
+          className="h-8 px-2.5 font-semibold text-[13.5px] text-accent-ink hover:bg-card/70 hover:text-accent-ink"
         >
           Support us
+          <ArrowRight aria-hidden className="size-[15px]" />
         </Button>
       }
     />

@@ -9,7 +9,7 @@
  */
 
 import { useQueryClient } from '@tanstack/react-query'
-import { CalendarCheck } from 'lucide-react'
+import { ArrowRight, CalendarCheck } from 'lucide-react'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Button } from '@/components/motion/button/base'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
@@ -222,16 +222,18 @@ export function FeedbackInviteCardView({
         <>
           <Button
             size="sm"
+            variant="ghost"
             onClick={onBook}
-            className="h-[34px] px-3.5 font-semibold text-[13.5px]"
+            className="h-8 px-2.5 font-semibold text-[13.5px] text-accent-ink hover:bg-card/70 hover:text-accent-ink"
           >
             Book a 15 minute chat
+            <ArrowRight aria-hidden className="size-[15px]" />
           </Button>
           <Button
             size="sm"
             variant="ghost"
             onClick={onDecline}
-            className="h-[34px] px-3 font-semibold text-[13.5px]"
+            className="h-8 px-2.5 font-semibold text-[13.5px]"
           >
             No thanks
           </Button>
