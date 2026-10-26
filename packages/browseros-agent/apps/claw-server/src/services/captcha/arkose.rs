@@ -44,7 +44,9 @@ const visible = el => !!el?.isConnected && el.getBoundingClientRect().width > 0
 const apis = Object.keys(window).filter(k => /^arkoseLabsClientApi/.test(k))
     .map(k => window[k]).filter(api => api?.state);
 const wanted = args.publicKey || args.sitekey;
-const api = apis.find(api => api.state.publicKey === wanted) || (apis.length === 1 ? apis[0] : null);
+const matching = apis.filter(api => String(api.state.publicKey).toLowerCase() === String(wanted).toLowerCase());
+const candidates = matching.length ? matching : apis;
+const api = candidates.find(api => api.state.completed !== true) || candidates[0];
 const st = api?.state, config = st?.config || {};
 const scripts = all('script[src]').filter(s => vendor(s.src));
 const script = scripts.find(s => wanted && s.src.includes(wanted)) || (scripts.length === 1 ? scripts[0] : null);
@@ -63,6 +65,9 @@ let gate = widget;
 try { gate ||= config.selector ? all(config.selector)[0] : null; } catch {}
 gate ||= frame;
 const snapshot = () => ({url:location.href, publicKey, blob:config.data?.blob || null,
+    owner:!!api || !!script?.src.match(/\/v2\/[\da-f-]{36}\/api\.js|\/fc\/api/i),
+    children:[...new Set([...all('iframe[src]').map(el => el.src), frame?.src].filter(Boolean))],
+    ancestors:Array.from(location.ancestorOrigins || []),
     apiHost:script ? new URL(script.src).host : (frame ? new URL(frame.src).host : null),
     instance:st?.id || null, session:st?.token || legacy?.value || null, frameSrc:frame?.src || null,
     loaded:!!frame?.isConnected && !!(st ? st.token && st.enforcementSetup : legacy?.value),
@@ -240,6 +245,159 @@ async fn read<P: CaptchaPage, B: CaptchaBackend>(
     guard(ctx).await?;
     Ok(value)
 }
+fn document_url(value: &str) -> Option<String> {
+    let mut url = url::Url::parse(value).ok()?;
+    url.set_fragment(None);
+    Some(url.into())
+}
+
+fn vendor_frame(value: &str) -> bool {
+    url::Url::parse(value)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| {
+            ["arkoselabs.com", "arkoselabs.cn", "funcaptcha.com"]
+                .iter()
+                .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+        })
+}
+
+async fn resolve_owner<P: CaptchaPage, B: CaptchaBackend>(
+    ctx: &SolveCtx<'_, P, B>,
+    challenge: &Challenge,
+) -> Result<(Challenge, Value), PageError> {
+    let state = read(ctx, challenge).await?;
+    if challenge.host_frame.is_none()
+        || (flag(&state, "owner")
+            && !challenge
+                .host_frame
+                .as_ref()
+                .is_some_and(|frame| vendor_frame(&frame.url)))
+    {
+        return Ok((challenge.clone(), state));
+    }
+    let expected = string(&state, "publicKey")
+        .or_else(|| challenge.sitekey.clone())
+        .filter(|key| valid_key(key));
+    let ancestors = state
+        .get("ancestors")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut documents = vec![(challenge.clone(), state)];
+    let frames = bounded(ctx, ctx.page.frames()).await?;
+    let mut targets = vec![Challenge {
+        host_frame: None,
+        ..challenge.clone()
+    }];
+    for frame in frames {
+        if challenge
+            .host_frame
+            .as_ref()
+            .is_some_and(|host| host.frame_id == frame.frame_id)
+            || document_url(&frame.url) == document_url(&ctx.document.url)
+        {
+            continue;
+        }
+        targets.push(Challenge {
+            host_frame: Some(frame),
+            ..challenge.clone()
+        });
+    }
+    let mut complete = true;
+    for target in targets {
+        match read(ctx, &target).await {
+            Ok(value) => documents.push((target, value)),
+            Err(PageError::Browser(_)) => complete = false,
+            Err(error) => return Err(error),
+        }
+    }
+    let owns_widget = |index: usize| {
+        let value = &documents[index].1;
+        flag(value, "owner")
+            && !flag(value, "completed")
+            && expected.as_ref().is_none_or(|key| {
+                string(value, "publicKey").is_some_and(|found| found.eq_ignore_ascii_case(key))
+            })
+    };
+    let mut frontier = vec![0];
+    let mut visited = vec![false; documents.len()];
+    visited[0] = true;
+    let mut selected = None;
+    let mut ambiguous = false;
+    while !frontier.is_empty() {
+        let child_urls: Vec<_> = frontier
+            .iter()
+            .filter_map(|index| {
+                string(&documents[*index].1, "url").and_then(|url| document_url(&url))
+            })
+            .collect();
+        let parents: Vec<_> = documents
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (_, value))| {
+                let children = value.get("children").and_then(Value::as_array);
+                (!visited[index]
+                    && children.is_some_and(|children| {
+                        children
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .filter_map(document_url)
+                            .any(|url| child_urls.contains(&url))
+                    }))
+                .then_some(index)
+            })
+            .collect();
+        if parents.len() > 1 {
+            ambiguous = true;
+            break;
+        }
+        let owners: Vec<_> = parents
+            .iter()
+            .copied()
+            .filter(|index| owns_widget(*index))
+            .collect();
+        if owners.len() == 1 {
+            selected = owners.first().copied();
+            break;
+        }
+        if owners.len() > 1 {
+            break;
+        }
+        for index in &parents {
+            visited[*index] = true;
+        }
+        frontier = parents;
+    }
+    if selected.is_none() && !ambiguous && complete {
+        for origin in ancestors.iter().filter_map(Value::as_str) {
+            let same_origin: Vec<_> = (1..documents.len())
+                .filter(|index| {
+                    string(&documents[*index].1, "url")
+                        .and_then(|url| url::Url::parse(&url).ok())
+                        .is_some_and(|url| url.origin().ascii_serialization() == origin)
+                })
+                .collect();
+            if !same_origin.iter().any(|index| owns_widget(*index)) {
+                continue;
+            }
+            if same_origin.len() == 1 {
+                selected = same_origin.first().copied();
+            }
+            break;
+        }
+    }
+    if let Some(index) = selected {
+        let mut owner = documents[index].0.clone();
+        owner.sitekey = string(&documents[index].1, "publicKey");
+        let fresh = read(ctx, &owner).await?;
+        return Ok((owner, fresh));
+    }
+    let mut unresolved = documents.remove(0);
+    unresolved.1["loaded"] = json!(false);
+    Ok(unresolved)
+}
+
 fn unconfirmed() -> Terminal {
     (
         SolveStatus::Failed,
@@ -260,7 +418,8 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
             "This flow handles only Arkose CAPTCHA.".into(),
         ));
     }
-    let state = read(ctx, challenge).await?;
+    let (resolved, state) = resolve_owner(ctx, challenge).await?;
+    let challenge = &resolved;
     if flag(&state, "completed") {
         return Ok((
             SolveStatus::AlreadyClear,
@@ -515,6 +674,8 @@ mod tests {
         frame_gone: bool,
         sdk_completed: bool,
         apply_delay: Duration,
+        frame_read: Option<Value>,
+        extra_owner: Option<Value>,
     }
 
     impl Default for State {
@@ -523,7 +684,7 @@ mod tests {
                 read: json!({"url":"https://fixture.test/widget", "publicKey":KEY,
                     "apiHost":"company-api.arkoselabs.com", "blob":"fresh-blob",
                     "instance":"widget-1", "session":"session-1", "frameSrc":"enforcement-1",
-                    "loaded":true, "failed":false, "completed":false}),
+                    "loaded":true, "failed":false, "completed":false, "owner":true}),
                 applied: false,
                 transition: true,
                 callback: true,
@@ -536,6 +697,8 @@ mod tests {
                 frame_gone: false,
                 sdk_completed: false,
                 apply_delay: Duration::ZERO,
+                frame_read: None,
+                extra_owner: None,
             }
         }
     }
@@ -574,10 +737,22 @@ mod tests {
             frame: &FrameRef,
             expr: &str,
         ) -> Result<Value, PageError> {
+            if frame.frame_id == "other-frame" {
+                return self
+                    .state()
+                    .extra_owner
+                    .clone()
+                    .ok_or_else(|| PageError::Browser("missing extra frame".into()));
+            }
             assert_eq!(frame.frame_id, "host-frame");
             {
                 let mut state = self.state();
                 state.frame_calls += 1;
+                if expr.contains("arkose:read")
+                    && let Some(value) = &state.frame_read
+                {
+                    return Ok(value.clone());
+                }
                 if state.applied && state.frame_gone {
                     return Err(PageError::Browser("frame removed".into()));
                 }
@@ -588,7 +763,15 @@ mod tests {
             Err(PageError::Browser("isolated world must not be used".into()))
         }
         async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
-            Ok(vec![])
+            Ok(if self.state().extra_owner.is_some() {
+                vec![FrameRef {
+                    frame_id: "other-frame".into(),
+                    url: "https://other.test/form".into(),
+                    rect: None,
+                }]
+            } else {
+                vec![]
+            })
         }
         async fn click_at(&self, _: f64, _: f64) -> Result<(), PageError> {
             Ok(())
@@ -1034,6 +1217,86 @@ mod tests {
             (result.status, result.reason),
             (SolveStatus::Failed, SolveReason::DeadlineExceeded)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_sdk_less_vendor_frames_resolve_to_the_owner_document() -> anyhow::Result<()>
+    {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.read["url"] = json!(document().url);
+            state.read["owner"] = json!(true);
+            state.read["children"] = json!(["https://client-api.arkoselabs.com/enforcement#key"]);
+            state.frame_read = Some(
+                json!({"url":"https://client-api.arkoselabs.com/enforcement#key", "owner":false,
+                "loaded":false, "completed":false, "children":[], "ancestors":["https://fixture.test"]}),
+            );
+        }
+        let backend = FakeBackend::new(&page);
+        let result = run(&page, &backend, &CancellationToken::new(), true).await?;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Solved, SolveReason::TokenAccepted)
+        );
+        let tasks = backend.tasks();
+        let Some(SolveTask::Arkose(params)) = tasks.first() else {
+            anyhow::bail!("owner was not solved")
+        };
+        assert_eq!(params.website_url, document().url);
+        assert_eq!(
+            page.state().frame_calls,
+            1,
+            "apply must run in the top owner, not the vendor frame"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_missing_owners_do_not_pay_or_apply() -> anyhow::Result<()> {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.read["owner"] = json!(false);
+            state.read["loaded"] = json!(false);
+            state.frame_read = Some(state.read.clone());
+        }
+        let backend = FakeBackend::new(&page);
+        let result = run(&page, &backend, &CancellationToken::new(), true).await?;
+        assert_eq!(
+            (result.status, result.paid_tasks),
+            (SolveStatus::NeedsHuman, 0)
+        );
+        assert!(backend.tasks().is_empty());
+        assert!(!page.state().applied);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_ambiguous_owners_do_not_spend_a_token() -> anyhow::Result<()> {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.read["url"] = json!(document().url);
+            state.read["owner"] = json!(true);
+            state.read["children"] = json!(["https://client-api.arkoselabs.com/enforcement"]);
+            let mut other = state.read.clone();
+            other["url"] = json!("https://other.test/form");
+            state.extra_owner = Some(other);
+            state.frame_read = Some(
+                json!({"url":"https://client-api.arkoselabs.com/enforcement", "owner":false,
+                "loaded":false, "completed":false, "children":[], "ancestors":["https://fixture.test"]}),
+            );
+        }
+        let backend = FakeBackend::new(&page);
+        let result = run(&page, &backend, &CancellationToken::new(), true).await?;
+        assert_eq!(
+            (result.status, result.paid_tasks),
+            (SolveStatus::NeedsHuman, 0)
+        );
+        assert!(backend.tasks().is_empty());
+        assert!(!page.state().applied);
         Ok(())
     }
 
