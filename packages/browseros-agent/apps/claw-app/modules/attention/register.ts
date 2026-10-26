@@ -16,6 +16,7 @@ import {
   HELP_NOTIFICATION_BUTTONS,
   TEST_NOTIFICATION_ID,
 } from './attention-alerts'
+import { createHelpStream } from './help-stream'
 import { chromeAnnouncedStore, createHelpWatcher } from './help-watcher'
 
 const WATCH_ALARM = 'claw-help-watch'
@@ -25,8 +26,8 @@ const WATCH_PERIOD_MINUTES = 0.5
 
 export interface AttentionOptions {
   resolveServerBaseUrl: () => Promise<string>
-  /** Reads the live sessions; the takeover bridge's cached read. */
-  liveSessions: () => Promise<SessionSummary[]>
+  /** Reads the live sessions; `fresh` skips the takeover bridge's cache. */
+  liveSessions: (fresh?: boolean) => Promise<SessionSummary[]>
 }
 
 export interface Attention {
@@ -46,18 +47,29 @@ export function registerAttention(options: AttentionOptions): Attention {
   const client = async () =>
     new ClawApiClient(await options.resolveServerBaseUrl(), { fetch })
 
-  const check = () => {
+  const check = (fresh = false) => {
     void options
-      .liveSessions()
+      .liveSessions(fresh)
       .then((sessions) => watcher.sync(sessions))
       .catch(() => {})
   }
+
+  // The server says the moment a help request changes; the alarm is the
+  // fallback while the stream is down, and it also wakes a sleeping worker to
+  // reopen the stream.
+  const stream = createHelpStream({
+    resolveServerBaseUrl: options.resolveServerBaseUrl,
+    onChange: () => check(true),
+  })
+  stream.ensure()
 
   void chrome.alarms.create(WATCH_ALARM, {
     periodInMinutes: WATCH_PERIOD_MINUTES,
   })
   chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === WATCH_ALARM) check()
+    if (alarm.name !== WATCH_ALARM) return
+    stream.ensure()
+    check()
   })
 
   const helpNow = async (requestId: string) => {
@@ -100,6 +112,6 @@ export function registerAttention(options: AttentionOptions): Attention {
     sync: (sessions) => {
       void watcher.sync(sessions)
     },
-    check,
+    check: () => check(true),
   }
 }

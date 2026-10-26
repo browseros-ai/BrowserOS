@@ -25,8 +25,8 @@ export interface TakeoverBridgeOptions {
 
 export interface TakeoverBridge {
   pollForTab: (tabId: number) => Promise<TakeoverPollResponse>
-  /** The live sessions, from the short cache when it is fresh. */
-  liveSessions: () => Promise<SessionSummary[]>
+  /** The live sessions, from the short cache unless `fresh` asks to skip it. */
+  liveSessions: (fresh?: boolean) => Promise<SessionSummary[]>
   resolve: (sessionId: string, note?: string) => Promise<void>
 }
 
@@ -40,7 +40,8 @@ export function createTakeoverBridge(
   const client = async () =>
     new ClawApiClient(await options.resolveServerBaseUrl(), { fetch })
 
-  const liveSessions = async (): Promise<SessionSummary[]> => {
+  const liveSessions = async (fresh = false): Promise<SessionSummary[]> => {
+    if (fresh) cache = null
     if (cache && now() - cache.at < CACHE_TTL_MS) return cache.sessions
     if (inflight) return inflight
     inflight = (async () => {
