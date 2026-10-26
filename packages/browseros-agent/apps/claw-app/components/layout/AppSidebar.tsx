@@ -22,6 +22,7 @@ import { CARD_TARGET_CLASS, Card } from '@/components/motion/card'
 import { cn } from '@/lib/utils'
 import { useLiveSessions } from '@/modules/api/audit.hooks'
 import { useConnections } from '@/modules/api/connections.hooks'
+import { useAttentionTitle } from '@/modules/attention/attention.hooks'
 import {
   isNavItemActive,
   type NavItem,
@@ -123,6 +124,7 @@ function NeedsYouCount() {
   const live = useLiveSessions({ refetchInterval: 5000 })
   const count =
     live.data?.items.filter((session) => session.live?.helpRequest).length ?? 0
+  useAttentionTitle(count)
   if (count === 0) return null
   return (
     <AnimatedBadge
