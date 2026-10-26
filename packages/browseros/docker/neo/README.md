@@ -57,14 +57,16 @@ NEO_VNC_PORT=7080 NEO_MCP_PORT=7010 NEO_DATA=/mnt/neo docker compose up -d --wai
 | Hosted mode (see below) | `-e BROWSERCLAW_HOSTED_MODE=0` | `BROWSERCLAW_HOSTED_MODE` | `1` |
 | Server behaviour (see [Behaviour file](#behaviour-file)) | `-v ./neo.toml:/etc/neo/neo.toml:ro` | the `neo.toml` volume in `compose.yaml` | the image's `/etc/neo/neo.toml` |
 | Chromium sandbox (see [Security](#security)) | `-e NEO_SANDBOX=true` | `NEO_SANDBOX` | `false` |
-| Disable bundled BrowserOS extensions | `-e NEO_DISABLE_BROWSEROS_EXTENSIONS=true` | `NEO_DISABLE_BROWSEROS_EXTENSIONS` | `false` |
-| Extra Neo command-line flags | `-e NEO_ARGS="--lang=de"` | `NEO_ARGS` | empty |
+| Bundled BrowserOS extensions off (see [Bundled extensions](#bundled-extensions)) | `-e NEO_DISABLE_BROWSEROS_EXTENSIONS=false` | `NEO_DISABLE_BROWSEROS_EXTENSIONS` | `true` |
+| Extra Neo command-line flags (see [Browser frame](#browser-frame)) | `-e NEO_ARGS="--lang=de"` | `NEO_ARGS` | empty |
 
 Ports inside the container are always 6080 and 9010; change only the host side.
 
 Image tags: `latest` and browser versions such as `0.52.0.1` move when a newer build is published. To stay
 on one source commit, use its `<version>-<commit>` tag (e.g. `0.52.0.1-169e41f`); a rebuild of that commit
 replaces it. To pin exact image contents, use the digest.
+The server updater is disabled so the server stays at the version verified with
+the image. Pull a newer image and recreate the container to update it.
 
 `BROWSERCLAW_HOSTED_MODE=1` gives agents the browser tools only. Skills (`save_skill`,
 `mark_skill_run`) and human help (`request_human_help`, `await_human_help`) are hidden, since
@@ -72,13 +74,20 @@ your agent's own harness keeps its workflows and asks you for help itself. Inste
 `name_session`, an agent names its task with an optional `taskName` argument on any tool call.
 Neo also leaves tab layout to your agent: a page joins a tab group only when the agent passes
 `groupId`, and Neo never creates, titles, collapses or closes a group itself. The
-[behaviour file](#behaviour-file) can turn per-task groups back on.
+[behaviour file](#behaviour-file) can turn per-task groups back on. From Neo 0.51.2.5, the
+browser in hosted mode names itself Google Chrome to websites that read its brand (User-Agent
+Client Hints).
 `BROWSERCLAW_HOSTED_MODE=0` restores the desktop tools and hides `solve_captcha`.
 Only exact `0` and `1` are accepted. After changing the flag, run
 `docker compose up -d --wait` to recreate the container with its new environment.
 With `docker run`, recreate it with the new flag and the existing data volume.
 The viewer's screen follows the browser tab's size once it connects, so `NEO_SCREEN`
 only matters until then.
+
+Images built with a CapSolver or 2Captcha key also offer `solve_captcha` in hosted
+mode. Keyless builds omit that tool. Provider keys are embedded files: anyone who
+can pull such an image can extract them. See the [build and release guide](../../bos_build/docs/docker-image.md)
+for key configuration and rotation.
 
 ### Behaviour file
 
@@ -102,29 +111,51 @@ Recreate the container after editing the file.
 
 The server logs the values it runs with at startup (`server behaviour`).
 
-Images built with a CapSolver or 2Captcha key also offer `solve_captcha` in hosted
-mode. Keyless builds omit that tool. Provider keys are embedded files: anyone who
-can pull such an image can extract them. See the [build and release guide](../../bos_build/docs/docker-image.md)
-for key configuration and rotation.
+### Browser frame
 
-Neo shows a minimal browser frame for watching agents: horizontal tabs, and no
-home or split-view button, bookmark star, bookmarks bar or window buttons. Each
-container start reapplies it, so changes made in the viewer last until the container
-restarts.
+The viewer is for watching agents and for taking over a login, code or payment, so Neo shows
+a minimal browser frame: horizontal tabs, blank new tabs, and a toolbar with only the back,
+forward, reload and menu buttons around the address bar. The entrypoint starts Neo with
+`--disable-browseros-features` and every name below. The browser applies them for that run
+only, never saves them in the profile, and the viewer cannot turn them back on. This needs
+Neo 0.51.2.5 or later; older browsers ignore the switch and show the full frame.
 
-The server updater is disabled so the server stays at the version verified with
-the image. Pull a newer image and recreate the container to update it.
-To run without the bundled BrowserOS extensions, pass
-`-e NEO_DISABLE_BROWSEROS_EXTENSIONS=true` to `docker run`, or use Compose:
+| Name | Turns off |
+|---|---|
+| `VerticalTabs` | Vertical tabs; the tab strip stays horizontal |
+| `HomeButton` | The home button |
+| `SplitTabButton` | The split-view button |
+| `TabSearchButton` | The tab search button |
+| `BookmarkEditing` | Adding or editing bookmarks, and the star |
+| `WebAppInstall` | Installing sites as apps |
+| `AvatarButton` | The profile button |
+| `ExtensionsToolbar` | The extensions button |
+| `NewTabPage` | The new tab page; new tabs open `about:blank` |
+
+To keep some of these, pass your own list in `NEO_ARGS`. It replaces the image's list, because
+Neo keeps the last value of a repeated switch; an empty value turns none off:
 
 ```sh
-NEO_DISABLE_BROWSEROS_EXTENSIONS=true docker compose up -d --wait
+docker run ... -e NEO_ARGS="--disable-browseros-features=VerticalTabs,HomeButton" ...
 ```
 
-MCP browser tools and user-installed extensions remain enabled. The BrowserOS
-extension UI and rrweb page recordings are unavailable while disabled. This
-setting adds `--disable-browseros-extensions` without replacing `NEO_ARGS`, so
-derived images keep their own flags. It accepts `true`/`1`/`yes`/`on` and
+The bookmarks bar and the window buttons have no names. Every container start turns the bar
+off with a managed policy and gives the window an empty GTK button layout.
+
+### Bundled extensions
+
+Neo runs without the bundled BrowserOS extensions, since agents drive it over MCP. MCP browser
+tools and user-installed extensions stay enabled. Turn the bundled ones back on for the
+BrowserOS extension UI and rrweb page recordings (`/v1/sessions/{id}/recording`, which returns
+no pages without them) by passing `-e NEO_DISABLE_BROWSEROS_EXTENSIONS=false` to `docker run`,
+or with Compose:
+
+```sh
+NEO_DISABLE_BROWSEROS_EXTENSIONS=false docker compose up -d --wait
+```
+
+`NEO_DISABLE_BROWSEROS_EXTENSIONS=true` adds `--disable-browseros-extensions` without replacing
+`NEO_ARGS`, so derived images keep their own flags. It accepts `true`/`1`/`yes`/`on` and
 `false`/`0`/`no`/`off`, ignoring case; other values stop startup.
 Recreate the container after changing it; `docker restart` keeps the old setting.
 With an existing data volume, Neo may uninstall its bundled extensions and
@@ -141,7 +172,7 @@ Within `/v1`, fields are only ever added, never renamed or removed.
 |---|---|
 | `GET /v1/sessions?client=&since=&until=&q=&cursor=&limit=` | Sessions, most recently active first |
 | `GET /v1/sessions/{id}?include=screenshots&wait=60` | One session and every tool call, with each screenshot inlined |
-| `GET /v1/sessions/{id}/recording` | The page recording as rrweb events, one entry per page |
+| `GET /v1/sessions/{id}/recording` | The page recording as rrweb events, one entry per page; needs the [bundled extensions](#bundled-extensions) |
 | `GET /v1/sessions/{id}/screencast?quality=low\|high&tab=` | A live MJPEG view of the tab the agent is working in; works as an `<img src>` |
 | `GET /v1/sessions/{id}/video?quality=low\|high&tab=` | The same tab as live AV1 video (fragmented MP4, ~2 s behind), for Media Source Extensions |
 

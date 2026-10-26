@@ -209,10 +209,15 @@ GitHub documents package Actions access in
   overridden. Server changes ship through a rebuilt image.
   Startup clears only persisted OTA ready selectors, keeping downloaded binaries
   and application data, so older profiles also select the image's server.
-- **Neo shows a minimal browser frame.** When the container starts, the entrypoint merges
-  horizontal tabs and an unpinned split-view button into the profile's `Preferences`,
-  writes a managed policy that hides the home button and turns off the bookmarks bar
-  and bookmark editing (which hides the star), and sets an empty GTK button layout so
-  the window has no buttons. Restarting only Neo inside a running container keeps
-  changes made in the viewer. BrowserOS has no switches for these yet;
-  `apply_minimal_ui` is the one place to swap them in.
+- **Neo shows a minimal browser frame.** `start_neo` passes
+  `--disable-browseros-features=$HIDDEN_BROWSEROS_FEATURES`, every name the browser knows
+  as of 0.51.2.5. The browser forces those prefs for the run without saving them, so
+  nothing is written into the profile. `NEO_ARGS` comes after it, and Chromium keeps the
+  last value of a repeated switch, so a deployment's own list replaces the image's. The
+  bookmarks bar and window buttons have no names: `apply_minimal_ui` writes a managed
+  policy for the bar and an empty GTK button layout on every container start. Browsers
+  before 0.51.2.5 ignore the switch; `smoke.py` catches that because a new tab page is
+  then not `about:blank`.
+- **Bundled BrowserOS extensions are off by default** (`NEO_DISABLE_BROWSEROS_EXTENSIONS=true`),
+  which also leaves rrweb recordings empty. The release smoke sets the variable explicitly
+  for both values, so it covers the extensions-on image too.

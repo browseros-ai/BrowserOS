@@ -28,7 +28,10 @@ readonly CDP_PORT=9110
 readonly SERVER_PORT=9210
 
 : "${NEO_SCREEN:=1600x1000}" "${NEO_SANDBOX:=false}" "${NEO_ARGS:=}"
-: "${NEO_DISABLE_BROWSEROS_EXTENSIONS:=false}"
+# Agents drive Neo over MCP, which needs none of the bundled BrowserOS
+# extensions, so they are off unless a deployment wants their UI or rrweb page
+# recordings back (README).
+: "${NEO_DISABLE_BROWSEROS_EXTENSIONS:=true}"
 : "${PUID:=1000}" "${PGID:=1000}"
 # Shared browser/server deployment flag (README). Hosted mode hides local-agent
 # MCP tools and enables hosted browser reporting; both processes require exact 1.
@@ -158,6 +161,16 @@ if is_true "$NEO_DISABLE_BROWSEROS_EXTENSIONS"; then
   browseros_extension_flags=(--disable-browseros-extensions)
 fi
 
+# The viewer is for watching agents and for a person taking over a login, code
+# or payment, so Neo hides the browser controls neither needs (README lists the
+# names). --disable-browseros-features forces their prefs for this run only:
+# the values beat choices saved in the profile, are never written to it, and
+# cannot be changed from the viewer. Chromium keeps the last value of a repeated
+# switch, so a deployment replaces this whole list with its own
+# --disable-browseros-features in NEO_ARGS, which start_neo passes last.
+# Browsers before 0.51.2.5 ignore the switch and show every control.
+readonly HIDDEN_BROWSEROS_FEATURES=VerticalTabs,HomeButton,SplitTabButton,TabSearchButton,BookmarkEditing,WebAppInstall,AvatarButton,ExtensionsToolbar,NewTabPage
+
 # --no-sandbox is deliberate here, so drop Chromium's "unsupported command-line
 # flag" bar for it. Written only in that mode: the same policy would also hide
 # warnings for risky flags passed through NEO_ARGS. This build reads policies
@@ -171,35 +184,13 @@ apply_policies() {
   fi
 }
 
-# The viewer is for watching agents drive Neo, so the image shows a minimal
-# browser frame: horizontal tabs, and no home or split-view button, bookmark
-# star, bookmarks bar or window buttons. BrowserOS has no switches for these
-# yet, so this sets Chromium's own prefs, policies and GTK layout each time the
-# container starts (not when the loop below restarts Neo), overriding changes
-# made in the viewer. Replace it with switches in start_neo once the browser
-# has them.
+# The two parts of the minimal frame that --disable-browseros-features has no
+# names for (see HIDDEN_BROWSEROS_FEATURES): the bookmarks bar and the window
+# buttons. Applied each time the container starts.
 apply_minimal_ui() {
-  # Chromium has no policy for these prefs. BrowserOS copies its vertical-tabs
-  # pref into Chromium's only while Chromium's is unset, so set both. Writing
-  # Preferences before the first launch makes Chromium (under --no-first-run)
-  # treat a fresh profile as an existing one; that only skips new-profile
-  # extras such as BrowserOS's onboarding grace for bundled extension updates.
-  # A damaged Preferences is left for Chromium to recover rather than blocking
-  # startup over appearance.
-  local prefs="$PROFILE/Default/Preferences"
-  [ -d "$PROFILE/Default" ] || install -d -m 700 -o neo -g neo "$PROFILE/Default"
-  merge_json "$prefs" '
-    .vertical_tabs.enabled = false
-    | .browseros.vertical_tabs_enabled = false
-    | .browser.pin_split_tab_button = false' \
-    || log "Could not update $prefs; Neo starts with its saved tab layout this time"
-
-  # BrowserOS shows the home button by default. The star is only hidden by
-  # turning bookmark editing off; claw-server only reads bookmarks.
   local managed=/etc/chromium/policies/managed
   mkdir -p "$managed"
-  echo '{"BookmarkBarEnabled": false, "EditBookmarksEnabled": false, "ShowHomeButton": false}' \
-    > "$managed/neo-minimal-ui.json"
+  echo '{"BookmarkBarEnabled": false}' > "$managed/neo-minimal-ui.json"
 
   # Chromium takes its frame-button layout from GTK. openbox keeps Neo
   # maximized, there is no taskbar to restore a minimized window from, and Neo
@@ -215,6 +206,7 @@ apply_minimal_ui() {
 start_neo() {
   # Releases verify the packaged/overlaid server, so pin it for the image's
   # lifetime. Keep this outside NEO_ARGS, which Compose/callers may replace.
+  # NEO_ARGS goes last so a caller's value for a repeated switch wins.
   # shellcheck disable=SC2086  # NEO_ARGS is a flag list by design
   spawn_as_neo browserclaw \
     "${sandbox_flags[@]}" \
@@ -229,6 +221,7 @@ start_neo() {
     --disable-browseros-server-updater \
     --hide-crash-restore-bubble \
     --start-maximized \
+    --disable-browseros-features="$HIDDEN_BROWSEROS_FEATURES" \
     $NEO_ARGS
   neo_pid=$!
   neo_signaled=0
