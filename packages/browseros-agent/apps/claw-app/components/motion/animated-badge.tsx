@@ -187,14 +187,11 @@ export function AnimatedBadge({
               exit={reduce ? REST_EXIT : "exit"}
               className="col-start-1 row-start-1 inline-flex items-center justify-center"
             >
+              {/* A CSS spin: the AnimatePresence above mounts with
+                  initial={false}, which lands motion animations on their end
+                  value, so a motion rotate here never starts turning. */}
               {status === "loading" && !reduce && !icon ? (
-                <motion.span
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                  className="inline-flex"
-                >
-                  <Icon className={ICON_CLASS[size]} />
-                </motion.span>
+                <Icon className={cn(ICON_CLASS[size], "animate-spin")} />
               ) : (
                 (icon ?? <Icon className={ICON_CLASS[size]} />)
               )}

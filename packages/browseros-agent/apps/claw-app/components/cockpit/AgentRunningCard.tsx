@@ -6,6 +6,7 @@ import { AspectRatio } from '@/components/motion/aspect-ratio'
 import { Button } from '@/components/motion/button/base'
 import { Card } from '@/components/motion/card'
 import { describeLiveStep } from '@/lib/step-sentences'
+import { cn } from '@/lib/utils'
 import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
 import { helpRequestSite, siteOf } from '@/screens/cockpit/cockpit.helpers'
 import { MiniScreencast } from './MiniScreencast'
@@ -51,7 +52,12 @@ export function AgentRunningCard({
       data-session-card={session.sessionId}
       data-needs-you={waiting ? session.sessionId : undefined}
       size="compact"
-      className="gap-0 border-border-2 bg-card p-3 shadow-card"
+      className={cn(
+        'gap-0 border-border-2 p-3 shadow-card',
+        // Working cards take the same calm blue as Home's promotion bar;
+        // waiting ones stay plain so amber alone says "needs you".
+        waiting || inControl ? 'bg-card' : 'bg-accent-tint',
+      )}
     >
       <AspectRatio
         ratio={16 / 9}
