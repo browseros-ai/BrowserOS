@@ -19,7 +19,7 @@ afterEach(() => {
 })
 
 /** A browser with the extension APIs the alerts use, recording each call. */
-function stubChrome(withNative: boolean) {
+function stubChrome(withNative: boolean, nativeRequests = true) {
   const calls: string[] = []
   const chrome = {
     runtime: { getURL: (path: string) => path, lastError: undefined },
@@ -43,10 +43,10 @@ function stubChrome(withNative: boolean) {
       ? {
           requestAttention: (
             options: { critical?: boolean },
-            done: () => void,
+            done: (requested: boolean) => void,
           ) => {
             calls.push(`dock bounce critical=${options.critical}`)
-            done()
+            done(nativeRequests)
           },
           cancelAttention: (done: () => void) => {
             calls.push('dock bounce stop')
@@ -84,6 +84,19 @@ describe('createAttentionAlerts', () => {
       'dock badge ""',
       'dock bounce stop',
       'toolbar ""',
+    ])
+  })
+
+  it('flashes the window where BrowserOS cannot bounce the dock', async () => {
+    const calls = stubChrome(true, false)
+    const alerts = createAttentionAlerts()
+
+    await alerts.show(help)
+
+    expect(calls).toEqual([
+      'notify req-1',
+      'dock bounce critical=true',
+      'drawAttention true',
     ])
   })
 

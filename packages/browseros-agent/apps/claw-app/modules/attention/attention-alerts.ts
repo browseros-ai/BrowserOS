@@ -48,16 +48,18 @@ function nativeAttention(): typeof chrome.browserOS | null {
   return typeof api?.requestAttention === 'function' ? api : null
 }
 
-function callNative(run: (done: () => void) => void): Promise<void> {
+function callNative<T = void>(
+  run: (done: (value?: T) => void) => void,
+): Promise<T | undefined> {
   return new Promise((resolve) => {
     try {
-      run(() => {
+      run((value) => {
         // Reading lastError keeps Chrome from logging an unchecked error.
         void chrome.runtime.lastError
-        resolve()
+        resolve(value)
       })
     } catch {
-      resolve()
+      resolve(undefined)
     }
   })
 }
@@ -86,13 +88,14 @@ export function createAttentionAlerts(): AttentionAlerts {
         })
       } catch {}
       const native = nativeAttention()
-      if (native) {
-        await callNative((done) =>
-          native.requestAttention({ critical: true }, done),
-        )
-      } else {
-        await drawAttention(help.browserTabId, true)
-      }
+      // The native request only works on macOS; elsewhere it answers false
+      // and the window's own attention flash (the Windows taskbar) takes over.
+      const requested = native
+        ? await callNative<boolean>((done) =>
+            native.requestAttention({ critical: true }, done),
+          )
+        : false
+      if (!requested) await drawAttention(help.browserTabId, true)
     },
     async clear(requestId, browserTabId) {
       try {
@@ -103,7 +106,9 @@ export function createAttentionAlerts(): AttentionAlerts {
     async setCount(count) {
       const native = nativeAttention()
       if (native) {
-        await callNative((done) => native.setDockBadge(badgeText(count), done))
+        await callNative<boolean>((done) =>
+          native.setDockBadge(badgeText(count), done),
+        )
         if (count === 0)
           await callNative((done) => native.cancelAttention(done))
       }
