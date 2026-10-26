@@ -54,7 +54,13 @@ export const FIRST_RUN_COPY = {
   noneFound: 'I didn’t find an AI agent yet.',
   getClaude: 'Get Claude',
   coworkQuestion: 'Using Claude Cowork?',
-  coworkAction: 'Set it up',
+  coworkAction: 'Add neo to Claude',
+  coworkUpdate: 'Update neo in Claude',
+  coworkOpening: 'Opening Claude…',
+  coworkWaiting: 'Claude is open. Click Install there.',
+  coworkStuck: 'Didn’t see Claude ask?',
+  coworkGuide: 'Set it up step by step',
+  coworkConnected: 'neo is added to the Claude desktop app.',
   tryLabel: 'Your turn',
 } as const
 
