@@ -20,6 +20,10 @@ const queryRoots = root => {
 };
 const scopes = queryRoots(scope);
 const all = (s, root = scope) => (root === scope ? scopes : queryRoots(root)).flatMap(r => [...r.querySelectorAll(s)]);
+const closest = (e, selector) => {
+    for (let p = e; p; p = p.parentElement || p.getRootNode().host) if (p.matches(selector)) return p;
+    return null;
+};
 const visible = (e, onScreen = false) => {
     if (!e || !e.isConnected) return false;
     for (let p = e; p; p = p.parentElement || p.getRootNode().host) {
@@ -40,8 +44,7 @@ const add = (e, kind, state) => {
     const field = ({turnstile:'input[name="cf-turnstile-response"]', hcaptcha:'textarea[name="h-captcha-response"]',
         geetest:'[name="geetest_validate"], [name="geetest_seccode"], [name="captcha_output"]',
         aws_waf:'[name="aws-waf-token"], [name="captcha_voucher"]'})[kind] || 'textarea[name="g-recaptcha-response"]';
-    const response = kind === 'arkose' ? null : (e && (e.matches(field) ? e : all(field, e)[0]) ||
-        (['geetest', 'aws_waf'].includes(kind) ? all(field).find(e => e.value?.trim()) : null));
+    const response = kind === 'arkose' ? null : e && (e.matches(field) ? e : all(field, e)[0]);
     const a = name => e?.getAttribute('data-' + name) || null;
     const w = {kind, inferred: !e, state: response?.value.trim() ? 'passed' : state, invisible: a('size') === 'invisible', enterprise: false,
         sitekey: a('sitekey') || a('pkey') || a('captcha-id') || a('gt') || a('api-key') || e?.getAttribute('apiKey') || null,
@@ -57,7 +60,7 @@ for (const e of all('.g-recaptcha[data-sitekey], .cf-turnstile, .h-captcha')) {
 for (const [selector, kind] of [['textarea[name="g-recaptcha-response"]', 'recaptcha_v2'], ['input[name="cf-turnstile-response"]', 'turnstile']]) {
     for (const e of all(selector)) {
         if (kind === 'recaptcha_v2' && e.parentElement?.querySelector('textarea[name="h-captcha-response"]')) continue;
-        if (!e.closest('.g-recaptcha, .cf-turnstile, .h-captcha')) add(e, kind, 'unknown');
+        if (!closest(e, '.g-recaptcha, .cf-turnstile, .h-captcha')) add(e, kind, 'unknown');
     }
 }
 const awsCaptcha = typeof window.gokuProps !== 'undefined' || addresses.some(raw => /(^|\.)captcha\.awswaf\.com$/.test(new URL(raw).hostname));
@@ -1961,6 +1964,88 @@ mod tests {
                 let tail = part[name.len()..].trim_start();
                 assert!(!tail.starts_with('=') || tail.starts_with("=="));
             }
+        }
+        Ok(())
+    }
+
+    async fn live_dom_detection(html: &str, setup: &str) -> anyhow::Result<Detection> {
+        use super::super::page::LivePage;
+        use browseros_cdp::{CdpClient, ConnectOptions};
+        use browseros_core::{Browser, pages::NewPageOptions};
+
+        let port: u16 = std::env::var("CAPTCHA_LIVE_CDP_PORT")?.parse()?;
+        assert!(![9010, 9011, 9121, 9211, 9212, 9213, 9214, 9215].contains(&port));
+        let connection = std::sync::Arc::new(CdpClient::connect(ConnectOptions::new(port)).await?);
+        let browser = Browser::new(connection.clone());
+        let id = browser
+            .new_page("about:blank", NewPageOptions::default())
+            .await?;
+        let page = LivePage::new(browser.view().await, id.clone());
+        page.eval_main(&format!(
+            "document.body.innerHTML = {}; {setup}; null",
+            serde_json::to_string(html)?
+        ))
+        .await?;
+        let result = detect(&page, Duration::from_secs(2)).await;
+        browser.close_page(id).await?;
+        connection.disconnect().await;
+        Ok(result?)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an owned dev browser at CAPTCHA_LIVE_CDP_PORT"]
+    async fn tests_that_live_response_tokens_belong_to_the_selected_widget() -> anyhow::Result<()> {
+        for (attribute, field, kind) in [
+            (
+                "class=\"geetest_widget\"",
+                "captcha_output",
+                CaptchaKind::Geetest,
+            ),
+            (
+                "id=\"awswaf-widget\"",
+                "captcha_voucher",
+                CaptchaKind::AwsWaf,
+            ),
+        ] {
+            for inside in [false, true] {
+                let token = format!("<input name=\"{field}\" value=\"old-answer\">");
+                let html = format!(
+                    "<div {attribute} style=\"width:300px;height:100px\">Widget{}</div>{}",
+                    if inside { &token } else { "" },
+                    if inside { "" } else { &token }
+                );
+                let result = live_dom_detection(&html, "").await?;
+                assert!(result.complete);
+                assert_eq!(result.challenges.len(), 1);
+                assert_eq!(result.challenges[0].kind, kind);
+                assert_eq!(
+                    result.challenges[0].state,
+                    if inside {
+                        ChallengeState::Passed
+                    } else {
+                        ChallengeState::Active
+                    },
+                    "{kind:?}, inside={inside}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an owned dev browser at CAPTCHA_LIVE_CDP_PORT"]
+    async fn tests_that_live_response_fields_in_shadows_do_not_duplicate_widgets()
+    -> anyhow::Result<()> {
+        for mode in ["open", "closed"] {
+            let html = r#"<div class="g-recaptcha" data-sitekey="test" data-size="invisible" style="width:300px;height:100px"><x-response></x-response></div>"#;
+            let setup = format!(
+                "document.querySelector('x-response').attachShadow({{mode:'{mode}'}}).innerHTML = '<textarea name=\"g-recaptcha-response\"></textarea>'"
+            );
+            let result = live_dom_detection(html, &setup).await?;
+            assert!(result.complete);
+            assert_eq!(result.challenges.len(), 1, "{mode}");
+            assert_eq!(result.challenges[0].kind, CaptchaKind::RecaptchaV2);
+            assert_eq!(result.challenges[0].state, ChallengeState::WidgetOnly);
         }
         Ok(())
     }
