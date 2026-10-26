@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ShieldCheck } from 'lucide-react'
+import { ChevronDown, CircleCheck, CircleX, ShieldCheck } from 'lucide-react'
 import {
   Collapsible,
   CollapsibleContent,
@@ -7,6 +7,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/motion/collapsible'
 import { Switch } from '@/components/motion/switch'
+import { cn } from '@/lib/utils'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { applyTelemetry } from '@/modules/analytics/posthog'
 import {
@@ -17,6 +18,21 @@ import {
 import { SettingRow, SettingsSection } from './settings.components'
 
 const SHARE_ID = 'share-usage'
+
+const COLLECTED = [
+  'Which AI agents you connect',
+  'Which neo screens you open',
+  'How you move around these screens, in one in five visits, with everything you type hidden',
+]
+
+const NEVER_COLLECTED = [
+  'The pages you browse',
+  'What you ask your AI agents',
+  'What your agents send or get back',
+  'Anything on a page',
+  'Your tasks, history or playback, even in those visits',
+  'Your account or personal details',
+]
 
 /**
  * The one consent switch for usage analytics. It is server-owned, so the
@@ -62,17 +78,25 @@ export function PrivacySettings() {
               <ChevronDown aria-hidden className="size-4" />
             </CollapsibleIndicator>
           </CollapsibleTrigger>
-          <CollapsibleContent contentClassName="px-[18px] pb-[18px]">
-            <p className="max-w-[68ch] text-[14.5px] text-ink-2">
-              BrowserOS neo collects anonymous, aggregate usage (which AI agents
-              connect and which screens you open) to improve the product. It
-              never collects the pages you browse, your prompts, what your AI
-              agents send or get back, or any page content. One in five
-              analytics sessions may also record interactions with these
-              screens. All inputs are masked, and task, history and playback
-              content is blocked from those recordings. No account or personal
-              data is used.
+          <CollapsibleContent contentClassName="flex flex-col gap-3 px-[18px] pb-[18px]">
+            <p className="text-[14.5px] text-ink-2">
+              Only anonymous usage, combined with everyone else’s, to make neo
+              better.
             </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <CollectList
+                title="We collect"
+                items={COLLECTED}
+                icon={CircleCheck}
+                className="border-green/25 bg-green-tint/60 [&_svg]:text-green-ink"
+              />
+              <CollectList
+                title="We never collect"
+                items={NEVER_COLLECTED}
+                icon={CircleX}
+                className="border-red/25 bg-red-tint/60 [&_svg]:text-red-ink"
+              />
+            </div>
           </CollapsibleContent>
         </Collapsible>
       }
@@ -98,5 +122,36 @@ export function PrivacySettings() {
         ) : null}
       </SettingRow>
     </SettingsSection>
+  )
+}
+
+// ---------------------------------------------------------------------------
+
+function CollectList({
+  title,
+  items,
+  icon: Icon,
+  className,
+}: {
+  title: string
+  items: string[]
+  icon: typeof CircleCheck
+  className: string
+}) {
+  return (
+    <section
+      aria-label={title}
+      className={cn('rounded-xl border p-4', className)}
+    >
+      <h3 className="mb-2.5 font-semibold text-[14.5px] text-ink">{title}</h3>
+      <ul className="flex flex-col gap-2">
+        {items.map((item) => (
+          <li key={item} className="flex gap-2.5 text-[14px] text-ink-2">
+            <Icon aria-hidden className="mt-[3px] size-4 shrink-0" />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
