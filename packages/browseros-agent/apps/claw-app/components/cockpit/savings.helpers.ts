@@ -26,7 +26,7 @@ export interface UsageComparison {
   percentLess: number
 }
 
-/** AI usage with and without neo, or null when there is no saving to show. */
+/** AI token usage with and without neo, or null when there is no saving to show. */
 export function usageComparison(
   stats: CockpitStats,
   window: CockpitStatsWindow,

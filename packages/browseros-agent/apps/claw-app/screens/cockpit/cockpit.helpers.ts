@@ -184,7 +184,7 @@ export function homeLede(
   if (sessions.length > 1) {
     return `Your AI agents are working on ${sessions.length} tasks.`
   }
-  return 'Nothing is running right now.'
+  return 'Your AI agents are ready for their next task.'
 }
 
 /** The site a help request is about, in the words a person would use. */

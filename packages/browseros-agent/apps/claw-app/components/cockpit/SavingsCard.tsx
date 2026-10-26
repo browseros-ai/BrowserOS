@@ -29,7 +29,7 @@ import {
 } from './savings.helpers'
 
 /**
- * Time saved in words, with AI usage with and without neo drawn underneath.
+ * Time saved in words, with AI token usage with and without neo drawn underneath.
  * Token counts stay in Details, so the picture carries the point on its own.
  */
 export function SavingsCard({ stats }: { stats: CockpitStats }) {
@@ -132,10 +132,10 @@ function SavingsDialog({ stats }: { stats: CockpitStats }) {
           </dl>
           {usage ? <UsageBars usage={usage} withNumbers /> : null}
           <p className="text-[13.5px] text-ink-3">
-            AI usage is counted in tokens, the small pieces of text an AI reads
-            and writes. neo hands your AI agents short descriptions of each page
-            instead of screenshots, so they read far less. “Without neo” is our
-            estimate for the same tasks done from screenshots.
+            Tokens are the small pieces of text an AI reads and writes. neo
+            hands your AI agents short descriptions of each page instead of
+            screenshots, so they use far fewer. “Without neo” is our estimate
+            for the same tasks done from screenshots.
           </p>
         </div>
       </CenterMorphModalContent>
@@ -174,11 +174,11 @@ function UsageBars({
   return (
     <div
       role="img"
-      aria-label={`AI usage: ${usage.percentLess}% less with neo than without`}
+      aria-label={`AI token usage: ${usage.percentLess}% less with neo than without`}
       className={cn('grid gap-2', withNumbers && 'gap-3', className)}
     >
       <div className="flex items-baseline justify-between font-semibold text-[13px] text-ink-3">
-        <span>AI usage</span>
+        <span>AI token usage</span>
         <span className="font-bold text-green-ink">
           {usage.percentLess}% less
         </span>

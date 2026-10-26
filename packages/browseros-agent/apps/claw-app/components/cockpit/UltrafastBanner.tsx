@@ -62,7 +62,7 @@ export function UltrafastBanner({ onClosed }: { onClosed?: () => void }) {
           <em className="text-accent-ink">Ultrafast</em> mode
         </>
       }
-      description="Faster browser tasks, with far less AI usage."
+      description="Faster browser tasks, with far fewer AI tokens."
       dismissLabel="Dismiss this banner"
       onDismiss={dismiss}
       action={
