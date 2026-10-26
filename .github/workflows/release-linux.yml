@@ -12,7 +12,7 @@ on:
           - browserclaw
           - all
       arch:
-        description: "Linux artifact set (arm64 cross-compiles on the x64 runner)"
+        description: "Linux artifact set (each arch builds on its own x64 runner; arm64 cross-compiles)"
         type: choice
         default: x64
         options:
@@ -155,7 +155,8 @@ jobs:
             echo "::error::source mode builds one candidate product per lane"
             exit 1
           fi
-          # Two serial builds can resolve mutable latest aliases hours apart.
+          # Each architecture lane (and any later retry of one) resolves its
+          # resources independently, so mutable latest aliases could differ.
           # Freeze all product resources before expanding a multi-arch matrix.
           if [ "$ARCH" = all ]; then
             semver_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
@@ -225,12 +226,11 @@ jobs:
             total="$(jq 'length' <<<"$jobs")"
             queued="$(jq '[.[] | select(.status == "queued")] | length' <<<"$jobs")"
             in_progress="$(jq '[.[] | select(.status == "in_progress")] | length' <<<"$jobs")"
-            # The matrix is serialized to own release.json. Later entries
-            # intentionally queue behind the first multi-hour build, so this
-            # watchdog only establishes that the shared runner can start work.
-            started="$(jq '[.[] | select(.status == "in_progress" or .status == "completed")] | length' <<<"$jobs")"
-            if [ "$started" -gt 0 ]; then
-              echo "Linux build runner picked up work; later matrix entries run serially."
+            # Matrix entries run in parallel, one VM each, so every entry
+            # should leave the queue. One stuck behind Azure quota or a
+            # WarpBuild concurrency cap must not pass silently.
+            if [ "$total" -gt 0 ] && [ "$queued" -eq 0 ]; then
+              echo "All $total build jobs picked up by runners."
               exit 0
             fi
             if [ "$(date +%s)" -ge "$deadline" ]; then
@@ -257,9 +257,10 @@ jobs:
     needs: plan
     strategy:
       fail-fast: false
-      # Both architectures merge the same product/version/linux/release.json.
-      # Keep its read/merge/write under one owner, including architecture retries.
-      max-parallel: 1
+      # Each entry gets its own ephemeral WarpBuild VM, so x64 and arm64
+      # compile concurrently. Both merge one product/version/linux/release.json;
+      # bos_build's upload step writes it with an R2 compare-and-swap
+      # (lib/r2.py update_json_in_r2), so neither lane drops the other's keys.
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     name: build (${{ matrix.product }} linux-${{ matrix.arch }})

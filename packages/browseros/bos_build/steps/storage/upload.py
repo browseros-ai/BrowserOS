@@ -23,6 +23,7 @@ from ...lib.r2 import (
     BOTO3_AVAILABLE,
     get_r2_client,
     get_release_json,
+    update_json_in_r2,
     upload_file_to_r2,
 )
 from ...release.prepared_resources import (
@@ -195,8 +196,9 @@ def generate_release_json(
             if key not in ("filename", "release_key"):
                 artifact_data[key] = value
 
-        # Linux architectures publish serially into one receipt. Record each
-        # writer's attempt so retrying arm64 cannot relabel an earlier x64 build.
+        # Linux architectures publish into one receipt from separate runners.
+        # Record each writer's attempt so retrying arm64 cannot relabel an
+        # earlier x64 build.
         if platform == "linux" and release_data.get("workflow_run_attempt"):
             artifact_data["workflow_run_attempt"] = release_data["workflow_run_attempt"]
 
@@ -231,11 +233,12 @@ def _has_pinned_linux_identity(release: Dict) -> bool:
 
 
 def merge_release_metadata(existing: Optional[Dict], new: Dict) -> Dict:
-    """Merge serialized architecture uploads only within one release identity.
+    """Merge architecture uploads only within one release identity.
 
     Linux may retain a successful sibling across workflow attempts. Its artifact
     attempts stay explicit; a mixed receipt cannot claim a single platform attempt.
-    The caller owns serialization of the remote read/merge/write operation.
+    This is a pure function of the current receipt so the caller can re-apply
+    it when a concurrent sibling wins the R2 compare-and-swap.
     """
     if not existing:
         return new
@@ -454,15 +457,25 @@ def upload_release_artifacts(
         if not upload_file_to_r2(client, artifact_path, r2_key, env.r2_bucket):
             return False, None
 
-    existing_release_data = get_release_json(
-        ctx.get_semantic_version(), platform, env, ctx.product.id
-    )
-    release_data = merge_release_metadata(existing_release_data, release_data)
-    release_json_path.write_text(json.dumps(release_data, indent=2))
+    lane_release_data = release_data
 
+    def merge_into_receipt(existing: Optional[Dict]) -> Dict:
+        if existing is None:
+            # First writer for this version: BrowserOS may still have a
+            # receipt under the pre-product legacy key to carry forward.
+            existing = get_release_json(
+                ctx.get_semantic_version(), platform, env, ctx.product.id
+            )
+        return merge_release_metadata(existing, lane_release_data)
+
+    # Linux x64 and arm64 build on separate runners and can finish together,
+    # so the shared receipt is updated with a compare-and-swap, not a blind put.
     r2_key = f"{release_path}release.json"
-    if not upload_file_to_r2(client, release_json_path, r2_key, env.r2_bucket):
+    merged = update_json_in_r2(client, r2_key, env.r2_bucket, merge_into_receipt)
+    if merged is None:
         return False, None
+    release_data = merged
+    release_json_path.write_text(json.dumps(release_data, indent=2))
 
     log_success(f"\nSuccessfully uploaded {len(artifacts)} artifact(s) to R2")
     log_info("\nRelease metadata:")

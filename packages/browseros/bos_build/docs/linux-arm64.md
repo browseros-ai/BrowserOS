@@ -35,7 +35,7 @@ names.
 Neo dispatch: platforms + linux_arch + publication
   -> preflight validates and freezes the selection/source
   -> release-linux expands product x architecture
-       -> existing x64 build runner
+       -> one x64 build runner per architecture, in parallel
        -> published server for the target architecture
        -> Chromium build -> verified AppImage + Debian pair
        -> versioned artifacts and Linux release.json
@@ -43,15 +43,16 @@ Neo dispatch: platforms + linux_arch + publication
   -> explicit promotion uses that same architecture selection
 ```
 
-## Metadata is one serialized handoff
+## Metadata is one compare-and-swap handoff
 
-Both architectures own entries in the same versioned `linux/release.json`.
-Its existing read/merge/write operation is not atomic. The Linux matrix therefore
-runs with `max-parallel: 1`, inside the existing `release-linux` concurrency group.
-This deliberately serializes compilation as well as publication: it is the
-smallest ownership rule that prevents lost updates without a new storage protocol
-or another finalization job. Each architecture still has its own checkout cache
-key and product output directory.
+Both architectures own entries in the same versioned `linux/release.json`, and
+their lanes compile in parallel on separate runners. The upload step updates the
+receipt as an R2 compare-and-swap: it reads the object and its ETag, merges its
+own artifact keys, and writes with `If-Match` (or `If-None-Match: *` when the
+receipt does not exist yet). A lane that loses the race gets a 412, re-reads,
+and merges again, so neither architecture's keys are lost and no separate
+finalization job is needed. Each architecture has its own checkout cache key,
+runner, and product output directory.
 
 A retry of a failed architecture may use a later workflow attempt than an already
 successful sibling. Linux metadata merges only when the release identity, source,

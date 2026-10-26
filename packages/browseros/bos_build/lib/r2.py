@@ -2,8 +2,10 @@
 """Cloudflare R2 client utilities for the BrowserOS build system."""
 
 import json
+import random
+import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from .env import EnvConfig
 from .utils import log_info, log_error, log_success, log_warning
@@ -11,6 +13,7 @@ from .utils import log_info, log_error, log_success, log_warning
 try:
     import boto3
     from botocore.config import Config
+    from botocore.exceptions import ClientError
 
     BOTO3_AVAILABLE = True
 except ImportError:
@@ -57,6 +60,68 @@ def upload_file_to_r2(
     except Exception as e:
         log_error(f"Failed to upload {local_path.name}: {e}")
         return False
+
+
+JSON_CAS_ATTEMPTS = 8
+
+
+def update_json_in_r2(
+    client,
+    r2_key: str,
+    bucket: str,
+    update: Callable[[Optional[Dict]], Dict],
+) -> Optional[Dict]:
+    """Read-modify-write one JSON object as an R2 compare-and-swap.
+
+    Parallel release lanes (Linux x64 and arm64 on separate runners) merge
+    their own entries into one shared receipt. R2 honors If-Match and
+    If-None-Match on PutObject, so a writer whose read went stale gets a 412,
+    re-reads, and re-applies ``update`` instead of overwriting its sibling.
+    ``update`` must therefore be a pure merge of the current document.
+    Returns the stored document, or None when the write never landed.
+    """
+    for attempt in range(1, JSON_CAS_ATTEMPTS + 1):
+        try:
+            response = client.get_object(Bucket=bucket, Key=r2_key)
+            current = json.loads(response["Body"].read().decode("utf-8"))
+            condition = {"IfMatch": response["ETag"]}
+        except client.exceptions.NoSuchKey:
+            current = None
+            condition = {"IfNoneMatch": "*"}
+        except Exception as e:
+            log_error(f"Failed to read {r2_key}: {e}")
+            return None
+
+        document = update(current)
+        try:
+            client.put_object(
+                Bucket=bucket,
+                Key=r2_key,
+                Body=json.dumps(document, indent=2).encode("utf-8"),
+                **condition,
+            )
+            log_success(f"Uploaded: {r2_key}")
+            return document
+        except ClientError as e:
+            status = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            # 412: another writer replaced the object after our read. 409: a
+            # concurrent conditional write to the same key was still in flight.
+            if status not in (409, 412):
+                log_error(f"Failed to upload {r2_key}: {e}")
+                return None
+        except Exception as e:
+            log_error(f"Failed to upload {r2_key}: {e}")
+            return None
+
+        log_warning(
+            f"{r2_key} changed concurrently; re-reading and merging "
+            f"(attempt {attempt}/{JSON_CAS_ATTEMPTS})"
+        )
+        # Jitter keeps two lanes that collided from colliding again in lockstep.
+        time.sleep(random.uniform(0.5, 2.0))
+
+    log_error(f"Gave up updating {r2_key} after {JSON_CAS_ATTEMPTS} conflicts")
+    return None
 
 
 def download_file_from_r2(

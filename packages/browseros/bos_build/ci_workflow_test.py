@@ -1756,7 +1756,8 @@ class LinuxReleaseSelectionTest(unittest.TestCase):
         self.assertEqual(dispatch["default"], "x64")
         self.assertEqual(triggers["workflow_call"]["inputs"]["arch"]["default"], "x64")
         build = self.workflow["jobs"]["build"]
-        self.assertEqual(build["strategy"]["max-parallel"], 1)
+        # Architectures build on separate VMs; release.json uses an R2 CAS.
+        self.assertNotIn("max-parallel", build["strategy"])
         self.assertEqual(build["with"]["arch"], "${{ matrix.arch }}")
 
 
