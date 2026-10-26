@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/extensions/BUILD.gn b/chrome/browser/extensions/BUILD.gn
-index 563383fc71d7bc73f0af0fd2130879d0844ba2af..b656b6ed235b1e25636a6eca216df1ce698cb1a6 100644
+index 563383fc71d7bc73f0af0fd2130879d0844ba2af..3b9de592a320174b111fa945da03c66c7741f533 100644
 --- a/chrome/browser/extensions/BUILD.gn
 +++ b/chrome/browser/extensions/BUILD.gn
 @@ -346,6 +346,12 @@ source_set("extensions") {
@@ -40,3 +40,12 @@ index 563383fc71d7bc73f0af0fd2130879d0844ba2af..b656b6ed235b1e25636a6eca216df1ce
        "//components/media_device_salt",
        "//components/navigation_interception",
        "//components/net_log",
+@@ -1142,6 +1159,8 @@ source_set("extensions") {
+ 
+     if (is_mac) {
+       sources += [
++        "api/browser_os/browser_os_attention_mac.h",
++        "api/browser_os/browser_os_attention_mac.mm",
+         "api/enterprise_reporting_private/keychain_data_helper_mac.cc",
+         "api/enterprise_reporting_private/keychain_data_helper_mac.h",
+         "api/image_writer_private/removable_storage_provider_mac.cc",
