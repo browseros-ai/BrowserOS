@@ -128,6 +128,30 @@ test('tests that the runner passes the detected type and paid count to the class
   expect(records[0]?.note).toContain('type')
 })
 
+test('tests that an expected missing tool bypasses type and paid assertions', async () => {
+  const page: CaptchaPage = {
+    ...(pages[3] as CaptchaPage),
+    expectType: 'hcaptcha',
+    maxPaidTasks: 0,
+  }
+  const records = await run(
+    'no-tool',
+    {
+      pages: [page],
+      expectToolMissing: true,
+    },
+    [page],
+  )
+  expect(records[0]).toMatchObject({
+    status: 'tool_not_found',
+    outcome: 'PASS',
+  })
+  expect(exitCode(records)).toBe(0)
+  expect(classifyOutcome(page, 'tool_not_found', 'n/a', '').outcome).toBe(
+    'FAIL',
+  )
+})
+
 async function run(
   scenario: Parameters<typeof startStubMcp>[0]['scenario'],
   overrides = {},

@@ -57,6 +57,14 @@ export function classifyOutcome(
     paidTasks?: number | null
   } = {},
 ): { outcome: ResultRecord['outcome']; note: string } {
+  if (status === 'tool_not_found' || options.expectToolMissing)
+    return {
+      outcome:
+        status === 'tool_not_found' && options.expectToolMissing
+          ? 'PASS'
+          : 'FAIL',
+      note: '',
+    }
   if (page.expectType !== undefined && options.type !== page.expectType)
     return {
       outcome: 'FAIL',
@@ -71,14 +79,6 @@ export function classifyOutcome(
         note: `paid tasks ${options.paidTasks} exceed cap ${page.maxPaidTasks}`,
       }
   }
-  if (status === 'tool_not_found' || options.expectToolMissing)
-    return {
-      outcome:
-        status === 'tool_not_found' && options.expectToolMissing
-          ? 'PASS'
-          : 'FAIL',
-      note: '',
-    }
   if (status === 'token_applied' && page.expect.includes('solved'))
     return classifyAppliedToken(verdict)
   if (page.expect.some((expected) => expected === status)) {

@@ -80,7 +80,9 @@ GeeTest uses 32 zeroes for its IDs; Arkose uses the all-zero UUID. AWS uses
 `FAKE_API_KEY_DO_NOT_USE` or clearly fake `gokuProps`. No key belongs to a site.
 Each page attempts the real SDK and records `loadedScripts`, `fallback`, and
 errors in its usual fixture state. A six-second fallback handles rejected fake
-keys without inventing vendor globals or successful tokens.
+keys without inventing vendor globals or successful tokens. Readiness requires
+every real loader to finish and rejects `script-load-error`, even if a fallback
+widget is visible.
 
 Frame parents contain only the cross-site iframe and a state relay; they load
 no vendor script. The child posts its fixture state. The parent verifies the
@@ -128,6 +130,10 @@ Inspected in the isolated dev-watch BrowserOS browser, without provider calls:
 `.geetest_holder` or `.geetest_box`, expect type `geetest` and status
 `unsupported`, and permit future paid solving. In both deployed pages,
 `main form button[type="submit"]` is **Check**. Their client posts to
-`/api/v1/captcha-demo/<slug>/verify` and renders the returned JSON; the success
-pattern is `"success"\s*:\s*true`. These selectors and the client acceptance
-path were inspected in the real browser. A spotting pass does not claim a solve.
+`/api/v1/captcha-demo/gee-test/verify` (v3) and
+`/api/v1/captcha-demo/gee-test-v4/verify` (v4), then renders the returned JSON.
+The success patterns are `"success"\s*:\s*true` for v3 and
+`"result"\s*:\s*"success"` for v4. Both also display
+“Captcha is passed successfully!” in English. These selectors and the client
+acceptance paths were inspected in the real browser. A spotting pass does not
+claim a solve.

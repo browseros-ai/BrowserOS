@@ -143,12 +143,50 @@ test.each(['geetest', 'geetest-v4'])(
       'main form button[type="submit"]',
     )
     const accepted = new RegExp(page?.verdict?.acceptedPattern ?? '(?!)')
-    expect(accepted.test('{"success": true}')).toBe(true)
-    expect(accepted.test('{"success": false}')).toBe(false)
+    const response =
+      slug === 'geetest-v4' ? { result: 'success' } : { success: true }
+    const rejected =
+      slug === 'geetest-v4' ? { result: 'fail' } : { success: false }
+    expect(accepted.test(JSON.stringify(response, null, 2))).toBe(true)
+    expect(accepted.test(JSON.stringify(rejected))).toBe(false)
+    if (slug === 'geetest-v4')
+      expect(accepted.test('{"success": true}')).toBe(false)
     const document = { querySelector: () => null }
     expect(runInNewContext(page?.ready ?? 'true', { document })).toBe(false)
   },
 )
+
+test('tests that spotting readiness requires every real script to load', () => {
+  for (const page of catalog.SPOTTING_PAGES) {
+    const count = page.id === 'aws-waf-interstitial' ? 2 : 1
+    const state = {
+      rendered: true,
+      errors: [] as string[],
+      loadedScripts: [] as string[],
+    }
+    const document = { documentElement: { dataset: { captchaFixture: '' } } }
+    const ready = () => {
+      document.documentElement.dataset.captchaFixture = JSON.stringify(state)
+      return runInNewContext(page.ready, { document })
+    }
+    expect(ready()).toBe(false)
+    state.loadedScripts = Array.from(
+      { length: count },
+      (_, i) => `https://vendor.test/${i}.js`,
+    )
+    expect(ready()).toBe(true)
+    state.rendered = false
+    expect(ready()).toBe(false)
+    state.rendered = true
+    state.errors.push('script-load-error')
+    expect(ready()).toBe(false)
+    if (count === 2) {
+      state.errors = []
+      state.loadedScripts.pop()
+      expect(ready()).toBe(false)
+    }
+  }
+})
 
 test('tests that frame readiness accepts only its own child origin, source and family', async () => {
   for (const [id, family] of [

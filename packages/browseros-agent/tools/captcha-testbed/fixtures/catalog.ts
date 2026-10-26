@@ -50,8 +50,7 @@ function spotting(
     expectType: family,
     maxPaidTasks: 0,
     mayNeedPaid: false,
-    ready:
-      "JSON.parse(document.documentElement.dataset.captchaFixture || '{}').rendered === true",
+    ready: `(s => s.rendered === true && s.loadedScripts?.length === ${id === 'aws-waf-interstitial' ? 2 : 1} && !s.errors?.includes('script-load-error'))(JSON.parse(document.documentElement.dataset.captchaFixture || '{}'))`,
   }
 }
 
@@ -164,7 +163,10 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
         '(document.querySelector(".geetest_holder, .geetest_box")?.getBoundingClientRect().height ?? 0) > 0',
       verdict: {
         submitSelector: 'main form button[type="submit"]',
-        acceptedPattern: '"success"\\s*:\\s*true',
+        acceptedPattern:
+          slug === 'geetest-v4'
+            ? '"result"\\s*:\\s*"success"'
+            : '"success"\\s*:\\s*true',
       },
     }),
   ),
