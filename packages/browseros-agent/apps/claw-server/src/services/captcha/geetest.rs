@@ -23,7 +23,8 @@ for (const root of roots) for (const e of root.querySelectorAll('*')) if (e.shad
 const all = selector => roots.flatMap(root => [...root.querySelectorAll(selector)]);
 const visible = e => !!e && e.isConnected && e.getBoundingClientRect().width > 0
     && e.getBoundingClientRect().height > 0 && getComputedStyle(e).visibility !== 'hidden';
-const widgets = all('.geetest_holder, .geetest_captcha').filter(visible);
+const containers = all('.geetest_holder, .geetest_captcha').filter(visible);
+const widgets = containers.filter(e => !containers.some(parent => parent !== e && parent.contains(e)));
 const widget = widgets.length === 1 ? widgets[0] : null;
 const resources = performance.getEntriesByType('resource');
 const urls = resources.map(e => { try { return new URL(e.name); } catch { return null; } }).filter(Boolean);
@@ -35,7 +36,10 @@ const load = [...urls].reverse().find(u => gee(u) && (v4
     : /\/(gettype|get|ajax)\.php$/.test(u.pathname) && u.searchParams.has('gt')));
 const identity = load?.href ?? null;
 const failed = all('[class*="geetest_error"], [data-error-code], [aria-invalid="true"]').some(visible);
+const ready = !!widget && (v4 ? widget.classList.contains('geetest_nextReady')
+    : widget.classList.contains('geetest_ready') || widget.classList.contains('geetest_detect'));
 const state = {version, href: location.href, identity, live: !!widget && !!load && !failed,
+    loading: version === 3 && !!widget && !failed && !ready,
     gt: load?.searchParams.get('gt'), challenge: load?.searchParams.get('challenge'),
     captchaId: load?.searchParams.get('captcha_id'), riskType: load?.searchParams.get('risk_type'),
     apiServer: load && load.hostname !== 'api.geetest.com' ? load.hostname : null};
@@ -207,6 +211,30 @@ async fn read<P: CaptchaPage, B: CaptchaBackend>(
     Ok(value)
 }
 
+async fn ready<P: CaptchaPage, B: CaptchaBackend>(
+    ctx: &SolveCtx<'_, P, B>,
+    challenge: &Challenge,
+) -> Result<Value, PageError> {
+    let until = Instant::now() + Duration::from_secs(8);
+    let mut state = read(ctx, challenge, false).await?;
+    while flag(&state, "loading") && Instant::now() < until {
+        bounded(ctx, async {
+            sleep_until(until.min(Instant::now() + Duration::from_millis(250))).await;
+            Ok(())
+        })
+        .await?;
+        match tokio::time::timeout_at(until, read(ctx, challenge, false)).await {
+            Ok(value) => state = value?,
+            Err(_) if Instant::now() >= ctx.deadline => return Err(PageError::Timeout),
+            Err(_) => break,
+        }
+    }
+    if flag(&state, "loading") {
+        state["live"] = json!(false);
+    }
+    Ok(state)
+}
+
 fn flag(value: &Value, key: &str) -> bool {
     value.get(key).and_then(Value::as_bool) == Some(true)
 }
@@ -312,7 +340,7 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
     challenge: &Challenge,
     result: &mut FlowResult,
 ) -> Result<Terminal, PageError> {
-    let state = read(ctx, challenge, false).await?;
+    let state = ready(ctx, challenge).await?;
     if params(&state, ctx.user_agent.clone()).is_none() {
         return Ok((
             SolveStatus::NeedsHuman,
@@ -754,6 +782,8 @@ mod tests {
         frame_calls: usize,
         top_calls: usize,
         delay: Duration,
+        ready_at: Option<usize>,
+        reads: usize,
     }
 
     struct FakePage(Arc<Mutex<State>>);
@@ -772,6 +802,8 @@ mod tests {
                 frame_calls: 0,
                 top_calls: 0,
                 delay: Duration::ZERO,
+                ready_at: None,
+                reads: 0,
             })))
         }
         fn state(&self) -> MutexGuard<'_, State> {
@@ -791,6 +823,11 @@ mod tests {
                     json!({"retained":s.retained, "accepted":s.accepted, "ready":true, "captchaFree":s.accepted}),
                 )
             } else {
+                s.reads += 1;
+                if s.ready_at.is_some_and(|at| s.reads >= at) {
+                    s.read["live"] = json!(true);
+                    s.read["loading"] = json!(false);
+                }
                 Ok(s.read.clone())
             }
         }
@@ -978,6 +1015,45 @@ mod tests {
                 assert!(!result.message.contains("vendor-"));
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_v3_waits_for_sdk_readiness_before_registering_or_paying()
+    -> anyhow::Result<()> {
+        let page = FakePage::new(3);
+        {
+            let mut state = page.state();
+            state.read["live"] = json!(false);
+            state.read["loading"] = json!(true);
+            state.ready_at = Some(3);
+        }
+        let backend = FakeBackend::new(3);
+        let result = run(&page, &backend, false, &CancellationToken::new()).await?;
+        assert_eq!(result.status, SolveStatus::TokenApplied);
+        assert_eq!(result.paid_tasks, 1);
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_sdk_readiness_wait_is_bounded_without_payment() -> anyhow::Result<()> {
+        let page = FakePage::new(3);
+        page.state().read["live"] = json!(false);
+        page.state().read["loading"] = json!(true);
+        let backend = FakeBackend::new(3);
+        let start = Instant::now();
+        let result = run(&page, &backend, false, &CancellationToken::new()).await?;
+        assert!(start.elapsed() >= Duration::from_secs(8));
+        assert!(start.elapsed() <= Duration::from_secs(9));
+        assert_eq!(result.reason, SolveReason::ChallengeNotPassed);
+        assert_eq!(result.paid_tasks, 0);
+        assert!(
+            backend
+                .calls
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
+        );
         Ok(())
     }
 
