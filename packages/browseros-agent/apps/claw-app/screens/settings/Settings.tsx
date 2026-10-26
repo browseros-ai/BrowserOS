@@ -33,6 +33,7 @@ import {
   useUpdateAgentSettings,
 } from '@/modules/api/agent-settings.hooks'
 import { HelpSettings } from './HelpSettings'
+import { NotifySetting } from './NotifySetting'
 import { PrivacySettings } from './PrivacySettings'
 import { StorageSettings } from './StorageSettings'
 import { SettingRow, SettingsSection } from './settings.components'
@@ -128,6 +129,7 @@ function AgentSwitches() {
           Couldn’t load these settings. Check that BrowserOS is running, then
           open this page again.
         </p>
+        <NotifySetting />
       </SettingsSection>
     )
   }
@@ -172,6 +174,7 @@ function AgentSwitches() {
           </p>
         ) : null}
       </SettingRow>
+      <NotifySetting />
     </SettingsSection>
   )
 }
