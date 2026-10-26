@@ -37,7 +37,8 @@ interface Anchor {
  */
 export function usePlayback(totalSeconds: number): Playback {
   const [time, setTime] = useState(0)
-  const [isPlaying, setIsPlaying] = useState(true)
+  // A task page opens paused; playback starts only when the person asks.
+  const [isPlaying, setIsPlaying] = useState(false)
   const [speed, setSpeed] = useState<number>(DEFAULT_PLAYBACK_SPEED)
   const timeRef = useRef(0)
   const anchorRef = useRef<Anchor | null>(null)

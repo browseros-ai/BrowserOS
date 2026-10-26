@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.h b/chrome/browser/extensions/api/browser_os/browser_os_api.h
 new file mode 100644
-index 0000000000000..0da7f357c6730
+index 0000000000000..fc1885b0009f2
 --- /dev/null
 +++ b/chrome/browser/extensions/api/browser_os/browser_os_api.h
-@@ -0,0 +1,124 @@
+@@ -0,0 +1,162 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -121,6 +121,44 @@ index 0000000000000..0da7f357c6730
 +
 + protected:
 +  ~BrowserOSShowInfoBarFunction() override = default;
++
++  ResponseAction Run() override;
++};
++
++class BrowserOSRequestAttentionFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("browserOS.requestAttention",
++                             BROWSER_OS_REQUESTATTENTION)
++
++  BrowserOSRequestAttentionFunction() = default;
++
++ protected:
++  ~BrowserOSRequestAttentionFunction() override = default;
++
++  ResponseAction Run() override;
++};
++
++class BrowserOSCancelAttentionFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("browserOS.cancelAttention",
++                             BROWSER_OS_CANCELATTENTION)
++
++  BrowserOSCancelAttentionFunction() = default;
++
++ protected:
++  ~BrowserOSCancelAttentionFunction() override = default;
++
++  ResponseAction Run() override;
++};
++
++class BrowserOSSetDockBadgeFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("browserOS.setDockBadge", BROWSER_OS_SETDOCKBADGE)
++
++  BrowserOSSetDockBadgeFunction() = default;
++
++ protected:
++  ~BrowserOSSetDockBadgeFunction() override = default;
 +
 +  ResponseAction Run() override;
 +};

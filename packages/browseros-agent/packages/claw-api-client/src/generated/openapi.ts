@@ -193,6 +193,23 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/help/events': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** @description Server-Sent Events. Sends an event named `help` at once and then whenever the open help requests change (one is opened, handed back, cancelled, consumed by the agent, or reaches its time limit). Each event's data is `{"version": <number>}` and carries no request details: read `GET /api/v1/sessions?status=live` for the requests themselves. */
+    get: operations['streamHelpEvents']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/sessions': {
     parameters: {
       query?: never
@@ -382,6 +399,40 @@ export interface paths {
     put: operations['connectHarness']
     post?: never
     delete: operations['disconnectHarness']
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/claude-desktop/extension': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** @description Whether the Claude desktop app and its BrowserOS neo extension are installed, read from Claude's own record of installed extensions. */
+    get: operations['getClaudeDesktopExtension']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/claude-desktop/extension/install': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** @description Fetches the pinned extension bundle, checks its hash, and opens it in the Claude desktop app, which shows its own install sheet for the person to confirm. Nothing is installed without that confirmation. */
+    post: operations['installClaudeDesktopExtension']
+    delete?: never
     options?: never
     head?: never
     patch?: never
@@ -894,6 +945,26 @@ export interface components {
     }
     ConnectionList: {
       items: components['schemas']['Connection'][]
+    }
+    ClaudeDesktopExtension: {
+      /** @description Whether the Claude desktop app is installed on this computer. */
+      claudeInstalled: boolean
+      /** @description Whether Claude has the BrowserOS neo extension installed. */
+      installed: boolean
+      /** @description The extension version Claude has installed. Present only when installed. */
+      installedVersion?: string
+      /** @description The extension version this server installs. */
+      availableVersion: string
+      /** @description Whether the installed extension is older than the available one. */
+      updateAvailable: boolean
+    }
+    /**
+     * @description opened means the extension file was handed to Claude, which now shows its own install sheet; missing means the Claude desktop app was not found.
+     * @enum {string}
+     */
+    ClaudeDesktopInstallStatus: 'opened' | 'missing'
+    ClaudeDesktopInstallResult: {
+      status: components['schemas']['ClaudeDesktopInstallStatus']
     }
     /**
      * @description keepForever never deletes audit data automatically; deleteAfterDays removes audit data older than the accompanying days value.
@@ -1536,6 +1607,26 @@ export interface operations {
       500: components['responses']['InternalError']
     }
   }
+  streamHelpEvents: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description A stream of `help` events until the client disconnects. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'text/event-stream': string
+        }
+      }
+    }
+  }
   listSessions: {
     parameters: {
       query?: {
@@ -1543,6 +1634,8 @@ export interface operations {
         slug?: string
         /** @description Use `live` to request a complete current snapshot with live browser state. */
         status?: components['schemas']['SessionStatus']
+        /** @description Only tasks that failed or were stopped. Applied before pagination, so pages stay full. */
+        needsAttention?: boolean
         site?: string
         search?: string
         since?: number
@@ -1905,6 +1998,48 @@ export interface operations {
         }
       }
       404: components['responses']['NotFound']
+      500: components['responses']['InternalError']
+    }
+  }
+  getClaudeDesktopExtension: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Claude desktop app and extension state. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ClaudeDesktopExtension']
+        }
+      }
+      500: components['responses']['InternalError']
+    }
+  }
+  installClaudeDesktopExtension: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The bundle was opened in Claude, or Claude was not found. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ClaudeDesktopInstallResult']
+        }
+      }
       500: components['responses']['InternalError']
     }
   }

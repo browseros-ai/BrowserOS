@@ -9,9 +9,8 @@
  */
 
 import type { FC, SVGProps } from 'react'
-import { AnthropicBlack } from '@/components/ui/svgs/anthropicBlack'
-import { AnthropicWhite } from '@/components/ui/svgs/anthropicWhite'
 import { Antigravity } from '@/components/ui/svgs/antigravity'
+import { ClaudeAiIcon } from '@/components/ui/svgs/claudeAiIcon'
 import { CodexDark } from '@/components/ui/svgs/codexDark'
 import { CodexLight } from '@/components/ui/svgs/codexLight'
 import { CursorDark } from '@/components/ui/svgs/cursorDark'
@@ -24,22 +23,9 @@ import { cn } from '@/lib/utils'
 
 export type HarnessMarkProps = SVGProps<SVGSVGElement>
 
-export const ClaudeCodeMark: FC<HarnessMarkProps> = ({
-  className,
-  ...props
-}) => (
-  <>
-    <AnthropicBlack
-      aria-hidden
-      className={cn(className, 'dark:hidden')}
-      {...props}
-    />
-    <AnthropicWhite
-      aria-hidden
-      className={cn(className, 'hidden dark:block')}
-      {...props}
-    />
-  </>
+/** Claude's orange mark reads on both themes, so it needs no dark variant. */
+export const ClaudeCodeMark: FC<HarnessMarkProps> = (props) => (
+  <ClaudeAiIcon aria-hidden {...props} />
 )
 
 export const CursorMark: FC<HarnessMarkProps> = ({ className, ...props }) => (

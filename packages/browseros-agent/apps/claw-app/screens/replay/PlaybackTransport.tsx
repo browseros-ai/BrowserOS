@@ -1,6 +1,8 @@
 import { Pause, Play, RotateCcw } from 'lucide-react'
-import type { ChangeEvent } from 'react'
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { ActionSwapRollIcon } from '@/components/motion/action-swap-roll'
+import { Button } from '@/components/motion/button/base'
+import { RangeSlider } from '@/components/motion/range-slider'
+import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
 import { cn } from '@/lib/utils'
 import { formatTime, KIND_STYLE, PLAYBACK_SPEEDS } from './replay.helpers'
 import type { ReplayAction } from './session-replay'
@@ -14,6 +16,8 @@ interface PlaybackTransportProps {
   totalSeconds: number
   actions: readonly ReplayAction[]
   onSeek: (seconds: number) => void
+  /** Shown but inert, while the recording is still loading. */
+  disabled?: boolean
 }
 
 /**
@@ -26,49 +30,56 @@ export function PlaybackTransport({
   totalSeconds,
   actions,
   onSeek,
+  disabled = false,
 }: PlaybackTransportProps) {
   const { time, isPlaying, speed, setSpeed, togglePlay } = playback
   const finished = time >= totalSeconds
-  const progress = totalSeconds === 0 ? 0 : (time / totalSeconds) * 100
 
-  const onScrubberChange = (event: ChangeEvent<HTMLInputElement>) => {
-    onSeek(Number(event.target.value))
-  }
+  const mode = finished ? 'restart' : isPlaying ? 'pause' : 'play'
 
   return (
-    <div className="rounded-2xl border border-border-2 bg-card p-3 shadow-sm">
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={togglePlay}
-          aria-label={
-            finished ? 'Restart playback' : isPlaying ? 'Pause' : 'Play'
-          }
-          className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent text-white shadow"
-        >
-          {finished ? (
+    <div className="flex items-center gap-3 px-1 pt-1">
+      <Button
+        size="icon"
+        onClick={togglePlay}
+        disabled={disabled}
+        aria-label={
+          finished ? 'Restart playback' : isPlaying ? 'Pause' : 'Play'
+        }
+        className="size-10 shrink-0 rounded-full"
+      >
+        <ActionSwapRollIcon value={mode}>
+          {mode === 'restart' ? (
             <RotateCcw className="size-4" />
-          ) : isPlaying ? (
+          ) : mode === 'pause' ? (
             <Pause className="size-4" />
           ) : (
             <Play className="size-4" />
           )}
-        </button>
-        <span className="w-20 shrink-0 font-mono text-ink-2 text-xs">
-          {formatTime(time)} / {formatTime(totalSeconds)}
-        </span>
-        <div className="relative flex h-7 flex-1 items-center">
-          <div className="absolute right-0 left-0 h-1.5 rounded-full bg-bg-sunken" />
-          <div
-            className="absolute left-0 h-1.5 rounded-full bg-accent transition-[width] duration-100"
-            style={{ width: `${progress}%` }}
-          />
+        </ActionSwapRollIcon>
+      </Button>
+      <div className="relative min-w-0 flex-1">
+        <RangeSlider
+          aria-label="Playback position"
+          formatValueText={(value) =>
+            `${formatTime(value)} of ${formatTime(totalSeconds)}`
+          }
+          min={0}
+          max={Math.max(totalSeconds, SCRUBBER_STEP)}
+          step={SCRUBBER_STEP}
+          value={time}
+          onValueChange={onSeek}
+          disabled={disabled}
+          showTicks={false}
+          className="h-9 bg-accent-tint [&>div:first-child>div]:bg-primary/25"
+        />
+        {/* Same 10px inset as the slider's handle, so marks line up with time. */}
+        <div className="pointer-events-none absolute inset-x-[10px] inset-y-0">
           {actions.map((action) => {
             const { frame } = action
             if (frame.kind === 'action') return null
             const pct =
               totalSeconds === 0 ? 0 : (action.startAt / totalSeconds) * 100
-            const kind = KIND_STYLE[frame.kind]
             return (
               <button
                 type="button"
@@ -78,50 +89,41 @@ export function PlaybackTransport({
                 onClick={() => onSeek(action.startAt)}
                 style={{ left: `${pct}%` }}
                 className={cn(
-                  'absolute z-10 size-2.5 -translate-x-1/2 rounded-full border-2 border-card shadow-sm',
-                  kind.dotClass,
+                  'pointer-events-auto absolute top-1/2 z-10 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-card shadow-sm',
+                  KIND_STYLE[frame.kind].dotClass,
                 )}
               />
             )
           })}
-          <span
-            aria-hidden
-            style={{ left: `${progress}%` }}
-            className="absolute z-10 size-3.5 -translate-x-1/2 rounded-full border-[2.5px] border-accent bg-card shadow"
-          />
-          <input
-            type="range"
-            aria-label="Playback position"
-            aria-valuetext={`${formatTime(time)} of ${formatTime(totalSeconds)}`}
-            min={0}
-            max={totalSeconds}
-            step={SCRUBBER_STEP}
-            value={time}
-            onChange={onScrubberChange}
-            className="absolute inset-0 z-20 h-full w-full cursor-pointer appearance-none bg-transparent opacity-0 focus-visible:opacity-100"
-          />
         </div>
-        <ToggleGroup
-          value={[String(speed)]}
-          onValueChange={(values) => {
-            const next = Number(values[0])
-            if (Number.isFinite(next)) setSpeed(next)
-          }}
-          spacing={0}
-          variant="outline"
-          className="bg-bg-sunken p-0.5"
+      </div>
+      <span className="shrink-0 text-[13.5px] text-ink-3 tabular-nums">
+        {formatTime(time)} / {formatTime(totalSeconds)}
+      </span>
+      <Tabs
+        variant="segment"
+        value={String(speed)}
+        onValueChange={(value) => {
+          const next = Number(value)
+          if (Number.isFinite(next)) setSpeed(next)
+        }}
+      >
+        <TabsList
+          aria-label="Playback speed"
+          className="border border-border-2"
         >
           {PLAYBACK_SPEEDS.map((s) => (
-            <ToggleGroupItem
+            <TabsTrigger
               key={s}
               value={String(s)}
-              className="h-7 rounded-md border-none bg-transparent px-2.5 font-bold text-ink-3 text-xs shadow-none hover:bg-transparent hover:text-ink aria-pressed:bg-card aria-pressed:text-ink aria-pressed:shadow-sm"
+              disabled={disabled}
+              className="px-2.5 text-[13px]"
             >
               {s}×
-            </ToggleGroupItem>
+            </TabsTrigger>
           ))}
-        </ToggleGroup>
-      </div>
+        </TabsList>
+      </Tabs>
     </div>
   )
 }

@@ -1,69 +1,128 @@
-import { ArrowRight } from 'lucide-react'
+import { ArrowUpRight, BookOpen, CircleCheck, LoaderCircle } from 'lucide-react'
 import { useState } from 'react'
+import { RowMenu } from '@/components/actions/RowMenu'
+import { HarnessIcon } from '@/components/harness/HarnessIcon'
+import { ButtonLink } from '@/components/motion/button/base'
+import { StatefulButton } from '@/components/motion/button/stateful'
+import { GET_CLAUDE_URL } from '@/screens/cockpit/cockpit-onboarding.helpers'
+import { AgentRow } from './ConnectionRow'
+import type { ClaudeSetupState } from './claude-desktop.helpers'
+import { useAddToClaude } from './claude-desktop.hooks'
 import { InstallExtensionDialog } from './InstallExtensionDialog'
-import { COWORK_REQUIREMENT_LINE } from './install-guide.data'
+
+const SUB: Record<ClaudeSetupState, string> = {
+  checking: 'Needs a one-time extension.',
+  'no-claude': 'Install the Claude desktop app first, then come back here.',
+  add: 'Adds neo to Claude. You confirm with one click in Claude.',
+  update: 'A newer version of neo for Claude is ready.',
+  waiting: 'Claude is open. Click Install there to finish.',
+  stuck:
+    'Didn’t see Claude ask? Try again, or set it up by hand from the menu.',
+  connected: 'Ready to use',
+}
 
 /**
- * Advertises the BrowserOS neo extension for Claude Desktop. Unlike the
- * harness rows, Claude Desktop installs a `.mcpb` through its own Settings,
- * which this app cannot toggle or detect, so the card opens a guided
- * walkthrough instead of offering a connect action.
+ * The Claude desktop app takes neo as an extension. Adding it hands the
+ * extension to Claude, which asks the person to confirm; the step-by-step
+ * guide sits in the row's menu for anyone who prefers to do it by hand.
  */
 export function ClaudeDesktopCard() {
   const [guideOpen, setGuideOpen] = useState(false)
+  const claude = useAddToClaude()
 
   return (
-    <section className="space-y-2">
-      <header className="flex items-baseline justify-between gap-3">
-        <h2 className="font-semibold text-cyanotype-ink text-lg">
-          Claude Desktop
-        </h2>
-        <span className="text-[12px] text-cyanotype-muted">Extension</span>
-      </header>
-      <button
-        type="button"
-        onClick={() => setGuideOpen(true)}
-        className="group block w-full rounded-9 border border-cyanotype-border bg-card p-4 text-left transition-colors hover:border-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-      >
-        <div className="flex items-start gap-3">
-          <ClaudeMark className="size-7 shrink-0" />
-          <div className="min-w-0 flex-1 space-y-1">
-            <p className="font-semibold text-[15px] text-cyanotype-ink leading-snug">
-              Give Claude Desktop a real browser.
-            </p>
-            <p className="text-[13px] text-cyanotype-muted leading-snug">
-              {COWORK_REQUIREMENT_LINE}
-            </p>
-          </div>
-        </div>
-        <div className="mt-3 flex justify-end">
-          <span className="inline-flex items-center gap-1 text-[12px] text-cyanotype-blue transition-colors group-hover:text-cyanotype-blue-hover">
-            Show me how
-            <ArrowRight
-              aria-hidden
-              className="size-3.5 transition-transform group-hover:translate-x-0.5"
+    <>
+      <AgentRow
+        className="bg-bg-sunken"
+        logo={<HarnessIcon harness="Claude Code" className="size-[22px]" />}
+        name="Claude desktop app"
+        sub={SUB[claude.state]}
+        action={
+          <span className="flex items-center gap-2.5">
+            <ClaudeAction
+              state={claude.state}
+              isOpening={claude.isOpening}
+              onAdd={claude.add}
+            />
+            <RowMenu
+              label="Claude desktop app"
+              actions={[
+                {
+                  id: 'manual-setup',
+                  label: 'Set it up by hand',
+                  ariaLabel: 'Set up the Claude desktop app by hand',
+                  icon: <BookOpen className="size-4" />,
+                  onClick: () => setGuideOpen(true),
+                },
+              ]}
             />
           </span>
-        </div>
-      </button>
+        }
+      />
       <InstallExtensionDialog open={guideOpen} onOpenChange={setGuideOpen} />
-    </section>
+    </>
   )
 }
 
-/** Claude logo (svgl.app). Keeps its brand terracotta on both themes. */
-function ClaudeMark({ className }: { className?: string }) {
+// ---------------------------------------------------------------------------
+
+function ClaudeAction({
+  state,
+  isOpening,
+  onAdd,
+}: {
+  state: ClaudeSetupState
+  isOpening: boolean
+  onAdd: () => void
+}) {
+  if (state === 'checking') return null
+  if (state === 'connected') {
+    return (
+      <span className="inline-flex items-center gap-1.5 font-semibold text-[14px] text-green-ink">
+        <CircleCheck aria-hidden className="size-4" />
+        Connected
+      </span>
+    )
+  }
+  if (state === 'no-claude') {
+    return (
+      <ButtonLink
+        href={GET_CLAUDE_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        size="sm"
+        className="font-semibold"
+      >
+        Get Claude
+        <ArrowUpRight aria-hidden className="size-[15px]" />
+      </ButtonLink>
+    )
+  }
+  if (state === 'waiting') {
+    return (
+      <span
+        role="status"
+        className="inline-flex items-center gap-1.5 font-semibold text-[14px] text-ink-2"
+      >
+        <LoaderCircle aria-hidden className="size-4 animate-spin" />
+        Waiting for Claude
+      </span>
+    )
+  }
   return (
-    <svg
-      viewBox="0 0 256 257"
-      className={className}
-      aria-hidden="true"
-      xmlns="http://www.w3.org/2000/svg"
+    <StatefulButton
+      size="sm"
+      state={isOpening ? 'loading' : 'idle'}
+      loadingText="Opening Claude"
+      disabled={isOpening}
+      onClick={onAdd}
+      className="font-semibold"
     >
-      <path
-        fill="#D97757"
-        d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z"
-      />
-    </svg>
+      {state === 'update'
+        ? 'Update'
+        : state === 'stuck'
+          ? 'Try again'
+          : 'Add to Claude'}
+    </StatefulButton>
   )
 }

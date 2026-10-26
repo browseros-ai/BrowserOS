@@ -254,6 +254,25 @@ fn parse(raw: Value) -> ToolExecResult<Args> {
     }
     Ok(args)
 }
+/// What to tell the agent after listing a page's sign-ins when only a person can go on: none is
+/// saved, or several are and the task does not say which. It names the help tool "if you have it"
+/// because whether human help is offered is decided by the server, not here.
+fn list_guidance(page_scoped: bool, queried: bool, total: u32) -> Option<&'static str> {
+    if !page_scoped {
+        return None;
+    }
+    match total {
+        0 => Some(
+            "No saved sign-in for this site, so the person has to sign in. Call request_human_help with kind \"login\" if you have it, otherwise ask them in your chat. Do not guess a password.",
+        ),
+        1 => None,
+        _ if queried => None,
+        _ => Some(
+            "More than one saved account for this site. Unless the task names the account, ask the person which to use: call request_human_help with kind \"login\" if you have it, otherwise ask in your chat.",
+        ),
+    }
+}
+
 fn escaped(text: &str) -> String {
     serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into())
 }
@@ -271,13 +290,16 @@ fn handler<'a>(
             () = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
             result = async { match args.action {
             Action::List => {
+                let queried = args.query.is_some();
                 let inventory = ctx.browser.list_credentials(args.page.map(PageId), CredentialListOptions {
                     query: args.query, limit: args.limit, cursor: args.cursor }).await;
                 inventory.map(|inventory| {
+                    let guidance = list_guidance(args.page.is_some(), queried, inventory.total);
                     let text = if inventory.credentials.is_empty() { "No saved accounts found.".to_owned() }
                         else { std::iter::once(format!("{} saved account(s){}", inventory.total,
                             inventory.origin.as_ref().map(|s| format!(" for {s}")).unwrap_or_default()))
                             .chain(inventory.credentials.iter().map(|c| format!("{} — {} at {} [{}]", c.credential_id, escaped(&c.username), escaped(&c.site), c.stores.join(", ")))).collect::<Vec<_>>().join("\n") };
+                    let text = match guidance { Some(guidance) => format!("{text}\n\n{guidance}"), None => text };
                     let mut data = serde_json::to_value(inventory).unwrap_or(json!({}));
                     data["action"] = json!(action);
                     if let Some(page) = args.page { data["page"] = json!(page); }
@@ -314,4 +336,29 @@ fn handler<'a>(
             }
         }))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::list_guidance;
+
+    #[test]
+    fn no_saved_sign_in_sends_the_agent_to_the_person() {
+        let guidance = list_guidance(true, false, 0).unwrap_or_default();
+        assert!(guidance.contains("request_human_help"));
+        assert!(guidance.contains("\"login\""));
+        assert!(guidance.contains("otherwise ask them in your chat"));
+    }
+
+    #[test]
+    fn several_accounts_ask_which_unless_the_agent_searched() {
+        assert!(list_guidance(true, false, 3).is_some_and(|text| text.contains("which to use")));
+        assert_eq!(list_guidance(true, true, 3), None);
+    }
+
+    #[test]
+    fn one_account_or_a_profile_wide_list_needs_no_person() {
+        assert_eq!(list_guidance(true, false, 1), None);
+        assert_eq!(list_guidance(false, false, 0), None);
+    }
 }

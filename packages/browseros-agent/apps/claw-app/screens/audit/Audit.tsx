@@ -1,289 +1,187 @@
-import {
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-} from '@tanstack/react-table'
-import { ArrowRight } from 'lucide-react'
-import { Fragment, type ReactNode, useMemo, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router'
 import { AuditEmpty } from '@/components/audit/AuditEmpty'
-import { AuditHoverPreview } from '@/components/audit/AuditHoverPreview'
 import { FilterBar } from '@/components/audit/FilterBar'
-import { ManageAuditFilesDialog } from '@/components/audit/ManageAuditFilesDialog'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import { cn } from '@/lib/utils'
-import type { TaskSummary } from '@/modules/api/audit.hooks'
-import {
-  COLUMN_WIDTHS,
-  NUMERIC_COLUMN_IDS,
-  TASK_COLUMNS,
-} from './audit.columns'
-import { useAuditScreenData } from './audit.data'
-import {
-  formatDayHeading,
-  isSameLocalDay,
-  orderByLiveThenRecency,
-} from './audit.helpers'
+import { TaskRow } from '@/components/audit/TaskRow'
+import { Page } from '@/components/layout/Page'
+import { PageHeader } from '@/components/layout/PageHeader'
+import { StatefulButton } from '@/components/motion/button/stateful'
+import { Card } from '@/components/motion/card'
+import { Skeleton } from '@/components/ui/skeleton'
+import { HISTORY_PAGE_SIZE, useAuditScreenData } from './audit.data'
 
-/** Keeps the implemented token column dormant without discarding its cell behavior. */
-const SHOW_TOKEN_USAGE_COLUMN = false
-
-/** First cell gets the card's left inset, last cell its right inset; the 8px
- *  each interior cell carries on both sides adds up to the 16px column gap. */
-const CELL_PADDING = 'px-2 py-2.5 first:pl-4 last:pr-4'
-
-/**
- * Audit ledger. Preserves the tanstack-table + shadcn Table primitives
- * and restyles them as a single bordered card: a quiet tinted header
- * strip, tinted day bands separating date groups, and hairline-separated
- * rows beneath. Rows are ordered LIVE-first then newest-first and are not
- * re-sortable — arbitrary column sorts would shred the day bands, and
- * the filter bar covers retrieval instead. On row hover, a fixed
- * top-right panel shows the session's screenshot preview.
- */
+/** Everything your AI agents did with neo, newest first, one card per day. */
 export function Audit() {
-  const {
-    tasks,
-    agentOptions,
-    statusOptions,
-    siteOptions,
-    isLoading,
-    isError,
-    hasNextPage,
-    isFetchingNextPage,
-    fetchNextPage,
-    filters,
-    setAgentFilter,
-    setStatusFilter,
-    setSiteFilter,
-    setSearch,
-  } = useAuditScreenData()
-  const navigate = useNavigate()
-  const location = useLocation()
-
-  const hasActiveFilters =
-    filters.agentSlug !== null ||
-    filters.status !== null ||
-    filters.site !== null ||
-    filters.search.length > 0
-
-  // LIVE-first pre-sort so a running session floats to the top of the
-  // list regardless of when it started.
-  const orderedTasks = useMemo(() => orderByLiveThenRecency(tasks), [tasks])
-
-  const state = useMemo(
-    () => ({ columnVisibility: { tokens: SHOW_TOKEN_USAGE_COLUMN } }),
-    [],
-  )
-
-  const table = useReactTable<TaskSummary>({
-    data: orderedTasks,
-    columns: TASK_COLUMNS,
-    state,
-    getCoreRowModel: getCoreRowModel(),
-  })
-
-  const [hoveredTask, setHoveredTask] = useState<TaskSummary | null>(null)
-  const rows = table.getRowModel().rows
-  const visibleColumnCount = table.getVisibleFlatColumns().length
+  const data = useAuditScreenData()
+  const { filters } = data
+  const now = Date.now()
+  const showFilters =
+    !data.isError && (data.loadedCount > 0 || data.hasActiveFilters)
 
   return (
-    <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-6 px-8 pt-8 pb-16">
-      <header className="flex items-start justify-between gap-4">
-        <h1 className="font-extrabold text-3xl leading-tight tracking-tight md:text-4xl">
-          Audit
-        </h1>
-        <ManageAuditFilesDialog />
-      </header>
+    <Page>
+      <PageHeader
+        title="History"
+        lede="Everything your AI agents did with neo, newest first. Open a task to see what happened."
+      />
 
-      {!isError && (tasks.length > 0 || hasActiveFilters) && (
+      {showFilters ? (
         <FilterBar
-          agentOptions={agentOptions}
-          statusOptions={statusOptions}
-          siteOptions={siteOptions}
-          selectedAgentSlug={filters.agentSlug}
-          selectedStatus={filters.status}
-          selectedSite={filters.site}
           search={filters.search}
-          onAgentChange={setAgentFilter}
-          onStatusChange={setStatusFilter}
-          onSiteChange={setSiteFilter}
-          onSearchChange={setSearch}
+          view={filters.view}
+          agentSlug={filters.agentSlug}
+          agentOptions={data.agentOptions}
+          onSearchChange={data.setSearch}
+          onViewChange={data.setView}
+          onAgentChange={data.setAgentFilter}
         />
-      )}
+      ) : null}
 
-      {isError ? (
+      {data.isError ? (
         <AuditEmpty variant="error" />
-      ) : isLoading ? (
-        <TableShell table={table} />
-      ) : rows.length === 0 ? (
-        <AuditEmpty variant={hasActiveFilters ? 'search-miss' : 'zero-tasks'} />
+      ) : data.isLoading ? (
+        <DaySkeleton />
+      ) : data.groups.length === 0 ? (
+        data.hasActiveFilters ? (
+          <AuditEmpty
+            variant="search-miss"
+            search={filters.search}
+            onShowAll={data.clearFilters}
+          />
+        ) : (
+          <AuditEmpty variant="zero-tasks" />
+        )
       ) : (
-        <>
-          {/* biome-ignore lint/a11y/noStaticElementInteractions: the onMouseLeave clears the supplementary hover-preview panel; the panel is a pointer-only progressive enhancement and does not gate any core information. */}
-          <div onMouseLeave={() => setHoveredTask(null)}>
-            <LedgerCard>
-              <Table className="table-fixed">
-                <LedgerHeader table={table} />
-                <TableBody>
-                  {rows.map((row, idx) => {
-                    const prev = idx > 0 ? rows[idx - 1] : null
-                    // Null-check narrows prev so we do not need the
-                    // non-null assertion inside isSameLocalDay's number
-                    // parameters. Biome's noNonNullAssertion rule bans
-                    // the `!` form; this preserves the type discipline.
-                    const dayChanged =
-                      prev === null ||
-                      !isSameLocalDay(
-                        row.original.startedAt,
-                        prev.original.startedAt,
-                      )
-                    return (
-                      <Fragment key={row.id}>
-                        {dayChanged && (
-                          <TableRow className="border-none hover:bg-transparent">
-                            <TableCell
-                              colSpan={visibleColumnCount}
-                              className="bg-ledger-band px-4 py-[7px] font-semibold text-[12px] text-ledger-band-ink"
-                            >
-                              {formatDayHeading(row.original.startedAt)}
-                            </TableCell>
-                          </TableRow>
-                        )}
-                        <TableRow
-                          data-testid={`task-row-${row.original.sessionId}`}
-                          onMouseEnter={() => setHoveredTask(row.original)}
-                          onClick={() =>
-                            navigate(
-                              `/audit/${encodeURIComponent(row.original.sessionId)}`,
-                              { state: { from: location.pathname } },
-                            )
-                          }
-                          className="cursor-pointer border-ledger-divider border-b hover:bg-card-tint"
-                        >
-                          {row.getVisibleCells().map((cell) => (
-                            <TableCell
-                              key={cell.id}
-                              className={cn(
-                                CELL_PADDING,
-                                NUMERIC_COLUMN_IDS.has(cell.column.id) &&
-                                  'text-right',
-                              )}
-                            >
-                              {flexRender(
-                                cell.column.columnDef.cell,
-                                cell.getContext(),
-                              )}
-                            </TableCell>
-                          ))}
-                        </TableRow>
-                      </Fragment>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </LedgerCard>
-          </div>
-          {hasNextPage && (
-            <div className="pt-2 text-center">
-              <button
-                type="button"
-                onClick={fetchNextPage}
-                disabled={isFetchingNextPage}
-                className="group inline-flex items-center gap-1.5 font-medium text-[13px] text-ink-2 transition-colors hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
+        <div className="flex flex-col gap-9">
+          {data.groups.map((group) => (
+            <section
+              key={group.key}
+              aria-labelledby={`day-${group.key}`}
+              className="flex flex-col gap-2.5"
+            >
+              <h2
+                id={`day-${group.key}`}
+                className="px-1 font-bold text-[14px] text-ink-3"
               >
-                {isFetchingNextPage ? 'Loading...' : 'Load older tasks'}
-                <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
-              </button>
-            </div>
-          )}
-        </>
+                {group.label}
+              </h2>
+              <Card
+                size="compact"
+                className="gap-0 overflow-hidden border-border-2 bg-card py-0 shadow-card"
+              >
+                <div className="flex flex-col divide-y divide-border-2">
+                  {group.tasks.map((task) => (
+                    <TaskRow
+                      key={task.sessionId}
+                      task={task}
+                      now={now}
+                      timeOnly
+                    />
+                  ))}
+                </div>
+              </Card>
+            </section>
+          ))}
+          <LoadMore
+            hasNextPage={data.hasNextPage}
+            isFetching={data.isFetchingNextPage}
+            loadedCount={data.loadedCount}
+            onLoad={data.fetchNextPage}
+          />
+        </div>
       )}
+    </Page>
+  )
+}
 
-      <AuditHoverPreview task={hoveredTask} />
+// ---------------------------------------------------------------------------
+
+/** How far below the viewport the next page starts loading. */
+const PRELOAD_MARGIN = '600px 0px'
+
+/**
+ * Loads the next page as the end of the list nears the viewport. The button
+ * stays for keyboards and for anyone who scrolls faster than the network.
+ */
+function LoadMore({
+  hasNextPage,
+  isFetching,
+  loadedCount,
+  onLoad,
+}: {
+  hasNextPage: boolean
+  isFetching: boolean
+  loadedCount: number
+  onLoad: () => void
+}) {
+  if (!hasNextPage) {
+    return loadedCount > HISTORY_PAGE_SIZE ? (
+      <p className="self-center text-[14px] text-ink-3">
+        That’s everything in your history.
+      </p>
+    ) : null
+  }
+
+  // The observer is DOM state; the ref callback's cleanup disconnects it.
+  const watch = (node: HTMLDivElement | null) => {
+    if (!node || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) onLoad()
+      },
+      { rootMargin: PRELOAD_MARGIN },
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }
+
+  return (
+    <div ref={watch} className="flex flex-col items-center gap-3">
+      {isFetching ? <RowsSkeleton count={2} /> : null}
+      <StatefulButton
+        variant="secondary"
+        state={isFetching ? 'loading' : 'idle'}
+        loadingText="Loading older tasks"
+        onClick={onLoad}
+        disabled={isFetching}
+        className="font-semibold"
+      >
+        Show older tasks
+      </StatefulButton>
     </div>
   )
 }
 
-/**
- * White card the ledger sits in. `overflow-clip` is what rounds the
- * header strip's top corners and the last row's bottom corners: neither
- * element carries a radius of its own.
- */
-function LedgerCard({ children }: { children: ReactNode }) {
+function DaySkeleton() {
   return (
-    <div className="overflow-clip rounded-9 border border-ledger-border bg-card">
-      {children}
+    <div className="flex flex-col gap-2.5">
+      <Skeleton className="h-4 w-24" />
+      <RowsSkeleton count={4} />
     </div>
   )
 }
 
-interface LedgerTableProps {
-  table: ReturnType<typeof useReactTable<TaskSummary>>
-}
-
-/** Quiet header strip. Labels only: the ledger is not operator-sortable. */
-function LedgerHeader({ table }: LedgerTableProps) {
+function RowsSkeleton({ count }: { count: number }) {
   return (
-    <TableHeader>
-      {table.getHeaderGroups().map((hg) => (
-        <TableRow
-          key={hg.id}
-          className="border-ledger-border border-b bg-ledger-head hover:bg-ledger-head"
-        >
-          {hg.headers.map((h) => (
-            <TableHead
-              key={h.id}
-              className={cn(
-                CELL_PADDING,
-                'h-auto font-medium text-[12px] text-ledger-head-ink',
-                COLUMN_WIDTHS[h.column.id],
-                NUMERIC_COLUMN_IDS.has(h.column.id) && 'text-right',
-              )}
-            >
-              {h.isPlaceholder
-                ? null
-                : flexRender(h.column.columnDef.header, h.getContext())}
-            </TableHead>
-          ))}
-        </TableRow>
-      ))}
-    </TableHeader>
-  )
-}
-
-/**
- * Loading-state skeleton. Renders the real card + header bar plus 6
- * empty rows so the layout does not jump when data lands.
- */
-function TableShell({ table }: LedgerTableProps) {
-  return (
-    <LedgerCard>
-      <Table className="table-fixed">
-        <LedgerHeader table={table} />
-        <TableBody>
-          {['s1', 's2', 's3', 's4', 's5', 's6'].map((id) => (
-            <TableRow
+    <Card
+      size="compact"
+      className="w-full gap-0 overflow-hidden border-border-2 bg-card py-0 shadow-card"
+    >
+      <div className="flex flex-col divide-y divide-border-2">
+        {Array.from({ length: count }, (_, index) => `row-${index}`).map(
+          (id) => (
+            <div
               key={id}
-              className="border-ledger-divider border-b hover:bg-transparent"
+              className="grid grid-cols-[72px_minmax(0,1fr)] items-center gap-4 px-4 py-3.5 sm:grid-cols-[112px_minmax(0,1fr)] sm:px-[18px]"
             >
-              <TableCell
-                colSpan={table.getVisibleFlatColumns().length}
-                className="px-4 py-4"
-              >
-                <div className="h-4 w-full animate-pulse rounded bg-card-tint" />
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </LedgerCard>
+              <Skeleton className="aspect-[16/10] rounded-[10px]" />
+              <div className="flex flex-col gap-2">
+                <Skeleton className="h-4 w-2/3" />
+                <Skeleton className="h-3.5 w-11/12" />
+                <Skeleton className="h-3 w-1/3" />
+              </div>
+            </div>
+          ),
+        )}
+      </div>
+    </Card>
   )
 }

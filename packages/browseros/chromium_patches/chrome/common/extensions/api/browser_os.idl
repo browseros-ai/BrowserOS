@@ -1,9 +1,9 @@
 diff --git a/chrome/common/extensions/api/browser_os.idl b/chrome/common/extensions/api/browser_os.idl
 new file mode 100644
-index 0000000000000..baeb98959b39a
+index 0000000000000000000000000000000000000000..86e967a89c198b8e77258e5c4db6565542552076
 --- /dev/null
 +++ b/chrome/common/extensions/api/browser_os.idl
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,178 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -70,6 +70,23 @@ index 0000000000000..baeb98959b39a
 +
 +  // Callback for showInfoBar.
 +  callback ShowInfoBarCallback = void(boolean shown);
++
++  // Options for requestAttention.
++  dictionary RequestAttentionOptions {
++    // Keep bouncing until BrowserOS becomes the active app, rather than
++    // bouncing once.
++    // Default: false
++    boolean? critical;
++  };
++
++  // Callback for requestAttention.
++  // |requested|: True if the request was made; false when BrowserOS is
++  //     already the active app or the platform has no dock to bounce.
++  callback RequestAttentionCallback = void(boolean requested);
++
++  // Callback for setDockBadge.
++  // |set|: True if the badge was updated; false on platforms without one.
++  callback SetDockBadgeCallback = void(boolean set);
 +
 +  interface Functions {
 +    // Settings API functions - compatible with chrome.settingsPrivate
@@ -140,5 +157,28 @@ index 0000000000000..baeb98959b39a
 +    static void showInfoBar(
 +        DOMString message,
 +        ShowInfoBarCallback callback);
++
++    // Asks the operating system to draw the person's attention to BrowserOS:
++    // on macOS, the dock icon bounces once, or until BrowserOS is active when
++    // |options.critical| is true. Use it when something needs the person, such
++    // as an agent waiting for a sign-in.
++    // |options|: How insistent the request is.
++    // |callback|: Called with whether a request was made.
++    static void requestAttention(
++        optional RequestAttentionOptions options,
++        RequestAttentionCallback callback);
++
++    // Stops a bounce started by requestAttention, for when the need has passed
++    // before the person looked.
++    // |callback|: Called once the request is cancelled.
++    static void cancelAttention(VoidCallback callback);
++
++    // Shows |text| as a badge on the BrowserOS dock icon (macOS), such as the
++    // number of agents waiting. An empty string removes the badge.
++    // |text|: The badge text; keep it to a few characters.
++    // |callback|: Called with whether the badge was updated.
++    static void setDockBadge(
++        DOMString text,
++        SetDockBadgeCallback callback);
 +  };
 +};

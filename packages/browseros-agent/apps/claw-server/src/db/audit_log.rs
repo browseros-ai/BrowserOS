@@ -257,6 +257,8 @@ pub struct ListTasksQuery {
     /// declared `agentName` when there is one, this is what the client reported itself as.
     pub client_name: Option<String>,
     pub status: Option<TaskStatus>,
+    /// Only tasks that failed or were stopped, the ones worth a second look.
+    pub needs_attention: bool,
     pub site: Option<String>,
     pub search: Option<String>,
     pub since: Option<i64>,
@@ -625,6 +627,10 @@ impl AuditLog {
                     .status
                     .map(|value| tasks::Column::Status.eq(value.as_str())),
             )
+            .add_option(query.needs_attention.then(|| {
+                tasks::Column::Status
+                    .is_in([TaskStatus::Failed.as_str(), TaskStatus::Cancelled.as_str()])
+            }))
             .add_option(query.site.map(|value| tasks::Column::Site.eq(value)))
             .add_option(query.since.map(|value| tasks::Column::StartedAt.gte(value)))
             .add_option(query.until.map(|value| tasks::Column::StartedAt.lte(value)))
@@ -1838,6 +1844,46 @@ mod tests {
             .await?;
         assert_eq!(failed.tasks.len(), 1);
         assert_eq!(failed.tasks[0].session_id, "b1");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn needs_attention_pages_only_failed_and_stopped_tasks() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        // f1 failed (three errors), d1 finished, f2 was stopped, d2 finished.
+        for _ in 0..3 {
+            audit
+                .record_tool_dispatch(dispatch("f1", "https://example.com", true))
+                .await?;
+        }
+        audit.record_session_end("f1", "closed", None).await?;
+        for (session, end) in [("d1", "closed"), ("f2", "cancelled"), ("d2", "closed")] {
+            audit
+                .record_tool_dispatch(dispatch(session, "https://example.com", false))
+                .await?;
+            audit.record_session_end(session, end, None).await?;
+        }
+        let first = audit
+            .list_tasks(ListTasksQuery {
+                needs_attention: true,
+                limit: Some(1),
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(first.tasks.len(), 1);
+        assert_eq!(first.tasks[0].session_id, "f2");
+        let second = audit
+            .list_tasks(ListTasksQuery {
+                needs_attention: true,
+                cursor: first.next_cursor,
+                limit: Some(1),
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(second.tasks.len(), 1);
+        assert_eq!(second.tasks[0].session_id, "f1");
+        assert_eq!(second.next_cursor, None);
         Ok(())
     }
 

@@ -48,13 +48,19 @@ export const FIRST_RUN_COPY = {
   /** With none found: "Almost there. *Watch me* first." */
   noApps: { lead: 'Almost there.', accent: 'Watch me', tail: 'first.' },
   connected: 'Connected',
-  connectedApps: 'Connected apps',
+  connectedApps: 'Connected agents',
   /** The popover's footer: a running app only sees neo after a restart. */
   restartHint: 'If one is open, restart it once.',
-  noneFound: 'I didn’t find an AI app yet.',
+  noneFound: 'I didn’t find an AI agent yet.',
   getClaude: 'Get Claude',
   coworkQuestion: 'Using Claude Cowork?',
-  coworkAction: 'Set it up',
+  coworkAction: 'Add neo to Claude',
+  coworkUpdate: 'Update neo in Claude',
+  coworkOpening: 'Opening Claude…',
+  coworkWaiting: 'Claude is open. Click Install there.',
+  coworkStuck: 'Didn’t see Claude ask?',
+  coworkGuide: 'Set it up step by step',
+  coworkConnected: 'neo is added to the Claude desktop app.',
   tryLabel: 'Your turn',
 } as const
 

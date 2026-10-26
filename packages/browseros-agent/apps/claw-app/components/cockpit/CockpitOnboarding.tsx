@@ -10,15 +10,22 @@
  * prompt. Cockpit passes the real installed, user-facing harnesses.
  */
 
-import { ArrowRight, ArrowUpRight } from 'lucide-react'
+import {
+  ArrowRight,
+  ArrowUpRight,
+  CircleCheck,
+  LoaderCircle,
+} from 'lucide-react'
 import { useState } from 'react'
 import type { Harness } from '@/components/harness/harness.types'
+import { AnimatedBadge } from '@/components/motion/animated-badge'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import {
   FIRST_RUN_COPY,
   GET_CLAUDE_URL,
   TRY_PROMPT,
 } from '@/screens/cockpit/cockpit-onboarding.helpers'
+import { useAddToClaude } from '@/screens/mcp/claude-desktop.hooks'
 import { InstallExtensionDialog } from '@/screens/mcp/InstallExtensionDialog'
 import { ConnectedApps } from './ConnectedApps'
 import { OnboardingDemo } from './OnboardingDemo'
@@ -83,24 +90,7 @@ export function CockpitOnboarding({
             </>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            track(AnalyticsEvent.OnboardingLinkClicked, { link: 'cowork' })
-            setCoworkGuideOpen(true)
-          }}
-          className="group inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md text-[14px] leading-5 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-accent/25"
-        >
-          <span className="text-ink-2">{FIRST_RUN_COPY.coworkQuestion}</span>
-          <span className="font-semibold text-accent group-hover:underline group-hover:underline-offset-4">
-            {FIRST_RUN_COPY.coworkAction}
-          </span>
-          <ArrowRight
-            aria-hidden
-            className="size-3.5 text-accent transition-transform group-hover:translate-x-0.5"
-            strokeWidth={2.2}
-          />
-        </button>
+        <CoworkSetup onOpenGuide={() => setCoworkGuideOpen(true)} />
       </div>
 
       {/* Paper: 18 px of spacer plus 18 px of padding above the prompt row. */}
@@ -114,6 +104,14 @@ export function CockpitOnboarding({
         />
       </div>
 
+      <p className="mt-3 flex flex-wrap items-center gap-2 text-[14px] text-ink-3">
+        <AnimatedBadge status="loading" size="sm">
+          Listening
+        </AnimatedBadge>
+        Paste it into {found ? connectedHarnesses[0] : 'Claude'}, press Enter,
+        then come back here to watch. This page updates by itself.
+      </p>
+
       <div className="mt-5">
         <OnboardingDemo />
       </div>
@@ -123,5 +121,98 @@ export function CockpitOnboarding({
         onOpenChange={setCoworkGuideOpen}
       />
     </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+
+const LINK_CLASS =
+  'group inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md text-[14px] leading-5 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-accent/25'
+
+/** Adds neo to the Claude desktop app from the first-run screen, with the guide as a fallback. */
+function CoworkSetup({ onOpenGuide }: { onOpenGuide: () => void }) {
+  const claude = useAddToClaude()
+  const guide = (label: string) => (
+    <button type="button" onClick={onOpenGuide} className={LINK_CLASS}>
+      <span className="font-semibold text-accent group-hover:underline group-hover:underline-offset-4">
+        {label}
+      </span>
+    </button>
+  )
+
+  if (claude.state === 'connected') {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1.5 text-[14px] text-green-ink leading-5">
+        <CircleCheck aria-hidden className="size-4" />
+        {FIRST_RUN_COPY.coworkConnected}
+      </span>
+    )
+  }
+  if (claude.state === 'waiting') {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-2 text-[14px] leading-5">
+        <span
+          role="status"
+          className="inline-flex items-center gap-1.5 text-ink-2"
+        >
+          <LoaderCircle aria-hidden className="size-3.5 animate-spin" />
+          {FIRST_RUN_COPY.coworkWaiting}
+        </span>
+        {guide(FIRST_RUN_COPY.coworkGuide)}
+      </span>
+    )
+  }
+  if (claude.state === 'stuck') {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-2 text-[14px] leading-5">
+        <span className="text-ink-2">{FIRST_RUN_COPY.coworkStuck}</span>
+        {guide(FIRST_RUN_COPY.coworkGuide)}
+      </span>
+    )
+  }
+  if (claude.state === 'no-claude') {
+    return (
+      <a
+        href={GET_CLAUDE_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={LINK_CLASS}
+      >
+        <span className="text-ink-2">{FIRST_RUN_COPY.coworkQuestion}</span>
+        <span className="font-semibold text-accent group-hover:underline group-hover:underline-offset-4">
+          {FIRST_RUN_COPY.getClaude}
+        </span>
+        <ArrowUpRight
+          aria-hidden
+          className="size-3.5 text-accent"
+          strokeWidth={2.2}
+        />
+      </a>
+    )
+  }
+  return (
+    <button
+      type="button"
+      disabled={claude.isOpening}
+      onClick={() => {
+        track(AnalyticsEvent.OnboardingLinkClicked, { link: 'cowork' })
+        claude.add()
+      }}
+      className={LINK_CLASS}
+    >
+      <span className="text-ink-2">{FIRST_RUN_COPY.coworkQuestion}</span>
+      <span className="font-semibold text-accent group-hover:underline group-hover:underline-offset-4">
+        {claude.isOpening
+          ? FIRST_RUN_COPY.coworkOpening
+          : claude.state === 'update'
+            ? FIRST_RUN_COPY.coworkUpdate
+            : FIRST_RUN_COPY.coworkAction}
+      </span>
+      <ArrowRight
+        aria-hidden
+        className="size-3.5 text-accent transition-transform group-hover:translate-x-0.5"
+        strokeWidth={2.2}
+      />
+    </button>
   )
 }

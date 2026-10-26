@@ -32,6 +32,12 @@ async function render(totalSeconds: number) {
   await act(async () => root.render(<Harness totalSeconds={totalSeconds} />))
 }
 
+/** Renders and presses Play, since playback always starts paused. */
+async function renderPlaying(totalSeconds: number) {
+  await render(totalSeconds)
+  await act(async () => latest.play())
+}
+
 /** Fires every pending animation frame with an explicit wall-clock stamp. */
 async function advanceTo(wallMs: number) {
   const pending = [...frames.values()]
@@ -96,7 +102,7 @@ afterEach(async () => {
 
 describe('usePlayback', () => {
   it('advances from animation-frame time at the selected speed', async () => {
-    await render(100)
+    await renderPlaying(100)
     await act(async () => latest.setSpeed(1))
 
     await advanceTo(1_000)
@@ -111,18 +117,21 @@ describe('usePlayback', () => {
     expect(latest.time).toBe(6)
   })
 
-  it('autoplays at 4x by default without consulting a player', async () => {
+  it('starts paused at 4x and runs no clock until Play', async () => {
     await render(100)
 
     expect(latest.speed).toBe(4)
-    expect(latest.isPlaying).toBe(true)
+    expect(latest.isPlaying).toBe(false)
+    expect(frames.size).toBe(0)
+
+    await act(async () => latest.play())
     await advanceTo(1_000)
     await advanceTo(2_000)
     expect(latest.time).toBe(4)
   })
 
   it('excludes paused wall time when playback resumes', async () => {
-    await render(100)
+    await renderPlaying(100)
     await act(async () => latest.setSpeed(1))
     await advanceTo(0)
     await advanceTo(2_000)
@@ -138,7 +147,7 @@ describe('usePlayback', () => {
   })
 
   it('stops once at activity end and restarts from zero on play', async () => {
-    await render(10)
+    await renderPlaying(10)
     await act(async () => latest.setSpeed(1))
     await advanceTo(0)
     await advanceTo(20_000)
@@ -170,7 +179,7 @@ describe('usePlayback', () => {
   })
 
   it('keeps playing through a scrub', async () => {
-    await render(100)
+    await renderPlaying(100)
     await act(async () => latest.setSpeed(1))
     await advanceTo(0)
     await advanceTo(2_000)
@@ -189,7 +198,7 @@ describe('usePlayback', () => {
   })
 
   it('keeps playing through a speed change', async () => {
-    await render(100)
+    await renderPlaying(100)
     await act(async () => latest.setSpeed(1))
     await advanceTo(0)
     await advanceTo(2_000)
@@ -218,7 +227,7 @@ describe('usePlayback', () => {
   })
 
   it('completes naturally when a playing scrub lands on the end', async () => {
-    await render(10)
+    await renderPlaying(10)
     await act(async () => latest.setSpeed(1))
     await advanceTo(0)
 
@@ -234,7 +243,7 @@ describe('usePlayback', () => {
   })
 
   it('resumes when a live recording grows past where activity ended', async () => {
-    await render(10)
+    await renderPlaying(10)
     await act(async () => latest.setSpeed(1))
     await advanceTo(0)
     await advanceTo(20_000)
@@ -247,7 +256,7 @@ describe('usePlayback', () => {
   })
 
   it('does not resume growth over an operator pause', async () => {
-    await render(10)
+    await renderPlaying(10)
     await act(async () => latest.setSpeed(1))
     await advanceTo(0)
     await advanceTo(4_000)
@@ -270,11 +279,12 @@ describe('usePlayback', () => {
 
   it('runs no clock while there is nothing replayable', async () => {
     await render(0)
+    await act(async () => latest.play())
 
     expect(latest.isPlaying).toBe(true)
     expect(frames.size).toBe(0)
 
-    // Autoplay survives until visuals resolve, then starts from zero.
+    // A Play pressed early holds until visuals resolve, then starts from zero.
     await render(10)
     await advanceTo(0)
     await advanceTo(1_000)
@@ -282,7 +292,7 @@ describe('usePlayback', () => {
   })
 
   it('keeps exactly one animation loop across control changes', async () => {
-    await render(100)
+    await renderPlaying(100)
     await act(async () => latest.setSpeed(1))
     await advanceTo(0)
     expect(frames.size).toBe(1)
@@ -295,7 +305,7 @@ describe('usePlayback', () => {
   })
 
   it('cancels its animation frame on unmount', async () => {
-    await render(100)
+    await renderPlaying(100)
     await advanceTo(0)
     expect(frames.size).toBe(1)
 

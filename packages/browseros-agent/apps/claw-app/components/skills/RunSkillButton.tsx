@@ -4,32 +4,32 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { Copy } from 'lucide-react'
-import { toast } from 'sonner'
-import { Button } from '@/components/ui/button'
+import { CopyButton } from '@/components/copy/CopyButton'
+import { cn } from '@/lib/utils'
+import { toastSuccess } from '@/modules/toast/toast'
 import { skillCommand } from '@/screens/skills/skills.helpers'
 
 interface RunSkillButtonProps {
   name: string
-  size?: 'sm' | 'default'
+  className?: string
 }
 
-/** Copies the `/name` command a user pastes into a coding agent to run a skill. */
-export function RunSkillButton({ name, size = 'sm' }: RunSkillButtonProps) {
-  const onRun = () => {
-    if (typeof window === 'undefined' || !navigator?.clipboard?.writeText) {
-      return
-    }
-    void navigator.clipboard.writeText(skillCommand(name)).then(() => {
-      toast.success(`Copied ${skillCommand(name)}`, {
-        description: 'Paste it into your coding agent to run this skill.',
-      })
-    })
-  }
+/** Copies the phrase a person pastes into one of their AI agents to run a saved task. */
+export function RunSkillButton({ name, className }: RunSkillButtonProps) {
+  const phrase = skillCommand(name)
   return (
-    <Button size={size} variant="outline" className="rounded-9" onClick={onRun}>
-      <Copy />
-      Run
-    </Button>
+    <CopyButton
+      text={phrase}
+      label="Copy phrase"
+      what={phrase}
+      size="sm"
+      onCopied={() =>
+        toastSuccess(
+          `Copied ${phrase}`,
+          'Paste it into one of your AI agents to run it.',
+        )
+      }
+      className={cn('h-[34px] font-semibold text-[13.5px]', className)}
+    />
   )
 }

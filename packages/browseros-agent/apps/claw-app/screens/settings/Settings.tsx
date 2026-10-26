@@ -4,28 +4,48 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { AgentSettings } from '@browseros/claw-api'
 import { JevTokenSource } from '@browseros/claw-api'
 import { useQueryClient } from '@tanstack/react-query'
-import { useRef, useState, useSyncExternalStore } from 'react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
+import {
+  BellRing,
+  ChevronDown,
+  Monitor,
+  Moon,
+  SlidersHorizontal,
+  Sun,
+} from 'lucide-react'
+import { useSyncExternalStore } from 'react'
+import { Page } from '@/components/layout/Page'
+import { PageHeader } from '@/components/layout/PageHeader'
+import { Button } from '@/components/motion/button/base'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleIndicator,
+  CollapsibleTrigger,
+} from '@/components/motion/collapsible'
+import { Switch } from '@/components/motion/switch'
+import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
+import { useTheme } from '@/components/theme-provider'
+import { normalizeTheme } from '@/lib/theme/theme-storage'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { isFlagEnabled, subscribeToFlags } from '@/modules/analytics/posthog'
 import {
   useAgentSettings,
-  useRemoveJevToken,
-  useSaveJevToken,
   useUpdateAgentSettings,
 } from '@/modules/api/agent-settings.hooks'
+import { useNotificationPermission } from '@/modules/attention/attention.hooks'
+import { showTestNotification } from '@/modules/attention/attention-alerts'
+import { toastApiError } from '@/modules/toast/toast'
+import { HelpSettings } from './HelpSettings'
+import { PrivacySettings } from './PrivacySettings'
+import { StorageSettings } from './StorageSettings'
+import { SettingRow, SettingsSection } from './settings.components'
+import { UltrafastKey } from './UltrafastKey'
 
-const HUMAN_HELP_SWITCH_ID = 'human-help-switch'
-const HUMAN_HELP_TITLE_ID = 'human-help-title'
-const HUMAN_HELP_DESCRIPTION_ID = 'human-help-description'
-const CLEANUP_TIP_SWITCH_ID = 'task-cleanup-tip-switch'
-const CLEANUP_TIP_TITLE_ID = 'task-cleanup-tip-title'
-const CLEANUP_TIP_DESCRIPTION_ID = 'task-cleanup-tip-description'
+const HUMAN_HELP_ID = 'human-help'
+const CLEANUP_TIP_ID = 'task-cleanup-tip'
+const THEME_ID = 'theme'
 /**
  * The flag that reveals the token field.
  *
@@ -33,13 +53,8 @@ const CLEANUP_TIP_DESCRIPTION_ID = 'task-cleanup-tip-description'
  * install with analytics turned off gets: no evaluation, so no field.
  */
 const TOKEN_FIELD_FLAG = 'ultrafast-token-field'
-const JEV_INPUT_ID = 'jev-token-input'
-const JEV_TITLE_ID = 'jev-token-title'
-const JEV_DESCRIPTION_ID = 'jev-token-description'
 
-/**
- * Server-owned agent settings. Switches show the server's saved values.
- */
+/** Every setting in one place, each in plain words. */
 export function Settings() {
   const settings = useAgentSettings()
   // false as the server snapshot, so a static render and a cold open agree:
@@ -49,6 +64,40 @@ export function Settings() {
     () => isFlagEnabled(TOKEN_FIELD_FLAG),
     () => false,
   )
+
+  return (
+    <Page>
+      <PageHeader title="Settings" />
+      <AgentSwitches />
+      <Appearance />
+      <StorageSettings />
+      <PrivacySettings />
+      <HelpSettings />
+      {tokenFieldEnabled && settings.data ? (
+        <Collapsible className="rounded-2xl border border-border-2 bg-card shadow-card">
+          <CollapsibleTrigger className="flex w-full items-center gap-2.5 rounded-2xl px-[18px] py-3.5 text-left font-semibold text-[15px] text-ink-2 outline-none hover:text-cyanotype-ink focus-visible:ring-2 focus-visible:ring-ring">
+            <SlidersHorizontal aria-hidden className="size-[15px]" />
+            <span className="flex-1">Advanced</span>
+            <CollapsibleIndicator>
+              <ChevronDown aria-hidden className="size-4" />
+            </CollapsibleIndicator>
+          </CollapsibleTrigger>
+          <CollapsibleContent contentClassName="px-[18px] pb-[18px]">
+            <UltrafastKey
+              source={settings.data.jevTokenSource ?? JevTokenSource.None}
+            />
+          </CollapsibleContent>
+        </Collapsible>
+      ) : null}
+    </Page>
+  )
+}
+
+// ---------------------------------------------------------------------------
+
+/** Server-owned switches that change what agents are told while they work. */
+function AgentSwitches() {
+  const settings = useAgentSettings()
   const updateSettings = useUpdateAgentSettings()
   const queryClient = useQueryClient()
 
@@ -77,216 +126,138 @@ export function Settings() {
     )
   }
 
-  return (
-    <div className="mx-auto flex w-full max-w-xl flex-col gap-8 px-8 pt-8 pb-16">
-      <header className="flex flex-col gap-1">
-        <h1 className="font-extrabold text-3xl leading-tight tracking-tight md:text-4xl">
-          Settings
-        </h1>
-        <p className="text-ink-2 text-sm">
-          Choose the tools and tips your agents receive.
+  if (settings.isError) {
+    return (
+      <SettingsSection title="While your AI works">
+        <p role="alert" className="px-5 py-4 text-[14.5px] text-ink-2">
+          Couldn’t load these settings. Check that BrowserOS is running, then
+          open this page again.
         </p>
-      </header>
+      </SettingsSection>
+    )
+  }
 
-      {settings.isError ? (
-        <div className="rounded-9 border border-ledger-border bg-card px-6 py-10 text-center text-ink-2 text-sm">
-          Could not load settings. Check that BrowserOS neo is running and try
-          again.
-        </div>
-      ) : (
-        <div className="rounded-9 border border-ledger-border bg-card">
-          <label
-            htmlFor={HUMAN_HELP_SWITCH_ID}
-            className="flex items-center justify-between gap-6 px-5 py-4"
-          >
-            <span className="flex flex-col gap-1">
-              <span
-                id={HUMAN_HELP_TITLE_ID}
-                className="font-medium text-ink text-sm"
-              >
-                Ask for human help
-              </span>
-              <span
-                id={HUMAN_HELP_DESCRIPTION_ID}
-                className="text-[13px] text-ink-2 leading-snug"
-              >
-                Lets agents pause and ask you to take over the page for a
-                sign-in, a code, or a captcha. When off, agents tell you what
-                they need in their own chat instead.
-              </span>
-            </span>
-            <Switch
-              id={HUMAN_HELP_SWITCH_ID}
-              aria-labelledby={HUMAN_HELP_TITLE_ID}
-              aria-describedby={HUMAN_HELP_DESCRIPTION_ID}
-              // The server's default (on) until it answers, so the switch
-              // does not flip on load unless the user turned it off.
-              checked={settings.data?.humanHelpEnabled ?? true}
-              onCheckedChange={handleHumanHelpChange}
-              disabled={!settings.data || updateSettings.isPending}
-            />
-          </label>
-          <label
-            htmlFor={CLEANUP_TIP_SWITCH_ID}
-            className="flex items-center justify-between gap-6 border-ledger-divider border-t px-5 py-4"
-          >
-            <span className="flex flex-col gap-1">
-              <span
-                id={CLEANUP_TIP_TITLE_ID}
-                className="font-medium text-ink text-sm"
-              >
-                Include tab group cleanup tip
-              </span>
-              <span
-                id={CLEANUP_TIP_DESCRIPTION_ID}
-                className="text-[13px] text-ink-2 leading-snug"
-              >
-                When you finish this task, close your task’s tab group.
-              </span>
-            </span>
-            <Switch
-              id={CLEANUP_TIP_SWITCH_ID}
-              aria-labelledby={CLEANUP_TIP_TITLE_ID}
-              aria-describedby={CLEANUP_TIP_DESCRIPTION_ID}
-              checked={settings.data?.taskCleanupTipEnabled ?? false}
-              onCheckedChange={handleCleanupTipChange}
-              disabled={!settings.data || updateSettings.isPending}
-            />
-          </label>
-          {updateSettings.isError && (
-            <p
-              role="alert"
-              className="border-ledger-divider border-t px-5 py-3 text-[13px] text-destructive"
-            >
-              Could not save this setting. Try again.
-            </p>
-          )}
-          {tokenFieldEnabled && (
-            <JevToken
-              source={settings.data?.jevTokenSource ?? JevTokenSource.None}
-            />
-          )}
-        </div>
-      )}
-    </div>
+  const busy = !settings.data || updateSettings.isPending
+
+  return (
+    <SettingsSection title="While your AI works">
+      <SettingRow
+        id={HUMAN_HELP_ID}
+        title="Ask me when it gets stuck"
+        description="If an agent needs you to sign in, type a code or solve a captcha, it waits and you get a notification. When this is off, agents ask you in their own app instead."
+        control={
+          <Switch
+            ariaLabel="Ask me when it gets stuck"
+            ariaDescribedBy={`${HUMAN_HELP_ID}-description`}
+            // The server's default (on) until it answers, so the switch
+            // does not flip on load unless the user turned it off.
+            checked={settings.data?.humanHelpEnabled ?? true}
+            onCheckedChange={handleHumanHelpChange}
+            disabled={busy}
+          />
+        }
+      >
+        {(settings.data?.humanHelpEnabled ?? true) ? (
+          <NotificationCheck />
+        ) : null}
+      </SettingRow>
+      <SettingRow
+        id={CLEANUP_TIP_ID}
+        title="Tidy up when a task finishes"
+        description="Your AI agents close the pages they opened once they’re done."
+        control={
+          <Switch
+            ariaLabel="Tidy up when a task finishes"
+            ariaDescribedBy={`${CLEANUP_TIP_ID}-description`}
+            checked={settings.data?.taskCleanupTipEnabled ?? false}
+            onCheckedChange={handleCleanupTipChange}
+            disabled={busy}
+          />
+        }
+      >
+        {updateSettings.isError ? (
+          <p role="alert" className="text-[13.5px] text-red-ink">
+            Couldn’t save that setting. Try again.
+          </p>
+        ) : null}
+      </SettingRow>
+    </SettingsSection>
   )
 }
 
 /**
- * The decision model credential, which is the one thing that decides whether
- * agents are offered `pursue` at all.
- *
- * Three states rather than two: a saved token, a token in the server's
- * environment, or neither. Naming the environment case is what stops a user
- * pasting a token they did not need.
+ * Lets the person see what a notification looks like, which is also when
+ * macOS first asks to allow them, and says plainly if the Mac blocks them.
  */
-function JevToken({ source }: { source: JevTokenSource }) {
-  // Uncontrolled on purpose: the credential lives in the field the user typed
-  // it into and is read once on submit, rather than being mirrored into React
-  // state and re-rendered.
-  const field = useRef<HTMLInputElement>(null)
-  const [replacing, setReplacing] = useState(false)
-  const save = useSaveJevToken()
-  const remove = useRemoveJevToken()
-  const queryClient = useQueryClient()
-
-  const publish = (saved: AgentSettings) => {
-    queryClient.setQueryData(useAgentSettings.getKey(), saved)
-    if (field.current) field.current.value = ''
-    setReplacing(false)
-  }
-
-  const saved = source === JevTokenSource.Settings
-  const showField = !saved || replacing
-  const busy = save.isPending || remove.isPending
-
+function NotificationCheck() {
+  const permission = useNotificationPermission()
   return (
-    <div className="border-ledger-divider border-t px-5 py-4">
-      <div className="flex flex-col gap-1">
-        <span id={JEV_TITLE_ID} className="font-medium text-ink text-sm">
-          Ultrafast decision loop
-        </span>
-        <span
-          id={JEV_DESCRIPTION_ID}
-          className="text-[13px] text-ink-2 leading-snug"
-        >
-          {saved
-            ? 'A token is saved, so agents are offered pursue, which decides each step with a typed model instead of a prompt.'
-            : source === JevTokenSource.Environment
-              ? 'Using the token in the server’s environment. A token saved here takes precedence over it.'
-              : 'Paste a token to offer agents pursue, which decides each step with a typed model instead of a prompt. Without one the tool is not offered at all.'}
-        </span>
-      </div>
-
-      {showField ? (
-        <form
-          className="mt-3 flex items-start gap-2"
-          onSubmit={(event) => {
-            event.preventDefault()
-            const token = field.current?.value.trim()
-            if (!token) return
-            save.mutate({ token }, { onSuccess: publish })
-          }}
-        >
-          <Input
-            ref={field}
-            id={JEV_INPUT_ID}
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            aria-labelledby={JEV_TITLE_ID}
-            aria-describedby={JEV_DESCRIPTION_ID}
-            placeholder="Paste your token"
-            disabled={busy}
-          />
-          <Button type="submit" disabled={busy}>
-            Save
-          </Button>
-          {saved && (
-            <Button
-              type="button"
-              variant="ghost"
-              disabled={busy}
-              onClick={() => {
-                if (field.current) field.current.value = ''
-                setReplacing(false)
-              }}
-            >
-              Cancel
-            </Button>
-          )}
-        </form>
-      ) : (
-        <div className="mt-3 flex items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={busy}
-            onClick={() => setReplacing(true)}
-          >
-            Replace
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={busy}
-            onClick={() => remove.mutate(undefined, { onSuccess: publish })}
-          >
-            Remove
-          </Button>
-        </div>
-      )}
-
-      <p className="mt-2 text-[12px] text-ink-3 leading-snug">
-        Agents pick up the change on their next tool list. An already installed
-        skill follows after BrowserOS neo restarts.
-      </p>
-
-      {(save.isError || remove.isError) && (
-        <p role="alert" className="mt-2 text-[13px] text-destructive">
-          Could not save that. Try again.
+    <div className="flex flex-col items-start gap-2">
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() =>
+          showTestNotification()
+            .catch((error) =>
+              toastApiError('Couldn’t show a notification', error),
+            )
+            .finally(() => void permission.refetch())
+        }
+        className="font-semibold"
+      >
+        <BellRing aria-hidden className="size-4" />
+        Send a test notification
+      </Button>
+      {permission.data === 'denied' ? (
+        <p role="status" className="text-[13.5px] text-amber-ink">
+          Your Mac is blocking notifications from BrowserOS. To allow them, open
+          System Settings, click Notifications, then BrowserOS.
         </p>
-      )}
+      ) : null}
     </div>
+  )
+}
+
+const THEME_OPTIONS = [
+  { value: 'light', label: 'Light', Icon: Sun },
+  { value: 'dark', label: 'Dark', Icon: Moon },
+  { value: 'system', label: 'Match browser', Icon: Monitor },
+] as const
+
+/** Light, dark, or whatever BrowserOS itself is set to. */
+function Appearance() {
+  const { theme, setTheme } = useTheme()
+  return (
+    <SettingsSection title="Appearance">
+      <SettingRow
+        id={THEME_ID}
+        title="Theme"
+        description="Match browser follows your BrowserOS appearance setting."
+        control={
+          <Tabs
+            variant="segment"
+            value={theme}
+            onValueChange={(value) => setTheme(normalizeTheme(value))}
+          >
+            <TabsList
+              aria-label="Theme"
+              aria-describedby={`${THEME_ID}-description`}
+              className="border border-border-2"
+            >
+              {THEME_OPTIONS.map(({ value, label, Icon }) => (
+                <TabsTrigger
+                  key={value}
+                  value={value}
+                  icon={<Icon className="size-4" />}
+                  className="px-3 font-semibold text-[13.5px]"
+                >
+                  {label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        }
+      />
+    </SettingsSection>
   )
 }

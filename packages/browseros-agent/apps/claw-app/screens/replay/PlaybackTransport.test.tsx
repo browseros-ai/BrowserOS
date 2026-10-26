@@ -7,9 +7,16 @@ import type { ReplayAction } from './session-replay'
 import { usePlayback } from './use-playback'
 
 const globalDescriptors = new Map(
-  ['window', 'document', 'navigator', 'HTMLElement', 'Node', 'Event'].map(
-    (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)],
-  ),
+  [
+    'window',
+    'document',
+    'navigator',
+    'HTMLElement',
+    'Node',
+    'Event',
+    'ResizeObserver',
+    'getComputedStyle',
+  ].map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]),
 )
 
 let root: Root
@@ -84,6 +91,12 @@ beforeEach(async () => {
     HTMLElement: dom.window.HTMLElement,
     Node: dom.window.Node,
     Event: dom.window.Event,
+    // linkedom has no layout; the slider only measures its track with this.
+    ResizeObserver: class {
+      observe() {}
+      disconnect() {}
+    },
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
   }
   for (const [name, value] of Object.entries(globals)) {
     Object.defineProperty(globalThis, name, {
@@ -123,29 +136,29 @@ describe('PlaybackTransport', () => {
     await act(async () => root.render(<TransportHarness />))
 
     const speedButton = (label: string) =>
-      [...container.querySelectorAll('button')].find(
-        (button) => button.textContent === label,
+      [...container.querySelectorAll('[role="tab"]')].find((button) =>
+        button.textContent?.includes(label),
       )
 
-    expect(speedButton('1×')?.getAttribute('aria-pressed')).toBe('false')
-    expect(speedButton('2×')?.getAttribute('aria-pressed')).toBe('false')
-    expect(speedButton('4×')?.getAttribute('aria-pressed')).toBe('true')
+    expect(speedButton('1×')?.getAttribute('aria-selected')).toBe('false')
+    expect(speedButton('2×')?.getAttribute('aria-selected')).toBe('false')
+    expect(speedButton('4×')?.getAttribute('aria-selected')).toBe('true')
 
     await act(async () => {
       speedButton('1×')?.dispatchEvent(
         new window.Event('click', { bubbles: true }),
       )
     })
-    expect(speedButton('1×')?.getAttribute('aria-pressed')).toBe('true')
-    expect(speedButton('4×')?.getAttribute('aria-pressed')).toBe('false')
+    expect(speedButton('1×')?.getAttribute('aria-selected')).toBe('true')
+    expect(speedButton('4×')?.getAttribute('aria-selected')).toBe('false')
 
     await act(async () => {
       speedButton('2×')?.dispatchEvent(
         new window.Event('click', { bubbles: true }),
       )
     })
-    expect(speedButton('1×')?.getAttribute('aria-pressed')).toBe('false')
-    expect(speedButton('2×')?.getAttribute('aria-pressed')).toBe('true')
+    expect(speedButton('1×')?.getAttribute('aria-selected')).toBe('false')
+    expect(speedButton('2×')?.getAttribute('aria-selected')).toBe('true')
   })
 
   it('supports explicit pause, resume, and restart without changing speed', async () => {
@@ -161,9 +174,13 @@ describe('PlaybackTransport', () => {
     const toggle = () =>
       container.querySelector('button[aria-label]')?.getAttribute('aria-label')
 
-    const oneTimes = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent === '1×',
+    const oneTimes = [...container.querySelectorAll('[role="tab"]')].find(
+      (button) => button.textContent?.includes('1×'),
     )
+    // The task opens paused; playback starts only on request.
+    expect(toggle()).toBe('Play')
+    await click('[data-command-play]')
+
     // A speed change through the real picker never pauses playback.
     await act(async () => {
       oneTimes?.dispatchEvent(new window.Event('click', { bubbles: true }))
@@ -182,11 +199,16 @@ describe('PlaybackTransport', () => {
     await click('[data-command-play]')
     expect(toggle()).toBe('Pause')
     expect(container.textContent).toContain('0:00 / 0:10')
-    expect(oneTimes?.getAttribute('aria-pressed')).toBe('true')
+    expect(oneTimes?.getAttribute('aria-selected')).toBe('true')
   })
 
   it('bookmarks non-action tools at their activity start', async () => {
     await act(async () => root.render(<TransportHarness />))
+    await act(async () => {
+      container
+        .querySelector('[data-command-play]')
+        ?.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
 
     const marks = [...container.querySelectorAll('button[aria-label^="Jump"]')]
     expect(marks.map((mark) => mark.getAttribute('aria-label'))).toEqual([

@@ -6,8 +6,8 @@
 
 import type { RecordingMetadata } from '@browseros/claw-api'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router'
 import type { RunStatus } from '@/lib/status'
+import { describeStep, verbForCall } from '@/lib/step-sentences'
 import {
   type TaskDetail,
   type ToolDispatchRow,
@@ -17,7 +17,6 @@ import {
   type ReplayEvent,
   type ReplayFrame,
   type ReplayKind,
-  type ReplayVerb,
   replayEventsRevision,
   replayMetadataRefetchInterval,
   useReplayEvents,
@@ -76,17 +75,22 @@ export interface ReplayData {
   eventsForTab: (tabId: number) => readonly ReplayEvent[]
 }
 
+/**
+ * Whether a recording is still on its way: `checking` until the recording
+ * metadata answers, `loading` while a recording it reports is downloading,
+ * then `settled` whether or not one turned up.
+ */
+export type RecordingLoadState = 'checking' | 'loading' | 'settled'
+
 export interface UseReplayDataResult {
   replay: ReplayData | null
   sessionId: string
   isLoading: boolean
-  navigate: ReturnType<typeof useNavigate>
+  recordingState: RecordingLoadState
 }
 
-/** Loads task metadata and stable rrweb event buckets for the replay page. */
-export function useReplayData(): UseReplayDataResult {
-  const { sessionId = '' } = useParams<{ sessionId: string }>()
-  const navigate = useNavigate()
+/** Loads task metadata and stable rrweb event buckets for one session's replay. */
+export function useReplayData(sessionId: string): UseReplayDataResult {
   const taskQuery = useSessionDetail({
     variables: { sessionId },
     enabled: sessionId.length > 0,
@@ -198,11 +202,18 @@ export function useReplayData(): UseReplayDataResult {
     )
   }, [taskQuery.data, eventCatalog, eventsLoaded, metadataQuery.data])
 
+  const recordingState: RecordingLoadState =
+    sessionId.length > 0 && metadataQuery.isPending
+      ? 'checking'
+      : metadataQuery.data?.hasData && !hasCurrentSessionSnapshot
+        ? 'loading'
+        : 'settled'
+
   return {
     replay,
     sessionId,
     isLoading: taskQuery.isLoading,
-    navigate,
+    recordingState,
   }
 }
 
@@ -298,25 +309,6 @@ function buildReplayTabs(
   })
 }
 
-const TOOL_TO_VERB: Record<string, ReplayVerb> = {
-  tabs: 'navigate',
-  navigate: 'navigate',
-  windows: 'navigate',
-  tab_groups: 'navigate',
-  snapshot: 'read',
-  read: 'read',
-  grep: 'read',
-  diff: 'read',
-  screenshot: 'read',
-  act: 'click',
-  upload: 'attach',
-  download: 'attach',
-  pdf: 'read',
-  wait: 'read',
-  run: 'type',
-  evaluate: 'type',
-}
-
 /**
  * One audit row as a replay frame. `t` is completion; `durationMs` rides along
  * untouched so `session-replay.ts` can approximate when the tool began without
@@ -335,8 +327,8 @@ export function mapDispatchToFrame(
   const kind: ReplayKind = cancelled ? 'block' : isError ? 'block' : 'action'
   const note = cancelled ? 'Cancelled' : isError ? 'Errored' : undefined
   const node = row.title || row.url || row.toolName
-  const verb = TOOL_TO_VERB[row.toolName] ?? 'read'
-  const caption = buildCaption(row, verb, isError, cancelled)
+  const verb = verbForCall(row)
+  const caption = describeStep(row)
   return {
     t,
     durationMs: row.durationMs,
@@ -352,19 +344,6 @@ export function mapDispatchToFrame(
     note,
     dispatchId: row.dispatchId,
   }
-}
-
-function buildCaption(
-  row: ToolDispatchRow,
-  verb: ReplayVerb,
-  isError: boolean,
-  cancelled: boolean,
-): string {
-  if (cancelled) return `${row.toolName}: cancelled by operator`
-  if (isError) return `${row.toolName}: errored`
-  if (verb === 'navigate' && row.url) return `Navigate to ${row.url}`
-  if (row.title) return `${row.toolName}: ${row.title}`
-  return row.toolName
 }
 
 function safeParse(json: string): Record<string, unknown> | null {

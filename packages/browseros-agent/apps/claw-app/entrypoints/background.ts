@@ -7,6 +7,7 @@ import { registerDiagnostics } from '@browseros/diagnostics/extension'
 
 import { defineBackground } from 'wxt/utils/define-background'
 import { resolveBrowserOSServerBaseUrl } from '@/modules/api/browseros-ports'
+import { type Attention, registerAttention } from '@/modules/attention/register'
 import { createRecordingsRelay } from '@/modules/recorder'
 import type { TakeoverResolveMessage } from '@/modules/takeover/takeover.types'
 import { createTakeoverBridge } from '@/modules/takeover/takeover-bridge'
@@ -44,8 +45,16 @@ export default defineBackground(() => {
 
   // Answers the in-page takeover bar: whether the sender's tab is the one a
   // parked agent is blocked on, and relays the human's Hand back.
+  // Help alerts ride on every live-sessions read the takeover bar makes, and
+  // look on their own when no page is polling.
+  let attention: Attention | null = null
   const takeover = createTakeoverBridge({
     resolveServerBaseUrl: resolveBrowserOSServerBaseUrl,
+    onLiveSessions: (sessions) => attention?.sync(sessions),
+  })
+  attention = registerAttention({
+    resolveServerBaseUrl: resolveBrowserOSServerBaseUrl,
+    liveSessions: takeover.liveSessions,
   })
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const takeoverMessage = message as { type?: unknown }

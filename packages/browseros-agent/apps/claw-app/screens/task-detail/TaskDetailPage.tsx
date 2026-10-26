@@ -1,138 +1,225 @@
-import { useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { Lightbulb } from 'lucide-react'
+import { useRef, useState } from 'react'
 import { useParams } from 'react-router'
-import {
-  ScreenshotLightbox,
-  type ScreenshotLightboxItem,
-} from '@/components/audit/ScreenshotLightbox'
-import { TaskHeader } from '@/components/audit/TaskHeader'
+import { StepLogDialog } from '@/components/audit/StepLogDialog'
 import { EmptyState } from '@/components/cockpit/EmptyState'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Page } from '@/components/layout/Page'
 import {
-  AutoHideTabs,
-  type AutoHideTabsItem,
-} from '@/components/ui/tabs-auto-hide'
-import { TabView } from './TabView'
+  Alert,
+  AlertAction,
+  AlertContent,
+  AlertDescription,
+} from '@/components/motion/alert'
+import { StatefulButton } from '@/components/motion/button/stateful'
+import { Skeleton } from '@/components/ui/skeleton'
+import type { DescribedStep } from '@/lib/step-sentences'
+import { AnalyticsEvent, track } from '@/modules/analytics/events'
+import {
+  useAgentSettings,
+  useUpdateAgentSettings,
+} from '@/modules/api/agent-settings.hooks'
+import { toastApiError } from '@/modules/toast/toast'
+import { PagesVisited } from './PagesVisited'
+import { SnapshotGallery } from './SnapshotGallery'
+import { TaskPageHeader } from './TaskPageHeader'
+import { TaskPlayer } from './TaskPlayer'
+import { TaskSteps } from './TaskSteps'
+import { TechnicalDetails } from './TechnicalDetails'
 import { useTaskDetailScreenData } from './task-detail.data'
-import { groupDispatchesByTab, pickDefaultTabId } from './task-detail.helpers'
+import {
+  actionForStep,
+  activeStepIndex,
+  dispatchTimes,
+  snapshotForStep,
+} from './task-detail.helpers'
 
 /**
- * Full-page view of one MCP task. Reached from the homepage card
- * click or the audit row click at `/audit/:sessionId`. Layout:
- *
- *   - TaskHeader     header card with agent, status, timestamps,
- *                    primary actions
- *   - AutoHideTabs   one tab per distinct pageId plus a leftmost
- *                    "Session" tab for pageId-less dispatches. When
- *                    the task touched exactly one bucket the tab
- *                    bar hides and the single view renders inline.
- *   - Lightbox       shadcn Dialog for the full-size screenshot
+ * One page per task at `/audit/:sessionId`: what it was and how it ended, the
+ * recording beside the steps it took in plain sentences, the pages it went to,
+ * and technical details for support. Choosing a step moves the player there.
  */
-export function TaskDetailPage() {
+export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
   const { sessionId = '' } = useParams()
-  const { detail, screenshots, isPending, isError, error } =
-    useTaskDetailScreenData(sessionId)
-  const [openScreenshotId, setOpenScreenshotId] = useState<number | null>(null)
+  // The replay link opens this page at the player, once, not on every poll.
+  const focusedRef = useRef(false)
+  const data = useTaskDetailScreenData(sessionId)
+  const [showHidden, setShowHidden] = useState(false)
+  // Without a recording, the step the person picked; null shows the last one.
+  const [chosenDispatchId, setChosenDispatchId] = useState<number | null>(null)
 
-  const groups = useMemo(
-    () => (detail ? groupDispatchesByTab(detail.dispatches, screenshots) : []),
-    [detail, screenshots],
-  )
-
-  const lightboxItems = useMemo<ScreenshotLightboxItem[]>(() => {
-    if (!detail) return []
-    const urlByScreenshot = new Map<number, string | null>()
-    for (const dispatch of detail.dispatches) {
-      if (dispatch.screenshotId != null) {
-        urlByScreenshot.set(dispatch.screenshotId, dispatch.url ?? null)
-      }
-    }
-    return [...screenshots]
-      .sort((a, b) => a.capturedAt - b.capturedAt)
-      .map((screenshot) => ({
-        screenshotId: screenshot.screenshotId,
-        sourceUrl: urlByScreenshot.get(screenshot.screenshotId) ?? null,
-        offsetMs: Math.max(0, screenshot.capturedAt - detail.session.startedAt),
-      }))
-  }, [detail, screenshots])
-
-  if (isPending) {
+  if (data.isPending) {
     return (
-      <div className="mx-auto w-full max-w-5xl space-y-6 px-8 pt-10 pb-20">
-        <Skeleton className="h-6 w-32" />
-        <Skeleton className="h-40 w-full rounded-2xl" />
-        <Skeleton className="h-44 w-full rounded-2xl" />
-        <Skeleton className="h-96 w-full rounded-2xl" />
-      </div>
+      <Page>
+        <Skeleton className="h-5 w-24" />
+        <div className="flex flex-col gap-3">
+          <Skeleton className="h-6 w-64" />
+          <Skeleton className="h-9 w-3/4" />
+          <Skeleton className="h-5 w-2/3" />
+        </div>
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
+          <Skeleton className="h-[420px] rounded-2xl" />
+          <Skeleton className="h-[420px] rounded-2xl" />
+        </div>
+      </Page>
     )
   }
-  if (isError || !detail) {
+  if (data.isError || !data.detail) {
     return (
-      <div className="mx-auto w-full max-w-5xl px-8 pt-10 pb-20">
+      <Page>
         <EmptyState
-          title="Task not found"
-          hint={
-            error?.message ??
-            'No dispatches for this session id. It may have been pruned or never existed.'
-          }
+          title="This task isn’t here"
+          hint="It may have been cleaned up, or the link is wrong. Your other tasks are in History."
         />
-      </div>
+      </Page>
     )
   }
 
-  const { session } = detail
-  const endEvent = session.endedAt
-    ? {
-        createdAt: session.endedAt,
-        kind:
-          session.status === 'failed'
-            ? ('errored' as const)
-            : session.status === 'cancelled'
-              ? ('cancelled' as const)
-              : ('closed' as const),
-        reason: null,
-      }
-    : null
+  const { session, dispatches } = data.detail
+  const { replay } = data
+  const steps = showHidden ? data.allSteps : data.steps
+  const hasRecording = replay.plan.durationSeconds > 0
+  // A recording still downloading already drives the steps from the start, so
+  // the highlighted step does not jump when playback becomes ready.
+  const followsPlayer = hasRecording || replay.recordingState === 'loading'
 
-  const items: AutoHideTabsItem[] = groups.map((g) => ({
-    id: g.id,
-    label: (
-      <span className="inline-flex items-center gap-1.5">
-        <span>{g.label}</span>
-        <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10.5px] text-ink-3">
-          {g.dispatchCount}
-        </span>
-      </span>
-    ),
-    content: (
-      <TabView
-        sessionId={sessionId}
-        group={g}
-        startedAt={session.startedAt}
-        endEvent={endEvent}
-        onScreenshotClick={(screenshotId) => setOpenScreenshotId(screenshotId)}
-      />
-    ),
-  }))
+  const currentDispatchId = replay.state.currentAction?.frame.dispatchId
+  const activeIndex = followsPlayer
+    ? activeStepIndex(
+        steps,
+        currentDispatchId != null
+          ? (dispatchTimes(dispatches).get(currentDispatchId) ?? null)
+          : null,
+      )
+    : chosenIndex(steps, chosenDispatchId)
+  const shownStep = steps[activeIndex]
+
+  const selectStep = (step: DescribedStep) => {
+    const action = actionForStep(step, replay.plan.actions)
+    if (hasRecording && action) replay.selectAction(action)
+    else setChosenDispatchId(step.dispatchIds[0] ?? null)
+  }
+
+  // Before the first step, a loading recording shows the first step's picture.
+  const pictureStep = shownStep ?? steps[0]
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-6 px-8 pt-10 pb-20">
-      <TaskHeader detail={detail} />
-      <AutoHideTabs
-        items={items}
-        defaultId={pickDefaultTabId(groups)}
-        listVariant="line"
-        // Many-tab sessions (one tab per browser page) overflow the fixed
-        // page width; scroll the strip horizontally instead of spilling
-        // off-screen, keep each trigger at its natural width, and hide the
-        // scrollbar so the strip scrolls cleanly with no visible track.
-        listClassName="w-full max-w-full justify-start overflow-x-auto [&_button]:shrink-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
-      />
-      <ScreenshotLightbox
+    <Page>
+      <TaskPageHeader session={session} lastPageUrl={data.lastPageUrl} />
+      {session.status === 'failed' && !data.humanHelpEnabled ? (
+        <AskForHelpTip />
+      ) : null}
+      <div className="grid grid-cols-1 items-stretch gap-5 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
+        <TaskPlayer
+          ref={(node) => {
+            if (!node || focus !== 'player' || focusedRef.current) return
+            focusedRef.current = true
+            node.scrollIntoView({ block: 'start' })
+          }}
+          sessionId={sessionId}
+          replay={replay}
+          step={shownStep}
+          snapshotId={
+            pictureStep
+              ? snapshotForStep(pictureStep, dispatches, data.screenshots)
+              : null
+          }
+        />
+        <TaskSteps
+          steps={steps}
+          activeIndex={activeIndex}
+          startedAt={session.startedAt}
+          hiddenCount={data.hiddenCount}
+          showHidden={showHidden}
+          onShowHiddenChange={setShowHidden}
+          onSelect={selectStep}
+        />
+      </div>
+      <PagesVisited pages={data.pages} />
+      <SnapshotGallery
         sessionId={sessionId}
-        items={lightboxItems}
-        startId={openScreenshotId}
-        onClose={() => setOpenScreenshotId(null)}
+        startedAt={session.startedAt}
+        screenshots={data.screenshots}
+        dispatches={dispatches}
+        onPlayFrom={(dispatchId) => {
+          const step = data.allSteps.find((candidate) =>
+            candidate.dispatchIds.includes(dispatchId),
+          )
+          if (step) selectStep(step)
+          document
+            .getElementById('player')
+            ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }}
       />
-    </div>
+      <TechnicalDetails session={session} dispatchCount={dispatches.length}>
+        <StepLogDialog session={session} dispatches={dispatches} />
+      </TechnicalDetails>
+    </Page>
+  )
+}
+
+// ---------------------------------------------------------------------------
+
+function chosenIndex(
+  steps: DescribedStep[],
+  dispatchId: number | null,
+): number {
+  if (dispatchId !== null) {
+    const index = steps.findIndex((step) =>
+      step.dispatchIds.includes(dispatchId),
+    )
+    if (index !== -1) return index
+  }
+  return steps.length - 1
+}
+
+/** A failed task's one next step: let the agents ask for help next time. */
+function AskForHelpTip() {
+  const queryClient = useQueryClient()
+  const update = useUpdateAgentSettings()
+
+  const turnOn = () =>
+    update.mutate(
+      { humanHelpEnabled: true },
+      {
+        onSuccess: (saved) => {
+          queryClient.setQueryData(useAgentSettings.getKey(), saved)
+          track(AnalyticsEvent.HumanHelpToggled, {
+            enabled: saved.humanHelpEnabled,
+          })
+        },
+        onError: (error) =>
+          toastApiError('Couldn’t turn that on. Try again in Settings.', error),
+      },
+    )
+
+  return (
+    <Alert
+      variant="info"
+      className="rounded-2xl px-5 py-4"
+      contentClassName="flex-wrap items-center gap-3.5 md:flex-nowrap"
+    >
+      <Lightbulb aria-hidden className="size-5 shrink-0" />
+      <AlertContent className="min-w-0 space-y-0">
+        <AlertDescription className="text-[15px] text-ink">
+          Next time, your AI agents can ask you for help instead of stopping,
+          for example when a page asks you to sign in.
+        </AlertDescription>
+      </AlertContent>
+      <AlertAction className="shrink-0 pt-0">
+        <StatefulButton
+          size="sm"
+          state={
+            update.isPending ? 'loading' : update.isSuccess ? 'success' : 'idle'
+          }
+          loadingText="Turning on"
+          successText="Turned on"
+          onClick={turnOn}
+          className="h-[34px] px-3.5 font-semibold text-[13.5px]"
+        >
+          Turn on “Ask me when it gets stuck”
+        </StatefulButton>
+      </AlertAction>
+    </Alert>
   )
 }

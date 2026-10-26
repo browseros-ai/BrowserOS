@@ -11,7 +11,7 @@ import {
 import { parseHTML } from 'linkedom'
 import { act, type ComponentProps, createElement } from 'react'
 import type { Root } from 'react-dom/client'
-import { renderToStaticMarkup } from 'react-dom/server'
+import { MemoryRouter } from 'react-router'
 
 interface Tracked {
   event: string
@@ -90,13 +90,22 @@ Object.defineProperty(globalThis, 'localStorage', {
 })
 
 const globalDescriptors = new Map(
-  ['window', 'document', 'navigator', 'HTMLElement', 'Node', 'Event'].map(
-    (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)],
-  ),
+  [
+    'window',
+    'document',
+    'navigator',
+    'HTMLElement',
+    'Node',
+    'NodeList',
+    'Element',
+    'SVGElement',
+    'Event',
+  ].map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]),
 )
 
-const { UltrafastWaitlist, UltrafastWaitlistView, normalizeEmail } =
-  await import('./UltrafastWaitlist')
+const { UltrafastWaitlist, normalizeEmail } = await import(
+  './UltrafastWaitlist'
+)
 const { priceForId } = await import('./ultrafast-price')
 
 const JOINED_KEY = 'ultrafastWaitlistJoined:v1'
@@ -148,6 +157,10 @@ beforeEach(async () => {
     navigator: dom.window.navigator,
     HTMLElement: dom.window.HTMLElement,
     Node: dom.window.Node,
+    // motion resolves animation targets with instanceof checks on these.
+    NodeList: dom.window.NodeList,
+    Element: dom.window.Element,
+    SVGElement: dom.window.SVGElement,
     Event: dom.window.Event,
   }
   for (const [name, value] of Object.entries(globals)) {
@@ -179,7 +192,11 @@ afterEach(async () => {
 
 async function render() {
   await act(async () => {
-    root.render(<UltrafastWaitlist />)
+    root.render(
+      <MemoryRouter>
+        <UltrafastWaitlist />
+      </MemoryRouter>,
+    )
   })
 }
 
@@ -425,25 +442,6 @@ describe('UltrafastWaitlist', () => {
     expect(container.textContent).toContain('on the list')
     expect(container.querySelector('form')).toBeNull()
   })
-})
-
-describe('UltrafastWaitlistView', () => {
-  it.each([9, 19] as const)(
-    'tests that the $%i card shows the price and form without a payment note',
-    (price) => {
-      const html = renderToStaticMarkup(
-        createElement(UltrafastWaitlistView, {
-          price,
-          joined: false,
-          onJoin: () => {},
-        }),
-      )
-      expect(html).toContain(`$${price}`)
-      expect(html).toContain('/month')
-      expect(html).toContain('Request early access</button>')
-      expect(html).not.toContain('No payment today.')
-    },
-  )
 })
 
 describe('normalizeEmail', () => {

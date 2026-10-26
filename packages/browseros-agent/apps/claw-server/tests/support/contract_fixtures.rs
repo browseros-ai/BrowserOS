@@ -3,9 +3,9 @@
 
 use axum::{http::StatusCode, response::IntoResponse};
 use claw_api::models::{
-    AgentSettings, ApiError, AppendRecordingEventsResponse, CancelSessionResponse, Connection,
-    ConnectionList, HealthResponse, RecordingMetadata, SessionDetail, SessionList,
-    ShutdownResponse, SystemInfo, TelemetryState,
+    AgentSettings, ApiError, AppendRecordingEventsResponse, CancelSessionResponse,
+    ClaudeDesktopExtension, ClaudeDesktopInstallResult, Connection, ConnectionList, HealthResponse,
+    RecordingMetadata, SessionDetail, SessionList, ShutdownResponse, SystemInfo, TelemetryState,
 };
 use claw_server::error::{CanonicalError, RequestId};
 use serde::de::DeserializeOwned;
@@ -32,6 +32,8 @@ fn generated_dtos_deserialize_shared_fixtures() -> anyhow::Result<()> {
     let _: AppendRecordingEventsResponse = fixture("append-recording-events.json")?;
     let _: Connection = fixture("connection.json")?;
     let _: ConnectionList = fixture("connection-list.json")?;
+    let _: ClaudeDesktopExtension = fixture("claude-desktop-extension.json")?;
+    let _: ClaudeDesktopInstallResult = fixture("claude-desktop-install.json")?;
     let _: ApiError = fixture("api-error.json")?;
     let _: ApiError = fixture("api-error-minimal.json")?;
     Ok(())

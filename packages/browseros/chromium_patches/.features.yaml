@@ -186,6 +186,8 @@ features:
       - chrome/browser/extensions/api/browser_os/browser_os_api_helpers.h
       - chrome/browser/extensions/api/browser_os/browser_os_api_utils.cc
       - chrome/browser/extensions/api/browser_os/browser_os_api_utils.h
+      - chrome/browser/extensions/api/browser_os/browser_os_attention_mac.h
+      - chrome/browser/extensions/api/browser_os/browser_os_attention_mac.mm
       - chrome/browser/extensions/api/browser_os/browser_os_change_detector.cc
       - chrome/browser/extensions/api/browser_os/browser_os_change_detector.h
       - chrome/browser/extensions/api/side_panel/side_panel_api.h

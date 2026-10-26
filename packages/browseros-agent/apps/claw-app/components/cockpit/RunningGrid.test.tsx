@@ -2,9 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import type { SessionBrowserTab } from '@browseros/claw-api'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { parseHTML } from 'linkedom'
-import { act, type ComponentProps, type ReactNode } from 'react'
+import { act } from 'react'
 import type { Root } from 'react-dom/client'
-import * as _popover from '@/components/ui/popover'
 import * as _auditHooks from '@/modules/api/audit.hooks'
 import * as _cancelHooks from '@/modules/api/cancel.hooks'
 import * as _focusHooks from '@/modules/api/focus.hooks'
@@ -44,15 +43,6 @@ mock.module('@/modules/api/focus.hooks', () => ({
   }),
 }))
 
-mock.module('@/components/ui/popover', () => ({
-  ..._popover,
-  Popover: ({ children }: { children?: ReactNode }) => <>{children}</>,
-  PopoverTrigger: (props: ComponentProps<'button'>) => <button {...props} />,
-  PopoverContent: (props: ComponentProps<'div'>) => (
-    <div data-slot="popover-content" {...props} />
-  ),
-}))
-
 const globalDescriptors = new Map(
   ['window', 'document', 'navigator', 'HTMLElement', 'Node', 'Event'].map(
     (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)],
@@ -83,6 +73,7 @@ function session(
     sessionId: 'session-live',
     profileId: 'profile-shared',
     slug: 'codex',
+    agentName: 'Codex',
     label: 'Codex',
     name: 'Research BrowserClaw',
     color: '#0254ec',
@@ -160,19 +151,6 @@ async function render(sessions: LiveSessionCardRecord[]) {
 }
 
 describe('RunningGrid', () => {
-  it('hides the Running now section when no live sessions are connected', async () => {
-    await render([])
-    expect(container.textContent).not.toContain('Running now')
-    expect(container.textContent).not.toContain('0 live')
-  })
-
-  it('uses the Audit hover blue caption tone', async () => {
-    await render([session()])
-
-    const card = container.querySelector('[data-session-card="session-live"]')
-    expect(card?.querySelector('[data-caption-tone="blue"]')).not.toBeNull()
-  })
-
   it('renders and cancels two same-profile sessions by distinct session ids', async () => {
     await render([
       session({ sessionId: 'session-a' }),
@@ -199,62 +177,7 @@ describe('RunningGrid', () => {
     ])
   })
 
-  it('counts connected sessions, including an idle zero-tab session', async () => {
-    await render([
-      session({ sessionId: 'session-active' }),
-      session({
-        sessionId: 'session-idle',
-        state: 'idle',
-        selectedTab: null,
-        browserTabs: [],
-        toolCount: 0,
-        recentTools: [],
-      }),
-    ])
-
-    expect(container.textContent).toContain('2 live')
-    const idleCard = container.querySelector(
-      '[data-session-card="session-idle"]',
-    )
-    expect(idleCard?.textContent).toContain('Idle')
-    expect(idleCard?.querySelector('[data-watch-browser-tab]')).toBeNull()
-    expect(idleCard?.querySelector('[data-preview-url]')).toBeNull()
-    expect(
-      idleCard?.querySelector('[data-stop-session="session-idle"]'),
-    ).not.toBeNull()
-  })
-
-  it('retains multi-tab count and merged tool trail', async () => {
-    const selectedTab = browserTab({
-      browserTabId: 41,
-      recentTools: [{ name: 'navigate', at: 100 }],
-    })
-    await render([
-      session({
-        selectedTab,
-        browserTabs: [selectedTab, browserTab({ browserTabId: 42 })],
-        toolCount: 3,
-        recentTools: [
-          { name: 'navigate', at: 100 },
-          { name: 'snapshot', at: 200 },
-          { name: 'act', at: 300 },
-        ],
-      }),
-    ])
-
-    expect(container.textContent).toContain('2 tabs')
-    expect(container.textContent).toContain('navigate -> snapshot -> act')
-    const trigger = container.querySelector('[data-tab-count="2"]')
-    if (!trigger) throw new Error('tab-count trigger missing')
-    const popover = container.querySelector('[data-slot="popover-content"]')
-    if (!popover) {
-      throw new Error(`tab popover missing: ${document.body.outerHTML}`)
-    }
-    expect(popover.getAttribute('class') ?? '').toContain('ph-no-capture')
-    expect(popover.textContent).toContain('Example')
-  })
-
-  it('watches the exact selected browser tab id', async () => {
+  it('watches the tab the agent is using', async () => {
     const selectedTab = browserTab({ browserTabId: 42 })
     await render([session({ selectedTab, browserTabs: [selectedTab] })])
 

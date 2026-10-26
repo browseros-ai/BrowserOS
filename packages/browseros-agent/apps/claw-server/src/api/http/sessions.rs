@@ -32,6 +32,7 @@ struct SessionQuery {
     profile_id: Option<String>,
     slug: Option<String>,
     status: Option<TaskStatus>,
+    needs_attention: bool,
     site: Option<String>,
     search: Option<String>,
     since: Option<i64>,
@@ -92,6 +93,7 @@ pub(super) async fn list(
         .list_tasks(ListTasksQuery {
             slug: query.slug,
             status: stored_status_filter,
+            needs_attention: query.needs_attention,
             site: query.site,
             search: query.search,
             since: query.since,
@@ -396,10 +398,16 @@ fn parse_query(
         Some("cancelled") => Some(TaskStatus::Cancelled),
         Some(_) => return Err(invalid_query(request_id, "invalid status")),
     };
+    let needs_attention = match raw.get("needsAttention").map(String::as_str) {
+        None | Some("false") => false,
+        Some("true") => true,
+        Some(_) => return Err(invalid_query(request_id, "invalid needsAttention")),
+    };
     Ok(SessionQuery {
         profile_id: raw.get("profileId").cloned(),
         slug: raw.get("slug").cloned(),
         status,
+        needs_attention,
         site: raw.get("site").cloned(),
         search: raw.get("search").cloned(),
         since: parse_integer(request_id, raw, "since", 0, i64::MAX)?,

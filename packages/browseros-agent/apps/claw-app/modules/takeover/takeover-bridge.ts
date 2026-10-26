@@ -19,10 +19,14 @@ const CACHE_TTL_MS = 1200
 export interface TakeoverBridgeOptions {
   resolveServerBaseUrl: () => Promise<string>
   now?: () => number
+  /** Every fresh read of the live sessions, so other watchers ride on it. */
+  onLiveSessions?: (sessions: SessionSummary[]) => void
 }
 
 export interface TakeoverBridge {
   pollForTab: (tabId: number) => Promise<TakeoverPollResponse>
+  /** The live sessions, from the short cache unless `fresh` asks to skip it. */
+  liveSessions: (fresh?: boolean) => Promise<SessionSummary[]>
   resolve: (sessionId: string, note?: string) => Promise<void>
 }
 
@@ -36,7 +40,8 @@ export function createTakeoverBridge(
   const client = async () =>
     new ClawApiClient(await options.resolveServerBaseUrl(), { fetch })
 
-  const liveSessions = async (): Promise<SessionSummary[]> => {
+  const liveSessions = async (fresh = false): Promise<SessionSummary[]> => {
+    if (fresh) cache = null
     if (cache && now() - cache.at < CACHE_TTL_MS) return cache.sessions
     if (inflight) return inflight
     inflight = (async () => {
@@ -45,6 +50,7 @@ export function createTakeoverBridge(
           status: SessionStatus.Live,
         })
         cache = { at: now(), sessions: list.items }
+        options.onLiveSessions?.(list.items)
         return list.items
       } catch {
         // A stopped or unreachable server just means no bar; keep the last good
@@ -58,6 +64,7 @@ export function createTakeoverBridge(
   }
 
   return {
+    liveSessions,
     async pollForTab(tabId) {
       const context = takeoverForTab(await liveSessions(), tabId)
       return context ? { active: true, context } : { active: false }

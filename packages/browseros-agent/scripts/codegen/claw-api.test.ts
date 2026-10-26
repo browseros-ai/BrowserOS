@@ -38,6 +38,7 @@ const expectedPaths = [
   '/api/v1/system',
   '/api/v1/settings/telemetry',
   '/api/v1/recordings/events',
+  '/api/v1/help/events',
   '/api/v1/sessions',
   '/api/v1/sessions/{sessionId}',
   '/api/v1/sessions/{sessionId}/cancel',
@@ -48,6 +49,8 @@ const expectedPaths = [
   '/api/v1/sessions/{sessionId}/screenshots/{screenshotId}',
   '/api/v1/connections',
   '/api/v1/connections/{harness}',
+  '/api/v1/claude-desktop/extension',
+  '/api/v1/claude-desktop/extension/install',
 ]
 
 const expectedPathGroups: Record<string, string> = {
@@ -56,6 +59,7 @@ const expectedPathGroups: Record<string, string> = {
   '/api/v1/system': 'system',
   '/api/v1/settings/telemetry': 'settings',
   '/api/v1/recordings/events': 'recordings',
+  '/api/v1/help/events': 'sessions',
   '/api/v1/sessions': 'sessions',
   '/api/v1/sessions/{sessionId}': 'sessions',
   '/api/v1/sessions/{sessionId}/cancel': 'sessions',
@@ -66,12 +70,17 @@ const expectedPathGroups: Record<string, string> = {
   '/api/v1/sessions/{sessionId}/screenshots/{screenshotId}': 'sessions',
   '/api/v1/connections': 'connections',
   '/api/v1/connections/{harness}': 'connections',
+  '/api/v1/claude-desktop/extension': 'claude_desktop',
+  '/api/v1/claude-desktop/extension/install': 'claude_desktop',
 }
 
 const expectedModelGroups = {
   ApiError: 'common',
   AppendRecordingEventsResponse: 'recordings',
   CancelSessionResponse: 'sessions',
+  ClaudeDesktopExtension: 'claude_desktop',
+  ClaudeDesktopInstallResult: 'claude_desktop',
+  ClaudeDesktopInstallStatus: 'claude_desktop',
   Connection: 'connections',
   ConnectionList: 'connections',
   Dispatch: 'dispatches',
@@ -103,6 +112,7 @@ const expectedOperationGroups = {
   connectHarness: 'connections',
   disconnectHarness: 'connections',
   downloadRecordingEvents: 'recordings',
+  getClaudeDesktopExtension: 'claude_desktop',
   getHealth: 'system',
   getRecording: 'recordings',
   getSession: 'sessions',
@@ -110,6 +120,7 @@ const expectedOperationGroups = {
   getSessionScreenshot: 'sessions',
   getSystemInfo: 'system',
   getTelemetry: 'settings',
+  installClaudeDesktopExtension: 'claude_desktop',
   listConnections: 'connections',
   listSessionScreenshots: 'sessions',
   listSessions: 'sessions',

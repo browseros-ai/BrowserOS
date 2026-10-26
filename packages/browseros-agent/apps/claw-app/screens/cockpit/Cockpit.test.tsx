@@ -1,7 +1,6 @@
 import { describe, expect, it, mock } from 'bun:test'
 import type { CockpitStats } from '@browseros/claw-api'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { parseHTML } from 'linkedom'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import type { TaskSummary } from '@/modules/api/audit.hooks'
@@ -217,153 +216,55 @@ function renderApp(
   )
 }
 
-describe('Cockpit (v2)', () => {
-  it('renders the three-part Schibsted hero with a cobalt italic middle segment', () => {
-    const html = renderApp({ stats: 'measured' })
-    const document = parseHTML(html).document
-    const hero = document.querySelector('[data-cockpit-hero]')
-    const segments = [
-      ...document.querySelectorAll('[data-cockpit-hero-segment]'),
-    ]
+const liveSession: LiveSessionCardRecord = {
+  sessionId: 'session-connected',
+  slug: 'claude-code',
+  label: 'Claude Code',
+  agentName: 'Claude Code',
+  name: 'Find a flight',
+  color: '#2F6FE0',
+  startedAt: 100,
+  state: 'idle',
+  selectedTab: null,
+  browserTabs: [],
+  toolCount: 0,
+  recentTools: [],
+}
 
-    expect(hero?.tagName).toBe('H1')
-    expect(segments.map((segment) => segment.textContent)).toEqual([
-      'What are your agents',
-      'working on',
-      'right now?',
-    ])
-    const heroClasses = hero?.getAttribute('class') ?? ''
-    for (const className of [
-      'flex',
-      'flex-wrap',
-      'items-baseline',
-      'gap-[9px]',
-      'pt-1',
-      'font-sans',
-      'font-extrabold',
-      'text-[28px]',
-      'text-cyanotype-ink',
-      'leading-[1.15]',
-      'tracking-[-0.025em]',
-    ]) {
-      expect(heroClasses).toContain(className)
-    }
-    const accentClasses = segments[1]?.getAttribute('class') ?? ''
-    for (const className of ['font-bold', 'text-cyanotype-blue', 'italic']) {
-      expect(accentClasses).toContain(className)
-    }
-  })
+describe('Cockpit', () => {
+  it('shows first-run onboarding until an agent is connected or a task exists', () => {
+    const firstRun = renderApp({ connections: 'empty', sessions: 'empty' })
+    expect(firstRun).toContain('Your turn')
+    expect(firstRun).not.toMatch(/Good (morning|afternoon|evening)/)
+    expect(statsQueryEnabled()).toBe(false)
 
-  it('renders measured idle stats between the hero and recent activity', () => {
-    const html = renderApp({ stats: 'measured' })
-
-    const heroIndex = html.indexOf('working on')
-    const savedStatsIndex = html.indexOf('Since you started')
-    const recentActivityIndex = html.indexOf('Recent activity')
-    expect(heroIndex).toBeGreaterThan(-1)
-    expect(savedStatsIndex).toBeGreaterThan(heroIndex)
-    expect(recentActivityIndex).toBeGreaterThan(savedStatsIndex)
-    expect(html).not.toContain('Running now')
+    const ready = renderApp({ connections: 'installed', sessions: 'history' })
+    expect(ready).toMatch(/Good (morning|afternoon|evening)/)
     expect(statsQueryEnabled()).toBe(true)
   })
 
-  it('always renders RunningGrid for a live session', () => {
-    const html = renderApp({
-      liveSessions: [liveSession('session-live')],
-      stats: 'measured',
-    })
-
-    expect(html).toContain('Running now')
-    expect(html).not.toContain('Since you started')
+  it('waits for both onboarding probes before choosing a shell or loading stats', () => {
+    const html = renderApp({ connections: 'pending', sessions: 'empty' })
+    expect(html).not.toContain('Your turn')
     expect(statsQueryEnabled()).toBe(false)
   })
 
-  it('keeps first-run and waiting onboarding shells free of saved stats', () => {
-    const firstRun = renderApp({
-      connections: 'empty',
-      sessions: 'empty',
-      stats: 'measured',
-    })
-    expect(firstRun).toContain('I didn’t find an AI app yet.')
-    expect(firstRun).toContain('Almost there.')
-    expect(firstRun).toContain('Your turn')
-    expect(firstRun).not.toMatch(/<h1[^>]*>[^<]*What are your agents/)
-    expect(firstRun).not.toContain('<video')
-    expect(firstRun).not.toContain('Since you started')
-    expect(statsQueryEnabled()).toBe(false)
-
-    const waiting = renderApp({
-      connections: 'installed',
-      sessions: 'empty',
-      stats: 'measured',
-    })
-    expect(waiting).toContain('then you try.')
-    expect(waiting).toContain('Connected apps: Codex')
-    expect(waiting).toContain('Set it up')
-    expect(waiting).not.toContain('Since you started')
-    expect(statsQueryEnabled()).toBe(false)
-  })
-
-  for (const stats of ['loading', 'error', 'unmeasured'] as const) {
-    it(`preserves Recent activity while idle stats are ${stats}`, () => {
-      const html = renderApp({ stats })
-
-      expect(html).toContain('Recent activity')
-      expect(html).not.toContain('Since you started')
-      expect(html).not.toContain('Running now')
-      expect(statsQueryEnabled()).toBe(true)
-    })
-  }
-
-  it('does not query stats before the onboarding probes resolve', () => {
-    const html = renderApp({
-      connections: 'pending',
-      sessions: 'empty',
-      stats: 'measured',
-    })
-
-    expect(html).toContain('Recent activity')
-    expect(html).toContain('No recent activity')
-    expect(html).not.toContain('Since you started')
-    expect(statsQueryEnabled()).toBe(false)
-  })
-
-  it('does NOT render an add-profile tile in the default v2 build', () => {
-    const html = renderApp()
-    expect(html).not.toContain('New profile')
-    expect(html).not.toContain('harness . logins . guardrails')
-  })
-
-  it('shows a connected zero-tab live session before configuration or activity', () => {
+  it('shows the live Home for a connected session even before any setup or history', () => {
     const html = renderApp({
       connections: 'empty',
-      liveSessions: [liveSession('session-connected')],
       sessions: 'empty',
-      stats: 'measured',
+      liveSessions: [liveSession],
     })
-
-    expect(html).toContain('Running now')
-    expect(html).toContain('data-session-card="session-connected"')
+    expect(html).toContain('Your AI agents are working on one task.')
     expect(html).toContain('data-stop-session="session-connected"')
-    expect(html).not.toContain('You watch. Your agent')
-    expect(html).not.toContain('Set up MCP endpoint')
-    expect(html).not.toContain('Since you started')
-    expect(statsQueryEnabled()).toBe(false)
+    expect(html).not.toContain('Your turn')
+  })
+
+  it('shows time saved only once neo has finished a task', () => {
+    const measured = renderApp({ connections: 'installed', stats: 'measured' })
+    expect(measured).toContain('neo has finished 12 tasks for you so far.')
+
+    const none = renderApp({ connections: 'installed', stats: 'unmeasured' })
+    expect(none).not.toContain('neo has finished')
   })
 })
-
-function liveSession(sessionId: string): LiveSessionCardRecord {
-  return {
-    sessionId,
-    slug: 'codex',
-    label: 'Codex',
-    name: 'Connected session',
-    color: '#7A5AF8',
-    startedAt: 100,
-    state: 'idle',
-    selectedTab: null,
-    browserTabs: [],
-    toolCount: 0,
-    recentTools: [],
-  }
-}

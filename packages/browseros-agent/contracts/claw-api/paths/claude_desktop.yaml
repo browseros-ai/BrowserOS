@@ -1,0 +1,31 @@
+extension:
+  get:
+    operationId: getClaudeDesktopExtension
+    description: >-
+      Whether the Claude desktop app and its BrowserOS neo extension are
+      installed, read from Claude's own record of installed extensions.
+    responses:
+      '200':
+        description: Claude desktop app and extension state.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/claude_desktop.yaml#/ClaudeDesktopExtension
+      '500':
+        $ref: ../responses.yaml#/InternalError
+install:
+  post:
+    operationId: installClaudeDesktopExtension
+    description: >-
+      Fetches the pinned extension bundle, checks its hash, and opens it in the
+      Claude desktop app, which shows its own install sheet for the person to
+      confirm. Nothing is installed without that confirmation.
+    responses:
+      '200':
+        description: The bundle was opened in Claude, or Claude was not found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/claude_desktop.yaml#/ClaudeDesktopInstallResult
+      '500':
+        $ref: ../responses.yaml#/InternalError

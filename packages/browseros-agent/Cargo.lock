@@ -541,6 +541,7 @@ dependencies = [
  "serde",
  "serde-saphyr",
  "serde_json",
+ "sha2",
  "syn 2.0.118",
  "tempfile",
  "thiserror",

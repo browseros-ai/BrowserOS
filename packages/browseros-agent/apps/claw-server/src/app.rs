@@ -65,6 +65,7 @@ pub struct AppState {
     pub capture: Arc<CaptureHub>,
     pub cockpit: Arc<CockpitQuery>,
     pub help: Arc<crate::services::help::HelpRegistry>,
+    pub claude_desktop: Arc<crate::services::claude_desktop::ClaudeDesktop>,
     pub extension_updates: Arc<crate::services::extension_updates::ExtensionUpdates>,
     pub shutdown: ShutdownHandle,
     /// How the data this server opened compares to the schema this build knows, published on
@@ -130,6 +131,10 @@ impl AppState {
             crate::config::PursueOffering::of(agent_settings.jev_token_source()),
             config.behavior.tab_grouping,
         )?;
+        let claude_desktop = Arc::new(crate::services::claude_desktop::ClaudeDesktop::new(
+            &home_dir,
+            config.browserclaw_dir.join("claude-desktop"),
+        ));
         let harness = Arc::new(HarnessService::new_with_managed_skill(
             config.browserclaw_dir.join("mcp-manager"),
             config.browserclaw_dir.join("harness-integrations"),
@@ -254,6 +259,7 @@ impl AppState {
             capture,
             cockpit,
             help: Arc::new(crate::services::help::HelpRegistry::new(HELP_MAX_WAIT)),
+            claude_desktop,
             extension_updates: Arc::default(),
             shutdown,
             migration,

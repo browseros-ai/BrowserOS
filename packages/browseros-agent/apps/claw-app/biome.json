@@ -12,7 +12,18 @@
   },
   "overrides": [
     {
-      "includes": ["components/ui/**", "components/ai-elements/**"],
+      "includes": [
+        "components/ui/**",
+        "components/ai-elements/**",
+        "components/motion/**",
+        "components/agents/**",
+        "lib/ease.ts",
+        "lib/presence-gate.tsx",
+        "lib/focusable.ts",
+        "lib/touch.ts",
+        "lib/text-shimmer.ts",
+        "lib/hooks/**"
+      ],
       "formatter": { "enabled": false },
       "linter": { "enabled": false },
       "assist": {

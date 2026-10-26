@@ -9,10 +9,9 @@
  */
 
 import { useQueryClient } from '@tanstack/react-query'
-import { CalendarCheck, X } from 'lucide-react'
+import { ArrowRight, CalendarCheck } from 'lucide-react'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { toast } from 'sonner'
-import { Button } from '@/components/ui/button'
+import { Button } from '@/components/motion/button/base'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import {
   isCapturing,
@@ -22,6 +21,8 @@ import {
   useFeedbackInvitation,
   useRecordFeedbackInvite,
 } from '@/modules/api/feedback.hooks'
+import { toastApiError } from '@/modules/toast/toast'
+import { PromoCard } from './PromoCard'
 
 /**
  * Remembers that the impression has already been counted for this browser
@@ -92,15 +93,34 @@ type InviteState =
   | { phase: 'showing'; bookUrl: string }
   | { phase: 'answered' }
 
-export function FeedbackInviteCard() {
-  const queryClient = useQueryClient()
+export interface FeedbackOffer {
+  /** The booking link while the server says this installation is invited. */
+  bookUrl?: string
+  /** True once an answer saved after the last question fences the invitation. */
+  fencedByNewerAnswer: boolean
+}
+
+/** Whether the server currently invites this installation, after the answer fence. */
+export function useFeedbackOffer(): FeedbackOffer {
   const invitation = useFeedbackInvitation()
-  const record = useRecordFeedbackInvite()
   const answeredAt = useSyncExternalStore(
     subscribeToAnswers,
     readAnsweredAt,
     () => null,
   )
+  const askedAt = invitation.data?.requestedAt ?? invitation.dataUpdatedAt
+  const fencedByNewerAnswer = answeredAt !== null && answeredAt >= askedAt
+  const bookUrl =
+    invitation.data?.eligible === true && !fencedByNewerAnswer
+      ? invitation.data.bookUrl
+      : undefined
+  return { bookUrl, fencedByNewerAnswer }
+}
+
+export function FeedbackInviteCard({ onClosed }: { onClosed?: () => void }) {
+  const queryClient = useQueryClient()
+  const record = useRecordFeedbackInvite()
+  const { bookUrl: offered, fencedByNewerAnswer } = useFeedbackOffer()
   const capturing = useSyncExternalStore(
     subscribeToCaptureState,
     isCapturing,
@@ -109,12 +129,6 @@ export function FeedbackInviteCard() {
   const [state, setState] = useState<InviteState>({ phase: 'waiting' })
   const appeared = useRef(false)
 
-  const askedAt = invitation.data?.requestedAt ?? invitation.dataUpdatedAt
-  const fencedByNewerAnswer = answeredAt !== null && answeredAt >= askedAt
-  const offered =
-    invitation.data?.eligible === true && !fencedByNewerAnswer
-      ? invitation.data.bookUrl
-      : undefined
   const report = record.mutate
 
   // The impression belongs to the card appearing, and there is no user action
@@ -160,6 +174,7 @@ export function FeedbackInviteCard() {
         : AnalyticsEvent.FeedbackInviteDismissed,
     )
     setState({ phase: 'answered' })
+    onClosed?.()
     report(
       { outcome },
       {
@@ -169,7 +184,7 @@ export function FeedbackInviteCard() {
           appeared.current = false
         },
         onError: () => {
-          toast.error(
+          toastApiError(
             'Could not save your response. The invitation may appear again.',
           )
         },
@@ -197,46 +212,33 @@ export function FeedbackInviteCardView({
   onDecline: () => void
 }) {
   return (
-    <section
+    <PromoCard
       aria-label="Feedback call invitation"
-      className="flex items-start gap-3 rounded-[9px] border border-cyanotype-border bg-accent-tint/50 px-4 py-3.5"
-    >
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-[9px] bg-accent-tint-2 text-cyanotype-blue">
-        <CalendarCheck className="size-4" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="font-semibold text-[13px] text-cyanotype-ink leading-5">
-          You're one of our most active users
-        </p>
-        <p className="text-[13px] text-cyanotype-soft leading-5">
-          We'd like to hear what you use neo for and what we should fix.
-        </p>
-        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+      icon={<CalendarCheck />}
+      title="You’re one of our most active users"
+      description="Tell us what you use neo for and what we should fix."
+      onDismiss={onDecline}
+      action={
+        <>
           <Button
             size="sm"
+            variant="ghost"
             onClick={onBook}
-            className="h-7 bg-cyanotype-blue px-3 text-[13px] text-on-cyanotype hover:bg-cyanotype-blue-hover"
+            className="h-8 px-2.5 font-semibold text-[13.5px] text-accent-ink hover:bg-card/70 hover:text-accent-ink"
           >
             Book a 15 minute chat
+            <ArrowRight aria-hidden className="size-[15px]" />
           </Button>
           <Button
             size="sm"
             variant="ghost"
             onClick={onDecline}
-            className="h-7 px-2 text-[13px] text-cyanotype-soft"
+            className="h-8 px-2.5 font-semibold text-[13.5px]"
           >
             No thanks
           </Button>
-        </div>
-      </div>
-      <button
-        type="button"
-        onClick={onDecline}
-        aria-label="Dismiss"
-        className="shrink-0 rounded-sm p-1 text-cyanotype-soft opacity-60 transition-opacity hover:opacity-100"
-      >
-        <X className="size-3.5" />
-      </button>
-    </section>
+        </>
+      }
+    />
   )
 }

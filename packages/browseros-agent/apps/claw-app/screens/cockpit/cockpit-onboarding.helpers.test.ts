@@ -52,7 +52,7 @@ describe('cockpit first-run copy', () => {
     expect(line(FIRST_RUN_COPY.noApps)).toBe('Almost there. Watch me first.')
     expect(
       `${FIRST_RUN_COPY.coworkQuestion} ${FIRST_RUN_COPY.coworkAction}`,
-    ).toBe('Using Claude Cowork? Set it up')
+    ).toBe('Using Claude Cowork? Add neo to Claude')
     expect(FIRST_RUN_COPY.tryLabel).toBe('Your turn')
     expect(FIRST_RUN_COPY.restartHint).toBe('If one is open, restart it once.')
     const copy = [

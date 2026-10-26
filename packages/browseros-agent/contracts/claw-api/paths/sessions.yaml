@@ -16,6 +16,12 @@ collection:
         description: Use `live` to request a complete current snapshot with live browser state.
         schema:
           $ref: ../schemas/sessions.yaml#/SessionStatus
+      - name: needsAttention
+        in: query
+        description: Only tasks that failed or were stopped. Applied before pagination, so pages stay full.
+        schema:
+          type: boolean
+          default: false
       - name: site
         in: query
         schema:
@@ -197,3 +203,19 @@ screenshot:
               message: session screenshot not found
       '500':
         $ref: ../responses.yaml#/InternalError
+helpEvents:
+  get:
+    operationId: streamHelpEvents
+    description: >-
+      Server-Sent Events. Sends an event named `help` at once and then whenever
+      the open help requests change (one is opened, handed back, cancelled,
+      consumed by the agent, or reaches its time limit). Each event's data is
+      `{"version": <number>}` and carries no request details: read
+      `GET /api/v1/sessions?status=live` for the requests themselves.
+    responses:
+      '200':
+        description: A stream of `help` events until the client disconnects.
+        content:
+          text/event-stream:
+            schema:
+              type: string

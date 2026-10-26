@@ -1,152 +1,83 @@
-import { useEffect, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router'
+import { useSessions } from '@/modules/api/audit.hooks'
 import {
-  type TaskStatus,
-  type TaskSummary,
-  useSessions,
-} from '@/modules/api/audit.hooks'
-import {
-  type AgentChip,
-  agentChipsFor,
-  siteOptions as siteOptionsOf,
-  statusOptions as statusOptionsOf,
+  type AgentOption,
+  agentOptionsFor,
+  type DayGroup,
+  groupByDay,
 } from './audit.helpers'
 import {
   type AuditFilters,
   filtersToParams,
+  type HistoryView,
   paramsToFilters,
 } from './audit.search-params'
 
-/**
- * Hard cap on how many extra pages this hook will auto-fetch when
- * the JS-layer filters (status / site / search / since) shrink the
- * current page to zero matches. With `limit: 100` per page this caps
- * the scan at `(1 + cap) * 100 = 600` sessions before the operator
- * sees the empty state. Prevents a no-match filter from scanning the
- * entire audit log.
- */
-const AUTO_FETCH_CAP = 5
+/** Tasks per page; scrolling near the end loads the next page. */
+export const HISTORY_PAGE_SIZE = 20
 
 export interface AuditScreenData {
-  tasks: TaskSummary[]
-  agentOptions: AgentChip[]
-  statusOptions: { status: TaskStatus; count: number }[]
-  siteOptions: { site: string; count: number }[]
+  groups: DayGroup[]
+  /** Tasks loaded so far across pages. */
+  loadedCount: number
+  agentOptions: AgentOption[]
   isLoading: boolean
   isError: boolean
   hasNextPage: boolean
   isFetchingNextPage: boolean
   fetchNextPage: () => void
   filters: AuditFilters
+  hasActiveFilters: boolean
   setAgentFilter: (slug: string | null) => void
-  setStatusFilter: (status: TaskStatus | null) => void
-  setSiteFilter: (site: string | null) => void
-  setSearch: (q: string) => void
+  setView: (view: HistoryView) => void
+  setSearch: (search: string) => void
+  clearFilters: () => void
 }
 
 /**
- * Single data hook for the audit screen. Reads filters from URL
- * search params so browser back / forward restores prior views; the
- * `useSessions` infinite query is variables-keyed off the same filter
- * shape so changing a filter starts a fresh paginated stream.
- *
- * Every returned value (`tasks`, `agentOptions`, etc.) is memoised so
- * the consumer can pass them to `useReactTable` without triggering a
- * re-process on every render. tanstack-table requires `data` to be a
- * stable reference; an inline `flatMap` here would create a new array
- * each render and put the table in a render storm.
- *
- * Auto-pagination on filtered emptiness: status / site / search / since
- * filter in JS after the SQL page is fetched. If the first 100 sessions
- * are all wrong-status (etc.) the response is `{tasks: [], nextCursor}`
- * and the operator sees "No tasks match these filters" even when
- * matches exist further back. This hook detects that case and chains
- * `fetchNextPage()` automatically up to `AUTO_FETCH_CAP` pages so the
- * operator gets the first real match or a true empty state, not a
- * premature one.
+ * History's one data hook. Filters live in the URL so back and forward
+ * restore a view, and every filter runs on the server before pagination, so
+ * each page holds a full 20 matching tasks.
  */
 export function useAuditScreenData(): AuditScreenData {
   const [params, setParams] = useSearchParams()
-  const filters = useMemo(() => paramsToFilters(params), [params])
+  const filters = paramsToFilters(params)
 
   const query = useSessions({
     variables: {
       slug: filters.agentSlug ?? undefined,
-      status: filters.status ?? undefined,
-      site: filters.site ?? undefined,
+      needsAttention: filters.view === 'attention' || undefined,
       search: filters.search || undefined,
-      limit: 100,
+      limit: HISTORY_PAGE_SIZE,
     },
   })
 
-  const pages = query.data?.pages
-  const tasks = useMemo(() => (pages ?? []).flatMap((p) => p.items), [pages])
-  const agentOptions = useMemo(() => agentChipsFor(tasks), [tasks])
-  const statusOpts = useMemo(() => statusOptionsOf(tasks), [tasks])
-  const siteOpts = useMemo(() => siteOptionsOf(tasks), [tasks])
-
-  // Filters applied in JS by the server-side tasks deriver. These are
-  // the ones that can shrink a SQL page to zero matches.
-  const hasJsLevelFilter =
-    filters.status !== null ||
-    filters.site !== null ||
-    filters.search.length > 0
-
-  // Reset the auto-fetch counter whenever the filter combo changes.
-  // Each variable set gets its own budget; the counter is a poor-man's
-  // per-query state we cannot get from react-query directly.
-  const autoFetchCount = useRef(0)
-  const filterKey = useMemo(
-    () =>
-      `${filters.agentSlug ?? ''}|${filters.status ?? ''}|${filters.site ?? ''}|${filters.search}`,
-    [filters.agentSlug, filters.status, filters.site, filters.search],
-  )
-  const prevFilterKey = useRef(filterKey)
-  if (prevFilterKey.current !== filterKey) {
-    prevFilterKey.current = filterKey
-    autoFetchCount.current = 0
-  }
-
-  const shouldAutoPaginate =
-    hasJsLevelFilter &&
-    pages !== undefined &&
-    tasks.length === 0 &&
-    Boolean(query.hasNextPage) &&
-    !query.isFetchingNextPage &&
-    autoFetchCount.current < AUTO_FETCH_CAP
-
-  useEffect(() => {
-    if (!shouldAutoPaginate) return
-    autoFetchCount.current += 1
-    void query.fetchNextPage()
-  }, [shouldAutoPaginate, query.fetchNextPage])
-
-  const isAutoPaginating =
-    hasJsLevelFilter &&
-    tasks.length === 0 &&
-    (query.isFetchingNextPage || shouldAutoPaginate)
-
-  const update = (patch: Partial<AuditFilters>): void => {
-    const next: AuditFilters = { ...filters, ...patch }
-    setParams(filtersToParams(next), { replace: true })
+  const tasks = (query.data?.pages ?? []).flatMap((page) => page.items)
+  const update = (patch: Partial<AuditFilters>) => {
+    setParams(filtersToParams({ ...filters, ...patch }), { replace: true })
   }
 
   return {
-    tasks,
-    agentOptions,
-    statusOptions: statusOpts,
-    siteOptions: siteOpts,
-    isLoading: query.isPending || isAutoPaginating,
+    groups: groupByDay(tasks, Date.now()),
+    loadedCount: tasks.length,
+    agentOptions: agentOptionsFor(tasks, filters.agentSlug),
+    isLoading: query.isPending,
     isError: query.isError,
     hasNextPage: Boolean(query.hasNextPage),
     isFetchingNextPage: query.isFetchingNextPage,
     fetchNextPage: () => {
-      void query.fetchNextPage()
+      if (query.hasNextPage && !query.isFetchingNextPage) {
+        void query.fetchNextPage()
+      }
     },
     filters,
+    hasActiveFilters:
+      filters.agentSlug !== null ||
+      filters.view !== 'all' ||
+      filters.search !== '',
     setAgentFilter: (agentSlug) => update({ agentSlug }),
-    setStatusFilter: (status) => update({ status }),
-    setSiteFilter: (site) => update({ site }),
+    setView: (view) => update({ view }),
     setSearch: (search) => update({ search }),
+    clearFilters: () => setParams(new URLSearchParams(), { replace: true }),
   }
 }

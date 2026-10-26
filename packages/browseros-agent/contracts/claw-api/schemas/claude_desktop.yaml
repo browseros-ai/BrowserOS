@@ -1,0 +1,35 @@
+ClaudeDesktopExtension:
+  type: object
+  additionalProperties: false
+  required: [claudeInstalled, installed, availableVersion, updateAvailable]
+  properties:
+    claudeInstalled:
+      type: boolean
+      description: Whether the Claude desktop app is installed on this computer.
+    installed:
+      type: boolean
+      description: Whether Claude has the BrowserOS neo extension installed.
+    installedVersion:
+      type: string
+      description: The extension version Claude has installed. Present only when installed.
+    availableVersion:
+      type: string
+      description: The extension version this server installs.
+    updateAvailable:
+      type: boolean
+      description: Whether the installed extension is older than the available one.
+ClaudeDesktopInstallStatus:
+  type: string
+  description: >-
+    opened means the extension file was handed to Claude, which now shows its
+    own install sheet; missing means the Claude desktop app was not found.
+  enum:
+    - opened
+    - missing
+ClaudeDesktopInstallResult:
+  type: object
+  additionalProperties: false
+  required: [status]
+  properties:
+    status:
+      $ref: '#/ClaudeDesktopInstallStatus'

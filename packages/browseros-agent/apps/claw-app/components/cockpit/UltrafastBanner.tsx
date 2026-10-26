@@ -8,15 +8,17 @@
  * funnel's denominator.
  */
 
-import { ArrowRight, X, Zap } from 'lucide-react'
+import { ArrowRight, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router'
+import { useHref } from 'react-router'
+import { ButtonLink } from '@/components/motion/button/base'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { useUltrafastJoined } from '@/screens/ultrafast/ultrafast-price'
+import { PromoCard } from './PromoCard'
 
 const DISMISS_KEY = 'ultrafastBannerDismissed:v1'
 
-function readDismissed(): boolean {
+export function readUltrafastBannerDismissed(): boolean {
   try {
     return localStorage.getItem(DISMISS_KEY) === 'true'
   } catch {
@@ -24,17 +26,21 @@ function readDismissed(): boolean {
   }
 }
 
-export function UltrafastBanner() {
+export function UltrafastBanner({ onClosed }: { onClosed?: () => void }) {
   const joined = useUltrafastJoined()
-  const [dismissed, setDismissed] = useState(readDismissed)
+  const [dismissed, setDismissed] = useState(readUltrafastBannerDismissed)
+  const waitlistHref = useHref('/ultrafast')
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
-      if (event.key === DISMISS_KEY && readDismissed()) setDismissed(true)
+      if (event.key === DISMISS_KEY && readUltrafastBannerDismissed()) {
+        setDismissed(true)
+        onClosed?.()
+      }
     }
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
-  }, [])
+  }, [onClosed])
 
   const dismiss = () => {
     setDismissed(true)
@@ -43,39 +49,34 @@ export function UltrafastBanner() {
     } catch {
       // Still hide this tab's banner when browser storage is unavailable.
     }
+    onClosed?.()
   }
 
   if (joined || dismissed) return null
   return (
-    <div className="relative rounded-lg border border-cyanotype-border bg-accent-tint/50">
-      <Link
-        to="/ultrafast"
-        onClick={() => track(AnalyticsEvent.UltrafastBannerClicked)}
-        className="group flex min-h-12 flex-wrap items-center gap-x-5 gap-y-2 rounded-lg py-2.5 pr-14 pl-[18px] text-[13px] leading-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyanotype-blue focus-visible:ring-offset-2"
-      >
-        <span className="flex shrink-0 items-center gap-2">
-          <Zap aria-hidden="true" className="size-4 text-cyanotype-blue" />
-          <span className="font-[650] text-[16px] text-cyanotype-ink leading-[22px] tracking-[-0.035em]">
-            <span className="text-cyanotype-blue italic">Ultrafast</span> mode
-          </span>
-        </span>
-        <span className="order-last w-full text-cyanotype-soft md:order-none md:w-auto md:min-w-0 md:flex-1 md:border-cyanotype-border md:border-l md:pl-5">
-          Faster browser tasks. 10× fewer tokens from your main agent.
-        </span>
-        <span className="ml-auto flex shrink-0 items-center gap-2 font-medium text-cyanotype-blue underline-offset-4 group-hover:underline">
-          Request early access
-          <ArrowRight aria-hidden="true" className="size-4" />
-        </span>
-      </Link>
-      <button
-        type="button"
-        onClick={dismiss}
-        aria-label="Dismiss this banner"
-        title="Dismiss this banner"
-        className="absolute top-2 right-2 flex size-8 cursor-pointer items-center justify-center rounded-md border border-cyanotype-border bg-background text-cyanotype-ink transition-colors hover:bg-accent-tint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyanotype-blue focus-visible:ring-offset-2"
-      >
-        <X aria-hidden="true" className="size-4" />
-      </button>
-    </div>
+    <PromoCard
+      aria-label="Ultrafast mode"
+      icon={<Zap />}
+      title={
+        <>
+          <em className="text-accent-ink">Ultrafast</em> mode
+        </>
+      }
+      description="Faster browser tasks, with far fewer AI tokens."
+      dismissLabel="Dismiss this banner"
+      onDismiss={dismiss}
+      action={
+        <ButtonLink
+          href={waitlistHref}
+          size="sm"
+          variant="ghost"
+          onClick={() => track(AnalyticsEvent.UltrafastBannerClicked)}
+          className="h-8 px-2.5 font-semibold text-[13.5px] text-accent-ink hover:bg-card/70 hover:text-accent-ink"
+        >
+          Join the waitlist
+          <ArrowRight aria-hidden className="size-[15px]" />
+        </ButtonLink>
+      }
+    />
   )
 }

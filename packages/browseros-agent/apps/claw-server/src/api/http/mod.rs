@@ -18,9 +18,11 @@ use tracing::{Instrument, info_span};
 use ulid::Ulid;
 
 pub(crate) mod audit;
+mod claude_desktop;
 mod cockpit;
 mod connections;
 mod feedback;
+mod help_events;
 mod live;
 mod previews;
 mod recordings;
@@ -66,6 +68,7 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/api/v1/settings/agent/jev-token",
             put(settings::save_jev_token).delete(settings::remove_jev_token),
         )
+        .route("/api/v1/help/events", get(help_events::events))
         .route("/api/v1/sessions", get(sessions::list))
         .route("/api/v1/sessions/{session_id}", get(sessions::get))
         .route(
@@ -104,6 +107,14 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/api/v1/recordings/events",
             post(recordings::append_document_events)
                 .layer(DefaultBodyLimit::max(RECORDING_INGEST_MAX_BYTES)),
+        )
+        .route(
+            "/api/v1/claude-desktop/extension",
+            get(claude_desktop::extension),
+        )
+        .route(
+            "/api/v1/claude-desktop/extension/install",
+            post(claude_desktop::install),
         )
         .route("/api/v1/connections", get(connections::list))
         .route(

@@ -1,9 +1,12 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { MessageSquareText } from 'lucide-react'
+import { CopyButton } from '@/components/copy/CopyButton'
+import { Card } from '@/components/motion/card'
 import { useLiveSessions, useSessions } from '@/modules/api/audit.hooks'
 import { useCancelSession } from '@/modules/api/cancel.hooks'
 import { useFocusBrowserTab } from '@/modules/api/focus.hooks'
 import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
+import { TRY_PROMPT } from '@/screens/cockpit/cockpit-onboarding.helpers'
 import { AgentRunningCard } from './AgentRunningCard'
 
 interface RunningGridProps {
@@ -11,22 +14,22 @@ interface RunningGridProps {
   /** Foreground a blocked agent's tab and open the in-control bar. */
   onTakeOver?: (sessionId: string, browserTabId: number) => void
   takeOverPendingSessionId?: string
+  /** The session whose page the person is in control of, if any. */
+  inControlSessionId?: string
 }
 
-/** Renders one card and one set of controls per connected live session. */
+/** What the agents are doing now, one compact card per task, or a calm idle line. */
 export function RunningGrid({
   sessions,
   onTakeOver,
   takeOverPendingSessionId,
+  inControlSessionId,
 }: RunningGridProps) {
   const queryClient = useQueryClient()
   const focus = useFocusBrowserTab()
   const cancel = useCancelSession()
-  const [pinnedTabBySession, setPinnedTabBySession] = useState<
-    Record<string, number>
-  >({})
 
-  if (sessions.length === 0) return null
+  if (sessions.length === 0) return <IdleCard />
 
   const onWatch = (browserTabId: number) => {
     focus.mutate(
@@ -68,53 +71,26 @@ export function RunningGrid({
       : undefined
 
   return (
-    <section className="ph-no-capture space-y-4">
-      <header className="flex items-baseline gap-3">
-        <h2 className="font-semibold text-ink text-lg">Running now</h2>
-        <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-accent uppercase tracking-[0.08em]">
-          <span
-            aria-hidden
-            className="inline-block size-1.5 animate-[pulse-dot_1.4s_ease-in-out_infinite] rounded-full bg-accent shadow-[0_0_8px_hsl(221_90%_55%/0.5)]"
-          />
-          {sessions.length} live
-        </span>
-      </header>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+    <section
+      aria-labelledby="happening-now"
+      className="ph-no-capture flex flex-col gap-3.5"
+    >
+      <h2
+        id="happening-now"
+        className="font-bold text-[19px] text-cyanotype-ink tracking-[-0.015em]"
+      >
+        Happening now
+      </h2>
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-4">
         {sessions.map((session) => {
-          const rawPin = pinnedTabBySession[session.sessionId]
-          const pinned =
-            rawPin !== undefined &&
-            session.browserTabs.some((tab) => tab.browserTabId === rawPin)
-          // The live target is the most recently active owned tab (browserTabs
-          // is activity-sorted); a sticky selection would lag tab switches.
-          const liveTabId = session.browserTabs[0]?.browserTabId
-          const shownTabId = pinned ? rawPin : liveTabId
+          const tabId = session.browserTabs[0]?.browserTabId
           const help = session.helpRequest
           return (
             <AgentRunningCard
               key={session.sessionId}
               session={session}
-              selectedBrowserTabId={shownTabId}
-              liveBrowserTabId={liveTabId}
-              pinned={pinned}
-              onSelectTab={(browserTabId) =>
-                setPinnedTabBySession((prev) => {
-                  const next = { ...prev }
-                  if (browserTabId === liveTabId) delete next[session.sessionId]
-                  else next[session.sessionId] = browserTabId
-                  return next
-                })
-              }
-              onFollowLive={() =>
-                setPinnedTabBySession((prev) => {
-                  const next = { ...prev }
-                  delete next[session.sessionId]
-                  return next
-                })
-              }
-              onWatch={
-                shownTabId !== undefined ? () => onWatch(shownTabId) : undefined
-              }
+              inControl={inControlSessionId === session.sessionId}
+              onWatch={tabId !== undefined ? () => onWatch(tabId) : undefined}
               onTakeOver={
                 help && onTakeOver
                   ? () => onTakeOver(session.sessionId, help.browserTabId)
@@ -124,7 +100,7 @@ export function RunningGrid({
               isFocusPending={
                 help
                   ? takeOverPendingSessionId === session.sessionId
-                  : pendingBrowserTabId === shownTabId
+                  : pendingBrowserTabId === tabId
               }
               isCancelPending={cancelPendingSessionId === session.sessionId}
             />
@@ -132,5 +108,39 @@ export function RunningGrid({
         })}
       </div>
     </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+
+function IdleCard() {
+  return (
+    <Card
+      variant="muted"
+      size="compact"
+      className="flex-row flex-wrap items-center gap-4 px-5 py-5 md:flex-nowrap"
+    >
+      <span
+        aria-hidden
+        className="grid size-11 shrink-0 place-items-center rounded-full bg-accent-tint text-primary"
+      >
+        <MessageSquareText className="size-[18px]" strokeWidth={1.75} />
+      </span>
+      <div className="flex min-w-0 flex-1 basis-[calc(100%-60px)] flex-col gap-0.5 md:basis-auto">
+        <p className="font-bold text-[16px] text-cyanotype-ink">
+          Ask your AI agents to use neo
+        </p>
+        <p className="text-[14.5px] text-ink-2">
+          Start your message with “use neo” in Claude or any connected agent.
+          You’ll see it here while it works.
+        </p>
+      </div>
+      <CopyButton
+        text={TRY_PROMPT}
+        label="Copy an example"
+        size="sm"
+        className="ml-[60px] h-[34px] font-semibold text-[13.5px] md:ml-0"
+      />
+    </Card>
   )
 }

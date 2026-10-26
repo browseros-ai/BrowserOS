@@ -1,12 +1,12 @@
 import { DiagnosticsPage } from '@browseros/diagnostics/view'
 import type { ReactNode } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router'
-import { CockpitShell } from '@/components/layout/CockpitShell'
+import { AppLayout } from '@/components/layout/AppLayout'
+import { Page } from '@/components/layout/Page'
 import { Analytics } from '@/modules/analytics/Analytics'
 import { Audit } from '@/screens/audit/Audit'
 import { Cockpit } from '@/screens/cockpit/Cockpit'
 import { Mcp } from '@/screens/mcp/Mcp'
-import { Replay } from '@/screens/replay/Replay'
 import { Settings } from '@/screens/settings/Settings'
 import { SkillDetail } from '@/screens/skills/SkillDetail'
 import { Skills } from '@/screens/skills/Skills'
@@ -19,15 +19,15 @@ export function App() {
     <HashRouter>
       <Analytics />
       <Routes>
-        <Route element={<CockpitShell />}>
+        <Route element={<AppLayout />}>
           <Route path="/" element={<Cockpit />} />
           <Route path="/mcp" element={<Mcp />} />
           <Route
             path="/diagnostics"
             element={
-              <div className="mx-auto max-w-5xl px-6 py-10">
+              <Page>
                 <DiagnosticsPage />
-              </div>
+              </Page>
             }
           />
           <Route path="/skills" element={<Skills />} />
@@ -54,7 +54,7 @@ export function App() {
             path="/audit/:sessionId/replay"
             element={
               <SensitiveRouteContent>
-                <Replay />
+                <TaskDetailPage focus="player" />
               </SensitiveRouteContent>
             }
           />

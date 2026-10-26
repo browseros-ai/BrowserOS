@@ -1,10 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
-import { toast } from 'sonner'
+import { useState, useSyncExternalStore } from 'react'
 import { useLiveSessions, useSessions } from '@/modules/api/audit.hooks'
 import { useCancelSession } from '@/modules/api/cancel.hooks'
 import { useFocusBrowserTab } from '@/modules/api/focus.hooks'
 import { useResolveHelp } from '@/modules/api/help.hooks'
+import { toast, toastApiError, toastSuccess } from '@/modules/toast/toast'
 import type { LiveSessionCardRecord } from './cockpit.helpers'
 
 export interface HelpTakeover {
@@ -70,7 +70,7 @@ export function useHelpTakeover(
           setInControlSessionId((current) =>
             current === sessionId ? null : current,
           )
-          toast.error('Could not bring the agent tab forward')
+          toastApiError('Could not bring the agent tab forward', err)
           // eslint-disable-next-line no-console
           console.warn('focus browser tab failed', { browserTabId, err })
         },
@@ -88,11 +88,11 @@ export function useHelpTakeover(
           void queryClient.invalidateQueries({
             queryKey: useLiveSessions.getKey(),
           })
-          if (result.resolved) toast.success('Handed back to the agent')
+          if (result.resolved) toastSuccess('Handed back to the agent')
           else toast('The agent already stopped waiting')
         },
         onError: (err) => {
-          toast.error('Could not hand back to the agent')
+          toastApiError('Could not hand back to the agent', err)
           // eslint-disable-next-line no-console
           console.warn('resolve help failed', { sessionId, err })
         },
@@ -114,7 +114,7 @@ export function useHelpTakeover(
           void queryClient.invalidateQueries({ queryKey: useSessions.getKey() })
         },
         onError: (err) => {
-          toast.error('Could not stop the agent')
+          toastApiError('Could not stop the agent', err)
           // eslint-disable-next-line no-console
           console.warn('cancel session failed', { sessionId, err })
         },
@@ -135,4 +135,16 @@ export function useHelpTakeover(
         : undefined,
     isHandingBack: resolve.isPending,
   }
+}
+
+function subscribeToMinutes(onChange: () => void): () => void {
+  const timer = window.setInterval(onChange, 60_000)
+  return () => window.clearInterval(timer)
+}
+
+const currentHour = () => new Date().getHours()
+
+/** The local hour, re-read every minute so a tab left open keeps the right greeting. */
+export function useCurrentHour(): number {
+  return useSyncExternalStore(subscribeToMinutes, currentHour, currentHour)
 }
