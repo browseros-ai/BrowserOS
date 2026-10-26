@@ -2,7 +2,7 @@ use crate::{
     BrowserContextId, BrowserProfileId, CoreError, PageId, ProtocolSession, SessionId, TabId,
     TargetError, TargetId, WindowId,
     connection::{CdpConnection, EXCLUDED_URL_PREFIXES, EpochGuard},
-    mobile_mode::{self, MobileRecord},
+    mobile_mode::{self, ViewportRecord},
     profiles::ProfileMeta,
     target::PageAdmission,
     timeouts,
@@ -29,6 +29,9 @@ pub type OnPageDetached = Arc<dyn Fn(PageId) + Send + Sync>;
 pub struct PageManagerHooks {
     pub on_session_attached: Option<OnSessionAttached>,
     pub on_page_detached: Option<OnPageDetached>,
+    /// Hosted servers keep every tab they attach to in a fixed viewport: the desktop preset
+    /// until the tab is switched to mobile. Off, a tab keeps its own size until toggled.
+    pub desktop_by_default: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -86,9 +89,10 @@ struct PageState {
     // list. Only these get focus emulation on attach, so an adopted user tab keeps
     // its real focus state (#2778).
     agent_created: HashSet<PageId>,
-    // Mobile presets, written only by `mobile_mode`. A PageId outlives target replacement,
-    // so the new target gets its preset on attach; pruned together with `agent_created`.
-    mobile: HashMap<PageId, MobileRecord>,
+    // Fixed viewports, written only by `mobile_mode` and the hosted default. A PageId outlives
+    // target replacement, so the new target gets its preset on attach; pruned with
+    // `agent_created`.
+    viewports: HashMap<PageId, ViewportRecord>,
     connection_epoch: u64,
     next_page_id: u32,
 }
@@ -178,7 +182,7 @@ impl PageManager {
                 if let Some(info) = info {
                     release_session(&self.cdp, &mut state.sessions, &info.target_id);
                     state.agent_created.remove(&page_id);
-                    state.mobile.remove(&page_id);
+                    state.viewports.remove(&page_id);
                     detached.push(page_id);
                 }
             }
@@ -279,16 +283,12 @@ impl PageManager {
             })
     }
 
-    pub(crate) async fn mobile_record(&self, page: &PageId) -> Option<MobileRecord> {
-        self.state.lock().await.mobile.get(page).cloned()
+    pub(crate) async fn viewport_record(&self, page: &PageId) -> Option<ViewportRecord> {
+        self.state.lock().await.viewports.get(page).cloned()
     }
 
-    pub(crate) async fn set_mobile_record(&self, page: PageId, record: MobileRecord) {
-        self.state.lock().await.mobile.insert(page, record);
-    }
-
-    pub(crate) async fn take_mobile_record(&self, page: &PageId) -> Option<MobileRecord> {
-        self.state.lock().await.mobile.remove(page)
+    pub(crate) async fn set_viewport_record(&self, page: PageId, record: ViewportRecord) {
+        self.state.lock().await.viewports.insert(page, record);
     }
 
     pub async fn get_info(&self, page_id: PageId) -> Option<PageInfo> {
@@ -647,7 +647,7 @@ impl PageManager {
         state.pages.remove(&page_id);
         release_session(&self.cdp, &mut state.sessions, &info.target_id);
         state.agent_created.remove(&page_id);
-        state.mobile.remove(&page_id);
+        state.viewports.remove(&page_id);
         drop(state);
         if let Some(callback) = &self.hooks.on_page_detached {
             callback(page_id);
@@ -744,18 +744,20 @@ impl PageManager {
         {
             warn!("failed to enable focus emulation for agent page {page_id:?}: {err}");
         }
-        // Chromium dropped the mode with the tab's previous session. Re-apply it before the
-        // session is published, so no other call can use the tab in between.
-        let record = self.state.lock().await.mobile.get(&page_id).cloned();
-        let mut input_scale = None;
+        // Chromium dropped the viewport with the tab's previous session. Re-apply it, or the
+        // hosted desktop default, before the session is published, so no other call can use
+        // the tab in between.
+        let record = self.state.lock().await.viewports.get(&page_id).cloned();
+        let record = record.or_else(|| self.hooks.desktop_by_default.then(ViewportRecord::desktop));
+        let mut applied = None;
         if let Some(record) = record {
             match mobile_mode::apply(&session, &record).await {
-                Ok(()) => input_scale = Some(record.zoom().scale()),
+                Ok(()) => applied = Some(record),
                 Err(failure) => {
-                    // Never fail the attach: a tab that cannot attach cannot be disabled either.
-                    warn!("failed to re-apply mobile mode to page {page_id:?}: {failure}");
+                    // Never fail the attach: a tab that cannot attach cannot be switched either.
+                    warn!("failed to re-apply the fixed viewport to page {page_id:?}: {failure}");
                     let _ = mobile_mode::clear(&session).await;
-                    self.state.lock().await.mobile.remove(&page_id);
+                    self.state.lock().await.viewports.remove(&page_id);
                 }
             }
         }
@@ -765,10 +767,12 @@ impl PageManager {
                 guard.check(self.cdp.as_ref())?;
             }
             state.sessions.insert(target_id, session_id.clone());
-            if let Some(scale) = input_scale
-                && self.cdp.connection_epoch() == epoch
-            {
-                mobile_mode::register_input_scale(&self.cdp, epoch, &session_id, scale);
+            if let Some(record) = applied {
+                if self.cdp.connection_epoch() == epoch {
+                    let scale = record.input_scale();
+                    mobile_mode::register_input_scale(&self.cdp, epoch, &session_id, scale);
+                }
+                state.viewports.entry(page_id.clone()).or_insert(record);
             }
         }
         if let Some(callback) = &self.hooks.on_session_attached {

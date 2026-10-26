@@ -1087,7 +1087,7 @@ impl BrowserView {
         Ok(capture)
     }
 
-    /// Switches one existing tab between desktop and the mobile preset (see `mobile_mode`).
+    /// Puts one existing tab in the fixed mobile or desktop viewport (see `mobile_mode`).
     pub async fn toggle_mobile_mode(
         &self,
         page: PageId,
@@ -1105,15 +1105,15 @@ impl BrowserView {
             Some(access) => access.session().await?,
             None => self.session.pages.get_session(page.clone()).await?,
         };
-        let record = match mode.zoom() {
-            Some(zoom) => {
+        let record = match mode {
+            MobileMode::Mobile(zoom) => {
                 let version = self.cdp("Browser.getVersion", json!({}), None).await?;
-                Some(crate::mobile_mode::MobileRecord::new(
+                crate::mobile_mode::ViewportRecord::mobile(
                     crate::mobile_mode::browser_major(&version)?,
                     zoom,
-                ))
+                )
             }
-            None => None,
+            MobileMode::Desktop => crate::mobile_mode::ViewportRecord::desktop(),
         };
         tokio::spawn(crate::mobile_mode::toggle(crate::mobile_mode::Toggle {
             view: self.clone(),

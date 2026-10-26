@@ -1,4 +1,5 @@
-//! Per-tab mobile mode: one fixed Android preset drawn at a device-preview zoom.
+//! Per-tab fixed viewports: a mobile preset (Android, 400x906 at 2x, drawn at a device-preview
+//! zoom) or a desktop preset (1920x1080 at 1x with the browser's own identity).
 //!
 //! Chromium keeps a page session's emulation across reloads, navigations and renderer swaps,
 //! and clears it when the session ends. The page registry therefore keeps the applied preset
@@ -19,6 +20,9 @@ use std::{
 pub const MOBILE_WIDTH: i64 = 400;
 pub const MOBILE_HEIGHT: i64 = 906;
 pub const MOBILE_DEVICE_SCALE_FACTOR: f64 = 2.0;
+pub const DESKTOP_WIDTH: i64 = 1920;
+pub const DESKTOP_HEIGHT: i64 = 1080;
+pub const DESKTOP_DEVICE_SCALE_FACTOR: f64 = 1.0;
 pub const MIN_ZOOM: f64 = 25.0;
 pub const MAX_ZOOM: f64 = 400.0;
 const DEFAULT_ZOOM: f64 = 100.0;
@@ -64,6 +68,7 @@ impl Zoom {
     }
 }
 
+/// The two fixed viewports. Desktop is the fixed 1920x1080 preset, not the tab's own size.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MobileMode {
     Desktop,
@@ -90,9 +95,22 @@ impl MobileMode {
         }
     }
 
+    /// Logical CSS width, height and device pixel ratio.
     #[must_use]
-    pub fn visible_size(self) -> Option<(i64, i64)> {
-        self.zoom().map(Zoom::visible_size)
+    pub fn viewport(self) -> (i64, i64, f64) {
+        match self {
+            Self::Desktop => (DESKTOP_WIDTH, DESKTOP_HEIGHT, DESKTOP_DEVICE_SCALE_FACTOR),
+            Self::Mobile(_) => (MOBILE_WIDTH, MOBILE_HEIGHT, MOBILE_DEVICE_SCALE_FACTOR),
+        }
+    }
+
+    /// The tab's view: the viewport drawn at the zoom (desktop is always 100%).
+    #[must_use]
+    pub fn visible_size(self) -> (i64, i64) {
+        match self {
+            Self::Desktop => (DESKTOP_WIDTH, DESKTOP_HEIGHT),
+            Self::Mobile(zoom) => zoom.visible_size(),
+        }
     }
 }
 
@@ -186,7 +204,7 @@ pub enum WindowOutcome {
 /// What a failed change left the tab in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MobileModeState {
-    Desktop,
+    /// Its earlier preset, or its own viewport if this tool had never set one.
     Previous,
     Unknown,
 }
@@ -194,8 +212,7 @@ pub enum MobileModeState {
 impl fmt::Display for MobileModeState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Desktop => "desktop (every mobile setting was cleared)",
-            Self::Previous => "previous (the earlier mobile preset was restored)",
+            Self::Previous => "previous (the tab's earlier viewport settings were restored)",
             Self::Unknown => {
                 "unknown (the tab's settings could not be confirmed; call toggleMobileMode again)"
             }
@@ -266,53 +283,98 @@ pub(crate) struct FittedWindow {
     applied: WindowBounds,
 }
 
-/// The preset applied to one PageId. Re-applying it on a new session needs no version read.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct MobileRecord {
-    zoom: Zoom,
-    user_agent: String,
-    metadata: Value,
+enum Preset {
+    Mobile {
+        zoom: Zoom,
+        user_agent: String,
+        metadata: Value,
+    },
+    Desktop,
+}
+
+/// The fixed viewport applied to one PageId. Re-applying it on a new session needs no version
+/// read; a mobile record also remembers a window this tool fitted.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ViewportRecord {
+    preset: Preset,
     window: Option<FittedWindow>,
 }
 
-impl MobileRecord {
-    pub(crate) fn new(major: u32, zoom: Zoom) -> Self {
+impl ViewportRecord {
+    pub(crate) fn mobile(major: u32, zoom: Zoom) -> Self {
         Self {
-            zoom,
-            user_agent: format!(
-                "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Mobile Safari/537.36"
-            ),
-            // No brands or full versions: Chromium fills them from the running browser, so
-            // they always agree with the UA's major version.
-            metadata: json!({"platform":"Android","platformVersion":"10.0.0","architecture":"",
-                "model":"K","mobile":true,"formFactors":["Mobile"]}),
+            preset: Preset::Mobile {
+                zoom,
+                user_agent: format!(
+                    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Mobile Safari/537.36"
+                ),
+                // No brands or full versions: Chromium fills them from the running browser,
+                // so they always agree with the UA's major version.
+                metadata: json!({"platform":"Android","platformVersion":"10.0.0",
+                    "architecture":"","model":"K","mobile":true,"formFactors":["Mobile"]}),
+            },
             window: None,
         }
     }
 
-    pub(crate) fn zoom(&self) -> Zoom {
-        self.zoom
+    pub(crate) fn desktop() -> Self {
+        Self {
+            preset: Preset::Desktop,
+            window: None,
+        }
+    }
+
+    pub(crate) fn mode(&self) -> MobileMode {
+        match &self.preset {
+            Preset::Mobile { zoom, .. } => MobileMode::Mobile(*zoom),
+            Preset::Desktop => MobileMode::Desktop,
+        }
+    }
+
+    pub(crate) fn input_scale(&self) -> f64 {
+        self.mode().zoom().map_or(1.0, Zoom::scale)
     }
 
     fn commands(&self) -> [(&'static str, Value); 4] {
-        let (width, height) = self.zoom.visible_size();
-        [
-            (
-                SET_USER_AGENT,
-                json!({"userAgent":self.user_agent,"userAgentMetadata":self.metadata}),
-            ),
-            (SET_TOUCH, json!({"enabled":true,"maxTouchPoints":1})),
-            (
-                SET_METRICS,
-                json!({"width":MOBILE_WIDTH,"height":MOBILE_HEIGHT,
-                    "deviceScaleFactor":MOBILE_DEVICE_SCALE_FACTOR,"mobile":true,
-                    "scale":self.zoom.scale(),"screenWidth":MOBILE_WIDTH,
-                    "screenHeight":MOBILE_HEIGHT,
-                    "screenOrientation":{"type":"portraitPrimary","angle":0},
-                    "dontSetVisibleSize":true}),
-            ),
-            (SET_VISIBLE_SIZE, json!({"width":width,"height":height})),
-        ]
+        let (width, height) = self.mode().visible_size();
+        match &self.preset {
+            Preset::Mobile {
+                zoom,
+                user_agent,
+                metadata,
+            } => [
+                (
+                    SET_USER_AGENT,
+                    json!({"userAgent":user_agent,"userAgentMetadata":metadata}),
+                ),
+                (SET_TOUCH, json!({"enabled":true,"maxTouchPoints":1})),
+                (
+                    SET_METRICS,
+                    json!({"width":MOBILE_WIDTH,"height":MOBILE_HEIGHT,
+                        "deviceScaleFactor":MOBILE_DEVICE_SCALE_FACTOR,"mobile":true,
+                        "scale":zoom.scale(),"screenWidth":MOBILE_WIDTH,
+                        "screenHeight":MOBILE_HEIGHT,
+                        "screenOrientation":{"type":"portraitPrimary","angle":0},
+                        "dontSetVisibleSize":true}),
+                ),
+                (SET_VISIBLE_SIZE, json!({"width":width,"height":height})),
+            ],
+            // An empty UA restores the browser's own identity and client hints.
+            Preset::Desktop => [
+                (SET_USER_AGENT, json!({"userAgent":""})),
+                (SET_TOUCH, json!({"enabled":false})),
+                (
+                    SET_METRICS,
+                    json!({"width":DESKTOP_WIDTH,"height":DESKTOP_HEIGHT,
+                        "deviceScaleFactor":DESKTOP_DEVICE_SCALE_FACTOR,"mobile":false,
+                        "scale":1.0,"screenWidth":DESKTOP_WIDTH,"screenHeight":DESKTOP_HEIGHT,
+                        "screenOrientation":{"type":"landscapePrimary","angle":0},
+                        "dontSetVisibleSize":true}),
+                ),
+                (SET_VISIBLE_SIZE, json!({"width":width,"height":height})),
+            ],
+        }
     }
 }
 
@@ -357,7 +419,7 @@ impl fmt::Display for StepFailure {
 /// Sends the preset in its fixed order and stops at the first failure.
 pub(crate) async fn apply(
     session: &ProtocolSession,
-    record: &MobileRecord,
+    record: &ViewportRecord,
 ) -> Result<(), StepFailure> {
     for (step, params) in record.commands() {
         session
@@ -368,8 +430,9 @@ pub(crate) async fn apply(
     Ok(())
 }
 
-/// Clears exactly the settings `apply` owns, sending every clear even after a failure. Clearing
-/// the metrics override also restores the view size; focus emulation is not ours to touch.
+/// Returns a tab this tool never set to its own viewport: clears exactly the settings `apply`
+/// owns, sending every clear even after a failure. Clearing the metrics override also restores
+/// the view size; focus emulation is not ours to touch.
 pub(crate) async fn clear(session: &ProtocolSession) -> Result<(), StepFailure> {
     let mut failed = None;
     for (step, params) in [
@@ -384,15 +447,14 @@ pub(crate) async fn clear(session: &ProtocolSession) -> Result<(), StepFailure> 
     failed.map_or(Ok(()), Err)
 }
 
-/// One toggle request with its admitted page session. `record` is the preset to apply, or None
-/// to restore desktop.
+/// One toggle request with its admitted page session and the preset to apply.
 pub(crate) struct Toggle {
     pub(crate) view: BrowserView,
     pub(crate) pages: Arc<PageManager>,
     pub(crate) page: PageId,
     pub(crate) session: PageSession,
     pub(crate) access: Option<Arc<PageAccess>>,
-    pub(crate) record: Option<MobileRecord>,
+    pub(crate) record: ViewportRecord,
     pub(crate) window: WindowFit,
 }
 
@@ -404,7 +466,7 @@ pub(crate) async fn toggle(request: Toggle) -> Result<MobileModeOutcome, CoreErr
         page,
         session,
         access,
-        record,
+        mut record,
         window,
     } = request;
     // A screenshot saves the emulation and view size and restores them afterwards, so a
@@ -412,56 +474,28 @@ pub(crate) async fn toggle(request: Toggle) -> Result<MobileModeOutcome, CoreErr
     let capture_lock = crate::screenshot::screenshot_mutex(&session.session);
     let _capture = capture_lock.lock().await;
     let protocol = &session.session;
-    let previous = pages.mobile_record(&page).await;
+    let previous = pages.viewport_record(&page).await;
     let mut outcome = MobileModeOutcome {
         page: page.clone(),
-        mode: record.as_ref().map_or(MobileMode::Desktop, |record| {
-            MobileMode::Mobile(record.zoom)
-        }),
-        changed: previous.as_ref().map(MobileRecord::zoom)
-            != record.as_ref().map(MobileRecord::zoom),
+        mode: record.mode(),
+        changed: previous.as_ref().map(ViewportRecord::mode) != Some(record.mode()),
         reload_required: !matches!(session.url.as_str(), "" | "about:blank"),
         window: None,
-    };
-    let Some(mut record) = record else {
-        // Desktop is the desired state whatever the clears report.
-        let fitted = pages
-            .take_mobile_record(&page)
-            .await
-            .and_then(|record| record.window);
-        forget_input_scale(protocol.connection(), &session.session_id);
-        let cleared = clear(protocol).await;
-        if let Some(fitted) = fitted {
-            outcome.window = Some(restore_window(&view, fitted).await);
-        }
-        return match cleared {
-            Ok(()) => Ok(outcome),
-            Err(failure) => {
-                let mut error = failure.into_error(MobileModeState::Unknown);
-                if let (CoreError::MobileMode { detail, .. }, Some(window)) =
-                    (&mut error, &outcome.window)
-                {
-                    detail.push_str(&format!("; {window}"));
-                }
-                Err(error)
-            }
-        };
     };
     let epoch = protocol.connection().connection_epoch();
     if let Err(failure) = apply(protocol, &record).await {
         // Chromium stores the UA before it validates the metadata, so the undo re-sends a
         // complete state, including the step that failed.
         let restored = match &previous {
-            Some(previous) => apply(protocol, previous)
-                .await
-                .is_ok()
-                .then_some(MobileModeState::Previous),
-            None => clear(protocol)
-                .await
-                .is_ok()
-                .then_some(MobileModeState::Desktop),
+            Some(previous) => apply(protocol, previous).await.is_ok(),
+            None => clear(protocol).await.is_ok(),
         };
-        return Err(failure.into_error(restored.unwrap_or(MobileModeState::Unknown)));
+        let state = if restored {
+            MobileModeState::Previous
+        } else {
+            MobileModeState::Unknown
+        };
+        return Err(failure.into_error(state));
     }
     let info = confirm_target(&pages, &page, &session, access.as_deref())
         .await
@@ -470,15 +504,24 @@ pub(crate) async fn toggle(request: Toggle) -> Result<MobileModeOutcome, CoreErr
             state: MobileModeState::Unknown,
             detail: error.to_string(),
         })?;
-    record.window = previous.and_then(|previous| previous.window);
-    if window == WindowFit::Resize {
-        let (fit, fitted) =
-            fit_window(&view, protocol, info.window_id, record.zoom, record.window).await;
-        outcome.window = Some(fit);
-        record.window = fitted;
-    }
-    let scale = record.zoom.scale();
-    pages.set_mobile_record(page, record).await;
+    let fitted = previous.and_then(|previous| previous.window);
+    record.window = match (record.mode(), window) {
+        (MobileMode::Mobile(zoom), WindowFit::Resize) => {
+            let (fit, kept) = fit_window(&view, protocol, info.window_id, zoom, fitted).await;
+            outcome.window = Some(fit);
+            kept
+        }
+        (MobileMode::Mobile(_), WindowFit::Keep) => fitted,
+        // Leaving mobile hands a window this tool fitted back, unless someone resized it since.
+        (MobileMode::Desktop, _) => {
+            if let Some(fitted) = fitted {
+                outcome.window = Some(restore_window(&view, fitted).await);
+            }
+            None
+        }
+    };
+    let scale = record.input_scale();
+    pages.set_viewport_record(page, record).await;
     if protocol.connection().connection_epoch() == epoch {
         register_input_scale(protocol.connection(), epoch, &session.session_id, scale);
     }

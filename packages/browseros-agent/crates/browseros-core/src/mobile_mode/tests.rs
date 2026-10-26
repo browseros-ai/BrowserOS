@@ -322,7 +322,13 @@ async fn harness_with(
     tabs: Vec<Value>,
     hooks: BrowserSessionHooks,
 ) -> Result<(Harness, PageId), CoreError> {
-    let native = Native::new(tabs);
+    harness_with_native(Native::new(tabs), hooks).await
+}
+
+async fn harness_with_native(
+    native: Arc<Native>,
+    hooks: BrowserSessionHooks,
+) -> Result<(Harness, PageId), CoreError> {
     let browser = BrowserSession::new(native.clone(), hooks);
     let page = browser
         .pages
@@ -359,6 +365,7 @@ fn publication_marker(native: &Arc<Native>) -> BrowserSessionHooks {
                 })
             })),
             on_page_detached: None,
+            desktop_by_default: false,
         },
     }
 }
@@ -391,11 +398,28 @@ fn preset(scale: f64, width: i64, height: i64) -> Vec<(String, Value)> {
     ]
 }
 
-fn desktop() -> Vec<(String, Value)> {
+/// The undo for a tab this tool never set: back to the tab's own viewport.
+fn cleared() -> Vec<(String, Value)> {
     vec![
         (CLEAR.into(), json!({})),
         (TOUCH.into(), json!({"enabled":false})),
         (UA.into(), json!({"userAgent":""})),
+    ]
+}
+
+/// enabled:false: the fixed 1920x1080 desktop viewport at 1x with the browser's own identity.
+fn desktop_preset() -> Vec<(String, Value)> {
+    vec![
+        (UA.into(), json!({"userAgent":""})),
+        (TOUCH.into(), json!({"enabled":false})),
+        (
+            METRICS.into(),
+            json!({"width":1920,"height":1080,"deviceScaleFactor":1.0,"mobile":false,
+                "scale":1.0,"screenWidth":1920,"screenHeight":1080,
+                "screenOrientation":{"type":"landscapePrimary","angle":0},
+                "dontSetVisibleSize":true}),
+        ),
+        (VISIBLE.into(), json!({"width":1920,"height":1080})),
     ]
 }
 
@@ -414,13 +438,20 @@ fn on_session(calls: &[Call], session: &SessionId) -> Vec<Call> {
         .collect()
 }
 
-async fn record_zoom(harness: &Harness, page: &PageId) -> Option<f64> {
+async fn record_mode(harness: &Harness, page: &PageId) -> Option<MobileMode> {
     harness
         .browser
         .pages
-        .mobile_record(page)
+        .viewport_record(page)
         .await
-        .map(|record| record.zoom().percent())
+        .map(|record| record.mode())
+}
+
+async fn record_zoom(harness: &Harness, page: &PageId) -> Option<f64> {
+    record_mode(harness, page)
+        .await
+        .and_then(MobileMode::zoom)
+        .map(Zoom::percent)
 }
 
 async fn page_session(harness: &Harness, page: &PageId) -> Result<ProtocolSession, CoreError> {
@@ -496,7 +527,7 @@ async fn enable_reads_the_root_version_then_sends_the_preset_in_order() -> TestR
         .toggle_mobile_mode(page.clone(), MobileMode::from_request(true, None)?)
         .await?;
     assert_eq!(outcome.mode, mobile(100.0)?);
-    assert_eq!(outcome.mode.visible_size(), Some((400, 906)));
+    assert_eq!(outcome.mode.visible_size(), (400, 906));
     assert!(outcome.changed);
     assert!(!outcome.reload_required);
 
@@ -553,7 +584,7 @@ async fn zoom_sets_the_scale_and_the_visible_size() -> TestResult {
             .view
             .toggle_mobile_mode(page.clone(), mobile(zoom)?)
             .await?;
-        assert_eq!(outcome.mode.visible_size(), Some((width, height)));
+        assert_eq!(outcome.mode.visible_size(), (width, height));
         assert!(outcome.reload_required);
         assert_eq!(
             sent(&harness.native.emulation()),
@@ -617,7 +648,7 @@ async fn changing_zoom_replaces_the_preset_and_repeats_resend_it() -> TestResult
 }
 
 #[tokio::test]
-async fn disable_clears_only_the_owned_settings() -> TestResult {
+async fn disable_selects_the_fixed_desktop_preset() -> TestResult {
     let (harness, page) = harness(vec![tab(1, "https://example.test/")]).await?;
     let session = page_session(&harness, &page).await?;
     harness
@@ -632,8 +663,12 @@ async fn disable_clears_only_the_owned_settings() -> TestResult {
         .await?;
     assert!(outcome.changed);
     assert!(outcome.reload_required);
-    assert_eq!(sent(&harness.native.since(mark)), desktop());
-    assert_eq!(record_zoom(&harness, &page).await, None);
+    assert_eq!(outcome.mode.visible_size(), (1920, 1080));
+    assert_eq!(sent(&harness.native.since(mark)), desktop_preset());
+    assert_eq!(
+        record_mode(&harness, &page).await,
+        Some(MobileMode::Desktop)
+    );
     assert_eq!(input_scale(&session), 1.0);
     assert!(
         harness
@@ -646,15 +681,15 @@ async fn disable_clears_only_the_owned_settings() -> TestResult {
 }
 
 #[tokio::test]
-async fn disabling_a_desktop_tab_is_safe() -> TestResult {
+async fn selecting_desktop_on_an_untouched_tab_applies_the_preset() -> TestResult {
     let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
     let outcome = harness
         .view
         .toggle_mobile_mode(page.clone(), MobileMode::Desktop)
         .await?;
-    assert!(!outcome.changed);
+    assert!(outcome.changed);
     assert!(!outcome.reload_required);
-    assert_eq!(sent(&harness.native.emulation()), desktop());
+    assert_eq!(sent(&harness.native.emulation()), desktop_preset());
     assert!(
         harness
             .native
@@ -662,11 +697,158 @@ async fn disabling_a_desktop_tab_is_safe() -> TestResult {
             .iter()
             .all(|call| call.method != "Browser.getVersion")
     );
+    assert_eq!(
+        record_mode(&harness, &page).await,
+        Some(MobileMode::Desktop)
+    );
     Ok(())
 }
 
 #[tokio::test]
-async fn a_failed_step_from_desktop_undoes_everything_including_itself() -> TestResult {
+async fn selecting_desktop_again_resends_it_and_reports_no_change() -> TestResult {
+    let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
+    harness
+        .view
+        .toggle_mobile_mode(page.clone(), MobileMode::Desktop)
+        .await?;
+    let mark = harness.native.mark();
+    let again = harness
+        .view
+        .toggle_mobile_mode(page.clone(), MobileMode::Desktop)
+        .await?;
+    assert!(!again.changed);
+    assert_eq!(sent(&harness.native.since(mark)), desktop_preset());
+    Ok(())
+}
+
+#[tokio::test]
+async fn mobile_desktop_mobile_switches_presets_each_time() -> TestResult {
+    let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
+    let session = page_session(&harness, &page).await?;
+    for mode in [mobile(100.0)?, MobileMode::Desktop, mobile(150.0)?] {
+        let outcome = harness.view.toggle_mobile_mode(page.clone(), mode).await?;
+        assert!(outcome.changed);
+        assert_eq!(record_mode(&harness, &page).await, Some(mode));
+    }
+    let mut expected = preset(1.0, 400, 906);
+    expected.extend(desktop_preset());
+    expected.extend(preset(1.5, 600, 1359));
+    assert_eq!(sent(&harness.native.emulation()), expected);
+    assert_eq!(input_scale(&session), 1.5);
+    Ok(())
+}
+
+#[tokio::test]
+async fn reattach_restores_the_desktop_preset() -> TestResult {
+    let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
+    harness
+        .view
+        .toggle_mobile_mode(page.clone(), MobileMode::Desktop)
+        .await?;
+    let old = harness.browser.pages.get_session(page.clone()).await?;
+    harness.browser.pages.detach_session(&old.session_id).await;
+    let mark = harness.native.mark();
+    let fresh = harness.browser.pages.get_session(page.clone()).await?;
+    let emulation = on_session(&harness.native.since(mark), &fresh.session_id)
+        .into_iter()
+        .filter(|call| call.method.starts_with("Emulation."))
+        .collect::<Vec<_>>();
+    assert_eq!(sent(&emulation), desktop_preset());
+    assert_eq!(
+        record_mode(&harness, &page).await,
+        Some(MobileMode::Desktop)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_failed_desktop_selection_restores_the_mobile_preset() -> TestResult {
+    let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
+    let session = page_session(&harness, &page).await?;
+    harness
+        .view
+        .toggle_mobile_mode(page.clone(), mobile(150.0)?)
+        .await?;
+    harness.native.fail(METRICS, 1);
+    let mark = harness.native.emulation().len();
+    let result = harness
+        .view
+        .toggle_mobile_mode(page.clone(), MobileMode::Desktop)
+        .await;
+    assert_eq!(
+        failure(result)?,
+        (METRICS.to_string(), MobileModeState::Previous)
+    );
+    let mut expected = desktop_preset()[..3].to_vec();
+    expected.extend(preset(1.5, 600, 1359));
+    assert_eq!(sent(&harness.native.emulation()[mark..]), expected);
+    assert_eq!(record_zoom(&harness, &page).await, Some(150.0));
+    assert_eq!(input_scale(&session), 1.5);
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_hosted_default_puts_an_attached_tab_in_desktop_before_publication() -> TestResult {
+    let native = Native::new(vec![tab(1, "about:blank")]);
+    let mut hooks = publication_marker(&native);
+    hooks.page_manager.desktop_by_default = true;
+    let (harness, page) = harness_with_native(native, hooks).await?;
+    let session = harness.browser.pages.get_session(page.clone()).await?;
+    let calls = on_session(&harness.native.calls(), &session.session_id);
+    let published = calls
+        .iter()
+        .position(|call| call.method == PUBLISHED)
+        .ok_or("publication missing")?;
+    let emulation = calls[..published]
+        .iter()
+        .filter(|call| call.method.starts_with("Emulation."))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(sent(&emulation), desktop_preset());
+    assert_eq!(
+        record_mode(&harness, &page).await,
+        Some(MobileMode::Desktop)
+    );
+    let explicit = harness
+        .view
+        .toggle_mobile_mode(page.clone(), MobileMode::Desktop)
+        .await?;
+    assert!(!explicit.changed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_explicit_mobile_choice_outlives_the_hosted_default_on_reattach() -> TestResult {
+    let mut hooks = BrowserSessionHooks::default();
+    hooks.page_manager.desktop_by_default = true;
+    let (harness, page) = harness_with(vec![tab(1, "about:blank")], hooks).await?;
+    harness
+        .view
+        .toggle_mobile_mode(page.clone(), mobile(150.0)?)
+        .await?;
+    let old = harness.browser.pages.get_session(page.clone()).await?;
+    harness.browser.pages.detach_session(&old.session_id).await;
+    let mark = harness.native.mark();
+    let fresh = harness.browser.pages.get_session(page.clone()).await?;
+    let emulation = on_session(&harness.native.since(mark), &fresh.session_id)
+        .into_iter()
+        .filter(|call| call.method.starts_with("Emulation."))
+        .collect::<Vec<_>>();
+    assert_eq!(sent(&emulation), preset(1.5, 600, 1359));
+    Ok(())
+}
+
+#[tokio::test]
+async fn without_the_hosted_default_nothing_is_applied_on_attach() -> TestResult {
+    let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
+    harness.browser.pages.get_session(page.clone()).await?;
+    assert!(harness.native.emulation().is_empty());
+    assert_eq!(record_mode(&harness, &page).await, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_failed_step_on_an_untouched_tab_restores_its_own_viewport() -> TestResult {
     for step in [UA, TOUCH, METRICS, VISIBLE] {
         let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
         let session = page_session(&harness, &page).await?;
@@ -677,15 +859,15 @@ async fn a_failed_step_from_desktop_undoes_everything_including_itself() -> Test
             .await;
         assert_eq!(
             failure(result)?,
-            (step.to_string(), MobileModeState::Desktop)
+            (step.to_string(), MobileModeState::Previous)
         );
         let emulation = harness.native.emulation();
         let failed = emulation
             .iter()
             .position(|call| call.method == step)
             .ok_or("failed step was not sent")?;
-        assert_eq!(sent(&emulation[failed + 1..]), desktop(), "{step}");
-        assert_eq!(record_zoom(&harness, &page).await, None);
+        assert_eq!(sent(&emulation[failed + 1..]), cleared(), "{step}");
+        assert_eq!(record_mode(&harness, &page).await, None);
         assert_eq!(input_scale(&session), 1.0);
     }
     Ok(())
@@ -731,7 +913,7 @@ async fn an_unconfirmed_rollback_reports_unknown_and_keeps_the_record() -> TestR
         failure(result)?,
         (METRICS.to_string(), MobileModeState::Unknown)
     );
-    assert_eq!(record_zoom(&from_desktop, &page).await, None);
+    assert_eq!(record_mode(&from_desktop, &page).await, None);
 
     // From 100%: restoring the previous preset fails too.
     let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
@@ -771,30 +953,6 @@ async fn a_lost_connection_reports_unknown() -> TestResult {
         (TOUCH.to_string(), MobileModeState::Unknown)
     );
     assert_eq!(record_zoom(&harness, &page).await, Some(100.0));
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_failed_disable_still_sends_every_clear_and_drops_the_record() -> TestResult {
-    let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
-    let session = page_session(&harness, &page).await?;
-    harness
-        .view
-        .toggle_mobile_mode(page.clone(), mobile(150.0)?)
-        .await?;
-    harness.native.fail(TOUCH, 1);
-    let mark = harness.native.mark();
-    let result = harness
-        .view
-        .toggle_mobile_mode(page.clone(), MobileMode::Desktop)
-        .await;
-    assert_eq!(
-        failure(result)?,
-        (TOUCH.to_string(), MobileModeState::Unknown)
-    );
-    assert_eq!(sent(&harness.native.since(mark)), desktop());
-    assert_eq!(record_zoom(&harness, &page).await, None);
-    assert_eq!(input_scale(&session), 1.0);
     Ok(())
 }
 
@@ -976,9 +1134,9 @@ async fn a_failed_reapply_clears_the_tab_drops_the_record_and_still_attaches() -
         .filter(|call| call.method.starts_with("Emulation."))
         .collect::<Vec<_>>();
     let mut expected = preset(1.5, 600, 1359)[..3].to_vec();
-    expected.extend(desktop());
+    expected.extend(cleared());
     assert_eq!(sent(&emulation), expected);
-    assert_eq!(record_zoom(&harness, &page).await, None);
+    assert_eq!(record_mode(&harness, &page).await, None);
     assert_eq!(input_scale(&fresh.session), 1.0);
     Ok(())
 }
@@ -992,7 +1150,7 @@ async fn closing_a_page_drops_its_record_and_input_scale() -> TestResult {
         .toggle_mobile_mode(page.clone(), mobile(150.0)?)
         .await?;
     harness.browser.pages.close(page.clone()).await?;
-    assert_eq!(record_zoom(&harness, &page).await, None);
+    assert_eq!(record_mode(&harness, &page).await, None);
     assert_eq!(input_scale(&session), 1.0);
     Ok(())
 }
@@ -1007,7 +1165,7 @@ async fn a_pruned_page_drops_its_record_and_input_scale() -> TestResult {
         .await?;
     harness.native.lock().tabs.retain(|tab| tab["tabId"] != 1);
     harness.browser.pages.list().await?;
-    assert_eq!(record_zoom(&harness, &page).await, None);
+    assert_eq!(record_mode(&harness, &page).await, None);
     assert_eq!(input_scale(&session), 1.0);
     Ok(())
 }
@@ -1064,7 +1222,7 @@ async fn a_second_page_never_gets_the_preset() -> TestResult {
             .all(|call| !call.method.starts_with("Emulation."))
     );
     assert_eq!(input_scale(&second.session), 1.0);
-    assert_eq!(record_zoom(&harness, &other).await, None);
+    assert_eq!(record_mode(&harness, &other).await, None);
     Ok(())
 }
 

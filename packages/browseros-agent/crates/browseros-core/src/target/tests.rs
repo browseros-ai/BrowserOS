@@ -3246,7 +3246,7 @@ async fn bound_mobile_mode_reads_the_scoped_version_and_drives_the_admitted_sess
     let view = view(native.clone(), None).await;
     let page = page_id(&view, 1).await?;
     let outcome = view.toggle_mobile_mode(page.clone(), mobile_150()?).await?;
-    assert_eq!(outcome.mode.visible_size(), Some((600, 1359)));
+    assert_eq!(outcome.mode.visible_size(), (600, 1359));
     let version = native.calls("Browser.getVersion");
     assert_eq!(version.len(), 1);
     assert!(version[0].session.is_none(), "version is a root read");
@@ -3273,19 +3273,22 @@ async fn bound_mobile_mode_reads_the_scoped_version_and_drives_the_admitted_sess
 
     view.toggle_mobile_mode(page.clone(), crate::mobile_mode::MobileMode::Desktop)
         .await?;
-    let cleared = emulation_calls(&native);
+    let desktop = emulation_calls(&native);
     assert_eq!(
-        cleared[4..]
+        desktop[4..]
             .iter()
             .map(|call| call.method.as_str())
             .collect::<Vec<_>>(),
         vec![
-            "Emulation.clearDeviceMetricsOverride",
-            "Emulation.setTouchEmulationEnabled",
             "Emulation.setUserAgentOverride",
+            "Emulation.setTouchEmulationEnabled",
+            "Emulation.setDeviceMetricsOverride",
+            "Emulation.setVisibleSize",
         ]
     );
-    assert!(cleared.iter().all(|call| call.session == session));
+    assert_eq!(desktop[6].params["width"], 1920);
+    assert_eq!(desktop[6].params["deviceScaleFactor"], 1.0);
+    assert!(desktop.iter().all(|call| call.session == session));
     assert!(native.calls("Network.setUserAgentOverride").is_empty());
     assert!(
         native
@@ -3397,7 +3400,7 @@ async fn a_target_change_during_a_bound_toggle_is_unknown_and_unrecorded() -> Te
         ),
         "{result:?}"
     );
-    assert!(view.session.pages.mobile_record(&page).await.is_none());
+    assert!(view.session.pages.viewport_record(&page).await.is_none());
     Ok(())
 }
 
