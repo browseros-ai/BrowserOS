@@ -1,5 +1,5 @@
 import { Search } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Input } from '@/components/motion/input'
 import {
   Select,
@@ -37,7 +37,6 @@ export function FilterBar({
 }: FilterBarProps) {
   const [draft, setDraft] = useState(search)
   const [lastSearch, setLastSearch] = useState(search)
-  const timer = useRef<number | undefined>(undefined)
 
   // "Show all tasks" clears the search from outside; follow it.
   if (search !== lastSearch) {
@@ -45,17 +44,18 @@ export function FilterBar({
     setDraft(search)
   }
 
-  // A search still waiting to apply must not rewrite the next page's URL.
-  useEffect(() => () => window.clearTimeout(timer.current), [])
-
-  const typeSearch = (next: string) => {
-    setDraft(next)
-    window.clearTimeout(timer.current)
-    timer.current = window.setTimeout(
-      () => onSearchChange(next.trim()),
+  // A debounce timer tied to the typed text. It restarts with the newest
+  // callback, so a filter picked while it waits is kept, and it is cleared
+  // when the bar goes away so a pending search never rewrites the next URL.
+  useEffect(() => {
+    const next = draft.trim()
+    if (next === search) return
+    const timer = window.setTimeout(
+      () => onSearchChange(next),
       SEARCH_DEBOUNCE_MS,
     )
-  }
+    return () => window.clearTimeout(timer)
+  }, [draft, search, onSearchChange])
 
   return (
     <div className="flex flex-wrap items-center gap-2.5">
@@ -64,7 +64,7 @@ export function FilterBar({
         aria-label="Search tasks"
         placeholder="Search tasks"
         value={draft}
-        onChange={typeSearch}
+        onChange={setDraft}
         leftIcon={<Search className="size-[18px]" />}
         className="min-w-[240px] flex-1"
         classNames={{
