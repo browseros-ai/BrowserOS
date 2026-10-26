@@ -8,6 +8,7 @@ export type CaptchaFamily =
   | 'none'
 export type TerminalStatus =
   | 'solved'
+  | 'token_applied'
   | 'already_clear'
   | 'unsupported'
   | 'failed'
@@ -244,6 +245,21 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
       acceptedPattern: '"success"\\s*:\\s*true',
     },
     notes: 'Cloudflare public interactive test key.',
+  },
+  {
+    id: 'arkose-demo',
+    title: 'Arkose non-production demo',
+    kind: 'demo',
+    family: 'arkose',
+    url: 'https://demo.arkoselabs.com/?key=11111111-1111-1111-1111-111111111111',
+    sitekey: '11111111-1111-1111-1111-111111111111',
+    expect: ['token_applied'],
+    expectType: 'arkose',
+    maxPaidTasks: 1,
+    mayNeedPaid: true,
+    ready:
+      '(() => { const name = Object.keys(window).find(k => /^arkoseLabsClientApi/.test(k)); const state = name && window[name]?.state; return !!state?.iframe?.isConnected && !!state.token && !state.error && state.iframe.getBoundingClientRect().height > 0; })()',
+    notes: 'Arkose-owned test key. SDK delivery only; no server verification.',
   },
 ]
 
