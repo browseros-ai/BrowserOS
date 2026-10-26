@@ -3,10 +3,11 @@
 # BrowserOS neo on a virtual display, streamed to a browser tab over noVNC,
 # with Neo's MCP server reachable from outside the container.
 #
-#   docker build --no-cache-filter neo --build-arg NEO_VERSION=0.51.1.4 -t neo .
+#   docker build --no-cache-filter neo --build-arg NEO_VERSION=0.51.2.5 -t neo .
 #
 # The runtime contract (ports 6080/9010, /data, env vars) is documented in
-# README.md; entrypoint.sh implements it.
+# README.md; entrypoint.sh implements it. Use Neo 0.51.2.5 or later: older
+# browsers ignore the switch that gives the viewer its minimal frame.
 
 # Optional local package. Empty by default; `--build-context neo-deb=<dir>` with
 # one .deb in <dir> installs that build instead of downloading NEO_VERSION. This
@@ -98,7 +99,7 @@ ENV NEO_SCREEN=1600x1000 \
     NEO_SANDBOX=false \
     BROWSEROS_CAPSOLVER_API_KEY_FILE=/home/neo/.config/browseros/captcha/capsolver-api-key \
     BROWSEROS_2CAPTCHA_API_KEY_FILE=/home/neo/.config/browseros/captcha/2captcha-api-key \
-    NEO_DISABLE_BROWSEROS_EXTENSIONS=false \
+    NEO_DISABLE_BROWSEROS_EXTENSIONS=true \
     NEO_ARGS="" \
     PUID=1000 \
     PGID=1000
