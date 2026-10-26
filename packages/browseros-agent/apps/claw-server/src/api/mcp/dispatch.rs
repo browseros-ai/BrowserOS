@@ -1512,9 +1512,9 @@ mod tests {
     }
 
     /// The hosted gate holds inside run as well: a desktop server's script cannot reach the
-    /// fixed-viewport tool through page.toggleMobileMode, while a hosted server's script can.
+    /// viewport-mode tool through page.toggleMode, while a hosted server's script can.
     #[tokio::test]
-    async fn run_reaches_toggle_mobile_mode_only_on_a_hosted_server() -> anyhow::Result<()> {
+    async fn run_reaches_toggle_mode_only_on_a_hosted_server() -> anyhow::Result<()> {
         use crate::api::mcp::test_support::{ProfileConnection, tool_call_in_mode};
         use crate::config::ServerMode;
         for mode in [ServerMode::Desktop, ServerMode::Hosted] {
@@ -1527,7 +1527,7 @@ mod tests {
             browser.pages.list().await?;
             let mut call = tool_call_in_mode(
                 "run",
-                json!({"code":"return await browser.page(1).toggleMobileMode({ enabled: false })"}),
+                json!({"code":"return await browser.page(1).toggleMode({ mode: 'desktop' })"}),
                 mode,
             )
             .await?;

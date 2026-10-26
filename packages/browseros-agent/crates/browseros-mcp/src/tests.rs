@@ -641,7 +641,7 @@ fn catalog_order_is_stable() {
             "grep",
             "screenshot",
             "pdf",
-            "toggleMobileMode",
+            "toggleMode",
             "wait",
             "windows",
             "evaluate",
@@ -675,7 +675,7 @@ fn catalog_page_metadata_matches_host_dispatch_contract() {
             ("grep", true),
             ("screenshot", true),
             ("pdf", true),
-            ("toggleMobileMode", true),
+            ("toggleMode", true),
             ("wait", true),
             ("windows", false),
             ("evaluate", true),
@@ -845,7 +845,7 @@ fn structured_tools_advertise_output_schemas() {
             "browser_profiles",
             "browser_target",
             "credentials",
-            "toggleMobileMode",
+            "toggleMode",
             "run"
         ]
     );
@@ -1924,14 +1924,19 @@ fn mobile_calls(connection: &HarnessConnection, from: usize) -> Vec<HarnessCall>
 }
 
 #[test]
-fn toggle_mobile_mode_schema_is_strict_and_states_its_reach() {
-    let tool = tool_by_name("toggleMobileMode");
+fn toggle_mode_schema_is_strict_and_states_its_reach() {
+    let tool = tool_by_name("toggleMode");
     let schema = Value::Object(tool.input_schema.as_ref().clone());
     assert_eq!(
         schema.get("additionalProperties"),
         Some(&json!({ "not": {} }))
     );
-    assert_eq!(schema.get("required"), Some(&json!(["page", "enabled"])));
+    assert_eq!(schema.get("required"), Some(&json!(["page", "mode"])));
+    assert_eq!(
+        schema.pointer("/properties/mode/enum"),
+        Some(&json!(["mobile", "desktop", "freesize"]))
+    );
+    assert!(schema.pointer("/properties/enabled").is_none());
     assert_eq!(schema.pointer("/properties/page/minimum"), Some(&json!(1)));
     assert_eq!(schema.pointer("/properties/zoom/minimum"), Some(&json!(25)));
     assert_eq!(
@@ -1947,29 +1952,34 @@ fn toggle_mobile_mode_schema_is_strict_and_states_its_reach() {
         "Raw page.cdp Input coordinates are in zoomed view space",
         "shared by every tab in it",
         "not the viewport size",
+        "switch to freesize first",
     ] {
         assert!(tool.description.contains(promise), "{promise}");
     }
 }
 
 #[tokio::test]
-async fn toggle_mobile_mode_rejects_invalid_arguments_before_its_own_cdp() {
+async fn toggle_mode_rejects_invalid_arguments_before_its_own_cdp() {
     let invalid = [
-        json!({ "enabled": true }),
+        json!({ "mode": "mobile" }),
         json!({ "page": 1 }),
-        json!({ "page": 0, "enabled": true }),
-        json!({ "page": 1, "enabled": true, "zoom": 0 }),
-        json!({ "page": 1, "enabled": true, "zoom": 24.9 }),
-        json!({ "page": 1, "enabled": true, "zoom": 400.1 }),
-        json!({ "page": 1, "enabled": false, "zoom": 100 }),
-        json!({ "page": 1, "enabled": false, "resizeWindow": true }),
-        json!({ "page": 1, "enabled": true, "width": 390 }),
+        json!({ "page": 1, "mode": "tablet" }),
+        json!({ "page": 1, "enabled": true }),
+        json!({ "page": 0, "mode": "mobile" }),
+        json!({ "page": 1, "mode": "mobile", "zoom": 0 }),
+        json!({ "page": 1, "mode": "mobile", "zoom": 24.9 }),
+        json!({ "page": 1, "mode": "mobile", "zoom": 400.1 }),
+        json!({ "page": 1, "mode": "desktop", "zoom": 100 }),
+        json!({ "page": 1, "mode": "freesize", "zoom": 100 }),
+        json!({ "page": 1, "mode": "desktop", "resizeWindow": true }),
+        json!({ "page": 1, "mode": "freesize", "resizeWindow": true }),
+        json!({ "page": 1, "mode": "mobile", "width": 390 }),
     ];
     for args in invalid {
         let (mut ctx, connection, _page) = harness_ctx().await;
         ctx.hosted = true;
         let before = connection.calls().len();
-        let tool = tool_by_name("toggleMobileMode");
+        let tool = tool_by_name("toggleMode");
         let mut response = ToolResponse::new();
         let handled = (tool.handler)(args.clone(), &ctx, &mut response).await;
         assert!(
@@ -1990,13 +2000,13 @@ async fn toggle_mobile_mode_rejects_invalid_arguments_before_its_own_cdp() {
 }
 
 #[tokio::test]
-async fn toggle_mobile_mode_reports_the_effective_preset() {
+async fn toggle_mode_reports_the_effective_preset() {
     let (mut ctx, connection, page) = harness_ctx().await;
     ctx.hosted = true;
-    let tool = tool_by_name("toggleMobileMode");
+    let tool = tool_by_name("toggleMode");
     let result = execute_tool(
         &tool,
-        json!({ "page": page, "enabled": true, "zoom": 150 }),
+        json!({ "page": page, "mode": "mobile", "zoom": 150 }),
         &ctx,
     )
     .await
@@ -2006,7 +2016,7 @@ async fn toggle_mobile_mode_reports_the_effective_preset() {
         result.structured_content,
         Some(json!({
             "page": page,
-            "enabled": true,
+            "mode": "mobile",
             "zoom": 150,
             "viewport": { "width": 400, "height": 906, "deviceScaleFactor": 2 },
             "visibleSize": { "width": 600, "height": 1359 },
@@ -2049,14 +2059,14 @@ async fn toggle_mobile_mode_reports_the_effective_preset() {
         ]
     );
 
-    let result = execute_tool(&tool, json!({ "page": page, "enabled": false }), &ctx)
+    let result = execute_tool(&tool, json!({ "page": page, "mode": "desktop" }), &ctx)
         .await
-        .unwrap_or_else(|err| panic!("disable failed: {err}"));
+        .unwrap_or_else(|err| panic!("desktop failed: {err}"));
     assert_eq!(
         result.structured_content,
         Some(json!({
             "page": page,
-            "enabled": false,
+            "mode": "desktop",
             "viewport": { "width": 1920, "height": 1080, "deviceScaleFactor": 1 },
             "visibleSize": { "width": 1920, "height": 1080 },
             "changed": true,
@@ -2068,17 +2078,36 @@ async fn toggle_mobile_mode_reports_the_effective_preset() {
         "{}",
         result_text(&result)
     );
+
+    let result = execute_tool(&tool, json!({ "page": page, "mode": "freesize" }), &ctx)
+        .await
+        .unwrap_or_else(|err| panic!("freesize failed: {err}"));
+    assert_eq!(
+        result.structured_content,
+        Some(json!({
+            "page": page,
+            "mode": "freesize",
+            "changed": true,
+            "reloadRequired": true
+        }))
+    );
+    assert!(
+        result_text(&result).contains("viewport commands are allowed"),
+        "{}",
+        result_text(&result)
+    );
 }
 
 #[tokio::test]
-async fn toggle_mobile_mode_runs_only_for_a_hosted_host() {
+async fn toggle_mode_runs_only_for_a_hosted_host() {
     let (mut ctx, connection, page) = harness_ctx().await;
     ctx.hosted = false;
     let before = connection.calls().len();
-    let tool = tool_by_name("toggleMobileMode");
+    let tool = tool_by_name("toggleMode");
     for args in [
-        json!({ "page": page, "enabled": true, "zoom": 150 }),
-        json!({ "page": page, "enabled": false }),
+        json!({ "page": page, "mode": "mobile", "zoom": 150 }),
+        json!({ "page": page, "mode": "desktop" }),
+        json!({ "page": page, "mode": "freesize" }),
     ] {
         let result = execute_tool(&tool, args.clone(), &ctx)
             .await
@@ -2096,16 +2125,16 @@ async fn toggle_mobile_mode_runs_only_for_a_hosted_host() {
         .filter(|tool| tool.metadata.hosted_only)
         .map(|tool| tool.name)
         .collect::<Vec<_>>();
-    assert_eq!(hosted_only, ["toggleMobileMode"]);
+    assert_eq!(hosted_only, ["toggleMode"]);
 }
 
 #[tokio::test]
-async fn toggle_mobile_mode_reports_the_actual_window_bounds() {
+async fn toggle_mode_reports_the_actual_window_bounds() {
     let (mut ctx, connection, page) = harness_ctx().await;
     ctx.hosted = true;
     let result = execute_tool(
-        &tool_by_name("toggleMobileMode"),
-        json!({ "page": page, "enabled": true, "resizeWindow": true }),
+        &tool_by_name("toggleMode"),
+        json!({ "page": page, "mode": "mobile", "resizeWindow": true }),
         &ctx,
     )
     .await

@@ -24,9 +24,9 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 pub const TASK_NAME_ARG: &str = "taskName";
-/// Fixed mobile and desktop viewports exist only on hosted servers; the desktop app keeps its
-/// own sizing. Tool execution enforces the same gate for run's nested calls.
-pub const MOBILE_MODE_TOOL_NAME: &str = "toggleMobileMode";
+/// Viewport modes (fixed mobile, fixed desktop, freesize) exist only on hosted servers; the
+/// desktop app keeps its own sizing. Tool execution enforces the same gate for run's nested calls.
+pub const TOGGLE_MODE_TOOL_NAME: &str = "toggleMode";
 // Repeated in every listed tool's schema, so it stays short; the instructions carry the rest.
 const TASK_NAME_ARG_DESCRIPTION: &str = "Optional 2-3 word label for this task, e.g. \"invoice processing\". Send it once, early; your tabs are grouped as <client>/<label>.";
 /// The clause of [`TASK_NAME_ARG_DESCRIPTION`] that promises the server's own tab group.
@@ -36,8 +36,8 @@ pub(super) const TASK_NAME_GROUPING: &str = "; your tabs are grouped as <client>
 const NAME_SESSION_REFUSAL: &str = "name_session is not available on this hosted BrowserOS neo server. Pass taskName=\"<2-3 word task label>\" on any tool call instead.";
 const SKILLS_REFUSAL: &str = "Skills are not available on this hosted BrowserOS neo server: nothing was saved or recorded. Keep repeatable workflows in your own agent instead.";
 const HUMAN_HELP_REFUSAL: &str = "Human help is not available on this hosted BrowserOS neo server. Do not wait for a human here: stop and tell the user in your chat what you need.";
-const MOBILE_MODE_REFUSAL: &str =
-    "toggleMobileMode is only available on a hosted BrowserOS neo server; nothing was changed.";
+const TOGGLE_MODE_REFUSAL: &str =
+    "toggleMode is only available on a hosted BrowserOS neo server; nothing was changed.";
 
 /// Why the server refuses `tool` in `mode`, or `None` when the mode offers it.
 ///
@@ -47,7 +47,7 @@ const MOBILE_MODE_REFUSAL: &str =
 #[must_use]
 pub fn refusal(mode: ServerMode, tool: &str) -> Option<&'static str> {
     if !mode.is_hosted() {
-        return (tool == MOBILE_MODE_TOOL_NAME).then_some(MOBILE_MODE_REFUSAL);
+        return (tool == TOGGLE_MODE_TOOL_NAME).then_some(TOGGLE_MODE_REFUSAL);
     }
     match tool {
         NAME_SESSION_TOOL_NAME => Some(NAME_SESSION_REFUSAL),
@@ -135,7 +135,7 @@ mod tests {
         for tool in HIDDEN.into_iter().chain(["tabs", "run", "pursue"]) {
             assert_eq!(refusal(ServerMode::Desktop, tool), None, "{tool}");
         }
-        let message = refusal(ServerMode::Desktop, MOBILE_MODE_TOOL_NAME).unwrap_or_default();
+        let message = refusal(ServerMode::Desktop, TOGGLE_MODE_TOOL_NAME).unwrap_or_default();
         assert!(message.contains("hosted"), "{message}");
     }
 
@@ -145,7 +145,7 @@ mod tests {
             assert!(refusal(ServerMode::Hosted, tool).is_some(), "{tool}");
         }
         // pursue keeps its own gate, the decision-model credential.
-        for tool in ["tabs", "run", "act", "pursue", MOBILE_MODE_TOOL_NAME] {
+        for tool in ["tabs", "run", "act", "pursue", TOGGLE_MODE_TOOL_NAME] {
             assert_eq!(refusal(ServerMode::Hosted, tool), None, "{tool}");
         }
     }

@@ -3532,9 +3532,9 @@ mod tests {
         Ok(())
     }
 
-    /// Only a hosted server offers the fixed-viewport tool; the desktop app keeps its sizing.
+    /// Only a hosted server offers the viewport-mode tool; the desktop app keeps its sizing.
     #[tokio::test]
-    async fn toggle_mobile_mode_is_listed_only_by_hosted_servers() -> anyhow::Result<()> {
+    async fn toggle_mode_is_listed_only_by_hosted_servers() -> anyhow::Result<()> {
         for (mode, listed) in [(ServerMode::Desktop, false), (ServerMode::Hosted, true)] {
             let call =
                 crate::api::mcp::test_support::tool_call_in_mode("tabs", json!({}), mode).await?;
@@ -3545,7 +3545,7 @@ mod tests {
                 .map(|tool| tool.name.to_string())
                 .collect::<Vec<_>>();
             assert_eq!(
-                names.iter().any(|name| name == "toggleMobileMode"),
+                names.iter().any(|name| name == "toggleMode"),
                 listed,
                 "{mode:?}: {names:?}"
             );
@@ -3756,7 +3756,7 @@ mod tests {
         expected.push(AWAIT_HELP_TOOL_NAME.to_string());
         assert_eq!(names, expected);
         assert!(names.contains(&"run".to_string()));
-        assert!(!names.contains(&hosted::MOBILE_MODE_TOOL_NAME.to_string()));
+        assert!(!names.contains(&hosted::TOGGLE_MODE_TOOL_NAME.to_string()));
         assert!(names.contains(&"name_session".to_string()));
         assert!(names.contains(&"save_skill".to_string()));
         assert!(names.contains(&"mark_skill_run".to_string()));

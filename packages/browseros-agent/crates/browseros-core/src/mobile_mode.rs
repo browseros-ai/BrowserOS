@@ -1,5 +1,6 @@
-//! Per-tab fixed viewports: a mobile preset (Android, 400x906 at 2x, drawn at a device-preview
-//! zoom) or a desktop preset (1920x1080 at 1x with the browser's own identity).
+//! Per-tab viewport modes: fixed mobile (Android, 400x906 at 2x, drawn at a device-preview
+//! zoom), fixed desktop (1920x1080 at 1x with the browser's own identity), or freesize (the
+//! tab's own viewport, chosen explicitly). Callers cannot change a fixed mode's viewport.
 //!
 //! Chromium keeps a page session's emulation across reloads, navigations and renderer swaps,
 //! and clears it when the session ends. The page registry therefore keeps the applied preset
@@ -68,48 +69,75 @@ impl Zoom {
     }
 }
 
-/// The two fixed viewports. Desktop is the fixed 1920x1080 preset, not the tab's own size.
+/// The mode a caller names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModeKind {
+    Mobile,
+    Desktop,
+    Freesize,
+}
+
+/// A tab's viewport mode. Mobile and desktop are fixed; freesize is the tab's own viewport.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MobileMode {
     Desktop,
     Mobile(Zoom),
+    Freesize,
 }
 
 impl MobileMode {
     /// The tool's arguments, validated before anything reaches the browser.
-    pub fn from_request(enabled: bool, zoom: Option<f64>) -> Result<Self, MobileModeArgError> {
-        match (enabled, zoom) {
-            (false, None) => Ok(Self::Desktop),
-            (false, Some(_)) => Err(MobileModeArgError::ZoomWithoutMobile),
-            (true, zoom) => Ok(Self::Mobile(Zoom::from_percent(
+    pub fn new(kind: ModeKind, zoom: Option<f64>) -> Result<Self, MobileModeArgError> {
+        match (kind, zoom) {
+            (ModeKind::Mobile, zoom) => Ok(Self::Mobile(Zoom::from_percent(
                 zoom.unwrap_or(DEFAULT_ZOOM),
             )?)),
+            (_, Some(_)) => Err(MobileModeArgError::ZoomWithoutMobile),
+            (ModeKind::Desktop, None) => Ok(Self::Desktop),
+            (ModeKind::Freesize, None) => Ok(Self::Freesize),
         }
+    }
+
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Desktop => "desktop",
+            Self::Mobile(_) => "mobile",
+            Self::Freesize => "freesize",
+        }
+    }
+
+    /// A fixed mode holds the viewport: caller viewport commands are refused.
+    #[must_use]
+    pub fn is_fixed(self) -> bool {
+        self != Self::Freesize
     }
 
     #[must_use]
     pub fn zoom(self) -> Option<Zoom> {
         match self {
-            Self::Desktop => None,
             Self::Mobile(zoom) => Some(zoom),
+            Self::Desktop | Self::Freesize => None,
         }
     }
 
-    /// Logical CSS width, height and device pixel ratio.
+    /// Logical CSS width, height and device pixel ratio of a fixed mode.
     #[must_use]
-    pub fn viewport(self) -> (i64, i64, f64) {
+    pub fn viewport(self) -> Option<(i64, i64, f64)> {
         match self {
-            Self::Desktop => (DESKTOP_WIDTH, DESKTOP_HEIGHT, DESKTOP_DEVICE_SCALE_FACTOR),
-            Self::Mobile(_) => (MOBILE_WIDTH, MOBILE_HEIGHT, MOBILE_DEVICE_SCALE_FACTOR),
+            Self::Desktop => Some((DESKTOP_WIDTH, DESKTOP_HEIGHT, DESKTOP_DEVICE_SCALE_FACTOR)),
+            Self::Mobile(_) => Some((MOBILE_WIDTH, MOBILE_HEIGHT, MOBILE_DEVICE_SCALE_FACTOR)),
+            Self::Freesize => None,
         }
     }
 
-    /// The tab's view: the viewport drawn at the zoom (desktop is always 100%).
+    /// The tab's view in a fixed mode: the viewport drawn at the zoom (desktop is 100%).
     #[must_use]
-    pub fn visible_size(self) -> (i64, i64) {
+    pub fn visible_size(self) -> Option<(i64, i64)> {
         match self {
-            Self::Desktop => (DESKTOP_WIDTH, DESKTOP_HEIGHT),
-            Self::Mobile(zoom) => zoom.visible_size(),
+            Self::Desktop => Some((DESKTOP_WIDTH, DESKTOP_HEIGHT)),
+            Self::Mobile(zoom) => Some(zoom.visible_size()),
+            Self::Freesize => None,
         }
     }
 }
@@ -131,17 +159,17 @@ pub struct MobileModeRequest {
 
 impl MobileModeRequest {
     pub fn new(
-        enabled: bool,
+        kind: ModeKind,
         zoom: Option<f64>,
         resize_window: Option<bool>,
     ) -> Result<Self, MobileModeArgError> {
-        let window = match (enabled, resize_window.unwrap_or(false)) {
+        let window = match (kind, resize_window.unwrap_or(false)) {
             (_, false) => WindowFit::Keep,
-            (true, true) => WindowFit::Resize,
-            (false, true) => return Err(MobileModeArgError::ResizeWindowWithoutMobile),
+            (ModeKind::Mobile, true) => WindowFit::Resize,
+            (_, true) => return Err(MobileModeArgError::ResizeWindowWithoutMobile),
         };
         Ok(Self {
-            mode: MobileMode::from_request(enabled, zoom)?,
+            mode: MobileMode::new(kind, zoom)?,
             window,
         })
     }
@@ -160,9 +188,11 @@ impl From<MobileMode> for MobileModeRequest {
 pub enum MobileModeArgError {
     #[error("zoom must be a number from 25 to 400")]
     ZoomOutOfRange,
-    #[error("zoom is only accepted with enabled: true")]
+    #[error("zoom is only accepted with mode \"mobile\"")]
     ZoomWithoutMobile,
-    #[error("resizeWindow is only accepted with enabled: true; disabling restores the window")]
+    #[error(
+        "resizeWindow is only accepted with mode \"mobile\"; leaving mobile restores the window"
+    )]
     ResizeWindowWithoutMobile,
 }
 
@@ -190,7 +220,7 @@ pub enum WindowOutcome {
         window: Option<WindowId>,
         reason: String,
     },
-    /// Disable put the window back to the bounds this tool found it at.
+    /// Leaving mobile put the window back to the bounds this tool found it at.
     Restored {
         window: WindowId,
         bounds: WindowBounds,
@@ -214,7 +244,7 @@ impl fmt::Display for MobileModeState {
         f.write_str(match self {
             Self::Previous => "previous (the tab's earlier viewport settings were restored)",
             Self::Unknown => {
-                "unknown (the tab's settings could not be confirmed; call toggleMobileMode again)"
+                "unknown (the tab's settings could not be confirmed; call toggleMode again)"
             }
         })
     }
@@ -228,7 +258,7 @@ pub struct MobileModeOutcome {
     pub changed: bool,
     /// The loaded document predates the change; only a reload gets server-chosen content.
     pub reload_required: bool,
-    /// Present when a fit was requested, or when disable found a fitted window.
+    /// Present when a fit was requested, or when leaving mobile found a fitted window.
     pub window: Option<WindowOutcome>,
 }
 
@@ -291,10 +321,11 @@ enum Preset {
         metadata: Value,
     },
     Desktop,
+    Freesize,
 }
 
-/// The fixed viewport applied to one PageId. Re-applying it on a new session needs no version
-/// read; a mobile record also remembers a window this tool fitted.
+/// The mode chosen for one PageId. Re-applying it on a new session needs no version read; a
+/// mobile record also remembers a window this tool fitted.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ViewportRecord {
     preset: Preset,
@@ -325,10 +356,18 @@ impl ViewportRecord {
         }
     }
 
+    pub(crate) fn freesize() -> Self {
+        Self {
+            preset: Preset::Freesize,
+            window: None,
+        }
+    }
+
     pub(crate) fn mode(&self) -> MobileMode {
         match &self.preset {
             Preset::Mobile { zoom, .. } => MobileMode::Mobile(*zoom),
             Preset::Desktop => MobileMode::Desktop,
+            Preset::Freesize => MobileMode::Freesize,
         }
     }
 
@@ -336,14 +375,14 @@ impl ViewportRecord {
         self.mode().zoom().map_or(1.0, Zoom::scale)
     }
 
-    fn commands(&self) -> [(&'static str, Value); 4] {
-        let (width, height) = self.mode().visible_size();
+    fn commands(&self) -> Vec<(&'static str, Value)> {
+        let (width, height) = self.mode().visible_size().unwrap_or_default();
         match &self.preset {
             Preset::Mobile {
                 zoom,
                 user_agent,
                 metadata,
-            } => [
+            } => vec![
                 (
                     SET_USER_AGENT,
                     json!({"userAgent":user_agent,"userAgentMetadata":metadata}),
@@ -361,7 +400,7 @@ impl ViewportRecord {
                 (SET_VISIBLE_SIZE, json!({"width":width,"height":height})),
             ],
             // An empty UA restores the browser's own identity and client hints.
-            Preset::Desktop => [
+            Preset::Desktop => vec![
                 (SET_USER_AGENT, json!({"userAgent":""})),
                 (SET_TOUCH, json!({"enabled":false})),
                 (
@@ -374,8 +413,32 @@ impl ViewportRecord {
                 ),
                 (SET_VISIBLE_SIZE, json!({"width":width,"height":height})),
             ],
+            Preset::Freesize => clears(),
         }
     }
+}
+
+/// The overrides this feature owns, cleared. Clearing the metrics override also restores the
+/// view size; focus emulation is not ours to touch.
+fn clears() -> Vec<(&'static str, Value)> {
+    vec![
+        (CLEAR_METRICS, json!({})),
+        (SET_TOUCH, json!({"enabled":false})),
+        (SET_USER_AGENT, json!({"userAgent":""})),
+    ]
+}
+
+/// Caller commands that would override or clear a tab's logical viewport. Page's deprecated
+/// metrics commands forward to Emulation.
+pub(crate) fn locks_viewport(method: &str) -> bool {
+    matches!(
+        method,
+        SET_METRICS
+            | CLEAR_METRICS
+            | SET_VISIBLE_SIZE
+            | "Page.setDeviceMetricsOverride"
+            | "Page.clearDeviceMetricsOverride"
+    )
 }
 
 /// The UA major comes from the browser process (`product` is "Chrome/<version>"), never from
@@ -430,16 +493,11 @@ pub(crate) async fn apply(
     Ok(())
 }
 
-/// Returns a tab this tool never set to its own viewport: clears exactly the settings `apply`
-/// owns, sending every clear even after a failure. Clearing the metrics override also restores
-/// the view size; focus emulation is not ours to touch.
+/// Returns a tab this tool never set to its own viewport, sending every clear even after a
+/// failure.
 pub(crate) async fn clear(session: &ProtocolSession) -> Result<(), StepFailure> {
     let mut failed = None;
-    for (step, params) in [
-        (CLEAR_METRICS, json!({})),
-        (SET_TOUCH, json!({"enabled":false})),
-        (SET_USER_AGENT, json!({"userAgent":""})),
-    ] {
+    for (step, params) in clears() {
         if let Err(error) = session.send_value(step, params).await {
             failed.get_or_insert(StepFailure { step, error });
         }
@@ -507,23 +565,47 @@ pub(crate) async fn toggle(request: Toggle) -> Result<MobileModeOutcome, CoreErr
     let fitted = previous.and_then(|previous| previous.window);
     record.window = match (record.mode(), window) {
         (MobileMode::Mobile(zoom), WindowFit::Resize) => {
-            let (fit, kept) = fit_window(&view, protocol, info.window_id, zoom, fitted).await;
+            let (fit, kept) = fit_window(&view, info.window_id, zoom, fitted).await;
             outcome.window = Some(fit);
             kept
         }
         (MobileMode::Mobile(_), WindowFit::Keep) => fitted,
         // Leaving mobile hands a window this tool fitted back, unless someone resized it since.
-        (MobileMode::Desktop, _) => {
+        (MobileMode::Desktop | MobileMode::Freesize, _) => {
             if let Some(fitted) = fitted {
                 outcome.window = Some(restore_window(&view, fitted).await);
             }
             None
         }
     };
+    // Any window change resets the tab's view to the window's content area, which would
+    // silently undo a fixed mode's view; freesize wants the window's own size anyway.
+    let resent = match (&outcome.window, record.mode().visible_size()) {
+        (Some(_), Some((width, height))) => protocol
+            .send_value(SET_VISIBLE_SIZE, json!({"width":width,"height":height}))
+            .await
+            .map(|_| ()),
+        _ => Ok(()),
+    };
     let scale = record.input_scale();
     pages.set_viewport_record(page, record).await;
     if protocol.connection().connection_epoch() == epoch {
         register_input_scale(protocol.connection(), epoch, &session.session_id, scale);
+    }
+    if let Err(error) = resent {
+        let window = outcome
+            .window
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        return Err(CoreError::MobileMode {
+            step: SET_VISIBLE_SIZE.into(),
+            state: MobileModeState::Unknown,
+            detail: format!(
+                "{error}, after the window change ({window}); the {} viewport is applied but the tab's view may not match it",
+                outcome.mode.name()
+            ),
+        });
     }
     Ok(outcome)
 }
@@ -597,7 +679,6 @@ async fn set_contents(
 /// the window. Returns the fit to remember: the new one, or the earlier one when nothing moved.
 async fn fit_window(
     view: &BrowserView,
-    protocol: &ProtocolSession,
     window: Option<WindowId>,
     zoom: Zoom,
     previous: Option<FittedWindow>,
@@ -643,29 +724,22 @@ async fn fit_window(
     }
     .await;
     match resized {
-        Ok((fitted, probe, applied)) => {
-            // Resizing the window resets the tab's view to the content area. Re-send the
-            // zoomed view so a clamped window does not show the page wider than its preset.
-            let _ = protocol
-                .send_value(SET_VISIBLE_SIZE, json!({"width":width,"height":height}))
-                .await;
-            (
-                WindowOutcome::Fitted {
-                    window,
-                    bounds: applied,
-                    requested: (width, height),
-                    exact: (
-                        probe.width == fitted.width + 1,
-                        probe.height == fitted.height + 1,
-                    ),
-                },
-                Some(FittedWindow {
-                    window,
-                    original,
-                    applied,
-                }),
-            )
-        }
+        Ok((fitted, probe, applied)) => (
+            WindowOutcome::Fitted {
+                window,
+                bounds: applied,
+                requested: (width, height),
+                exact: (
+                    probe.width == fitted.width + 1,
+                    probe.height == fitted.height + 1,
+                ),
+            },
+            Some(FittedWindow {
+                window,
+                original,
+                applied,
+            }),
+        ),
         Err(failure) => (
             not_fitted(format!(
                 "{failure}; the window may have changed size and is not restored automatically"

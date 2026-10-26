@@ -3189,7 +3189,7 @@ async fn credential_cancellation_reaches_original_session_after_tab_leaves_its_p
 }
 
 fn mobile_150() -> Result<crate::mobile_mode::MobileMode, crate::mobile_mode::MobileModeArgError> {
-    crate::mobile_mode::MobileMode::from_request(true, Some(150.0))
+    crate::mobile_mode::MobileMode::new(crate::mobile_mode::ModeKind::Mobile, Some(150.0))
 }
 
 fn emulation_calls(native: &Native) -> Vec<Call> {
@@ -3246,7 +3246,7 @@ async fn bound_mobile_mode_reads_the_scoped_version_and_drives_the_admitted_sess
     let view = view(native.clone(), None).await;
     let page = page_id(&view, 1).await?;
     let outcome = view.toggle_mobile_mode(page.clone(), mobile_150()?).await?;
-    assert_eq!(outcome.mode.visible_size(), (600, 1359));
+    assert_eq!(outcome.mode.visible_size(), Some((600, 1359)));
     let version = native.calls("Browser.getVersion");
     assert_eq!(version.len(), 1);
     assert!(version[0].session.is_none(), "version is a root read");
@@ -3440,7 +3440,11 @@ async fn a_bound_window_fit_only_touches_the_admitted_pages_window() -> TestResu
     let native = Native::new();
     let view = view(native.clone(), None).await;
     let page = page_id(&view, 1).await?;
-    let request = crate::mobile_mode::MobileModeRequest::new(true, Some(100.0), Some(true))?;
+    let request = crate::mobile_mode::MobileModeRequest::new(
+        crate::mobile_mode::ModeKind::Mobile,
+        Some(100.0),
+        Some(true),
+    )?;
     let outcome = view.toggle_mobile_mode(page, request).await?;
     assert!(
         matches!(
@@ -3514,5 +3518,49 @@ async fn mobile_window_commands_refuse_other_windows_and_methods() -> TestResult
     );
     assert!(native.calls("Browser.getWindowBounds").is_empty());
     assert!(native.calls("Browser.closeWindow").is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_bound_fixed_mode_refuses_raw_viewport_commands_before_admission() -> TestResult {
+    let native = Native::new();
+    let view = view(native.clone(), None).await;
+    let page = page_id(&view, 1).await?;
+    view.toggle_mobile_mode(page.clone(), crate::mobile_mode::MobileMode::Desktop)
+        .await?;
+    let before = native.calls("Emulation.setDeviceMetricsOverride").len();
+    let result = view
+        .cdp_json_for_page(
+            page.clone(),
+            "Emulation.setDeviceMetricsOverride",
+            r#"{"width":800,"height":600,"deviceScaleFactor":1,"mobile":false}"#,
+        )
+        .await;
+    assert!(
+        matches!(
+            result,
+            Err(CoreError::ViewportLocked {
+                mode: "desktop",
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+    assert_eq!(
+        native.calls("Emulation.setDeviceMetricsOverride").len(),
+        before
+    );
+    view.toggle_mobile_mode(page.clone(), crate::mobile_mode::MobileMode::Freesize)
+        .await?;
+    view.cdp_json_for_page(
+        page,
+        "Emulation.setDeviceMetricsOverride",
+        r#"{"width":800,"height":600,"deviceScaleFactor":1,"mobile":false}"#,
+    )
+    .await?;
+    assert_eq!(
+        native.calls("Emulation.setDeviceMetricsOverride").len(),
+        before + 1
+    );
     Ok(())
 }

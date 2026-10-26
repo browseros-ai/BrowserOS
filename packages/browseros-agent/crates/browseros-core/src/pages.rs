@@ -291,6 +291,22 @@ impl PageManager {
         self.state.lock().await.viewports.insert(page, record);
     }
 
+    /// Whether any tab can hold a fixed viewport: the hosted default, or a fixed mode chosen.
+    pub(crate) async fn may_lock_viewports(&self) -> bool {
+        self.hooks.desktop_by_default
+            || self
+                .state
+                .lock()
+                .await
+                .viewports
+                .values()
+                .any(|record| record.mode().is_fixed())
+    }
+
+    pub(crate) async fn page_for_target(&self, target: &TargetId) -> Option<PageId> {
+        find_by_target(&self.state.lock().await.pages, target)
+    }
+
     pub async fn get_info(&self, page_id: PageId) -> Option<PageInfo> {
         self.state.lock().await.pages.get(&page_id).cloned()
     }
@@ -751,7 +767,13 @@ impl PageManager {
         let record = record.or_else(|| self.hooks.desktop_by_default.then(ViewportRecord::desktop));
         let mut applied = None;
         if let Some(record) = record {
-            match mobile_mode::apply(&session, &record).await {
+            // Freesize is the tab's own viewport: a new session carries no overrides to clear.
+            let applying = if record.mode() == mobile_mode::MobileMode::Freesize {
+                Ok(())
+            } else {
+                mobile_mode::apply(&session, &record).await
+            };
+            match applying {
                 Ok(()) => applied = Some(record),
                 Err(failure) => {
                     // Never fail the attach: a tab that cannot attach cannot be switched either.

@@ -1087,7 +1087,7 @@ impl BrowserView {
         Ok(capture)
     }
 
-    /// Puts one existing tab in the fixed mobile or desktop viewport (see `mobile_mode`).
+    /// Puts one existing tab in mobile, desktop or freesize mode (see `mobile_mode`).
     pub async fn toggle_mobile_mode(
         &self,
         page: PageId,
@@ -1095,7 +1095,7 @@ impl BrowserView {
     ) -> Result<crate::mobile_mode::MobileModeOutcome, CoreError> {
         use crate::mobile_mode::{MobileMode, MobileModeArgError, MobileModeRequest, WindowFit};
         let MobileModeRequest { mode, window } = request.into();
-        if window == WindowFit::Resize && mode == MobileMode::Desktop {
+        if window == WindowFit::Resize && mode.zoom().is_none() {
             return Err(MobileModeArgError::ResizeWindowWithoutMobile
                 .to_string()
                 .into());
@@ -1114,6 +1114,7 @@ impl BrowserView {
                 )
             }
             MobileMode::Desktop => crate::mobile_mode::ViewportRecord::desktop(),
+            MobileMode::Freesize => crate::mobile_mode::ViewportRecord::freesize(),
         };
         tokio::spawn(crate::mobile_mode::toggle(crate::mobile_mode::Toggle {
             view: self.clone(),
@@ -1130,6 +1131,60 @@ impl BrowserView {
             state: crate::mobile_mode::MobileModeState::Unknown,
             detail: err.to_string(),
         })?
+    }
+
+    /// The tab a session the caller attached itself drives, attached here so a hosted default
+    /// mode applies before the lock is checked. Ordinary servers never lock a viewport.
+    async fn page_for_caller_session(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<PageId>, CoreError> {
+        let pages = &self.session.pages;
+        if !pages.may_lock_viewports().await {
+            return Ok(None);
+        }
+        let reply = self
+            .session
+            .cdp("Target.getTargetInfo", json!({}), Some(session))
+            .await?;
+        let info = &reply["targetInfo"];
+        let (Some("page"), Some(target)) = (info["type"].as_str(), info["targetId"].as_str())
+        else {
+            return Ok(None);
+        };
+        let target = crate::TargetId::from(target.to_string());
+        let page = match pages.page_for_target(&target).await {
+            Some(page) => Some(page),
+            None => {
+                pages.list().await?;
+                pages.page_for_target(&target).await
+            }
+        };
+        if let Some(page) = &page {
+            self.page_session(page.clone()).await?;
+        }
+        Ok(page)
+    }
+
+    /// A caller's viewport command on a tab in a fixed mode is refused before it is sent; the
+    /// mode change itself and screenshots send their commands internally, never through here.
+    async fn check_viewport_lock(&self, page: Option<PageId>) -> Result<(), CoreError> {
+        let Some(page) = page else {
+            return Ok(());
+        };
+        match self
+            .session
+            .pages
+            .viewport_record(&page)
+            .await
+            .map(|record| record.mode())
+        {
+            Some(mode) if mode.is_fixed() => Err(CoreError::ViewportLocked {
+                page,
+                mode: mode.name(),
+            }),
+            _ => Ok(()),
+        }
     }
 
     /// Mobile mode's window fit and restore. Not raw CDP: only these window commands, only
@@ -1402,6 +1457,17 @@ impl BrowserView {
         // Raw CDP passes the native gate before any routing. Only methods and (method,
         // parameter) pairs a FEATURES row lists can be refused; internal calls never send them.
         self.native().check_raw(method, &params)?;
+        if let Some(session) = session
+            && crate::mobile_mode::locks_viewport(method)
+        {
+            let page = match self.session.pages.page_for_session(session).await {
+                Some(page) => Some(page.page_id),
+                // Bound views refuse a session they did not admit, below.
+                None if self.scope()?.is_some() => None,
+                None => self.page_for_caller_session(session).await?,
+            };
+            self.check_viewport_lock(page).await?;
+        }
         if self.scope()?.is_none() {
             if self.expected_created_page.is_some() {
                 // An unbound creation callback remains global in routing, but it cannot
@@ -1435,6 +1501,11 @@ impl BrowserView {
         params_json: &str,
     ) -> Result<String, CoreError> {
         self.native().check_raw_json(method, params_json)?;
+        if crate::mobile_mode::locks_viewport(method) {
+            // Attach first: a hosted default mode is applied on attach, and the lock sees it.
+            self.page_session(page.clone()).await?;
+            self.check_viewport_lock(Some(page.clone())).await?;
+        }
         if self.epoch_guard()?.is_none() {
             return self
                 .session

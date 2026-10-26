@@ -49,6 +49,8 @@ struct Fixture {
     lose_after: Option<String>,
     attachments: usize,
     hold: Option<(String, Arc<Notify>)>,
+    /// Fail only the nth upcoming call of a method (1-based), letting earlier ones pass.
+    fail_at: Option<(String, usize)>,
     /// Window 1's outer bounds; contents are these minus `overhead`, never below `minimum`.
     window: Value,
     overhead: (i64, i64),
@@ -132,6 +134,18 @@ impl Native {
         if state.lose_after.as_deref() == Some(method) {
             self.connected.store(false, Ordering::SeqCst);
         }
+        if let Some((failing, nth)) = state.fail_at.as_mut()
+            && failing == method
+        {
+            *nth -= 1;
+            if *nth == 0 {
+                state.fail_at = None;
+                return Err(CdpError::Protocol {
+                    code: -32000,
+                    message: format!("injected failure: {method}"),
+                });
+            }
+        }
         if let Some(remaining) = state.failures.get_mut(method)
             && *remaining > 0
         {
@@ -183,6 +197,17 @@ impl Native {
                     state.attachments
                 )})
             }
+            // Sessions are named session-<target>-<n>; without a targetId the reply is the
+            // session's own target.
+            "Target.getTargetInfo" => {
+                let target = session
+                    .and_then(|session| session.as_str().strip_prefix("session-"))
+                    .and_then(|rest| rest.rsplit_once('-'))
+                    .map(|(target, _)| target.to_string())
+                    .ok_or(CdpError::SessionGone)?;
+                json!({"targetInfo":{"targetId":target,"type":"page","title":"fixture",
+                    "url":"about:blank","attached":true,"canAccessOpener":false}})
+            }
             "Runtime.evaluate" => {
                 return Err(CdpError::Protocol {
                     code: -32000,
@@ -198,6 +223,7 @@ impl Native {
                 });
             }
             "Browser.getWindowBounds" => json!({"bounds":state.window}),
+            "Page.captureScreenshot" => json!({"data":"cG5n"}),
             "Browser.setContentsSize" => {
                 if state.window["windowState"] != "normal" {
                     return Err(CdpError::Protocol {
@@ -371,7 +397,7 @@ fn publication_marker(native: &Arc<Native>) -> BrowserSessionHooks {
 }
 
 fn mobile(zoom: f64) -> Result<MobileMode, MobileModeArgError> {
-    MobileMode::from_request(true, Some(zoom))
+    MobileMode::new(ModeKind::Mobile, Some(zoom))
 }
 
 fn user_agent() -> &'static str {
@@ -476,21 +502,31 @@ fn failure(
 fn requests_are_validated_without_a_browser() {
     for zoom in [0.0, 24.9, 400.1, -100.0, f64::NAN, f64::INFINITY] {
         assert_eq!(
-            MobileMode::from_request(true, Some(zoom)),
+            MobileMode::new(ModeKind::Mobile, Some(zoom)),
             Err(MobileModeArgError::ZoomOutOfRange),
             "{zoom}"
         );
     }
+    for kind in [ModeKind::Desktop, ModeKind::Freesize] {
+        assert_eq!(
+            MobileMode::new(kind, Some(100.0)),
+            Err(MobileModeArgError::ZoomWithoutMobile)
+        );
+        assert_eq!(
+            MobileModeRequest::new(kind, None, Some(true)),
+            Err(MobileModeArgError::ResizeWindowWithoutMobile)
+        );
+    }
     assert_eq!(
-        MobileMode::from_request(false, Some(100.0)),
-        Err(MobileModeArgError::ZoomWithoutMobile)
-    );
-    assert_eq!(
-        MobileMode::from_request(false, None),
+        MobileMode::new(ModeKind::Desktop, None),
         Ok(MobileMode::Desktop)
     );
+    assert_eq!(
+        MobileMode::new(ModeKind::Freesize, None),
+        Ok(MobileMode::Freesize)
+    );
     for (requested, percent) in [(None, 100.0), (Some(25.0), 25.0), (Some(400.0), 400.0)] {
-        let mode = MobileMode::from_request(true, requested);
+        let mode = MobileMode::new(ModeKind::Mobile, requested);
         assert_eq!(
             mode.map(|mode| mode.zoom().map(Zoom::percent)),
             Ok(Some(percent))
@@ -524,10 +560,10 @@ async fn enable_reads_the_root_version_then_sends_the_preset_in_order() -> TestR
     let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
     let outcome = harness
         .view
-        .toggle_mobile_mode(page.clone(), MobileMode::from_request(true, None)?)
+        .toggle_mobile_mode(page.clone(), MobileMode::new(ModeKind::Mobile, None)?)
         .await?;
     assert_eq!(outcome.mode, mobile(100.0)?);
-    assert_eq!(outcome.mode.visible_size(), (400, 906));
+    assert_eq!(outcome.mode.visible_size(), Some((400, 906)));
     assert!(outcome.changed);
     assert!(!outcome.reload_required);
 
@@ -584,7 +620,7 @@ async fn zoom_sets_the_scale_and_the_visible_size() -> TestResult {
             .view
             .toggle_mobile_mode(page.clone(), mobile(zoom)?)
             .await?;
-        assert_eq!(outcome.mode.visible_size(), (width, height));
+        assert_eq!(outcome.mode.visible_size(), Some((width, height)));
         assert!(outcome.reload_required);
         assert_eq!(
             sent(&harness.native.emulation()),
@@ -663,7 +699,7 @@ async fn disable_selects_the_fixed_desktop_preset() -> TestResult {
         .await?;
     assert!(outcome.changed);
     assert!(outcome.reload_required);
-    assert_eq!(outcome.mode.visible_size(), (1920, 1080));
+    assert_eq!(outcome.mode.visible_size(), Some((1920, 1080)));
     assert_eq!(sent(&harness.native.since(mark)), desktop_preset());
     assert_eq!(
         record_mode(&harness, &page).await,
@@ -1319,7 +1355,7 @@ fn window_calls(calls: &[Call]) -> Vec<(String, Value)> {
 }
 
 fn fit(zoom: f64) -> Result<MobileModeRequest, MobileModeArgError> {
-    MobileModeRequest::new(true, Some(zoom), Some(true))
+    MobileModeRequest::new(ModeKind::Mobile, Some(zoom), Some(true))
 }
 
 fn bounds(left: i64, top: i64, width: i64, height: i64) -> WindowBounds {
@@ -1333,19 +1369,15 @@ fn bounds(left: i64, top: i64, width: i64, height: i64) -> WindowBounds {
 
 #[test]
 fn resize_window_is_validated_with_the_rest_of_the_request() {
-    assert_eq!(
-        MobileModeRequest::new(false, None, Some(true)),
-        Err(MobileModeArgError::ResizeWindowWithoutMobile)
-    );
-    for (enabled, resize, window) in [
-        (true, Some(true), WindowFit::Resize),
-        (true, Some(false), WindowFit::Keep),
-        (true, None, WindowFit::Keep),
-        (false, Some(false), WindowFit::Keep),
-        (false, None, WindowFit::Keep),
+    for (kind, resize, window) in [
+        (ModeKind::Mobile, Some(true), WindowFit::Resize),
+        (ModeKind::Mobile, Some(false), WindowFit::Keep),
+        (ModeKind::Mobile, None, WindowFit::Keep),
+        (ModeKind::Desktop, Some(false), WindowFit::Keep),
+        (ModeKind::Freesize, None, WindowFit::Keep),
     ] {
         assert_eq!(
-            MobileModeRequest::new(enabled, None, resize).map(|request| request.window),
+            MobileModeRequest::new(kind, None, resize).map(|request| request.window),
             Ok(window)
         );
     }
@@ -1563,5 +1595,381 @@ async fn resize_window_without_enable_is_refused_before_any_command() -> TestRes
             .is_err()
     );
     assert!(harness.native.since(mark).is_empty());
+    Ok(())
+}
+
+fn freesize() -> MobileMode {
+    MobileMode::Freesize
+}
+
+#[tokio::test]
+async fn freesize_clears_the_owned_overrides_and_is_remembered() -> TestResult {
+    let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
+    let session = page_session(&harness, &page).await?;
+    harness
+        .view
+        .toggle_mobile_mode(page.clone(), mobile(150.0)?)
+        .await?;
+    let mark = harness.native.mark();
+    let outcome = harness
+        .view
+        .toggle_mobile_mode(page.clone(), freesize())
+        .await?;
+    assert!(outcome.changed);
+    assert_eq!(outcome.mode.visible_size(), None);
+    assert_eq!(sent(&harness.native.since(mark)), cleared());
+    assert_eq!(
+        record_mode(&harness, &page).await,
+        Some(MobileMode::Freesize)
+    );
+    assert_eq!(input_scale(&session), 1.0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn every_transition_between_the_three_modes_applies_its_preset() -> TestResult {
+    let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
+    let steps = [
+        MobileMode::Desktop,
+        freesize(),
+        mobile(100.0)?,
+        freesize(),
+        MobileMode::Desktop,
+        mobile(150.0)?,
+        MobileMode::Desktop,
+    ];
+    let mut expected = Vec::new();
+    for mode in steps {
+        let outcome = harness.view.toggle_mobile_mode(page.clone(), mode).await?;
+        assert!(outcome.changed, "{mode:?}");
+        assert_eq!(record_mode(&harness, &page).await, Some(mode));
+        expected.extend(match mode {
+            MobileMode::Desktop => desktop_preset(),
+            MobileMode::Freesize => cleared(),
+            MobileMode::Mobile(zoom) => {
+                let (width, height) = zoom.visible_size();
+                preset(zoom.scale(), width, height)
+            }
+        });
+    }
+    assert_eq!(sent(&harness.native.emulation()), expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn repeating_freesize_resends_the_clears_and_reports_no_change() -> TestResult {
+    let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
+    harness
+        .view
+        .toggle_mobile_mode(page.clone(), freesize())
+        .await?;
+    let mark = harness.native.mark();
+    let again = harness
+        .view
+        .toggle_mobile_mode(page.clone(), freesize())
+        .await?;
+    assert!(!again.changed);
+    assert_eq!(sent(&harness.native.since(mark)), cleared());
+    Ok(())
+}
+
+#[tokio::test]
+async fn freesize_survives_reattach_without_the_hosted_default() -> TestResult {
+    let mut hooks = BrowserSessionHooks::default();
+    hooks.page_manager.desktop_by_default = true;
+    let (harness, page) = harness_with(vec![tab(1, "about:blank")], hooks).await?;
+    harness
+        .view
+        .toggle_mobile_mode(page.clone(), freesize())
+        .await?;
+    let old = harness.browser.pages.get_session(page.clone()).await?;
+    harness.browser.pages.detach_session(&old.session_id).await;
+    let mark = harness.native.mark();
+    let fresh = harness.browser.pages.get_session(page.clone()).await?;
+    assert!(
+        on_session(&harness.native.since(mark), &fresh.session_id)
+            .iter()
+            .all(|call| !call.method.starts_with("Emulation.")),
+        "freesize is the tab's own viewport: nothing to re-apply"
+    );
+    assert_eq!(
+        record_mode(&harness, &page).await,
+        Some(MobileMode::Freesize)
+    );
+    Ok(())
+}
+
+// Page's deprecated metrics commands forward to Emulation, so they are locked as well.
+const VIEWPORT_COMMANDS: [(&str, &str); 5] = [
+    (
+        "Emulation.setDeviceMetricsOverride",
+        r#"{"width":800,"height":600,"deviceScaleFactor":1,"mobile":false}"#,
+    ),
+    ("Emulation.clearDeviceMetricsOverride", "{}"),
+    ("Emulation.setVisibleSize", r#"{"width":800,"height":600}"#),
+    (
+        "Page.setDeviceMetricsOverride",
+        r#"{"width":800,"height":600,"deviceScaleFactor":1,"mobile":false}"#,
+    ),
+    ("Page.clearDeviceMetricsOverride", "{}"),
+];
+
+#[tokio::test]
+async fn fixed_modes_refuse_caller_viewport_commands_before_any_cdp() -> TestResult {
+    let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
+    let session = harness.browser.pages.get_session(page.clone()).await?;
+    for (mode, name) in [(MobileMode::Desktop, "desktop"), (mobile(150.0)?, "mobile")] {
+        harness.view.toggle_mobile_mode(page.clone(), mode).await?;
+        let mark = harness.native.mark();
+        for (method, params) in VIEWPORT_COMMANDS {
+            let raw = harness
+                .view
+                .cdp_json_for_page(page.clone(), method, params)
+                .await
+                .map(|_| ());
+            let direct = harness
+                .view
+                .cdp(
+                    method,
+                    serde_json::from_str(params)?,
+                    Some(&session.session_id),
+                )
+                .await
+                .map(|_| ());
+            for result in [raw, direct] {
+                match result {
+                    Err(CoreError::ViewportLocked { page: locked, mode }) => {
+                        assert_eq!((locked, mode), (page.clone(), name));
+                    }
+                    other => return Err(format!("{method} in {name}: {other:?}").into()),
+                }
+            }
+        }
+        assert!(harness.native.since(mark).is_empty(), "{name}");
+        let message = CoreError::ViewportLocked {
+            page: page.clone(),
+            mode: name,
+        }
+        .to_string();
+        assert!(message.contains("freesize"), "{message}");
+    }
+    // Other commands are untouched by the lock.
+    harness
+        .view
+        .cdp_json_for_page(page.clone(), "Page.enable", "{}")
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn freesize_and_untouched_tabs_accept_caller_viewport_commands() -> TestResult {
+    let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
+    page_session(&harness, &page).await?;
+    for set_freesize in [false, true] {
+        if set_freesize {
+            harness
+                .view
+                .toggle_mobile_mode(page.clone(), freesize())
+                .await?;
+        }
+        let mark = harness.native.mark();
+        for (method, params) in VIEWPORT_COMMANDS {
+            harness
+                .view
+                .cdp_json_for_page(page.clone(), method, params)
+                .await?;
+        }
+        let methods = harness
+            .native
+            .since(mark)
+            .into_iter()
+            .map(|call| call.method)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            methods,
+            VIEWPORT_COMMANDS.map(|(method, _)| method.to_string()),
+            "freesize {set_freesize}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn internal_screenshots_still_work_in_fixed_modes() -> TestResult {
+    let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
+    for mode in [mobile(150.0)?, MobileMode::Desktop] {
+        harness.view.toggle_mobile_mode(page.clone(), mode).await?;
+        let capture = harness
+            .view
+            .screenshot(
+                page.clone(),
+                crate::screenshot::ScreenshotCaptureOptions::default(),
+            )
+            .await?;
+        assert_eq!(capture.data, "cG5n");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn leaving_a_fitted_window_re_sends_the_fixed_view_after_the_restore() -> TestResult {
+    let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
+    harness
+        .view
+        .toggle_mobile_mode(page.clone(), fit(100.0)?)
+        .await?;
+    let mark = harness.native.mark();
+    let outcome = harness
+        .view
+        .toggle_mobile_mode(page.clone(), MobileMode::Desktop)
+        .await?;
+    assert!(matches!(
+        outcome.window,
+        Some(WindowOutcome::Restored { .. })
+    ));
+    let calls = harness.native.since(mark);
+    let restored = calls
+        .iter()
+        .position(|call| call.method == "Browser.setWindowBounds")
+        .ok_or("window not restored")?;
+    assert_eq!(
+        sent(&calls[restored + 1..])
+            .into_iter()
+            .filter(|(method, _)| method.starts_with("Emulation."))
+            .collect::<Vec<_>>(),
+        vec![(VISIBLE.to_string(), json!({"width":1920,"height":1080}))]
+    );
+
+    // freesize has no fixed view: the restored window's own size is the point.
+    harness
+        .view
+        .toggle_mobile_mode(page.clone(), fit(100.0)?)
+        .await?;
+    let mark = harness.native.mark();
+    harness
+        .view
+        .toggle_mobile_mode(page.clone(), freesize())
+        .await?;
+    let calls = harness.native.since(mark);
+    let restored = calls
+        .iter()
+        .position(|call| call.method == "Browser.setWindowBounds")
+        .ok_or("window not restored")?;
+    assert!(
+        calls[restored + 1..]
+            .iter()
+            .all(|call| !call.method.starts_with("Emulation."))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_failed_view_resend_after_a_window_change_is_reported() -> TestResult {
+    let (harness, page) = harness(vec![tab(1, "about:blank")]).await?;
+    harness
+        .view
+        .toggle_mobile_mode(page.clone(), fit(100.0)?)
+        .await?;
+    // The desktop preset's own visible size passes; the re-send after the restore fails.
+    harness.native.lock().fail_at = Some((VISIBLE.into(), 2));
+    let result = harness
+        .view
+        .toggle_mobile_mode(page.clone(), MobileMode::Desktop)
+        .await;
+    match result {
+        Err(CoreError::MobileMode {
+            step,
+            state: MobileModeState::Unknown,
+            detail,
+        }) => {
+            assert_eq!(step, VISIBLE);
+            assert!(detail.contains("window"), "{detail}");
+        }
+        other => return Err(format!("{other:?}").into()),
+    }
+    assert_eq!(
+        record_mode(&harness, &page).await,
+        Some(MobileMode::Desktop)
+    );
+    assert_eq!(harness.native.lock().window["width"], json!(1200));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_session_the_caller_attached_itself_is_locked_too() -> TestResult {
+    let mut hooks = BrowserSessionHooks::default();
+    hooks.page_manager.desktop_by_default = true;
+    let (harness, page) = harness_with(vec![tab(1, "about:blank")], hooks).await?;
+    let own = harness
+        .view
+        .cdp(
+            "Target.attachToTarget",
+            json!({"targetId":"target-1","flatten":true}),
+            None,
+        )
+        .await?;
+    let own = SessionId::from(own["sessionId"].as_str().ok_or("no session")?);
+    let metrics = json!({"width":800,"height":600,"deviceScaleFactor":1,"mobile":false});
+    // The hosted default holds the tab in desktop even before this server attached it.
+    let result = harness.view.cdp(METRICS, metrics.clone(), Some(&own)).await;
+    assert!(
+        matches!(
+            result,
+            Err(CoreError::ViewportLocked {
+                mode: "desktop",
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+    assert!(
+        on_session(&harness.native.calls(), &own)
+            .iter()
+            .all(|call| !call.method.starts_with("Emulation.")),
+        "nothing reached the caller's session"
+    );
+    harness
+        .view
+        .toggle_mobile_mode(page.clone(), freesize())
+        .await?;
+    harness.view.cdp(METRICS, metrics, Some(&own)).await?;
+    assert_eq!(
+        on_session(&harness.native.calls(), &own)
+            .iter()
+            .filter(|call| call.method == METRICS)
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordinary_servers_send_caller_session_viewport_commands_untouched() -> TestResult {
+    let (harness, _page) = harness(vec![tab(1, "about:blank")]).await?;
+    let own = harness
+        .view
+        .cdp(
+            "Target.attachToTarget",
+            json!({"targetId":"target-1","flatten":true}),
+            None,
+        )
+        .await?;
+    let own = SessionId::from(own["sessionId"].as_str().ok_or("no session")?);
+    let mark = harness.native.mark();
+    harness
+        .view
+        .cdp(
+            METRICS,
+            json!({"width":800,"height":600,"deviceScaleFactor":1,"mobile":false}),
+            Some(&own),
+        )
+        .await?;
+    let methods = harness
+        .native
+        .since(mark)
+        .into_iter()
+        .map(|call| call.method)
+        .collect::<Vec<_>>();
+    assert_eq!(methods, [METRICS], "no lookup, no attach");
     Ok(())
 }

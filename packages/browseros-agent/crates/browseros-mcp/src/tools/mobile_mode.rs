@@ -5,7 +5,7 @@ use browseros_core::{
     PageId,
     mobile_mode::{
         DESKTOP_HEIGHT, DESKTOP_WIDTH, MOBILE_HEIGHT, MOBILE_WIDTH, MobileMode, MobileModeArgError,
-        MobileModeOutcome, MobileModeRequest, WindowBounds, WindowOutcome,
+        MobileModeOutcome, MobileModeRequest, ModeKind, WindowBounds, WindowOutcome,
     },
 };
 use futures_util::future::BoxFuture;
@@ -15,13 +15,15 @@ use serde_json::{Value, json};
 use std::borrow::Cow;
 
 const DESCRIPTION: &str = "\
-Put one existing tab in one of two fixed viewports. enabled:true is mobile: Android Chrome \
-user agent and client hints, touch input, and a 400x906 CSS px viewport at 2x density. \
-enabled:false is desktop: a 1920x1080 CSS px viewport at 1x with the browser's own identity \
-and no touch. Tabs this server attaches to start in desktop. \
+Set one existing tab's viewport mode. mobile: Android Chrome user agent and client hints, \
+touch input, and a fixed 400x906 CSS px viewport at 2x density. desktop: a fixed 1920x1080 \
+CSS px viewport at 1x with the browser's own identity and no touch. freesize: none of these \
+overrides; the tab uses its window's own viewport. Tabs this server attaches to start in \
+desktop. In mobile or desktop, viewport commands sent through page.cdp or browser.cdp are \
+refused; switch to freesize first to change the viewport yourself. \
 zoom (mobile only, 25-400, default 100) is the DevTools device-preview scale and only changes \
 how large the tab draws the page; snapshots, screenshots, refs and act coordinates stay in \
-CSS px. Either viewport survives reloads, navigation and tab switches in this tab. \
+CSS px. The mode survives reloads, navigation and tab switches in this tab. \
 It affects everyone using this tab, including a tab the user is viewing. \
 It never reloads: the loaded document keeps its server-chosen content until you reload it \
 (reloadRequired). New tabs, popups, cross-site iframes and workers are not covered by mobile. \
@@ -30,33 +32,39 @@ resizeWindow:true (mobile only, default false) also resizes this tab's whole Chr
 shared by every tab in it, so its content area fits the zoomed view. The window keeps its tab \
 strip, toolbar and frame, so its size is not the viewport size; the result reports the actual \
 bounds and any axis Chrome's minimum size or the screen limited. A maximized or fullscreen \
-window is left alone. enabled:false restores the window unless something resized it since.";
+window is left alone. Leaving mobile restores the window unless something resized it since.";
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum ModeArg {
+    Mobile,
+    Desktop,
+    Freesize,
+}
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct ToggleMobileModeArgs {
+struct ToggleModeArgs {
     /// Page id from `tabs`.
     #[schemars(range(min = 1))]
     page: u32,
-    /// true selects the fixed mobile viewport; false the fixed 1920x1080 desktop viewport.
-    enabled: bool,
-    /// Device-preview zoom in percent (default 100): 150 draws the page at 1.5x. Only with
-    /// enabled: true.
+    /// mobile: fixed 400x906 at 2x; desktop: fixed 1920x1080 at 1x; freesize: the tab's own.
+    mode: ModeArg,
+    /// Device-preview zoom in percent (default 100): 150 draws the page at 1.5x. Mobile only.
     #[schemars(range(min = 25, max = 400))]
     zoom: Option<f64>,
-    /// Also fit this tab's whole Chrome window to the zoomed view. Default false. Only with
-    /// enabled: true.
+    /// Also fit this tab's whole Chrome window to the zoomed view. Default false. Mobile only.
     #[serde(rename = "resizeWindow")]
     resize_window: Option<bool>,
 }
 
 /// The wire shape of `structured`. Hosts keep structured data only for tools that declare an
 /// output schema, and callers need `changed`, `reloadRequired` and the window bounds as data.
-struct ToggleMobileModeOutput;
+struct ToggleModeOutput;
 
-impl JsonSchema for ToggleMobileModeOutput {
+impl JsonSchema for ToggleModeOutput {
     fn schema_name() -> Cow<'static, str> {
-        "ToggleMobileModeOutput".into()
+        "ToggleModeOutput".into()
     }
 
     fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
@@ -69,7 +77,7 @@ impl JsonSchema for ToggleMobileModeOutput {
             "type": "object",
             "properties": {
                 "page": { "type": "integer", "minimum": 1 },
-                "enabled": { "type": "boolean" },
+                "mode": { "type": "string", "enum": ["mobile", "desktop", "freesize"] },
                 "zoom": { "type": "number", "minimum": 25, "maximum": 400 },
                 "viewport": {
                     "type": "object",
@@ -112,14 +120,14 @@ impl JsonSchema for ToggleMobileModeOutput {
                     }
                 }
             },
-            "required": ["page", "enabled", "changed", "reloadRequired"]
+            "required": ["page", "mode", "changed", "reloadRequired"]
         })
     }
 }
 
 pub fn definition() -> crate::framework::ToolDef {
-    super::def_with_output::<ToggleMobileModeArgs, ToggleMobileModeOutput>(
-        "toggleMobileMode",
+    super::def_with_output::<ToggleModeArgs, ToggleModeOutput>(
+        "toggleMode",
         DESCRIPTION,
         None,
         handler,
@@ -132,12 +140,17 @@ fn handler<'a>(
     _response: &'a mut crate::response::ToolResponse,
 ) -> BoxFuture<'a, ToolExecResult<Option<ToolResult>>> {
     Box::pin(async move {
-        let args: ToggleMobileModeArgs = parse_args(raw)?;
+        let args: ToggleModeArgs = parse_args(raw)?;
         if args.page == 0 {
             return Err(invalid("page", "page ids start at 1".into()));
         }
+        let kind = match args.mode {
+            ModeArg::Mobile => ModeKind::Mobile,
+            ModeArg::Desktop => ModeKind::Desktop,
+            ModeArg::Freesize => ModeKind::Freesize,
+        };
         let request =
-            MobileModeRequest::new(args.enabled, args.zoom, args.resize_window).map_err(|err| {
+            MobileModeRequest::new(kind, args.zoom, args.resize_window).map_err(|err| {
                 let path = match err {
                     MobileModeArgError::ResizeWindowWithoutMobile => "resizeWindow",
                     _ => "zoom",
@@ -175,6 +188,9 @@ fn summary(outcome: &MobileModeOutcome) -> String {
         MobileMode::Desktop => format!(
             "Desktop mode on for page {page}: fixed {DESKTOP_WIDTH}x{DESKTOP_HEIGHT} CSS px viewport at 1x."
         ),
+        MobileMode::Freesize => format!(
+            "Freesize mode on for page {page}: the tab uses its window's own viewport, and viewport commands are allowed."
+        ),
     };
     if !outcome.changed {
         text.push_str(" Settings were already in place and were re-sent.");
@@ -198,17 +214,20 @@ fn capitalized(text: &str) -> String {
 fn structured(outcome: &MobileModeOutcome) -> Value {
     let mut value = json!({
         "page": outcome.page.0,
-        "enabled": outcome.mode != MobileMode::Desktop,
+        "mode": outcome.mode.name(),
         "changed": outcome.changed,
         "reloadRequired": outcome.reload_required,
     });
     if let MobileMode::Mobile(zoom) = outcome.mode {
         value["zoom"] = number(zoom.percent());
     }
-    let (width, height, density) = outcome.mode.viewport();
-    let (visible_width, visible_height) = outcome.mode.visible_size();
-    value["viewport"] = json!({"width":width,"height":height,"deviceScaleFactor":number(density)});
-    value["visibleSize"] = json!({"width":visible_width,"height":visible_height});
+    if let (Some((width, height, density)), Some((visible_width, visible_height))) =
+        (outcome.mode.viewport(), outcome.mode.visible_size())
+    {
+        value["viewport"] =
+            json!({"width":width,"height":height,"deviceScaleFactor":number(density)});
+        value["visibleSize"] = json!({"width":visible_width,"height":visible_height});
+    }
     if let Some(window) = &outcome.window {
         value["window"] = window_json(window);
     }
