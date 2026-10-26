@@ -83,9 +83,11 @@ export function ManualSetupDialog({
                       language="bash"
                       showLineNumbers={false}
                       copyable
-                      onCopy={() =>
+                      // A custom onCopy replaces CodeBlock's own copy, so it copies too.
+                      onCopy={async () => {
+                        await navigator.clipboard.writeText(step.command ?? '')
                         track(AnalyticsEvent.ManualSetupCommandCopied)
-                      }
+                      }}
                     />
                   ) : null}
                   {step.note !== undefined ? (
