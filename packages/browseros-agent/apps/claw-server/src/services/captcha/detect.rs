@@ -636,6 +636,7 @@ fn fold_vendor_widgets(
                     w.kind = kind;
                 }
                 if w.state != ChallengeState::Passed
+                    && w.challenge_frame.is_none()
                     && (outer
                         .rect
                         .is_some_and(|r| r.width <= 0.0 || r.height <= 0.0)
@@ -1317,6 +1318,30 @@ mod tests {
                 .map(|f| f.frame_id.as_str()),
             Some("tiles")
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_open_bframe_stays_active_with_a_hidden_badge() -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(false);
+        page.frames[0].url.push_str("&size=invisible");
+        let tiles = frame(
+            "tiles",
+            "https://www.google.com/recaptcha/api2/bframe?k=key",
+        );
+        let mut badge = widget("recaptcha_v2", "widget_only");
+        badge["invisible"] = json!(true);
+        let mut main = probe(json!([badge]));
+        main["frames"] = json!([
+            {"url": page.frames[0].url, "visible": false},
+            {"url": tiles.url, "visible": true}
+        ]);
+        page.main = Mutex::new(VecDeque::from([main]));
+        page.frames.push(tiles.clone());
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        assert_eq!(result.challenges[0].challenge_frame, Some(tiles));
         Ok(())
     }
 
