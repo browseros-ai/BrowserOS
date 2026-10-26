@@ -19,18 +19,14 @@ import { SettingRow, SettingsSection } from './settings.components'
 
 const SHARE_ID = 'share-usage'
 
-const COLLECTED = [
-  'Which AI agents you connect',
-  'Which neo screens you open',
-  'How you move around these screens, in one in five visits, with everything you type hidden',
-]
+const COLLECTED = ['Which AI agents you connect', 'Which neo screens you open']
 
 const NEVER_COLLECTED = [
   'The pages you browse',
   'What you ask your AI agents',
   'What your agents send or get back',
   'Anything on a page',
-  'Your tasks, history or playback, even in those visits',
+  'Your tasks, history or playback',
   'Your account or personal details',
 ]
 
