@@ -135,7 +135,7 @@ test.each(['geetest', 'geetest-v4'])(
       url: `https://2captcha.com/demo/${slug}`,
       family: 'geetest',
       kind: 'demo',
-      expect: ['unsupported'],
+      expect: ['solved'],
       expectType: 'geetest',
       mayNeedPaid: true,
     })

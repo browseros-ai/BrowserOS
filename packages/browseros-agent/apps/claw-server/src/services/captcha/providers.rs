@@ -25,6 +25,23 @@ const MIN_SUBMISSION_BUDGET: Duration = Duration::from_secs(5);
 
 pub trait CaptchaBackend: Send + Sync {
     fn is_configured(&self) -> bool;
+    fn solve_fresh<'a, F, Fut>(
+        &'a self,
+        mut fresh: F,
+        deadline: Instant,
+        cancel: &'a CancellationToken,
+    ) -> impl Future<Output = Result<ProviderAnswer, ProviderError>> + Send + 'a
+    where
+        F: FnMut() -> Fut + Send + 'a,
+        Fut: Future<Output = Option<SolveTask>> + Send + 'a,
+    {
+        async move {
+            let task = refresh(&mut fresh, deadline, cancel)
+                .await?
+                .ok_or_else(missing_fresh)?;
+            self.solve(&task, deadline, cancel).await
+        }
+    }
     /// With a `ProviderChain`, read `paid_tasks()` before and after this call to
     /// count charged attempts, including failed vendors before a successful fallback.
     /// Deltas are per-call only without overlapping solves; the counter also includes
@@ -35,6 +52,32 @@ pub trait CaptchaBackend: Send + Sync {
         deadline: Instant,
         cancel: &CancellationToken,
     ) -> impl Future<Output = Result<ProviderAnswer, ProviderError>> + Send;
+}
+
+fn missing_fresh() -> ProviderError {
+    ProviderError {
+        provider: None,
+        kind: ProviderErrorKind::BadRequest,
+        message: "fresh CAPTCHA parameters unavailable".into(),
+        charged: false,
+    }
+}
+
+async fn refresh<F, Fut>(
+    fresh: &mut F,
+    deadline: Instant,
+    cancel: &CancellationToken,
+) -> Result<Option<SolveTask>, ProviderError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Option<SolveTask>>,
+{
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err(ProviderError { kind: ProviderErrorKind::Cancelled, ..missing_fresh() }),
+        _ = tokio::time::sleep_until(deadline) => Err(ProviderError { kind: ProviderErrorKind::Timeout, ..missing_fresh() }),
+        task = fresh() => Ok(task),
+    }
 }
 
 pub trait VendorClient: Send + Sync {
@@ -107,19 +150,70 @@ impl CaptchaBackend for ProviderChain {
         !self.clients.is_empty()
     }
 
+    async fn solve_fresh<'a, F, Fut>(
+        &'a self,
+        mut fresh: F,
+        deadline: Instant,
+        cancel: &'a CancellationToken,
+    ) -> Result<ProviderAnswer, ProviderError>
+    where
+        F: FnMut() -> Fut + Send + 'a,
+        Fut: Future<Output = Option<SolveTask>> + Send + 'a,
+    {
+        let task = refresh(&mut fresh, deadline, cancel)
+            .await?
+            .ok_or_else(missing_fresh)?;
+        self.solve_from(std::borrow::Cow::Owned(task), Some(fresh), deadline, cancel)
+            .await
+    }
+
     async fn solve(
         &self,
         task: &SolveTask,
         deadline: Instant,
         cancel: &CancellationToken,
     ) -> Result<ProviderAnswer, ProviderError> {
+        self.solve_from(
+            std::borrow::Cow::Borrowed(task),
+            None::<fn() -> std::future::Ready<Option<SolveTask>>>,
+            deadline,
+            cancel,
+        )
+        .await
+    }
+}
+
+impl ProviderChain {
+    async fn solve_from<F, Fut>(
+        &self,
+        mut current: std::borrow::Cow<'_, SolveTask>,
+        mut fresh: Option<F>,
+        deadline: Instant,
+        cancel: &CancellationToken,
+    ) -> Result<ProviderAnswer, ProviderError>
+    where
+        F: FnMut() -> Fut + Send,
+        Fut: Future<Output = Option<SolveTask>> + Send,
+    {
+        let mut previous = None;
         let mut errors = Vec::new();
         let mut charged = false;
         let mut prior_cost = 0.0;
         for (index, client) in self.clients.iter().enumerate() {
-            if !client.supports(task) {
+            if !client.supports(current.as_ref()) {
                 continue;
             }
+            if let (Some(source), Some(previous_error)) = (&mut fresh, previous.take()) {
+                match refresh(source, deadline, cancel).await {
+                    Ok(Some(fresh_task)) => current = std::borrow::Cow::Owned(fresh_task),
+                    Ok(None) => return Err(previous_error),
+                    Err(mut error) => {
+                        error.charged = charged;
+                        return Err(error);
+                    }
+                }
+            }
+            let task = current.as_ref();
             let provider = client.name();
             let started = Instant::now();
             if cancel.is_cancelled()
@@ -172,6 +266,11 @@ impl CaptchaBackend for ProviderChain {
                         error.charged = charged;
                         return Err(error);
                     }
+                    previous = Some(ProviderError {
+                        message: errors.join("; "),
+                        charged,
+                        ..error
+                    });
                 }
             }
         }
@@ -1138,6 +1237,221 @@ mod tests {
         let debug = format!("{:?}", tiles(TileGrid::Single));
         assert!(!debug.contains(IMAGE));
         assert!(debug.contains("base64 chars>"));
+    }
+
+    struct FreshVendor {
+        provider: ProviderName,
+        supported: bool,
+        failure: bool,
+        tasks: Arc<std::sync::Mutex<Vec<SolveTask>>>,
+    }
+
+    impl VendorClient for FreshVendor {
+        fn name(&self) -> ProviderName {
+            self.provider
+        }
+        fn supports(&self, _: &SolveTask) -> bool {
+            self.supported
+        }
+        fn solve<'a>(
+            &'a self,
+            task: &'a SolveTask,
+            _: Instant,
+            _: &'a CancellationToken,
+        ) -> BoxFuture<'a, Result<ProviderAnswer, ProviderError>> {
+            Box::pin(async move {
+                self.tasks
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(task.clone());
+                if self.failure {
+                    Err(ProviderError {
+                        provider: Some(self.provider),
+                        kind: ProviderErrorKind::Unsolvable,
+                        message: "first challenge consumed".into(),
+                        charged: true,
+                    })
+                } else {
+                    Ok(ProviderAnswer {
+                        provider: self.provider,
+                        answer: SolveAnswer::Token("accepted".into()),
+                        task_id: None,
+                        cost_usd: Some(0.003),
+                    })
+                }
+            })
+        }
+    }
+
+    fn fresh_geetest(challenge: &str) -> SolveTask {
+        SolveTask::GeetestV3(super::super::types::GeetestV3Params {
+            website_url: "https://fixture.test/widget".into(),
+            gt: "81388ea1fc187e0c335c0a8907ff2625".into(),
+            challenge: challenge.into(),
+            api_server: None,
+            user_agent: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn tests_that_fresh_fallback_rebuilds_single_use_tasks_without_refreshing_skips()
+    -> anyhow::Result<()> {
+        let tasks = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let clients: Vec<Box<dyn VendorClient>> = [
+            (ProviderName::Capsolver, true, true),
+            (ProviderName::Capsolver, false, false),
+            (ProviderName::TwoCaptcha, true, false),
+        ]
+        .into_iter()
+        .map(|(provider, supported, failure)| {
+            Box::new(FreshVendor {
+                provider,
+                supported,
+                failure,
+                tasks: Arc::clone(&tasks),
+            }) as Box<dyn VendorClient>
+        })
+        .collect();
+        let chain = ProviderChain::with_clients(clients, 3);
+        let mut calls = 0;
+        let answer = chain
+            .solve_fresh(
+                || {
+                    calls += 1;
+                    std::future::ready(Some(fresh_geetest(&format!("challenge-{calls}"))))
+                },
+                Instant::now() + Duration::from_secs(120),
+                &CancellationToken::new(),
+            )
+            .await?;
+        assert_eq!(calls, 2);
+        assert_eq!(chain.paid_tasks(), 2);
+        assert_eq!(answer.provider, ProviderName::TwoCaptcha);
+        assert_eq!(answer.cost_usd, Some(0.0042));
+        assert_eq!(
+            *tasks.lock().unwrap_or_else(|e| e.into_inner()),
+            [fresh_geetest("challenge-1"), fresh_geetest("challenge-2")]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_missing_fresh_parameters_stop_without_another_payment() -> anyhow::Result<()>
+    {
+        for missing_first in [true, false] {
+            let tasks = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let clients: Vec<Box<dyn VendorClient>> =
+                [ProviderName::Capsolver, ProviderName::TwoCaptcha]
+                    .into_iter()
+                    .map(|provider| {
+                        Box::new(FreshVendor {
+                            provider,
+                            supported: true,
+                            failure: true,
+                            tasks: Arc::clone(&tasks),
+                        }) as Box<dyn VendorClient>
+                    })
+                    .collect();
+            let chain = ProviderChain::with_clients(clients, 3);
+            let mut calls = 0;
+            let result = chain
+                .solve_fresh(
+                    || {
+                        calls += 1;
+                        std::future::ready(
+                            (!missing_first && calls == 1).then(|| fresh_geetest("one-use")),
+                        )
+                    },
+                    Instant::now() + Duration::from_secs(120),
+                    &CancellationToken::new(),
+                )
+                .await;
+            let Err(error) = result else {
+                anyhow::bail!("missing params must fail");
+            };
+            assert_eq!(
+                error.kind,
+                if missing_first {
+                    ProviderErrorKind::BadRequest
+                } else {
+                    ProviderErrorKind::Unsolvable
+                }
+            );
+            assert_eq!(error.charged, !missing_first);
+            assert_eq!(chain.paid_tasks(), u32::from(!missing_first));
+            if missing_first {
+                assert_eq!(error.provider, None);
+                assert_eq!(error.message, "fresh CAPTCHA parameters unavailable");
+            } else {
+                assert!(error.message.contains("first challenge consumed"));
+            }
+            assert_eq!(
+                tasks.lock().unwrap_or_else(|e| e.into_inner()).len(),
+                usize::from(!missing_first)
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_fresh_parameter_reads_obey_cancel_and_deadline() -> anyhow::Result<()> {
+        for cancelled in [true, false] {
+            let (client, calls) = fake("never", None, true, true);
+            let chain = ProviderChain::with_clients(vec![client], 2);
+            let cancel = CancellationToken::new();
+            if cancelled {
+                cancel.cancel();
+            }
+            let result = chain
+                .solve_fresh(
+                    std::future::pending::<Option<SolveTask>>,
+                    Instant::now() + Duration::from_secs(10),
+                    &cancel,
+                )
+                .await;
+            let Err(error) = result else {
+                anyhow::bail!("must be bounded");
+            };
+            assert_eq!(
+                error.kind,
+                if cancelled {
+                    ProviderErrorKind::Cancelled
+                } else {
+                    ProviderErrorKind::Timeout
+                }
+            );
+            assert_eq!(chain.paid_tasks(), 0);
+            assert_eq!(calls.load(Ordering::Relaxed), 0);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_missing_fresh_parameters_keep_all_prior_charges() -> anyhow::Result<()> {
+        let (first, _) = fake("FIRST", Some(ProviderErrorKind::Unsolvable), true, true);
+        let (second, _) = fake("SECOND", Some(ProviderErrorKind::Auth), false, true);
+        let (third, calls) = fake("THIRD", None, true, true);
+        let chain = ProviderChain::with_clients(vec![first, second, third], 4);
+        let mut reads = 0;
+        let result = chain
+            .solve_fresh(
+                || {
+                    reads += 1;
+                    std::future::ready((reads < 3).then(recaptcha))
+                },
+                Instant::now() + Duration::from_secs(120),
+                &CancellationToken::new(),
+            )
+            .await;
+        let Err(error) = result else {
+            anyhow::bail!("missing params must fail");
+        };
+        assert!(error.charged);
+        assert!(error.message.contains("FIRST"));
+        assert!(error.message.contains("SECOND"));
+        assert_eq!(chain.paid_tasks(), 1);
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+        Ok(())
     }
 
     struct FakeVendor {
