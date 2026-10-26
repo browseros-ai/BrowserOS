@@ -63,7 +63,10 @@ export function StorageSettings() {
   const [pendingChoice, setPendingChoice] = useState<RetentionChoice | null>(
     null,
   )
-  const [customDays, setCustomDays] = useState(String(server.days))
+  // Null until the person edits the field, so it shows the saved days even
+  // when they load after the first render.
+  const [editedDays, setEditedDays] = useState<string | null>(null)
+  const customDays = editedDays ?? String(server.days)
   const choice = pendingChoice ?? server.choice
 
   const save = (next: RetentionChoice, days: number) =>
@@ -71,13 +74,13 @@ export function StorageSettings() {
 
   const choose = (next: RetentionChoice) => {
     setPendingChoice(next)
-    if (next === 'custom') setCustomDays(String(server.days))
+    if (next === 'custom') setEditedDays(null)
     else save(next, server.days)
   }
 
   const saveCustom = () => {
     const days = Math.max(1, Math.floor(Number(customDays) || 1))
-    setCustomDays(String(days))
+    setEditedDays(String(days))
     save('custom', days)
   }
 
@@ -138,7 +141,7 @@ export function StorageSettings() {
               inputMode="numeric"
               aria-label="Days to keep task history"
               value={customDays}
-              onChange={setCustomDays}
+              onChange={setEditedDays}
               className="w-28"
             />
             <span className="text-[14px] text-ink-2">days</span>

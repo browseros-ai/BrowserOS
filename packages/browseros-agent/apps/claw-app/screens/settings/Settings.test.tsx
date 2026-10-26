@@ -15,6 +15,7 @@ import {
 } from 'bun:test'
 import type {
   AgentSettings,
+  AuditStorageState,
   SaveJevTokenRequest,
   UpdateAgentSettingsRequest,
 } from '@browseros/claw-api'
@@ -43,6 +44,7 @@ const server: {
   removeToken: () => Promise<AgentSettings>
   tokenSaves: SaveJevTokenRequest[]
   tokenRemovals: number
+  storage: () => Promise<AuditStorageState>
 } = {
   read: async () => settingsOf(),
   save: async (body) => settingsOf(body),
@@ -52,6 +54,7 @@ const server: {
   removeToken: async () => settingsOf(),
   tokenSaves: [],
   tokenRemovals: 0,
+  storage: () => new Promise(() => {}),
 }
 const captured: { event: string; properties?: Record<string, unknown> }[] = []
 
@@ -71,6 +74,7 @@ mock.module('@/modules/api/client', () => ({
       server.tokenRemovals += 1
       return server.removeToken()
     },
+    getAuditStorage: () => server.storage(),
   }),
 }))
 
@@ -219,6 +223,7 @@ describe('Settings screen interactions', () => {
     server.removeToken = async () => settingsOf()
     server.tokenSaves = []
     server.tokenRemovals = 0
+    server.storage = () => new Promise(() => {})
     captured.length = 0
     // The field is behind a flag; the tests below are about the field, and the
     // gate itself is tested separately.
@@ -329,6 +334,28 @@ describe('Settings screen interactions', () => {
         switchIn(container, CLEANUP_SWITCH).getAttribute('aria-checked'),
       ).toBe(String(taskCleanupTipEnabled))
     }
+  })
+
+  it('tests that a saved custom history period shows its own days once it loads', async () => {
+    let resolveStorage: (state: AuditStorageState) => void = () => {}
+    server.storage = () =>
+      new Promise((resolve) => {
+        resolveStorage = resolve
+      })
+    await mount()
+
+    await act(async () =>
+      resolveStorage({
+        retention: { mode: 'deleteAfterDays', days: 90 },
+        usage: { recordingBytes: 0, screenshotBytes: 0, totalBytes: 0 },
+      }),
+    )
+    await settle()
+
+    const days = container.querySelector(
+      'input[aria-label="Days to keep task history"]',
+    ) as HTMLInputElement | null
+    expect(days?.value).toBe('90')
   })
 
   it('tests that the switch is disabled until settings load', async () => {
