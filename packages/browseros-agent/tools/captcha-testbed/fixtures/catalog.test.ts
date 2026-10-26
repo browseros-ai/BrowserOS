@@ -101,7 +101,7 @@ test('tests that all eleven spotting fixtures require the right family and zero 
     expect(page).toMatchObject({
       path: `/${id}.html`,
       family,
-      kind: 'spotting',
+      kind: 'fixture',
       expect: ['unsupported', 'needs_human'],
       expectType: family,
       maxPaidTasks: 0,

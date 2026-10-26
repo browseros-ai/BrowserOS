@@ -44,7 +44,7 @@ function spotting(
     id,
     title,
     family,
-    kind: 'spotting',
+    kind: 'fixture',
     path: `/${id}.html`,
     expect: ['unsupported', 'needs_human'],
     expectType: family,

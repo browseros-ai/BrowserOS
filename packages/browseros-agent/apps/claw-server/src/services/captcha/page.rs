@@ -1,4 +1,8 @@
-use std::{collections::HashSet, future::Future, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    future::Future,
+    time::Duration,
+};
 
 use browseros_cdp::CdpError;
 use browseros_core::{
@@ -26,6 +30,11 @@ pub trait CaptchaPage: Send + Sync {
     fn eval_main(&self, expression: &str) -> impl Future<Output = Result<Value, PageError>> + Send;
     /// Hidden and zero-size frames retain their measured rect; callers must not click or capture them.
     fn frames(&self) -> impl Future<Output = Result<Vec<FrameRef>, PageError>> + Send;
+    fn frame_parent_ids(
+        &self,
+    ) -> impl Future<Output = Result<HashMap<String, String>, PageError>> + Send {
+        async { Ok(HashMap::new()) }
+    }
     fn eval_in_frame(
         &self,
         frame: &FrameRef,
@@ -37,6 +46,13 @@ pub trait CaptchaPage: Send + Sync {
         _expression: &str,
     ) -> impl Future<Output = Result<Value, PageError>> + Send {
         std::future::ready(Err(bad("main-world frame evaluation unavailable")))
+    }
+    fn scan_closed_shadow_roots(
+        &self,
+        _frame: &FrameRef,
+        _function_declaration: &str,
+    ) -> impl Future<Output = Result<Vec<Value>, PageError>> + Send {
+        async { Ok(vec![]) }
     }
     fn click_at(&self, x: f64, y: f64) -> impl Future<Output = Result<(), PageError>> + Send;
     fn screenshot_clip(&self, rect: Rect)
@@ -56,6 +72,7 @@ pub struct LivePage {
     pub view: BrowserView,
     pub page: PageId,
     last_point: Mutex<(f64, f64)>,
+    frame_parents: Mutex<HashMap<String, String>>,
 }
 
 impl LivePage {
@@ -64,6 +81,7 @@ impl LivePage {
             view,
             page,
             last_point: Mutex::new((0.0, 0.0)),
+            frame_parents: Mutex::new(HashMap::new()),
         }
     }
     async fn top(&self) -> Result<ProtocolSession, PageError> {
@@ -118,8 +136,9 @@ impl CaptchaPage for LivePage {
             }];
             let mut seen_frames = HashSet::from([result[0].frame_id.clone()]);
             let mut seen_sessions = HashSet::new();
-            let mut pending = vec![(top, Some(origin))];
-            while let Some((parent, origin)) = pending.pop() {
+            let mut parents = HashMap::new();
+            let mut pending = vec![(top, Some(origin), result[0].frame_id.clone())];
+            while let Some((parent, origin, parent_id)) = pending.pop() {
                 if !seen_sessions.insert(parent.session_id().cloned()) {
                     continue;
                 }
@@ -129,6 +148,7 @@ impl CaptchaPage for LivePage {
                     json!({"depth":-1,"pierce":true}),
                 )
                 .await?;
+                collect_frame_parents(&dom["root"], &parent_id, &mut parents);
                 let mut owners = Vec::new();
                 collect_owners(&dom["root"], &mut owners);
                 for id in owners {
@@ -158,18 +178,22 @@ impl CaptchaPage for LivePage {
                         Err(error) => return Err(error),
                     };
                     result.push(FrameRef {
-                        frame_id: id,
+                        frame_id: id.clone(),
                         url: text(frame, "url")?,
                         rect,
                     });
                     if !session.same_session(&parent) {
-                        pending.push((session, rect));
+                        pending.push((session, rect, id));
                     }
                 }
             }
+            *self.frame_parents.lock().await = parents;
             Ok(result)
         })
         .await
+    }
+    async fn frame_parent_ids(&self) -> Result<HashMap<String, String>, PageError> {
+        Ok(self.frame_parents.lock().await.clone())
     }
     async fn eval_in_frame(&self, frame: &FrameRef, expression: &str) -> Result<Value, PageError> {
         self.frame_operation(async {
@@ -233,6 +257,40 @@ impl CaptchaPage for LivePage {
             evaluation_value(response?)
         })
         .await
+    }
+    async fn scan_closed_shadow_roots(
+        &self,
+        frame: &FrameRef,
+        function_declaration: &str,
+    ) -> Result<Vec<Value>, PageError> {
+        self.frame_operation(async {
+            let session = self.frame(&frame.frame_id).await?;
+            let tree = send(&session, "Page.getFrameTree", json!({})).await?;
+            let dom = send(&session, "DOM.getDocument", json!({"depth":-1,"pierce":true})).await?;
+            let document = if tree["frameTree"]["frame"]["id"] == frame.frame_id {
+                Some(&dom["root"])
+            } else {
+                find_document(&dom["root"], &frame.frame_id)
+            }.ok_or_else(|| bad("Frame document is unavailable"))?;
+            let mut roots = Vec::new();
+            collect_shadow_roots(document, &mut roots);
+            roots.retain(|root| root["shadowRootType"] == "closed");
+            let mut values = Vec::new();
+            if roots.len() > 64 {
+                values.push(json!({"widgets":[],"frames":[],"checked":null,"expired":false,"complete":false}));
+            }
+            for root in roots.into_iter().take(64) {
+                let resolved = send(&session, "DOM.resolveNode", json!({"backendNodeId":root["backendNodeId"]})).await?;
+                let object = text(&resolved["object"], "objectId")?;
+                let result = send(&session, "Runtime.callFunctionOn", json!({
+                    "objectId":object,"functionDeclaration":function_declaration,
+                    "returnByValue":true,"awaitPromise":true
+                })).await;
+                let _ = send(&session, "Runtime.releaseObject", json!({"objectId":object})).await;
+                values.push(evaluation_value(result?)?);
+            }
+            Ok(values)
+        }).await
     }
     async fn click_at(&self, x: f64, y: f64) -> Result<(), PageError> {
         if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 {
@@ -496,6 +554,26 @@ fn quad_rect(quad: &Value) -> Result<Rect, PageError> {
             - y,
     })
 }
+fn collect_frame_parents(node: &Value, document: &str, parents: &mut HashMap<String, String>) {
+    let owner = matches!(
+        node["nodeName"].as_str(),
+        Some("IFRAME" | "FRAME" | "OBJECT" | "EMBED" | "FENCEDFRAME")
+    )
+    .then(|| node["frameId"].as_str())
+    .flatten();
+    if let Some(id) = owner {
+        parents.insert(id.to_owned(), document.to_owned());
+    }
+    for key in ["children", "shadowRoots"] {
+        for child in node[key].as_array().into_iter().flatten() {
+            collect_frame_parents(child, document, parents);
+        }
+    }
+    if let Some(child) = node.get("contentDocument") {
+        collect_frame_parents(child, owner.unwrap_or(document), parents);
+    }
+}
+
 fn collect_owners(node: &Value, frames: &mut Vec<String>) {
     if matches!(
         node["nodeName"].as_str(),
@@ -571,6 +649,7 @@ mod tests {
         function_results: Mutex<VecDeque<Result<Value, CdpError>>>,
         same_process: AtomicBool,
         child_failure: Mutex<Option<(&'static str, bool, CdpError)>>,
+        document: Mutex<Option<Value>>,
         page_open: AtomicBool,
         events: broadcast::Sender<CdpEvent>,
     }
@@ -583,6 +662,7 @@ mod tests {
                 function_results: Mutex::new(VecDeque::new()),
                 same_process: AtomicBool::new(false),
                 child_failure: Mutex::new(None),
+                document: Mutex::new(None),
                 page_open: AtomicBool::new(true),
                 events: broadcast::channel(32).0,
             })
@@ -615,6 +695,16 @@ mod tests {
                     }
                     return Err(error);
                 }
+            }
+            if method == "DOM.getDocument"
+                && child
+                && let Some(document) = self
+                    .document
+                    .lock()
+                    .map_err(|_| CdpError::SessionGone)?
+                    .clone()
+            {
+                return Ok(json!({"root":document}));
             }
             let tab = json!({"tabId":1,"targetId":"page","url":"http://fixture.test","title":"fixture","isActive":true,"isLoading":false,"loadProgress":1.0,"isPinned":false,"isHidden":false,"windowId":1});
             Ok(match method {
@@ -687,6 +777,12 @@ mod tests {
                         .pop_front()
                     {
                         return result;
+                    }
+                    if params["functionDeclaration"]
+                        .as_str()
+                        .is_some_and(|s| s.contains("shadow-probe"))
+                    {
+                        return Ok(json!({"result":{"value":{"root":params["objectId"]}}}));
                     }
                     json!({"result":{"value":if params["objectId"] == "node-42" && params["arguments"][0]["value"] == "input[type=checkbox]" {json!({"x":9,"y":20,"width":24,"height":24})} else {Value::Null}}})
                 }
@@ -769,6 +865,77 @@ mod tests {
                 height: 65.0,
             }),
         }
+    }
+
+    const SHADOW_PROBE: &str = "function() { /* shadow-probe */ return {root: this.nodeType}; }";
+
+    #[tokio::test]
+    async fn tests_that_only_closed_roots_in_the_frame_document_are_scanned() -> TestResult {
+        let (native, page) = fixture();
+        *native.document.lock().map_err(|_| "poisoned")? = Some(json!({
+            "nodeType":9,"backendNodeId":40,"children":[{
+                "shadowRoots":[
+                    {"shadowRootType":"closed","backendNodeId":42},
+                    {"shadowRootType":"open","backendNodeId":43,"children":[{
+                        "shadowRoots":[{"shadowRootType":"closed","backendNodeId":44}]
+                    }]},
+                    {"shadowRootType":"user-agent","backendNodeId":45}
+                ]
+            },{
+                "nodeName":"IFRAME","frameId":"nested","contentDocument":{
+                    "shadowRoots":[{"shadowRootType":"closed","backendNodeId":99}]
+                }
+            }]
+        }));
+        let result = page
+            .scan_closed_shadow_roots(&widget(), SHADOW_PROBE)
+            .await?;
+        assert_eq!(
+            result,
+            vec![json!({"root":"node-42"}), json!({"root":"node-44"})]
+        );
+        let calls = native.calls("Runtime.callFunctionOn")?;
+        assert!(calls.iter().all(|call| call.1["returnByValue"] == true));
+        assert_eq!(native.calls("Runtime.releaseObject")?.len(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_closed_root_scans_stop_at_64_and_report_truncation() -> TestResult {
+        for count in [64, 65] {
+            let (native, page) = fixture();
+            let roots: Vec<_> = (0..count)
+                .map(|id| json!({"shadowRootType":"closed","backendNodeId":id}))
+                .collect();
+            *native.document.lock().map_err(|_| "poisoned")? = Some(json!({"shadowRoots":roots}));
+            let result = page
+                .scan_closed_shadow_roots(&widget(), SHADOW_PROBE)
+                .await?;
+            assert_eq!(
+                result.iter().filter(|v| v.get("root").is_some()).count(),
+                64
+            );
+            assert_eq!(result.iter().any(|v| v["complete"] == false), count > 64);
+            assert_eq!(native.calls("DOM.resolveNode")?.len(), 64);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_closed_root_transport_errors_are_typed() -> TestResult {
+        let (native, page) = fixture();
+        *native.child_failure.lock().map_err(|_| "poisoned")? = Some((
+            "DOM.resolveNode",
+            false,
+            CdpError::Timeout {
+                method: "DOM.resolveNode".into(),
+            },
+        ));
+        assert_eq!(
+            page.scan_closed_shadow_roots(&widget(), SHADOW_PROBE).await,
+            Err(PageError::Timeout)
+        );
+        Ok(())
     }
 
     #[tokio::test]
@@ -1055,6 +1222,13 @@ mod tests {
         assert_eq!(frames.len(), 2);
         assert!(frames.contains(&widget()));
         assert_eq!(
+            page.frame_parent_ids()
+                .await?
+                .get("widget")
+                .map(String::as_str),
+            Some("root")
+        );
+        assert_eq!(
             page.document().await?,
             DocumentId {
                 url: "http://fixture.test".into(),
@@ -1062,6 +1236,17 @@ mod tests {
             }
         );
         Ok(())
+    }
+
+    #[test]
+    fn tests_that_parent_ids_follow_nested_frame_documents_and_shadow_roots() {
+        let document = json!({"children":[{"nodeName":"IFRAME","frameId":"outer","contentDocument":{
+            "children":[{"shadowRoots":[{"children":[{"nodeName":"IFRAME","frameId":"inner"}]}]}]
+        }}]});
+        let mut parents = HashMap::new();
+        collect_frame_parents(&document, "top", &mut parents);
+        assert_eq!(parents.get("outer").map(String::as_str), Some("top"));
+        assert_eq!(parents.get("inner").map(String::as_str), Some("outer"));
     }
 
     #[test]
