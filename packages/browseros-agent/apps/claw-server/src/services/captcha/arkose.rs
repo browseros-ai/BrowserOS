@@ -45,7 +45,9 @@ const apis = Object.keys(window).filter(k => /^arkoseLabsClientApi/.test(k))
     .map(k => window[k]).filter(api => api?.state);
 const wanted = args.publicKey || args.sitekey;
 const matching = apis.filter(api => String(api.state.publicKey).toLowerCase() === String(wanted).toLowerCase());
-const candidates = matching.length ? matching : apis;
+const keys = new Set(apis.map(api => String(api.state.publicKey).toLowerCase()));
+const ambiguous = !matching.length && keys.size > 1;
+const candidates = matching.length ? matching : (ambiguous ? [] : apis);
 const api = candidates.find(api => api.state.completed !== true) || candidates[0];
 const st = api?.state, config = st?.config || {};
 const scripts = all('script[src]').filter(s => vendor(s.src));
@@ -64,13 +66,14 @@ const publicKey = st?.publicKey || widget?.getAttribute('data-pkey')
 let gate = widget;
 try { gate ||= config.selector ? all(config.selector)[0] : null; } catch {}
 gate ||= frame;
-const snapshot = () => ({url:location.href, publicKey, blob:config.data?.blob || null,
-    owner:!!api || !!script?.src.match(/\/v2\/[\da-f-]{36}\/api\.js|\/fc\/api/i),
+const snapshot = () => ({url:location.href, top:window === window.top, publicKey, blob:config.data?.blob || null,
+    owner:apis.length > 0 || !!script?.src.match(/\/v2\/[\da-f-]{36}\/api\.js|\/fc\/api/i),
+    ambiguous,
     children:[...new Set([...all('iframe[src]').map(el => el.src), frame?.src].filter(Boolean))],
     ancestors:Array.from(location.ancestorOrigins || []),
     apiHost:script ? new URL(script.src).host : (frame ? new URL(frame.src).host : null),
     instance:st?.id || null, session:st?.token || legacy?.value || null, frameSrc:frame?.src || null,
-    loaded:!!frame?.isConnected && !!(st ? st.token && st.enforcementSetup : legacy?.value),
+    loaded:!ambiguous && !!frame?.isConnected && !!(st ? st.token && st.enforcementSetup : legacy?.value),
     failed:!!(st?.error || st?.failed), completed:st?.completed === true});
 "#;
 const READ: &str = "/* arkose:read */ return snapshot();";
@@ -267,6 +270,15 @@ async fn resolve_owner<P: CaptchaPage, B: CaptchaBackend>(
     challenge: &Challenge,
 ) -> Result<(Challenge, Value), PageError> {
     let state = read(ctx, challenge).await?;
+    if flag(&state, "top") {
+        return Ok((
+            Challenge {
+                host_frame: None,
+                ..challenge.clone()
+            },
+            state,
+        ));
+    }
     if challenge.host_frame.is_none()
         || (flag(&state, "owner")
             && !challenge
@@ -277,8 +289,8 @@ async fn resolve_owner<P: CaptchaPage, B: CaptchaBackend>(
         return Ok((challenge.clone(), state));
     }
     let expected = string(&state, "publicKey")
-        .or_else(|| challenge.sitekey.clone())
-        .filter(|key| valid_key(key));
+        .filter(|key| valid_key(key))
+        .or_else(|| challenge.sitekey.clone().filter(|key| valid_key(key)));
     let ancestors = state
         .get("ancestors")
         .and_then(Value::as_array)
@@ -288,6 +300,7 @@ async fn resolve_owner<P: CaptchaPage, B: CaptchaBackend>(
     let frames = bounded(ctx, ctx.page.frames()).await?;
     let mut targets = vec![Challenge {
         host_frame: None,
+        sitekey: expected.clone(),
         ..challenge.clone()
     }];
     for frame in frames {
@@ -295,27 +308,28 @@ async fn resolve_owner<P: CaptchaPage, B: CaptchaBackend>(
             .host_frame
             .as_ref()
             .is_some_and(|host| host.frame_id == frame.frame_id)
-            || document_url(&frame.url) == document_url(&ctx.document.url)
         {
             continue;
         }
         targets.push(Challenge {
             host_frame: Some(frame),
+            sitekey: expected.clone(),
             ..challenge.clone()
         });
     }
     let mut complete = true;
     for target in targets {
         match read(ctx, &target).await {
+            Ok(value) if target.host_frame.is_some() && flag(&value, "top") => {}
             Ok(value) => documents.push((target, value)),
             Err(PageError::Browser(_)) => complete = false,
             Err(error) => return Err(error),
         }
     }
-    let owns_widget = |index: usize| {
+    let matches_owner = |index: usize| {
         let value = &documents[index].1;
         flag(value, "owner")
-            && !flag(value, "completed")
+            && !flag(value, "ambiguous")
             && expected.as_ref().is_none_or(|key| {
                 string(value, "publicKey").is_some_and(|found| found.eq_ignore_ascii_case(key))
             })
@@ -325,7 +339,7 @@ async fn resolve_owner<P: CaptchaPage, B: CaptchaBackend>(
     visited[0] = true;
     let mut selected = None;
     let mut ambiguous = false;
-    while !frontier.is_empty() {
+    while complete && !frontier.is_empty() {
         let child_urls: Vec<_> = frontier
             .iter()
             .filter_map(|index| {
@@ -352,16 +366,14 @@ async fn resolve_owner<P: CaptchaPage, B: CaptchaBackend>(
             ambiguous = true;
             break;
         }
-        let owners: Vec<_> = parents
-            .iter()
-            .copied()
-            .filter(|index| owns_widget(*index))
-            .collect();
-        if owners.len() == 1 {
-            selected = owners.first().copied();
-            break;
-        }
-        if owners.len() > 1 {
+        if let Some(index) = parents.first().copied()
+            && flag(&documents[index].1, "owner")
+        {
+            if matches_owner(index) {
+                selected = Some(index);
+            } else {
+                ambiguous = true;
+            }
             break;
         }
         for index in &parents {
@@ -378,11 +390,16 @@ async fn resolve_owner<P: CaptchaPage, B: CaptchaBackend>(
                         .is_some_and(|url| url.origin().ascii_serialization() == origin)
                 })
                 .collect();
-            if !same_origin.iter().any(|index| owns_widget(*index)) {
+            if !same_origin
+                .iter()
+                .any(|index| flag(&documents[*index].1, "owner"))
+            {
                 continue;
             }
-            if same_origin.len() == 1 {
-                selected = same_origin.first().copied();
+            if let [index] = same_origin.as_slice()
+                && matches_owner(*index)
+            {
+                selected = Some(*index);
             }
             break;
         }
@@ -390,7 +407,16 @@ async fn resolve_owner<P: CaptchaPage, B: CaptchaBackend>(
     if let Some(index) = selected {
         let mut owner = documents[index].0.clone();
         owner.sitekey = string(&documents[index].1, "publicKey");
-        let fresh = read(ctx, &owner).await?;
+        let mut fresh = read(ctx, &owner).await?;
+        if !flag(&fresh, "owner")
+            || flag(&fresh, "ambiguous")
+            || expected.as_ref().is_some_and(|key| {
+                !string(&fresh, "publicKey").is_some_and(|found| found.eq_ignore_ascii_case(key))
+            })
+        {
+            fresh["loaded"] = json!(false);
+            fresh["completed"] = json!(false);
+        }
         return Ok((owner, fresh));
     }
     let mut unresolved = documents.remove(0);
@@ -676,6 +702,7 @@ mod tests {
         apply_delay: Duration,
         frame_read: Option<Value>,
         extra_owner: Option<Value>,
+        extra_applied: bool,
     }
 
     impl Default for State {
@@ -699,6 +726,7 @@ mod tests {
                 apply_delay: Duration::ZERO,
                 frame_read: None,
                 extra_owner: None,
+                extra_applied: false,
             }
         }
     }
@@ -738,11 +766,21 @@ mod tests {
             expr: &str,
         ) -> Result<Value, PageError> {
             if frame.frame_id == "other-frame" {
-                return self
-                    .state()
-                    .extra_owner
-                    .clone()
-                    .ok_or_else(|| PageError::Browser("missing extra frame".into()));
+                if expr.contains("arkose:read") {
+                    let value = self
+                        .state()
+                        .extra_owner
+                        .clone()
+                        .ok_or_else(|| PageError::Browser("missing extra frame".into()))?;
+                    if flag(&value, "readError") {
+                        return Err(PageError::Browser("unreadable frame".into()));
+                    }
+                    return Ok(value);
+                }
+                if expr.contains("arkose:apply") {
+                    self.state().extra_applied = true;
+                }
+                return self.eval_main(expr).await;
             }
             assert_eq!(frame.frame_id, "host-frame");
             {
@@ -766,7 +804,14 @@ mod tests {
             Ok(if self.state().extra_owner.is_some() {
                 vec![FrameRef {
                     frame_id: "other-frame".into(),
-                    url: "https://other.test/form".into(),
+                    url: self
+                        .state()
+                        .extra_owner
+                        .as_ref()
+                        .and_then(|v| v.get("url"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("https://other.test/form")
+                        .into(),
                     rect: None,
                 }]
             } else {
@@ -1287,6 +1332,95 @@ mod tests {
             state.frame_read = Some(
                 json!({"url":"https://client-api.arkoselabs.com/enforcement", "owner":false,
                 "loaded":false, "completed":false, "children":[], "ancestors":["https://fixture.test"]}),
+            );
+        }
+        let backend = FakeBackend::new(&page);
+        let result = run(&page, &backend, &CancellationToken::new(), true).await?;
+        assert_eq!(
+            (result.status, result.paid_tasks),
+            (SolveStatus::NeedsHuman, 0)
+        );
+        assert!(backend.tasks().is_empty());
+        assert!(!page.state().applied);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_same_url_child_owners_are_not_mistaken_for_the_top_document()
+    -> anyhow::Result<()> {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            let mut child = state.read.clone();
+            child["url"] = json!(document().url);
+            child["top"] = json!(false);
+            child["children"] = json!(["https://client-api.arkoselabs.com/enforcement"]);
+            state.extra_owner = Some(child);
+            state.read["url"] = json!(document().url);
+            state.read["top"] = json!(true);
+            state.read["owner"] = json!(false);
+            state.read["loaded"] = json!(false);
+            state.read["children"] = json!([document().url]);
+            state.frame_read = Some(
+                json!({"url":"https://client-api.arkoselabs.com/enforcement",
+                "owner":false,"loaded":false,"completed":false,"children":[],"ancestors":["https://fixture.test"]}),
+            );
+        }
+        let backend = FakeBackend::new(&page);
+        let result = run(&page, &backend, &CancellationToken::new(), true).await?;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Solved, SolveReason::TokenAccepted)
+        );
+        assert!(page.state().extra_applied);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_recovery_stops_at_the_nearest_sdk_owner() -> anyhow::Result<()> {
+        for (completed, key, status) in [
+            (true, KEY, SolveStatus::AlreadyClear),
+            (
+                false,
+                "22222222-2222-2222-2222-222222222222",
+                SolveStatus::NeedsHuman,
+            ),
+        ] {
+            let page = FakePage::default();
+            {
+                let mut state = page.state();
+                state.read["url"] = json!(document().url);
+                state.read["children"] = json!(["https://other.test/form"]);
+                let mut near = state.read.clone();
+                near["url"] = json!("https://other.test/form");
+                near["completed"] = json!(completed);
+                near["publicKey"] = json!(key);
+                near["children"] = json!(["https://client-api.arkoselabs.com/enforcement"]);
+                state.extra_owner = Some(near);
+                state.frame_read = Some(
+                    json!({"url":"https://client-api.arkoselabs.com/enforcement","publicKey":KEY,
+                    "owner":false,"loaded":false,"completed":false,"children":[],"ancestors":["https://other.test","https://fixture.test"]}),
+                );
+            }
+            let backend = FakeBackend::new(&page);
+            let result = run(&page, &backend, &CancellationToken::new(), true).await?;
+            assert_eq!(result.status, status);
+            assert!(backend.tasks().is_empty());
+            assert!(!page.state().applied);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_incomplete_owner_probes_do_not_pay() -> anyhow::Result<()> {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.read["url"] = json!(document().url);
+            state.read["children"] = json!(["https://client-api.arkoselabs.com/enforcement"]);
+            state.extra_owner = Some(json!({"url":"https://other.test/frame","readError":true}));
+            state.frame_read = Some(
+                json!({"url":"https://client-api.arkoselabs.com/enforcement","owner":false,"loaded":false,"children":[]}),
             );
         }
         let backend = FakeBackend::new(&page);
