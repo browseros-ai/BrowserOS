@@ -1,5 +1,6 @@
 //! The only place that sends CDP mouse events. Callers pass CSS px; on a page session in
-//! mobile mode the coordinates and wheel deltas go out in its zoomed view space.
+//! mobile mode the coordinates go out in its zoomed view space. Wheel deltas stay as they
+//! are: Blink divides the position by the zoom but not the delta (measured live).
 use crate::{
     CoreError, ProtocolSession,
     input::{ClickOptions, Point},
@@ -133,8 +134,8 @@ pub async fn dispatch_scroll(
                 "type": "mouseWheel",
                 "x": x * scale,
                 "y": y * scale,
-                "deltaX": delta_x * scale,
-                "deltaY": delta_y * scale
+                "deltaX": delta_x,
+                "deltaY": delta_y
             }),
         )
         .await?;

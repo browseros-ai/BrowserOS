@@ -1103,7 +1103,8 @@ async fn mouse_input_is_sent_in_zoomed_view_space() -> TestResult {
             json!({"type":"mousePressed","x":15.0,"y":30.0,"button":"left","clickCount":1}),
             json!({"type":"mouseMoved","x":45.0,"y":60.0}),
             json!({"type":"mouseReleased","x":45.0,"y":60.0,"button":"left","clickCount":1}),
-            json!({"type":"mouseWheel","x":150.0,"y":300.0,"deltaX":0.0,"deltaY":180.0}),
+            // Blink scales the wheel position but not its delta: 120 still scrolls 120 CSS px.
+            json!({"type":"mouseWheel","x":150.0,"y":300.0,"deltaX":0.0,"deltaY":120.0}),
         ]
     );
     Ok(())
