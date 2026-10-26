@@ -77,7 +77,9 @@ export function StepLogDialog({ session, dispatches }: StepLogDialogProps) {
       <CenterMorphModalContent
         ariaLabel="Full step log"
         showCloseButton
-        className="max-w-[920px] rounded-[22px] border-border-2 bg-card"
+        // Portaled outside the task page's ph-no-capture wrapper, so it blocks
+        // its own private content from session recordings.
+        className="ph-no-capture max-w-[920px] rounded-[22px] border-border-2 bg-card"
       >
         <div className="flex max-h-[min(820px,calc(100dvh-64px))] flex-col">
           <header className="flex flex-col gap-1 px-6 pt-6 pr-16 pb-4">

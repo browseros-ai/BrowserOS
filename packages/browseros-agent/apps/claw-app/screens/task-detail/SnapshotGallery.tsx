@@ -199,6 +199,9 @@ export function SnapshotGallery({
             ))}
           </ImageViewerGallery>
           <ImageViewerContent
+            // Portaled outside the task page's ph-no-capture wrapper, so it
+            // blocks the snapshots from session recordings itself.
+            className="ph-no-capture"
             header={
               <div className="flex w-full items-center justify-between gap-3 text-white">
                 <ImageViewerCounter className="text-sm" />
