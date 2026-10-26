@@ -6,7 +6,7 @@ import * as catalog from '../fixtures/catalog'
 import { launchConfiguredBrowser } from './browser-launch'
 import { parseOptions, selectPages } from './run'
 
-test('tests that spotting is selectable without entering fixtures or all', () => {
+test('tests that spotting remains selectable within fixtures and all', () => {
   const all = [
     ...catalog.FIXTURE_PAGES,
     ...catalog.DEMO_PAGES,
@@ -16,11 +16,14 @@ test('tests that spotting is selectable without entering fixtures or all', () =>
   expect(spotting).toHaveLength(11)
   for (const group of ['fixtures', 'all'])
     expect(
-      selectPages(all, parseOptions(['--pages', group])).some((p) =>
-        spotting.includes(p),
+      spotting.every((p) =>
+        selectPages(all, parseOptions(['--pages', group])).includes(p),
       ),
-    ).toBe(false)
-  expect(selectPages(all, parseOptions(['--pages', 'all']))).toHaveLength(13)
+    ).toBe(true)
+  expect(selectPages(all, parseOptions(['--pages', 'fixtures']))).toHaveLength(
+    17,
+  )
+  expect(selectPages(all, parseOptions(['--pages', 'all']))).toHaveLength(24)
   expect(
     selectPages(
       all,

@@ -11,7 +11,7 @@ import {
   buildRustServer,
   startRustServer,
 } from '../../../contracts/claw-mcp/tests/rust-server'
-import type { CaptchaPage } from '../fixtures/catalog'
+import { type CaptchaPage, SPOTTING_PAGES } from '../fixtures/catalog'
 import { launchConfiguredBrowser } from './browser-launch'
 import {
   checkDevPreflight,
@@ -121,10 +121,12 @@ export function selectPages(
 ) {
   const selected = pages.filter(
     (p) =>
-      (options.pages === 'all'
-        ? p.kind !== 'spotting'
-        : p.kind ===
-          (options.pages === 'fixtures' ? 'fixture' : options.pages)) &&
+      (options.pages === 'spotting'
+        ? SPOTTING_PAGES.some((spotting) => spotting.id === p.id)
+        : options.pages === 'all'
+          ? p.kind !== 'spotting'
+          : p.kind ===
+            (options.pages === 'fixtures' ? 'fixture' : options.pages)) &&
       (!options.only || options.only.includes(p.id)),
   )
   if (
