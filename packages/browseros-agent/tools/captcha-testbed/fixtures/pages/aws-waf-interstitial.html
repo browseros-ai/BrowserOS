@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AWS WAF interstitial spotting fixture</title><style>body { font: 16px system-ui, sans-serif; margin: 32px; } #widget, #funcaptcha, #captcha-container { width: 340px; } .geetest_holder { position: relative; width: 260px; min-height: 50px; background: #f4f4f4; border: 1px solid #ddd; } .geetest_btn_svg, .geetest_btn_click { position: absolute; inset: 0; width: 260px; height: 50px; } .geetest_tip { padding: 14px; } .geetest_logo { display: none; } .geetest_panel, .geetest_goto, .geetest_fullpage_click { display: none; }</style></head>
+<body>
+<h1>AWS WAF interstitial</h1>
+<p>Fake key. Detection only; no paid tasks.</p>
+<div id="captcha-container"></div>
+<script>
+(() => {
+  const state = window.__captchaFixture = { id: 'aws-waf-interstitial', family: 'aws_waf', layout: 'top', sitekey: 'FAKE_KEY_DO_NOT_USE', rendered: false, callbackFired: false, tokenLength: 0, errors: [], loadedScripts: [], fallback: false };
+  const mount = document.getElementById('captcha-container');
+  function mirror() {
+    document.documentElement.dataset.captchaFixture = JSON.stringify(state);
+    if (window.parent !== window) window.parent.postMessage({ type: 'captcha-fixture', state: { ...state } }, '*');
+  }
+  function check() {
+    const element = mount.querySelector(".amzn-captcha-modal");
+    const rect = element?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+    state.rendered = true;
+    mirror();
+    return true;
+  }
+  function fallback() {
+    if (check()) return;
+    mount.innerHTML = "<div id=\"root\"><div class=\"amzn-captcha-modal\"><form><div class=\"amzn-captcha-modal-title\">Let's confirm you are human</div><div><canvas width=\"320\" height=\"320\"></canvas></div><button type=\"submit\" id=\"amzn-btn-verify-internal\" class=\"btn btn-primary\" disabled>Confirm</button></form></div></div>";
+    state.fallback = true;
+    check();
+  }
+  function fail(code) { state.errors.push(code); mirror(); fallback(); }
+  const observer = new MutationObserver(check);
+  observer.observe(mount, { childList: true, subtree: true, attributes: true });
+  const resize = new ResizeObserver(check);
+  resize.observe(mount);
+  window.gokuProps = { key: 'FAKE_KEY_DO_NOT_USE', iv: '0000000000000000', context: 'FAKE_CONTEXT_DO_NOT_USE' };
+  mirror();
+  // Fake keys may never reach the vendor's render callback.
+  setTimeout(fallback, 6000);
+  (async () => {
+    for (const src of ["https://41bcdd4fb3cb.610cd090.us-east-1.token.awswaf.com/41bcdd4fb3cb/0d21de737ccb/cd77baa6c832/challenge.js", "https://41bcdd4fb3cb.610cd090.us-east-1.captcha.awswaf.com/41bcdd4fb3cb/0d21de737ccb/cd77baa6c832/captcha.js"]) {
+      await new Promise(resolve => {
+        const script = document.createElement('script');
+        script.src = src;
+
+        script.onload = () => { state.loadedScripts.push(src); mirror(); resolve(); };
+        script.onerror = () => { fail('script-load-error'); resolve(); };
+        (document.head).append(script);
+      });
+    }
+    try {
+      if (window.CaptchaScript?.renderCaptcha) {
+        window.CaptchaScript.renderCaptcha(mount, () => { state.callbackFired = true; mirror(); });
+      }
+      check();
+    } catch { fail('widget-error'); }
+  })();
+})();
+</script>
+</body>
+</html>

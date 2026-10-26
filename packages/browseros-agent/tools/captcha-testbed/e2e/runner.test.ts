@@ -56,6 +56,78 @@ const pages: CaptchaPage[] = [
 ]
 const tokenLengthExpression = () => '0'
 
+test('tests that a matching status cannot hide a wrong CAPTCHA family', () => {
+  const page: CaptchaPage = {
+    ...(pages[3] as CaptchaPage),
+    expectType: 'hcaptcha',
+  }
+  expect(
+    classifyOutcome(page, 'unsupported', 'n/a', 'unsupported_type', {
+      type: 'hcaptcha',
+    }).outcome,
+  ).toBe('PASS')
+  for (const type of ['geetest', 'n/a', undefined]) {
+    const result = classifyOutcome(
+      page,
+      'unsupported',
+      'n/a',
+      'unsupported_type',
+      { type },
+    )
+    expect(result.outcome).toBe('FAIL')
+    expect(result.note).toContain('type')
+  }
+})
+
+test('tests that paid task counts cannot exceed the page budget', () => {
+  const page: CaptchaPage = { ...(pages[3] as CaptchaPage), maxPaidTasks: 0 }
+  expect(
+    classifyOutcome(page, 'unsupported', 'n/a', '', { paidTasks: 0 }).outcome,
+  ).toBe('PASS')
+  const over = classifyOutcome(page, 'unsupported', 'n/a', '', { paidTasks: 1 })
+  expect(over.outcome).toBe('FAIL')
+  expect(over.note).toContain('paid')
+  expect(
+    classifyOutcome({ ...page, maxPaidTasks: 2 }, 'unsupported', 'n/a', '', {
+      paidTasks: 2,
+    }).outcome,
+  ).toBe('PASS')
+  expect(
+    classifyOutcome(
+      { ...page, maxPaidTasks: undefined },
+      'unsupported',
+      'n/a',
+      '',
+      { paidTasks: 10 },
+    ).outcome,
+  ).toBe('PASS')
+})
+
+test('tests that a capped page fails when the paid task count is absent', () => {
+  const page: CaptchaPage = { ...(pages[3] as CaptchaPage), maxPaidTasks: 0 }
+  expect(
+    classifyOutcome(page, 'unsupported', 'n/a', '', { paidTasks: null })
+      .outcome,
+  ).toBe('FAIL')
+})
+
+test('tests that the runner passes the detected type and paid count to the classifier', async () => {
+  const base = pages[3] as CaptchaPage
+  const selected = {
+    ...base,
+    expectType: 'geetest',
+    maxPaidTasks: 0,
+  } satisfies CaptchaPage
+  const records = await run('contract', { pages: [selected] }, [base])
+  expect(records[0]).toMatchObject({
+    status: 'unsupported',
+    type: 'hcaptcha',
+    paidTasks: 0,
+    outcome: 'FAIL',
+  })
+  expect(records[0]?.note).toContain('type')
+})
+
 async function run(
   scenario: Parameters<typeof startStubMcp>[0]['scenario'],
   overrides = {},

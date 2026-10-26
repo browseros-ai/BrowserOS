@@ -5,6 +5,7 @@ From `packages/browseros-agent`:
 ```sh
 bun run test:captcha-docker-e2e -- --keys none --expect-tool-missing
 bun run test:captcha-docker-e2e -- --keys placeholder --keep
+bun run test:captcha-docker-e2e -- --keys placeholder --pages spotting
 
 # Paid run: central operator only
 BROWSEROS_2CAPTCHA_API_KEY_FILE="$HOME/.config/browseros/captcha/2captcha-api-key" \
@@ -25,6 +26,14 @@ Without `--keep`, the container and temporary files are removed on exit.
 `--clean` also removes the base and overlay images; it conflicts with `--keep`.
 Other flags, such as `--only no-captcha` or `--solve-timeout 150000`, go to the
 `tools/captcha-testbed/e2e` runner.
+
+The harness maps both `host.docker.internal` and `captcha-frame.test` to
+`host-gateway`. Top fixtures use the first host; cross-site widgets use the
+second, on another listener port. It forwards `--fixture-frame-host
+captcha-frame.test` to the E2E runner. The harness owns these addresses and
+rejects caller overrides. `--pages spotting` selects the eleven fake-key
+GeeTest/AWS/FunCaptcha pages; they require the right type and zero paid tasks.
+They are excluded from the normal `fixtures`/`all` groups pending detection.
 
 ## Server build and keys
 

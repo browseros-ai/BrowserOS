@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>GeeTest v3 spotting fixture</title><style>body { font: 16px system-ui, sans-serif; margin: 32px; } #widget, #funcaptcha, #captcha-container { width: 340px; } .geetest_holder { position: relative; width: 260px; min-height: 50px; background: #f4f4f4; border: 1px solid #ddd; } .geetest_btn_svg, .geetest_btn_click { position: absolute; inset: 0; width: 260px; height: 50px; } .geetest_tip { padding: 14px; } .geetest_logo { display: none; } .geetest_panel, .geetest_goto, .geetest_fullpage_click { display: none; }</style></head>
+<body>
+<h1>GeeTest v3</h1>
+<p>Fake key. Detection only; no paid tasks.</p>
+<div id="widget"></div>
+<script>
+(() => {
+  const state = window.__captchaFixture = { id: 'geetest-v3', family: 'geetest', layout: 'top', sitekey: '00000000000000000000000000000000', rendered: false, callbackFired: false, tokenLength: 0, errors: [], loadedScripts: [], fallback: false };
+  const mount = document.getElementById('widget');
+  function mirror() {
+    document.documentElement.dataset.captchaFixture = JSON.stringify(state);
+    if (window.parent !== window) window.parent.postMessage({ type: 'captcha-fixture', state: { ...state } }, '*');
+  }
+  function check() {
+    const element = mount.querySelector(".geetest_holder");
+    const rect = element?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+    state.rendered = true;
+    mirror();
+    return true;
+  }
+  function fallback() {
+    if (check()) return;
+    mount.innerHTML = "<div class=\"geetest_holder geetest_wind geetest_ready\" style=\"width: 300px;\"><div class=\"geetest_btn\"><div class=\"geetest_radar_btn\" tabindex=\"0\" aria-label=\"Click to verify\"><div class=\"geetest_radar\"><div class=\"geetest_ring\"><div class=\"geetest_small\"></div></div><div class=\"geetest_sector\"><div class=\"geetest_small\"></div></div><div class=\"geetest_cross\"><div class=\"geetest_h\"></div><div class=\"geetest_v\"></div></div><div class=\"geetest_dot\"></div><div class=\"geetest_scan\"><div class=\"geetest_h\"></div></div><div class=\"geetest_status\"><div class=\"geetest_bg\"></div><div class=\"geetest_hook\"></div></div></div><div class=\"geetest_ie_radar\"></div><div class=\"geetest_radar_tip\" tabindex=\"0\" aria-label=\"Click to verify\" style=\"outline-width: 0px;\"><span class=\"geetest_radar_tip_content\">Click to verify</span><span class=\"geetest_reset_tip_content\">Retry</span><span class=\"geetest_radar_error_code\"></span></div><a class=\"geetest_logo\" target=\"_blank\" href=\"https://www.geetest.com/first_page\"></a><div class=\"geetest_other_offline geetest_offline\"></div></div><div class=\"geetest_ghost_success\"><div class=\"geetest_success_btn\"><div class=\"geetest_success_box\"><div class=\"geetest_success_show\"><div class=\"geetest_success_pie\"></div><div class=\"geetest_success_filter\"></div><div class=\"geetest_success_mask\"></div></div><div class=\"geetest_success_correct\"><div class=\"geetest_success_icon\"></div></div></div><div class=\"geetest_success_radar_tip\"><span class=\"geetest_success_radar_tip_content\"></span><span class=\"geetest_success_radar_tip_timeinfo\"></span></div><a class=\"geetest_success_logo\" target=\"_blank\" href=\"https://www.geetest.com/first_page\"></a><div class=\"geetest_success_offline geetest_offline\"></div></div></div><div class=\"geetest_slide_icon\"></div></div><div class=\"geetest_wait\"><span class=\"geetest_wait_dot geetest_dot_1\"></span><span class=\"geetest_wait_dot geetest_dot_2\"></span><span class=\"geetest_wait_dot geetest_dot_3\"></span></div><div class=\"geetest_fullpage_click\"><div class=\"geetest_fullpage_ghost\"></div><div class=\"geetest_fullpage_click_wrap\"><div class=\"geetest_fullpage_click_box\"></div><div class=\"geetest_fullpage_pointer\"><div class=\"geetest_fullpage_pointer_out\"></div><div class=\"geetest_fullpage_pointer_in\"></div></div></div></div><div class=\"geetest_goto\" style=\"display: none;\"><div class=\"geetest_goto_ghost\"></div><div class=\"geetest_goto_wrap\"><div class=\"geetest_goto_content\"><div class=\"geetest_goto_content_tip\"></div></div><div class=\"geetest_goto_cancel\"></div><a class=\"geetest_goto_confirm\"></a></div></div><div class=\"geetest_panel\"><div class=\"geetest_panel_ghost\"></div><div class=\"geetest_panel_box\"><div class=\"geetest_other_offline geetest_panel_offline\"></div><div class=\"geetest_panel_loading\"><div class=\"geetest_panel_loading_icon\"></div><div class=\"geetest_panel_loading_content\"></div></div><div class=\"geetest_panel_success\"><div class=\"geetest_panel_success_box\"><div class=\"geetest_panel_success_show\"><div class=\"geetest_panel_success_pie\"></div><div class=\"geetest_panel_success_filter\"></div><div class=\"geetest_panel_success_mask\"></div></div><div class=\"geetest_panel_success_correct\"><div class=\"geetest_panel_success_icon\"></div></div></div><div class=\"geetest_panel_success_title\"></div></div><div class=\"geetest_panel_error\"><div class=\"geetest_panel_error_icon\"></div><div class=\"geetest_panel_error_title\"></div><div class=\"geetest_panel_error_content\"></div><div class=\"geetest_panel_error_code\"><div class=\"geetest_panel_error_code_text\"></div></div></div><div class=\"geetest_panel_footer\"><div class=\"geetest_panel_footer_logo\"></div><div class=\"geetest_panel_footer_copyright\"></div></div><div class=\"geetest_panel_next\"></div></div></div></div>";
+    state.fallback = true;
+    check();
+  }
+  function fail(code) { state.errors.push(code); mirror(); fallback(); }
+  const observer = new MutationObserver(check);
+  observer.observe(mount, { childList: true, subtree: true, attributes: true });
+  const resize = new ResizeObserver(check);
+  resize.observe(mount);
+
+  mirror();
+  // Fake keys may never reach the vendor's render callback.
+  setTimeout(fallback, 6000);
+  (async () => {
+    for (const src of ["https://static.geetest.com/static/js/gt.0.4.9.js"]) {
+      await new Promise(resolve => {
+        const script = document.createElement('script');
+        script.src = src;
+
+        script.onload = () => { state.loadedScripts.push(src); mirror(); resolve(); };
+        script.onerror = () => { fail('script-load-error'); resolve(); };
+        (document.head).append(script);
+      });
+    }
+    try {
+      window.initGeetest({ gt: '00000000000000000000000000000000', challenge: '00000000000000000000000000000000', offline: true, new_captcha: true, product: 'float', lang: 'en' }, captcha => {
+        captcha.appendTo('#widget');
+        captcha.onReady(check);
+        captcha.onError(() => fail('widget-error'));
+        captcha.onSuccess(() => { state.callbackFired = true; mirror(); });
+      });
+      check();
+    } catch { fail('widget-error'); }
+  })();
+})();
+</script>
+</body>
+</html>

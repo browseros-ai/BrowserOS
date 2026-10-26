@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>GeeTest v4 cross-site frame fixture</title></head>
+<body>
+<iframe id="fixture-frame" title="GeeTest v4 cross-site widget" src="{{FRAME_ORIGIN}}/geetest-v4.html" width="460" height="640" style="border:0"></iframe>
+<script>
+(() => {
+  const frame = document.getElementById('fixture-frame');
+  const origin = new URL(frame.src).origin;
+  const state = window.__captchaFixture = { id: 'geetest-v4-frame', family: 'geetest', layout: 'frame', rendered: false, callbackFired: false, tokenLength: 0, errors: [], loadedScripts: [] };
+  const mirror = () => { document.documentElement.dataset.captchaFixture = JSON.stringify(state); };
+  window.addEventListener('message', event => {
+    if (event.source !== frame.contentWindow || event.origin !== origin || event.data?.type !== 'captcha-fixture') return;
+    const child = event.data.state;
+    if (child?.id !== 'geetest-v4' || child.family !== state.family) return;
+    state.rendered = child.rendered === true;
+    state.callbackFired = child.callbackFired === true;
+    state.tokenLength = Number.isFinite(child.tokenLength) ? child.tokenLength : 0;
+    state.loadedScripts = Array.isArray(child.loadedScripts) ? child.loadedScripts : [];
+    state.errors = Array.isArray(child.errors) ? child.errors : [];
+    state.fallback = child.fallback === true;
+    mirror();
+  });
+  mirror();
+})();
+</script>
+</body>
+</html>

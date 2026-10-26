@@ -45,6 +45,7 @@ export function parseOptions(argv: string[]) {
       'startup-timeout': { type: 'string', default: '600000' },
       'fixture-bind': { type: 'string' },
       'fixture-host': { type: 'string' },
+      'fixture-frame-host': { type: 'string' },
       'fixture-origin': { type: 'string' },
       headed: { type: 'boolean' },
       headless: { type: 'boolean' },
@@ -75,8 +76,8 @@ export function parseOptions(argv: string[]) {
     throw new Error(
       '--dev-watch uses its own headed browser; cannot combine with --mcp-url, --headless or --browser-arg',
     )
-  if (!['fixtures', 'demo', 'all'].includes(values.pages))
-    throw new Error('--pages must be fixtures, demo, or all')
+  if (!['fixtures', 'demo', 'all', 'spotting'].includes(values.pages))
+    throw new Error('--pages must be fixtures, demo, all, or spotting')
   if (!['placeholder', 'real', 'none'].includes(values.keys))
     throw new Error('--keys must be placeholder, real, or none')
   if (
@@ -105,6 +106,7 @@ export function parseOptions(argv: string[]) {
     startupTimeout,
     fixtureBind: values['fixture-bind'],
     fixtureHost: values['fixture-host'],
+    fixtureFrameHost: values['fixture-frame-host'],
     fixtureOrigin: values['fixture-origin'],
     headed: !values.headless,
     browserArgs: values['browser-arg'] ?? [],
@@ -119,8 +121,10 @@ export function selectPages(
 ) {
   const selected = pages.filter(
     (p) =>
-      (options.pages === 'all' ||
-        p.kind === (options.pages === 'fixtures' ? 'fixture' : 'demo')) &&
+      (options.pages === 'all'
+        ? p.kind !== 'spotting'
+        : p.kind ===
+          (options.pages === 'fixtures' ? 'fixture' : options.pages)) &&
       (!options.only || options.only.includes(p.id)),
   )
   if (
@@ -147,7 +151,11 @@ async function main(): Promise<number> {
     throw new Error('BROWSEROS_BINARY is required unless --mcp-url is set')
   const catalog = await import('../fixtures/catalog')
   const pages = selectPages(
-    [...catalog.FIXTURE_PAGES, ...catalog.DEMO_PAGES],
+    [
+      ...catalog.FIXTURE_PAGES,
+      ...catalog.DEMO_PAGES,
+      ...catalog.SPOTTING_PAGES,
+    ],
     options,
   )
   const resources = createResources()
@@ -207,6 +215,7 @@ async function main(): Promise<number> {
           startCaptchaFixtureServer({
             hostname: options.fixtureBind,
             publicHost: options.fixtureHost,
+            publicFrameHost: options.fixtureFrameHost,
           }),
         (fixture) => fixture.stop(),
       )

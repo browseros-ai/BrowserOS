@@ -195,6 +195,19 @@ test('tests that a healthy run proves the overlay and forwards the Docker fixtur
   expect(runner).toContain('http://127.0.0.1:40123/mcp')
   expect(runner).toContain('0.0.0.0')
   expect(runner).toContain('host.docker.internal')
+  expect(
+    runner.slice(
+      runner.indexOf('--fixture-frame-host'),
+      runner.indexOf('--fixture-frame-host') + 2,
+    ),
+  ).toEqual(['--fixture-frame-host', 'captcha-frame.test'])
+  const launch =
+    h.calls.find(
+      (args) =>
+        args[0] === 'docker' && args[1] === 'run' && args.includes('--detach'),
+    ) ?? []
+  expect(launch).toContain('host.docker.internal:host-gateway')
+  expect(launch).toContain('captcha-frame.test:host-gateway')
   expect(runner).toContain('--expect-tool-missing')
   expect(
     runner.slice(runner.indexOf('--keys'), runner.indexOf('--keys') + 2),
@@ -204,6 +217,14 @@ test('tests that a healthy run proves the overlay and forwards the Docker fixtur
   ).toBe(true)
   expect(await Bun.file(join(h.out, 'proof.json')).exists()).toBe(true)
   await expect(stat(h.data())).rejects.toMatchObject({ code: 'ENOENT' })
+})
+
+test('tests that Docker owns the frame address instead of accepting overrides', () => {
+  for (const args of [
+    ['--fixture-frame-host', 'other.test'],
+    ['--fixture-frame-host=other.test'],
+  ])
+    expect(() => parseArgs(args)).toThrow('owns')
 })
 
 for (const failure of ['hash', 'health', 'runner']) {

@@ -50,8 +50,27 @@ export function classifyOutcome(
   status: string,
   verdict: string,
   reason: string,
-  options: { paid?: boolean; expectToolMissing?: boolean } = {},
+  options: {
+    paid?: boolean
+    expectToolMissing?: boolean
+    type?: string
+    paidTasks?: number | null
+  } = {},
 ): { outcome: ResultRecord['outcome']; note: string } {
+  if (page.expectType !== undefined && options.type !== page.expectType)
+    return {
+      outcome: 'FAIL',
+      note: `expected type ${page.expectType}, received ${options.type ?? 'n/a'}`,
+    }
+  if (page.maxPaidTasks !== undefined) {
+    if (options.paidTasks == null)
+      return { outcome: 'FAIL', note: 'paid task count missing' }
+    if (options.paidTasks > page.maxPaidTasks)
+      return {
+        outcome: 'FAIL',
+        note: `paid tasks ${options.paidTasks} exceed cap ${page.maxPaidTasks}`,
+      }
+  }
   if (status === 'tool_not_found' || options.expectToolMissing)
     return {
       outcome:
@@ -224,7 +243,7 @@ export async function runCaptchaE2E(
         record.status,
         record.verdict,
         record.reason,
-        options,
+        { ...options, type: record.type, paidTasks: record.paidTasks },
       )
       record.outcome = classification.outcome
       if (classification.note)

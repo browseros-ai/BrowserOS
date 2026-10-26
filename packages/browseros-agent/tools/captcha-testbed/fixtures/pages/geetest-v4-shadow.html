@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>GeeTest v4 spotting fixture</title><style>body { font: 16px system-ui, sans-serif; margin: 32px; } #widget, #funcaptcha, #captcha-container { width: 340px; } .geetest_holder { position: relative; width: 260px; min-height: 50px; background: #f4f4f4; border: 1px solid #ddd; } .geetest_btn_svg, .geetest_btn_click { position: absolute; inset: 0; width: 260px; height: 50px; } .geetest_tip { padding: 14px; } .geetest_logo { display: none; } .geetest_panel, .geetest_goto, .geetest_fullpage_click { display: none; }</style></head>
+<body>
+<h1>GeeTest v4 — closed shadow root</h1>
+<p>Fake key. Detection only; no paid tasks.</p>
+<section id="shadow-host"></section>
+<script>
+(() => {
+  const state = window.__captchaFixture = { id: 'geetest-v4-shadow', family: 'geetest', layout: 'shadow', sitekey: '00000000000000000000000000000000', rendered: false, callbackFired: false, tokenLength: 0, errors: [], loadedScripts: [], fallback: false };
+  const host = document.getElementById('shadow-host');
+  const root = host.attachShadow({ mode: 'closed' });
+  const style = document.createElement('style');
+  style.textContent = "body { font: 16px system-ui, sans-serif; margin: 32px; } #widget, #funcaptcha, #captcha-container { width: 340px; } .geetest_holder { position: relative; width: 260px; min-height: 50px; background: #f4f4f4; border: 1px solid #ddd; } .geetest_btn_svg, .geetest_btn_click { position: absolute; inset: 0; width: 260px; height: 50px; } .geetest_tip { padding: 14px; } .geetest_logo { display: none; } .geetest_panel, .geetest_goto, .geetest_fullpage_click { display: none; }";
+  root.append(style);
+  const mount = document.createElement('div');
+  mount.id = "widget";
+
+  root.append(mount);
+  function mirror() {
+    document.documentElement.dataset.captchaFixture = JSON.stringify(state);
+    if (window.parent !== window) window.parent.postMessage({ type: 'captcha-fixture', state: { ...state } }, '*');
+  }
+  function check() {
+    const element = mount.querySelector(".geetest_holder");
+    const rect = element?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+    state.rendered = true;
+    mirror();
+    return true;
+  }
+  function fallback() {
+    if (check()) return;
+    mount.innerHTML = "<div class=\"geetest_holder_7aa6ddf3 geetest_holder\"><svg class=\"geetest_btn_svg_7aa6ddf3 geetest_btn_svg\"><path class=\"geetest_path_top_7aa6ddf3 geetest_path_top geetest_svg_default geetest_svg_animate\" d=\"M0,25 L0.0,4.0 Q0,0,4.0,0.0 L256.0,0.0 Q260,0,260.0,4.0 L260,25\" stroke-dasharray=\"310, 310\" stroke-dashoffset=\"310\" stroke-width=\"0\"></path><path class=\"geetest_path_bottom_7aa6ddf3 geetest_path_bottom geetest_svg_default geetest_svg_animate\" d=\"M0,25 L0.0,46.0 Q0,50,4.0,50.0 L256.0,50.0 Q260,50,260.0,46.0 L260,25\" stroke-dasharray=\"310, 310\" stroke-dashoffset=\"310\" stroke-width=\"0\"></path></svg><div class=\"geetest_btn_click_7aa6ddf3 geetest_btn_click\" aria-label=\"Click to verify\" tabindex=\"0\"></div><div class=\"geetest_mask_7aa6ddf3 geetest_mask\"><div class=\"geetest_mask_layer_7aa6ddf3 geetest_mask_layer\"></div></div><div class=\"geetest_content_7aa6ddf3 geetest_content\"><div class=\"geetest_gradient_bar_7aa6ddf3 geetest_gradient_bar\"></div><div class=\"geetest_tip_container_7aa6ddf3 geetest_tip_container\"><div class=\"geetest_tips_wrap_7aa6ddf3 geetest_tips_wrap\"><div class=\"geetest_err_tips_7aa6ddf3 geetest_err_tips\"></div><div class=\"geetest_tip_7aa6ddf3 geetest_tip\">Click to verify</div></div><a class=\"geetest_logo_7aa6ddf3 geetest_logo\" href=\"https://www.geetest.com/first_page\" target=\"_blank\" tabindex=\"-1\" aria-label=\"Geetest\"></a></div><div class=\"geetest_err_code_7aa6ddf3 geetest_err_code\"></div></div></div>";
+    state.fallback = true;
+    check();
+  }
+  function fail(code) { state.errors.push(code); mirror(); fallback(); }
+  const observer = new MutationObserver(check);
+  observer.observe(mount, { childList: true, subtree: true, attributes: true });
+  const resize = new ResizeObserver(check);
+  resize.observe(mount);
+
+  mirror();
+  // Fake keys may never reach the vendor's render callback.
+  setTimeout(fallback, 6000);
+  (async () => {
+    for (const src of ["https://static.geetest.com/v4/gt4.js"]) {
+      await new Promise(resolve => {
+        const script = document.createElement('script');
+        script.src = src;
+
+        script.onload = () => { state.loadedScripts.push(src); mirror(); resolve(); };
+        script.onerror = () => { fail('script-load-error'); resolve(); };
+        (root).append(script);
+      });
+    }
+    try {
+      window.initGeetest4({ captchaId: '00000000000000000000000000000000', product: 'float' }, captcha => {
+        if ("shadow" === 'shadow') return fallback();
+        captcha.appendTo('#widget');
+        captcha.onReady(check);
+        captcha.onError(() => fail('widget-error'));
+        captcha.onSuccess(() => { state.callbackFired = true; mirror(); });
+      });
+      check();
+    } catch { fail('widget-error'); }
+  })();
+})();
+</script>
+</body>
+</html>

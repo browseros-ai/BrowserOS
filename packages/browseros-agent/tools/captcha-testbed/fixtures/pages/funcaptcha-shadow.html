@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>FunCaptcha spotting fixture</title><style>body { font: 16px system-ui, sans-serif; margin: 32px; } #widget, #funcaptcha, #captcha-container { width: 340px; } .geetest_holder { position: relative; width: 260px; min-height: 50px; background: #f4f4f4; border: 1px solid #ddd; } .geetest_btn_svg, .geetest_btn_click { position: absolute; inset: 0; width: 260px; height: 50px; } .geetest_tip { padding: 14px; } .geetest_logo { display: none; } .geetest_panel, .geetest_goto, .geetest_fullpage_click { display: none; }</style></head>
+<body>
+<h1>FunCaptcha — closed shadow root</h1>
+<p>Fake key. Detection only; no paid tasks.</p>
+<section id="shadow-host"></section>
+<script>
+(() => {
+  const state = window.__captchaFixture = { id: 'funcaptcha-shadow', family: 'arkose', layout: 'shadow', sitekey: '00000000-0000-0000-0000-000000000000', rendered: false, callbackFired: false, tokenLength: 0, errors: [], loadedScripts: [], fallback: false };
+  const host = document.getElementById('shadow-host');
+  const root = host.attachShadow({ mode: 'closed' });
+  const style = document.createElement('style');
+  style.textContent = "body { font: 16px system-ui, sans-serif; margin: 32px; } #widget, #funcaptcha, #captcha-container { width: 340px; } .geetest_holder { position: relative; width: 260px; min-height: 50px; background: #f4f4f4; border: 1px solid #ddd; } .geetest_btn_svg, .geetest_btn_click { position: absolute; inset: 0; width: 260px; height: 50px; } .geetest_tip { padding: 14px; } .geetest_logo { display: none; } .geetest_panel, .geetest_goto, .geetest_fullpage_click { display: none; }";
+  root.append(style);
+  const mount = document.createElement('div');
+  mount.id = "funcaptcha";
+  mount.dataset.pkey = '00000000-0000-0000-0000-000000000000';
+  root.append(mount);
+  function mirror() {
+    document.documentElement.dataset.captchaFixture = JSON.stringify(state);
+    if (window.parent !== window) window.parent.postMessage({ type: 'captcha-fixture', state: { ...state } }, '*');
+  }
+  function check() {
+    const element = mount.querySelector("iframe[data-e2e=\"enforcement-frame\"]");
+    const rect = element?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+    state.rendered = true;
+    mirror();
+    return true;
+  }
+  function fallback() {
+    if (check()) return;
+    const frame = document.createElement('iframe');
+    frame.src = "https://client-api.arkoselabs.com/v2/4.6.0/enforcement.4a0a596001e90a947b26597095cadd81.html#00000000-0000-0000-0000-000000000000";
+    frame.title = 'Verification challenge';
+    frame.setAttribute('aria-label', 'Verification challenge');
+    frame.dataset.e2e = 'enforcement-frame';
+    frame.style.cssText = 'display:block;width:302px;height:290px;border:0';
+    mount.replaceChildren(frame);
+    state.fallback = true;
+    check();
+  }
+  function fail(code) { state.errors.push(code); mirror(); fallback(); }
+  const observer = new MutationObserver(check);
+  observer.observe(mount, { childList: true, subtree: true, attributes: true });
+  const resize = new ResizeObserver(check);
+  resize.observe(mount);
+  window.fixtureArkose = enforcement => {
+    delete window.fixtureArkose;
+    enforcement.setConfig({
+      selector: '#funcaptcha', mode: 'inline',
+      onReady: check,
+      onError: () => fail('widget-error'),
+      onCompleted: () => { state.callbackFired = true; mirror(); }
+    });
+  };
+  mirror();
+  // Fake keys may never reach the vendor's render callback.
+  setTimeout(fallback, 6000);
+  (async () => {
+    for (const src of ["https://client-api.arkoselabs.com/v2/00000000-0000-0000-0000-000000000000/api.js"]) {
+      await new Promise(resolve => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.dataset.callback = 'fixtureArkose';
+        script.onload = () => { state.loadedScripts.push(src); mirror(); resolve(); };
+        script.onerror = () => { fail('script-load-error'); resolve(); };
+        (root).append(script);
+      });
+    }
+    try {
+      // The SDK invokes fixtureArkose through its data-callback attribute.
+      check();
+    } catch { fail('widget-error'); }
+  })();
+})();
+</script>
+</body>
+</html>

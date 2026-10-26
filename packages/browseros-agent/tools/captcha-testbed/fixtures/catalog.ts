@@ -1,4 +1,11 @@
-export type CaptchaFamily = 'recaptcha_v2' | 'turnstile' | 'hcaptcha' | 'none'
+export type CaptchaFamily =
+  | 'recaptcha_v2'
+  | 'turnstile'
+  | 'hcaptcha'
+  | 'geetest'
+  | 'aws_waf'
+  | 'arkose'
+  | 'none'
 export type TerminalStatus =
   | 'solved'
   | 'already_clear'
@@ -14,17 +21,57 @@ export interface PageVerdict {
 export interface CaptchaPage {
   id: string
   title: string
-  kind: 'fixture' | 'demo'
+  kind: 'fixture' | 'demo' | 'spotting'
   family: CaptchaFamily
   sitekey?: string
   path?: string
   url?: string
   expect: TerminalStatus[]
+  expectType?: CaptchaFamily
+  maxPaidTasks?: number
   mayNeedPaid: boolean
   ready: string
   verdict?: PageVerdict
   notes?: string
 }
+
+function spotting(
+  id: string,
+  title: string,
+  family: CaptchaFamily,
+): CaptchaPage {
+  return {
+    id,
+    title,
+    family,
+    kind: 'spotting',
+    path: `/${id}.html`,
+    expect: ['unsupported', 'needs_human'],
+    expectType: family,
+    maxPaidTasks: 0,
+    mayNeedPaid: false,
+    ready:
+      "JSON.parse(document.documentElement.dataset.captchaFixture || '{}').rendered === true",
+  }
+}
+
+export const SPOTTING_PAGES: readonly CaptchaPage[] = [
+  spotting('geetest-v4', 'GeeTest v4', 'geetest'),
+  spotting('geetest-v4-frame', 'GeeTest v4 in a cross-site frame', 'geetest'),
+  spotting(
+    'geetest-v4-shadow',
+    'GeeTest v4 in a closed shadow root',
+    'geetest',
+  ),
+  spotting('geetest-v3', 'GeeTest v3', 'geetest'),
+  spotting('aws-waf', 'AWS WAF JS API', 'aws_waf'),
+  spotting('aws-waf-frame', 'AWS WAF in a cross-site frame', 'aws_waf'),
+  spotting('aws-waf-shadow', 'AWS WAF in a closed shadow root', 'aws_waf'),
+  spotting('aws-waf-interstitial', 'AWS WAF interstitial', 'aws_waf'),
+  spotting('funcaptcha', 'FunCaptcha', 'arkose'),
+  spotting('funcaptcha-frame', 'FunCaptcha in a cross-site frame', 'arkose'),
+  spotting('funcaptcha-shadow', 'FunCaptcha in a closed shadow root', 'arkose'),
+]
 
 function fixture(
   id: string,
@@ -103,6 +150,24 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
 ]
 
 export const DEMO_PAGES: readonly CaptchaPage[] = [
+  ...['geetest', 'geetest-v4'].map(
+    (slug): CaptchaPage => ({
+      id: `2captcha-${slug}-demo`,
+      title: `2Captcha ${slug === 'geetest' ? 'GeeTest v3' : 'GeeTest v4'} demo`,
+      kind: 'demo',
+      family: 'geetest',
+      url: `https://2captcha.com/demo/${slug}`,
+      expect: ['unsupported'],
+      expectType: 'geetest',
+      mayNeedPaid: true,
+      ready:
+        '(document.querySelector(".geetest_holder, .geetest_box")?.getBoundingClientRect().height ?? 0) > 0',
+      verdict: {
+        submitSelector: 'main form button[type="submit"]',
+        acceptedPattern: '"success"\\s*:\\s*true',
+      },
+    }),
+  ),
   {
     id: 'google-recaptcha-demo',
     title: 'Google reCAPTCHA demo',
@@ -185,9 +250,12 @@ export function tokenLengthExpression(family: CaptchaFamily): string {
     recaptcha_v2: 'g-recaptcha-response',
     turnstile: 'cf-turnstile-response',
     hcaptcha: 'h-captcha-response',
+    geetest: '',
+    aws_waf: '',
+    arkose: 'fc-token',
     none: '',
   }
-  return family === 'none'
-    ? '0'
-    : `(document.querySelector('[name="${fields[family]}"]')?.value?.length ?? 0)`
+  return fields[family]
+    ? `(document.querySelector('[name="${fields[family]}"]')?.value?.length ?? 0)`
+    : '0'
 }

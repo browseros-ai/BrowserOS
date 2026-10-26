@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { DEMO_PAGES, FIXTURE_PAGES } from './catalog'
+import { DEMO_PAGES, FIXTURE_PAGES, SPOTTING_PAGES } from './catalog'
 
 test('tests that the CLI prints public fixture and demo URLs and stops on SIGINT', async () => {
   const child = Bun.spawn(
@@ -11,6 +11,10 @@ test('tests that the CLI prints public fixture and demo URLs and stops on SIGINT
       '--public-host',
       'captcha.test',
       '--port',
+      '0',
+      '--frame-host',
+      'frame.test',
+      '--frame-port',
       '0',
     ],
     { stdout: 'pipe', stderr: 'pipe' },
@@ -24,7 +28,8 @@ test('tests that the CLI prints public fixture and demo URLs and stops on SIGINT
       output += new TextDecoder().decode(value)
     }
     expect(output).toContain('http://captcha.test:')
-    for (const page of FIXTURE_PAGES)
+    expect(output).toContain('Frame origin: http://frame.test:')
+    for (const page of [...FIXTURE_PAGES, ...SPOTTING_PAGES])
       expect(output).toContain(page.path ?? 'missing-path')
     for (const page of DEMO_PAGES)
       expect(output).toContain(page.url ?? 'missing-url')
@@ -40,6 +45,7 @@ test('tests that the CLI rejects unknown arguments and invalid ports', async () 
     [['--wat'], 'Unknown option'],
     [['--port', 'bad'], 'Invalid port'],
     [['--port=-1'], 'Invalid port'],
+    [['--frame-port=-1'], 'Invalid port'],
     [['--host'], 'argument missing'],
   ] as const) {
     const child = Bun.spawn(['bun', `${import.meta.dir}/serve.ts`, ...args], {

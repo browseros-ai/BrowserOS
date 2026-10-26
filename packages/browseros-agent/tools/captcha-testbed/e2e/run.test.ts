@@ -2,8 +2,39 @@ import { expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import * as catalog from '../fixtures/catalog'
 import { launchConfiguredBrowser } from './browser-launch'
 import { parseOptions, selectPages } from './run'
+
+test('tests that spotting is selectable without entering fixtures or all', () => {
+  const all = [
+    ...catalog.FIXTURE_PAGES,
+    ...catalog.DEMO_PAGES,
+    ...(catalog.SPOTTING_PAGES ?? []),
+  ]
+  const spotting = selectPages(all, parseOptions(['--pages', 'spotting']))
+  expect(spotting).toHaveLength(11)
+  for (const group of ['fixtures', 'all'])
+    expect(
+      selectPages(all, parseOptions(['--pages', group])).some((p) =>
+        spotting.includes(p),
+      ),
+    ).toBe(false)
+  expect(selectPages(all, parseOptions(['--pages', 'all']))).toHaveLength(13)
+  expect(
+    selectPages(
+      all,
+      parseOptions(['--pages', 'spotting', '--only', 'geetest-v4-frame']),
+    ).map((p) => p.id),
+  ).toEqual(['geetest-v4-frame'])
+})
+
+test('tests that the runner accepts the cross-site frame host flag', () => {
+  expect(
+    parseOptions(['--fixture-frame-host', 'captcha-frame.test'])
+      .fixtureFrameHost,
+  ).toBe('captcha-frame.test')
+})
 
 test('tests that CLI defaults and repeated browser flags are preserved', () => {
   expect(parseOptions([])).toMatchObject({
