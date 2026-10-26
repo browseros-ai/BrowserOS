@@ -132,11 +132,15 @@ class WatchdogFilterTest(unittest.TestCase):
             jobs,
         )
 
-    def test_serial_linux_watchdog_requires_first_pickup_not_every_matrix_entry(self):
+    def test_parallel_linux_watchdog_requires_every_matrix_entry(self):
         step = self.load_watchdog_step("release-linux.yml")
         for statuses, succeeds, cancels in (
-            (("in_progress", "queued"), True, False),
-            (("completed", "queued"), True, False),
+            (("in_progress", "in_progress"), True, False),
+            (("in_progress", "completed"), True, False),
+            # A live sibling keeps running; the stuck lane fails loudly.
+            (("in_progress", "queued"), False, False),
+            # Nothing live: the queued lane alone pins the concurrency group.
+            (("completed", "queued"), False, True),
             (("queued",), False, True),
             ((), False, False),
         ):

@@ -20,6 +20,11 @@ from bos_build.steps.storage.upload import (
 )
 
 
+def _first_receipt_write(_client, _key, _bucket, update):
+    """Stand in for the R2 CAS helper when no receipt exists yet."""
+    return update(None)
+
+
 def _upload_ctx(
     dist_dir: Path,
     *,
@@ -335,6 +340,10 @@ class UploadMetadataTest(unittest.TestCase):
                 "bos_build.steps.storage.upload.get_release_json", return_value=None
             ),
             mock.patch(
+                "bos_build.steps.storage.upload.update_json_in_r2",
+                side_effect=_first_receipt_write,
+            ),
+            mock.patch(
                 "bos_build.steps.storage.upload.upload_file_to_r2",
                 return_value=True,
             ),
@@ -391,6 +400,10 @@ class UploadMetadataTest(unittest.TestCase):
                     return_value=None,
                 ),
                 mock.patch(
+                    "bos_build.steps.storage.upload.update_json_in_r2",
+                    side_effect=_first_receipt_write,
+                ) as update_receipt,
+                mock.patch(
                     "bos_build.steps.storage.upload.upload_file_to_r2",
                     return_value=True,
                 ) as upload_file,
@@ -414,7 +427,11 @@ class UploadMetadataTest(unittest.TestCase):
                 uploaded_names = [
                     Path(call.args[1]).name for call in upload_file.call_args_list
                 ]
-                self.assertEqual(uploaded_names, [selected_name, "release.json"])
+                self.assertEqual(uploaded_names, [selected_name])
+                self.assertEqual(
+                    update_receipt.call_args.args[1],
+                    f"releases/{product_id}/1.2.3/macos/release.json",
+                )
 
     def test_upload_keeps_same_product_macos_arch_artifacts(self) -> None:
         with (
@@ -428,6 +445,10 @@ class UploadMetadataTest(unittest.TestCase):
             mock.patch(
                 "bos_build.steps.storage.upload.get_release_json", return_value=None
             ),
+            mock.patch(
+                "bos_build.steps.storage.upload.update_json_in_r2",
+                side_effect=_first_receipt_write,
+            ) as update_receipt,
             mock.patch(
                 "bos_build.steps.storage.upload.upload_file_to_r2",
                 return_value=True,
@@ -460,8 +481,11 @@ class UploadMetadataTest(unittest.TestCase):
         uploaded_names = [
             Path(call.args[1]).name for call in upload_file.call_args_list
         ]
-        self.assertEqual(uploaded_names[:-1], sorted(product_names))
-        self.assertEqual(uploaded_names[-1], "release.json")
+        self.assertEqual(uploaded_names, sorted(product_names))
+        self.assertEqual(
+            update_receipt.call_args.args[1],
+            "releases/browserclaw/1.2.3/macos/release.json",
+        )
 
     def test_merge_release_metadata_preserves_existing_artifacts(self) -> None:
         existing = {
@@ -588,7 +612,9 @@ class UploadMetadataTest(unittest.TestCase):
             "source_sha": "a" * 40,
             "workflow_run_id": "123",
             "component_versions": {
-                "claw-server-rust": "0.0.68", "browserclaw": "0.2.30", "claw-onboard": "0.1.0",
+                "claw-server-rust": "0.0.68",
+                "browserclaw": "0.2.30",
+                "claw-onboard": "0.1.0",
             },
         }
         x64 = {
@@ -650,16 +676,32 @@ class UploadMetadataTest(unittest.TestCase):
 
         for versions in (None, {}, {"claw-server-rust": "0.0.68"}):
             with self.subTest(unpinned_versions=versions):
-                before = {**x64, "workflow_run_attempt": "1", "component_versions": versions}
-                after = {**arm64, "workflow_run_attempt": "2", "component_versions": versions}
+                before = {
+                    **x64,
+                    "workflow_run_attempt": "1",
+                    "component_versions": versions,
+                }
+                after = {
+                    **arm64,
+                    "workflow_run_attempt": "2",
+                    "component_versions": versions,
+                }
                 self.assertEqual(merge_release_metadata(before, after), after)
 
         for name in identity["component_versions"]:
             for alias in ("latest", "alpha", "../latest"):
                 with self.subTest(name=name, alias=alias):
                     versions = {**identity["component_versions"], name: alias}
-                    before = {**x64, "workflow_run_attempt": "1", "component_versions": versions}
-                    after = {**arm64, "workflow_run_attempt": "2", "component_versions": versions}
+                    before = {
+                        **x64,
+                        "workflow_run_attempt": "1",
+                        "component_versions": versions,
+                    }
+                    after = {
+                        **arm64,
+                        "workflow_run_attempt": "2",
+                        "component_versions": versions,
+                    }
                     self.assertEqual(merge_release_metadata(before, after), after)
 
 

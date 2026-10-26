@@ -126,10 +126,13 @@ resources. Standalone wrapper dispatches use the same published-resource path.
 Linux is unsigned. Windows follows the caller's `sign` input.
 
 Linux also accepts `arch=x64|arm64|all` (default x64). The product-by-architecture
-matrix cross-compiles arm64 on the existing x64 runner. Its entries run serially
-because both architectures merge one product/version's `linux/release.json`;
-the queue watchdog succeeds on the first runner pickup rather than timing out
-on intentionally queued siblings. Published resources support both targets;
+matrix cross-compiles arm64 on the same x64 runner label. Its entries run in
+parallel, each on its own ephemeral VM, so `arch=all` costs one build's
+wall-clock rather than two. Both architectures merge one product/version's
+`linux/release.json`; the upload step writes it with an R2 compare-and-swap
+(`If-Match`/`If-None-Match`), re-reading and re-merging on a 412, so concurrent
+lanes cannot drop each other's keys. Two parallel lanes need 64 vCPUs of
+Dalsv7-family quota in East US. Published resources support both targets;
 source mode is limited to x64. A dual-architecture standalone build requires one
 product and exact `server_version`, `extension_version`, and `onboarding_version`
 inputs; full product releases supply those pins. See [Linux arm64](linux-arm64.md).
@@ -351,12 +354,11 @@ Mechanics worth knowing:
 - GitHub discards self-hosted jobs queued for more than 24h, and each release
   platform workflow has a concurrency group (`release-linux` or
   `release-windows`) with `cancel-in-progress: false`. A queued build can
-  therefore pin the platform lane for a full day. Linux's `queue-watchdog`
-  exits after the first runner pickup; later matrix entries intentionally queue
-  behind it. If no Linux job starts, the watchdog cancels at 20 minutes. The
-  Windows watchdog steps in at the 20-minute mark: it cancels the run when no build job is
-  actually running (everything stuck in queue or already finished), and fails
-  loudly without cancelling while any build is in progress. In that mixed
+  therefore pin the platform lane for a full day. Both lanes'
+  `queue-watchdog` steps in at the 20-minute mark if any build job is still
+  queued: it cancels the run when no build job is actually running
+  (everything stuck in queue or already finished), and fails loudly without
+  cancelling while any build is in progress. In that mixed
   case, cancel the run manually once the live builds finish — a still-queued
   job otherwise pins the group for up to 24h with no watcher left.
 - Do not rely on a configuration fix to repair the current release.

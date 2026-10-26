@@ -98,8 +98,9 @@ gh workflow run release-browserclaw.yml --ref main \
 ```
 
 Linux arm64 uses the existing x64 WarpBuild runner and published arm64 server
-resources. `linux_arch=all` builds the x64 and arm64 AppImage/DEB pairs serially
-so their shared Linux release metadata cannot lose an architecture. The browser
+resources. `linux_arch=all` builds the x64 and arm64 AppImage/DEB pairs in parallel
+on separate runners; their shared Linux release metadata is written with an R2
+compare-and-swap so neither architecture is lost. The browser
 draft checks exactly the selected pairs. Pass the same `--linux-arch` selection
 to later release CLI validation/promotion. See [Linux arm64](linux-arm64.md) for
 the design, source-mode limit, retry provenance, and native verification gate.
