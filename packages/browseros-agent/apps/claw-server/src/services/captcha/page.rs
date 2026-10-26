@@ -38,6 +38,13 @@ pub trait CaptchaPage: Send + Sync {
     ) -> impl Future<Output = Result<Value, PageError>> + Send {
         std::future::ready(Err(bad("main-world frame evaluation unavailable")))
     }
+    fn scan_closed_shadow_roots(
+        &self,
+        _frame: &FrameRef,
+        _function_declaration: &str,
+    ) -> impl Future<Output = Result<Vec<Value>, PageError>> + Send {
+        async { Ok(vec![]) }
+    }
     fn click_at(&self, x: f64, y: f64) -> impl Future<Output = Result<(), PageError>> + Send;
     fn screenshot_clip(&self, rect: Rect)
     -> impl Future<Output = Result<String, PageError>> + Send;
@@ -233,6 +240,40 @@ impl CaptchaPage for LivePage {
             evaluation_value(response?)
         })
         .await
+    }
+    async fn scan_closed_shadow_roots(
+        &self,
+        frame: &FrameRef,
+        function_declaration: &str,
+    ) -> Result<Vec<Value>, PageError> {
+        self.frame_operation(async {
+            let session = self.frame(&frame.frame_id).await?;
+            let tree = send(&session, "Page.getFrameTree", json!({})).await?;
+            let dom = send(&session, "DOM.getDocument", json!({"depth":-1,"pierce":true})).await?;
+            let document = if tree["frameTree"]["frame"]["id"] == frame.frame_id {
+                Some(&dom["root"])
+            } else {
+                find_document(&dom["root"], &frame.frame_id)
+            }.ok_or_else(|| bad("Frame document is unavailable"))?;
+            let mut roots = Vec::new();
+            collect_shadow_roots(document, &mut roots);
+            roots.retain(|root| root["shadowRootType"] == "closed");
+            let mut values = Vec::new();
+            if roots.len() > 64 {
+                values.push(json!({"widgets":[],"frames":[],"checked":null,"expired":false,"complete":false}));
+            }
+            for root in roots.into_iter().take(64) {
+                let resolved = send(&session, "DOM.resolveNode", json!({"backendNodeId":root["backendNodeId"]})).await?;
+                let object = text(&resolved["object"], "objectId")?;
+                let result = send(&session, "Runtime.callFunctionOn", json!({
+                    "objectId":object,"functionDeclaration":function_declaration,
+                    "returnByValue":true,"awaitPromise":true
+                })).await;
+                let _ = send(&session, "Runtime.releaseObject", json!({"objectId":object})).await;
+                values.push(evaluation_value(result?)?);
+            }
+            Ok(values)
+        }).await
     }
     async fn click_at(&self, x: f64, y: f64) -> Result<(), PageError> {
         if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 {
@@ -571,6 +612,7 @@ mod tests {
         function_results: Mutex<VecDeque<Result<Value, CdpError>>>,
         same_process: AtomicBool,
         child_failure: Mutex<Option<(&'static str, bool, CdpError)>>,
+        document: Mutex<Option<Value>>,
         page_open: AtomicBool,
         events: broadcast::Sender<CdpEvent>,
     }
@@ -583,6 +625,7 @@ mod tests {
                 function_results: Mutex::new(VecDeque::new()),
                 same_process: AtomicBool::new(false),
                 child_failure: Mutex::new(None),
+                document: Mutex::new(None),
                 page_open: AtomicBool::new(true),
                 events: broadcast::channel(32).0,
             })
@@ -615,6 +658,16 @@ mod tests {
                     }
                     return Err(error);
                 }
+            }
+            if method == "DOM.getDocument"
+                && child
+                && let Some(document) = self
+                    .document
+                    .lock()
+                    .map_err(|_| CdpError::SessionGone)?
+                    .clone()
+            {
+                return Ok(json!({"root":document}));
             }
             let tab = json!({"tabId":1,"targetId":"page","url":"http://fixture.test","title":"fixture","isActive":true,"isLoading":false,"loadProgress":1.0,"isPinned":false,"isHidden":false,"windowId":1});
             Ok(match method {
@@ -687,6 +740,12 @@ mod tests {
                         .pop_front()
                     {
                         return result;
+                    }
+                    if params["functionDeclaration"]
+                        .as_str()
+                        .is_some_and(|s| s.contains("shadow-probe"))
+                    {
+                        return Ok(json!({"result":{"value":{"root":params["objectId"]}}}));
                     }
                     json!({"result":{"value":if params["objectId"] == "node-42" && params["arguments"][0]["value"] == "input[type=checkbox]" {json!({"x":9,"y":20,"width":24,"height":24})} else {Value::Null}}})
                 }
@@ -769,6 +828,77 @@ mod tests {
                 height: 65.0,
             }),
         }
+    }
+
+    const SHADOW_PROBE: &str = "function() { /* shadow-probe */ return {root: this.nodeType}; }";
+
+    #[tokio::test]
+    async fn tests_that_only_closed_roots_in_the_frame_document_are_scanned() -> TestResult {
+        let (native, page) = fixture();
+        *native.document.lock().map_err(|_| "poisoned")? = Some(json!({
+            "nodeType":9,"backendNodeId":40,"children":[{
+                "shadowRoots":[
+                    {"shadowRootType":"closed","backendNodeId":42},
+                    {"shadowRootType":"open","backendNodeId":43,"children":[{
+                        "shadowRoots":[{"shadowRootType":"closed","backendNodeId":44}]
+                    }]},
+                    {"shadowRootType":"user-agent","backendNodeId":45}
+                ]
+            },{
+                "nodeName":"IFRAME","frameId":"nested","contentDocument":{
+                    "shadowRoots":[{"shadowRootType":"closed","backendNodeId":99}]
+                }
+            }]
+        }));
+        let result = page
+            .scan_closed_shadow_roots(&widget(), SHADOW_PROBE)
+            .await?;
+        assert_eq!(
+            result,
+            vec![json!({"root":"node-42"}), json!({"root":"node-44"})]
+        );
+        let calls = native.calls("Runtime.callFunctionOn")?;
+        assert!(calls.iter().all(|call| call.1["returnByValue"] == true));
+        assert_eq!(native.calls("Runtime.releaseObject")?.len(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_closed_root_scans_stop_at_64_and_report_truncation() -> TestResult {
+        for count in [64, 65] {
+            let (native, page) = fixture();
+            let roots: Vec<_> = (0..count)
+                .map(|id| json!({"shadowRootType":"closed","backendNodeId":id}))
+                .collect();
+            *native.document.lock().map_err(|_| "poisoned")? = Some(json!({"shadowRoots":roots}));
+            let result = page
+                .scan_closed_shadow_roots(&widget(), SHADOW_PROBE)
+                .await?;
+            assert_eq!(
+                result.iter().filter(|v| v.get("root").is_some()).count(),
+                64
+            );
+            assert_eq!(result.iter().any(|v| v["complete"] == false), count > 64);
+            assert_eq!(native.calls("DOM.resolveNode")?.len(), 64);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_closed_root_transport_errors_are_typed() -> TestResult {
+        let (native, page) = fixture();
+        *native.child_failure.lock().map_err(|_| "poisoned")? = Some((
+            "DOM.resolveNode",
+            false,
+            CdpError::Timeout {
+                method: "DOM.resolveNode".into(),
+            },
+        ));
+        assert_eq!(
+            page.scan_closed_shadow_roots(&widget(), SHADOW_PROBE).await,
+            Err(PageError::Timeout)
+        );
+        Ok(())
     }
 
     #[tokio::test]

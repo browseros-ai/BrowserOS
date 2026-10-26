@@ -7,29 +7,47 @@ use url::Url;
 
 use super::{
     page::CaptchaPage,
-    types::{CaptchaKind, Challenge, ChallengeState, Detection, PageError, ScanOutcome},
+    types::{CaptchaKind, Challenge, ChallengeState, Detection, FrameRef, PageError, ScanOutcome},
 };
 
 const DOM_SCAN: &str = r#"
 const widgets = [], roots = [], frames = [];
 let complete = true;
-const all = (s, root = document) => [...root.querySelectorAll(s)];
+const queryRoots = root => {
+    const list = [root];
+    for (const r of list) for (const e of r.querySelectorAll('*')) if (e.shadowRoot) list.push(e.shadowRoot);
+    return list;
+};
+const scopes = queryRoots(scope);
+const all = (s, root = scope) => (root === scope ? scopes : queryRoots(root)).flatMap(r => [...r.querySelectorAll(s)]);
 const visible = (e, onScreen = false) => {
     if (!e || !e.isConnected) return false;
-    for (let p = e; p; p = p.parentElement) {
+    for (let p = e; p; p = p.parentElement || p.getRootNode().host) {
         const s = getComputedStyle(p);
         if (s.display === 'none' || s.visibility === 'hidden' || s.visibility === 'collapse' || s.opacity === '0') return false;
     }
     const r = e.getBoundingClientRect();
     return r.width > 0 && r.height > 0 && (!onScreen || (r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth));
 };
+const addresses = [...new Set([
+    ...all('script[src]').map(e => e.src),
+    ...(scope === document ? performance.getEntriesByType('resource').map(e => e.name) : [])
+])].filter(raw => {
+    try { return /(^|\.)(google\.com|recaptcha\.net|hcaptcha\.com|challenges\.cloudflare\.com|geetest\.com|geevisit\.com|awswaf\.com|arkoselabs\.com|arkoselabs\.cn|funcaptcha\.com)$/.test(new URL(raw).hostname); }
+    catch { return false; }
+});
 const add = (e, kind, state) => {
-    const field = kind === 'turnstile' ? 'input[name="cf-turnstile-response"]' : 'textarea[name="g-recaptcha-response"]';
-    const response = e && (e.matches(field) ? e : e.querySelector(field));
+    const field = ({turnstile:'input[name="cf-turnstile-response"]', hcaptcha:'textarea[name="h-captcha-response"]',
+        geetest:'[name="geetest_validate"], [name="geetest_seccode"], [name="captcha_output"]',
+        aws_waf:'[name="aws-waf-token"], [name="captcha_voucher"]',
+        arkose:'[name="fc-token"], [name="FunCaptcha-Token"], [name="funcaptcha-response"]'})[kind] || 'textarea[name="g-recaptcha-response"]';
+    const response = e && (e.matches(field) ? e : all(field, e)[0]) ||
+        (['geetest', 'aws_waf', 'arkose'].includes(kind) ? all(field).find(e => e.value?.trim()) : null);
     const a = name => e?.getAttribute('data-' + name) || null;
-    const w = {kind, state: response?.value.trim() ? 'passed' : state, invisible: a('size') === 'invisible', enterprise: false,
-        sitekey: a('sitekey'), recaptchaS: a('s'), action: a('action'), cdata: a('cdata'), callback: a('callback'),
-        frameUrl: e?.querySelector('iframe')?.src || null};
+    const w = {kind, inferred: !e, state: response?.value.trim() ? 'passed' : state, invisible: a('size') === 'invisible', enterprise: false,
+        sitekey: a('sitekey') || a('pkey') || a('captcha-id') || a('gt') || a('api-key') || e?.getAttribute('apiKey') || null,
+        recaptchaS: a('s'), action: a('action'), cdata: a('cdata'), callback: a('callback'),
+        frameUrl: e && all('iframe', e)[0]?.src || null};
     widgets.push(w); roots.push(e); return w;
 };
 for (const e of all('.g-recaptcha[data-sitekey], .cf-turnstile, .h-captcha')) {
@@ -43,12 +61,15 @@ for (const [selector, kind] of [['textarea[name="g-recaptcha-response"]', 'recap
         if (!e.closest('.g-recaptcha, .cf-turnstile, .h-captcha')) add(e, kind, 'unknown');
     }
 }
-for (const [selector, kind] of [['[class*="geetest_"]', 'geetest'], ['[id*="awswaf"], [class*="awswaf"]', 'aws_waf'], ['[id*="funcaptcha"], [class*="funcaptcha"]', 'arkose']]) {
+const awsCaptcha = typeof window.gokuProps !== 'undefined' || addresses.some(raw => /(^|\.)captcha\.awswaf\.com$/.test(new URL(raw).hostname));
+for (const [selector, kind] of [['[class*="geetest_"]', 'geetest'],
+    ['awswaf-captcha, [id*="awswaf"], [class*="awswaf"]' + (awsCaptcha ? ', #captcha-container' : ''), 'aws_waf'],
+    ['[id*="funcaptcha"], [class*="funcaptcha"], [data-pkey]', 'arkose']]) {
     const e = all(selector).find(e => visible(e));
-    if (e) add(e, kind, 'unknown');
+    if (e) add(e, kind, 'active');
 }
 for (const e of all('iframe')) frames.push({url: e.src, visible: visible(e, /\/bframe(?:\?|$)/.test(e.src))});
-const anchor = document.querySelector('#recaptcha-anchor');
+const anchor = all('#recaptcha-anchor')[0];
 const checked = anchor ? anchor.getAttribute('aria-checked') === 'true' : null;
 const expired = !!anchor && anchor.classList.contains('recaptcha-checkbox-expired');
 "#;
@@ -99,7 +120,7 @@ for (const {meta, nodes, v3} of configs) {
     }
     configured.add(index);
     const w = widgets[index];
-    w.frameUrl ||= node?.querySelector('iframe')?.src || null;
+    w.frameUrl ||= node && all('iframe', node)[0]?.src || null;
     for (const key of ['sitekey', 'action', 'recaptchaS', 'callback']) w[key] ||= meta[key] || null;
     w.invisible ||= meta.size === 'invisible';
     if (w.invisible && w.state === 'unknown') w.state = 'widget_only';
@@ -112,16 +133,23 @@ if (!widgets.some(w => w.kind.startsWith('recaptcha')) && (renderKey || all('.gr
 for (const w of widgets.filter(w => w.kind.startsWith('recaptcha'))) w.enterprise ||= enterprise;
 if (typeof window.turnstile !== 'undefined' && !widgets.some(w => w.kind === 'turnstile')) add(null, 'turnstile', 'widget_only');
 for (const [present, kind] of [[typeof window.initGeetest === 'function', 'geetest'], [typeof window.AwsWafCaptcha !== 'undefined', 'aws_waf'], [typeof window.ArkoseEnforcement !== 'undefined', 'arkose']])
-    if (present && !widgets.some(w => w.kind === kind)) add(null, kind, 'unknown');
-if (/^Just a moment/i.test(document.title) || document.querySelector('#challenge-form') || window._cf_chl_opt || location.pathname.startsWith('/cdn-cgi/challenge-platform/'))
+    if (present && !widgets.some(w => w.kind === kind)) add(null, kind, 'widget_only');
+for (const w of widgets.filter(w => w.kind === 'aws_waf')) w.sitekey ||= window.gokuProps?.key || window.apiKey || null;
+if (/^Just a moment/i.test(document.title) || all('#challenge-form').length || window._cf_chl_opt || location.pathname.startsWith('/cdn-cgi/challenge-platform/'))
     add(null, 'cloudflare_challenge', 'active');
 "#;
 
 fn script(main: bool) -> String {
     format!(
-        "(() => {{ /* captcha:{} */ {DOM_SCAN} {} return {{widgets, frames, checked, expired, complete, top: window === window.top, url: location.href}}; }})()",
+        "(() => {{ /* captcha:{} */ const scope = document; {DOM_SCAN} {} return {{widgets, frames, addresses, checked, expired, complete, top: window === window.top, url: location.href}}; }})()",
         if main { "main" } else { "frame" },
         if main { MAIN_SCAN } else { "" },
+    )
+}
+
+fn closed_script() -> String {
+    format!(
+        "function() {{ const scope = this; {DOM_SCAN} return {{widgets, frames, addresses, checked, expired, complete, top: window === window.top, url: location.href}}; }}"
     )
 }
 
@@ -133,6 +161,8 @@ struct Probe {
     expired: bool,
     complete: bool,
     #[serde(default)]
+    addresses: Vec<String>,
+    #[serde(default)]
     top: bool,
     url: Option<String>,
 }
@@ -143,6 +173,8 @@ struct Widget {
     challenge: Challenge,
     #[serde(rename = "frameUrl")]
     frame_url: Option<String>,
+    #[serde(default)]
+    inferred: bool,
 }
 
 impl Widget {
@@ -163,7 +195,27 @@ impl Widget {
                 callback: None,
             },
             frame_url: None,
+            inferred: true,
         }
+    }
+
+    fn merge(&mut self, mut other: Self) {
+        if self.inferred && !other.inferred {
+            std::mem::swap(self, &mut other);
+        }
+        let w = &mut self.challenge;
+        let extra = other.challenge;
+        if !other.inferred && extra.state == ChallengeState::Passed {
+            w.state = ChallengeState::Passed;
+        }
+        w.sitekey = w.sitekey.take().or(extra.sitekey);
+        w.recaptcha_s = w.recaptcha_s.take().or(extra.recaptcha_s);
+        w.action = w.action.take().or(extra.action);
+        w.cdata = w.cdata.take().or(extra.cdata);
+        w.callback = w.callback.take().or(extra.callback);
+        w.enterprise |= extra.enterprise;
+        w.invisible |= extra.invisible;
+        self.frame_url = self.frame_url.take().or(other.frame_url);
     }
 }
 
@@ -171,6 +223,8 @@ impl Widget {
 struct Visibility {
     url: String,
     visible: bool,
+    #[serde(skip)]
+    host_frame: Option<FrameRef>,
 }
 
 async fn bounded<T>(
@@ -244,6 +298,8 @@ async fn scan(
     let mut complete = true;
     let mut widgets = Vec::new();
     let mut visibility = Vec::new();
+    let mut addresses = Vec::new();
+    let mut top_url = None;
     if let Some(probe) = partial(
         bounded(deadline, page.eval_main(&script(true)))
             .await
@@ -253,6 +309,8 @@ async fn scan(
         complete &= probe.complete;
         widgets = probe.widgets;
         visibility = probe.frames;
+        addresses.extend(probe.addresses.into_iter().map(|url| (url, None)));
+        top_url = probe.url;
     }
     let frames =
         partial(bounded(deadline, page.frames()).await, &mut complete)?.unwrap_or_default();
@@ -272,7 +330,7 @@ async fn scan(
             probes.push(None);
             continue;
         }
-        let probe = partial(
+        let mut probe = partial(
             bounded(deadline, page.eval_in_frame(frame, &script(false)))
                 .await
                 .and_then(decode),
@@ -281,11 +339,62 @@ async fn scan(
         if let Some(probe) = &probe {
             complete &= probe.complete;
         }
+        let host = if probe.as_ref().is_some_and(|p| p.top)
+            || (frames.first() == Some(frame) && top_url.as_deref() == Some(&frame.url))
+        {
+            None
+        } else {
+            Some(frame.clone())
+        };
+        match bounded(
+            deadline,
+            page.scan_closed_shadow_roots(frame, &closed_script()),
+        )
+        .await
+        {
+            Ok(values) => {
+                for value in values {
+                    match decode(value) {
+                        Ok(mut closed) => {
+                            complete &= closed.complete;
+                            append_probe(
+                                &mut closed,
+                                host.clone(),
+                                &mut widgets,
+                                &mut visibility,
+                                &mut addresses,
+                            );
+                        }
+                        Err(_) => complete = false,
+                    }
+                }
+            }
+            Err(_) => complete = false,
+        }
+        if let Some(probe) = probe.as_mut().filter(|p| !p.top) {
+            append_probe(probe, host, &mut widgets, &mut visibility, &mut addresses);
+        }
         probes.push(probe);
     }
-    for probe in probes.iter_mut().flatten().filter(|p| !p.top) {
-        visibility.append(&mut probe.frames);
-        widgets.append(&mut probe.widgets);
+    for (raw, host) in addresses {
+        let Some((kind, url)) = frame_kind(&raw) else {
+            continue;
+        };
+        let key = sitekey(kind, &url);
+        if let Some(widget) = widgets.iter_mut().find(|w| {
+            w.challenge.host_frame == host
+                && (w.challenge.kind == kind
+                    || (kind == CaptchaKind::RecaptchaV2
+                        && w.challenge.kind == CaptchaKind::RecaptchaV3))
+        }) {
+            widget.challenge.sitekey = widget.challenge.sitekey.take().or(key);
+        } else {
+            let mut widget = Widget::new(kind);
+            widget.challenge.state = ChallengeState::WidgetOnly;
+            widget.challenge.host_frame = host;
+            widget.challenge.sitekey = key;
+            widgets.push(widget);
+        }
     }
     let full_page = widgets
         .iter()
@@ -314,15 +423,9 @@ async fn scan(
         {
             continue;
         }
-        let sitekey = param(&url, "k")
-            .or_else(|| param(&url, "sitekey"))
-            .or_else(|| {
-                url.path_segments()?
-                    .find(|s| {
-                        s.starts_with("0x") || (s.starts_with(['1', '2', '3']) && s.len() == 24)
-                    })
-                    .map(str::to_owned)
-            });
+        let sitekey = sitekey(kind, &url);
+        let owner = visibility.iter().find(|v| v.url == frame_url);
+        let host = owner.and_then(|v| v.host_frame.clone());
         let matches_kind = |w: &Widget| {
             w.challenge.kind == kind
                 || (kind == CaptchaKind::RecaptchaV2
@@ -332,12 +435,14 @@ async fn scan(
             .iter()
             .position(|w| {
                 matches_kind(w)
+                    && w.challenge.host_frame == host
                     && w.challenge.frame.is_none()
                     && w.frame_url.as_deref() == Some(frame_url)
             })
             .or_else(|| {
                 widgets.iter().position(|w| {
                     matches_kind(w)
+                        && w.challenge.host_frame == host
                         && w.challenge.frame.is_none()
                         && w.frame_url.is_none()
                         && (w.challenge.sitekey.is_none() || w.challenge.sitekey == sitekey)
@@ -349,6 +454,7 @@ async fn scan(
         });
         let w = &mut widgets[index].challenge;
         w.frame = Some(frame.clone());
+        w.host_frame = host;
         w.invisible |= invisible;
         w.enterprise |= url.path().contains("/enterprise/");
         w.sitekey = w.sitekey.take().or(sitekey);
@@ -377,6 +483,18 @@ async fn scan(
             }
         } else if kind == CaptchaKind::Turnstile && w.state != ChallengeState::Passed {
             w.state = ChallengeState::Active;
+        } else if matches!(
+            kind,
+            CaptchaKind::Geetest | CaptchaKind::AwsWaf | CaptchaKind::Arkose
+        ) && w.state != ChallengeState::Passed
+        {
+            w.state = if owner.is_some_and(|v| v.visible)
+                || frame.rect.is_some_and(|r| r.width > 0.0 && r.height > 0.0)
+            {
+                ChallengeState::Active
+            } else {
+                ChallengeState::WidgetOnly
+            };
         }
     }
     for frame in &frames {
@@ -427,6 +545,55 @@ async fn scan(
     Ok((widgets, complete))
 }
 
+fn append_probe(
+    probe: &mut Probe,
+    host: Option<FrameRef>,
+    widgets: &mut Vec<Widget>,
+    visibility: &mut Vec<Visibility>,
+    addresses: &mut Vec<(String, Option<FrameRef>)>,
+) {
+    for mut widget in probe.widgets.drain(..) {
+        widget.challenge.host_frame = host.clone();
+        if let Some(existing) = widgets.iter_mut().find(|w| {
+            w.challenge.kind == widget.challenge.kind
+                && w.challenge.host_frame == host
+                && (w.inferred
+                    || widget.inferred
+                    || (w.frame_url.is_some() && w.frame_url == widget.frame_url))
+        }) {
+            existing.merge(widget);
+        } else {
+            widgets.push(widget);
+        }
+    }
+    for frame in &mut probe.frames {
+        frame.host_frame = host.clone();
+    }
+    visibility.append(&mut probe.frames);
+    addresses.extend(probe.addresses.drain(..).map(|url| (url, host.clone())));
+}
+
+fn sitekey(kind: CaptchaKind, url: &Url) -> Option<String> {
+    param(url, "k")
+        .or_else(|| param(url, "sitekey"))
+        .or_else(|| match kind {
+            CaptchaKind::Geetest => param(url, "captcha_id").or_else(|| param(url, "gt")),
+            CaptchaKind::AwsWaf => param(url, "apiKey"),
+            CaptchaKind::Arkose => url
+                .path()
+                .strip_prefix("/v2/")?
+                .strip_suffix("/api.js")
+                .filter(|s| !s.is_empty() && !s.contains('/'))
+                .map(str::to_owned),
+            _ => None,
+        })
+        .or_else(|| {
+            url.path_segments()?
+                .find(|s| s.starts_with("0x") || (s.starts_with(['1', '2', '3']) && s.len() == 24))
+                .map(str::to_owned)
+        })
+}
+
 fn param(url: &Url, key: &str) -> Option<String> {
     url.query_pairs()
         .find(|(k, _)| k == key)
@@ -456,11 +623,11 @@ fn frame_kind(raw: &str) -> Option<(CaptchaKind, Url)> {
         CaptchaKind::Turnstile
     } else if domain("hcaptcha.com") {
         CaptchaKind::Hcaptcha
-    } else if domain("geetest.com") {
+    } else if domain("geetest.com") || domain("geevisit.com") {
         CaptchaKind::Geetest
     } else if domain("awswaf.com") {
         CaptchaKind::AwsWaf
-    } else if domain("arkoselabs.com") || domain("funcaptcha.com") {
+    } else if domain("arkoselabs.com") || domain("arkoselabs.cn") || domain("funcaptcha.com") {
         CaptchaKind::Arkose
     } else {
         return None;
@@ -486,6 +653,7 @@ mod tests {
         documents: Mutex<VecDeque<DocumentId>>,
         frame_delay: Duration,
         scripts: Mutex<Vec<String>>,
+        closed: Result<Vec<Value>, PageError>,
     }
 
     fn document(loader: &str) -> DocumentId {
@@ -525,6 +693,7 @@ mod tests {
                 documents: Mutex::new(VecDeque::from([document("a")])),
                 frame_delay: Duration::ZERO,
                 scripts: Mutex::new(vec![]),
+                closed: Ok(vec![]),
             }
         }
 
@@ -591,6 +760,14 @@ mod tests {
             .ok_or(PageError::Closed)
         }
 
+        async fn scan_closed_shadow_roots(
+            &self,
+            _frame: &FrameRef,
+            _function: &str,
+        ) -> Result<Vec<Value>, PageError> {
+            self.closed.clone()
+        }
+
         async fn click_at(&self, _x: f64, _y: f64) -> Result<(), PageError> {
             panic!("detection clicked")
         }
@@ -608,6 +785,191 @@ mod tests {
 
     async fn scan(page: &FakePage) -> Result<Detection, PageError> {
         detect(page, Duration::from_secs(2)).await
+    }
+
+    #[tokio::test]
+    async fn tests_that_closed_shadow_widgets_keep_their_host_frame() -> Result<(), PageError> {
+        for kind in ["geetest", "aws_waf", "arkose"] {
+            let mut page = FakePage::new(json!([]));
+            let host = frame("host", "https://fixture.test/child");
+            page.frames.push(host.clone());
+            page.closed = Ok(vec![probe(json!([widget(kind, "active")]))]);
+            let result = scan(&page).await?;
+            assert!(result.complete);
+            assert_eq!(result.challenges.len(), 1);
+            assert_eq!(result.challenges[0].kind.as_str(), kind);
+            assert_eq!(result.challenges[0].state, ChallengeState::Active);
+            assert_eq!(result.challenges[0].host_frame, Some(host));
+            assert!(result.challenges[0].frame.is_none());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_closed_widgets_replace_global_only_findings() -> Result<(), PageError> {
+        for state in ["active", "passed"] {
+            let mut global = widget("aws_waf", "widget_only");
+            global["inferred"] = json!(true);
+            global["sitekey"] = json!("global-key");
+            let mut page = FakePage::new(json!([global]));
+            page.frames.push(frame("top", "https://fixture.test/"));
+            let mut top = probe(json!([]));
+            top["top"] = json!(true);
+            page.frame_result = Ok(top);
+            page.closed = Ok(vec![probe(json!([widget("aws_waf", state)]))]);
+            let result = scan(&page).await?;
+            assert_eq!(result.challenges.len(), 1);
+            assert_eq!(
+                serde_json::to_value(result.challenges[0].state)
+                    .map_err(|e| PageError::Browser(e.to_string()))?,
+                json!(state)
+            );
+            assert_eq!(result.challenges[0].sitekey.as_deref(), Some("global-key"));
+            assert!(result.challenges[0].host_frame.is_none());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_visible_child_widgets_keep_their_host_frame() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([]));
+        let host = frame("host", "https://fixture.test/child");
+        page.frames.push(host.clone());
+        page.frame_result = Ok(probe(json!([widget("geetest", "active")])));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        assert_eq!(result.challenges[0].host_frame, Some(host));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_failed_closed_root_scans_are_incomplete() -> Result<(), PageError> {
+        for error in [
+            PageError::Timeout,
+            PageError::Closed,
+            PageError::Browser("miss".into()),
+        ] {
+            let mut page = FakePage::new(json!([widget("geetest", "active")]));
+            page.frames
+                .push(frame("host", "https://fixture.test/child"));
+            page.closed = Err(error);
+            let result = scan(&page).await?;
+            assert!(!result.complete);
+            assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_loaded_vendor_addresses_are_not_blocking() -> anyhow::Result<()> {
+        use crate::services::captcha::{
+            CaptchaService, LiveDriver,
+            config::CaptchaConfig,
+            events::CaptchaEventBus,
+            providers::ProviderChain,
+            types::{SolveReason, SolveStatus},
+        };
+        use browseros_core::PageId;
+        use tokio_util::sync::CancellationToken;
+
+        for (address, kind, key) in [
+            (
+                "https://static.geetest.com/v4/gt4.js?captcha_id=gt-key",
+                CaptchaKind::Geetest,
+                Some("gt-key"),
+            ),
+            (
+                "https://static.geevisit.com/gt.js?gt=v3-key",
+                CaptchaKind::Geetest,
+                Some("v3-key"),
+            ),
+            (
+                "https://a.token.awswaf.com/challenge.js",
+                CaptchaKind::AwsWaf,
+                None,
+            ),
+            (
+                "https://client-api.arkoselabs.com/v2/pk-key/api.js",
+                CaptchaKind::Arkose,
+                Some("pk-key"),
+            ),
+            (
+                "https://client-api.arkoselabs.cn/v2/cn-key/api.js",
+                CaptchaKind::Arkose,
+                Some("cn-key"),
+            ),
+            (
+                "https://funcaptcha.com/fc/api.js",
+                CaptchaKind::Arkose,
+                None,
+            ),
+        ] {
+            let page = FakePage::new(json!([]));
+            let mut loaded = probe(json!([]));
+            loaded["addresses"] = json!([address]);
+            *page.main.lock().map_err(|e| anyhow::anyhow!("{e}"))? = VecDeque::from([loaded]);
+            let result = scan(&page).await?;
+            assert_eq!(result.challenges.len(), 1, "{address}");
+            assert_eq!(result.challenges[0].kind, kind);
+            assert_eq!(result.challenges[0].state, ChallengeState::WidgetOnly);
+            assert_eq!(result.challenges[0].sitekey.as_deref(), key);
+            let service = CaptchaService {
+                providers: ProviderChain::new(&CaptchaConfig::default()),
+                reservations: Default::default(),
+                events: CaptchaEventBus::new(),
+                forced_method: None,
+            };
+            let outcome = service
+                .solve_with(
+                    &page,
+                    PageId(1),
+                    CancellationToken::new(),
+                    false,
+                    Instant::now() + Duration::from_secs(2),
+                    &LiveDriver,
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            assert_eq!(outcome.status, SolveStatus::AlreadyClear);
+            assert_eq!(outcome.reason, SolveReason::NotBlocking);
+            assert_eq!(outcome.paid_tasks, 0);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_loaded_addresses_enrich_widgets_without_duplicates() -> Result<(), PageError>
+    {
+        let mut page = FakePage::new(json!([]));
+        let host = frame("host", "https://fixture.test/child");
+        page.frames.push(host.clone());
+        let mut loaded = probe(json!([widget("arkose", "active")]));
+        loaded["addresses"] = json!(["https://client-api.arkoselabs.com/v2/public-key/api.js"]);
+        page.frame_result = Ok(loaded);
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        assert_eq!(result.challenges[0].sitekey.as_deref(), Some("public-key"));
+        assert_eq!(result.challenges[0].host_frame, Some(host));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_loaded_anchor_addresses_do_not_duplicate_v3_widgets()
+    -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(false);
+        page.frames[0].url.push_str("&size=invisible");
+        let mut badge = widget("recaptcha_v3", "widget_only");
+        badge["sitekey"] = json!("key");
+        let mut main = probe(json!([badge]));
+        main["addresses"] = json!([page.frames[0].url]);
+        page.main = Mutex::new(VecDeque::from([main]));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::RecaptchaV3);
+        assert_eq!(result.challenges[0].state, ChallengeState::WidgetOnly);
+        Ok(())
     }
 
     #[tokio::test]
@@ -1155,6 +1517,75 @@ mod tests {
                 output.join("live-adapter-results.json"),
                 serde_json::to_vec_pretty(&results)?,
             )?;
+        }
+        connection.disconnect().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an owned dev browser and CAPTCHA_LIVE_CASES_FILE"]
+    async fn tests_that_live_detection_matches_cases_within_budget() -> anyhow::Result<()> {
+        use super::super::page::LivePage;
+        use browseros_cdp::{CdpClient, ConnectOptions};
+        use browseros_core::{Browser, pages::NewPageOptions};
+        use std::sync::Arc;
+
+        let port: u16 = std::env::var("CAPTCHA_LIVE_CDP_PORT")?.parse()?;
+        assert!(![9010, 9011, 9121, 9211, 9212, 9213, 9214, 9215].contains(&port));
+        let cases: Vec<Value> =
+            serde_json::from_slice(&std::fs::read(std::env::var("CAPTCHA_LIVE_CASES_FILE")?)?)?;
+        let connection = Arc::new(CdpClient::connect(ConnectOptions::new(port)).await?);
+        let browser = Browser::new(connection.clone());
+        let mut results = Vec::new();
+        for case in cases {
+            let url = case["url"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing URL"))?;
+            let id = browser.new_page(url, NewPageOptions::default()).await?;
+            let page = LivePage::new(browser.view().await, id.clone());
+            let ready = case["ready"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing readiness probe"))?;
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while page.eval_main(ready).await.ok() != Some(json!(true)) {
+                anyhow::ensure!(Instant::now() < deadline, "{} never ready", case["id"]);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            for _ in 0..case["samples"].as_u64().unwrap_or(1) {
+                let start = Instant::now();
+                let result = detect(&page, Duration::from_secs(2)).await?;
+                let elapsed_ms = start.elapsed().as_millis();
+                results.push(json!({"id":case["id"],"scanMs":elapsed_ms,"detection":result}));
+                std::fs::write(
+                    std::env::var("CAPTCHA_LIVE_RESULTS_FILE")?,
+                    serde_json::to_vec_pretty(&results)?,
+                )?;
+                anyhow::ensure!(
+                    result.complete && elapsed_ms < 2000,
+                    "{} incomplete or over budget",
+                    case["id"]
+                );
+                if let Some(kind) = case["kind"].as_str() {
+                    let challenge = result
+                        .challenges
+                        .iter()
+                        .find(|c| c.kind.as_str() == kind)
+                        .ok_or_else(|| anyhow::anyhow!("{} missing {kind}", case["id"]))?;
+                    assert_eq!(
+                        serde_json::to_value(challenge.state)?,
+                        case["state"],
+                        "{}",
+                        case["id"]
+                    );
+                    assert_eq!(
+                        challenge.host_frame.is_some(),
+                        case["child"] == true,
+                        "{}",
+                        case["id"]
+                    );
+                }
+            }
+            browser.close_page(id).await?;
         }
         connection.disconnect().await;
         Ok(())
