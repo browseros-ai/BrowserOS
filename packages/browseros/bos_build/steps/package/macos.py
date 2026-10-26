@@ -2,6 +2,8 @@
 """DMG creation and packaging module for BrowserOS"""
 
 import shutil
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Dict
 from ...core.step import Step, ValidationError, step
@@ -15,6 +17,40 @@ from ...lib.utils import (
     log_warning,
     IS_MACOS,
 )
+
+
+@dataclass(frozen=True)
+class DmgAppearance:
+    """Resolved art and layout for a laid-out install DMG.
+
+    Icon positions are the centers Finder shows them at, in the window's
+    640x420 point space, and must line up with the arrow drawn into the
+    background art (see resources/<product>/dmg-assets/README.md).
+    """
+
+    background: Path  # 1x PNG; dmgbuild picks up a sibling <name>@2x.png for Retina
+    volume_icon: Optional[Path] = None  # .icns for the mounted volume, or None
+    app_icon_pos: tuple = (165, 190)
+    apps_icon_pos: tuple = (475, 190)
+    window_rect: tuple = ((200, 120), (640, 420))
+    icon_size: int = 128
+    text_size: int = 13
+
+
+def resolve_dmg_appearance(ctx: Context) -> Optional[DmgAppearance]:
+    """Return the DMG appearance for this product, or None to use a plain
+    image. A product opts in by shipping a dmg-assets/background.png."""
+    background = ctx.get_dmg_assets_dir() / "background.png"
+    if not background.exists():
+        return None
+
+    volume_icon = (
+        ctx.root_dir / "resources" / ctx.product.id / "icons" / "mac" / "app.icns"
+    )
+    return DmgAppearance(
+        background=background,
+        volume_icon=volume_icon if volume_icon.exists() else None,
+    )
 
 
 @step("package_macos", phase="package", platforms=("macos",))
@@ -39,25 +75,46 @@ class MacOSPackageModule(Step):
         dmg_name = ctx.get_artifact_name("dmg")
         dmg_path = dmg_dir / dmg_name
         pkg_dmg_path = ctx.get_pkg_dmg_path()
+        appearance = resolve_dmg_appearance(ctx)
+        if appearance:
+            log_info("  Using laid-out install window (drag to Applications)")
+        else:
+            log_info("  Using plain disk image (no DMG art for this product)")
 
         if ctx.artifact_registry.has("signed_app"):
-            self._create_signed_notarized_dmg(app_path, dmg_path, pkg_dmg_path, ctx)
+            self._create_signed_notarized_dmg(
+                app_path, dmg_path, pkg_dmg_path, ctx, appearance
+            )
         else:
-            self._create_dmg(app_path, dmg_path, pkg_dmg_path, ctx)
+            self._create_dmg(app_path, dmg_path, pkg_dmg_path, ctx, appearance)
 
         ctx.artifact_registry.add("dmg", dmg_path)
         log_success(f"DMG created: {dmg_name}")
 
     def _create_dmg(
-        self, app_path: Path, dmg_path: Path, pkg_dmg_path: Path, ctx: Context
+        self,
+        app_path: Path,
+        dmg_path: Path,
+        pkg_dmg_path: Path,
+        ctx: Context,
+        appearance: Optional[DmgAppearance] = None,
     ) -> None:
         if not create_dmg(
-            app_path, dmg_path, ctx.product.mac.dmg_volume_name, pkg_dmg_path
+            app_path,
+            dmg_path,
+            ctx.product.mac.dmg_volume_name,
+            pkg_dmg_path,
+            appearance,
         ):
             raise RuntimeError("Failed to create DMG")
 
     def _create_signed_notarized_dmg(
-        self, app_path: Path, dmg_path: Path, pkg_dmg_path: Path, ctx: Context
+        self,
+        app_path: Path,
+        dmg_path: Path,
+        pkg_dmg_path: Path,
+        ctx: Context,
+        appearance: Optional[DmgAppearance] = None,
     ) -> None:
         from ..sign.macos import check_environment
 
@@ -80,6 +137,7 @@ class MacOSPackageModule(Step):
             keychain_profile,
             keychain_path,
             env_vars,
+            appearance,
         ):
             raise RuntimeError("Failed to create signed and notarized DMG")
 
@@ -89,8 +147,14 @@ def create_dmg(
     dmg_path: Path,
     volume_name: str = "BrowserOS",
     pkg_dmg_path: Optional[Path] = None,
+    appearance: Optional[DmgAppearance] = None,
 ) -> bool:
-    """Create a DMG package from an app bundle"""
+    """Create a DMG package from an app bundle.
+
+    With an appearance, lay out a branded install window via dmgbuild; a
+    failure there is fatal rather than a silent drop to an unstyled image.
+    Without one, fall back to Chromium's pkg-dmg (products with no DMG art).
+    """
     log_info(f"\n📀 Creating DMG package: {dmg_path.name}")
 
     # Verify app exists
@@ -105,6 +169,12 @@ def create_dmg(
     if dmg_path.exists():
         log_info(f"  Removing existing DMG: {dmg_path.name}")
         dmg_path.unlink()
+
+    if appearance is not None:
+        if create_dmg_with_layout(app_path, dmg_path, volume_name, appearance):
+            return True
+        log_error("DMG layout failed; refusing to fall back to an unstyled image")
+        return False
 
     # Build command
     cmd = []
@@ -148,6 +218,77 @@ def create_dmg(
     except Exception as e:
         log_error(f"Failed to create DMG: {e}")
         return False
+
+
+def create_dmg_with_layout(
+    app_path: Path,
+    dmg_path: Path,
+    volume_name: str,
+    appearance: DmgAppearance,
+) -> bool:
+    """Lay out a branded install DMG (background + icon positions) via dmgbuild.
+
+    The app icon and the Applications alias are placed over the background art,
+    the window size and icon view options are baked into the image's .DS_Store,
+    and the format stays UDBZ to match the plain path. No Finder is involved, so
+    this runs headless in CI.
+    """
+    log_info("  Laying out install window with dmgbuild")
+
+    try:
+        import dmgbuild  # type: ignore  # macOS-only build dependency, no stubs
+    except ImportError:
+        log_error("dmgbuild is not installed; cannot lay out the DMG")
+        return False
+
+    icon_name = app_path.name
+    lines = [
+        f"app_path = {str(app_path)!r}",
+        f"icon_name = {icon_name!r}",
+        f"background = {str(appearance.background)!r}",
+    ]
+    if appearance.volume_icon is not None:
+        lines.append(f"icon = {str(appearance.volume_icon)!r}")
+    lines += [
+        'format = "UDBZ"',
+        "files = [app_path]",
+        'symlinks = {"Applications": "/Applications"}',
+        "icon_locations = {",
+        f"    icon_name: {tuple(appearance.app_icon_pos)!r},",
+        f'    "Applications": {tuple(appearance.apps_icon_pos)!r},',
+        "}",
+        f"window_rect = {appearance.window_rect!r}",
+        'default_view = "icon-view"',
+        "show_status_bar = False",
+        "show_tab_view = False",
+        "show_toolbar = False",
+        "show_pathbar = False",
+        "show_sidebar = False",
+        f"icon_size = {appearance.icon_size}",
+        f"text_size = {appearance.text_size}",
+    ]
+    settings_src = "\n".join(lines) + "\n"
+
+    settings_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as handle:
+            handle.write(settings_src)
+            settings_path = Path(handle.name)
+
+        dmgbuild.build_dmg(
+            filename=str(dmg_path),
+            volume_name=volume_name,
+            settings_file=str(settings_path),
+            lookForHiDPI=True,
+        )
+        log_success(f"DMG laid out: {dmg_path}")
+        return True
+    except Exception as e:
+        log_error(f"Failed to lay out DMG with dmgbuild: {e}")
+        return False
+    finally:
+        if settings_path is not None:
+            settings_path.unlink(missing_ok=True)
 
 
 def sign_dmg(
@@ -320,6 +461,7 @@ def create_signed_notarized_dmg(
     keychain_profile: str = "notarytool-profile",
     keychain_path: Optional[Path] = None,
     notarization_env: Optional[Dict[str, str]] = None,
+    appearance: Optional[DmgAppearance] = None,
 ) -> bool:
     """Create, sign, and notarize a DMG in one go"""
     log_info("=" * 70)
@@ -327,7 +469,7 @@ def create_signed_notarized_dmg(
     log_info("=" * 70)
 
     # Create DMG
-    if not create_dmg(app_path, dmg_path, volume_name, pkg_dmg_path):
+    if not create_dmg(app_path, dmg_path, volume_name, pkg_dmg_path, appearance):
         return False
 
     # Sign DMG
@@ -380,10 +522,15 @@ def package_universal(contexts: List[Context]) -> bool:
 
     # Get pkg-dmg tool
     pkg_dmg_path = contexts[0].get_pkg_dmg_path()
+    appearance = resolve_dmg_appearance(universal_ctx)
 
     # Create the universal DMG
     if create_dmg(
-        universal_app_path, dmg_path, product.mac.dmg_volume_name, pkg_dmg_path
+        universal_app_path,
+        dmg_path,
+        product.mac.dmg_volume_name,
+        pkg_dmg_path,
+        appearance,
     ):
         log_success(f"Universal DMG created: {dmg_name}")
         return True

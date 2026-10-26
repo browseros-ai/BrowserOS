@@ -217,6 +217,10 @@ class Context:
         """Get pkg-dmg tool path (macOS only)"""
         return join_paths(self.chromium_src, "chrome", "installer", "mac", "pkg-dmg")
 
+    def get_dmg_assets_dir(self) -> Path:
+        """Get product DMG appearance assets (background art), if any."""
+        return join_paths(self.root_dir, "resources", self.product.id, "dmg-assets")
+
     def get_app_path(self) -> Path:
         """Get built app path
 

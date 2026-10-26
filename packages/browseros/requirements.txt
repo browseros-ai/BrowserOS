@@ -1,5 +1,6 @@
 # Requirements for Nxtscape Build System
-click>=8.0.0 
+click>=8.0.0
 PyYAML>=5.4.1
 requests>=2.33.0
 google-cloud-storage>=2.10.0
+dmgbuild>=1.6.1 ; sys_platform == "darwin"
