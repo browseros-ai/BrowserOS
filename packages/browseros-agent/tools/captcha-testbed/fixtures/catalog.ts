@@ -156,7 +156,7 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
       kind: 'demo',
       family: 'geetest',
       url: `https://2captcha.com/demo/${slug}`,
-      expect: ['unsupported'],
+      expect: ['solved'],
       expectType: 'geetest',
       mayNeedPaid: true,
       ready:
