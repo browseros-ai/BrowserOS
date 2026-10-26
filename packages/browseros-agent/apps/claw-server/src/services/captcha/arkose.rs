@@ -742,6 +742,14 @@ mod tests {
 
     impl CaptchaPage for FakePage {
         async fn eval_main(&self, expression: &str) -> Result<Value, PageError> {
+            if expression.contains("const widgets = [], roots = [], frames = [];") {
+                return Ok(json!({
+                    "widgets":[{"kind":"arkose", "state":"active", "sitekey":KEY,
+                        "invisible":false, "enterprise":false}],
+                    "frames":[], "addresses":[], "checked":null, "expired":false,
+                    "complete":true, "top":true, "url":document().url
+                }));
+            }
             if expression.contains("arkose:apply") {
                 let delay = self.state().apply_delay;
                 tokio::time::sleep(delay).await;
@@ -968,6 +976,45 @@ mod tests {
             data_blob: Some("fresh-blob".into()),
             user_agent: Some("BrowserOS test agent".into()),
         })
+    }
+
+    #[tokio::test]
+    async fn tests_that_public_solve_dispatches_a_detected_arkose_widget() -> anyhow::Result<()> {
+        use super::super::{
+            CaptchaService, LiveDriver, config::CaptchaConfig, providers::ProviderChain,
+        };
+
+        let page = FakePage::default();
+        let service = CaptchaService {
+            providers: ProviderChain::new(&CaptchaConfig::default()),
+            reservations: Arc::default(),
+            events: CaptchaEventBus::new(),
+            forced_method: None,
+        };
+        let detection = super::super::detect::detect(&page, Duration::from_secs(2)).await?;
+        assert!(detection.complete);
+        assert_eq!(detection.challenges.len(), 1);
+        assert_eq!(detection.challenges[0].state, ChallengeState::Active);
+        assert!(detection.challenges[0].host_frame.is_none());
+        let result = service
+            .solve_with(
+                &page,
+                browseros_core::PageId(42),
+                CancellationToken::new(),
+                false,
+                Instant::now() + Duration::from_secs(30),
+                &LiveDriver,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(result.kind, Some(CaptchaKind::Arkose));
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::NeedsHuman, SolveReason::NoProvider)
+        );
+        assert_eq!(result.paid_tasks, 0);
+        assert!(!page.state().applied);
+        Ok(())
     }
 
     #[tokio::test]
