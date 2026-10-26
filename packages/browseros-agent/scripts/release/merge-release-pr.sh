@@ -14,8 +14,11 @@ body="${4:-}"
 attempts="${RELEASE_PR_MERGE_ATTEMPTS:-36}"
 poll_seconds="${RELEASE_PR_MERGE_POLL_SECONDS:-5}"
 
-if [ -z "${GITHUB_REPOSITORY:-}" ] || [ -z "${GH_TOKEN:-}" ]; then
-  echo "GITHUB_REPOSITORY and GH_TOKEN are required" >&2
+# gh's GH_REPO wins so a release can merge its version bump in the repository
+# it reflects into (see the reflect-version jobs), not the one it runs in.
+repo="${GH_REPO:-${GITHUB_REPOSITORY:-}}"
+if [ -z "$repo" ] || [ -z "${GH_TOKEN:-}" ]; then
+  echo "GH_REPO or GITHUB_REPOSITORY, and GH_TOKEN, are required" >&2
   exit 2
 fi
 if [[ ! "$expected_head" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -33,7 +36,7 @@ fi
 
 inspect_pr() {
   gh pr view "$pr" \
-    --repo "$GITHUB_REPOSITORY" \
+    --repo "$repo" \
     --json state,mergeStateStatus,headRefOid,isDraft,statusCheckRollup
 }
 
@@ -81,7 +84,7 @@ read_inspection() {
 
 merge_args=(
   pr merge "$pr"
-  --repo "$GITHUB_REPOSITORY"
+  --repo "$repo"
   --squash
   --delete-branch
   --match-head-commit "$expected_head"
