@@ -39,10 +39,9 @@ const addresses = [...new Set([
 const add = (e, kind, state) => {
     const field = ({turnstile:'input[name="cf-turnstile-response"]', hcaptcha:'textarea[name="h-captcha-response"]',
         geetest:'[name="geetest_validate"], [name="geetest_seccode"], [name="captcha_output"]',
-        aws_waf:'[name="aws-waf-token"], [name="captcha_voucher"]',
-        arkose:'[name="fc-token"], [name="FunCaptcha-Token"], [name="funcaptcha-response"]'})[kind] || 'textarea[name="g-recaptcha-response"]';
-    const response = e && (e.matches(field) ? e : all(field, e)[0]) ||
-        (['geetest', 'aws_waf', 'arkose'].includes(kind) ? all(field).find(e => e.value?.trim()) : null);
+        aws_waf:'[name="aws-waf-token"], [name="captcha_voucher"]'})[kind] || 'textarea[name="g-recaptcha-response"]';
+    const response = kind === 'arkose' ? null : (e && (e.matches(field) ? e : all(field, e)[0]) ||
+        (['geetest', 'aws_waf'].includes(kind) ? all(field).find(e => e.value?.trim()) : null));
     const a = name => e?.getAttribute('data-' + name) || null;
     const w = {kind, inferred: !e, state: response?.value.trim() ? 'passed' : state, invisible: a('size') === 'invisible', enterprise: false,
         sitekey: a('sitekey') || a('pkey') || a('captcha-id') || a('gt') || a('api-key') || e?.getAttribute('apiKey') || null,
@@ -481,6 +480,8 @@ async fn scan(
                     ChallengeState::Unknown
                 };
             }
+        } else if kind == CaptchaKind::Hcaptcha && w.state == ChallengeState::WidgetOnly {
+            w.state = ChallengeState::Unknown;
         } else if kind == CaptchaKind::Turnstile && w.state != ChallengeState::Passed {
             w.state = ChallengeState::Active;
         } else if matches!(
@@ -969,6 +970,23 @@ mod tests {
         assert_eq!(result.challenges.len(), 1);
         assert_eq!(result.challenges[0].kind, CaptchaKind::RecaptchaV3);
         assert_eq!(result.challenges[0].state, ChallengeState::WidgetOnly);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_visible_hcaptcha_overrides_script_only_state() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([]));
+        let mut main = probe(json!([]));
+        main["addresses"] = json!(["https://js.hcaptcha.com/1/api.js"]);
+        page.main = Mutex::new(VecDeque::from([main]));
+        page.frames.push(frame(
+            "h",
+            "https://newassets.hcaptcha.com/captcha/v1/test/hcaptcha.html#sitekey=key",
+        ));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::Hcaptcha);
+        assert_eq!(result.challenges[0].state, ChallengeState::Unknown);
         Ok(())
     }
 
@@ -1587,6 +1605,31 @@ mod tests {
             }
             browser.close_page(id).await?;
         }
+        connection.disconnect().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an owned dev browser at CAPTCHA_LIVE_CDP_PORT"]
+    async fn tests_that_live_arkose_session_tokens_remain_active() -> anyhow::Result<()> {
+        use super::super::page::LivePage;
+        use browseros_cdp::{CdpClient, ConnectOptions};
+        use browseros_core::{Browser, pages::NewPageOptions};
+        let port: u16 = std::env::var("CAPTCHA_LIVE_CDP_PORT")?.parse()?;
+        assert!(![9010, 9011, 9121, 9211, 9212, 9213, 9214, 9215].contains(&port));
+        let connection = std::sync::Arc::new(CdpClient::connect(ConnectOptions::new(port)).await?);
+        let browser = Browser::new(connection.clone());
+        let id = browser
+            .new_page("about:blank", NewPageOptions::default())
+            .await?;
+        let page = LivePage::new(browser.view().await, id.clone());
+        page.eval_main(r#"document.body.innerHTML = '<div data-pkey="test-key" style="width:300px;height:100px">FunCaptcha<input id="FunCaptcha-Token" name="fc-token" value="session-token|pk=test-key|surl=https://funcaptcha.com"></div>'; null"#).await?;
+        let result = detect(&page, Duration::from_secs(2)).await?;
+        assert!(result.complete);
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::Arkose);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        browser.close_page(id).await?;
         connection.disconnect().await;
         Ok(())
     }
