@@ -16,6 +16,7 @@ dependencies = [
   "python-dotenv>=1.2.2",
   "Pillow>=10.0.0",
   "cryptography>=50.0.0",
+  "dmgbuild>=1.6.1 ; sys_platform == 'darwin'",
 ]
 
 [project.scripts]
