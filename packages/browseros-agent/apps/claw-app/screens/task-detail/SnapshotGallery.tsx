@@ -21,7 +21,11 @@ import {
   type LightboxImage,
   useImageViewer,
 } from '@/components/motion/morphing-lightbox'
-import { Tooltip } from '@/components/motion/tooltip'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/motion/tooltip'
 import { describeStep } from '@/lib/step-sentences'
 import {
   type ToolDispatchRow,
@@ -120,27 +124,33 @@ export function SnapshotGallery({
             </span>
             {snapshots.length > 1 ? (
               <>
-                <Tooltip content="Scroll left">
-                  <Button
-                    variant="secondary"
-                    size="icon"
-                    aria-label="Scroll snapshots left"
-                    onClick={() => scrollRow(-1)}
-                    className="size-9 rounded-full"
-                  >
-                    <ChevronLeft aria-hidden className="size-4" />
-                  </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="secondary"
+                      size="icon"
+                      aria-label="Scroll snapshots left"
+                      onClick={() => scrollRow(-1)}
+                      className="size-9 rounded-full"
+                    >
+                      <ChevronLeft aria-hidden className="size-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Scroll left</TooltipContent>
                 </Tooltip>
-                <Tooltip content="Scroll right">
-                  <Button
-                    variant="secondary"
-                    size="icon"
-                    aria-label="Scroll snapshots right"
-                    onClick={() => scrollRow(1)}
-                    className="size-9 rounded-full"
-                  >
-                    <ChevronRight aria-hidden className="size-4" />
-                  </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="secondary"
+                      size="icon"
+                      aria-label="Scroll snapshots right"
+                      onClick={() => scrollRow(1)}
+                      className="size-9 rounded-full"
+                    >
+                      <ChevronRight aria-hidden className="size-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Scroll right</TooltipContent>
                 </Tooltip>
               </>
             ) : null}
