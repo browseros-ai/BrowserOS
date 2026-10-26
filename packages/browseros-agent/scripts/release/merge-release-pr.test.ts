@@ -69,6 +69,7 @@ function run(
   return spawnSync(script, ['https://example.test/pull/1', head], {
     env: {
       ...process.env,
+      GH_REPO: '',
       GH_TOKEN: 'token',
       GITHUB_REPOSITORY: 'example/repo',
       MERGE_TEST_CALLS: test.calls,
@@ -94,6 +95,21 @@ describe('merge-release-pr', () => {
       expect(calls).toContain('--squash')
       expect(calls).toContain(`--match-head-commit ${head}`)
       expect(calls).not.toContain('--auto')
+    } finally {
+      rmSync(test.root, { recursive: true, force: true })
+    }
+  })
+
+  it('targets GH_REPO when a release reflects into another repository', () => {
+    const test = fixture()
+    try {
+      const result = run(test, { GH_REPO: 'example/public' })
+      expect(result.status, result.stderr || result.stdout).toBe(0)
+      for (const calls of [test.calls, test.viewCalls]) {
+        const text = readFileSync(calls, 'utf8')
+        expect(text).toContain('--repo example/public')
+        expect(text).not.toContain('example/repo')
+      }
     } finally {
       rmSync(test.root, { recursive: true, force: true })
     }

@@ -1238,6 +1238,48 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
         )
         self.assertIn("needs.publish_alpha.result == 'success'", reflect["if"])
 
+    def test_version_reflection_targets_the_configured_source_repository(self):
+        # BrowserOS-internal mirrors this repository one way, so its releases
+        # must reflect versions into the repository it mirrors, not itself.
+        token = "${{ secrets.RELEASE_REFLECT_TOKEN || github.token }}"
+        default_branch = "${{ steps.source.outputs.default_branch }}"
+        for workflow_name in (
+            "release-server.yml",
+            "release-claw-server.yml",
+            "release-extensions.yml",
+            "release-app-onboard.yml",
+            "release-claw-onboard.yml",
+        ):
+            workflow = self.load_workflow(workflow_name)
+            reflect = workflow["jobs"]["reflect-version"]
+            source, checkout = reflect["steps"][:2]
+            publish = next(
+                step
+                for step in reflect["steps"]
+                if "merge-release-pr.sh" in step.get("run", "")
+            )
+            with self.subTest(workflow=workflow_name):
+                self.assertEqual(
+                    reflect["env"]["GH_REPO"],
+                    "${{ vars.RELEASE_REFLECT_REPO || github.repository }}",
+                )
+                self.assertEqual(source["id"], "source")
+                self.assertEqual(source["env"]["GH_TOKEN"], token)
+                self.assertIn('gh api "repos/$GH_REPO"', source["run"])
+                self.assertTrue(checkout["uses"].startswith("actions/checkout@"))
+                self.assertEqual(
+                    checkout["with"],
+                    {
+                        "fetch-depth": 0,
+                        "repository": "${{ env.GH_REPO }}",
+                        "ref": default_branch,
+                        "token": token,
+                    },
+                )
+                self.assertEqual(publish["env"]["GH_TOKEN"], token)
+                self.assertEqual(publish["env"]["DEFAULT_BRANCH"], default_branch)
+                self.assertNotIn("--repo", publish["run"])
+
     def test_reusable_components_have_one_validated_state_owner(self):
         for workflow_name in (
             "release-server.yml",
