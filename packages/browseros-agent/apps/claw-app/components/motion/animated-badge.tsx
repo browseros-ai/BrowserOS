@@ -190,10 +190,13 @@ export function AnimatedBadge({
               {/* A CSS spin: the AnimatePresence above mounts with
                   initial={false}, which lands motion animations on their end
                   value, so a motion rotate here never starts turning. */}
-              {status === "loading" && !reduce && !icon ? (
-                <Icon className={cn(ICON_CLASS[size], "animate-spin")} />
-              ) : (
-                (icon ?? <Icon className={ICON_CLASS[size]} />)
+              {icon ?? (
+                <Icon
+                  className={cn(
+                    ICON_CLASS[size],
+                    status === "loading" && !reduce && "animate-spin",
+                  )}
+                />
               )}
             </motion.span>
           </AnimatePresence>
