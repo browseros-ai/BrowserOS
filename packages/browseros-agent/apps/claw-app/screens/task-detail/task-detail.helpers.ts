@@ -77,20 +77,38 @@ export interface VisitedPage {
 }
 
 /** Every web page the task touched, once each, in the order it first went there. */
+/** A step's page as a web address without its fragment, or null for anything else. */
+function webPage(raw: string | null | undefined): URL | null {
+  if (!raw) return null
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+  parsed.hash = ''
+  return parsed
+}
+
+/** The web page the task was on at its last step, even when it was visited before. */
+export function lastPageUrl(
+  dispatches: readonly ToolDispatchRow[],
+): string | undefined {
+  for (let index = dispatches.length - 1; index >= 0; index -= 1) {
+    const page = webPage(dispatches[index]?.url)
+    if (page) return page.toString()
+  }
+  return undefined
+}
+
 export function pagesVisited(
   dispatches: readonly ToolDispatchRow[],
 ): VisitedPage[] {
   const pages = new Map<string, VisitedPage>()
   for (const row of dispatches) {
-    if (!row.url) continue
-    let parsed: URL
-    try {
-      parsed = new URL(row.url)
-    } catch {
-      continue
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue
-    parsed.hash = ''
+    const parsed = webPage(row.url)
+    if (!parsed) continue
     const url = parsed.toString()
     const host = parsed.hostname.replace(/^www\./, '')
     const existing = pages.get(url)

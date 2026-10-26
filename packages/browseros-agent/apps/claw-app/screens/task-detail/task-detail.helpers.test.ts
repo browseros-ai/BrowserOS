@@ -6,6 +6,7 @@ import type { ReplayAction } from '@/screens/replay/session-replay'
 import {
   actionForStep,
   activeStepIndex,
+  lastPageUrl,
   pagesVisited,
   snapshotForStep,
 } from './task-detail.helpers'
@@ -75,6 +76,22 @@ describe('snapshotForStep', () => {
       11,
     )
     expect(snapshotForStep(step(100, [7]), dispatches, shots)).toBeNull()
+  })
+})
+
+describe('lastPageUrl', () => {
+  it('is the page of the last step, even one visited earlier', () => {
+    expect(
+      lastPageUrl([
+        row(1, 1, { url: 'https://a.example/' }),
+        row(2, 2, { url: 'https://b.example/' }),
+        row(3, 3, { url: 'https://a.example/#top' }),
+        row(4, 4, { url: 'chrome://newtab/' }),
+      ]),
+    ).toBe('https://a.example/')
+    expect(lastPageUrl([row(1, 1, { url: 'chrome://newtab/' })])).toBe(
+      undefined,
+    )
   })
 })
 

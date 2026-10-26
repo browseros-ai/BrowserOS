@@ -102,11 +102,10 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
 
   // Before the first step, a loading recording shows the first step's picture.
   const pictureStep = shownStep ?? steps[0]
-  const lastPageUrl = data.pages.at(-1)?.url
 
   return (
     <Page>
-      <TaskPageHeader session={session} lastPageUrl={lastPageUrl} />
+      <TaskPageHeader session={session} lastPageUrl={data.lastPageUrl} />
       {session.status === 'failed' && !data.humanHelpEnabled ? (
         <AskForHelpTip />
       ) : null}

@@ -10,7 +10,11 @@ import {
   type ReplaySession,
   useReplaySession,
 } from '@/screens/replay/use-replay-session'
-import { pagesVisited, type VisitedPage } from './task-detail.helpers'
+import {
+  lastPageUrl,
+  pagesVisited,
+  type VisitedPage,
+} from './task-detail.helpers'
 
 export interface TaskDetailScreenData {
   detail: TaskDetail | undefined
@@ -21,6 +25,8 @@ export interface TaskDetailScreenData {
   allSteps: DescribedStep[]
   hiddenCount: number
   pages: VisitedPage[]
+  /** Where the task last was, for Open the last page. */
+  lastPageUrl: string | undefined
   replay: ReplaySession
   /** False only once settings say the agents may not ask for help. */
   humanHelpEnabled: boolean
@@ -54,6 +60,7 @@ export function useTaskDetailScreenData(
     allSteps,
     hiddenCount,
     pages: pagesVisited(dispatches),
+    lastPageUrl: lastPageUrl(dispatches),
     replay,
     humanHelpEnabled: settings.data?.humanHelpEnabled ?? true,
     // Waiting on the recording check too means the player opens in its final
