@@ -160,7 +160,7 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
       expectType: 'geetest',
       mayNeedPaid: true,
       ready:
-        '(document.querySelector(".geetest_holder, .geetest_box")?.getBoundingClientRect().height ?? 0) > 0',
+        '(document.querySelector(".geetest_holder")?.getBoundingClientRect().height ?? 0) > 0',
       verdict: {
         submitSelector: 'main form button[type="submit"]',
         acceptedPattern:

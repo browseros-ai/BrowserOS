@@ -127,7 +127,7 @@ Inspected in the isolated dev-watch BrowserOS browser, without provider calls:
 ### GeeTest demo verdicts
 
 `2captcha-geetest-demo` and `2captcha-geetest-v4-demo` wait for a visible
-`.geetest_holder` or `.geetest_box`, expect type `geetest` and status
+`.geetest_holder`, expect type `geetest` and status
 `unsupported`, and permit future paid solving. In both deployed pages,
 `main form button[type="submit"]` is **Check**. Their client posts to
 `/api/v1/captcha-demo/gee-test/verify` (v3) and
@@ -137,3 +137,6 @@ The success patterns are `"success"\s*:\s*true` for v3 and
 “Captcha is passed successfully!” in English. These selectors and the client
 acceptance paths were inspected in the real browser. A spotting pass does not
 claim a solve.
+
+The popup `.geetest_box` can briefly have dimensions before the actual widget
+exists; it does not satisfy the demo readiness probe.

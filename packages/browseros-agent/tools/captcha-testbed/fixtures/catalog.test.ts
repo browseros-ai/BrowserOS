@@ -188,6 +188,26 @@ test('tests that spotting readiness requires every real script to load', () => {
   }
 })
 
+test('tests that GeeTest demo readiness ignores a transient popup before the widget exists', () => {
+  for (const id of ['2captcha-geetest-demo', '2captcha-geetest-v4-demo']) {
+    const page = DEMO_PAGES.find((p) => p.id === id)
+    if (!page) throw new Error('missing GeeTest demo')
+    let holderVisible = false
+    const document = {
+      querySelector: (selector: string) => {
+        if (holderVisible && selector.includes('.geetest_holder'))
+          return { getBoundingClientRect: () => ({ width: 260, height: 50 }) }
+        if (selector.includes('.geetest_box'))
+          return { getBoundingClientRect: () => ({ width: 960, height: 52 }) }
+        return null
+      },
+    }
+    expect(runInNewContext(page.ready, { document })).toBe(false)
+    holderVisible = true
+    expect(runInNewContext(page.ready, { document })).toBe(true)
+  }
+})
+
 test('tests that frame readiness accepts only its own child origin, source and family', async () => {
   for (const [id, family] of [
     ['geetest-v4', 'geetest'],
