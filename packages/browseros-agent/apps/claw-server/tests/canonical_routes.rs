@@ -288,6 +288,7 @@ async fn test_app() -> anyhow::Result<TestApp> {
         dev_mode: false,
         native: Default::default(),
         mode: Default::default(),
+        behavior: Default::default(),
     });
     let state = AppState::new_with_home(config, dir.path().join("home")).await?;
     let connection = FixtureConnection::new();

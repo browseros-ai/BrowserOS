@@ -7,12 +7,11 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-const DESCRIPTION: &str = "\
-Manage browser tabs: list open pages (with their page ids), show the active page, \
-open a new page in the background (snapshot attached), or close one. \
-A new page is handed back once it has stopped changing, not merely once it has \
-loaded, so do not pause afterwards to let it catch up. \
-Use the returned page id with snapshot/act/navigate. \
+// One literal behind both the description and the exported span, so the span is always
+// exactly what the description says.
+macro_rules! group_recovery_guidance {
+    () => {
+        " \
 action=\"list\" reports the tab group id of every grouped page. Record yours on \
 your first list of a task, before you need it. Ownership is per connection: every \
 remade connection starts a new session and loses it, so list before you open \
@@ -21,7 +20,28 @@ pages then keep going to that group instead of a second one being started for th
 same task, and the tabs already in it read as yours again. If you no longer have \
 the id, find it in the listing: after a reconnect your tabs read as another \
 agent's, and your group is titled with your own name as <yourName>/<task>. Only \
-action=\"new\" reclaims; groupId is ignored on the other actions.";
+action=\"new\" reclaims; groupId is ignored on the other actions."
+    };
+}
+
+/// The description's closing sentences, on rejoining a task's tab group after a reconnect.
+/// They hold for a host that keeps each task's pages in a group of its own; a host that does
+/// not removes exactly this span.
+pub const GROUP_RECOVERY_GUIDANCE: &str = group_recovery_guidance!();
+
+/// The clause of the `groupId` argument's description that promises a host-made group. Kept
+/// in step with the doc comment on `TabsArgs::group_id`, which schemars turns into the text.
+pub const OWN_GROUP_FALLBACK: &str = "; omit it to use your own group.";
+
+const DESCRIPTION: &str = concat!(
+    "\
+Manage browser tabs: list open pages (with their page ids), show the active page, \
+open a new page in the background (snapshot attached), or close one. \
+A new page is handed back once it has stopped changing, not merely once it has \
+loaded, so do not pause afterwards to let it catch up. \
+Use the returned page id with snapshot/act/navigate.",
+    group_recovery_guidance!()
+);
 const PROFILE_NOTE: &str = "\
 Listings and page operations include only normal windows of one regular profile: the \
 browser_target selection, or the original Default profile (directory \"Default\") when \
@@ -164,11 +184,12 @@ fn handler<'a>(
                 if let Some(requested) = args.group_id.as_deref()
                     && !group_is_open(ctx, requested).await
                 {
-                    // Grouping runs detached so it cannot delay this response,
-                    // so the note says what was NOT done rather than asserting
-                    // a placement that has not happened yet.
+                    // The note says only what was NOT done. Where the page goes
+                    // instead is the host's decision, made after this response:
+                    // a grouping host moves it to the session's group, others
+                    // leave it ungrouped.
                     response.text(format!(
-                        "note: tab group {requested} is not open, so page {} was not added to it and will go to your own group. List tab groups to find the id you meant.",
+                        "note: tab group {requested} is not open, so page {} was not added to it. List tab groups to find the id you meant.",
                         page.page_id.0
                     ));
                 }
@@ -211,6 +232,19 @@ mod tests {
         assert!(DESCRIPTION.contains("list before you open"));
         assert!(DESCRIPTION.contains("<yourName>/<task>"));
         assert!(DESCRIPTION.contains("read as another"));
+    }
+
+    /// Hosts remove the exported spans by exact match, so each must still be in the text it
+    /// claims to come from.
+    #[test]
+    fn the_exported_group_spans_are_in_the_text_they_name() -> anyhow::Result<()> {
+        assert!(DESCRIPTION.ends_with(super::GROUP_RECOVERY_GUIDANCE));
+        let schema = serde_json::to_value(super::definition().input_schema)?;
+        let group_id = schema["properties"]["groupId"]["description"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(group_id.ends_with(super::OWN_GROUP_FALLBACK), "{group_id}");
+        Ok(())
     }
 
     #[test]

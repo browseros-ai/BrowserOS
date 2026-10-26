@@ -19,6 +19,8 @@ import {
 export type PromoKind = 'feedback' | 'product-hunt' | 'ultrafast'
 
 const PRIORITY: readonly PromoKind[] = ['feedback', 'product-hunt', 'ultrafast']
+// Pause the waitlist promotion until re-enabled.
+const SHOW_ULTRAFAST_BANNER = false
 
 export interface PromoSlotState {
   /** The one promotion Home shows, or null when none is due. */
@@ -34,7 +36,10 @@ export function usePromoSlot(): PromoSlotState {
   const available: Record<PromoKind, boolean> = {
     feedback: feedback.bookUrl !== undefined,
     'product-hunt': isProductHuntPromoAvailable(),
-    ultrafast: !ultrafastJoined && !readUltrafastBannerDismissed(),
+    ultrafast:
+      SHOW_ULTRAFAST_BANNER &&
+      !ultrafastJoined &&
+      !readUltrafastBannerDismissed(),
   }
   const kind =
     PRIORITY.find(

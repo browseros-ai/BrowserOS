@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "packages/browseros/bos_build/**"
+      - "packages/browseros/docker/neo/**"
       - "packages/browseros/tools/vendor_uploads/**"
       - "packages/browseros/chromium_files/products/**"
       - "packages/browseros/pyproject.toml"
@@ -56,8 +57,11 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: python3 -m unittest discover -s tools/release_secrets -t . -p "*_test.py" -v
 
+      - name: Run Docker smoke tests
+        run: uv run python -m unittest discover -s docker/neo -p "*_test.py" -v
+
       - name: Ruff
-        run: uv run ruff check bos_build
+        run: uv run ruff check bos_build docker/neo
 
       - name: CLI smoke
         run: |

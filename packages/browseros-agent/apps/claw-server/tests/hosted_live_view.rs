@@ -44,6 +44,7 @@ async fn app() -> anyhow::Result<TestApp> {
         dev_mode: false,
         native: Default::default(),
         mode: ServerMode::Hosted,
+        behavior: claw_server::config::Behavior::defaults(ServerMode::Hosted),
     });
     let mut state = AppState::new_with_home(config, dir.path().join("home")).await?;
     let browser = ScriptedCdp::new();

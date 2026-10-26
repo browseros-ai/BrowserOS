@@ -11,8 +11,9 @@ use crate::{
         observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
         prompt::mcp_instructions,
         pursue::PursueOffering,
+        tab_grouping,
     },
-    config::ServerMode,
+    config::{ServerMode, TabGrouping},
     identity::{ClientIdentity, ClientInfo, ProfileView},
     ids::{DispatchId, SessionId},
     services::{
@@ -71,6 +72,10 @@ const AGENT_NAME_ARG: &str = "agentName";
 // for them. Naming the alternative here matters because this text is read at the
 // moment an agent is deciding how to keep continuity.
 pub const SESSION_ARG_DESCRIPTION: &str = "Opaque logical task handle, including its browser_target binding. You receive one only if your client connects without its own transport session id: the server returns it in every tool result's `_meta` under `com.browseros.neo/session` and in result text. Pass it as `session` on later calls; natural successors retain the task's latest target even across server restart. If you never see one, your continuity across a remade connection is your tab group id instead: pass a known groupId on tabs action=\"new\" to recover its task binding before creation. Existing tabs keep their actual ownership. Omit session on the first call or to start a separate task after Stop; a stopped handle stays stopped. Stale browser targets require explicit browser_target reselection or clear.";
+/// The sentences of [`SESSION_ARG_DESCRIPTION`] and [`NAME_SESSION_DESCRIPTION`] that promise the
+/// server's own tab group. `tab_grouping` rewrites them under explicit grouping.
+pub(super) const SESSION_GROUP_CONTINUITY: &str = "If you never see one, your continuity across a remade connection is your tab group id instead: pass a known groupId on tabs action=\"new\" to recover its task binding before creation. Existing tabs keep their actual ownership. ";
+pub(super) const NAME_SESSION_GROUPING: &str = "Tabs are grouped as <client>/<name>; the label";
 const AGENT_NAME_ARG_DESCRIPTION: &str = "Optional fallback identifying your client application: claude, codex, cursor, opencode, antigravity, vscode, or zed. For another application, use its short product name. Put your task name in name_session, not here. BrowserOS prefers recognized MCP client metadata for the visible prefix; this fallback is used when that metadata does not identify a known product.";
 /// The sentence of [`AGENT_NAME_ARG_DESCRIPTION`] a hosted server rewrites, since it offers
 /// `taskName` instead of `name_session`.
@@ -254,6 +259,10 @@ impl ClawMcpService {
         self.state.config.mode
     }
 
+    fn tab_grouping(&self) -> TabGrouping {
+        self.state.config.behavior.tab_grouping
+    }
+
     /// Human help as this server offers it: the setting on desktop, always off when hosted,
     /// where the remote agent's own harness decides when to involve a person.
     fn human_help(&self) -> HumanHelp {
@@ -283,6 +292,7 @@ impl ClawMcpService {
     fn listed_tools(&self, declare_agent_name: bool) -> Vec<Tool> {
         let pursue = self.pursue_offering();
         let mode = self.mode();
+        let tab_grouping = self.tab_grouping();
         let decorate = |tool: Tool| {
             let mut tool = with_session_arg(with_pursue_fallback_note(tool, pursue));
             if mode.is_hosted() {
@@ -291,7 +301,8 @@ impl ClawMcpService {
             if declare_agent_name {
                 tool = with_agent_name_arg(tool, mode);
             }
-            tool
+            // Last, so it also sees the descriptions the decorators above add.
+            tab_grouping::tool(tool, tab_grouping)
         };
         // Tools whose native feature the connected browser lacks are not offered. The list is
         // fixed for the process (the identity is), and execute_tool refuses cached callers.
@@ -1351,6 +1362,7 @@ impl ServerHandler for ClawMcpService {
                 self.human_help(),
                 self.pursue_offering(),
                 self.native(),
+                self.tab_grouping(),
             ))
     }
 
@@ -1656,7 +1668,11 @@ impl ServerHandler for ClawMcpService {
         )
         .await;
         let mut result = attach_session_handle(finished, session_handle, presented_handle)?;
-        if self.state.agent_settings.task_cleanup_tip_enabled() && !result.is_error.unwrap_or(false)
+        // The tip asks the agent to close the group the server made for it, so it has no place
+        // where the server makes none.
+        if self.tab_grouping().is_automatic()
+            && self.state.agent_settings.task_cleanup_tip_enabled()
+            && !result.is_error.unwrap_or(false)
         {
             result.content.push(rmcp::model::ContentBlock::text(
                 "Tip: When you finish this task, close your task’s tab group.",
@@ -3403,7 +3419,8 @@ mod tests {
                     ServerMode::Desktop,
                     HumanHelp::On,
                     service.pursue_offering(),
-                    native
+                    native,
+                    service.tab_grouping()
                 )
                 .as_str()
             )
@@ -3561,10 +3578,116 @@ mod tests {
                     HumanHelp::Off,
                     service.pursue_offering(),
                     service.native(),
+                    service.tab_grouping()
                 )
                 .as_str()
             )
         );
+        Ok(())
+    }
+
+    /// What an agent reads must not promise a group the server will not make. Explicit grouping
+    /// removes every such promise in either mode, automatic keeps them, and hosted keeps
+    /// declaring taskName either way because clients validate their calls against it.
+    #[tokio::test]
+    async fn tests_that_only_automatic_grouping_text_promises_groups() -> anyhow::Result<()> {
+        use crate::config::{Behavior, TabGrouping};
+        const PROMISES: [&str; 9] = [
+            "own group",
+            "grouped as",
+            "tabs group as",
+            "read as yours again",
+            "take it back",
+            "<yourName>/<task>",
+            "keep going to that group",
+            "group id instead",
+            "close your task's tab group",
+        ];
+        for mode in [ServerMode::Desktop, ServerMode::Hosted] {
+            for tab_grouping in [TabGrouping::Automatic, TabGrouping::Explicit] {
+                let call = crate::api::mcp::test_support::tool_call_with_behavior(
+                    "tabs",
+                    json!({}),
+                    mode,
+                    Behavior { tab_grouping },
+                )
+                .await?;
+                let service = ClawMcpService::new(call.state);
+                let tools = service.listed_tools(true);
+                let surface = format!(
+                    "{}\n{}",
+                    serde_json::to_string(&tools)?,
+                    service.get_info().instructions.unwrap_or_default()
+                );
+                let promised = PROMISES
+                    .iter()
+                    .filter(|promise| surface.contains(*promise))
+                    .collect::<Vec<_>>();
+                let case = format!("{mode:?} {tab_grouping:?}");
+                if tab_grouping.is_automatic() {
+                    assert!(!promised.is_empty(), "{case}");
+                } else {
+                    assert!(promised.is_empty(), "{case}: {promised:?}");
+                }
+                if mode.is_hosted() {
+                    for tool in &tools {
+                        assert_eq!(
+                            tool.input_schema["properties"][hosted::TASK_NAME_ARG]["type"],
+                            "string",
+                            "{case} {}",
+                            tool.name
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Every explicit rewrite still matches the automatic text it was written for. One that
+    /// matches nothing has drifted from its owner's wording, which leaves the promise it was
+    /// meant to remove in explicit text.
+    #[tokio::test]
+    async fn tests_that_every_explicit_rewrite_matches_automatic_text() -> anyhow::Result<()> {
+        use crate::{
+            api::mcp::effects::page_ownership_notice::RECLAIM_ADVICE,
+            config::{Behavior, TabGrouping},
+        };
+        let mut texts = Vec::new();
+        for mode in [ServerMode::Desktop, ServerMode::Hosted] {
+            let call = crate::api::mcp::test_support::tool_call_with_behavior(
+                "tabs",
+                json!({}),
+                mode,
+                Behavior {
+                    tab_grouping: TabGrouping::Automatic,
+                },
+            )
+            .await?;
+            let service = ClawMcpService::new(call.state);
+            texts.push(service.get_info().instructions.unwrap_or_default());
+            for tool in service.listed_tools(true) {
+                texts.push(tool.description.unwrap_or_default().into_owned());
+                if let Some(Value::Object(properties)) = tool.input_schema.get("properties") {
+                    texts.extend(
+                        properties
+                            .values()
+                            .filter_map(|property| property["description"].as_str())
+                            .map(str::to_string),
+                    );
+                }
+            }
+        }
+        for (promise, _) in tab_grouping::EXPLICIT_REWRITES {
+            // Interpolated into the ownership note, a result rather than listed text.
+            if promise == RECLAIM_ADVICE {
+                continue;
+            }
+            assert!(
+                texts.iter().any(|text| text.contains(promise)),
+                "no automatic text contains {promise:?}"
+            );
+        }
         Ok(())
     }
 
@@ -3856,6 +3979,7 @@ mod tests {
                     HumanHelp::Off,
                     service.pursue_offering(),
                     call.state.config.native.capabilities,
+                    service.tab_grouping()
                 )
                 .as_str(),
             )

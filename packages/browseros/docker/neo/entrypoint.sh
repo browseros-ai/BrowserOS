@@ -10,11 +10,13 @@
 # websockify exits, the container exits and Docker's restart policy takes over.
 set -euo pipefail
 
-readonly PROFILE=/data/profile
-readonly DOWNLOADS=/data/downloads
+: "${NEO_DATA_DIR:=/data}"
+readonly NEO_DATA_DIR
+readonly PROFILE="$NEO_DATA_DIR/profile"
+readonly DOWNLOADS="$NEO_DATA_DIR/downloads"
 # claw-server's database, recordings, skills and agent settings. It defaults to
 # ~/.browserclaw, which is not on the volume and would vanish with the container.
-readonly CLAW_DATA=/data/browserclaw
+readonly CLAW_DATA="$NEO_DATA_DIR/browserclaw"
 readonly NEO_HOME=/home/neo
 readonly XDG_DIR=/tmp/neo-xdg
 readonly CONFIGURED=/tmp/neo-configured
@@ -26,6 +28,7 @@ readonly CDP_PORT=9110
 readonly SERVER_PORT=9210
 
 : "${NEO_SCREEN:=1600x1000}" "${NEO_SANDBOX:=false}" "${NEO_ARGS:=}"
+: "${NEO_DISABLE_BROWSEROS_EXTENSIONS:=false}"
 : "${PUID:=1000}" "${PGID:=1000}"
 # Shared browser/server deployment flag (README). Hosted mode hides local-agent
 # MCP tools and enables hosted browser reporting; both processes require exact 1.
@@ -41,6 +44,11 @@ is_true() {
 
 log() { printf '[neo] %s\n' "$*"; }
 die() { log "$*" >&2; exit 1; }
+
+# This directory becomes private and owned by Neo; it must identify a data
+# folder rather than the container root or a working-directory-relative path.
+[[ "$NEO_DATA_DIR" = /* ]] || die "NEO_DATA_DIR must be an absolute path"
+[ "$(realpath -m -- "$NEO_DATA_DIR")" != / ] || die "NEO_DATA_DIR must not be the filesystem root"
 
 # Validate before starting services so the browser and its server agree.
 case "$BROWSERCLAW_HOSTED_MODE" in
@@ -67,38 +75,50 @@ apply_ids() {
   chown -R neo:neo "$NEO_HOME"
 }
 
-prepare_data() {
-  mkdir -p "$PROFILE" "$DOWNLOADS" "$CLAW_DATA" "$XDG_DIR" "$NEO_HOME/.config/gtk-3.0" "$NEO_HOME/.config/gtk-4.0"
-  chown neo:neo /data "$PROFILE" "$DOWNLOADS" "$CLAW_DATA" "$XDG_DIR"
-  chmod 700 "$XDG_DIR"
-  ln -sfn "$DOWNLOADS" "$NEO_HOME/Downloads"
+# Applies a jq update to one of Chromium's JSON state files (Local State,
+# Preferences), creating the file when missing. Those files also hold every
+# setting the user made, so they are updated in place and never replaced. Run
+# it only while Neo is stopped: Chromium rewrites these files as it exits.
+# Returns non-zero when the file is not valid JSON or cannot be written, and
+# callers decide whether that stops startup. Callers test it with ||, which
+# turns off errexit inside, so every step is checked explicitly.
+merge_json() {
+  local file=$1 update=$2 tmp
+  tmp=$(mktemp) || return 1
+  if [ -s "$file" ]; then
+    jq "$update" "$file" > "$tmp"
+  else
+    jq -n "$update" > "$tmp"
+  fi && mv "$tmp" "$file" && chown neo:neo "$file" && return 0
+  rm -f "$tmp"
+  return 1
+}
 
-  # There is no taskbar to restore a minimized window from, so hide Neo's
-  # minimize button. Chromium takes its frame-button layout from GTK.
-  for gtk in gtk-3.0 gtk-4.0; do
-    printf '[Settings]\ngtk-decoration-layout=:maximize,close\n' > "$NEO_HOME/.config/$gtk/settings.ini"
-  done
-  chown -R neo:neo "$NEO_HOME/.config"
+prepare_data() {
+  mkdir -p "$PROFILE" "$DOWNLOADS" "$CLAW_DATA" "$XDG_DIR"
+  # Derived images may share the parent mount with other users. Limit ownership
+  # changes to Neo's root and data folders, and keep the cookies private there.
+  chown neo:neo "$NEO_DATA_DIR" "$PROFILE" "$DOWNLOADS" "$CLAW_DATA" "$XDG_DIR"
+  chmod 700 "$NEO_DATA_DIR" "$XDG_DIR"
+  ln -sfn "$DOWNLOADS" "$NEO_HOME/Downloads"
 
   # Neo's MCP proxy drops connections that are not from loopback unless this
   # Local State pref is set, and Docker's port forwarding arrives from the
-  # bridge address. Merge it: the file holds the profile's other browser-wide
-  # settings and must never be replaced.
-  local state="$PROFILE/Local State" tmp
-  tmp=$(mktemp)
-  if [ -s "$state" ]; then
-    jq '.browseros.server.allow_remote_in_mcp = true' "$state" > "$tmp" \
-      || die "$state is not valid JSON; fix or remove it"
-  else
-    echo '{"browseros":{"server":{"allow_remote_in_mcp":true}}}' > "$tmp"
-  fi
-  mv "$tmp" "$state"
-  chown neo:neo "$state"
+  # bridge address.
+  merge_json "$PROFILE/Local State" '.browseros.server.allow_remote_in_mcp = true' \
+    || die "Could not update $PROFILE/Local State; if it is not valid JSON, fix or remove it"
 
   # Chromium's profile lock outlives the container that held it. No Neo can be
   # running against this profile yet, so a lock here is stale. (One container
   # per data folder; two would corrupt the profile.)
   rm -f "$PROFILE"/SingletonLock "$PROFILE"/SingletonSocket "$PROFILE"/SingletonCookie
+
+  # Disabling network updates still lets Chromium select a previously downloaded
+  # server. Clear only its ready selectors (legacy and Claw layouts), so an old
+  # profile cannot override this image's server. Keep downloaded files and all
+  # application data; the browser/server processes have not started yet.
+  rm -f "$PROFILE/.browseros/current_version" \
+    "$PROFILE/.browseros/BrowserClawServer/current_version"
 }
 
 start_display() {
@@ -130,6 +150,14 @@ start_display() {
 sandbox_flags=(--no-sandbox)
 is_true "$NEO_SANDBOX" && sandbox_flags=()
 
+# Suppress only BrowserOS's managed extension provider. Keep these arguments
+# additive to NEO_ARGS so callers retain their own flags; user extensions and
+# the native MCP server stay enabled.
+browseros_extension_flags=()
+if is_true "$NEO_DISABLE_BROWSEROS_EXTENSIONS"; then
+  browseros_extension_flags=(--disable-browseros-extensions)
+fi
+
 # --no-sandbox is deliberate here, so drop Chromium's "unsupported command-line
 # flag" bar for it. Written only in that mode: the same policy would also hide
 # warnings for risky flags passed through NEO_ARGS. This build reads policies
@@ -143,10 +171,54 @@ apply_policies() {
   fi
 }
 
+# The viewer is for watching agents drive Neo, so the image shows a minimal
+# browser frame: horizontal tabs, and no home or split-view button, bookmark
+# star, bookmarks bar or window buttons. BrowserOS has no switches for these
+# yet, so this sets Chromium's own prefs, policies and GTK layout each time the
+# container starts (not when the loop below restarts Neo), overriding changes
+# made in the viewer. Replace it with switches in start_neo once the browser
+# has them.
+apply_minimal_ui() {
+  # Chromium has no policy for these prefs. BrowserOS copies its vertical-tabs
+  # pref into Chromium's only while Chromium's is unset, so set both. Writing
+  # Preferences before the first launch makes Chromium (under --no-first-run)
+  # treat a fresh profile as an existing one; that only skips new-profile
+  # extras such as BrowserOS's onboarding grace for bundled extension updates.
+  # A damaged Preferences is left for Chromium to recover rather than blocking
+  # startup over appearance.
+  local prefs="$PROFILE/Default/Preferences"
+  [ -d "$PROFILE/Default" ] || install -d -m 700 -o neo -g neo "$PROFILE/Default"
+  merge_json "$prefs" '
+    .vertical_tabs.enabled = false
+    | .browseros.vertical_tabs_enabled = false
+    | .browser.pin_split_tab_button = false' \
+    || log "Could not update $prefs; Neo starts with its saved tab layout this time"
+
+  # BrowserOS shows the home button by default. The star is only hidden by
+  # turning bookmark editing off; claw-server only reads bookmarks.
+  local managed=/etc/chromium/policies/managed
+  mkdir -p "$managed"
+  echo '{"BookmarkBarEnabled": false, "EditBookmarksEnabled": false, "ShowHomeButton": false}' \
+    > "$managed/neo-minimal-ui.json"
+
+  # Chromium takes its frame-button layout from GTK. openbox keeps Neo
+  # maximized, there is no taskbar to restore a minimized window from, and Neo
+  # is restarted here whenever it closes, so the frame needs no buttons.
+  local gtk
+  for gtk in gtk-3.0 gtk-4.0; do
+    mkdir -p "$NEO_HOME/.config/$gtk"
+    printf '[Settings]\ngtk-decoration-layout=:\n' > "$NEO_HOME/.config/$gtk/settings.ini"
+  done
+  chown -R neo:neo "$NEO_HOME/.config"
+}
+
 start_neo() {
+  # Releases verify the packaged/overlaid server, so pin it for the image's
+  # lifetime. Keep this outside NEO_ARGS, which Compose/callers may replace.
   # shellcheck disable=SC2086  # NEO_ARGS is a flag list by design
   spawn_as_neo browserclaw \
     "${sandbox_flags[@]}" \
+    "${browseros_extension_flags[@]}" \
     --user-data-dir="$PROFILE" \
     --no-first-run \
     --no-default-browser-check \
@@ -154,6 +226,7 @@ start_neo() {
     --browseros-proxy-port=9010 \
     --browseros-cdp-port="$CDP_PORT" \
     --browseros-server-port="$SERVER_PORT" \
+    --disable-browseros-server-updater \
     --hide-crash-restore-bubble \
     --start-maximized \
     $NEO_ARGS
@@ -222,6 +295,7 @@ rm -f "$CONFIGURED"
 apply_ids
 prepare_data
 apply_policies
+apply_minimal_ui
 start_display
 start_neo
 configure_neo &

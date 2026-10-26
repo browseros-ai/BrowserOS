@@ -1,5 +1,5 @@
-use crate::api::mcp::pursue::PursueOffering;
-use crate::config::ServerMode;
+use crate::api::mcp::{pursue::PursueOffering, tab_grouping};
+use crate::config::{ServerMode, TabGrouping};
 use crate::services::agent_settings::HumanHelp;
 use browseros_core::{NativeCapabilities, NativeFeature};
 
@@ -195,16 +195,35 @@ const HOSTED_SUBSTITUTIONS: [(&str, &str); 3] = [
     (SAVE_SKILL_GUIDANCE, ""),
 ];
 
+/// The spans of [`SHARED_BROWSER_GUIDANCE`] that promise the server's own tab groups.
+/// `tab_grouping` rewrites them under explicit grouping; automatic grouping reads them as
+/// written.
+pub(super) const RECONNECT_GROUP_GUIDANCE: &str = r#"anything. It reports the tab group id of every grouped page, in every
+  section, including the tabs that now read as another agent's: after a
+  reconnect, yours are among those. Group titles use <client>/<task>; the client
+  prefix is shared, so identify your task and group id. Pass its id as groupId
+  on tabs action="new" and your pages keep going to that group. A known group
+  recovers its task binding before creation; existing tabs keep their actual
+  ownership, instead of being left behind while a
+  second group starts. Record
+  the id when you first see it so you can skip the lookup later."#;
+pub(super) const CLOSE_GROUP_CLAUSE: &str =
+    ", unless a tool reply asks you to close your task's tab group.";
+/// Ends both naming bullets, desktop's and hosted's alike.
+pub(super) const GROUP_TITLE_CLAUSE: &str = ";\n  tabs group as <client>/<name>.";
+
 /// The server instructions, with the blocked-by-a-person paragraph chosen by the setting and
 /// the profile paragraph only for natives that implement profile targeting. Instructions go out
 /// once at initialize, so they use the process-fixed native identity. A hosted server never
-/// names a tool it does not offer, so callers pass the effective help setting (off there).
+/// names a tool it does not offer, so callers pass the effective help setting (off there), and
+/// no server promises tab groups it does not make (see `tab_grouping`).
 #[must_use]
 pub fn mcp_instructions(
     mode: ServerMode,
     human_help: HumanHelp,
     pursue: PursueOffering,
     native: NativeCapabilities,
+    tab_grouping: TabGrouping,
 ) -> String {
     let help = match human_help {
         HumanHelp::On => HUMAN_HELP_GUIDANCE,
@@ -235,7 +254,7 @@ pub fn mcp_instructions(
         paragraphs.push(PROFILE_GUIDANCE);
     }
     paragraphs.extend([shared.as_str(), help, PAGE_CONTENT_GUARD]);
-    paragraphs.join("\n\n")
+    tab_grouping::text(&paragraphs.join("\n\n"), tab_grouping).into_owned()
 }
 
 #[cfg(test)]
@@ -243,7 +262,7 @@ mod tests {
     use super::{
         BROWSER_GUIDANCE, HOSTED_SUBSTITUTIONS, HumanHelp, PURSUE_FIRST_CHOICE,
         PURSUE_FIRST_COMPOSE, PursueOffering, RUN_FIRST_CHOICE, RUN_FIRST_COMPOSE,
-        SHARED_BROWSER_GUIDANCE, ServerMode, mcp_instructions,
+        SHARED_BROWSER_GUIDANCE, ServerMode, TabGrouping, mcp_instructions,
     };
     use browseros_core::NativeCapabilities;
 
@@ -270,8 +289,13 @@ mod tests {
     #[test]
     fn a_server_without_the_loop_reads_exactly_what_it_read_before() {
         for help in [HumanHelp::On, HumanHelp::Off] {
-            let absent =
-                mcp_instructions(ServerMode::Desktop, help, PursueOffering::Absent, current());
+            let absent = mcp_instructions(
+                ServerMode::Desktop,
+                help,
+                PursueOffering::Absent,
+                current(),
+                TabGrouping::Automatic,
+            );
             assert!(absent.contains(RUN_FIRST_CHOICE));
             assert!(absent.contains(RUN_FIRST_COMPOSE));
             assert!(!absent.contains("pursue"));
@@ -286,6 +310,7 @@ mod tests {
             HumanHelp::On,
             PursueOffering::Offered,
             current(),
+            TabGrouping::Automatic,
         );
         assert!(offered.contains(PURSUE_FIRST_CHOICE));
         assert!(offered.contains(PURSUE_FIRST_COMPOSE));
@@ -303,6 +328,7 @@ mod tests {
             HumanHelp::On,
             PursueOffering::Absent,
             current(),
+            TabGrouping::Automatic,
         );
         assert!(instructions.contains("independent subtasks get their own tabs"));
         assert!(!instructions.contains("hidden window"));
@@ -320,6 +346,7 @@ mod tests {
             HumanHelp::On,
             PursueOffering::Absent,
             current(),
+            TabGrouping::Automatic,
         );
         // Ordered, not just mentioned: the lookup has to happen before the open.
         assert!(instructions.contains("list before you open"));
@@ -341,6 +368,7 @@ mod tests {
             HumanHelp::On,
             PursueOffering::Absent,
             current(),
+            TabGrouping::Automatic,
         );
         assert!(instructions.contains("save_skill"));
         assert!(instructions.contains("Save repeatable tasks"));
@@ -363,6 +391,7 @@ mod tests {
             HumanHelp::On,
             PursueOffering::Absent,
             current(),
+            TabGrouping::Automatic,
         );
         assert!(instructions.contains("request_human_help"));
         assert!(instructions.contains("await_human_help"));
@@ -375,6 +404,7 @@ mod tests {
             HumanHelp::Off,
             PursueOffering::Absent,
             current(),
+            TabGrouping::Automatic,
         );
         assert!(!instructions.contains("request_human_help"));
         assert!(!instructions.contains("await_human_help"));
@@ -387,7 +417,8 @@ mod tests {
                 ServerMode::Desktop,
                 HumanHelp::Off,
                 PursueOffering::Absent,
-                current()
+                current(),
+                TabGrouping::Automatic
             )
             .contains(ASK_IN_CHAT)
         );
@@ -400,12 +431,14 @@ mod tests {
             HumanHelp::On,
             PursueOffering::Absent,
             current(),
+            TabGrouping::Automatic,
         );
         let off = mcp_instructions(
             ServerMode::Desktop,
             HumanHelp::Off,
             PursueOffering::Absent,
             current(),
+            TabGrouping::Automatic,
         );
         let on = on.split("\n\n").collect::<Vec<_>>();
         let off = off.split("\n\n").collect::<Vec<_>>();
@@ -430,6 +463,7 @@ mod tests {
                 human_help,
                 PursueOffering::Absent,
                 current(),
+                TabGrouping::Automatic,
             );
             assert!(
                 instructions.ends_with(&format!("\n\n{PAGE_CONTENT_LINE}")),
@@ -445,6 +479,7 @@ mod tests {
             HumanHelp::On,
             PursueOffering::Absent,
             current(),
+            TabGrouping::Automatic,
         );
         assert!(capable.contains("Choose\nanother profile once for the task"));
         // The default rule is what agents rely on when they never select a profile.
@@ -459,6 +494,7 @@ mod tests {
                 HumanHelp::On,
                 PursueOffering::Absent,
                 older,
+                TabGrouping::Automatic,
             );
             assert!(!instructions.contains("browser_profiles"), "{older}");
             assert!(!instructions.contains("browser_target"), "{older}");
@@ -485,7 +521,13 @@ mod tests {
     #[test]
     fn hosted_instructions_name_no_tool_a_hosted_server_hides() {
         for pursue in [PursueOffering::Absent, PursueOffering::Offered] {
-            let hosted = mcp_instructions(ServerMode::Hosted, HumanHelp::Off, pursue, current());
+            let hosted = mcp_instructions(
+                ServerMode::Hosted,
+                HumanHelp::Off,
+                pursue,
+                current(),
+                TabGrouping::Automatic,
+            );
             for hidden in [
                 "name_session",
                 "save_skill",
@@ -511,12 +553,14 @@ mod tests {
             HumanHelp::Off,
             PursueOffering::Absent,
             current(),
+            TabGrouping::Automatic,
         );
         let hosted = mcp_instructions(
             ServerMode::Hosted,
             HumanHelp::Off,
             PursueOffering::Absent,
             current(),
+            TabGrouping::Automatic,
         );
         let desktop = desktop.split("\n\n").collect::<Vec<_>>();
         let hosted = hosted.split("\n\n").collect::<Vec<_>>();

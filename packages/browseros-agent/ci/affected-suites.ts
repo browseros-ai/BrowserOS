@@ -101,6 +101,13 @@ export const SUITES: Record<string, SuiteConfig> = {
     needs_browser: false,
     needs_rust: false,
   },
+  'agent-cursor': {
+    suite: 'agent-cursor',
+    command: '(cd packages/agent-cursor && bun run test)',
+    junit_path: 'test-results/agent-cursor.xml',
+    needs_browser: false,
+    needs_rust: false,
+  },
   build: {
     suite: 'build',
     command: 'bun run ./scripts/run-bun-test.ts ./scripts/build',
@@ -139,7 +146,7 @@ export const SUITES: Record<string, SuiteConfig> = {
   },
   captcha: {
     suite: 'captcha',
-    command: 'bun run ./scripts/run-bun-test.ts ./contracts/captcha',
+    command: 'bun run ./scripts/run-bun-test.ts ./tools/captcha-testbed',
     junit_path: 'test-results/captcha.xml',
     needs_browser: false,
     needs_rust: false,
@@ -161,6 +168,7 @@ const PACKAGE_SUITES: Record<string, string[]> = {
   '@browseros/claw-app': ['claw-app'],
   '@browseros/claw-onboard': ['claw-onboard'],
   '@browseros/app-onboard': ['app-onboard'],
+  '@browseros/agent-cursor': ['agent-cursor', 'build'],
   // The build suite exercises scripts/build, which uses build-server-tools, so
   // an affected build-server-tools (or a scripts/ change, handled below) runs it.
   '@browseros/build-server-tools': ['build'],
@@ -220,6 +228,14 @@ export function computeAffectedSuites(
 
   // Path signals for things that are not workspace packages.
   if (
+    changedFiles.includes(
+      `${AGENT}crates/browseros-core/src/assets/agent-cursor.js`,
+    )
+  ) {
+    keys.add('agent-cursor')
+    keys.add('build')
+  }
+  if (
     changedFiles.some(
       (f) =>
         f.startsWith(`${AGENT}scripts/`) &&
@@ -249,7 +265,7 @@ export function computeAffectedSuites(
   ) {
     keys.add('claw-mcp')
   }
-  if (changedFiles.some((f) => f.startsWith(`${AGENT}contracts/captcha/`)))
+  if (changedFiles.some((f) => f.startsWith(`${AGENT}tools/captcha-testbed/`)))
     keys.add('captcha')
 
   return Object.keys(SUITES)

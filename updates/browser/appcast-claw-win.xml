@@ -7,18 +7,18 @@
     <language>en</language>
 
     <item>
-      <title>BrowserOS neo - 0.51.1.2</title>
+      <title>BrowserOS neo - 0.51.2.4</title>
       <description sparkle:format="plain-text">
       </description>
-      <sparkle:version>10000.0.51.1.2</sparkle:version>
-      <sparkle:shortVersionString>0.51.1.2</sparkle:shortVersionString>
-      <pubDate>Tue, 13 Oct 2026 08:14:43 +0000</pubDate>
+      <sparkle:version>10000.0.51.2.4</sparkle:version>
+      <sparkle:shortVersionString>0.51.2.4</sparkle:shortVersionString>
+      <pubDate>Sat, 24 Oct 2026 01:15:51 +0000</pubDate>
       <link>https://www.browseros.com/</link>
       <enclosure
-        url="http://cdn.browseros.com/releases/browserclaw/0.51.1.2/win/BrowserOS_neo_v0.51.1.2_x64_installer.exe"
+        url="https://cdn.browseros.com/releases/browserclaw/0.51.2.4/win/BrowserOS_neo_v0.51.2.4_x64_installer.exe"
         sparkle:os="windows"
-        sparkle:edSignature="bZSdBZFZqiKiR4Q18AQhNgk+VlKIby/jIzCoaLlH7FTh1t0dV4F7H/g7zP30ky43acYRm1K5e3EenKAx9F7KDQ=="
-        length="137344056"
+        sparkle:edSignature="Q4/ic6iaV9VqXgenipKJIIZVpi1wHUnIGtjG41a8s0mcZnzy8+VagrlkUyZPDz/acIzh0vDiv87o2MK/AbC+DQ=="
+        length="138417208"
         type="application/octet-stream" />
     </item>
 

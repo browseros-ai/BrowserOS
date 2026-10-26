@@ -23,10 +23,23 @@ use tokio::{task::JoinHandle, time::timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+/// Whether this server groups pages the agent did not place itself.
+///
+/// Explicit grouping is enforced here, at the two entry points every server-made group comes
+/// through: this effect (every dispatched call, pursue's moves included) and
+/// [`run_tab_group_work`], which the script hook also spawns. Nothing else records a session
+/// group, so with both closed the session never has one, and the rest falls away on its own:
+/// core gets no default group to open pages into, renames have no group to retitle, and
+/// retention has nothing to collapse or close. An agent's own `groupId` placement is core's
+/// and still works.
+fn groups_automatically(call: &ToolCall) -> bool {
+    call.state.config.behavior.tab_grouping.is_automatic()
+}
+
 /// Creates or joins the durable tab group for a successful `tabs new` call.
 pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
     Box::pin(async move {
-        if context.result.is_error {
+        if context.result.is_error || !groups_automatically(context.call) {
             return Ok(None);
         }
         if context.call.identity.is_none() || context.call.browser_session.is_none() {
@@ -191,6 +204,9 @@ fn spawn_tab_group_work(call: ToolCall, created: Option<CreatedPage>) -> JoinHan
 /// script hook so a page a script opens joins the agent's group the same way a
 /// `tabs new` page does.
 pub(crate) async fn run_tab_group_work(call: ToolCall, created: Option<CreatedPage>) {
+    if !groups_automatically(&call) {
+        return;
+    }
     let (Some(identity), Some(browser), Some(tab_groups)) = (
         call.identity.as_ref(),
         call.view.as_ref(),

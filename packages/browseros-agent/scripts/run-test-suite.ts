@@ -13,6 +13,11 @@ const bun = process.execPath
 const testSuites = {
   all: [
     {
+      label: 'agent cursor tests',
+      cwd: resolve(projectRoot, 'packages/agent-cursor'),
+      argv: [bun, 'run', 'test'],
+    },
+    {
       label: 'diagnostics tests',
       cwd: resolve(projectRoot, 'packages/diagnostics'),
       argv: [bun, 'run', 'test'],
@@ -43,7 +48,7 @@ const testSuites = {
     },
     {
       label: 'captcha test bed unit tests',
-      argv: [bun, 'test', 'contracts/captcha'],
+      argv: [bun, 'test', 'tools/captcha-testbed'],
     },
     {
       // Skips cleanly (exit 0) unless BROWSEROS_BINARY is set, so it keeps

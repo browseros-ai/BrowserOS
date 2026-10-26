@@ -1,7 +1,7 @@
 use crate::{
     AppState,
     api::mcp::dispatch::{ToolCall, ToolIdentity, linked_cancel_token},
-    config::{Config, ServerMode},
+    config::{Behavior, Config, ServerMode},
     identity::{ClientIdentity, ConversationIdentity},
     ids::SessionId,
     services::sessions::{ClawTargetStore, Session},
@@ -36,6 +36,17 @@ pub async fn tool_call_in_mode(
     raw_args: Value,
     mode: ServerMode,
 ) -> anyhow::Result<ToolCall> {
+    tool_call_with_behavior(tool_name, raw_args, mode, Behavior::defaults(mode)).await
+}
+
+/// A tool call whose server runs `mode` with `behavior` instead of that mode's defaults, as a
+/// behaviour file would configure it.
+pub async fn tool_call_with_behavior(
+    tool_name: &str,
+    raw_args: Value,
+    mode: ServerMode,
+    behavior: Behavior,
+) -> anyhow::Result<ToolCall> {
     let dir = tempfile::tempdir()?;
     let root = dir.path().join("browserclaw");
     let home = dir.path().join("home");
@@ -56,6 +67,7 @@ pub async fn tool_call_in_mode(
             asserted: false,
         },
         mode,
+        behavior,
     });
     let state = AppState::new_with_home(config, home).await?;
     let session = Session::new(

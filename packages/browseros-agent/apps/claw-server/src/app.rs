@@ -129,6 +129,7 @@ impl AppState {
         let skill = load_browserclaw_skill(
             &config.resources_dir,
             crate::config::PursueOffering::of(agent_settings.jev_token_source()),
+            config.behavior.tab_grouping,
         )?;
         let claude_desktop = Arc::new(crate::services::claude_desktop::ClaudeDesktop::new(
             &home_dir,
@@ -344,6 +345,7 @@ mod tests {
             dev_mode: false,
             native: Default::default(),
             mode: Default::default(),
+            behavior: Default::default(),
         });
 
         let state = AppState::new_with_home(config, dir.path().join("home")).await?;

@@ -17,11 +17,15 @@ services:
       - "127.0.0.1:${NEO_MCP_PORT:-9010}:9010"
     volumes:
       - "${NEO_DATA:-./neo-data}:/data"
+      # Server behaviour (README, "Behaviour file"): uncomment to use ./neo.toml
+      # instead of the defaults the image ships.
+      # - "./neo.toml:/etc/neo/neo.toml:ro"
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       NEO_SCREEN: ${NEO_SCREEN:-1600x1000}
       BROWSERCLAW_HOSTED_MODE: ${BROWSERCLAW_HOSTED_MODE:-1}
       NEO_SANDBOX: ${NEO_SANDBOX:-false}
+      NEO_DISABLE_BROWSEROS_EXTENSIONS: ${NEO_DISABLE_BROWSEROS_EXTENSIONS:-false}
       NEO_ARGS: ${NEO_ARGS:-}
     restart: unless-stopped

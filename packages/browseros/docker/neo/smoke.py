@@ -5,7 +5,9 @@ It talks to the container the way a developer does: through the published
 viewer and MCP ports. Passing means the noVNC viewer is served, an agent
 outside the container can reach Neo's MCP server (which proves the
 allow_remote_in_mcp setting works through Docker's port forwarding), agents get
-the hosted tool set (BROWSERCLAW_HOSTED_MODE=1), and an agent-opened tab loads.
+the hosted tool set (BROWSERCLAW_HOSTED_MODE=1), and an agent-opened tab loads
+and, in hosted mode, stays out of any tab group (the shipped neo.toml keeps the
+explicit grouping default).
 
   python3 smoke.py [--vnc-port 6080] [--mcp-port 9010]
 
@@ -14,7 +16,9 @@ Standard library only, so it runs anywhere python3 does.
 
 import argparse
 import json
+import re
 import sys
+import time
 import urllib.request
 
 PROTOCOL = "2025-06-18"
@@ -90,6 +94,17 @@ class McpClient:
             raise RuntimeError(f"{name}: {text[:300]}")
         return text
 
+    def tools(self) -> list[dict]:
+        """Read every page so release checks also cover tools beyond page one."""
+        tools = []
+        params = {}
+        while True:
+            page = self.call("tools/list", params)
+            tools.extend(page["tools"])
+            if not page.get("nextCursor"):
+                return tools
+            params = {"cursor": page["nextCursor"]}
+
 
 def accepts_task_name(client: McpClient) -> bool:
     """Whether this claw-server knows the taskName argument, in either mode.
@@ -138,7 +153,7 @@ def main() -> None:
     check("MCP initialize from the host", bool(client.session_id), info.get("serverInfo", {}).get("name", ""))
     client.notify("notifications/initialized")
 
-    listed = client.call("tools/list")["tools"]
+    listed = client.tools()
     tools = {tool["name"] for tool in listed}
     check("MCP lists the tabs tool", "tabs" in tools, f"{len(tools)} tools")
     check("human help disabled", not tools & HUMAN_HELP_TOOLS)
@@ -160,7 +175,25 @@ def main() -> None:
         new_tab["taskName"] = "docker smoke"
     opened = client.tool("tabs", new_tab)
     check("agent opened a tab", "opened page" in opened, opened.splitlines()[0] if opened else "")
+    if hosted:
+        check_ungrouped(client, int(re.search(r"opened page (\d+)", opened).group(1)))
 
+
+def check_ungrouped(client: McpClient, page: int) -> None:
+    """Hosted mode's explicit tab grouping: the server never groups a page itself.
+
+    The listing's text shows ` [group <id>]` on every grouped page, and it is what an agent
+    reads. Automatic grouping runs after the tool call returns, so one listing could pass
+    before the group lands; listing for a few seconds catches a group that arrives late.
+    """
+    line = ""
+    for _ in range(6):
+        listing = client.tool("tabs", {"action": "list"})
+        line = next((row for row in listing.splitlines() if row.startswith(f"[{page}] ")), "")
+        if not line or "[group " in line:
+            break
+        time.sleep(0.5)
+    check("hosted tabs stay ungrouped", bool(line) and "[group " not in line, line or f"page {page} not listed")
 
 if __name__ == "__main__":
     main()

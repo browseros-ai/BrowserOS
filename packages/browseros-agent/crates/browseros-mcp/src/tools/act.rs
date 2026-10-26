@@ -457,6 +457,7 @@ fn click_options(args: &ActArgs) -> ClickOptions {
             ActMouseButton::Right => MouseButton::Right,
         }),
         click_count: args.click_count,
+        ..Default::default()
     }
 }
 

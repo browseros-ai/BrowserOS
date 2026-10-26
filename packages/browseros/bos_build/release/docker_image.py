@@ -7,6 +7,13 @@ builds without this module. What a release adds around it lives here: the
 preflight that every requested architecture was actually published, the tag
 policy, and the buildx invocation. The CLI and the release workflow are thin
 callers of build_image.
+
+Tag policy: a release installs the browser package for `<version>` plus the
+claw-server and packaging of one repository commit, so the browser version alone
+does not name an image. `<version>-<commit>` names one build and is never reused
+for different source; `<version>` and `latest` are aliases that move to the newest
+build. Shipping a server or packaging change for an already released browser is
+another run of the workflow on the newer commit, with no new browser build.
 """
 
 import json
@@ -40,6 +47,18 @@ PLATFORM_PACKAGES = {
 }
 
 _VERSION = re.compile(r"^\d+(\.\d+){1,3}$")
+_REVISION = re.compile(r"^[0-9a-f]{40}$")
+# The commit tag uses GitHub's short form, so it matches the commit links people see.
+_SHORT_REVISION = 7
+# claw-server compiles this marker into its binary (VERSION_MARKER in
+# apps/claw-server/src/main.rs). Reading it avoids running a binary that may be
+# built for another architecture, and cannot disagree with the binary installed.
+_SERVER_VERSION_MARKER = re.compile(rb"browseros-claw-server-version=([0-9A-Za-z.+-]+);")
+# The Ubuntu base image sets the version label to its own release (24.04), so
+# every build overrides it.
+VERSION_LABEL = "org.opencontainers.image.version"
+REVISION_LABEL = "org.opencontainers.image.revision"
+SERVER_VERSION_LABEL = "com.browseros.claw-server.version"
 # Release package names carry the version and architecture, e.g.
 # BrowserOS_neo_v0.51.1.4_arm64.deb.
 _DEB_NAME = re.compile(r"^BrowserOS_neo_v(?P<version>\d+(?:\.\d+){1,3})_(?P<arch>amd64|arm64)\.deb$")
@@ -54,7 +73,13 @@ class ImageRequest:
     """What to build. Without push the image is loaded into local Docker,
     which holds one platform, so it defaults to the host's architecture. An
     explicit platform (or a .deb's own) may differ from the host on purpose,
-    e.g. to test an amd64 package on Apple silicon under emulation."""
+    e.g. to test an amd64 package on Apple silicon under emulation. Optional
+    server binaries override the package's server. `revision` is the full sha of
+    the commit those servers and the Docker context come from. A revision
+    requires the servers and pushing requires both, so every commit tag runs
+    that commit's server. Key paths are
+    BuildKit inputs; their contents are intentionally installed in the image,
+    never read here."""
 
     version: str = ""
     repository: str = DEFAULT_REPOSITORY
@@ -62,6 +87,10 @@ class ImageRequest:
     latest: bool = False
     platforms: tuple[str, ...] = ()
     deb: Optional[Path] = None
+    server_dir: Optional[Path] = None
+    revision: str = ""
+    capsolver_key_file: Optional[Path] = None
+    twocaptcha_key_file: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -138,13 +167,29 @@ def _require_published(version: str, platforms: tuple[str, ...], ops: ImageOpera
         raise ImageError(f"Neo {version} has no {', '.join(missing)} on the CDN")
 
 
+def _server_version(server_dir: Path, platforms: tuple[str, ...]) -> str:
+    """The claw-server version every requested architecture's binary declares."""
+    versions = {}
+    for platform in platforms:
+        arch = platform.split("/")[1]
+        match = _SERVER_VERSION_MARKER.search((server_dir / arch / "browseros-claw-server-rs").read_bytes())
+        if not match:
+            raise ImageError(f"{arch}/browseros-claw-server-rs has no claw-server version marker")
+        versions[arch] = match[1].decode()
+    if len(set(versions.values())) != 1:
+        found = ", ".join(f"{arch} {version}" for arch, version in versions.items())
+        raise ImageError(f"Server binaries were built from different versions: {found}")
+    return next(iter(versions.values()))
+
+
 def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> ImageResult:
     """Builds the image for `request` from the Docker context at `context`.
 
     Raises ImageError, before running buildx, for a request that would publish
     the wrong thing: a malformed version, an architecture the version never
-    shipped, or :latest on an image that is not being pushed. A local .deb
-    replaces the CDN lookup and is only ever loaded into local Docker.
+    shipped, :latest on an image that is not being pushed, or a commit tag or
+    push without that commit's servers and full revision. A local .deb replaces the CDN lookup
+    and is only ever loaded into local Docker.
     """
     if request.deb is not None:
         request = _resolve_deb(request, request.deb)
@@ -152,17 +197,53 @@ def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> I
         raise ImageError(f"Invalid Neo version '{request.version}'; expected e.g. 0.52.0.1")
     if request.latest and not request.push:
         raise ImageError("--latest requires --push")
+    if (request.push or request.revision) and request.server_dir is None:
+        raise ImageError("A commit-tagged build needs that commit's servers; pass --server-dir")
+    if (request.push or request.revision) and not _REVISION.match(request.revision):
+        raise ImageError(
+            f"Invalid revision '{request.revision}'; pass the full 40-character commit sha with --revision"
+        )
     platforms = _platforms(request, ops)
+    server_version = ""
+    if request.server_dir is not None:
+        for platform in platforms:
+            arch = platform.split("/")[1]
+            if not (request.server_dir / arch / "browseros-claw-server-rs").is_file():
+                raise ImageError(f"Server directory has no {arch}/browseros-claw-server-rs")
+        server_version = _server_version(request.server_dir, platforms)
+    keys = [
+        (name, key_file)
+        for name, key_file in (
+            ("capsolver_api_key", request.capsolver_key_file),
+            ("twocaptcha_api_key", request.twocaptcha_key_file),
+        )
+        if key_file is not None
+    ]
+    for name, key_file in keys:
+        if not key_file.is_file():
+            raise ImageError(f"{name} key file does not exist: {key_file}")
     if request.deb is None:
         _require_published(request.version, platforms, ops)
 
-    tags = (f"{request.repository}:{request.version}",)
+    image_version = request.version
+    tags: tuple[str, ...] = ()
+    if request.revision:
+        image_version += f"-{request.revision[:_SHORT_REVISION]}"
+        tags += (f"{request.repository}:{image_version}",)
+    tags += (f"{request.repository}:{request.version}",)
     if request.latest:
         tags += (f"{request.repository}:latest",)
     argv = ["--platform", ",".join(platforms)]
     argv += ["--build-arg", f"NEO_VERSION={request.version}"]
     for tag in tags:
         argv += ["--tag", tag]
+    # Labels only reach the final image config, so they never invalidate the
+    # cached browser installation.
+    argv += ["--label", f"{VERSION_LABEL}={image_version}"]
+    if request.revision:
+        argv += ["--label", f"{REVISION_LABEL}={request.revision}"]
+    if server_version:
+        argv += ["--label", f"{SERVER_VERSION_LABEL}={server_version}"]
     if request.push:
         # Index annotations fail on an export without an index, so request the
         # provenance attestation explicitly: it makes even a single-platform
@@ -174,6 +255,14 @@ def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> I
         ]
     else:
         argv.append("--load")
+    if request.server_dir is not None:
+        argv += ["--build-context", f"neo-server={request.server_dir}"]
+    # Re-run the final credentials stage even for keyless builds: secret
+    # contents (and their removal) are not reliable cache invalidators. Keep
+    # the expensive browser installation cached in the preceding runtime stage.
+    argv += ["--no-cache-filter", "neo"]
+    for name, key_file in keys:
+        argv += ["--secret", f"id={name},src={key_file}"]
     staging = ops.staged_deb(request.deb) if request.deb is not None else nullcontext(None)
     with staging as deb_dir:
         if deb_dir is not None:

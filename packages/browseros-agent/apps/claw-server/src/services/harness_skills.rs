@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 use harness_integrations::SkillSpec;
 use serde::Deserialize;
 
-use crate::config::PursueOffering;
+use crate::config::{PursueOffering, TabGrouping};
 use crate::error::{AppError, AppResult};
 
 // This skill ships twice. This copy is installed automatically for the harnesses on
@@ -40,6 +40,18 @@ Fall back to `run` once two `pursue` calls have come back with a status other th
 
 Go straight to `run` for work that is a script rather than an outcome: pagination over many pages, bulk extraction, repeated loops over a list you already hold, or anything needing a saved helper. One `run` script composes the whole snapshot -> act -> verify loop in a single call, and it is the only place saved helpers work. Use a single granular tool (`act`, `snapshot`, `navigate`, `evaluate`, `read`) directly only for a one-off step or step-by-step debugging."#;
 
+/// The guide's promises of server-made tab groups, and what explicit grouping says instead.
+///
+/// The MCP text has its own rewrites in `api::mcp::tab_grouping`; these stay here because a
+/// service must not reach up into the API layer, and the guide words them its own way.
+const SKILL_GROUP_PROMISES: [(&str, &str); 2] = [
+    ("; tabs group as `<client>/<name>` in the cockpit.", "."),
+    (
+        ", unless a tool reply asks you to close your task's tab group.",
+        ".",
+    ),
+];
+
 #[derive(Deserialize)]
 struct SkillFrontmatter {
     name: String,
@@ -48,16 +60,18 @@ struct SkillFrontmatter {
 
 /// Loads the active signed resource copy, falling back to the compiled asset when unavailable.
 ///
-/// `pursue` chooses which tool the guide tells the agent to reach for. This is
-/// read once, at launch, so a server that gains or loses the credential needs a
-/// restart before installed skills follow.
+/// `pursue` chooses which tool the guide tells the agent to reach for, and `tab_grouping`
+/// whether it may promise the server's own tab groups. This is read once, at launch, so a
+/// server that gains or loses the credential needs a restart before installed skills follow.
 pub fn load_browserclaw_skill(
     resources_dir: &Path,
     pursue: PursueOffering,
+    tab_grouping: TabGrouping,
 ) -> AppResult<SkillSpec> {
+    let adapt = |content| with_tab_grouping(with_tool_choice(content, pursue), tab_grouping);
     let path = resources_dir.join("skills/browserclaw/SKILL.md");
     match fs::read_to_string(&path) {
-        Ok(content) => match parse_browserclaw_skill(with_tool_choice(content, pursue)) {
+        Ok(content) => match parse_browserclaw_skill(adapt(content)) {
             Ok(spec) => return Ok(spec),
             Err(error) => {
                 tracing::warn!(path = %path.display(), %error, "invalid BrowserClaw skill resource; using embedded fallback");
@@ -67,11 +81,7 @@ pub fn load_browserclaw_skill(
             tracing::warn!(path = %path.display(), %error, "BrowserClaw skill resource unavailable; using embedded fallback");
         }
     }
-    parse_browserclaw_skill(with_tool_choice(
-        EMBEDDED_BROWSERCLAW_SKILL.to_string(),
-        pursue,
-    ))
-    .map_err(|error| {
+    parse_browserclaw_skill(adapt(EMBEDDED_BROWSERCLAW_SKILL.to_string())).map_err(|error| {
         AppError::Internal(format!(
             "embedded BrowserClaw skill failed validation: {error}"
         ))
@@ -88,6 +98,19 @@ fn with_tool_choice(content: String, pursue: PursueOffering) -> String {
         PursueOffering::Absent => content,
         PursueOffering::Offered => content.replace(SKILL_RUN_FIRST, SKILL_PURSUE_FIRST),
     }
+}
+
+/// Removes the guide's group promises when the server does not group tabs itself. Automatic
+/// grouping installs the guide unchanged.
+fn with_tab_grouping(content: String, tab_grouping: TabGrouping) -> String {
+    if tab_grouping.is_automatic() {
+        return content;
+    }
+    SKILL_GROUP_PROMISES
+        .iter()
+        .fold(content, |content, (promise, explicit)| {
+            content.replace(promise, explicit)
+        })
 }
 
 fn parse_browserclaw_skill(content: String) -> Result<SkillSpec, String> {
@@ -133,9 +156,38 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        PursueOffering, SKILL_PURSUE_FIRST, SKILL_RUN_FIRST, embedded_browserclaw_skill,
-        load_browserclaw_skill, with_tool_choice,
+        PursueOffering, SKILL_GROUP_PROMISES, SKILL_PURSUE_FIRST, SKILL_RUN_FIRST, TabGrouping,
+        embedded_browserclaw_skill, load_browserclaw_skill, with_tool_choice,
     };
+
+    /// Each promise is removed by an exact string replace, so a reword of the shipped guide
+    /// would silently keep it in the explicit-grouping install.
+    #[test]
+    fn the_guide_still_contains_each_group_promise_that_gets_removed() {
+        let content = embedded_browserclaw_skill();
+        for (promise, _) in SKILL_GROUP_PROMISES {
+            assert_eq!(content.matches(promise).count(), 1, "{promise}");
+        }
+    }
+
+    /// A guide that promises groups the server will not make is worse than none, since the
+    /// agent reads both. Explicit grouping installs it without them; automatic, unchanged.
+    #[test]
+    fn an_explicit_grouping_server_installs_a_guide_without_group_promises()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        let explicit =
+            load_browserclaw_skill(root.path(), PursueOffering::Absent, TabGrouping::Explicit)?;
+        let content = explicit.content();
+        assert!(!content.contains("tab group"), "{content}");
+        assert!(!content.contains("tabs group as"), "{content}");
+        assert!(content.contains("Call `name_session` early"));
+        assert!(content.contains("Preserve useful pages when the task ends."));
+        let automatic =
+            load_browserclaw_skill(root.path(), PursueOffering::Absent, TabGrouping::Automatic)?;
+        assert_eq!(automatic.content(), embedded_browserclaw_skill());
+        Ok(())
+    }
 
     /// The swap is a string replace against the shipped guide. A reword of that
     /// paragraph would silently leave the offered case telling the agent to
@@ -150,7 +202,8 @@ mod tests {
     fn a_server_with_the_loop_installs_a_guide_that_prefers_it()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;
-        let offered = load_browserclaw_skill(root.path(), PursueOffering::Offered)?;
+        let offered =
+            load_browserclaw_skill(root.path(), PursueOffering::Offered, TabGrouping::Automatic)?;
         let content = offered.content();
         assert_eq!(offered.name(), "browseros-neo");
         assert!(content.contains(SKILL_PURSUE_FIRST));
@@ -203,7 +256,8 @@ mod tests {
         let runtime = "---\nname: browseros-neo\ndescription: Runtime copy\n---\nruntime\n";
         fs::write(skill_dir.join("SKILL.md"), runtime)?;
 
-        let loaded = load_browserclaw_skill(root.path(), PursueOffering::Absent)?;
+        let loaded =
+            load_browserclaw_skill(root.path(), PursueOffering::Absent, TabGrouping::Automatic)?;
 
         assert_eq!(loaded.name(), "browseros-neo");
         assert_eq!(loaded.content(), runtime);
@@ -216,21 +270,24 @@ mod tests {
         let root = tempdir()?;
         let expected = embedded_browserclaw_skill();
         assert_eq!(
-            load_browserclaw_skill(root.path(), PursueOffering::Absent)?.content(),
+            load_browserclaw_skill(root.path(), PursueOffering::Absent, TabGrouping::Automatic)?
+                .content(),
             expected
         );
 
         let path = root.path().join("skills/browserclaw/SKILL.md");
         fs::create_dir_all(&path)?;
         assert_eq!(
-            load_browserclaw_skill(root.path(), PursueOffering::Absent)?.content(),
+            load_browserclaw_skill(root.path(), PursueOffering::Absent, TabGrouping::Automatic)?
+                .content(),
             expected
         );
         fs::remove_dir(&path)?;
 
         fs::write(&path, "---\nname: wrong\ndescription: Wrong name\n---\n")?;
         assert_eq!(
-            load_browserclaw_skill(root.path(), PursueOffering::Absent)?.content(),
+            load_browserclaw_skill(root.path(), PursueOffering::Absent, TabGrouping::Automatic)?
+                .content(),
             expected
         );
 
@@ -239,7 +296,8 @@ mod tests {
             "---\nname: browseros-neo\ndescription: [\n---\nmalformed\n",
         )?;
         assert_eq!(
-            load_browserclaw_skill(root.path(), PursueOffering::Absent)?.content(),
+            load_browserclaw_skill(root.path(), PursueOffering::Absent, TabGrouping::Automatic)?
+                .content(),
             expected
         );
 
@@ -248,7 +306,8 @@ mod tests {
             "---\nname: browseros-neo\ndescription: |\n---\nempty description\n",
         )?;
         assert_eq!(
-            load_browserclaw_skill(root.path(), PursueOffering::Absent)?.content(),
+            load_browserclaw_skill(root.path(), PursueOffering::Absent, TabGrouping::Automatic)?
+                .content(),
             expected
         );
         Ok(())

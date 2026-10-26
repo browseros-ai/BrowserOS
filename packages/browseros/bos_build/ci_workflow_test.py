@@ -3839,28 +3839,55 @@ class RepairUpdateFeedWorkflowTest(unittest.TestCase):
 
 
 class DockerImageWorkflowTest(unittest.TestCase):
-    PUSH_STEP = "Push amd64 and arm64"
-
     def setUp(self):
         self.workflow = yaml.safe_load(
             (WORKFLOW_DIR / "release-docker.yml").read_text(encoding="utf-8")
         )
-        self.job = self.workflow["jobs"]["image"]
-        self.steps = {step.get("name"): step for step in self.job["steps"]}
+        self.jobs = self.workflow["jobs"]
 
-    def test_only_the_image_job_can_write_packages(self):
+    def test_only_the_publish_job_can_write_packages(self):
         self.assertEqual(self.workflow["permissions"], {})
-        self.assertEqual(self.job["permissions"], {"contents": "read", "packages": "write"})
+        for name, job in self.jobs.items():
+            self.assertEqual(job["permissions"].get("packages"), "write" if name == "publish" else None)
 
-    def test_smoke_test_gates_the_push(self):
-        names = [step.get("name") for step in self.job["steps"]]
-        self.assertLess(names.index("Smoke test"), names.index(self.PUSH_STEP))
-        self.assertNotIn("--push", self.steps["Build amd64 for the smoke test"]["run"])
-        self.assertIn("--push", self.steps[self.PUSH_STEP]["run"])
+    def test_native_smoke_checks_on_both_architectures_gate_publication(self):
+        verify = self.jobs["verify"]
+        self.assertEqual(verify["runs-on"], "${{ matrix.runner }}")
+        self.assertEqual(verify["strategy"]["matrix"]["include"], [
+            {"arch": "amd64", "runner": "ubuntu-latest"},
+            {"arch": "arm64", "runner": "ubuntu-24.04-arm"},
+        ])
+        self.assertIn("verify", self.jobs["publish"]["needs"])
+        steps = {step.get("name"): step for step in verify["steps"]}
+        self.assertNotIn("--push", steps["Build native image"]["run"])
+        smoke = next(step for step in verify["steps"] if step.get("id") == "smoke")
+        self.assertIn("for hosted in 1 0", smoke["run"])
+        self.assertIn("for extensions_disabled in false true", smoke["run"])
+        self.assertIn("< packages/browseros/docker/neo/check_extensions.py", smoke["run"])
+        self.assertIn('captcha_smoke.py "http://127.0.0.1:$port" "$hosted" "$KEYED"', smoke["run"])
+        self.assertEqual(self.jobs["publish"]["if"], "inputs.push")
+
+    def test_keyed_jobs_scope_secrets_to_preparation_and_always_clean_files(self):
+        for name in ("verify", "publish"):
+            job = self.jobs[name]
+            self.assertEqual(job["environment"], "neo-captcha")
+            self.assertNotIn("CAPSOLVER_API_KEY", job.get("env", {}))
+            self.assertNotIn("TWOCAPTCHA_API_KEY", job.get("env", {}))
+            cleanup = job["steps"][-1]
+            self.assertEqual(cleanup["if"], "always()")
+            self.assertIn('rm -f "$RUNNER_TEMP/neo-capsolver-key" "$RUNNER_TEMP/neo-2captcha-key"', cleanup["run"])
+
+    def test_server_override_preserves_production_telemetry_configuration(self):
+        build = next(step for step in self.jobs["server"]["steps"]
+                     if step.get("name") == "Build this commit's server")
+        self.assertEqual(build["env"]["CLAW_POSTHOG_KEY"], "${{ secrets.CLAW_POSTHOG_KEY }}")
+        self.assertEqual(build["env"]["CLAW_SENTRY_DSN"], "${{ secrets.CLAW_SENTRY_DSN }}")
+        self.assertIn('if [ -z "$CLAW_POSTHOG_KEY" ]', build["run"])
 
     def test_inputs_reach_shell_only_through_environment(self):
-        for step in self.job["steps"]:
-            self.assertNotIn("${{ inputs.", step.get("run", ""))
+        for job in self.jobs.values():
+            for step in job["steps"]:
+                self.assertNotIn("${{ inputs.", step.get("run", ""))
 
 
 if __name__ == "__main__":

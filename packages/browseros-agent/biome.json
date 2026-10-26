@@ -12,9 +12,12 @@
       "!.scripts",
       "!**/*.svg",
       "!packages/claw-api/src/generated",
+      "!packages/agent-cursor/src",
+      "!packages/agent-cursor/tests/fixtures/golden.json",
       "!contracts/claw-mcp/fixtures/pages",
-      "!contracts/captcha/fixtures/pages",
+      "!tools/captcha-testbed/fixtures/pages",
       "!crates/browseros-core/tests/data/captured",
+      "!crates/browseros-core/src/assets/agent-cursor.js",
       "!apps/server/src/lib/db/migrations"
     ]
   },

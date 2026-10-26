@@ -5,7 +5,9 @@ use crate::{
     ids::{ConvoId, DispatchId, SessionId},
     services::sessions::Session,
 };
-use browseros_core::{BrowserSession, PageId, pages::PageInfo, target::BrowserView};
+use browseros_core::{
+    BrowserSession, PageId, pages::PageInfo, pointer::Pointer, target::BrowserView,
+};
 use browseros_mcp::{
     BrowserToolDefaults, BrowserToolOptions, OutputFileAccess, TargetStore, ToolCtx, ToolDef,
     ToolResult, execute_tool,
@@ -533,7 +535,7 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
                 _ => Vec::new(),
             };
             let ctx = ToolCtx::new(BrowserToolOptions {
-                browser: view.clone(),
+                browser: view.clone().with_pointer(Pointer::default()),
                 target: Some(call.target_store.clone()),
                 defaults: BrowserToolDefaults {
                     default_window_id: None,
@@ -703,6 +705,156 @@ pub fn linked_cancel_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Opens `url` through `tool` on a fresh synthetic browser under `behavior`, awaits the
+    /// grouping work the effect would otherwise detach, and returns the call with the group
+    /// id the page ended up in.
+    async fn open_with_behavior(
+        tool: &str,
+        raw_args: Value,
+        url: &str,
+        mode: crate::config::ServerMode,
+        behavior: crate::config::Behavior,
+    ) -> anyhow::Result<(ToolCall, Option<String>)> {
+        use crate::api::mcp::test_support::{
+            ProfileConnection, current_session, tool_call_with_behavior,
+        };
+        let native = ProfileConnection::new().with_default_profile();
+        let browser = current_session(native.clone());
+        browser.pages.list().await?;
+        let mut call = tool_call_with_behavior(tool, raw_args, mode, behavior).await?;
+        call.browser_session = Some(browser.clone());
+        call.view = Some(BrowserView::capture(browser.clone(), None, None).await);
+        let result = dispatch_tool_call(call.clone()).await?;
+        assert_ne!(result.is_error, Some(true), "{result:?}");
+        let text = result
+            .content
+            .iter()
+            .filter_map(ContentBlock::as_text)
+            .map(|text| text.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !behavior.tab_grouping.is_automatic() {
+            assert!(!text.contains("tab group is being started"), "{text}");
+        }
+        let page = browser
+            .pages
+            .list()
+            .await?
+            .into_iter()
+            .find(|page| page.url == url)
+            .ok_or_else(|| anyhow::anyhow!("{url} was not opened"))?;
+        // The same worker the effect and the script hook detach; awaiting it here makes the
+        // outcome deterministic instead of racing a background task.
+        let captured = effects::tab_groups::created_page(&call, page.page_id.0).await;
+        effects::tab_groups::run_tab_group_work(call.clone(), captured).await;
+        let group = browser
+            .pages
+            .get_info(page.page_id.clone())
+            .await
+            .and_then(|page| page.group_id);
+        Ok((call, group))
+    }
+
+    /// The behaviour, not the mode, decides grouping: explicit leaves `tabs new` and a script's
+    /// `browser.open` ungrouped with no session group recorded, in either mode, and automatic
+    /// still groups them, in either mode.
+    #[tokio::test]
+    async fn tests_that_only_automatic_grouping_groups_pages_the_agent_did_not_place()
+    -> anyhow::Result<()> {
+        use crate::config::{Behavior, ServerMode, TabGrouping};
+        let url = "https://synthetic.test/placement";
+        for mode in [ServerMode::Desktop, ServerMode::Hosted] {
+            for tab_grouping in [TabGrouping::Automatic, TabGrouping::Explicit] {
+                for script in [false, true] {
+                    let (tool, args) = if script {
+                        (
+                            "run",
+                            json!({"code": format!("return await browser.open('{url}');")}),
+                        )
+                    } else {
+                        ("tabs", json!({"action": "new", "url": url}))
+                    };
+                    let (call, group) =
+                        open_with_behavior(tool, args, url, mode, Behavior { tab_grouping })
+                            .await?;
+                    let key = call
+                        .identity
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+                        .ownership_key
+                        .clone();
+                    let recorded = call.state.sessions.ownership().tab_group_ref(&key).await;
+                    let case = format!("{mode:?} {tab_grouping:?} script={script}");
+                    assert_eq!(group.is_some(), tab_grouping.is_automatic(), "{case}");
+                    assert_eq!(recorded.is_some(), tab_grouping.is_automatic(), "{case}");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Explicit grouping still honours a named group, and naming one does not make it the
+    /// session's default: the next unnamed page stays ungrouped.
+    #[tokio::test]
+    async fn tests_that_explicit_grouping_places_named_groups_without_adopting_them()
+    -> anyhow::Result<()> {
+        use crate::{
+            api::mcp::test_support::{ProfileConnection, current_session, tool_call_with_behavior},
+            config::{Behavior, ServerMode, TabGrouping},
+        };
+        let explicit = Behavior {
+            tab_grouping: TabGrouping::Explicit,
+        };
+        let native = ProfileConnection::new().with_default_profile();
+        let browser = current_session(native.clone());
+        browser.pages.list().await?;
+        let view = BrowserView::capture(browser.clone(), None, None).await;
+        let group = view
+            .cdp(
+                "Browser.createTabGroup",
+                json!({"tabIds": [104], "title": "harness layout"}),
+                None,
+            )
+            .await?["group"]["groupId"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("group missing"))?
+            .to_string();
+        let mut groups_seen = Vec::new();
+        for (url, named) in [
+            ("https://synthetic.test/named", Some(group.as_str())),
+            ("https://synthetic.test/unnamed", None),
+        ] {
+            let mut args = json!({"action": "new", "url": url});
+            if let Some(named) = named {
+                args["groupId"] = json!(named);
+            }
+            let mut call =
+                tool_call_with_behavior("tabs", args, ServerMode::Hosted, explicit).await?;
+            call.browser_session = Some(browser.clone());
+            call.view = Some(BrowserView::capture(browser.clone(), None, None).await);
+            let result = dispatch_tool_call(call.clone()).await?;
+            assert_ne!(result.is_error, Some(true), "{result:?}");
+            let page = browser
+                .pages
+                .list()
+                .await?
+                .into_iter()
+                .find(|page| page.url == url)
+                .ok_or_else(|| anyhow::anyhow!("{url} was not opened"))?;
+            let captured = effects::tab_groups::created_page(&call, page.page_id.0).await;
+            effects::tab_groups::run_tab_group_work(call.clone(), captured).await;
+            groups_seen.push(
+                browser
+                    .pages
+                    .get_info(page.page_id.clone())
+                    .await
+                    .and_then(|page| page.group_id),
+            );
+        }
+        assert_eq!(groups_seen, vec![Some(group), None]);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn deferred_grouping_preserves_explicit_group_update() -> anyhow::Result<()> {

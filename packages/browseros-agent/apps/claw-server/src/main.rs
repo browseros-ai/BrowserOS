@@ -127,6 +127,12 @@ fn log_native_identity(config: &claw_server::config::Config) {
         env = claw_server::config::HOSTED_MODE_ENV,
         "server mode"
     );
+    // The effective values, so a deployment can confirm its behaviour file took hold.
+    info!(
+        tab_grouping = config.behavior.tab_grouping.as_str(),
+        file_env = claw_server::config::BEHAVIOR_FILE_ENV,
+        "server behaviour"
+    );
 }
 
 async fn run(
@@ -434,6 +440,7 @@ mod tests {
             dev_mode: false,
             native: Default::default(),
             mode: Default::default(),
+            behavior: Default::default(),
         });
         let state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
         let shutdown = state.shutdown.clone();
@@ -485,6 +492,7 @@ mod tests {
             dev_mode: false,
             native: Default::default(),
             mode: Default::default(),
+            behavior: Default::default(),
         });
         let state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
         let mut runtime = AppRuntime::start(state);

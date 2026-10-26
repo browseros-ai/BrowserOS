@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.cc b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
 new file mode 100644
-index 0000000000000..4b0fb78e639a9
+index 0000000000000000000000000000000000000000..3b0172e8340200d55781af150bf3f9fc93f21a17
 --- /dev/null
 +++ b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
-@@ -0,0 +1,392 @@
+@@ -0,0 +1,391 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -101,10 +101,9 @@ index 0000000000000..4b0fb78e639a9
 +  browser_os::PrefObject pref_obj;
 +  pref_obj.key = params->name;
 +
-+  const base::Value* value = prefs->GetUserPrefValue(params->name);
-+  if (!value) {
-+    value = prefs->GetDefaultPrefValue(params->name);
-+  }
++  // The effective value, so values forced by policy or the command line
++  // (e.g. --disable-browseros-features) show through.
++  const base::Value* value = prefs->FindPreference(params->name)->GetValue();
 +
 +  pref_obj.type = GetPrefTypeName(value);
 +  pref_obj.value = value->Clone();

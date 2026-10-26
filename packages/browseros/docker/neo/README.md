@@ -55,21 +55,80 @@ NEO_VNC_PORT=7080 NEO_MCP_PORT=7010 NEO_DATA=/mnt/neo docker compose up -d --wai
 | Owner of files in the data folder | `-e PUID=… -e PGID=…` | `PUID`, `PGID` | 1000 / 1000 |
 | Starting screen size | `-e NEO_SCREEN=1920x1080` | `NEO_SCREEN` | `1600x1000` |
 | Hosted mode (see below) | `-e BROWSERCLAW_HOSTED_MODE=0` | `BROWSERCLAW_HOSTED_MODE` | `1` |
+| Server behaviour (see [Behaviour file](#behaviour-file)) | `-v ./neo.toml:/etc/neo/neo.toml:ro` | the `neo.toml` volume in `compose.yaml` | the image's `/etc/neo/neo.toml` |
 | Chromium sandbox (see [Security](#security)) | `-e NEO_SANDBOX=true` | `NEO_SANDBOX` | `false` |
+| Disable bundled BrowserOS extensions | `-e NEO_DISABLE_BROWSEROS_EXTENSIONS=true` | `NEO_DISABLE_BROWSEROS_EXTENSIONS` | `false` |
 | Extra Neo command-line flags | `-e NEO_ARGS="--lang=de"` | `NEO_ARGS` | empty |
 
 Ports inside the container are always 6080 and 9010; change only the host side.
+
+Image tags: `latest` and browser versions such as `0.52.0.1` move when a newer build is published. To stay
+on one source commit, use its `<version>-<commit>` tag (e.g. `0.52.0.1-169e41f`); a rebuild of that commit
+replaces it. To pin exact image contents, use the digest.
 
 `BROWSERCLAW_HOSTED_MODE=1` gives agents the browser tools only. Skills (`save_skill`,
 `mark_skill_run`) and human help (`request_human_help`, `await_human_help`) are hidden, since
 your agent's own harness keeps its workflows and asks you for help itself. Instead of calling
 `name_session`, an agent names its task with an optional `taskName` argument on any tool call.
-`BROWSERCLAW_HOSTED_MODE=0` restores the full tool set of the BrowserOS app.
+Neo also leaves tab layout to your agent: a page joins a tab group only when the agent passes
+`groupId`, and Neo never creates, titles, collapses or closes a group itself. The
+[behaviour file](#behaviour-file) can turn per-task groups back on.
+`BROWSERCLAW_HOSTED_MODE=0` restores the desktop tools and hides `solve_captcha`.
 Only exact `0` and `1` are accepted. After changing the flag, run
 `docker compose up -d --wait` to recreate the container with its new environment.
 With `docker run`, recreate it with the new flag and the existing data volume.
 The viewer's screen follows the browser tab's size once it connects, so `NEO_SCREEN`
 only matters until then.
+
+### Behaviour file
+
+Server behaviour that a deployment may want to change lives in one TOML file instead of
+more environment variables. The image ships `/etc/neo/neo.toml` with every key commented
+out, so it documents the defaults; replace it to change them. Mount your own over it:
+
+```sh
+docker run ... -v ./neo.toml:/etc/neo/neo.toml:ro ghcr.io/browseros-ai/neo
+```
+
+or uncomment the `neo.toml` line in `compose.yaml`, or `COPY` one to `/etc/neo/neo.toml` in
+an image built `FROM` Neo. A key you leave out keeps the default for the mode
+(`BROWSERCLAW_HOSTED_MODE`). Unknown keys or values stop the server at startup, and the
+reason is in `docker logs`; so does a `BROWSERCLAW_CONFIG_FILE` that names a missing file.
+Recreate the container after editing the file.
+
+| Key | Values | Hosted default | Desktop default |
+|---|---|---|---|
+| `[tabs] grouping` | `"explicit"`: a page joins a group only when the agent passes `groupId`. `"auto"`: Neo keeps each task's pages in a `<client>/<task>` group it titles, collapses and closes. | `"explicit"` | `"auto"` |
+
+The server logs the values it runs with at startup (`server behaviour`).
+
+Images built with a CapSolver or 2Captcha key also offer `solve_captcha` in hosted
+mode. Keyless builds omit that tool. Provider keys are embedded files: anyone who
+can pull such an image can extract them. See the [build and release guide](../../bos_build/docs/docker-image.md)
+for key configuration and rotation.
+
+Neo shows a minimal browser frame for watching agents: horizontal tabs, and no
+home or split-view button, bookmark star, bookmarks bar or window buttons. Each
+container start reapplies it, so changes made in the viewer last until the container
+restarts.
+
+The server updater is disabled so the server stays at the version verified with
+the image. Pull a newer image and recreate the container to update it.
+To run without the bundled BrowserOS extensions, pass
+`-e NEO_DISABLE_BROWSEROS_EXTENSIONS=true` to `docker run`, or use Compose:
+
+```sh
+NEO_DISABLE_BROWSEROS_EXTENSIONS=true docker compose up -d --wait
+```
+
+MCP browser tools and user-installed extensions remain enabled. The BrowserOS
+extension UI and rrweb page recordings are unavailable while disabled. This
+setting adds `--disable-browseros-extensions` without replacing `NEO_ARGS`, so
+derived images keep their own flags. It accepts `true`/`1`/`yes`/`on` and
+`false`/`0`/`no`/`off`, ignoring case; other values stop startup.
+Recreate the container after changing it; `docker restart` keeps the old setting.
+With an existing data volume, Neo may uninstall its bundled extensions and
+install them again when re-enabled.
 
 ## Read what your agent did
 
@@ -97,13 +156,34 @@ Within `/v1`, fields are only ever added, never renamed or removed.
 
 ## Your data
 
-Everything Neo keeps lives under `/data`:
+Everything Neo keeps lives under `/data` by default:
 
 ```
 /data/profile      the Neo profile: logins, cookies, history, settings
 /data/browserclaw  agent data: sessions, recordings, skills, agent settings
 /data/downloads    Neo's Downloads folder
 ```
+
+`NEO_DATA_DIR` changes the directory **inside the container**. For example, a
+derived image can set `NEO_DATA_DIR=/var/lib/mirror/browseros`; Neo then uses
+`profile`, `browserclaw`, and `downloads` below that directory. Mount that directory
+or a persistent parent explicitly:
+
+```sh
+docker run --rm --shm-size=1g \
+  -p 127.0.0.1:6080:6080 -p 127.0.0.1:9010:9010 \
+  -e NEO_DATA_DIR=/var/lib/mirror/browseros \
+  -v "$HOME/neo-data:/var/lib/mirror/browseros" \
+  ghcr.io/browseros-ai/neo:latest
+```
+
+The path must be absolute and must not resolve to `/`. Neo makes the data root
+private (`0700`) and gives it and its three data directories to `PUID`/`PGID`;
+parent directories keep their ownership and permissions. The image declares no
+Docker volumes, so persistence requires an explicit mount. Compose and the
+default `docker run` example already provide one at `/data`; neither changes.
+`NEO_DATA` in Compose chooses the host directory. Compose keeps its existing
+`/data` target; using a custom container directory requires your own Compose override.
 
 - **Sign in once.** Logins survive `docker compose down` / `up` and image upgrades.
 - **One container per data folder.** Two containers on one profile corrupt it.
@@ -152,14 +232,14 @@ The Dockerfile reads the version's published `release.json` from the BrowserOS C
 package for the architecture being built, and checks its sha256:
 
 ```sh
-docker build --build-arg NEO_VERSION=0.51.1.4 -t neo .
+docker build --no-cache-filter neo --build-arg NEO_VERSION=0.51.1.4 -t neo .
 ```
 
 To test a Neo build that isn't on the CDN (a CI artifact, say), put its `.deb` alone in a
 folder and pass that folder as the `neo-deb` build context:
 
 ```sh
-docker build --build-context neo-deb=/path/to/folder -t neo .
+docker build --no-cache-filter neo --build-context neo-deb=/path/to/folder -t neo .
 ```
 
 Maintainers build and publish the image with `browseros release docker`; see
