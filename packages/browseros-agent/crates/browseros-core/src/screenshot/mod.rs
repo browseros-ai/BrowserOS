@@ -663,7 +663,7 @@ where
     task().await
 }
 
-fn screenshot_mutex(page_session: &ProtocolSession) -> Arc<Mutex<()>> {
+pub(crate) fn screenshot_mutex(page_session: &ProtocolSession) -> Arc<Mutex<()>> {
     static QUEUES: OnceLock<StdMutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
     let key = page_session
         .session_id()

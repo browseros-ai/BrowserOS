@@ -74,6 +74,13 @@ pub enum CoreError {
         required: BrowserOsVersion,
         reported: Option<BrowserOsVersion>,
     },
+    /// A mobile mode change failed at `step`; `state` is what the tab was left in.
+    #[error("mobile_mode_failed: {step} failed: {detail}; final state: {state}")]
+    MobileMode {
+        step: String,
+        state: crate::mobile_mode::MobileModeState,
+        detail: String,
+    },
     #[error(transparent)]
     Cdp(#[from] CdpError),
     #[error(transparent)]

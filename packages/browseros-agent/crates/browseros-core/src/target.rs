@@ -1087,6 +1087,70 @@ impl BrowserView {
         Ok(capture)
     }
 
+    /// Switches one existing tab between desktop and the mobile preset (see `mobile_mode`).
+    pub async fn toggle_mobile_mode(
+        &self,
+        page: PageId,
+        request: impl Into<crate::mobile_mode::MobileModeRequest>,
+    ) -> Result<crate::mobile_mode::MobileModeOutcome, CoreError> {
+        use crate::mobile_mode::{MobileMode, MobileModeArgError, MobileModeRequest, WindowFit};
+        let MobileModeRequest { mode, window } = request.into();
+        if window == WindowFit::Resize && mode == MobileMode::Desktop {
+            return Err(MobileModeArgError::ResizeWindowWithoutMobile
+                .to_string()
+                .into());
+        }
+        let access = self.page_access(page.clone()).await?;
+        let session = match &access {
+            Some(access) => access.session().await?,
+            None => self.session.pages.get_session(page.clone()).await?,
+        };
+        let record = match mode.zoom() {
+            Some(zoom) => {
+                let version = self.cdp("Browser.getVersion", json!({}), None).await?;
+                Some(crate::mobile_mode::MobileRecord::new(
+                    crate::mobile_mode::browser_major(&version)?,
+                    zoom,
+                ))
+            }
+            None => None,
+        };
+        tokio::spawn(crate::mobile_mode::toggle(crate::mobile_mode::Toggle {
+            view: self.clone(),
+            pages: self.session.pages.clone(),
+            page,
+            session,
+            access,
+            record,
+            window,
+        }))
+        .await
+        .map_err(|err| CoreError::MobileMode {
+            step: "mobile mode task".into(),
+            state: crate::mobile_mode::MobileModeState::Unknown,
+            detail: err.to_string(),
+        })?
+    }
+
+    /// Mobile mode's window fit and restore. Not raw CDP: only these window commands, only
+    /// for a window in this view's scope, always on the capture's connection epoch.
+    pub(crate) async fn mobile_window_command(
+        &self,
+        window: WindowId,
+        method: &str,
+        mut params: Value,
+    ) -> Result<Value, CoreError> {
+        if !matches!(
+            method,
+            "Browser.getWindowBounds" | "Browser.setContentsSize" | "Browser.setWindowBounds"
+        ) {
+            return Err(cdp_policy::unsupported(method));
+        }
+        self.validate_window(window).await?;
+        params["windowId"] = json!(window.0);
+        self.send_at_capture(method, params, None).await
+    }
+
     pub async fn active_page(&self) -> Result<Option<PageInfo>, CoreError> {
         let Some(scope) = self.scope()? else {
             if self.expected_created_page.is_some() {

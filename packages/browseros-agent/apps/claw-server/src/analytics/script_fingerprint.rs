@@ -77,6 +77,7 @@ const SDK_SURFACE: &[&str] = &[
     "waitForSelector",
     "waitForText",
     "waitForTime",
+    "toggleMobileMode",
     "save",
     "snapshot",
     "diff",

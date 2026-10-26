@@ -331,6 +331,16 @@ impl CdpConnection for HarnessConnection {
                     }
                 })),
                 "Page.captureScreenshot" => Ok(json!({ "data": "cG5n" })),
+                "Browser.getVersion" => Ok(json!({ "product": "Chrome/155.0.8315.26" })),
+                "Emulation.setUserAgentOverride"
+                | "Emulation.setTouchEmulationEnabled"
+                | "Emulation.setDeviceMetricsOverride"
+                | "Emulation.setVisibleSize"
+                | "Emulation.clearDeviceMetricsOverride"
+                | "Browser.setContentsSize" => Ok(json!({})),
+                "Browser.getWindowBounds" => Ok(json!({
+                    "bounds": { "left": 0, "top": 0, "width": 1200, "height": 900, "windowState": "normal" }
+                })),
                 "Accessibility.getFullAXTree" => {
                     assert_eq!(params, json!({}));
                     Ok(json!({ "nodes": snapshot_nodes() }))
@@ -631,6 +641,7 @@ fn catalog_order_is_stable() {
             "grep",
             "screenshot",
             "pdf",
+            "toggleMobileMode",
             "wait",
             "windows",
             "evaluate",
@@ -664,6 +675,7 @@ fn catalog_page_metadata_matches_host_dispatch_contract() {
             ("grep", true),
             ("screenshot", true),
             ("pdf", true),
+            ("toggleMobileMode", true),
             ("wait", true),
             ("windows", false),
             ("evaluate", true),
@@ -829,7 +841,13 @@ fn structured_tools_advertise_output_schemas() {
         .collect::<Vec<_>>();
     assert_eq!(
         advertised,
-        ["browser_profiles", "browser_target", "credentials", "run"]
+        [
+            "browser_profiles",
+            "browser_target",
+            "credentials",
+            "toggleMobileMode",
+            "run"
+        ]
     );
 }
 
@@ -1890,3 +1908,187 @@ fn optional_enum_arguments_keep_their_variants_and_stay_optional() {
 
 #[path = "credentials_tests.rs"]
 mod credentials_tests;
+
+fn mobile_calls(connection: &HarnessConnection, from: usize) -> Vec<HarnessCall> {
+    connection.calls()[from..]
+        .iter()
+        .filter(|call| {
+            call.method.starts_with("Emulation.")
+                || matches!(
+                    call.method.as_str(),
+                    "Browser.getVersion" | "Browser.getWindowBounds" | "Browser.setContentsSize"
+                )
+        })
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn toggle_mobile_mode_schema_is_strict_and_states_its_reach() {
+    let tool = tool_by_name("toggleMobileMode");
+    let schema = Value::Object(tool.input_schema.as_ref().clone());
+    assert_eq!(
+        schema.get("additionalProperties"),
+        Some(&json!({ "not": {} }))
+    );
+    assert_eq!(schema.get("required"), Some(&json!(["page", "enabled"])));
+    assert_eq!(schema.pointer("/properties/page/minimum"), Some(&json!(1)));
+    assert_eq!(schema.pointer("/properties/zoom/minimum"), Some(&json!(25)));
+    assert_eq!(
+        schema.pointer("/properties/zoom/maximum"),
+        Some(&json!(400))
+    );
+    assert!(schema.pointer("/properties/resizeWindow").is_some());
+    assert!(tool.metadata.accepts_page_arg);
+    for promise in [
+        "including a tab the user is viewing",
+        "until you reload it",
+        "New tabs, popups, cross-site iframes and workers are not covered",
+        "Raw page.cdp Input coordinates are in zoomed view space",
+        "shared by every tab in it",
+        "not the viewport size",
+    ] {
+        assert!(tool.description.contains(promise), "{promise}");
+    }
+}
+
+#[tokio::test]
+async fn toggle_mobile_mode_rejects_invalid_arguments_before_its_own_cdp() {
+    let invalid = [
+        json!({ "enabled": true }),
+        json!({ "page": 1 }),
+        json!({ "page": 0, "enabled": true }),
+        json!({ "page": 1, "enabled": true, "zoom": 0 }),
+        json!({ "page": 1, "enabled": true, "zoom": 24.9 }),
+        json!({ "page": 1, "enabled": true, "zoom": 400.1 }),
+        json!({ "page": 1, "enabled": false, "zoom": 100 }),
+        json!({ "page": 1, "enabled": false, "resizeWindow": true }),
+        json!({ "page": 1, "enabled": true, "width": 390 }),
+    ];
+    for args in invalid {
+        let (ctx, connection, _page) = harness_ctx().await;
+        let before = connection.calls().len();
+        let tool = tool_by_name("toggleMobileMode");
+        let mut response = ToolResponse::new();
+        let handled = (tool.handler)(args.clone(), &ctx, &mut response).await;
+        assert!(
+            matches!(
+                handled,
+                Err(crate::framework::ToolError::InvalidArguments(_))
+            ),
+            "{args}: {handled:?}"
+        );
+        assert_eq!(connection.calls().len(), before, "{args}");
+        let result = execute_tool(&tool, args.clone(), &ctx)
+            .await
+            .unwrap_or_else(|err| panic!("{args}: {err}"));
+        assert!(result.is_error, "{args}");
+        assert!(result_text(&result).contains("Invalid arguments"), "{args}");
+        assert!(mobile_calls(&connection, before).is_empty(), "{args}");
+    }
+}
+
+#[tokio::test]
+async fn toggle_mobile_mode_reports_the_effective_preset() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let tool = tool_by_name("toggleMobileMode");
+    let result = execute_tool(
+        &tool,
+        json!({ "page": page, "enabled": true, "zoom": 150 }),
+        &ctx,
+    )
+    .await
+    .unwrap_or_else(|err| panic!("enable failed: {err}"));
+    assert!(!result.is_error, "{}", result_text(&result));
+    assert_eq!(
+        result.structured_content,
+        Some(json!({
+            "page": page,
+            "enabled": true,
+            "zoom": 150,
+            "viewport": { "width": 400, "height": 906, "deviceScaleFactor": 2 },
+            "visibleSize": { "width": 600, "height": 1359 },
+            "changed": true,
+            "reloadRequired": true
+        }))
+    );
+    assert!(result_text(&result).contains("Reload the page"));
+    let schema = Value::Object(
+        tool.output_schema
+            .clone()
+            .unwrap_or_else(|| panic!("missing output schema"))
+            .as_ref()
+            .clone(),
+    );
+    for key in result
+        .structured_content
+        .as_ref()
+        .and_then(Value::as_object)
+        .unwrap_or_else(|| panic!("structured content missing"))
+        .keys()
+    {
+        assert!(schema["properties"].get(key).is_some(), "{key} is undeclared");
+    }
+    let methods = mobile_calls(&connection, 0)
+        .into_iter()
+        .map(|call| call.method)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        methods,
+        vec![
+            "Browser.getVersion",
+            "Emulation.setUserAgentOverride",
+            "Emulation.setTouchEmulationEnabled",
+            "Emulation.setDeviceMetricsOverride",
+            "Emulation.setVisibleSize",
+        ]
+    );
+
+    let result = execute_tool(&tool, json!({ "page": page, "enabled": false }), &ctx)
+        .await
+        .unwrap_or_else(|err| panic!("disable failed: {err}"));
+    assert_eq!(
+        result.structured_content,
+        Some(json!({ "page": page, "enabled": false, "changed": true, "reloadRequired": true }))
+    );
+}
+
+#[tokio::test]
+async fn toggle_mobile_mode_reports_the_actual_window_bounds() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let result = execute_tool(
+        &tool_by_name("toggleMobileMode"),
+        json!({ "page": page, "enabled": true, "resizeWindow": true }),
+        &ctx,
+    )
+    .await
+    .unwrap_or_else(|err| panic!("enable failed: {err}"));
+    assert!(!result.is_error, "{}", result_text(&result));
+    let structured = result
+        .structured_content
+        .clone()
+        .unwrap_or_else(|| panic!("structured content missing"));
+    // The fixture window never changes size, so neither axis can be confirmed exact.
+    assert_eq!(
+        structured["window"],
+        json!({
+            "windowId": 1,
+            "resized": true,
+            "bounds": { "left": 0, "top": 0, "width": 1200, "height": 900 },
+            "requestedContentSize": { "width": 400, "height": 906 },
+            "contentSizeExact": { "width": false, "height": false }
+        })
+    );
+    assert!(
+        result_text(&result).contains("tab strip, toolbar and frame"),
+        "{}",
+        result_text(&result)
+    );
+    assert!(
+        connection
+            .calls()
+            .iter()
+            .filter(|call| call.method == "Browser.setContentsSize")
+            .all(|call| call.params["windowId"] == 1)
+    );
+}

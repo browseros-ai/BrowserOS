@@ -52,6 +52,7 @@ const SDK_SURFACE: &[&str] = &[
     "waitForSelector",
     "waitForText",
     "waitForTime",
+    "toggleMobileMode",
     "save",
     // chained methods, the ones agents reach for on the wrong shape
     "snapshot",

@@ -541,6 +541,7 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
         "grep",
         "screenshot",
         "pdf",
+        "toggleMobileMode",
         "wait",
         "windows",
         "evaluate",

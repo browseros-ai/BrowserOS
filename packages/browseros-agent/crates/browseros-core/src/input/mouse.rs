@@ -1,6 +1,9 @@
+//! The only place that sends CDP mouse events. Callers pass CSS px; on a page session in
+//! mobile mode the coordinates and wheel deltas go out in its zoomed view space.
 use crate::{
     CoreError, ProtocolSession,
     input::{ClickOptions, Point},
+    mobile_mode::input_scale,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -70,6 +73,8 @@ pub async fn dispatch_click_with_options(
     }
     let button = opts.button.unwrap_or(MouseButton::Left);
     let click_count = opts.click_count.unwrap_or(1);
+    let scale = input_scale(session);
+    let (x, y) = (x * scale, y * scale);
     let _: Value = session
         .send(
             "Input.dispatchMouseEvent",
@@ -103,10 +108,11 @@ pub async fn dispatch_click_with_options(
 }
 
 pub async fn dispatch_hover(session: &ProtocolSession, x: f64, y: f64) -> Result<(), CoreError> {
+    let scale = input_scale(session);
     let _: Value = session
         .send(
             "Input.dispatchMouseEvent",
-            json!({ "type": "mouseMoved", "x": x, "y": y }),
+            json!({ "type": "mouseMoved", "x": x * scale, "y": y * scale }),
         )
         .await?;
     Ok(())
@@ -119,10 +125,17 @@ pub async fn dispatch_scroll(
     delta_x: f64,
     delta_y: f64,
 ) -> Result<(), CoreError> {
+    let scale = input_scale(session);
     let _: Value = session
         .send(
             "Input.dispatchMouseEvent",
-            json!({ "type": "mouseWheel", "x": x, "y": y, "deltaX": delta_x, "deltaY": delta_y }),
+            json!({
+                "type": "mouseWheel",
+                "x": x * scale,
+                "y": y * scale,
+                "deltaX": delta_x * scale,
+                "deltaY": delta_y * scale
+            }),
         )
         .await?;
     Ok(())
@@ -133,6 +146,15 @@ pub async fn dispatch_drag(
     from: Point,
     to: Point,
 ) -> Result<(), CoreError> {
+    let scale = input_scale(session);
+    let from = Point {
+        x: from.x * scale,
+        y: from.y * scale,
+    };
+    let to = Point {
+        x: to.x * scale,
+        y: to.y * scale,
+    };
     let _: Value = session
         .send(
             "Input.dispatchMouseEvent",

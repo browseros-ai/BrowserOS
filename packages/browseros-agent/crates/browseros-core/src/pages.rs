@@ -2,6 +2,7 @@ use crate::{
     BrowserContextId, BrowserProfileId, CoreError, PageId, ProtocolSession, SessionId, TabId,
     TargetError, TargetId, WindowId,
     connection::{CdpConnection, EXCLUDED_URL_PREFIXES, EpochGuard},
+    mobile_mode::{self, MobileRecord},
     profiles::ProfileMeta,
     target::PageAdmission,
     timeouts,
@@ -85,6 +86,9 @@ struct PageState {
     // list. Only these get focus emulation on attach, so an adopted user tab keeps
     // its real focus state (#2778).
     agent_created: HashSet<PageId>,
+    // Mobile presets, written only by `mobile_mode`. A PageId outlives target replacement,
+    // so the new target gets its preset on attach; pruned together with `agent_created`.
+    mobile: HashMap<PageId, MobileRecord>,
     connection_epoch: u64,
     next_page_id: u32,
 }
@@ -153,7 +157,7 @@ impl PageManager {
                     *existing = page_info_from_tab(page_id.clone(), tab, prior_window);
                 }
                 if let Some(stale_target) = stale_target {
-                    state.sessions.remove(&stale_target);
+                    release_session(&self.cdp, &mut state.sessions, &stale_target);
                 }
             } else {
                 let page_id = PageId(state.next_page_id);
@@ -172,8 +176,9 @@ impl PageManager {
             if !seen.contains(&info.target_id) {
                 let info = state.pages.remove(&page_id);
                 if let Some(info) = info {
-                    state.sessions.remove(&info.target_id);
+                    release_session(&self.cdp, &mut state.sessions, &info.target_id);
                     state.agent_created.remove(&page_id);
+                    state.mobile.remove(&page_id);
                     detached.push(page_id);
                 }
             }
@@ -272,6 +277,18 @@ impl PageManager {
                     && page.live_browser_context_id == scope.context_id
                     && page.window_id.is_some_and(|id| windows.contains(&id))
             })
+    }
+
+    pub(crate) async fn mobile_record(&self, page: &PageId) -> Option<MobileRecord> {
+        self.state.lock().await.mobile.get(page).cloned()
+    }
+
+    pub(crate) async fn set_mobile_record(&self, page: PageId, record: MobileRecord) {
+        self.state.lock().await.mobile.insert(page, record);
+    }
+
+    pub(crate) async fn take_mobile_record(&self, page: &PageId) -> Option<MobileRecord> {
+        self.state.lock().await.mobile.remove(page)
     }
 
     pub async fn get_info(&self, page_id: PageId) -> Option<PageInfo> {
@@ -393,7 +410,7 @@ impl PageManager {
                     return Ok(Some(current.clone()));
                 }
                 if updated.target_id != info.target_id {
-                    state.sessions.remove(&info.target_id);
+                    release_session(&self.cdp, &mut state.sessions, &info.target_id);
                 }
                 state.pages.insert(page_id, updated.clone());
                 Ok(Some(updated))
@@ -628,8 +645,9 @@ impl PageManager {
             .await?;
         let mut state = self.state.lock().await;
         state.pages.remove(&page_id);
-        state.sessions.remove(&info.target_id);
+        release_session(&self.cdp, &mut state.sessions, &info.target_id);
         state.agent_created.remove(&page_id);
+        state.mobile.remove(&page_id);
         drop(state);
         if let Some(callback) = &self.hooks.on_page_detached {
             callback(page_id);
@@ -670,6 +688,7 @@ impl PageManager {
         if let Some(target) = target {
             state.sessions.remove(&target);
         }
+        mobile_mode::forget_input_scale(&self.cdp, session_id);
     }
 
     async fn attach(&self, target_id: TargetId, page_id: PageId) -> Result<SessionId, CoreError> {
@@ -687,6 +706,9 @@ impl PageManager {
             return Ok(cached);
         }
 
+        let epoch = guard
+            .as_ref()
+            .map_or_else(|| self.cdp.connection_epoch(), |guard| guard.expected);
         let root = ProtocolSession::root(self.cdp.clone()).with_epoch_guard(guard.clone());
         let attached: target::AttachToTargetResult = root
             .send(
@@ -722,12 +744,32 @@ impl PageManager {
         {
             warn!("failed to enable focus emulation for agent page {page_id:?}: {err}");
         }
+        // Chromium dropped the mode with the tab's previous session. Re-apply it before the
+        // session is published, so no other call can use the tab in between.
+        let record = self.state.lock().await.mobile.get(&page_id).cloned();
+        let mut input_scale = None;
+        if let Some(record) = record {
+            match mobile_mode::apply(&session, &record).await {
+                Ok(()) => input_scale = Some(record.zoom().scale()),
+                Err(failure) => {
+                    // Never fail the attach: a tab that cannot attach cannot be disabled either.
+                    warn!("failed to re-apply mobile mode to page {page_id:?}: {failure}");
+                    let _ = mobile_mode::clear(&session).await;
+                    self.state.lock().await.mobile.remove(&page_id);
+                }
+            }
+        }
         {
             let mut state = self.state.lock().await;
             if let Some(guard) = &guard {
                 guard.check(self.cdp.as_ref())?;
             }
             state.sessions.insert(target_id, session_id.clone());
+            if let Some(scale) = input_scale
+                && self.cdp.connection_epoch() == epoch
+            {
+                mobile_mode::register_input_scale(&self.cdp, epoch, &session_id, scale);
+            }
         }
         if let Some(callback) = &self.hooks.on_session_attached {
             callback(session, page_id, session_id.clone()).await?;
@@ -746,6 +788,7 @@ impl PageManager {
             if state.connection_epoch != guard.expected {
                 state.sessions.clear();
                 state.connection_epoch = guard.expected;
+                mobile_mode::forget_input_scales_before(&self.cdp, guard.expected);
             }
         } else {
             self.ensure_connected().await?;
@@ -763,6 +806,7 @@ impl PageManager {
         if epoch != state.connection_epoch {
             state.sessions.clear();
             state.connection_epoch = epoch;
+            mobile_mode::forget_input_scales_before(&self.cdp, epoch);
             return Ok(true);
         }
         Ok(false)
@@ -888,6 +932,17 @@ fn page_info_from_tab(page_id: PageId, tab: NativeTab, prior_window: Option<Wind
         group_id: tab.group_id,
         browser_profile_id: meta.browser_profile_id,
         live_browser_context_id: meta.live_browser_context_id,
+    }
+}
+
+/// A session id is only valid on its socket, and a zoomed session's input scale goes with it.
+fn release_session(
+    cdp: &Arc<dyn CdpConnection>,
+    sessions: &mut HashMap<TargetId, SessionId>,
+    target: &TargetId,
+) {
+    if let Some(session) = sessions.remove(target) {
+        mobile_mode::forget_input_scale(cdp, &session);
     }
 }
 

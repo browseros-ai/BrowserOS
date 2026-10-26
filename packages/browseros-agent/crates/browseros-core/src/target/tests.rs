@@ -179,6 +179,23 @@ impl Native {
                 });
             }
             "Browser.getProfiles" => json!({"profiles":state.profiles}),
+            "Browser.getVersion" => {
+                json!({"protocolVersion":"1.3","product":"Chrome/155.0.7727.12",
+                "revision":"@fixture","userAgent":"fixture","jsVersion":"15.5"})
+            }
+            "Browser.getWindowBounds" | "Browser.setContentsSize" | "Browser.setWindowBounds"
+                if !state
+                    .windows
+                    .iter()
+                    .any(|window| window["windowId"] == params["windowId"]) =>
+            {
+                return Err(CdpError::Protocol {
+                    code: -32000,
+                    message: "Browser window not found".into(),
+                });
+            }
+            "Browser.getWindowBounds" => json!({"bounds":{"left":0,"top":0,"width":1200,
+                "height":900,"windowState":"normal"}}),
             "Browser.getWindows" => json!({"windows":state.windows}),
             "Browser.getTabs" => {
                 json!({"tabs":state.tabs.iter().filter(|tab|params.get("windowId").is_none_or(|id|*id == tab["windowId"])).collect::<Vec<_>>()})
@@ -3168,5 +3185,331 @@ async fn credential_cancellation_reaches_original_session_after_tab_leaves_its_p
             .as_str()
             .is_some_and(|id| !id.is_empty())
     );
+    Ok(())
+}
+
+fn mobile_150() -> Result<crate::mobile_mode::MobileMode, crate::mobile_mode::MobileModeArgError> {
+    crate::mobile_mode::MobileMode::from_request(true, Some(150.0))
+}
+
+fn emulation_calls(native: &Native) -> Vec<Call> {
+    native
+        .lock()
+        .calls
+        .iter()
+        .filter(|call| call.method.starts_with("Emulation."))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn mobile_mode_policy_rows_admit_only_their_listed_keys() {
+    let admitted = [
+        (
+            "Emulation.setUserAgentOverride",
+            json!({"userAgent":"ua","userAgentMetadata":{}}),
+        ),
+        ("Emulation.setUserAgentOverride", json!({"userAgent":""})),
+        (
+            "Emulation.setVisibleSize",
+            json!({"width":600,"height":1359}),
+        ),
+    ];
+    for (method, params) in admitted {
+        assert!(cdp_policy::page_method(method, &params).is_ok(), "{method}");
+    }
+    for key in ["acceptLanguage", "platform"] {
+        let mut params = json!({"userAgent":"ua"});
+        params[key] = json!("x");
+        assert!(cdp_policy::page_method("Emulation.setUserAgentOverride", &params).is_err());
+    }
+    assert!(
+        cdp_policy::page_method(
+            "Emulation.setVisibleSize",
+            &json!({"width":600,"height":1359,"x":1})
+        )
+        .is_err()
+    );
+    for refused in [
+        "Network.setUserAgentOverride",
+        "Emulation.setEmitTouchEventsForMouse",
+    ] {
+        assert!(cdp_policy::page_method(refused, &json!({"enabled":true})).is_err());
+        assert!(cdp_policy::page_method(refused, &json!({"userAgent":"ua"})).is_err());
+    }
+}
+
+#[tokio::test]
+async fn bound_mobile_mode_reads_the_scoped_version_and_drives_the_admitted_session() -> TestResult
+{
+    let native = Native::new();
+    let view = view(native.clone(), None).await;
+    let page = page_id(&view, 1).await?;
+    let outcome = view.toggle_mobile_mode(page.clone(), mobile_150()?).await?;
+    assert_eq!(outcome.mode.visible_size(), Some((600, 1359)));
+    let version = native.calls("Browser.getVersion");
+    assert_eq!(version.len(), 1);
+    assert!(version[0].session.is_none(), "version is a root read");
+    let session = Some(SessionId::from("session-target-1"));
+    let enabled = emulation_calls(&native);
+    assert_eq!(
+        enabled
+            .iter()
+            .map(|call| call.method.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "Emulation.setUserAgentOverride",
+            "Emulation.setTouchEmulationEnabled",
+            "Emulation.setDeviceMetricsOverride",
+            "Emulation.setVisibleSize",
+        ]
+    );
+    assert!(enabled.iter().all(|call| call.session == session));
+    assert!(
+        enabled[0].params["userAgent"]
+            .as_str()
+            .is_some_and(|ua| ua.contains("Chrome/155.0.0.0 Mobile Safari"))
+    );
+
+    view.toggle_mobile_mode(page.clone(), crate::mobile_mode::MobileMode::Desktop)
+        .await?;
+    let cleared = emulation_calls(&native);
+    assert_eq!(
+        cleared[4..]
+            .iter()
+            .map(|call| call.method.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "Emulation.clearDeviceMetricsOverride",
+            "Emulation.setTouchEmulationEnabled",
+            "Emulation.setUserAgentOverride",
+        ]
+    );
+    assert!(cleared.iter().all(|call| call.session == session));
+    assert!(native.calls("Network.setUserAgentOverride").is_empty());
+    assert!(
+        native
+            .calls("Emulation.setEmitTouchEventsForMouse")
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn bound_mobile_mode_refuses_another_profiles_page_before_any_emulation() -> TestResult {
+    let native = Native::new();
+    let view = view(native.clone(), None).await;
+    for tab in [3, 4] {
+        let outside = page_id(&view, tab).await?;
+        let result = view.toggle_mobile_mode(outside, mobile_150()?).await;
+        assert!(
+            matches!(
+                result,
+                Err(CoreError::Target(TargetError::PageOutOfScope(_)))
+            ),
+            "tab {tab}: {result:?}"
+        );
+    }
+    assert!(emulation_calls(&native).is_empty());
+    assert!(native.calls("Browser.getVersion").is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn raw_page_cdp_gains_only_the_two_mobile_rows() -> TestResult {
+    let native = Native::new();
+    let view = view(native.clone(), None).await;
+    let page = page_id(&view, 1).await?;
+    view.cdp_json_for_page(
+        page.clone(),
+        "Emulation.setUserAgentOverride",
+        r#"{"userAgent":""}"#,
+    )
+    .await?;
+    view.cdp_json_for_page(
+        page.clone(),
+        "Emulation.setVisibleSize",
+        r#"{"width":400,"height":906}"#,
+    )
+    .await?;
+    for (method, params) in [
+        ("Network.setUserAgentOverride", r#"{"userAgent":"x"}"#),
+        (
+            "Emulation.setEmitTouchEventsForMouse",
+            r#"{"enabled":true}"#,
+        ),
+        (
+            "Emulation.setUserAgentOverride",
+            r#"{"userAgent":"x","platform":"Android"}"#,
+        ),
+    ] {
+        let result = view.cdp_json_for_page(page.clone(), method, params).await;
+        assert!(
+            matches!(
+                result,
+                Err(CoreError::Target(TargetError::CdpUnsupported { .. }))
+            ),
+            "{method}: {result:?}"
+        );
+    }
+    assert!(native.calls("Network.setUserAgentOverride").is_empty());
+    assert!(
+        native
+            .calls("Emulation.setEmitTouchEventsForMouse")
+            .is_empty()
+    );
+    assert_eq!(native.calls("Emulation.setUserAgentOverride").len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_target_change_during_a_bound_toggle_is_unknown_and_unrecorded() -> TestResult {
+    let native = Native::new();
+    let view = view(native.clone(), None).await;
+    let page = page_id(&view, 1).await?;
+    let release = Arc::new(tokio::sync::Notify::new());
+    *native
+        .dispatch_hold
+        .lock()
+        .unwrap_or_else(|err| panic!("fixture poisoned: {err}")) =
+        Some(("Emulation.setVisibleSize".into(), release.clone()));
+    let mode = mobile_150()?;
+    let caller = tokio::spawn({
+        let view = view.clone();
+        let page = page.clone();
+        async move { view.toggle_mobile_mode(page, mode).await }
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        native.dispatch_started.notified(),
+    )
+    .await?;
+    native.lock().tabs[0]["targetId"] = json!("target-1-replaced");
+    release.notify_one();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), caller).await??;
+    assert!(
+        matches!(
+            result,
+            Err(CoreError::MobileMode {
+                state: crate::mobile_mode::MobileModeState::Unknown,
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+    assert!(view.session.pages.mobile_record(&page).await.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_bound_reattach_reapplies_the_preset_through_the_guarded_attach() -> TestResult {
+    let native = Native::new();
+    let view = view(native.clone(), None).await;
+    let page = page_id(&view, 1).await?;
+    view.toggle_mobile_mode(page.clone(), mobile_150()?).await?;
+    view.session
+        .pages
+        .detach_session(&SessionId::from("session-target-1"))
+        .await;
+    let before = emulation_calls(&native).len();
+    view.page_session(page).await?;
+    let reapplied = emulation_calls(&native);
+    assert_eq!(
+        reapplied[before..]
+            .iter()
+            .map(|call| (call.method.as_str(), call.session.clone()))
+            .collect::<Vec<_>>(),
+        [
+            "Emulation.setUserAgentOverride",
+            "Emulation.setTouchEmulationEnabled",
+            "Emulation.setDeviceMetricsOverride",
+            "Emulation.setVisibleSize",
+        ]
+        .map(|method| (method, Some(SessionId::from("session-target-1"))))
+        .to_vec()
+    );
+    assert_eq!(native.calls("Browser.getVersion").len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_bound_window_fit_only_touches_the_admitted_pages_window() -> TestResult {
+    let native = Native::new();
+    let view = view(native.clone(), None).await;
+    let page = page_id(&view, 1).await?;
+    let request = crate::mobile_mode::MobileModeRequest::new(true, Some(100.0), Some(true))?;
+    let outcome = view.toggle_mobile_mode(page, request).await?;
+    assert!(
+        matches!(
+            outcome.window,
+            Some(crate::mobile_mode::WindowOutcome::Fitted {
+                window: WindowId(11),
+                ..
+            })
+        ),
+        "{:?}",
+        outcome.window
+    );
+    let window_calls = native
+        .lock()
+        .calls
+        .iter()
+        .filter(|call| {
+            matches!(
+                call.method.as_str(),
+                "Browser.getWindowBounds"
+                    | "Browser.setContentsSize"
+                    | "Browser.setWindowBounds"
+                    | "Browser.activateTab"
+                    | "Browser.activateWindow"
+                    | "Browser.moveTab"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(!window_calls.is_empty());
+    assert!(
+        window_calls
+            .iter()
+            .all(|call| call.params["windowId"] == 11 && call.session.is_none()),
+        "{window_calls:?}"
+    );
+    assert!(
+        window_calls
+            .iter()
+            .all(|call| call.method != "Browser.setWindowBounds"
+                && !call.method.starts_with("Browser.activate"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn mobile_window_commands_refuse_other_windows_and_methods() -> TestResult {
+    let native = Native::new();
+    let view = view(native.clone(), None).await;
+    for window in [13, 20] {
+        let result = view
+            .mobile_window_command(WindowId(window), "Browser.getWindowBounds", json!({}))
+            .await;
+        assert!(
+            matches!(
+                result,
+                Err(CoreError::Target(TargetError::WindowOutOfScope(_)))
+            ),
+            "{window}: {result:?}"
+        );
+    }
+    let result = view
+        .mobile_window_command(WindowId(11), "Browser.closeWindow", json!({}))
+        .await;
+    assert!(
+        matches!(
+            result,
+            Err(CoreError::Target(TargetError::CdpUnsupported { .. }))
+        ),
+        "{result:?}"
+    );
+    assert!(native.calls("Browser.getWindowBounds").is_empty());
+    assert!(native.calls("Browser.closeWindow").is_empty());
     Ok(())
 }

@@ -66,6 +66,7 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.evaluate(fn, arg?, opts?)     - runs INSIDE the page. Returns { changed } alongside the value: a script that mutated the page is settled before you get it back, so never pause afterwards. For an effect that is entirely asynchronous (a click whose result arrives over the network) pass { settle: true } to wait for quiet regardless. Pass a real function; a second argument is JSON-serialized and handed to it, e.g. page.evaluate((sel) => document.querySelectorAll(sel).length, '.row'). It does not close over script variables. A code string with a `return` also works: page.evaluate("return document.title").
   page.screenshot(opts?) / pdf(opts?)
     screenshot has no default cap; size caps CSS pixels, with omitted axes unconstrained
+  page.toggleMobileMode({ enabled, zoom?, resizeWindow? }) - this tab only: the toggleMobileMode tool's mobile preset at a device-preview zoom %
   page.download(ref) / upload(ref, files)
   page.close() / info()
 Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers.<name>(browser, page) where page is the id NUMBER.
@@ -193,7 +194,7 @@ const BOOTSTRAP_JS: &str = r#"
     frames: 'Frames are not addressable. Use page.cdp(method, paramsJson).',
     mainFrame: 'Frames are not addressable. Use page.cdp(method, paramsJson).',
     setContent: 'Set content from inside page.evaluate instead.',
-    setViewportSize: 'The viewport is the user\'s. Pass { size } to page.screenshot to cap a capture.',
+    setViewportSize: 'The viewport is the user\'s. For a mobile viewport use page.toggleMobileMode({ enabled: true, zoom }); pass { size } to page.screenshot to cap a capture.',
     addInitScript: 'There is no init-script hook. Run the script with page.evaluate after page.goto.',
     exposeFunction: 'There is no binding hook. Return a value from page.evaluate instead.',
     ariaSnapshot: 'Use page.snapshot(), which returns { text, refs, url } rather than YAML.',
@@ -315,6 +316,7 @@ const BOOTSTRAP_JS: &str = r#"
         : {}),
       screenshot: (opts) => tool('screenshot', opts),
       pdf: (opts) => tool('pdf', opts),
+      toggleMobileMode: (opts) => tool('toggleMobileMode', opts),
       // A real function is serialized here, before the JSON boundary drops it.
       // For a function, the second argument is its input; for a code string,
       // which cannot take one, the second argument is the options object.
@@ -1294,6 +1296,7 @@ fn tool_def(name: &str) -> Option<ToolDef> {
         "evaluate" => tools::evaluate::definition(),
         "download" => tools::download::definition(),
         "pdf" => tools::pdf::definition(),
+        "toggleMobileMode" => tools::mobile_mode::definition(),
         "upload" => tools::upload::definition(),
         "tab_groups" => tools::tab_groups::definition(),
         "windows" => tools::windows::definition(),
@@ -1795,6 +1798,11 @@ mod tests {
                         "tab": select_fixture_tab(&self.tabs(), &params)?
                     })),
                     "Target.attachToTarget" => Ok(json!({ "sessionId": "session-target-7" })),
+                    "Browser.getVersion" => Ok(json!({ "product": "Chrome/155.0.8315.26" })),
+                    "Emulation.setUserAgentOverride"
+                    | "Emulation.setTouchEmulationEnabled"
+                    | "Emulation.setDeviceMetricsOverride"
+                    | "Emulation.setVisibleSize" => Ok(json!({})),
                     "Page.enable"
                     | "DOM.enable"
                     | "Runtime.enable"
@@ -2986,6 +2994,36 @@ return seen;
             vec!["nav.goto", "observe.snapshot", "tool:read", "tool:wait"]
         );
         assert!(log.recorded.iter().all(|(_, page, _)| *page == Some(1)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn page_toggle_mobile_mode_runs_the_tool_on_its_own_page() -> anyhow::Result<()> {
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let ctx = ctx_with_hook(log.clone());
+        let result = run_tool_with_ctx(
+            "return await browser.page(1).toggleMobileMode({ enabled: true, zoom: 150 });",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(!result.is_error, "{:?}", result.content);
+        let structured = result
+            .structured_content
+            .ok_or_else(|| anyhow::anyhow!("structured content"))?;
+        assert_eq!(structured["value"]["enabled"], json!(true));
+        assert_eq!(structured["value"]["zoom"], json!(150));
+        assert_eq!(
+            structured["value"]["visibleSize"],
+            json!({ "width": 600, "height": 1359 })
+        );
+        let log = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(
+            log.recorded,
+            vec![("tool:toggleMobileMode".to_owned(), Some(1), false)]
+        );
         Ok(())
     }
 

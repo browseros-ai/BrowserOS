@@ -30,6 +30,7 @@ const EXPECTED_TOOLS = [
   'snapshot',
   'tab_groups',
   'tabs',
+  'toggleMobileMode',
   'upload',
   'wait',
   'windows',

@@ -6,6 +6,7 @@ pub mod credentials;
 pub mod error;
 pub mod frames;
 pub mod input;
+pub mod mobile_mode;
 pub mod navigation;
 pub mod observer;
 pub mod page_signals;
