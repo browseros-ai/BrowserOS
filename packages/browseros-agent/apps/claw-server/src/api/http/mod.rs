@@ -18,6 +18,7 @@ use tracing::{Instrument, info_span};
 use ulid::Ulid;
 
 pub(crate) mod audit;
+mod claude_desktop;
 mod cockpit;
 mod connections;
 mod feedback;
@@ -106,6 +107,14 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/api/v1/recordings/events",
             post(recordings::append_document_events)
                 .layer(DefaultBodyLimit::max(RECORDING_INGEST_MAX_BYTES)),
+        )
+        .route(
+            "/api/v1/claude-desktop/extension",
+            get(claude_desktop::extension),
+        )
+        .route(
+            "/api/v1/claude-desktop/extension/install",
+            post(claude_desktop::install),
         )
         .route("/api/v1/connections", get(connections::list))
         .route(

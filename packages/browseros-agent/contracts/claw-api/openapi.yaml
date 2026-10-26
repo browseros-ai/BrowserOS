@@ -54,6 +54,10 @@ paths:
     $ref: ./paths/connections.yaml#/collection
   /api/v1/connections/{harness}:
     $ref: ./paths/connections.yaml#/harness
+  /api/v1/claude-desktop/extension:
+    $ref: ./paths/claude_desktop.yaml#/extension
+  /api/v1/claude-desktop/extension/install:
+    $ref: ./paths/claude_desktop.yaml#/install
   /api/v1/audit/storage:
     $ref: ./paths/audit.yaml#/storage
   /api/v1/audit/retention:
@@ -190,6 +194,12 @@ components:
       $ref: ./schemas/connections.yaml#/Connection
     ConnectionList:
       $ref: ./schemas/connections.yaml#/ConnectionList
+    ClaudeDesktopExtension:
+      $ref: ./schemas/claude_desktop.yaml#/ClaudeDesktopExtension
+    ClaudeDesktopInstallStatus:
+      $ref: ./schemas/claude_desktop.yaml#/ClaudeDesktopInstallStatus
+    ClaudeDesktopInstallResult:
+      $ref: ./schemas/claude_desktop.yaml#/ClaudeDesktopInstallResult
     AuditRetentionMode:
       $ref: ./schemas/audit.yaml#/AuditRetentionMode
     AuditRetention:

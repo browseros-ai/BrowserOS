@@ -2810,3 +2810,17 @@ async fn help_events_announce_each_change_to_the_open_requests() -> anyhow::Resu
     assert!(next_version().await? > first);
     Ok(())
 }
+
+#[tokio::test]
+async fn claude_desktop_extension_reports_what_claude_has_installed() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/claude-desktop/extension", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    let extension: claw_api::models::ClaudeDesktopExtension = serde_json::from_value(body)?;
+    // The test home has no Claude record, whatever this machine has installed.
+    assert!(!extension.installed);
+    assert!(!extension.update_available);
+    assert_eq!(extension.available_version, "0.5.0");
+    Ok(())
+}

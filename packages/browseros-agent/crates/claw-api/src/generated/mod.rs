@@ -1,5 +1,7 @@
 pub mod audit;
 pub use self::audit::*;
+pub mod claude_desktop;
+pub use self::claude_desktop::*;
 pub mod cockpit;
 pub use self::cockpit::*;
 pub mod common;

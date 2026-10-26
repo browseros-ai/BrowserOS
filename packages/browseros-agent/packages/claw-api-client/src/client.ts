@@ -5,6 +5,8 @@ import type {
   AuditRetention,
   AuditStorageState,
   CancelSessionResponse,
+  ClaudeDesktopExtension,
+  ClaudeDesktopInstallResult,
   CockpitStats,
   Connection,
   ConnectionList,
@@ -327,6 +329,18 @@ export class ClawApiClient {
       await this.client.DELETE('/api/v1/connections/{harness}', {
         params: { path: request },
       }),
+    )
+  }
+
+  async getClaudeDesktopExtension(): Promise<ClaudeDesktopExtension> {
+    return this.unwrap(
+      await this.client.GET('/api/v1/claude-desktop/extension'),
+    )
+  }
+
+  async installClaudeDesktopExtension(): Promise<ClaudeDesktopInstallResult> {
+    return this.unwrap(
+      await this.client.POST('/api/v1/claude-desktop/extension/install'),
     )
   }
 
