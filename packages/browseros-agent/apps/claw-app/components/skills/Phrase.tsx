@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 
-/** A phrase a person types into their AI agent, such as `/neo-inbox-sweep`. */
+/** A phrase a person types into their AI agent, such as `use the neo-inbox-sweep skill`. */
 export function Phrase({
   children,
   className,

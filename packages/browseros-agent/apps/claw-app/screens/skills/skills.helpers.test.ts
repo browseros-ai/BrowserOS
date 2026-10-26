@@ -8,8 +8,8 @@ import {
 } from './skills.helpers'
 
 describe('skillCommand', () => {
-  it('prefixes the name with a slash', () => {
-    expect(skillCommand('inbox-sweep')).toBe('/inbox-sweep')
+  it('asks for the skill by name, without any one agent’s prefix', () => {
+    expect(skillCommand('inbox-sweep')).toBe('use the inbox-sweep skill')
   })
 })
 

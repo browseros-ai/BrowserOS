@@ -21,9 +21,13 @@ export function neoName(suffix: string): string {
   return `${NEO_SKILL_PREFIX}${suffix.replace(/^neo-/, '')}`
 }
 
-/** The command a user pastes into a coding agent to run a skill. */
+/**
+ * The phrase a person pastes into an AI agent to run a skill. Plain words
+ * rather than a prefix, since each agent has its own (`/name` in Claude Code,
+ * `$name` in Codex) and every one understands being asked by name.
+ */
 export function skillCommand(name: string): string {
-  return `/${name}`
+  return `use the ${name} skill`
 }
 
 /**
