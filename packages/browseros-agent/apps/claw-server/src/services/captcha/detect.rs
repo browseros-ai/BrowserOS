@@ -422,6 +422,11 @@ async fn scan(
         widgets.retain(|w| w.challenge.kind != CaptchaKind::Turnstile);
     }
     for (frame, probe) in frames.iter().zip(&probes) {
+        if probe.as_ref().is_some_and(|p| p.top)
+            || (frames.first() == Some(frame) && top_url.as_deref() == Some(&frame.url))
+        {
+            continue;
+        }
         // Page.getFrameTree omits URL fragments used to identify hCaptcha widgets.
         let frame_url = probe
             .as_ref()
@@ -1233,6 +1238,37 @@ mod tests {
                     .as_ref()
                     .is_some_and(|f| f.frame_id.starts_with("outer-"))
         }));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_vendor_demo_top_document_is_not_an_iframe() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([]));
+        let top = frame("top", "https://demo.arkoselabs.com/?key=test");
+        let outer = frame(
+            "outer",
+            "https://client-api.arkoselabs.com/v2/enforcement.html",
+        );
+        let inner = frame("inner", "https://client-api.arkoselabs.com/game");
+        let mut main = probe(json!([]));
+        main["url"] = json!(top.url);
+        main["addresses"] = json!(["https://client-api.arkoselabs.com/v2/key/api.js"]);
+        page.main = Mutex::new(VecDeque::from([main.clone()]));
+        main["top"] = json!(true);
+        page.frame_results.insert("top".into(), main);
+        for f in [&outer, &inner] {
+            page.frame_results.insert(
+                f.frame_id.clone(),
+                probe(json!([widget("arkose", "active")])),
+            );
+        }
+        page.parent_ids.insert("outer".into(), "top".into());
+        page.parent_ids.insert("inner".into(), "outer".into());
+        page.frames = vec![top, outer.clone(), inner];
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].frame, Some(outer));
+        assert!(result.challenges[0].host_frame.is_none());
         Ok(())
     }
 
