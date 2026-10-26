@@ -204,3 +204,60 @@ test('tests that an explicitly requested occupied port is not silently changed',
     startCaptchaFixtureServer({ port: Number(new URL(fixture.origin).port) }),
   ).rejects.toThrow()
 })
+
+test('tests that both listeners serve the same pages on different sites and ports', async () => {
+  expect(typeof fixture.frameOrigin).toBe('string')
+  const top = new URL(fixture.origin)
+  const frame = new URL(fixture.frameOrigin)
+  expect(top.hostname).toBe('127.0.0.1')
+  expect(frame.hostname).toBe('localhost')
+  expect(frame.port).not.toBe(top.port)
+  for (const origin of [fixture.origin, fixture.frameOrigin]) {
+    expect(await (await fetch(`${origin}/healthz`)).text()).toBe('ok')
+    expect((await fetch(`${origin}/no-captcha.html`)).status).toBe(200)
+  }
+})
+
+test('tests that frame layouts embed the substituted cross-site origin without vendor scripts', async () => {
+  for (const family of ['geetest-v4', 'aws-waf', 'funcaptcha']) {
+    const response = await fetch(fixture.url(`/${family}-frame.html`))
+    expect(response.status).toBe(200)
+    const html = await response.text()
+    expect(html).toContain(`src="${fixture.frameOrigin}/${family}.html"`)
+    expect(html).not.toContain('{{FRAME_ORIGIN}}')
+    expect(html).not.toMatch(/<script[^>]+src=/)
+  }
+  expect((await submit('geetest-v4')).status).toBe(404)
+})
+
+test('tests that custom frame hosts are advertised separately from the bind address', async () => {
+  const server = await startCaptchaFixtureServer({
+    hostname: '0.0.0.0',
+    publicHost: 'host.docker.internal',
+    publicFrameHost: 'captcha-frame.test',
+    port: 0,
+    framePort: 0,
+  })
+  servers.push(server)
+  expect(new URL(server.frameOrigin).hostname).toBe('captcha-frame.test')
+  const framePort = new URL(server.frameOrigin).port
+  expect(
+    await (await fetch(`http://127.0.0.1:${framePort}/healthz`)).text(),
+  ).toBe('ok')
+})
+
+test('tests that identical advertised hosts are rejected even on different ports', async () => {
+  await expect(
+    startCaptchaFixtureServer({
+      publicHost: 'localhost',
+      publicFrameHost: 'localhost',
+    }),
+  ).rejects.toThrow('different')
+})
+
+test('tests that stopping the fixture server closes both listeners', async () => {
+  const server = await startCaptchaFixtureServer({ port: 0, framePort: 0 })
+  await server.stop()
+  for (const origin of [server.origin, server.frameOrigin])
+    await expect(fetch(`${origin}/healthz`)).rejects.toThrow()
+})

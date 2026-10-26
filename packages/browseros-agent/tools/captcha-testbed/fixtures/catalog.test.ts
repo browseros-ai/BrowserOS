@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { runInNewContext } from 'node:vm'
+import * as catalog from './catalog'
 import {
   type CaptchaFamily,
   DEMO_PAGES,
@@ -75,6 +76,206 @@ test.each(['recaptcha_v2', 'turnstile', 'hcaptcha', 'none'] as CaptchaFamily[])(
     ).toBe(0)
   },
 )
+
+test('tests that all eleven spotting fixtures require the right family and zero paid tasks', async () => {
+  const expected = {
+    'geetest-v4': 'geetest',
+    'geetest-v4-frame': 'geetest',
+    'geetest-v4-shadow': 'geetest',
+    'geetest-v3': 'geetest',
+    'aws-waf': 'aws_waf',
+    'aws-waf-frame': 'aws_waf',
+    'aws-waf-shadow': 'aws_waf',
+    'aws-waf-interstitial': 'aws_waf',
+    funcaptcha: 'arkose',
+    'funcaptcha-frame': 'arkose',
+    'funcaptcha-shadow': 'arkose',
+  }
+  const pages = catalog.SPOTTING_PAGES ?? []
+  expect(pages).toHaveLength(11)
+  expect(
+    new Set([...FIXTURE_PAGES, ...DEMO_PAGES, ...pages].map((p) => p.id)).size,
+  ).toBe(FIXTURE_PAGES.length + DEMO_PAGES.length + pages.length)
+  for (const [id, family] of Object.entries(expected)) {
+    const page = pages.find((p) => p.id === id)
+    expect(page).toMatchObject({
+      path: `/${id}.html`,
+      family,
+      kind: 'spotting',
+      expect: ['unsupported', 'needs_human'],
+      expectType: family,
+      maxPaidTasks: 0,
+      mayNeedPaid: false,
+    })
+    expect(page?.verdict).toBeUndefined()
+    expect(await Bun.file(`${import.meta.dir}/pages/${id}.html`).exists()).toBe(
+      true,
+    )
+  }
+})
+
+test('tests that new token probes return zero without a response field and read the Arkose field', () => {
+  for (const family of ['geetest', 'aws_waf'] as const)
+    expect(runInNewContext(tokenLengthExpression(family), {})).toBe(0)
+  expect(
+    runInNewContext(tokenLengthExpression('arkose'), {
+      document: {
+        querySelector: (selector: string) =>
+          selector === '[name="fc-token"]' ? { value: 'token' } : null,
+      },
+    }),
+  ).toBe(5)
+})
+
+test.each(['geetest', 'geetest-v4'])(
+  'tests that the %s demo has a visible widget probe and its own acceptance check',
+  (slug) => {
+    const page = DEMO_PAGES.find((p) => p.id === `2captcha-${slug}-demo`)
+    expect(page).toMatchObject({
+      url: `https://2captcha.com/demo/${slug}`,
+      family: 'geetest',
+      kind: 'demo',
+      expect: ['unsupported'],
+      expectType: 'geetest',
+      mayNeedPaid: true,
+    })
+    expect(page?.verdict?.submitSelector).toBe(
+      'main form button[type="submit"]',
+    )
+    const accepted = new RegExp(page?.verdict?.acceptedPattern ?? '(?!)')
+    const response =
+      slug === 'geetest-v4' ? { result: 'success' } : { success: true }
+    const rejected =
+      slug === 'geetest-v4' ? { result: 'fail' } : { success: false }
+    expect(accepted.test(JSON.stringify(response, null, 2))).toBe(true)
+    expect(accepted.test(JSON.stringify(rejected))).toBe(false)
+    if (slug === 'geetest-v4')
+      expect(accepted.test('{"success": true}')).toBe(false)
+    const document = { querySelector: () => null }
+    expect(runInNewContext(page?.ready ?? 'true', { document })).toBe(false)
+  },
+)
+
+test('tests that spotting readiness requires every real script to load', () => {
+  for (const page of catalog.SPOTTING_PAGES) {
+    const count = page.id === 'aws-waf-interstitial' ? 2 : 1
+    const state = {
+      rendered: true,
+      errors: [] as string[],
+      loadedScripts: [] as string[],
+    }
+    const document = { documentElement: { dataset: { captchaFixture: '' } } }
+    const ready = () => {
+      document.documentElement.dataset.captchaFixture = JSON.stringify(state)
+      return runInNewContext(page.ready, { document })
+    }
+    expect(ready()).toBe(false)
+    state.loadedScripts = Array.from(
+      { length: count },
+      (_, i) => `https://vendor.test/${i}.js`,
+    )
+    expect(ready()).toBe(true)
+    state.rendered = false
+    expect(ready()).toBe(false)
+    state.rendered = true
+    state.errors.push('script-load-error')
+    expect(ready()).toBe(false)
+    if (count === 2) {
+      state.errors = []
+      state.loadedScripts.pop()
+      expect(ready()).toBe(false)
+    }
+  }
+})
+
+test('tests that GeeTest demo readiness ignores a transient popup before the widget exists', () => {
+  for (const id of ['2captcha-geetest-demo', '2captcha-geetest-v4-demo']) {
+    const page = DEMO_PAGES.find((p) => p.id === id)
+    if (!page) throw new Error('missing GeeTest demo')
+    let holderVisible = false
+    const document = {
+      querySelector: (selector: string) => {
+        if (holderVisible && selector.includes('.geetest_holder'))
+          return { getBoundingClientRect: () => ({ width: 260, height: 50 }) }
+        if (selector.includes('.geetest_box'))
+          return { getBoundingClientRect: () => ({ width: 960, height: 52 }) }
+        return null
+      },
+    }
+    expect(runInNewContext(page.ready, { document })).toBe(false)
+    holderVisible = true
+    expect(runInNewContext(page.ready, { document })).toBe(true)
+  }
+})
+
+test('tests that frame readiness accepts only its own child origin, source and family', async () => {
+  for (const [id, family] of [
+    ['geetest-v4', 'geetest'],
+    ['aws-waf', 'aws_waf'],
+    ['funcaptcha', 'arkose'],
+  ]) {
+    const html = (
+      await Bun.file(`${import.meta.dir}/pages/${id}-frame.html`).text()
+    ).replaceAll('{{FRAME_ORIGIN}}', 'http://localhost:18081')
+    const childWindow = {}
+    const dataset: Record<string, string> = {}
+    let onMessage: (event: unknown) => void = () => {}
+    const window: Record<string, unknown> = {
+      addEventListener: (_: string, listener: typeof onMessage) => {
+        onMessage = listener
+      },
+    }
+    const document = {
+      documentElement: { dataset },
+      getElementById: () => ({
+        src: `http://localhost:18081/${id}.html`,
+        contentWindow: childWindow,
+      }),
+    }
+    for (const match of html.matchAll(/<script>([\s\S]*?)<\/script>/g))
+      runInNewContext(match[1] ?? '', { window, document, URL })
+    const state = {
+      id,
+      family,
+      rendered: true,
+      callbackFired: false,
+      tokenLength: 0,
+      loadedScripts: ['https://vendor.test/script.js'],
+      errors: [],
+    }
+    const event = {
+      source: childWindow,
+      origin: 'http://localhost:18081',
+      data: { type: 'captcha-fixture', state },
+    }
+    for (const invalid of [
+      { ...event, source: {} },
+      { ...event, origin: 'http://evil.test' },
+      { ...event, data: { type: 'other', state } },
+      {
+        ...event,
+        data: { type: 'captcha-fixture', state: { ...state, family: 'other' } },
+      },
+      {
+        ...event,
+        data: { type: 'captcha-fixture', state: { ...state, id: 'other' } },
+      },
+    ]) {
+      onMessage(invalid)
+      expect(JSON.parse(dataset.captchaFixture ?? '{}').rendered).toBe(false)
+    }
+    onMessage(event)
+    expect(JSON.parse(dataset.captchaFixture ?? '{}')).toMatchObject({
+      id: `${id}-frame`,
+      family,
+      rendered: true,
+      loadedScripts: state.loadedScripts,
+    })
+    expect(window.__captchaFixture).toEqual(
+      JSON.parse(dataset.captchaFixture ?? '{}'),
+    )
+  }
+})
 
 test('tests that standalone pages mirror their lifecycle state and wait for visible iframes', async () => {
   for (const page of FIXTURE_PAGES) {

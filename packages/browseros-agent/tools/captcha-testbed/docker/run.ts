@@ -63,7 +63,9 @@ export function parseArgs(argv: string[]) {
     throw new Error('--keep and --clean conflict')
   if (
     options.passthrough.some((arg) =>
-      /^--(mcp-url|fixture-bind|fixture-host)(=|$)/.test(arg),
+      /^--(mcp-url|fixture-bind|fixture-host|fixture-frame-host)(=|$)/.test(
+        arg,
+      ),
     )
   ) {
     throw new Error('The harness owns MCP and fixture addresses')
@@ -335,6 +337,7 @@ export async function runDockerE2e(
         `--name=${name}`,
         '--shm-size=1g',
         '--add-host=host.docker.internal:host-gateway',
+        '--add-host=captcha-frame.test:host-gateway',
         '--publish=127.0.0.1::9010',
         '--publish=127.0.0.1::6080',
         `--mount=type=bind,src=${data},dst=/data`,
@@ -382,6 +385,8 @@ export async function runDockerE2e(
         '0.0.0.0',
         '--fixture-host',
         'host.docker.internal',
+        '--fixture-frame-host',
+        'captcha-frame.test',
         '--pages',
         'all',
         '--keys',
