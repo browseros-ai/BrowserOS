@@ -270,7 +270,12 @@ impl VendorClient for TwoCaptchaClient {
     fn attempt_budget(&self, task: &SolveTask) -> Duration {
         match task {
             SolveTask::RecaptchaTiles(_) => Duration::from_secs(30),
-            SolveTask::RecaptchaToken(_) | SolveTask::TurnstileToken(_) => Duration::from_secs(90),
+            SolveTask::RecaptchaToken(_)
+            | SolveTask::TurnstileToken(_)
+            | SolveTask::GeetestV3(_)
+            | SolveTask::GeetestV4(_)
+            | SolveTask::AwsWaf(_)
+            | SolveTask::Arkose(_) => Duration::from_secs(90),
         }
     }
     fn solve<'a>(
@@ -331,8 +336,36 @@ fn task_body(task: &SolveTask) -> Result<Value, ProviderError> {
             optional(&mut body, "data", &p.cdata);
             body
         }
+        SolveTask::GeetestV3(_) | SolveTask::GeetestV4(_) => super::geetest::twocaptcha_task(task)
+            .map_err(|why| {
+                error(
+                    ProviderErrorKind::BadRequest,
+                    "INVALID_PARAMETERS",
+                    &why,
+                    false,
+                )
+            })?,
+        SolveTask::AwsWaf(_) => super::aws_waf::twocaptcha_task(task).map_err(|why| {
+            error(
+                ProviderErrorKind::BadRequest,
+                "INVALID_PARAMETERS",
+                &why,
+                false,
+            )
+        })?,
+        SolveTask::Arkose(_) => super::arkose::twocaptcha_task(task).map_err(|why| {
+            error(
+                ProviderErrorKind::BadRequest,
+                "INVALID_PARAMETERS",
+                &why,
+                false,
+            )
+        })?,
     };
-    if !matches!(task, SolveTask::RecaptchaTiles(_)) {
+    if matches!(
+        task,
+        SolveTask::RecaptchaToken(_) | SolveTask::TurnstileToken(_)
+    ) {
         let url = body["websiteURL"]
             .as_str()
             .and_then(|s| url::Url::parse(s).ok());
@@ -381,7 +414,16 @@ fn answer(task: &SolveTask, solution: &Value) -> Result<SolveAnswer, ProviderErr
             }
             Ok(SolveAnswer::Tiles(indexes))
         }
-        _ => {
+        SolveTask::GeetestV3(_) | SolveTask::GeetestV4(_) => {
+            super::geetest::twocaptcha_answer(task, solution).ok_or_else(invalid)
+        }
+        SolveTask::AwsWaf(_) => {
+            super::aws_waf::twocaptcha_answer(task, solution).ok_or_else(invalid)
+        }
+        SolveTask::Arkose(_) => {
+            super::arkose::twocaptcha_answer(task, solution).ok_or_else(invalid)
+        }
+        SolveTask::RecaptchaToken(_) | SolveTask::TurnstileToken(_) => {
             let field = if matches!(task, SolveTask::RecaptchaToken(_)) {
                 "gRecaptchaResponse"
             } else {
@@ -597,6 +639,21 @@ mod tests {
     }
     fn ready(solution: Value) -> Value {
         json!({"errorId":0,"status":"ready","solution":solution,"cost":"0.0123"})
+    }
+
+    #[test]
+    fn tests_that_new_stub_answers_are_not_treated_as_tokens() {
+        for (kind, task, _) in super::super::types::new_token_tasks() {
+            if kind.is_supported() {
+                continue;
+            }
+            let error = answer(
+                &task,
+                &json!({"token":"invalid", "gRecaptchaResponse":"invalid"}),
+            )
+            .err();
+            assert!(error.is_some_and(|error| error.kind == ProviderErrorKind::BadRequest));
+        }
     }
     async fn solve(
         client: &TwoCaptchaClient,
@@ -1363,6 +1420,7 @@ mod tests {
                 SolveTask::RecaptchaToken(_) => json!({"gRecaptchaResponse":"token"}),
                 SolveTask::TurnstileToken(_) => json!({"token":"token"}),
                 SolveTask::RecaptchaTiles(_) => json!({"click":[1,9]}),
+                _ => anyhow::bail!("unexpected task in legacy payload test"),
             };
             let backup =
                 mock_server(vec![json!({"errorId":0,"taskId":42}), ready(solution)]).await?;
@@ -1390,6 +1448,7 @@ mod tests {
                     SolveTask::RecaptchaToken(_) => "RecaptchaV2TaskProxyless",
                     SolveTask::TurnstileToken(_) => "TurnstileTaskProxyless",
                     SolveTask::RecaptchaTiles(_) => "GridTask",
+                    _ => anyhow::bail!("unexpected task in legacy payload test"),
                 }
             );
         }

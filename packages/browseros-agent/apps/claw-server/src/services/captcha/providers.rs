@@ -11,7 +11,9 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::{
+    arkose, aws_waf,
     config::{CaptchaConfig, ProviderConfig},
+    geetest,
     types::{
         ProviderAnswer, ProviderError, ProviderErrorKind, ProviderName, SolveAnswer, SolveTask,
         TileGrid,
@@ -41,7 +43,12 @@ pub trait VendorClient: Send + Sync {
     fn attempt_budget(&self, task: &SolveTask) -> Duration {
         match task {
             SolveTask::RecaptchaTiles(_) => ATTEMPT_TIMEOUT,
-            SolveTask::RecaptchaToken(_) | SolveTask::TurnstileToken(_) => Duration::from_secs(60),
+            SolveTask::RecaptchaToken(_)
+            | SolveTask::TurnstileToken(_)
+            | SolveTask::GeetestV3(_)
+            | SolveTask::GeetestV4(_)
+            | SolveTask::AwsWaf(_)
+            | SolveTask::Arkose(_) => Duration::from_secs(60),
         }
     }
     fn solve<'a>(
@@ -303,6 +310,12 @@ impl CapsolverClient {
                 optional(&mut metadata, "cdata", &params.cdata);
                 json!({"type":"AntiTurnstileTaskProxyLess","websiteURL":params.website_url,"websiteKey":params.website_key,"metadata":metadata})
             }
+            SolveTask::GeetestV3(_) | SolveTask::GeetestV4(_) => geetest::capsolver_task(task)
+                .map_err(|why| self.error(ProviderErrorKind::BadRequest, &why, false))?,
+            SolveTask::AwsWaf(_) => aws_waf::capsolver_task(task)
+                .map_err(|why| self.error(ProviderErrorKind::BadRequest, &why, false))?,
+            SolveTask::Arkose(_) => arkose::capsolver_task(task)
+                .map_err(|why| self.error(ProviderErrorKind::BadRequest, &why, false))?,
         })
     }
 
@@ -520,6 +533,11 @@ impl CapsolverClient {
                 secrets.extend(params.enterprise_s.as_deref())
             }
             Some(SolveTask::TurnstileToken(params)) => secrets.extend(params.cdata.as_deref()),
+            Some(task @ (SolveTask::GeetestV3(_) | SolveTask::GeetestV4(_))) => {
+                secrets.extend(geetest::secrets(task))
+            }
+            Some(task @ SolveTask::AwsWaf(_)) => secrets.extend(aws_waf::secrets(task)),
+            Some(task @ SolveTask::Arkose(_)) => secrets.extend(arkose::secrets(task)),
             None => {}
         }
         for secret in secrets.into_iter().filter(|secret| !secret.is_empty()) {
@@ -533,7 +551,8 @@ impl VendorClient for CapsolverClient {
         ProviderName::Capsolver
     }
     fn supports(&self, task: &SolveTask) -> bool {
-        !matches!(task, SolveTask::RecaptchaTiles(puzzle)
+        !matches!(task, SolveTask::Arkose(_))
+            && !matches!(task, SolveTask::RecaptchaTiles(puzzle)
             if !puzzle.question_id.as_deref().is_some_and(|id| id.starts_with("/m/") && id.len()>3))
     }
     fn solve<'a>(
@@ -578,6 +597,14 @@ fn amount(value: &Value) -> Option<f64> {
 }
 
 fn normalize(task: &SolveTask, solution: &Value) -> Result<SolveAnswer, ()> {
+    match task {
+        SolveTask::GeetestV3(_) | SolveTask::GeetestV4(_) => {
+            return geetest::capsolver_answer(task, solution).ok_or(());
+        }
+        SolveTask::AwsWaf(_) => return aws_waf::capsolver_answer(task, solution).ok_or(()),
+        SolveTask::Arkose(_) => return arkose::capsolver_answer(task, solution).ok_or(()),
+        _ => {}
+    }
     if let SolveTask::RecaptchaTiles(puzzle) = task {
         if let Some(size) = solution.get("size") {
             let expected = match puzzle.grid {
@@ -666,6 +693,9 @@ fn estimate(task: &SolveTask) -> f64 {
         SolveTask::RecaptchaTiles(_) => 0.0004,
         SolveTask::RecaptchaToken(_) => 0.0008,
         SolveTask::TurnstileToken(_) => 0.0012,
+        SolveTask::GeetestV3(_) | SolveTask::GeetestV4(_) => geetest::CAPSOLVER_ESTIMATE_USD,
+        SolveTask::AwsWaf(_) => aws_waf::CAPSOLVER_ESTIMATE_USD,
+        SolveTask::Arkose(_) => arkose::CAPSOLVER_ESTIMATE_USD,
     }
 }
 
@@ -814,6 +844,73 @@ mod tests {
                 &CancellationToken::new(),
             )
             .await
+    }
+
+    #[tokio::test]
+    async fn tests_that_new_token_stubs_fail_uncharged_without_http() -> anyhow::Result<()> {
+        let mock = vendor(vec![]).await?;
+        let config = config(Some(&mock), 1)?
+            .capsolver
+            .ok_or_else(|| anyhow::anyhow!("missing config"))?;
+        let chain = ProviderChain::with_clients(
+            vec![
+                Box::new(CapsolverClient {
+                    config: config.clone(),
+                    http: Some(Client::new()),
+                }),
+                Box::new(super::super::twocaptcha::TwoCaptchaClient::new(&config)?),
+            ],
+            1,
+        );
+        for (kind, task, _) in super::super::types::new_token_tasks() {
+            if kind.is_supported() {
+                continue;
+            }
+            for client in &chain.clients {
+                let error = client
+                    .solve(
+                        &task,
+                        Instant::now() + Duration::from_secs(10),
+                        &CancellationToken::new(),
+                    )
+                    .await
+                    .err()
+                    .ok_or_else(|| anyhow::anyhow!("stub succeeded"))?;
+                assert_eq!(error.kind, ProviderErrorKind::BadRequest);
+                assert_eq!(error.provider, Some(client.name()));
+                assert!(!error.charged);
+                assert!(error.message.contains("not implemented"));
+                assert_eq!(
+                    client.attempt_budget(&task),
+                    Duration::from_secs(if client.name() == ProviderName::Capsolver {
+                        60
+                    } else {
+                        90
+                    })
+                );
+                assert_eq!(
+                    client.supports(&task),
+                    client.name() != ProviderName::Capsolver
+                        || !matches!(task, SolveTask::Arkose(_))
+                );
+            }
+            let error = solve(&chain, &task)
+                .await
+                .err()
+                .ok_or_else(|| anyhow::anyhow!("stub chain succeeded"))?;
+            assert_eq!(error.kind, ProviderErrorKind::BadRequest);
+            assert!(!error.charged);
+            assert_eq!(chain.paid_tasks(), 0);
+            assert!(
+                normalize(
+                    &task,
+                    &json!({"token":"must-not-be-accepted", "gRecaptchaResponse":"also-invalid"})
+                )
+                .is_err()
+            );
+        }
+        assert!(mock.state.lock().await.requests.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
@@ -1044,6 +1141,7 @@ mod tests {
     }
 
     struct FakeVendor {
+        provider: ProviderName,
         code: &'static str,
         failure: Option<ProviderErrorKind>,
         charged: bool,
@@ -1053,7 +1151,7 @@ mod tests {
 
     impl VendorClient for FakeVendor {
         fn name(&self) -> ProviderName {
-            ProviderName::Capsolver
+            self.provider
         }
         fn supports(&self, _task: &SolveTask) -> bool {
             self.supported
@@ -1093,6 +1191,7 @@ mod tests {
         let calls = Arc::new(AtomicU32::new(0));
         (
             Box::new(FakeVendor {
+                provider: ProviderName::Capsolver,
                 code,
                 failure,
                 charged,
@@ -1204,6 +1303,72 @@ mod tests {
         assert_eq!(first.load(Ordering::Relaxed), 0);
         assert_eq!(second.load(Ordering::Relaxed), 1);
         assert_eq!(chain.paid_tasks(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_arkose_skips_real_capsolver_without_an_attempt_or_charge()
+    -> anyhow::Result<()> {
+        struct CountedCapsolver(CapsolverClient, Arc<AtomicU32>);
+        impl VendorClient for CountedCapsolver {
+            fn name(&self) -> ProviderName {
+                self.0.name()
+            }
+            fn supports(&self, task: &SolveTask) -> bool {
+                self.0.supports(task)
+            }
+            fn solve<'a>(
+                &'a self,
+                task: &'a SolveTask,
+                deadline: Instant,
+                cancel: &'a CancellationToken,
+            ) -> BoxFuture<'a, Result<ProviderAnswer, ProviderError>> {
+                self.1.fetch_add(1, Ordering::Relaxed);
+                self.0.solve(task, deadline, cancel)
+            }
+        }
+        let mock = vendor(vec![]).await?;
+        let config = config(Some(&mock), 1)?
+            .capsolver
+            .ok_or_else(|| anyhow::anyhow!("missing config"))?;
+        let first = Arc::new(AtomicU32::new(0));
+        let second = Arc::new(AtomicU32::new(0));
+        let chain = ProviderChain::with_clients(
+            vec![
+                Box::new(CountedCapsolver(
+                    CapsolverClient {
+                        config,
+                        http: Some(Client::new()),
+                    },
+                    first.clone(),
+                )),
+                Box::new(FakeVendor {
+                    provider: ProviderName::TwoCaptcha,
+                    code: "BACKUP_REJECTED",
+                    failure: Some(ProviderErrorKind::BadRequest),
+                    charged: false,
+                    supported: true,
+                    calls: second.clone(),
+                }),
+            ],
+            1,
+        );
+        let task = super::super::types::new_token_tasks()
+            .into_iter()
+            .find(|(_, task, _)| matches!(task, SolveTask::Arkose(_)))
+            .ok_or_else(|| anyhow::anyhow!("missing Arkose task"))?
+            .1;
+        let error = solve(&chain, &task)
+            .await
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("expected backup rejection"))?;
+        assert_eq!(error.provider, Some(ProviderName::TwoCaptcha));
+        assert_eq!(error.message, "TwoCaptcha BadRequest: BACKUP_REJECTED");
+        assert_eq!(first.load(Ordering::Relaxed), 0);
+        assert_eq!(second.load(Ordering::Relaxed), 1);
+        assert_eq!(chain.paid_tasks(), 0);
+        assert!(!error.charged);
+        assert!(mock.state.lock().await.requests.is_empty());
         Ok(())
     }
 

@@ -31,6 +31,13 @@ pub trait CaptchaPage: Send + Sync {
         frame: &FrameRef,
         expression: &str,
     ) -> impl Future<Output = Result<Value, PageError>> + Send;
+    fn eval_in_frame_main(
+        &self,
+        _frame: &FrameRef,
+        _expression: &str,
+    ) -> impl Future<Output = Result<Value, PageError>> + Send {
+        std::future::ready(Err(bad("main-world frame evaluation unavailable")))
+    }
     fn click_at(&self, x: f64, y: f64) -> impl Future<Output = Result<(), PageError>> + Send;
     fn screenshot_clip(&self, rect: Rect)
     -> impl Future<Output = Result<String, PageError>> + Send;
@@ -177,6 +184,53 @@ impl CaptchaPage for LivePage {
                 .as_i64()
                 .ok_or_else(|| bad("Missing frame execution context"))?;
             evaluate(&session, expression, Some(context)).await
+        })
+        .await
+    }
+    async fn eval_in_frame_main(
+        &self,
+        frame: &FrameRef,
+        expression: &str,
+    ) -> Result<Value, PageError> {
+        self.frame_operation(async {
+            let session = self.frame(&frame.frame_id).await?;
+            let tree = send(&session, "Page.getFrameTree", json!({})).await?;
+            let dom = send(
+                &session,
+                "DOM.getDocument",
+                json!({"depth":-1,"pierce":true}),
+            )
+            .await?;
+            let document = if tree["frameTree"]["frame"]["id"] == frame.frame_id {
+                Some(&dom["root"])
+            } else {
+                find_document(&dom["root"], &frame.frame_id)
+            }
+            .ok_or_else(|| bad("Frame document is unavailable"))?;
+            let resolved = send(
+                &session,
+                "DOM.resolveNode",
+                json!({"backendNodeId":document["backendNodeId"]}),
+            )
+            .await?;
+            let object = text(&resolved["object"], "objectId")?;
+            let response = send(
+                &session,
+                "Runtime.callFunctionOn",
+                json!({
+                    "objectId":object,
+                    "functionDeclaration":format!("function() {{ return ({expression}); }}"),
+                    "returnByValue":true,"awaitPromise":true
+                }),
+            )
+            .await;
+            let _ = send(
+                &session,
+                "Runtime.releaseObject",
+                json!({"objectId":object}),
+            )
+            .await;
+            evaluation_value(response?)
         })
         .await
     }
@@ -514,6 +568,8 @@ mod tests {
         widget_url: &'static str,
         calls: Mutex<Vec<Call>>,
         evaluations: Mutex<VecDeque<Result<Value, CdpError>>>,
+        function_results: Mutex<VecDeque<Result<Value, CdpError>>>,
+        same_process: AtomicBool,
         child_failure: Mutex<Option<(&'static str, bool, CdpError)>>,
         page_open: AtomicBool,
         events: broadcast::Sender<CdpEvent>,
@@ -524,6 +580,8 @@ mod tests {
                 widget_url,
                 calls: Mutex::new(Vec::new()),
                 evaluations: Mutex::new(VecDeque::new()),
+                function_results: Mutex::new(VecDeque::new()),
+                same_process: AtomicBool::new(false),
                 child_failure: Mutex::new(None),
                 page_open: AtomicBool::new(true),
                 events: broadcast::channel(32).0,
@@ -576,13 +634,22 @@ mod tests {
                     json!({"frameTree":{"frame":{"id":"widget","parentId":"root","url":self.widget_url,"loaderId":"widget-loader"}}})
                 }
                 "Page.getFrameTree" => {
-                    json!({"frameTree":{"frame":{"id":"root","url":"http://fixture.test","loaderId":"main-loader"}}})
+                    let mut tree = json!({"frameTree":{"frame":{"id":"root","url":"http://fixture.test","loaderId":"main-loader"}}});
+                    if self.same_process.load(Ordering::Relaxed) {
+                        tree["frameTree"]["childFrames"] = json!([{"frame":{"id":"widget", "parentId":"root", "url":self.widget_url, "loaderId":"widget-loader"}}]);
+                    }
+                    tree
                 }
                 "DOM.getDocument" if child => {
                     json!({"root":{"nodeType":9,"backendNodeId":40,"children":[{"nodeName":"BODY","nodeType":1,"backendNodeId":41,"shadowRoots":[{"shadowRootType":"closed","nodeType":11,"backendNodeId":42,"children":[{"nodeName":"INPUT","nodeType":1,"backendNodeId":43}]}]}]}})
                 }
                 "DOM.getDocument" => {
-                    json!({"root":{"nodeType":9,"backendNodeId":1,"children":[{"nodeName":"HTML","frameId":"root"},{"shadowRoots":[{"shadowRootType":"closed","children":[{"nodeName":"IFRAME","frameId":"widget","backendNodeId":5}]}]}]}})
+                    let mut dom = json!({"root":{"nodeType":9,"backendNodeId":1,"children":[{"nodeName":"HTML","frameId":"root"},{"shadowRoots":[{"shadowRootType":"closed","children":[{"nodeName":"IFRAME","frameId":"widget","backendNodeId":5}]}]}]}});
+                    if self.same_process.load(Ordering::Relaxed) {
+                        dom["root"]["children"][1]["shadowRoots"][0]["children"][0]["contentDocument"] =
+                            json!({"nodeType":9, "backendNodeId":70});
+                    }
+                    dom
                 }
                 "DOM.getFrameOwner" if params["frameId"] == "root" => {
                     return Err(CdpError::Protocol {
@@ -591,6 +658,9 @@ mod tests {
                     });
                 }
                 "DOM.getFrameOwner" => json!({"backendNodeId":5}),
+                "DOM.describeNode" if self.same_process.load(Ordering::Relaxed) => {
+                    json!({"node":{"frameId":"widget", "contentDocument":{"nodeType":9, "backendNodeId":70}}})
+                }
                 "DOM.describeNode" => json!({"node":{"frameId":"widget"}}),
                 "DOM.getBoxModel" => json!({"model":{"content":[30,40,330,40,330,105,30,105]}}),
                 "Page.createIsolatedWorld" => json!({"executionContextId":77}),
@@ -610,6 +680,14 @@ mod tests {
                     json!({"object":{"objectId":format!("node-{}",params["backendNodeId"])}})
                 }
                 "Runtime.callFunctionOn" => {
+                    if let Some(result) = self
+                        .function_results
+                        .lock()
+                        .map_err(|_| CdpError::SessionGone)?
+                        .pop_front()
+                    {
+                        return result;
+                    }
                     json!({"result":{"value":if params["objectId"] == "node-42" && params["arguments"][0]["value"] == "input[type=checkbox]" {json!({"x":9,"y":20,"width":24,"height":24})} else {Value::Null}}})
                 }
                 "Page.captureScreenshot" => json!({"data":"iVBORw0KGgo="}),
@@ -753,6 +831,7 @@ mod tests {
             state: ChallengeState::Active,
             frame: None,
             challenge_frame: None,
+            host_frame: None,
             sitekey: Some("test-key".into()),
             invisible: false,
             enterprise: false,
@@ -785,6 +864,63 @@ mod tests {
                 .len(),
             6
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_frame_main_evaluation_uses_the_document_world_in_both_sessions()
+    -> TestResult {
+        for (same_process, session, object) in
+            [(false, "s-widget", "node-40"), (true, "s-page", "node-70")]
+        {
+            let (native, page) = fixture();
+            native.same_process.store(same_process, Ordering::Relaxed);
+            native
+                .function_results
+                .lock()
+                .map_err(|_| "poisoned")?
+                .push_back(Ok(json!({"result":{"value":"page-global"}})));
+            assert_eq!(
+                page.eval_in_frame_main(&widget(), "window.widgetCallback()")
+                    .await?,
+                json!("page-global")
+            );
+            assert!(native.calls("Page.createIsolatedWorld")?.is_empty());
+            assert!(native.calls("Runtime.evaluate")?.is_empty());
+            let calls = native.calls("Runtime.callFunctionOn")?;
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].2.as_ref().map(SessionId::as_str), Some(session));
+            assert_eq!(calls[0].1["objectId"], object);
+            assert_eq!(
+                calls[0].1["functionDeclaration"],
+                "function() { return (window.widgetCallback()); }"
+            );
+            assert_eq!(calls[0].1["returnByValue"], true);
+            assert_eq!(calls[0].1["awaitPromise"], true);
+            let resolves = native.calls("DOM.resolveNode")?;
+            assert!(
+                resolves
+                    .iter()
+                    .all(|call| call.1.get("executionContextId").is_none())
+            );
+            let released = native.calls("Runtime.releaseObject")?;
+            assert_eq!(released.len(), 1);
+            assert_eq!(released[0].1["objectId"], object);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_frame_main_exceptions_are_browser_errors_and_release_the_document()
+    -> TestResult {
+        let (native, page) = fixture();
+        native.function_results.lock().map_err(|_| "poisoned")?.push_back(Ok(json!({"exceptionDetails":{"text":"Uncaught", "exception":{"description":"Error: callback failed"}}})));
+        assert_eq!(
+            page.eval_in_frame_main(&widget(), "window.widgetCallback()")
+                .await,
+            Err(PageError::Browser("Error: callback failed".into()))
+        );
+        assert_eq!(native.calls("Runtime.releaseObject")?.len(), 1);
         Ok(())
     }
 

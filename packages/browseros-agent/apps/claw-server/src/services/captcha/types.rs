@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -16,7 +18,13 @@ pub enum CaptchaKind {
 }
 impl CaptchaKind {
     pub fn is_supported(self) -> bool {
-        matches!(self, Self::RecaptchaV2 | Self::Turnstile)
+        match self {
+            Self::RecaptchaV2 | Self::Turnstile => true,
+            Self::Geetest => super::geetest::SUPPORTED,
+            Self::AwsWaf => super::aws_waf::SUPPORTED,
+            Self::Arkose => super::arkose::SUPPORTED,
+            _ => false,
+        }
     }
     pub fn as_str(self) -> &'static str {
         match self {
@@ -77,6 +85,8 @@ pub struct Challenge {
     pub state: ChallengeState,
     pub frame: Option<FrameRef>, // reCAPTCHA anchor / Turnstile widget iframe
     pub challenge_frame: Option<FrameRef>, // reCAPTCHA bframe (image challenge), when open
+    #[serde(default)]
+    pub host_frame: Option<FrameRef>,
     pub sitekey: Option<String>,
     pub invisible: bool,
     pub enterprise: bool,
@@ -166,10 +176,52 @@ pub struct TurnstileParams {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct GeetestV3Params {
+    pub website_url: String,
+    pub gt: String,
+    pub challenge: String,
+    pub api_server: Option<String>,
+    pub user_agent: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeetestV4Params {
+    pub website_url: String,
+    pub captcha_id: String,
+    pub risk_type: Option<String>,
+    pub api_server: Option<String>,
+    pub user_agent: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct AwsWafParams {
+    pub website_url: String,
+    pub key: Option<String>,
+    pub iv: Option<String>,
+    pub context: Option<String>,
+    pub challenge_script: Option<String>,
+    pub captcha_script: Option<String>,
+    pub jsapi_script: Option<String>,
+    pub api_key: Option<String>,
+    pub existing_token: Option<String>,
+    pub problem_url: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArkoseParams {
+    pub website_url: String,
+    pub public_key: String,
+    pub api_subdomain: Option<String>,
+    pub data_blob: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum SolveTask {
     RecaptchaTiles(TilePuzzle),
     RecaptchaToken(RecaptchaParams),
     TurnstileToken(TurnstileParams),
+    GeetestV3(GeetestV3Params),
+    GeetestV4(GeetestV4Params),
+    AwsWaf(AwsWafParams),
+    Arkose(ArkoseParams),
 }
 impl SolveTask {
     pub fn label(&self) -> &'static str {
@@ -177,6 +229,10 @@ impl SolveTask {
             Self::RecaptchaTiles(_) => "recaptcha_tiles",
             Self::RecaptchaToken(_) => "recaptcha_token",
             Self::TurnstileToken(_) => "turnstile_token",
+            Self::GeetestV3(_) => "geetest_v3_token",
+            Self::GeetestV4(_) => "geetest_v4_token",
+            Self::AwsWaf(_) => "aws_waf_token",
+            Self::Arkose(_) => "arkose_token",
         }
     }
 }
@@ -185,12 +241,30 @@ impl SolveTask {
 pub enum SolveAnswer {
     Tiles(Vec<usize>), /* zero-based, row-major */
     Token(String),
+    Fields(BTreeMap<String, String>),
 }
 impl std::fmt::Debug for SolveAnswer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Tiles(tiles) => f.debug_tuple("Tiles").field(tiles).finish(),
             Self::Token(token) => write!(f, "Token(<redacted, {} chars>)", token.chars().count()),
+            Self::Fields(fields) => {
+                struct Redacted(usize);
+                impl std::fmt::Debug for Redacted {
+                    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(f, "<redacted, {} chars>", self.0)
+                    }
+                }
+                f.write_str("Fields(")?;
+                f.debug_map()
+                    .entries(
+                        fields
+                            .iter()
+                            .map(|(key, value)| (key, Redacted(value.chars().count()))),
+                    )
+                    .finish()?;
+                f.write_str(")")
+            }
         }
     }
 }
@@ -383,9 +457,110 @@ pub enum SolveStep {
 }
 
 #[cfg(test)]
+pub(super) fn new_token_tasks() -> [(CaptchaKind, SolveTask, &'static str); 4] {
+    [
+        (
+            CaptchaKind::Geetest,
+            SolveTask::GeetestV3(GeetestV3Params {
+                website_url: "https://fixture.test".into(),
+                gt: "gt".into(),
+                challenge: "challenge".into(),
+                api_server: None,
+                user_agent: None,
+            }),
+            "geetest_v3_token",
+        ),
+        (
+            CaptchaKind::Geetest,
+            SolveTask::GeetestV4(GeetestV4Params {
+                website_url: "https://fixture.test".into(),
+                captcha_id: "captcha-id".into(),
+                risk_type: None,
+                api_server: None,
+                user_agent: None,
+            }),
+            "geetest_v4_token",
+        ),
+        (
+            CaptchaKind::AwsWaf,
+            SolveTask::AwsWaf(AwsWafParams {
+                website_url: "https://fixture.test".into(),
+                key: None,
+                iv: None,
+                context: None,
+                challenge_script: None,
+                captcha_script: None,
+                jsapi_script: None,
+                api_key: None,
+                existing_token: None,
+                problem_url: None,
+            }),
+            "aws_waf_token",
+        ),
+        (
+            CaptchaKind::Arkose,
+            SolveTask::Arkose(ArkoseParams {
+                website_url: "https://fixture.test".into(),
+                public_key: "public-key".into(),
+                api_subdomain: None,
+                data_blob: None,
+                user_agent: None,
+            }),
+            "arkose_token",
+        ),
+    ]
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::{json, to_value};
+
+    #[test]
+    fn tests_that_new_token_tasks_have_stable_labels() {
+        for (_, task, label) in new_token_tasks() {
+            assert_eq!(task.label(), label);
+        }
+    }
+
+    #[test]
+    fn tests_that_fields_debug_redacts_every_value() {
+        let answer = SolveAnswer::Fields(std::collections::BTreeMap::from([
+            ("validate".into(), "private-validation".into()),
+            ("seccode".into(), "秘密".into()),
+        ]));
+        let debug = format!("{answer:?}");
+        assert_eq!(
+            debug,
+            "Fields({\"seccode\": <redacted, 2 chars>, \"validate\": <redacted, 18 chars>})"
+        );
+        assert!(!debug.contains("private-validation"));
+        assert!(!debug.contains("秘密"));
+        assert_eq!(
+            format!("{:?}", SolveAnswer::Fields(Default::default())),
+            "Fields({})"
+        );
+    }
+
+    #[test]
+    fn tests_that_challenge_host_frame_is_optional_on_the_wire() -> anyhow::Result<()> {
+        let mut wire = json!({"kind":"geetest", "state":"active", "frame":null,
+            "challengeFrame":null, "sitekey":null, "invisible":false, "enterprise":false,
+            "recaptchaS":null, "action":null, "cdata":null, "callback":null});
+        let legacy: Challenge = serde_json::from_value(wire.clone())?;
+        assert_eq!(legacy.host_frame, None);
+        wire["hostFrame"] = json!({"frameId":"host", "url":"https://fixture.test", "rect":null});
+        let challenge: Challenge = serde_json::from_value(wire.clone())?;
+        assert_eq!(
+            challenge
+                .host_frame
+                .as_ref()
+                .map(|frame| frame.frame_id.as_str()),
+            Some("host")
+        );
+        assert_eq!(to_value(challenge)?, wire);
+        Ok(())
+    }
 
     #[test]
     fn tests_that_token_applied_values_round_trip() -> anyhow::Result<()> {
@@ -523,7 +698,13 @@ mod tests {
             assert_eq!(kind.as_str(), wire);
             assert_eq!(
                 kind.is_supported(),
-                matches!(kind, CaptchaKind::RecaptchaV2 | CaptchaKind::Turnstile)
+                match kind {
+                    CaptchaKind::RecaptchaV2 | CaptchaKind::Turnstile => true,
+                    CaptchaKind::Geetest => super::super::geetest::SUPPORTED,
+                    CaptchaKind::AwsWaf => super::super::aws_waf::SUPPORTED,
+                    CaptchaKind::Arkose => super::super::arkose::SUPPORTED,
+                    _ => false,
+                }
             );
         }
         for (event, wire) in [

@@ -1006,6 +1006,7 @@ mod tests {
             state: ChallengeState::Active,
             frame: Some(frame(true)),
             challenge_frame: Some(frame(false)),
+            host_frame: None,
             sitekey: Some("test-site-key".into()),
             invisible: false,
             enterprise: false,

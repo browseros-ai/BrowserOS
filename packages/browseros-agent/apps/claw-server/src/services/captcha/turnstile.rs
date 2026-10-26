@@ -798,6 +798,7 @@ mod tests {
             state: ChallengeState::Active,
             frame: None,
             challenge_frame: None,
+            host_frame: None,
             sitekey: Some("stale-key".into()),
             invisible: false,
             enterprise: false,
