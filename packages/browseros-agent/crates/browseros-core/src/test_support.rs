@@ -8,6 +8,13 @@ use std::{
 };
 use tokio::sync::broadcast;
 
+const TEST_ERROR_KEY: &str = "__test_cdp_error";
+
+/// A queued response that makes the call fail with a CDP protocol error carrying `message`.
+pub fn cdp_error(message: &str) -> Value {
+    serde_json::json!({ TEST_ERROR_KEY: message })
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TestCall {
     pub method: String,
@@ -60,7 +67,8 @@ impl TestConnection {
             method: method.to_string(),
             params,
         });
-        self.responses
+        let response = self
+            .responses
             .lock()
             .map_err(|_| test_state_error())?
             .get_mut(method)
@@ -68,7 +76,14 @@ impl TestConnection {
             .ok_or_else(|| CdpError::Protocol {
                 code: -1,
                 message: format!("unexpected test CDP call: {method}"),
-            })
+            })?;
+        match response.get(TEST_ERROR_KEY).and_then(Value::as_str) {
+            Some(message) => Err(CdpError::Protocol {
+                code: -32000,
+                message: message.to_string(),
+            }),
+            None => Ok(response),
+        }
     }
 }
 
