@@ -55,9 +55,12 @@ if (args.fresh && state.live && version === 3) {
         ['fetch', 'xmlhttprequest'].includes(e.initiatorType) && /geetest|gee-test|captcha|register|challenge/i.test(e.name))
         .reverse().slice(0, 3);
     state.live = false;
+    const until = performance.now() + 2500;
     for (const entry of candidates) {
+        const remaining = Math.ceil(until - performance.now());
+        if (remaining <= 0) break;
         try {
-            const response = await fetch(entry.name, {credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(500)});
+            const response = await fetch(entry.name, {credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(remaining)});
             if (!response.ok) continue;
             const raw = await response.json(), data = raw?.data?.challenge ? raw.data : raw;
             if (data?.gt !== state.gt || !/^[0-9a-f]{32}$/i.test(data.challenge ?? '')) continue;
