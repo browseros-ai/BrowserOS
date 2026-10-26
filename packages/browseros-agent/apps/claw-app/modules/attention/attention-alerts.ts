@@ -38,6 +38,30 @@ async function windowOfTab(browserTabId: number): Promise<number | null> {
   }
 }
 
+/**
+ * BrowserOS's own attention API, when this build has it: a dock bounce that
+ * keeps going until the person looks, and a count on the dock icon. Older
+ * builds fall back to the single bounce from `drawAttention`.
+ */
+function nativeAttention(): typeof chrome.browserOS | null {
+  const api = typeof chrome === 'undefined' ? undefined : chrome.browserOS
+  return typeof api?.requestAttention === 'function' ? api : null
+}
+
+function callNative(run: (done: () => void) => void): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      run(() => {
+        // Reading lastError keeps Chrome from logging an unchecked error.
+        void chrome.runtime.lastError
+        resolve()
+      })
+    } catch {
+      resolve()
+    }
+  })
+}
+
 /** Bounces the dock icon (macOS) or flashes the taskbar for a tab's window. */
 async function drawAttention(browserTabId: number, on: boolean): Promise<void> {
   const windowId = await windowOfTab(browserTabId)
@@ -61,7 +85,14 @@ export function createAttentionAlerts(): AttentionAlerts {
           priority: 2,
         })
       } catch {}
-      await drawAttention(help.browserTabId, true)
+      const native = nativeAttention()
+      if (native) {
+        await callNative((done) =>
+          native.requestAttention({ critical: true }, done),
+        )
+      } else {
+        await drawAttention(help.browserTabId, true)
+      }
     },
     async clear(requestId, browserTabId) {
       try {
@@ -70,6 +101,12 @@ export function createAttentionAlerts(): AttentionAlerts {
       await drawAttention(browserTabId, false)
     },
     async setCount(count) {
+      const native = nativeAttention()
+      if (native) {
+        await callNative((done) => native.setDockBadge(badgeText(count), done))
+        if (count === 0)
+          await callNative((done) => native.cancelAttention(done))
+      }
       try {
         await chrome.action.setBadgeBackgroundColor({ color: BADGE_COLOR })
         await chrome.action.setBadgeTextColor?.({ color: '#FFFFFF' })
