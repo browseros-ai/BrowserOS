@@ -19,19 +19,24 @@ export interface FocusBrowserTabVariables {
   browserTabId: number
 }
 
+/** Brings a tab to the front of its window and that window to the front. */
+export async function focusBrowserTab(
+  browserTabId: number,
+): Promise<FocusBrowserTabResult> {
+  const tab = await chrome.tabs.update(browserTabId, { active: true })
+  if (!tab) throw new Error(`Chrome tab ${browserTabId} is unavailable`)
+  if (typeof tab.windowId === 'number') {
+    await chrome.windows.update(tab.windowId, { focused: true })
+  }
+  return {
+    browserTabId,
+    windowId: tab.windowId,
+  }
+}
+
 export const useFocusBrowserTab = createMutation<
   FocusBrowserTabResult,
   FocusBrowserTabVariables
 >({
-  mutationFn: async ({ browserTabId }) => {
-    const tab = await chrome.tabs.update(browserTabId, { active: true })
-    if (!tab) throw new Error(`Chrome tab ${browserTabId} is unavailable`)
-    if (typeof tab.windowId === 'number') {
-      await chrome.windows.update(tab.windowId, { focused: true })
-    }
-    return {
-      browserTabId,
-      windowId: tab.windowId,
-    }
-  },
+  mutationFn: ({ browserTabId }) => focusBrowserTab(browserTabId),
 })
