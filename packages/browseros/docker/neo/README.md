@@ -260,10 +260,11 @@ python3 smoke.py --vnc-port 7080 --mcp-port 7010
 ## Build it yourself
 
 The Dockerfile reads the version's published `release.json` from the BrowserOS CDN, picks the
-package for the architecture being built, and checks its sha256:
+package for the architecture being built, and checks its sha256. Use 0.51.2.5 or later (see
+[Browser frame](#browser-frame)):
 
 ```sh
-docker build --no-cache-filter neo --build-arg NEO_VERSION=0.51.1.4 -t neo .
+docker build --no-cache-filter neo --build-arg NEO_VERSION=0.51.2.5 -t neo .
 ```
 
 To test a Neo build that isn't on the CDN (a CI artifact, say), put its `.deb` alone in a
