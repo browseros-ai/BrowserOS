@@ -1,4 +1,8 @@
-use std::{collections::HashSet, future::Future, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    future::Future,
+    time::Duration,
+};
 
 use browseros_cdp::CdpError;
 use browseros_core::{
@@ -26,6 +30,11 @@ pub trait CaptchaPage: Send + Sync {
     fn eval_main(&self, expression: &str) -> impl Future<Output = Result<Value, PageError>> + Send;
     /// Hidden and zero-size frames retain their measured rect; callers must not click or capture them.
     fn frames(&self) -> impl Future<Output = Result<Vec<FrameRef>, PageError>> + Send;
+    fn frame_parent_ids(
+        &self,
+    ) -> impl Future<Output = Result<HashMap<String, String>, PageError>> + Send {
+        async { Ok(HashMap::new()) }
+    }
     fn eval_in_frame(
         &self,
         frame: &FrameRef,
@@ -63,6 +72,7 @@ pub struct LivePage {
     pub view: BrowserView,
     pub page: PageId,
     last_point: Mutex<(f64, f64)>,
+    frame_parents: Mutex<HashMap<String, String>>,
 }
 
 impl LivePage {
@@ -71,6 +81,7 @@ impl LivePage {
             view,
             page,
             last_point: Mutex::new((0.0, 0.0)),
+            frame_parents: Mutex::new(HashMap::new()),
         }
     }
     async fn top(&self) -> Result<ProtocolSession, PageError> {
@@ -125,8 +136,9 @@ impl CaptchaPage for LivePage {
             }];
             let mut seen_frames = HashSet::from([result[0].frame_id.clone()]);
             let mut seen_sessions = HashSet::new();
-            let mut pending = vec![(top, Some(origin))];
-            while let Some((parent, origin)) = pending.pop() {
+            let mut parents = HashMap::new();
+            let mut pending = vec![(top, Some(origin), result[0].frame_id.clone())];
+            while let Some((parent, origin, parent_id)) = pending.pop() {
                 if !seen_sessions.insert(parent.session_id().cloned()) {
                     continue;
                 }
@@ -136,6 +148,7 @@ impl CaptchaPage for LivePage {
                     json!({"depth":-1,"pierce":true}),
                 )
                 .await?;
+                collect_frame_parents(&dom["root"], &parent_id, &mut parents);
                 let mut owners = Vec::new();
                 collect_owners(&dom["root"], &mut owners);
                 for id in owners {
@@ -165,18 +178,22 @@ impl CaptchaPage for LivePage {
                         Err(error) => return Err(error),
                     };
                     result.push(FrameRef {
-                        frame_id: id,
+                        frame_id: id.clone(),
                         url: text(frame, "url")?,
                         rect,
                     });
                     if !session.same_session(&parent) {
-                        pending.push((session, rect));
+                        pending.push((session, rect, id));
                     }
                 }
             }
+            *self.frame_parents.lock().await = parents;
             Ok(result)
         })
         .await
+    }
+    async fn frame_parent_ids(&self) -> Result<HashMap<String, String>, PageError> {
+        Ok(self.frame_parents.lock().await.clone())
     }
     async fn eval_in_frame(&self, frame: &FrameRef, expression: &str) -> Result<Value, PageError> {
         self.frame_operation(async {
@@ -537,6 +554,26 @@ fn quad_rect(quad: &Value) -> Result<Rect, PageError> {
             - y,
     })
 }
+fn collect_frame_parents(node: &Value, document: &str, parents: &mut HashMap<String, String>) {
+    let owner = matches!(
+        node["nodeName"].as_str(),
+        Some("IFRAME" | "FRAME" | "OBJECT" | "EMBED" | "FENCEDFRAME")
+    )
+    .then(|| node["frameId"].as_str())
+    .flatten();
+    if let Some(id) = owner {
+        parents.insert(id.to_owned(), document.to_owned());
+    }
+    for key in ["children", "shadowRoots"] {
+        for child in node[key].as_array().into_iter().flatten() {
+            collect_frame_parents(child, document, parents);
+        }
+    }
+    if let Some(child) = node.get("contentDocument") {
+        collect_frame_parents(child, owner.unwrap_or(document), parents);
+    }
+}
+
 fn collect_owners(node: &Value, frames: &mut Vec<String>) {
     if matches!(
         node["nodeName"].as_str(),
@@ -1185,6 +1222,13 @@ mod tests {
         assert_eq!(frames.len(), 2);
         assert!(frames.contains(&widget()));
         assert_eq!(
+            page.frame_parent_ids()
+                .await?
+                .get("widget")
+                .map(String::as_str),
+            Some("root")
+        );
+        assert_eq!(
             page.document().await?,
             DocumentId {
                 url: "http://fixture.test".into(),
@@ -1192,6 +1236,17 @@ mod tests {
             }
         );
         Ok(())
+    }
+
+    #[test]
+    fn tests_that_parent_ids_follow_nested_frame_documents_and_shadow_roots() {
+        let document = json!({"children":[{"nodeName":"IFRAME","frameId":"outer","contentDocument":{
+            "children":[{"shadowRoots":[{"children":[{"nodeName":"IFRAME","frameId":"inner"}]}]}]
+        }}]});
+        let mut parents = HashMap::new();
+        collect_frame_parents(&document, "top", &mut parents);
+        assert_eq!(parents.get("outer").map(String::as_str), Some("top"));
+        assert_eq!(parents.get("inner").map(String::as_str), Some("outer"));
     }
 
     #[test]

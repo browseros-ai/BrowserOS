@@ -199,14 +199,29 @@ impl Widget {
     }
 
     fn merge(&mut self, mut other: Self) {
+        let state = if self.challenge.challenge_frame.is_some()
+            || other.challenge.challenge_frame.is_some()
+        {
+            ChallengeState::Active
+        } else {
+            [self.challenge.state, other.challenge.state]
+                .into_iter()
+                .max_by_key(|state| match state {
+                    ChallengeState::Passed => 3,
+                    ChallengeState::Active => 2,
+                    ChallengeState::Unknown => 1,
+                    ChallengeState::WidgetOnly => 0,
+                })
+                .unwrap_or(ChallengeState::WidgetOnly)
+        };
         if self.inferred && !other.inferred {
             std::mem::swap(self, &mut other);
         }
         let w = &mut self.challenge;
         let extra = other.challenge;
-        if !other.inferred && extra.state == ChallengeState::Passed {
-            w.state = ChallengeState::Passed;
-        }
+        w.state = state;
+        w.frame = w.frame.take().or(extra.frame);
+        w.challenge_frame = w.challenge_frame.take().or(extra.challenge_frame);
         w.sitekey = w.sitekey.take().or(extra.sitekey);
         w.recaptcha_s = w.recaptcha_s.take().or(extra.recaptcha_s);
         w.action = w.action.take().or(extra.action);
@@ -313,6 +328,11 @@ async fn scan(
     }
     let frames =
         partial(bounded(deadline, page.frames()).await, &mut complete)?.unwrap_or_default();
+    let parents = partial(
+        bounded(deadline, page.frame_parent_ids()).await,
+        &mut complete,
+    )?
+    .unwrap_or_default();
     let mut probes = Vec::with_capacity(frames.len());
     for widget in &mut widgets {
         let w = &mut widget.challenge;
@@ -543,7 +563,129 @@ async fn scan(
             complete = false;
         }
     }
+    let top = frames
+        .iter()
+        .zip(&probes)
+        .find(|(frame, probe)| {
+            probe.as_ref().is_some_and(|p| p.top)
+                || (frames.first() == Some(frame) && top_url.as_deref() == Some(&frame.url))
+        })
+        .map(|(frame, _)| frame.frame_id.as_str());
+    let widgets = fold_vendor_widgets(widgets, &frames, &parents, top, &visibility, &mut complete);
     Ok((widgets, complete))
+}
+
+fn vendor_owner(
+    source: &FrameRef,
+    frames: &[FrameRef],
+    parents: &std::collections::HashMap<String, String>,
+    top: Option<&str>,
+    complete: &mut bool,
+) -> (Option<FrameRef>, Option<FrameRef>) {
+    let mut current = Some(source);
+    let mut outer = None;
+    let mut seen = std::collections::HashSet::new();
+    while let Some(frame) = current {
+        if Some(frame.frame_id.as_str()) == top {
+            return (None, outer);
+        }
+        if !seen.insert(frame.frame_id.as_str()) {
+            *complete = false;
+            break;
+        }
+        if frame_kind(&frame.url).is_none() {
+            return (Some(frame.clone()), outer);
+        }
+        outer = Some(frame.clone());
+        current = parents
+            .get(&frame.frame_id)
+            .and_then(|id| frames.iter().find(|f| &f.frame_id == id));
+    }
+    (None, outer)
+}
+
+fn fold_vendor_widgets(
+    widgets: Vec<Widget>,
+    frames: &[FrameRef],
+    parents: &std::collections::HashMap<String, String>,
+    top: Option<&str>,
+    visibility: &[Visibility],
+    complete: &mut bool,
+) -> Vec<Widget> {
+    let mut folded: Vec<Widget> = Vec::new();
+    let mut inferred = Vec::new();
+    for mut widget in widgets {
+        let w = &mut widget.challenge;
+        if let Some(source) = w
+            .frame
+            .as_ref()
+            .or(w.challenge_frame.as_ref())
+            .or(w.host_frame.as_ref())
+        {
+            let (host, outer) = vendor_owner(source, frames, parents, top, complete);
+            w.host_frame = host;
+            if let Some(outer) = outer {
+                if let Some((kind, _)) = frame_kind(&outer.url)
+                    && !(kind == CaptchaKind::RecaptchaV2 && w.kind == CaptchaKind::RecaptchaV3)
+                {
+                    w.kind = kind;
+                }
+                if w.state != ChallengeState::Passed
+                    && (outer
+                        .rect
+                        .is_some_and(|r| r.width <= 0.0 || r.height <= 0.0)
+                        || visibility.iter().any(|v| v.url == outer.url && !v.visible))
+                {
+                    w.state = ChallengeState::WidgetOnly;
+                }
+                w.frame = Some(outer);
+            }
+        }
+        if widget.inferred && w.frame.is_none() {
+            inferred.push(widget);
+            continue;
+        }
+        let existing = folded.iter_mut().find(|other| {
+            let a = &other.challenge;
+            a.kind == w.kind
+                && a.host_frame == w.host_frame
+                && w.frame.as_ref().is_some_and(|f| {
+                    a.frame.as_ref().is_some_and(|o| o.frame_id == f.frame_id)
+                        || a.challenge_frame
+                            .as_ref()
+                            .is_some_and(|o| o.frame_id == f.frame_id)
+                })
+        });
+        if let Some(existing) = existing {
+            existing.merge(widget);
+        } else {
+            folded.push(widget);
+        }
+    }
+    for widget in inferred {
+        let w = &widget.challenge;
+        let candidates: Vec<_> = folded
+            .iter_mut()
+            .filter(|other| {
+                let a = &other.challenge;
+                a.kind == w.kind
+                    && a.host_frame == w.host_frame
+                    && (a.sitekey.is_none() || w.sitekey.is_none() || a.sitekey == w.sitekey)
+            })
+            .collect();
+        if candidates.is_empty() {
+            folded.push(widget);
+        } else {
+            for candidate in candidates {
+                candidate.merge(Widget {
+                    challenge: widget.challenge.clone(),
+                    frame_url: widget.frame_url.clone(),
+                    inferred: true,
+                });
+            }
+        }
+    }
+    folded
 }
 
 fn append_probe(
@@ -655,6 +797,8 @@ mod tests {
         frame_delay: Duration,
         scripts: Mutex<Vec<String>>,
         closed: Result<Vec<Value>, PageError>,
+        parent_ids: std::collections::HashMap<String, String>,
+        frame_results: std::collections::HashMap<String, Value>,
     }
 
     fn document(loader: &str) -> DocumentId {
@@ -695,6 +839,8 @@ mod tests {
                 frame_delay: Duration::ZERO,
                 scripts: Mutex::new(vec![]),
                 closed: Ok(vec![]),
+                parent_ids: Default::default(),
+                frame_results: Default::default(),
             }
         }
 
@@ -735,9 +881,15 @@ mod tests {
             Ok(self.frames.clone())
         }
 
+        async fn frame_parent_ids(
+            &self,
+        ) -> Result<std::collections::HashMap<String, String>, PageError> {
+            Ok(self.parent_ids.clone())
+        }
+
         async fn eval_in_frame(
             &self,
-            _frame: &FrameRef,
+            frame: &FrameRef,
             expression: &str,
         ) -> Result<Value, PageError> {
             assert!(expression.contains("captcha:frame"));
@@ -745,7 +897,10 @@ mod tests {
                 .lock()
                 .map_err(|e| PageError::Browser(e.to_string()))?
                 .push(expression.into());
-            self.frame_result.clone()
+            self.frame_results
+                .get(&frame.frame_id)
+                .cloned()
+                .map_or_else(|| self.frame_result.clone(), Ok)
         }
 
         async fn document(&self) -> Result<DocumentId, PageError> {
@@ -987,6 +1142,97 @@ mod tests {
         assert_eq!(result.challenges.len(), 1);
         assert_eq!(result.challenges[0].kind, CaptchaKind::Hcaptcha);
         assert_eq!(result.challenges[0].state, ChallengeState::Unknown);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_nested_vendor_findings_fold_into_the_outer_widget() -> Result<(), PageError>
+    {
+        for (kind, url) in [
+            (
+                "arkose",
+                "https://client-api.arkoselabs.com/v2/enforcement.html",
+            ),
+            ("geetest", "https://gcaptcha4.geetest.com/load"),
+            ("aws_waf", "https://a.captcha.awswaf.com/widget"),
+            (
+                "hcaptcha",
+                "https://newassets.hcaptcha.com/captcha/v1/hcaptcha.html",
+            ),
+            (
+                "recaptcha_v2",
+                "https://www.google.com/recaptcha/api2/anchor?k=key",
+            ),
+            (
+                "turnstile",
+                "https://challenges.cloudflare.com/widget?sitekey=key",
+            ),
+        ] {
+            for child_host in [false, true] {
+                let mut page = FakePage::new(json!([]));
+                let outer = frame("outer", url);
+                let inner = frame("inner", &format!("{url}#inner"));
+                let host = frame("host", "https://fixture.test/child");
+                if child_host {
+                    page.frames.push(host.clone());
+                    page.parent_ids.insert("outer".into(), "host".into());
+                }
+                page.frames.extend([outer.clone(), inner.clone()]);
+                page.parent_ids.insert("inner".into(), "outer".into());
+                for f in [&outer, &inner] {
+                    let mut p = probe(json!([widget(kind, "active")]));
+                    p["checked"] = json!(false);
+                    p["addresses"] = json!([url]);
+                    page.frame_results.insert(f.frame_id.clone(), p);
+                }
+                let result = scan(&page).await?;
+                assert_eq!(
+                    result.challenges.len(),
+                    1,
+                    "{kind}, child host {child_host}: {:?}",
+                    result.challenges
+                );
+                let challenge = &result.challenges[0];
+                assert_eq!(challenge.kind.as_str(), kind);
+                assert_eq!(challenge.state, ChallengeState::Active);
+                assert_eq!(
+                    challenge.frame.as_ref().map(|f| &f.frame_id),
+                    Some(&outer.frame_id)
+                );
+                assert_eq!(challenge.host_frame, child_host.then_some(host));
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_separate_vendor_widgets_are_not_folded_together() -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([]));
+        for index in 0..2 {
+            let outer = frame(
+                &format!("outer-{index}"),
+                &format!("https://client-api.arkoselabs.com/widget/{index}"),
+            );
+            let inner = frame(
+                &format!("inner-{index}"),
+                &format!("https://client-api.arkoselabs.com/game/{index}"),
+            );
+            page.parent_ids
+                .insert(inner.frame_id.clone(), outer.frame_id.clone());
+            page.frame_results.insert(
+                inner.frame_id.clone(),
+                probe(json!([widget("arkose", "active")])),
+            );
+            page.frames.extend([outer, inner]);
+        }
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 2);
+        assert!(result.challenges.iter().all(|c| {
+            c.host_frame.is_none()
+                && c.frame
+                    .as_ref()
+                    .is_some_and(|f| f.frame_id.starts_with("outer-"))
+        }));
         Ok(())
     }
 
