@@ -187,7 +187,7 @@ describe('Settings screen', () => {
 
     expect(toggle.getAttribute('aria-label')).toBe('Ask me when it gets stuck')
     expect(textOf(toggle.getAttribute('aria-describedby'))).toBe(
-      'neo pauses and asks you to sign in, enter a code, or solve a captcha. When this is off, your AI agents ask you in their own chat instead.',
+      'If an agent needs you to sign in, type a code or solve a captcha, it waits and you get a notification. When this is off, agents ask you in their own app instead.',
     )
   })
 })

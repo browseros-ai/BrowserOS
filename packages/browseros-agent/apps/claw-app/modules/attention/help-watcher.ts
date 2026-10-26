@@ -28,8 +28,6 @@ export interface AnnouncedStore {
 export interface HelpWatcherOptions {
   alerts: AttentionAlerts
   store: AnnouncedStore
-  /** The person's "Notify me" choice; the badge shows either way. */
-  notifyEnabled: () => Promise<boolean>
 }
 
 export interface HelpWatcher {
@@ -52,9 +50,7 @@ export function createHelpWatcher(options: HelpWatcherOptions): HelpWatcher {
       announced.map((help) => help.requestId),
       open,
     )
-    if (started.length > 0 && (await options.notifyEnabled())) {
-      for (const help of started) await alerts.show(help)
-    }
+    for (const help of started) await alerts.show(help)
     for (const requestId of ended) {
       const gone = announced.find((help) => help.requestId === requestId)
       if (gone) await alerts.clear(requestId, gone.browserTabId)

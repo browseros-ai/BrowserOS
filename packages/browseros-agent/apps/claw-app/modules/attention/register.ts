@@ -10,7 +10,6 @@
 import type { SessionSummary } from '@browseros/claw-api'
 import { ClawApiClient } from '@browseros/claw-api-client'
 import { focusBrowserTab } from '@/modules/api/focus.hooks'
-import { readNotifyPreference } from './attention.preferences'
 import {
   createAttentionAlerts,
   HELP_NOTIFICATION_BUTTONS,
@@ -42,7 +41,6 @@ export function registerAttention(options: AttentionOptions): Attention {
   const watcher = createHelpWatcher({
     alerts,
     store: chromeAnnouncedStore(),
-    notifyEnabled: readNotifyPreference,
   })
   const client = async () =>
     new ClawApiClient(await options.resolveServerBaseUrl(), { fetch })

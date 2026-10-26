@@ -140,7 +140,8 @@ export function notificationPermission(): Promise<'granted' | 'denied'> {
     try {
       chrome.notifications.getPermissionLevel((level) => resolve(level))
     } catch {
-      resolve('denied')
+      // No notification API to ask means nothing to warn about.
+      resolve('granted')
     }
   })
 }

@@ -5,22 +5,9 @@
  */
 
 import { useEffect } from 'react'
-import { createMutation, createQuery } from 'react-query-kit'
+import { createQuery } from 'react-query-kit'
 import { attentionTitle } from './attention.helpers'
-import {
-  readNotifyPreference,
-  writeNotifyPreference,
-} from './attention.preferences'
 import { notificationPermission } from './attention-alerts'
-
-export const useNotifyPreference = createQuery<boolean>({
-  queryKey: ['attention', 'notify'],
-  fetcher: readNotifyPreference,
-})
-
-export const useSetNotifyPreference = createMutation<boolean, boolean>({
-  mutationFn: writeNotifyPreference,
-})
 
 const BASE_TITLE = 'BrowserOS neo'
 

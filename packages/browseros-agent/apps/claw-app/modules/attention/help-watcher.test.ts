@@ -101,7 +101,6 @@ describe('createHelpWatcher', () => {
     const watcher = createHelpWatcher({
       alerts,
       store,
-      notifyEnabled: async () => true,
     })
 
     await watcher.sync([session('a', {})])
@@ -117,27 +116,11 @@ describe('createHelpWatcher', () => {
     ])
   })
 
-  it('keeps the badge but sends no notification when notifying is off', async () => {
-    const { calls, alerts, store, stored } = fakes()
-    const watcher = createHelpWatcher({
-      alerts,
-      store,
-      notifyEnabled: async () => false,
-    })
-
-    await watcher.sync([session('a', {})])
-
-    expect(calls).toEqual(['count 1'])
-    // Remembered anyway, so turning it on later does not announce old ones.
-    expect(stored().map((help) => help.requestId)).toEqual(['req-a'])
-  })
-
   it('does not announce twice when snapshots arrive together', async () => {
     const { calls, alerts, store } = fakes()
     const watcher = createHelpWatcher({
       alerts,
       store,
-      notifyEnabled: async () => true,
     })
 
     await Promise.all([
@@ -155,7 +138,6 @@ describe('createHelpWatcher', () => {
     const watcher = createHelpWatcher({
       alerts,
       store,
-      notifyEnabled: async () => true,
     })
     await watcher.sync([session('a', {})])
 

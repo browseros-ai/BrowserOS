@@ -7,6 +7,7 @@
 import { JevTokenSource } from '@browseros/claw-api'
 import { useQueryClient } from '@tanstack/react-query'
 import {
+  BellRing,
   ChevronDown,
   Monitor,
   Moon,
@@ -16,6 +17,7 @@ import {
 import { useSyncExternalStore } from 'react'
 import { Page } from '@/components/layout/Page'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { Button } from '@/components/motion/button/base'
 import {
   Collapsible,
   CollapsibleContent,
@@ -32,8 +34,10 @@ import {
   useAgentSettings,
   useUpdateAgentSettings,
 } from '@/modules/api/agent-settings.hooks'
+import { useNotificationPermission } from '@/modules/attention/attention.hooks'
+import { showTestNotification } from '@/modules/attention/attention-alerts'
+import { toastApiError } from '@/modules/toast/toast'
 import { HelpSettings } from './HelpSettings'
-import { NotifySetting } from './NotifySetting'
 import { PrivacySettings } from './PrivacySettings'
 import { StorageSettings } from './StorageSettings'
 import { SettingRow, SettingsSection } from './settings.components'
@@ -129,7 +133,6 @@ function AgentSwitches() {
           Couldn’t load these settings. Check that BrowserOS is running, then
           open this page again.
         </p>
-        <NotifySetting />
       </SettingsSection>
     )
   }
@@ -141,7 +144,7 @@ function AgentSwitches() {
       <SettingRow
         id={HUMAN_HELP_ID}
         title="Ask me when it gets stuck"
-        description="neo pauses and asks you to sign in, enter a code, or solve a captcha. When this is off, your AI agents ask you in their own chat instead."
+        description="If an agent needs you to sign in, type a code or solve a captcha, it waits and you get a notification. When this is off, agents ask you in their own app instead."
         control={
           <Switch
             ariaLabel="Ask me when it gets stuck"
@@ -153,7 +156,11 @@ function AgentSwitches() {
             disabled={busy}
           />
         }
-      />
+      >
+        {(settings.data?.humanHelpEnabled ?? true) ? (
+          <NotificationCheck />
+        ) : null}
+      </SettingRow>
       <SettingRow
         id={CLEANUP_TIP_ID}
         title="Tidy up when a task finishes"
@@ -174,8 +181,40 @@ function AgentSwitches() {
           </p>
         ) : null}
       </SettingRow>
-      <NotifySetting />
     </SettingsSection>
+  )
+}
+
+/**
+ * Lets the person see what a notification looks like, which is also when
+ * macOS first asks to allow them, and says plainly if the Mac blocks them.
+ */
+function NotificationCheck() {
+  const permission = useNotificationPermission()
+  return (
+    <div className="flex flex-col items-start gap-2">
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={() =>
+          showTestNotification()
+            .catch((error) =>
+              toastApiError('Couldn’t show a notification', error),
+            )
+            .finally(() => void permission.refetch())
+        }
+        className="font-semibold"
+      >
+        <BellRing aria-hidden className="size-4" />
+        Send a test notification
+      </Button>
+      {permission.data === 'denied' ? (
+        <p role="status" className="text-[13.5px] text-amber-ink">
+          Your Mac is blocking notifications from BrowserOS. To allow them, open
+          System Settings, click Notifications, then BrowserOS.
+        </p>
+      ) : null}
+    </div>
   )
 }
 
