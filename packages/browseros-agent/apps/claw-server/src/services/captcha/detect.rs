@@ -153,6 +153,7 @@ impl Widget {
                 state: ChallengeState::Unknown,
                 frame: None,
                 challenge_frame: None,
+                host_frame: None,
                 sitekey: None,
                 invisible: false,
                 enterprise: false,

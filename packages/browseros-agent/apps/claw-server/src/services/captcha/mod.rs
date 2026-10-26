@@ -1,6 +1,9 @@
+pub mod arkose;
+pub mod aws_waf;
 pub mod config;
 pub mod detect;
 pub mod events;
+pub mod geetest;
 pub mod page;
 pub mod providers;
 pub mod recaptcha;
@@ -406,6 +409,9 @@ impl SolveDriver for LiveDriver {
         match challenge.kind {
             CaptchaKind::RecaptchaV2 => recaptcha::solve(ctx, challenge).await,
             CaptchaKind::Turnstile => turnstile::solve(ctx, challenge).await,
+            CaptchaKind::Geetest => geetest::solve(ctx, challenge).await,
+            CaptchaKind::AwsWaf => aws_waf::solve(ctx, challenge).await,
+            CaptchaKind::Arkose => arkose::solve(ctx, challenge).await,
             _ => terminal(
                 SolveStatus::Unsupported,
                 SolveReason::UnsupportedType,
@@ -616,7 +622,14 @@ mod tests {
 mod orchestration_tests {
     use super::*;
     use serde_json::{Value, json};
-    use std::{collections::VecDeque, sync::Mutex, time::Duration};
+    use std::{
+        collections::VecDeque,
+        sync::{
+            Mutex,
+            atomic::{AtomicU32, Ordering},
+        },
+        time::Duration,
+    };
     use types::{
         CaptchaEventName, CaptchaKind, Challenge, ChallengeState, Detection, FlowResult, FrameRef,
         PageError, Rect, ScanOutcome, SolveStep,
@@ -629,13 +642,24 @@ mod orchestration_tests {
         }
     }
 
-    struct FakePage(Result<DocumentId, PageError>);
+    struct FakePage {
+        document: Result<DocumentId, PageError>,
+        clicks: AtomicU32,
+    }
+    impl FakePage {
+        fn new(document: Result<DocumentId, PageError>) -> Self {
+            Self {
+                document,
+                clicks: AtomicU32::new(0),
+            }
+        }
+    }
     impl CaptchaPage for FakePage {
         async fn eval_main(&self, _: &str) -> Result<Value, PageError> {
             Ok(json!("fake-agent"))
         }
         async fn document(&self) -> Result<DocumentId, PageError> {
-            self.0.clone()
+            self.document.clone()
         }
         async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
             Ok(vec![])
@@ -644,6 +668,7 @@ mod orchestration_tests {
             Ok(Value::Null)
         }
         async fn click_at(&self, _: f64, _: f64) -> Result<(), PageError> {
+            self.clicks.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
         async fn screenshot_clip(&self, _: Rect) -> Result<String, PageError> {
@@ -746,6 +771,7 @@ mod orchestration_tests {
                     state,
                     frame: None,
                     challenge_frame: None,
+                    host_frame: None,
                     sitekey: None,
                     invisible: false,
                     enterprise: false,
@@ -760,7 +786,7 @@ mod orchestration_tests {
     async fn run(driver: &FakeDriver, human_help: bool) -> anyhow::Result<SolveOutcome> {
         service()
             .solve_with(
-                &FakePage(Ok(document("current"))),
+                &FakePage::new(Ok(document("current"))),
                 PageId(42),
                 CancellationToken::new(),
                 human_help,
@@ -862,7 +888,7 @@ mod orchestration_tests {
         };
         let outcome = service
             .solve_with(
-                &FakePage(Ok(document("current"))),
+                &FakePage::new(Ok(document("current"))),
                 PageId(42),
                 CancellationToken::new(),
                 false,
@@ -888,6 +914,60 @@ mod orchestration_tests {
             );
         }
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_new_active_types_stay_unsupported_without_payment_or_clicks()
+    -> anyhow::Result<()> {
+        for kind in [
+            CaptchaKind::Geetest,
+            CaptchaKind::AwsWaf,
+            CaptchaKind::Arkose,
+        ]
+        .into_iter()
+        .filter(|kind| !kind.is_supported())
+        {
+            let service = service();
+            let page = FakePage::new(Ok(document("current")));
+            let driver = FakeDriver::new(scan(&[(kind, ChallengeState::Active)], true));
+            let outcome = service
+                .solve_with(
+                    &page,
+                    PageId(42),
+                    CancellationToken::new(),
+                    false,
+                    Instant::now() + Duration::from_secs(120),
+                    &driver,
+                )
+                .await
+                .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            assert_eq!(
+                (outcome.status, outcome.reason),
+                (SolveStatus::Unsupported, SolveReason::UnsupportedType)
+            );
+            assert_eq!(outcome.kind, Some(kind));
+            assert_eq!(outcome.attempts, Attempts::default());
+            assert_eq!(outcome.paid_tasks, 0);
+            assert_eq!(service.providers.paid_tasks(), 0);
+            assert_eq!(page.clicks.load(Ordering::Relaxed), 0);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_pages_without_frame_main_support_return_the_default_error() {
+        let page = FakePage::new(Ok(document("current")));
+        let frame = FrameRef {
+            frame_id: "child".into(),
+            url: "https://fixture.test".into(),
+            rect: None,
+        };
+        assert_eq!(
+            page.eval_in_frame_main(&frame, "1").await,
+            Err(PageError::Browser(
+                "main-world frame evaluation unavailable".into()
+            ))
+        );
     }
 
     #[tokio::test]
@@ -1023,7 +1103,7 @@ mod orchestration_tests {
             .map_err(|_| anyhow::anyhow!("busy"))?;
         let result = service
             .solve_with(
-                &FakePage(Ok(document("current"))),
+                &FakePage::new(Ok(document("current"))),
                 PageId(42),
                 CancellationToken::new(),
                 false,
@@ -1058,7 +1138,7 @@ mod orchestration_tests {
             }
             let outcome = service
                 .solve_with(
-                    &FakePage(Ok(document("current"))),
+                    &FakePage::new(Ok(document("current"))),
                     PageId(42),
                     cancel,
                     false,
@@ -1091,7 +1171,7 @@ mod orchestration_tests {
     -> anyhow::Result<()> {
         let outcome = service()
             .solve_with(
-                &FakePage(Err(PageError::Closed)),
+                &FakePage::new(Err(PageError::Closed)),
                 PageId(42),
                 CancellationToken::new(),
                 false,
@@ -1232,7 +1312,7 @@ mod orchestration_tests {
             ));
             let outcome = service
                 .solve_with(
-                    &FakePage(Ok(document("current"))),
+                    &FakePage::new(Ok(document("current"))),
                     PageId(42),
                     cancel,
                     false,
@@ -1325,7 +1405,7 @@ mod orchestration_tests {
         let started = Instant::now();
         let outcome = service()
             .solve_with(
-                &FakePage(Ok(document("current"))),
+                &FakePage::new(Ok(document("current"))),
                 PageId(42),
                 CancellationToken::new(),
                 false,
