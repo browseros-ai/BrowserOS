@@ -111,7 +111,7 @@ const TRANSITION: &str = r#"
 return {ready:document.readyState === 'complete' && /^https?:$/.test(location.protocol),
     status:performance.getEntriesByType('navigation')[0]?.responseStatus ?? null,
     navigated:documentStamp() !== args.document,
-    transition:!args.interstitial && args.wasVisible && !all('awswaf-captcha').some(visible),
+    transition:!args.interstitial && args.wasVisible && !all('awswaf-captcha').length,
     captchaFree:!window.gokuProps && !window._cf_chl_opt && !all('#captcha-container, awswaf-captcha, .g-recaptcha, .h-captcha, .cf-turnstile, [class*="geetest_"], [id*="funcaptcha"], [name="g-recaptcha-response"], [name="cf-turnstile-response"], [name="h-captcha-response"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="challenges.cloudflare.com"]').length};
 "#;
 const RETAINED: &str = "/* aws-waf:retained */ const tokens = cookieValues(); return tokens.length === 1 && tokens[0] === args.token;";
@@ -361,50 +361,74 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
         return Ok(unconfirmed());
     }
     loop {
-        let document = bounded(ctx, ctx.page.document()).await?;
-        let evidence = if document != ctx.document {
-            bounded(ctx, ctx.page.eval_main(&script(TRANSITION, &applied))).await?
+        let probe_deadline = if flag(&applied, "interstitial") {
+            until
         } else {
-            eval(ctx, challenge, TRANSITION, &applied).await?
+            ctx.deadline
         };
-        if bounded(ctx, ctx.page.document()).await? != document {
-            return Err(PageError::Navigated);
-        }
-        let navigated = flag(&evidence, "navigated") || document != ctx.document;
-        let accepted = if navigated {
-            flag(&evidence, "ready")
-                && flag(&evidence, "captchaFree")
-                && evidence["status"]
-                    .as_u64()
-                    .is_some_and(|status| (200..300).contains(&status) && status != 202)
-        } else {
-            flag(&evidence, "transition")
+        let observation = tokio::time::timeout_at(probe_deadline, async {
+            let document = bounded(ctx, ctx.page.document()).await?;
+            let evidence = if document != ctx.document {
+                bounded(ctx, ctx.page.eval_main(&script(TRANSITION, &applied))).await?
+            } else {
+                eval(ctx, challenge, TRANSITION, &applied).await?
+            };
+            if bounded(ctx, ctx.page.document()).await? != document {
+                return Err(PageError::Navigated);
+            }
+            Ok((document, evidence))
+        })
+        .await;
+        let observation = match observation {
+            Ok(Ok(value)) => Some(value),
+            Ok(Err(PageError::Navigated | PageError::Browser(_)))
+                if flag(&applied, "interstitial") =>
+            {
+                None
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(_) => return Ok(unconfirmed()),
         };
-        if accepted {
-            return Ok((
-                SolveStatus::Solved,
-                SolveReason::TokenAccepted,
-                "The page accepted the AWS WAF token; continue.".into(),
-            ));
+        if let Some((document, evidence)) = observation {
+            let navigated = flag(&evidence, "navigated") || document != ctx.document;
+            let accepted = if navigated {
+                flag(&evidence, "ready")
+                    && flag(&evidence, "captchaFree")
+                    && evidence["status"]
+                        .as_u64()
+                        .is_some_and(|status| (200..300).contains(&status) && status != 202)
+            } else {
+                flag(&evidence, "transition")
+            };
+            if accepted {
+                return Ok((
+                    SolveStatus::Solved,
+                    SolveReason::TokenAccepted,
+                    "The page accepted the AWS WAF token; continue.".into(),
+                ));
+            }
+            if Instant::now() >= until {
+                if flag(&applied, "interstitial")
+                    || flag(&evidence, "navigated")
+                    || document != ctx.document
+                {
+                    return Ok(unconfirmed());
+                }
+                if eval(ctx, challenge, RETAINED, &applied).await?.as_bool() != Some(true) {
+                    return Ok(unconfirmed());
+                }
+                return Ok((
+                    SolveStatus::TokenApplied,
+                    SolveReason::AwaitingSubmit,
+                    super::token_applied_message(result.callback_ran).replace(
+                        "no callback was declared",
+                        "the site's success callback was unavailable",
+                    ),
+                ));
+            }
         }
         if Instant::now() >= until {
-            if flag(&applied, "interstitial")
-                || flag(&evidence, "navigated")
-                || document != ctx.document
-            {
-                return Ok(unconfirmed());
-            }
-            if eval(ctx, challenge, RETAINED, &applied).await?.as_bool() != Some(true) {
-                return Ok(unconfirmed());
-            }
-            return Ok((
-                SolveStatus::TokenApplied,
-                SolveReason::AwaitingSubmit,
-                super::token_applied_message(result.callback_ran).replace(
-                    "no callback was declared",
-                    "the site's success callback was unavailable",
-                ),
-            ));
+            return Ok(unconfirmed());
         }
         bounded(ctx, async {
             sleep_until(until.min(Instant::now() + Duration::from_millis(250))).await;
@@ -534,6 +558,9 @@ pub(super) fn twocaptcha_task(task: &SolveTask) -> Result<Value, String> {
         return Err("not an AWS WAF task".into());
     };
     validate(p)?;
+    if present(&p.challenge_script).is_none() {
+        return Err("missing AWS WAF voucher exchange endpoint".into());
+    }
     let mut out = json!({"type":"AmazonTaskProxyless","websiteURL":p.website_url});
     if let (Some(k), Some(i), Some(c)) = (present(&p.key), present(&p.iv), present(&p.context)) {
         out["websiteKey"] = json!(k);
@@ -714,6 +741,55 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_voucher_tasks_require_a_readable_exchange_endpoint_before_payment() {
+        for jsapi in [false, true] {
+            let mut p = params();
+            p.challenge_script = None;
+            p.jsapi_script = Some("https://example.captcha-sdk.awswaf.com/a/jsapi.js".into());
+            if jsapi {
+                p.key = None;
+                p.iv = None;
+                p.context = None;
+                p.api_key = Some(STANDARD.encode([b'k'; 64]));
+            }
+            let task = SolveTask::AwsWaf(p);
+            assert!(capsolver_task(&task).is_ok());
+            assert!(twocaptcha_task(&task).is_err());
+        }
+    }
+
+    #[test]
+    fn tests_that_a_hidden_but_present_widget_is_not_an_acceptance_transition() -> anyhow::Result<()>
+    {
+        let probe = script(
+            TRANSITION,
+            &json!({"interstitial":false,"wasVisible":true,
+                "document":serde_json::to_string(&json!(["https://protected.test/gate",1]))?}),
+        );
+        let globals = r#"
+const element = {isConnected:true, getBoundingClientRect:() => ({width:0,height:0}), checkVisibility:() => false};
+globalThis.document = {readyState:'complete', querySelectorAll:s => s === '*' || s.includes('awswaf-captcha') ? [element] : []};
+globalThis.window = {};
+globalThis.location = {href:'https://protected.test/gate',protocol:'https:'};
+Object.defineProperty(globalThis, 'performance', {value:{timeOrigin:1,getEntriesByType:() => []}});
+"#;
+        let output = std::process::Command::new("node")
+            .args(["--input-type=module", "-e"])
+            .arg(format!(
+                "{globals}\nconsole.log(JSON.stringify(await {probe}));"
+            ))
+            .output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "node probe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let evidence: Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(evidence["transition"], json!(false));
+        Ok(())
+    }
+
+    #[test]
     fn tests_that_answers_require_a_cookie_or_the_complete_voucher_pair() {
         let task = SolveTask::AwsWaf(params());
         assert_eq!(
@@ -878,6 +954,9 @@ mod tests {
         retained: bool,
         navigate_on_solve: bool,
         navigated: bool,
+        reload_during_verify: bool,
+        verify_error: Option<PageError>,
+        verify_delay: Duration,
         framed: bool,
         apply_delay: Duration,
     }
@@ -893,6 +972,9 @@ mod tests {
                 retained: true,
                 navigate_on_solve: false,
                 navigated: false,
+                reload_during_verify: false,
+                verify_error: None,
+                verify_delay: Duration::ZERO,
                 framed: false,
                 apply_delay: Duration::ZERO,
             }
@@ -911,6 +993,10 @@ mod tests {
                 let delay = self.state().apply_delay;
                 tokio::time::sleep(delay).await;
             }
+            if expression.contains("aws-waf:verify") {
+                let delay = self.state().verify_delay;
+                tokio::time::sleep(delay).await;
+            }
             let mut state = self.state();
             assert_eq!(framed, state.framed, "wrong document");
             state.calls.push((framed, expression.to_owned()));
@@ -921,6 +1007,13 @@ mod tests {
                 return Ok(state.applied.clone());
             }
             if expression.contains("aws-waf:verify") {
+                if state.reload_during_verify {
+                    state.reload_during_verify = false;
+                    state.navigated = true;
+                    if let Some(error) = state.verify_error.take() {
+                        return Err(error);
+                    }
+                }
                 return Ok(state.evidence.clone());
             }
             if expression.contains("aws-waf:retained") {
@@ -1141,6 +1234,26 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn tests_that_an_interstitial_reload_during_verification_is_retried() -> anyhow::Result<()>
+    {
+        for error in [
+            None,
+            Some(PageError::Navigated),
+            Some(PageError::Browser("Execution context was destroyed".into())),
+        ] {
+            let page = FakePage::default();
+            page.state().reload_during_verify = true;
+            page.state().verify_error = error;
+            let result = run(&page, &FakeBackend::new(&page), &CancellationToken::new()).await?;
+            assert_eq!(
+                (result.status, result.reason),
+                (SolveStatus::Solved, SolveReason::TokenAccepted)
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn tests_that_jsapi_cookies_await_submission_without_visible_acceptance()
     -> anyhow::Result<()> {
         for callback in [false, true] {
@@ -1157,6 +1270,7 @@ mod tests {
                 json!({"written":true,"callbackRan":callback,"interstitial":false});
             page.state().evidence =
                 json!({"ready":true,"captchaFree":false,"navigated":false,"transition":false});
+            page.state().verify_delay = Duration::from_millis(5);
             let result = run(&page, &FakeBackend::new(&page), &CancellationToken::new()).await?;
             assert_eq!(
                 (result.status, result.reason),
