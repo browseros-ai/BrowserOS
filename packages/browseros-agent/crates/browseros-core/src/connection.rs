@@ -224,6 +224,10 @@ impl ProtocolSession {
         self.session_id == other.session_id
     }
 
+    pub(crate) fn connection(&self) -> &Arc<dyn CdpConnection> {
+        &self.connection
+    }
+
     /// Cleanup must reach the original session even after page-scope admission
     /// has been revoked (for example a moved tab). Retain the socket epoch and
     /// session identity; callers may only use this for idempotent cancellation.

@@ -534,7 +534,7 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
                 }
                 _ => Vec::new(),
             };
-            let ctx = ToolCtx::new(BrowserToolOptions {
+            let mut ctx = ToolCtx::new(BrowserToolOptions {
                 browser: view.clone().with_pointer(Pointer::default()),
                 target: Some(call.target_store.clone()),
                 defaults: BrowserToolDefaults {
@@ -546,6 +546,7 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
                 inner_call_hook,
                 preloaded_helpers,
             });
+            ctx.hosted = call.state.config.mode.is_hosted();
             // A tab group is destroyed when its last page is reparented. Explicit
             // placement must share the detached grouper's conversation lock, so a
             // callback cannot erase a group after we return its successful ID.
@@ -1507,6 +1508,54 @@ mod tests {
             listing.pages[0].window_id,
             Some(browseros_core::WindowId(2))
         );
+        Ok(())
+    }
+
+    /// The hosted gate holds inside run as well: a desktop server's script cannot reach the
+    /// viewport-mode tool through page.toggleMode, while a hosted server's script can.
+    #[tokio::test]
+    async fn run_reaches_toggle_mode_only_on_a_hosted_server() -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call_in_mode};
+        use crate::config::ServerMode;
+        for mode in [ServerMode::Desktop, ServerMode::Hosted] {
+            let transport = ProfileConnection::new();
+            let browser = BrowserSession::new_with_native(
+                transport.clone(),
+                browseros_core::BrowserSessionHooks::default(),
+                browseros_core::NativeCapabilities::from_browseros_version(Some("0.51.1.2")),
+            );
+            browser.pages.list().await?;
+            let mut call = tool_call_in_mode(
+                "run",
+                json!({"code":"return await browser.page(1).toggleMode({ mode: 'desktop' })"}),
+                mode,
+            )
+            .await?;
+            call.browser_session = Some(browser.clone());
+            call.view = Some(BrowserView::capture(browser.clone(), None, None).await);
+            let result = dispatch_tool_call(call).await?;
+            let text = result
+                .content
+                .iter()
+                .filter_map(|content| content.as_text())
+                .map(|content| content.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let refused = text.contains("hosted_only");
+            assert_eq!(refused, mode == ServerMode::Desktop, "{mode:?}: {text}");
+            let emulation = transport
+                .calls
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .iter()
+                .filter(|(method, _)| method.starts_with("Emulation."))
+                .count();
+            assert_eq!(
+                emulation > 0,
+                mode == ServerMode::Hosted,
+                "{mode:?}: {text}"
+            );
+        }
         Ok(())
     }
 

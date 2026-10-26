@@ -74,6 +74,18 @@ pub enum CoreError {
         required: BrowserOsVersion,
         reported: Option<BrowserOsVersion>,
     },
+    /// A caller tried to change the viewport of a tab held in a fixed mode.
+    #[error(
+        "viewport_locked: page {page} is in fixed {mode} mode; call toggleMode with mode \"freesize\" first, then change its viewport"
+    )]
+    ViewportLocked { page: PageId, mode: &'static str },
+    /// A viewport mode change failed at `step`; `state` is what the tab was left in.
+    #[error("mobile_mode_failed: {step} failed: {detail}; final state: {state}")]
+    MobileMode {
+        step: String,
+        state: crate::mobile_mode::MobileModeState,
+        detail: String,
+    },
     #[error(transparent)]
     Cdp(#[from] CdpError),
     #[error(transparent)]

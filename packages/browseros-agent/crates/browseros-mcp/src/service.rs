@@ -334,10 +334,11 @@ impl ServerHandler for BrowserMcpService {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
+        // This generic server is never a hosted one, so hosted-only tools are not offered.
         let tools = self
             .catalog
             .iter()
-            .filter(|tool| tool.available(self.native))
+            .filter(|tool| tool.available(self.native) && !tool.metadata.hosted_only)
             .map(|tool| tool.to_mcp_tool(self.native))
             .collect::<Vec<_>>();
         std::future::ready(Ok(ListToolsResult::with_all_items(tools)))

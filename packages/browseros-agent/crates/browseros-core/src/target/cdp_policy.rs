@@ -317,6 +317,8 @@ fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
         ]),
         "Emulation.clearDeviceMetricsOverride" => Some(&[]),
         "Emulation.setTouchEmulationEnabled" => Some(&["enabled", "maxTouchPoints"]),
+        "Emulation.setUserAgentOverride" => Some(&["userAgent", "userAgentMetadata"]),
+        "Emulation.setVisibleSize" => Some(&["width", "height"]),
         "Emulation.setEmulatedMedia" => Some(&["media", "features"]),
         _ => None,
     }

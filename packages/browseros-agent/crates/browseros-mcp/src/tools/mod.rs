@@ -11,6 +11,7 @@ pub mod download;
 pub mod evaluate;
 pub mod grep;
 pub mod history;
+pub mod mobile_mode;
 pub mod navigate;
 mod page_creation;
 pub mod pdf;
@@ -44,6 +45,7 @@ pub fn catalog() -> Vec<ToolDef> {
         grep::definition(),
         screenshot::definition(),
         pdf::definition(),
+        mobile_mode::definition(),
         wait::definition(),
         windows::definition(),
         evaluate::definition(),
@@ -120,6 +122,7 @@ fn metadata_for_tool(name: &str) -> ToolMetadata {
             _ => None,
         },
         manages_target: matches!(name, "browser_target" | "browser_profiles"),
+        hosted_only: name == "toggleMode",
         accepts_page_arg: matches!(
             name,
             "credentials"
@@ -134,6 +137,7 @@ fn metadata_for_tool(name: &str) -> ToolMetadata {
                 | "grep"
                 | "screenshot"
                 | "pdf"
+                | "toggleMode"
                 | "wait"
                 | "evaluate"
         ),

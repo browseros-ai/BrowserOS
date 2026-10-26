@@ -179,6 +179,7 @@ impl AppState {
             sessions.ownership(),
             tab_registry.clone(),
             config.native.capabilities,
+            config.mode.is_hosted(),
         );
         let live_recordings = LiveRecordingBus::new();
         let recording_ingest = RecordingIngestService::new(

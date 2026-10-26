@@ -91,6 +91,7 @@ impl BrowserSession {
         let page_hooks = PageManagerHooks {
             on_session_attached: Some(frame_hook),
             on_page_detached: Some(detach_hook),
+            desktop_by_default: hooks.page_manager.desktop_by_default,
         };
         let pages = Arc::new(PageManager::new(connection.clone(), page_hooks));
         let windows = Arc::new(WindowManager::new(connection.clone()));
