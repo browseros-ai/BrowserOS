@@ -122,7 +122,7 @@ function SkillCard({ skill, now }: { skill: Skill; now: number }) {
       className="relative w-full gap-2.5 border-border-2 bg-card px-4 pt-4 pb-3.5 shadow-card transition-[border-color,box-shadow] hover:border-primary/35 hover:shadow-pop has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring"
     >
       <div className="flex min-h-8 items-center gap-2.5">
-        <SiteBadge className="size-8 rounded-[10px]" />
+        <SiteBadge site={skill.site} className="size-8 rounded-[10px]" />
         <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink-3">
           {skill.site ?? 'Any website'}
         </span>

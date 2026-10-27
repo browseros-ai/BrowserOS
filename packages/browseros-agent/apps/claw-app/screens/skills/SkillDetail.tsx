@@ -74,7 +74,7 @@ export function SkillDetail() {
         back={BACK}
         eyebrow={
           <>
-            <SiteBadge className="size-8 rounded-[10px]" />
+            <SiteBadge site={skill.site} className="size-8 rounded-[10px]" />
             <span className="text-[14px] text-ink-3">
               {skill.site ?? 'Any website'}
             </span>
