@@ -124,31 +124,70 @@ pub(super) fn clear_commands() -> Vec<(&'static str, Value)> {
     ]
 }
 
-/// Android Chrome's reduced user agent and client hints for this browser's Chromium version.
+/// What Google Chrome on an Android phone sends for this browser's Chromium version: the reduced
+/// user agent and its client hints. The device's own model and Android version are high-entropy
+/// hints, so they stay plausible rather than the frozen "K" and "10" of the user agent.
 fn mobile_identity(chrome_version: &str) -> Value {
-    let major = chrome_version.split('.').next().unwrap_or(chrome_version);
+    let major = major_version(chrome_version).unwrap_or_default();
     json!({
         "userAgent": format!(
             "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Mobile Safari/537.36"
         ),
         "userAgentMetadata": {
-            "brands": [
-                {"brand": "Chromium", "version": major},
-                {"brand": "Not/A)Brand", "version": "24"}
-            ],
-            "fullVersionList": [
-                {"brand": "Chromium", "version": chrome_version},
-                {"brand": "Not/A)Brand", "version": "24.0.0.0"}
-            ],
+            "brands": chrome_brands(major, None),
+            "fullVersionList": chrome_brands(major, Some(chrome_version)),
+            "fullVersion": chrome_version,
             "platform": "Android",
-            "platformVersion": "10.0.0",
+            "platformVersion": "14.0.0",
             "architecture": "",
-            "model": "K",
+            "model": "Pixel 7",
             "mobile": true,
             "bitness": "",
-            "wow64": false
+            "wow64": false,
+            "formFactors": ["Mobile"]
         }
     })
+}
+
+/// Chrome's own brand list (Chromium's `GenerateBrandVersionList`): a GREASE brand, Chromium and
+/// Google Chrome, named, versioned and ordered by values seeded with the major version.
+fn chrome_brands(major: u64, full_version: Option<&str>) -> Value {
+    const GREASE_CHARS: [&str; 11] = [" ", "(", ":", "-", ".", "/", ")", ";", "=", "?", "_"];
+    const GREASE_VERSIONS: [&str; 3] = ["8", "99", "24"];
+    const ORDERS: [[usize; 3]; 6] = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ];
+    let seed = usize::try_from(major).unwrap_or_default();
+    let grease = format!(
+        "Not{}A{}Brand",
+        GREASE_CHARS[seed % GREASE_CHARS.len()],
+        GREASE_CHARS[(seed + 1) % GREASE_CHARS.len()]
+    );
+    let grease_version = GREASE_VERSIONS[seed % GREASE_VERSIONS.len()];
+    let (grease_version, chrome) = match full_version {
+        Some(full) => (format!("{grease_version}.0.0.0"), full.to_string()),
+        None => (grease_version.to_string(), major.to_string()),
+    };
+    let generated = [
+        (grease, grease_version),
+        ("Chromium".to_string(), chrome.clone()),
+        ("Google Chrome".to_string(), chrome),
+    ];
+    let order = ORDERS[seed % ORDERS.len()];
+    let mut brands = vec![Value::Null; generated.len()];
+    for (index, (brand, version)) in generated.into_iter().enumerate() {
+        brands[order[index]] = json!({"brand": brand, "version": version});
+    }
+    Value::Array(brands)
+}
+
+fn major_version(chrome_version: &str) -> Option<u64> {
+    chrome_version.split('.').next()?.parse().ok()
 }
 
 /// The Chromium version from `Browser.getVersion`, e.g. `155.0.8315.26`.
@@ -158,6 +197,7 @@ pub(super) fn chrome_version(reply: &Value) -> Option<String> {
             .as_str()
             .and_then(|text| text.split("Chrome/").nth(1))
             .and_then(|rest| rest.split_whitespace().next())
+            .filter(|version| major_version(version).is_some())
             .map(ToString::to_string)
     };
     from(&reply["product"]).or_else(|| from(&reply["userAgent"]))

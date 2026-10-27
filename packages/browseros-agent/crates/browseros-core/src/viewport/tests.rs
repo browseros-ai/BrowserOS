@@ -50,6 +50,7 @@ struct Fake {
     tampered: bool,
     /// `Emulation.clearDeviceMetricsOverride` fails, as on a page that just went away.
     fail_clear: bool,
+    chrome_version: String,
 }
 
 struct Native {
@@ -94,6 +95,7 @@ impl Native {
                 moved_to: None,
                 tampered: false,
                 fail_clear: false,
+                chrome_version: "155.0.8315.26".to_string(),
             }),
             events,
         })
@@ -224,7 +226,7 @@ impl Native {
                 json!({"sessionId": id})
             }
             "Browser.getVersion" => {
-                json!({"protocolVersion":"1.3","product":"Chrome/155.0.8315.26",
+                json!({"protocolVersion":"1.3","product":format!("Chrome/{}", fake.chrome_version),
                 "revision":"@0","jsVersion":"15.5",
                 "userAgent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"})
             }
@@ -1280,5 +1282,73 @@ async fn tests_that_a_capture_after_a_switch_to_default_holds_off_the_next_chang
     assert!(emulation_methods(&fixture.native.methods()).is_empty());
     drop(capture);
     change.await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_mobile_identity_matches_google_chrome_on_android() -> TestResult {
+    // Real Chrome 131 sends "Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24".
+    for (version, brands) in [
+        (
+            "131.0.6778.86",
+            [
+                ("Google Chrome", "131"),
+                ("Chromium", "131"),
+                ("Not_A Brand", "24"),
+            ],
+        ),
+        (
+            "155.0.8315.26",
+            [
+                ("Google Chrome", "155"),
+                ("Chromium", "155"),
+                ("Not(A:Brand", "24"),
+            ],
+        ),
+    ] {
+        let fixture = Fixture::new(&[(1, 10)]);
+        fixture.native.lock().chrome_version = version.to_string();
+        let page = fixture.page(1).await?;
+        fixture.set(&page, ViewportMode::Mobile, None).await?;
+
+        let identity = fixture
+            .native
+            .only("Emulation.setUserAgentOverride")?
+            .params;
+        let major = version.split('.').next().unwrap_or_default();
+        assert_eq!(
+            identity["userAgent"],
+            format!(
+                "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Mobile Safari/537.36"
+            )
+        );
+        let metadata = &identity["userAgentMetadata"];
+        let majors: Vec<Value> = brands
+            .iter()
+            .map(|(brand, major)| json!({"brand": brand, "version": major}))
+            .collect();
+        assert_eq!(metadata["brands"], json!(majors), "{version}");
+        let fulls: Vec<Value> = brands
+            .iter()
+            .map(|(brand, major)| {
+                let full = if brand.starts_with("Not") {
+                    format!("{major}.0.0.0")
+                } else {
+                    version.to_string()
+                };
+                json!({"brand": brand, "version": full})
+            })
+            .collect();
+        assert_eq!(metadata["fullVersionList"], json!(fulls), "{version}");
+        assert_eq!(metadata["fullVersion"], version);
+        assert_eq!(
+            (
+                &metadata["platform"],
+                &metadata["mobile"],
+                &metadata["formFactors"]
+            ),
+            (&json!("Android"), &json!(true), &json!(["Mobile"]))
+        );
+    }
     Ok(())
 }
