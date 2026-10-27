@@ -125,10 +125,10 @@ prepare_data() {
     "$PROFILE/.browseros/BrowserClawServer/current_version"
 }
 
-# Neo never zooms (see start_neo), so pages zoomed before, per site or through
-# a changed default, go back to 100%. start_neo runs it before every launch,
-# while Neo is stopped, so a level saved before Neo closed is gone when it
-# comes back. Only zoom levels are dropped, and a profile whose preferences
+# Viewers can't zoom Neo (see start_neo), but the menu's zoom buttons still
+# work, so pages zoomed before, per site or through a changed default, go back
+# to 100%. start_neo runs it before every launch, while Neo is stopped, so a
+# level saved before Neo closed is gone when it comes back. Only zoom levels are dropped, and a profile whose preferences
 # cannot be read keeps them and still starts.
 forget_zoom_levels() {
   local prefs="$PROFILE/Default/Preferences"
@@ -236,13 +236,11 @@ apply_minimal_ui() {
   chown -R neo:neo "$NEO_HOME/.config"
 }
 
-# Neo never zooms: the page a viewer pinches is the page agents work in, so
-# viewers zoom their own browser instead (README "Zoom"). --disable-pinch stops
-# touch pinch. --browseros-disable-zoom keeps every tab at 100% whatever the
-# keyboard, Ctrl + mouse wheel, menu or saved zoom levels ask for; browsers
-# without it ignore the switch, and openbox-rc.xml takes the zoom keys and
-# Ctrl + mouse wheel (noVNC's pinch) before they reach the browser.
-# setViewport's zoom is DevTools emulation, not browser zoom, and still works.
+# Viewers can't zoom Neo: the page a viewer pinches is the page agents work in,
+# so viewers zoom their own browser instead (README "Zoom"). --disable-pinch
+# stops touch pinch, and openbox-rc.xml takes the zoom keys and Ctrl + mouse
+# wheel (noVNC's pinch) before they reach the browser. setViewport's zoom is
+# DevTools emulation, not browser zoom, and still works.
 start_neo() {
   forget_zoom_levels
   # Releases verify the packaged/overlaid server, so pin it for the image's
@@ -264,7 +262,6 @@ start_neo() {
     --hide-crash-restore-bubble \
     --start-maximized \
     --disable-pinch \
-    --browseros-disable-zoom \
     --disable-browseros-features="$HIDDEN_BROWSEROS_FEATURES" \
     $NEO_ARGS
   neo_pid=$!

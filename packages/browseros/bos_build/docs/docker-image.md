@@ -223,13 +223,11 @@ GitHub documents package Actions access in
   policy for the bar and an empty GTK button layout on every container start. Browsers
   before 0.51.2.5 ignore the switch; `smoke.py` catches that because a new tab page is
   then not `about:blank`.
-- **Neo never zooms.** `start_neo` passes `--disable-pinch` and `--browseros-disable-zoom`,
-  which holds every tab at 100%; browsers without the switch (0.51.2.7 and earlier) ignore it.
-  `openbox-rc.xml` also takes Chromium's zoom keys and Ctrl + mouse wheel (noVNC's pinch)
-  before Neo sees them, which covers those browsers, and `start_neo` drops zoom levels saved in
-  the profile before every launch, restarts included (`forget_zoom_levels`). The release smoke
-  runs `check_zoom.py`, which drives the VNC server like the viewer and fails if the page
-  zooms, so it covers both mechanisms.
+- **Viewers can't zoom Neo.** `start_neo` passes `--disable-pinch`, and `openbox-rc.xml` takes
+  Chromium's zoom keys and Ctrl + mouse wheel (noVNC's pinch) before Neo sees them. The menu's
+  zoom buttons still work, so `start_neo` drops zoom levels saved in the profile before every
+  launch, restarts included (`forget_zoom_levels`). The release smoke runs `check_zoom.py`,
+  which drives the VNC server like the viewer and fails if the page zooms.
 - **Bundled BrowserOS extensions are off by default** (`NEO_DISABLE_BROWSEROS_EXTENSIONS=true`),
   which also leaves rrweb recordings empty. The release smoke sets the variable explicitly
   for both values, so it covers the extensions-on image too.

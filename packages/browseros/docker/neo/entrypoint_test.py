@@ -50,13 +50,12 @@ class StartNeoTest(unittest.TestCase):
 
         self.assertEqual(argv[0], "browserclaw")
         self.assertIn("--disable-pinch", argv)
-        self.assertIn("--browseros-disable-zoom", argv)
 
     def test_neo_args_still_come_last(self):
         _, argv = self.launch("--lang=de --disable-browseros-features=")
 
         self.assertEqual(argv[-2:], ["--lang=de", "--disable-browseros-features="])
-        self.assertLess(argv.index("--browseros-disable-zoom"), len(argv) - 2)
+        self.assertLess(argv.index("--disable-pinch"), len(argv) - 2)
 
     def test_every_launch_first_drops_saved_zoom_levels(self):
         # The supervisor loop relaunches Neo through start_neo after it closes.
