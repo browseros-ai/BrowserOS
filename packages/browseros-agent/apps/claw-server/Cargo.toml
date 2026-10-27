@@ -24,7 +24,7 @@ claw-api.workspace = true
 hosted-api.workspace = true
 
 anyhow.workspace = true
-axum.workspace = true
+axum = { workspace = true, features = ["ws"] }
 base64.workspace = true
 bytes.workspace = true
 clap.workspace = true
