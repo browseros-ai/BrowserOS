@@ -125,6 +125,18 @@ impl Fixed {
     }
 }
 
+/// Whether a raw protocol call replaces something a fixed mode set on the page session.
+pub(super) fn overrides(method: &str) -> bool {
+    matches!(
+        method,
+        "Emulation.setDeviceMetricsOverride"
+            | "Emulation.clearDeviceMetricsOverride"
+            | "Emulation.setTouchEmulationEnabled"
+            | "Emulation.setUserAgentOverride"
+            | "Emulation.setVisibleSize"
+    )
+}
+
 /// Undoes exactly what [`Fixed::commands`] set.
 pub(super) fn clear_commands() -> Vec<(&'static str, Value)> {
     vec![

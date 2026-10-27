@@ -392,6 +392,25 @@ impl BrowserView {
             None => crate::viewport::ViewportLease::default(),
         }
     }
+    /// A caller's raw `method` can replace what a fixed viewport set on its page session. The
+    /// guard, dropped when the call ends however it ends, makes that tab's next operation put
+    /// its mode back.
+    async fn viewport_reapply(
+        &self,
+        method: &str,
+        page: Option<PageId>,
+        session: Option<&SessionId>,
+    ) -> Option<crate::viewport::Reapply> {
+        let viewports = self.viewports.as_ref()?;
+        if !crate::viewport::overrides(method) {
+            return None;
+        }
+        let page = match page {
+            Some(page) => page,
+            None => self.session.pages.page_for_session(session?).await?.page_id,
+        };
+        Some(viewports.reapply(page))
+    }
     /// Restores the page's fixed viewport and window before a page operation. Hold the lease
     /// until the operation, including its readback, is done.
     pub async fn prepare_viewport(
@@ -1398,6 +1417,7 @@ impl BrowserView {
         // Raw CDP passes the native gate before any routing. Only methods and (method,
         // parameter) pairs a FEATURES row lists can be refused; internal calls never send them.
         self.native().check_raw(method, &params)?;
+        let _reapply = self.viewport_reapply(method, None, session).await;
         if self.scope()?.is_none() {
             if self.expected_created_page.is_some() {
                 // An unbound creation callback remains global in routing, but it cannot
@@ -1431,6 +1451,9 @@ impl BrowserView {
         params_json: &str,
     ) -> Result<String, CoreError> {
         self.native().check_raw_json(method, params_json)?;
+        let _reapply = self
+            .viewport_reapply(method, Some(page.clone()), None)
+            .await;
         if self.epoch_guard()?.is_none() {
             return self
                 .session

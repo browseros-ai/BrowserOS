@@ -769,6 +769,62 @@ async fn tests_that_a_page_ignoring_emulation_is_reported_as_a_failure() -> Test
 }
 
 #[tokio::test]
+async fn tests_that_a_raw_override_on_a_fixed_tab_is_undone_by_its_next_operation() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    fixture
+        .set(&page, ViewportMode::Mobile, Some(150.0))
+        .await?;
+    let session = fixture.view.page_session(page.clone()).await?.session_id;
+
+    // A caller's raw calls share the page session with the mode: page.cdp, then browser.cdp
+    // addressed to the page's session.
+    for raw in ["page", "session"] {
+        if raw == "page" {
+            fixture
+                .view
+                .cdp_json_for_page(page.clone(), "Emulation.clearDeviceMetricsOverride", "{}")
+                .await?;
+        } else {
+            fixture
+                .view
+                .cdp(
+                    "Emulation.setDeviceMetricsOverride",
+                    json!({"width": 777, "height": 555, "deviceScaleFactor": 1, "mobile": false}),
+                    Some(&session),
+                )
+                .await?;
+        }
+        fixture.native.clear_calls();
+        drop(fixture.view.prepare_viewport(page.clone()).await?);
+        let methods = emulation_methods(&fixture.native.methods());
+        for method in [
+            "Emulation.setDeviceMetricsOverride",
+            "Emulation.setVisibleSize",
+        ] {
+            assert!(
+                methods.iter().any(|sent| sent == method),
+                "{raw}: {methods:?}"
+            );
+        }
+    }
+
+    // A raw call that leaves the mode's overrides alone changes nothing.
+    fixture
+        .view
+        .cdp_json_for_page(
+            page.clone(),
+            "Emulation.setFocusEmulationEnabled",
+            r#"{"enabled": true}"#,
+        )
+        .await?;
+    fixture.native.clear_calls();
+    drop(fixture.view.prepare_viewport(page).await?);
+    assert!(emulation_methods(&fixture.native.methods()).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn tests_that_default_clears_what_a_failed_change_left_on_the_page() -> TestResult {
     let fixture = Fixture::new(&[(1, 10)]);
     let page = fixture.page(1).await?;

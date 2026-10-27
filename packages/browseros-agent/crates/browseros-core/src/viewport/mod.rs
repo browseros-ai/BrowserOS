@@ -245,7 +245,40 @@ pub struct ViewportLease {
     _exclusive: Option<OwnedRwLockWriteGuard<WindowSlot>>,
 }
 
+/// Held across a caller's raw call that replaces what a fixed mode set on the page session.
+/// Once dropped, however the call ended, the tab's next operation applies its mode again.
+pub(crate) struct Reapply {
+    viewports: Arc<Viewports>,
+    page: PageId,
+}
+
+impl Drop for Reapply {
+    fn drop(&mut self) {
+        if let Some(tab) = self
+            .viewports
+            .tabs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(&self.page)
+        {
+            tab.applied = None;
+        }
+    }
+}
+
+/// Whether a caller's raw `method` replaces something a fixed mode set on the page session.
+pub(crate) fn overrides(method: &str) -> bool {
+    device::overrides(method)
+}
+
 impl Viewports {
+    pub(crate) fn reapply(self: &Arc<Self>, page: PageId) -> Reapply {
+        Reapply {
+            viewports: Arc::clone(self),
+            page,
+        }
+    }
+
     pub(crate) fn pointer_scale(&self, page: &PageId) -> f64 {
         self.tab(page).map_or(1.0, |tab| tab.fixed.scale())
     }
