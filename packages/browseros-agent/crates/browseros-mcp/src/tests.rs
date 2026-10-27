@@ -14,8 +14,9 @@ use crate::{
 };
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::{
-    BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, NativeCapabilities, PageId,
-    SessionId,
+    BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, DocumentMark,
+    NativeCapabilities, PageId, SessionId,
+    settle::SettleOutcome,
     snapshot::{AxNode, AxValue, SnapshotDiff},
 };
 use futures_util::future::BoxFuture;
@@ -23,7 +24,7 @@ use rmcp::handler::server::ServerHandler;
 use serde_json::{Value, json};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -178,6 +179,9 @@ struct HarnessConnection {
     calls: Mutex<Vec<HarnessCall>>,
     created_tab: Mutex<Option<Value>>,
     emit_console_on_input: AtomicBool,
+    /// The page's DOM mutation count, as the readiness probe reports it. A test bumps it to
+    /// stand in for the page changing.
+    mutations: AtomicU64,
 }
 
 impl HarnessConnection {
@@ -188,6 +192,7 @@ impl HarnessConnection {
             calls: Mutex::new(Vec::new()),
             created_tab: Mutex::new(None),
             emit_console_on_input: AtomicBool::new(false),
+            mutations: AtomicU64::new(0),
         })
     }
 
@@ -334,6 +339,19 @@ impl CdpConnection for HarnessConnection {
                 "Accessibility.getFullAXTree" => {
                     assert_eq!(params, json!({}));
                     Ok(json!({ "nodes": snapshot_nodes() }))
+                }
+                "Runtime.evaluate"
+                    if params
+                        .get("expression")
+                        .and_then(Value::as_str)
+                        .is_some_and(|expression| expression.contains("__browseros_ready")) =>
+                {
+                    Ok(json!({ "result": { "value": {
+                        "n": self.mutations.load(Ordering::SeqCst),
+                        "installed": false,
+                        "showing": true,
+                        "complete": true
+                    } } }))
                 }
                 "Runtime.evaluate" => Ok(json!({ "result": { "value": 0 } })),
                 "Input.dispatchKeyEvent" => {
@@ -1599,7 +1617,7 @@ async fn diff_formatter_keeps_unchanged_compact() {
 async fn diff_post_action_failure_is_visible() {
     let ctx = fake_ctx();
     let mut response = ToolResponse::new();
-    response.include_diff(7, true, DiffDetail::Full);
+    response.include_diff(7, true, DiffDetail::Full, DocumentMark::default());
     let built = response
         .build_for_session(&ctx, None)
         .await
@@ -1614,6 +1632,249 @@ async fn diff_post_action_failure_is_visible() {
     assert!(text.contains("[page 7 diff unavailable:"));
     assert!(built.structured_content.is_none());
     assert!(!built.is_error);
+}
+
+fn started_navigating(frame: &str, navigation_type: &str) -> Value {
+    json!({
+        "frameId": frame,
+        "url": "https://example.test/next",
+        "loaderId": "loader-2",
+        "navigationType": navigation_type
+    })
+}
+
+/// Emits each event on the harness page's session once its offset from now has passed.
+fn emit_later(connection: &Arc<HarnessConnection>, events: Vec<(u64, &'static str, Value)>) {
+    let connection = connection.clone();
+    let start = tokio::time::Instant::now();
+    tokio::spawn(async move {
+        for (at_ms, method, params) in events {
+            tokio::time::sleep_until(start + Duration::from_millis(at_ms)).await;
+            connection.emit(method, params, Some("session-1"));
+        }
+    });
+}
+
+async fn settle_from(ctx: &ToolCtx, page: u32, mark: DocumentMark) -> (SettleOutcome, Duration) {
+    let start = tokio::time::Instant::now();
+    let outcome = crate::settle::wait_for_action_settle(&ctx.browser, PageId(page), mark).await;
+    (outcome, start.elapsed())
+}
+
+#[tokio::test]
+async fn settle_returns_after_one_quiet_interval_when_nothing_navigates() {
+    let (ctx, _connection, page) = harness_ctx().await;
+    let mark = ctx.browser.signals().document_mark(&PageId(page));
+    let (outcome, elapsed) = settle_from(&ctx, page, mark).await;
+    assert_eq!(
+        outcome,
+        SettleOutcome::Settled {
+            navigation_observed: false
+        }
+    );
+    // The polling settle spent 150ms looking for a navigation before its quiet interval.
+    assert!(elapsed < Duration::from_millis(250), "took {elapsed:?}");
+}
+
+#[tokio::test]
+async fn settle_waits_out_dom_changes_for_one_quiet_interval() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let mark = ctx.browser.signals().document_mark(&PageId(page));
+    let page_changes = connection.clone();
+    tokio::spawn(async move {
+        for _ in 0..2 {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            page_changes.mutations.fetch_add(5, Ordering::SeqCst);
+        }
+    });
+    let (outcome, elapsed) = settle_from(&ctx, page, mark).await;
+    assert_eq!(
+        outcome,
+        SettleOutcome::Settled {
+            navigation_observed: false
+        }
+    );
+    assert!(elapsed >= Duration::from_millis(250), "took {elapsed:?}");
+}
+
+#[tokio::test]
+async fn settle_waits_for_a_new_document_before_reading_quiet() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let mark = ctx.browser.signals().document_mark(&PageId(page));
+    emit_later(
+        &connection,
+        vec![
+            (
+                30,
+                "Page.frameStartedNavigating",
+                started_navigating("target-1", "differentDocument"),
+            ),
+            (
+                350,
+                "Page.domContentEventFired",
+                json!({ "timestamp": 1.0 }),
+            ),
+        ],
+    );
+    let (outcome, elapsed) = settle_from(&ctx, page, mark).await;
+    assert_eq!(
+        outcome,
+        SettleOutcome::Settled {
+            navigation_observed: true
+        }
+    );
+    // DOMContentLoaded at 350ms, then one quiet interval on the new document.
+    assert!(elapsed >= Duration::from_millis(400), "took {elapsed:?}");
+    assert!(elapsed < Duration::from_millis(1_000), "took {elapsed:?}");
+}
+
+#[tokio::test]
+async fn settle_gives_a_navigation_the_arrival_budget() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let mark = ctx.browser.signals().document_mark(&PageId(page));
+    emit_later(
+        &connection,
+        vec![(
+            30,
+            "Page.frameStartedNavigating",
+            started_navigating("target-1", "differentDocument"),
+        )],
+    );
+    let (outcome, elapsed) = settle_from(&ctx, page, mark).await;
+    assert_eq!(outcome, SettleOutcome::BudgetExpired);
+    assert!(
+        elapsed >= browseros_core::timeouts::ARRIVAL_READY_BUDGET - Duration::from_millis(50),
+        "a navigation should get the arrival ceiling, took {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn settle_stops_waiting_when_a_navigation_ends_without_a_document() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let mark = ctx.browser.signals().document_mark(&PageId(page));
+    emit_later(
+        &connection,
+        vec![
+            (
+                30,
+                "Page.frameStartedNavigating",
+                started_navigating("target-1", "differentDocument"),
+            ),
+            (
+                120,
+                "Page.frameStoppedLoading",
+                json!({ "frameId": "target-1" }),
+            ),
+        ],
+    );
+    let (outcome, elapsed) = settle_from(&ctx, page, mark).await;
+    assert_eq!(
+        outcome,
+        SettleOutcome::Settled {
+            navigation_observed: true
+        }
+    );
+    assert!(elapsed < Duration::from_millis(600), "took {elapsed:?}");
+}
+
+#[tokio::test]
+async fn settle_ignores_subframe_and_same_document_navigations() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let mark = ctx.browser.signals().document_mark(&PageId(page));
+    emit_later(
+        &connection,
+        vec![
+            (
+                20,
+                "Page.frameStartedNavigating",
+                started_navigating("ad-frame", "differentDocument"),
+            ),
+            (
+                20,
+                "Page.frameStartedNavigating",
+                started_navigating("target-1", "sameDocument"),
+            ),
+        ],
+    );
+    let (outcome, elapsed) = settle_from(&ctx, page, mark).await;
+    assert_eq!(
+        outcome,
+        SettleOutcome::Settled {
+            navigation_observed: false
+        }
+    );
+    assert!(elapsed < Duration::from_millis(250), "took {elapsed:?}");
+}
+
+#[tokio::test]
+async fn settle_does_not_blame_the_action_for_an_earlier_navigation() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let signals = ctx.browser.signals().clone();
+    let before = signals.document_mark(&PageId(page));
+    connection.emit(
+        "Page.frameStartedNavigating",
+        started_navigating("target-1", "differentDocument"),
+        Some("session-1"),
+    );
+    eventually(|| signals.document_mark(&PageId(page)) != before).await;
+
+    let mark = signals.document_mark(&PageId(page));
+    let (outcome, elapsed) = settle_from(&ctx, page, mark).await;
+    assert_eq!(
+        outcome,
+        SettleOutcome::Settled {
+            navigation_observed: false
+        }
+    );
+    assert!(elapsed < Duration::from_millis(250), "took {elapsed:?}");
+}
+
+#[tokio::test]
+async fn settle_stops_for_an_open_dialog() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let signals = ctx.browser.signals().clone();
+    connection.emit(
+        "Page.javascriptDialogOpening",
+        json!({ "type": "confirm", "message": "Leave site?" }),
+        Some("session-1"),
+    );
+    eventually(|| signals.pending_dialog(&PageId(page)).is_some()).await;
+    let mark = signals.document_mark(&PageId(page));
+    let (outcome, _elapsed) = settle_from(&ctx, page, mark).await;
+    assert!(
+        matches!(&outcome, SettleOutcome::Skipped { reason } if reason.contains("dialog open")),
+        "unexpected outcome {outcome:?}"
+    );
+}
+
+/// `navigate` and `tabs new` attach a snapshot after their own readiness wait; settling again
+/// before it only added latency.
+#[tokio::test]
+async fn a_snapshot_post_action_reads_without_settling() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let mut response = ToolResponse::new();
+    response.include_snapshot(page);
+    let built = response
+        .build_for_session(&ctx, None)
+        .await
+        .unwrap_or_else(|err| panic!("snapshot post-action should build: {err}"));
+    let text = built
+        .content
+        .iter()
+        .filter_map(|content| content.as_text())
+        .map(|content| content.text.as_ref())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains(&format!("[Page {page} snapshot]")), "{text}");
+    let probed = connection.calls().iter().any(|call| {
+        call.method == "Runtime.evaluate"
+            && call
+                .params
+                .get("expression")
+                .and_then(Value::as_str)
+                .is_some_and(|expression| expression.contains("__browseros_ready"))
+    });
+    assert!(!probed, "a snapshot post-action must not settle first");
 }
 
 #[test]

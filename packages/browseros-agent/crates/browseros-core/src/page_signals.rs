@@ -5,12 +5,49 @@ use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, Mutex, MutexGuard},
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 use tracing::{debug, warn};
 
 const CONSOLE_RING_CAPACITY: usize = 50;
 const ALERT_NOTE_CAPACITY: usize = 10;
 const SUMMARY_TEXT_MAX_CHARS: usize = 240;
+/// Document events kept per page. A settle reads only the events after its own mark, a second
+/// or so of history, and out-of-process frames report on sessions of their own, so a page
+/// rarely produces more than a handful in that window.
+const DOCUMENT_EVENT_CAPACITY: usize = 32;
+
+/// A position in a page's document events, taken before an action so a settle can tell the
+/// navigations that action caused from earlier ones.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DocumentMark(u64);
+
+/// Where a page's main-frame document stands, counted from a [`DocumentMark`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentSince {
+    /// No cross-document navigation of the main frame started after the mark.
+    Unchanged,
+    /// One started and its document has not reached DOMContentLoaded.
+    Loading,
+    /// The latest one reached DOMContentLoaded, or stopped loading without a document, as a
+    /// download or a 204 does.
+    Arrived,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DocumentEventKind {
+    NavigationStarted,
+    /// `Page.domContentEventFired`, which Chromium sends only for the session's root frame.
+    ContentLoaded,
+    LoadingStopped,
+}
+
+#[derive(Debug, Clone)]
+struct DocumentEvent {
+    sequence: u64,
+    kind: DocumentEventKind,
+    /// The frame the event names; `None` for the root-frame-only DOMContentLoaded.
+    frame: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageDialog {
@@ -112,6 +149,8 @@ struct PageSignalState {
     alert_notes: VecDeque<String>,
     console_entries: VecDeque<ConsoleEntry>,
     next_console_sequence: u64,
+    document_events: VecDeque<DocumentEvent>,
+    next_document_sequence: u64,
 }
 
 #[derive(Default)]
@@ -127,6 +166,9 @@ pub struct PageSignals {
     cdp: Arc<dyn CdpConnection>,
     state: Arc<Mutex<SignalsState>>,
     scope: Option<SignalAdmission>,
+    /// Bumped after every recorded document event, on any page. Waiters re-read their own
+    /// page's state when it moves; scoped projections share it with the source.
+    document_changes: Arc<watch::Sender<u64>>,
 }
 
 impl PageSignals {
@@ -136,6 +178,7 @@ impl PageSignals {
             cdp,
             state: Arc::new(Mutex::new(SignalsState::default())),
             scope: None,
+            document_changes: Arc::new(watch::channel(0).0),
         });
         Self::spawn_event_listener(signals.clone());
         signals
@@ -148,6 +191,7 @@ impl PageSignals {
             cdp: source.cdp.clone(),
             state: source.state.clone(),
             scope: Some(scope),
+            document_changes: source.document_changes.clone(),
         })
     }
     fn allowed(&self, page: &PageId) -> bool {
@@ -257,6 +301,69 @@ impl PageSignals {
             .unwrap_or_default()
     }
 
+    #[must_use]
+    pub fn document_mark(&self, page_id: &PageId) -> DocumentMark {
+        if !self.allowed(page_id) {
+            return DocumentMark::default();
+        }
+        DocumentMark(
+            self.state()
+                .pages
+                .get(page_id)
+                .map(|page| page.next_document_sequence)
+                .unwrap_or(0),
+        )
+    }
+
+    /// Whether the page's main frame started a new document after `mark`, and whether that
+    /// document has arrived.
+    ///
+    /// `main_frame` is the page's target id: Chromium names a tab's main frame with the same
+    /// devtools token as its target. Events of any other frame on the session (same-process
+    /// iframes) are ignored, so an ad iframe navigating never reads as the page navigating.
+    #[must_use]
+    pub fn document_since(
+        &self,
+        page_id: &PageId,
+        main_frame: &str,
+        mark: DocumentMark,
+    ) -> DocumentSince {
+        if !self.allowed(page_id) {
+            return DocumentSince::Unchanged;
+        }
+        let state = self.state();
+        let Some(page) = state.pages.get(page_id) else {
+            return DocumentSince::Unchanged;
+        };
+        let mut since = DocumentSince::Unchanged;
+        for event in page
+            .document_events
+            .iter()
+            .filter(|event| event.sequence >= mark.0)
+        {
+            let main = event.frame.as_deref() == Some(main_frame);
+            since = match (event.kind, since) {
+                (DocumentEventKind::NavigationStarted, _) if main => DocumentSince::Loading,
+                (DocumentEventKind::ContentLoaded, DocumentSince::Loading) => {
+                    DocumentSince::Arrived
+                }
+                (DocumentEventKind::LoadingStopped, DocumentSince::Loading) if main => {
+                    DocumentSince::Arrived
+                }
+                (_, unchanged) => unchanged,
+            };
+        }
+        since
+    }
+
+    /// Changes whenever a document event is recorded on any page. Subscribe before reading
+    /// [`Self::document_since`] so an event landing between the read and the wait still wakes
+    /// the waiter.
+    #[must_use]
+    pub fn document_changes(&self) -> watch::Receiver<u64> {
+        self.document_changes.subscribe()
+    }
+
     pub fn take_alert_note_lines(&self, page_id: &PageId) -> Vec<String> {
         if !self.allowed(page_id) {
             return Vec::new();
@@ -298,8 +405,59 @@ impl PageSignals {
             "Page.javascriptDialogClosed" => self.handle_dialog_closed(event),
             "Runtime.consoleAPICalled" => self.handle_console_api_called(event),
             "Runtime.exceptionThrown" => self.handle_exception_thrown(event),
+            "Page.frameStartedNavigating" => {
+                // Same-document navigations (pushState, fragments) keep the document, so the
+                // DOM quiet check covers them; only a new document is worth waiting for.
+                let cross_document = matches!(
+                    event.params.get("navigationType").and_then(Value::as_str),
+                    Some(
+                        "differentDocument"
+                            | "historyDifferentDocument"
+                            | "reload"
+                            | "reloadBypassingCache"
+                            | "restore"
+                            | "restoreWithPost"
+                    )
+                );
+                if cross_document {
+                    self.record_document_event(&event, DocumentEventKind::NavigationStarted);
+                }
+            }
+            "Page.domContentEventFired" => {
+                self.record_document_event(&event, DocumentEventKind::ContentLoaded);
+            }
+            "Page.frameStoppedLoading" => {
+                self.record_document_event(&event, DocumentEventKind::LoadingStopped);
+            }
             _ => {}
         }
+    }
+
+    fn record_document_event(&self, event: &CdpEvent, kind: DocumentEventKind) {
+        let Some((page_id, _session_id)) = self.page_for_event(event) else {
+            return;
+        };
+        let frame = event
+            .params
+            .get("frameId")
+            .and_then(Value::as_str)
+            .map(ToString::to_string);
+        {
+            let mut state = self.state();
+            let page = state.pages.entry(page_id).or_default();
+            let sequence = page.next_document_sequence;
+            page.next_document_sequence = sequence.saturating_add(1);
+            if page.document_events.len() == DOCUMENT_EVENT_CAPACITY {
+                page.document_events.pop_front();
+            }
+            page.document_events.push_back(DocumentEvent {
+                sequence,
+                kind,
+                frame,
+            });
+        }
+        self.document_changes
+            .send_modify(|changes| *changes = changes.wrapping_add(1));
     }
 
     async fn handle_dialog_opening(&self, event: CdpEvent) {
@@ -542,7 +700,7 @@ fn clamp_chars(value: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::PageSignals;
+    use super::{DocumentSince, PageSignals};
     use crate::{CdpConnection, PageId, SessionId};
     use browseros_cdp::{CdpError, CdpEvent};
     use futures_util::future::BoxFuture;
@@ -653,6 +811,110 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert!(condition());
+    }
+
+    fn navigation(frame: &str, navigation_type: &str) -> Value {
+        json!({
+            "frameId": frame,
+            "url": "https://example.test/next",
+            "loaderId": "loader-2",
+            "navigationType": navigation_type
+        })
+    }
+
+    #[tokio::test]
+    async fn a_main_frame_navigation_is_loading_until_its_content_loads() {
+        let (signals, connection, page_id) = harness();
+        let mark = signals.document_mark(&page_id);
+        assert_eq!(
+            signals.document_since(&page_id, "main", mark),
+            DocumentSince::Unchanged
+        );
+
+        connection.emit(
+            "Page.frameStartedNavigating",
+            navigation("main", "differentDocument"),
+            Some("session-7"),
+        );
+        eventually(|| signals.document_since(&page_id, "main", mark) == DocumentSince::Loading)
+            .await;
+
+        connection.emit(
+            "Page.domContentEventFired",
+            json!({ "timestamp": 1.0 }),
+            Some("session-7"),
+        );
+        eventually(|| signals.document_since(&page_id, "main", mark) == DocumentSince::Arrived)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn a_navigation_that_stops_without_a_document_has_arrived() {
+        let (signals, connection, page_id) = harness();
+        let mark = signals.document_mark(&page_id);
+        connection.emit(
+            "Page.frameStartedNavigating",
+            navigation("main", "differentDocument"),
+            Some("session-7"),
+        );
+        // A download or a 204 stops loading without ever firing DOMContentLoaded.
+        connection.emit(
+            "Page.frameStoppedLoading",
+            json!({ "frameId": "main" }),
+            Some("session-7"),
+        );
+        eventually(|| signals.document_since(&page_id, "main", mark) == DocumentSince::Arrived)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn subframe_same_document_and_earlier_navigations_leave_the_document_unchanged() {
+        let (signals, connection, page_id) = harness();
+        let before = signals.document_mark(&page_id);
+        connection.emit(
+            "Page.frameStartedNavigating",
+            navigation("main", "differentDocument"),
+            Some("session-7"),
+        );
+        eventually(|| signals.document_mark(&page_id) != before).await;
+
+        let mark = signals.document_mark(&page_id);
+        connection.emit(
+            "Page.frameStartedNavigating",
+            navigation("child", "differentDocument"),
+            Some("session-7"),
+        );
+        connection.emit(
+            "Page.frameStartedNavigating",
+            navigation("main", "sameDocument"),
+            Some("session-7"),
+        );
+        connection.emit(
+            "Page.frameStartedNavigating",
+            navigation("main", "differentDocument"),
+            Some("session-other"),
+        );
+        // Only the child's start and stop are recorded; once both are, the listener has handled
+        // every event above, so the assertion below cannot run ahead of them.
+        connection.emit(
+            "Page.frameStoppedLoading",
+            json!({ "frameId": "child" }),
+            Some("session-7"),
+        );
+        eventually(|| signals.document_mark(&page_id).0 == mark.0 + 2).await;
+        assert_eq!(
+            signals.document_since(&page_id, "main", mark),
+            DocumentSince::Unchanged
+        );
+    }
+
+    #[tokio::test]
+    async fn document_events_wake_a_waiter() {
+        let (signals, connection, _page_id) = harness();
+        let mut changes = signals.document_changes();
+        connection.emit("Page.domContentEventFired", json!({}), Some("session-7"));
+        let woke = tokio::time::timeout(Duration::from_secs(1), changes.changed()).await;
+        assert!(matches!(woke, Ok(Ok(()))));
     }
 
     #[tokio::test]

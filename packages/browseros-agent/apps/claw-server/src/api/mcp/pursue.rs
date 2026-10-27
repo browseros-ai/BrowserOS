@@ -65,27 +65,25 @@ const WAITED_FOR_BUDGET: std::time::Duration = std::time::Duration::from_millis(
 
 /// Waits for the page to stop changing, for a bounded time.
 ///
-/// `browseros_core` already has this: it reads the tab's loading flag, waits out
-/// a navigation if it saw one, then watches a `MutationObserver` counter until
-/// two reads agree. The shared default budget is 50ms, which cannot reach its
-/// own 150ms navigation detect window or its own 100ms quiet interval, and its
-/// comment says it is short on purpose so that an agent's actions stay
-/// responsive, with the explicit `wait` tool for anything slower. That trade is
-/// right for a model that can name what it is waiting for. jev cannot write a
-/// selector or a substring, and a wait decision costs it a whole request, so it
-/// passes its own budget instead.
+/// The readiness wait goto and tab creation use: the page's DOM holding still
+/// for one quiet interval, with something showing or the document complete.
+/// It never waits on images or the load event, which the snapshot read next
+/// does not see. A move's own navigation is already waited out by the tool
+/// that made it (`act` waits for the new document before its diff, `navigate`
+/// for readiness), so this only has to catch a page still filling in. jev
+/// cannot write a selector or a substring for the `wait` tool, and a wait
+/// decision costs it a whole request, so it passes its own budget instead.
 ///
-/// The outcome is deliberately discarded. `BudgetExpired` means the page is
-/// still moving and the ceiling was reached, which is the case the ceiling is
-/// for; `Skipped` means the page could not be evaluated, and a snapshot is
-/// still the right next move. There is nothing a caller could do differently
-/// with either.
+/// The outcome is deliberately discarded. `StillMoving` means the ceiling was
+/// reached, which is the case the ceiling is for; `Unknown` means the page
+/// could not be evaluated, and a snapshot is still the right next move. There
+/// is nothing a caller could do differently with either.
 async fn settle(
     pages: &browseros_core::pages::PageManager,
     page: u32,
     budget: std::time::Duration,
 ) {
-    let _ = browseros_core::settle::wait_for_action_settle(pages, PageId(page), budget).await;
+    let _ = browseros_core::settle::wait_for_page_ready(pages, PageId(page), budget).await;
 }
 
 /// Where each tool sits in the connected peer's catalogue.

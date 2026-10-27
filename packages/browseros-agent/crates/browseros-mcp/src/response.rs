@@ -10,7 +10,7 @@ use crate::{
     },
     framework::{AuditHints, ToolCtx, ToolError, ToolExecResult, ToolResult, merge_structured},
 };
-use browseros_core::{ConsoleEntry, PageId, pointer, settle::SettleOutcome};
+use browseros_core::{ConsoleEntry, DocumentMark, PageId, pointer, settle::SettleOutcome};
 use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
 
@@ -23,6 +23,9 @@ enum PostAction {
         page: u32,
         include_structured: bool,
         detail: DiffDetail,
+        /// Taken before the action ran, so the settle can tell a navigation it caused from
+        /// an earlier one.
+        since: DocumentMark,
     },
     Pages,
     Screenshot {
@@ -97,15 +100,26 @@ impl ToolResponse {
         }
     }
 
+    /// Appends the page's snapshot without settling first: callers return only after the page
+    /// was already found ready (goto, history and tab creation wait for readiness), and a
+    /// second wait was measured adding 300-600 ms to every `navigate` for nothing.
     pub fn include_snapshot(&mut self, page: u32) {
         self.post_actions.push(PostAction::Snapshot { page });
     }
 
-    pub fn include_diff(&mut self, page: u32, include_structured: bool, detail: DiffDetail) {
+    /// Appends what changed on the page, once the action that started at `since` has landed.
+    pub fn include_diff(
+        &mut self,
+        page: u32,
+        include_structured: bool,
+        detail: DiffDetail,
+        since: DocumentMark,
+    ) {
         self.post_actions.push(PostAction::Diff {
             page,
             include_structured,
             detail,
+            since,
         });
     }
 
@@ -201,6 +215,7 @@ impl ToolResponse {
                 page,
                 include_structured,
                 detail,
+                ..
             } => {
                 self.throw_if_dialog_open(ctx, page)?;
                 let diff = ctx
@@ -306,7 +321,7 @@ impl ToolResponse {
         action: &PostAction,
         ctx: &ToolCtx,
     ) -> ToolExecResult<()> {
-        let Some(page) = action.settle_page() else {
+        let Some((page, since)) = action.settle_target() else {
             return Ok(());
         };
         if ctx
@@ -323,7 +338,7 @@ impl ToolResponse {
             outcome = crate::settle::wait_for_action_settle(
                 &ctx.browser,
                 PageId(page),
-                browseros_core::timeouts::ACTION_SETTLE_DEFAULT_TIMEOUT,
+                since,
             ) => outcome,
         };
         match outcome {
@@ -430,10 +445,11 @@ impl BuiltToolResponse {
 }
 
 impl PostAction {
-    fn settle_page(&self) -> Option<u32> {
+    /// The page to settle before this post-action reads it, and the mark its action started at.
+    fn settle_target(&self) -> Option<(u32, DocumentMark)> {
         match self {
-            Self::Snapshot { page } | Self::Diff { page, .. } => Some(*page),
-            Self::Pages | Self::Screenshot { .. } => None,
+            Self::Diff { page, since, .. } => Some((*page, *since)),
+            Self::Snapshot { .. } | Self::Pages | Self::Screenshot { .. } => None,
         }
     }
 
