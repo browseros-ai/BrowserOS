@@ -33,13 +33,21 @@ pub enum NativeFeature {
     /// PR #2908: saved-profile discovery/loading, window/tab identity sidecars, and
     /// profile-scoped routing for History and tab/window creation.
     ProfileTargeting,
-    /// Saved-password inventory, explicit storage and acknowledged native filling.
+    /// Saved-password inventory, explicit storage and acknowledged native filling, served
+    /// by BrowserOS's own `Passwords` CDP domain.
     Credentials,
+    /// Saved payment card metadata, card saves and native card filling, served by
+    /// BrowserOS's own `Payments` CDP domain.
+    PaymentCards,
 }
 
 impl NativeFeature {
     /// Every feature, for hosts that publish a flag per feature (the run runtime).
-    pub const ALL: &'static [Self] = &[Self::ProfileTargeting, Self::Credentials];
+    pub const ALL: &'static [Self] = &[
+        Self::ProfileTargeting,
+        Self::Credentials,
+        Self::PaymentCards,
+    ];
 
     /// Stable camelCase key for machine-readable surfaces such as run's feature flags.
     #[must_use]
@@ -47,6 +55,7 @@ impl NativeFeature {
         match self {
             Self::ProfileTargeting => "profileTargeting",
             Self::Credentials => "credentials",
+            Self::PaymentCards => "paymentCards",
         }
     }
 
@@ -141,13 +150,28 @@ const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         feature: NativeFeature::Credentials,
         label: "credentials",
-        min_browseros: BrowserOsVersion::new(0, 51, 2, 1),
+        // 0.51.2.1 served these commands from upstream's Autofill domain; 0.51.2.7 moved
+        // them, wire shapes unchanged, into BrowserOS's own Passwords domain.
+        min_browseros: BrowserOsVersion::new(0, 51, 2, 7),
         raw_methods: &[
-            "Autofill.getCredentialContext",
-            "Autofill.listCredentials",
-            "Autofill.addCredential",
-            "Autofill.fillCredential",
-            "Autofill.cancelCredentialOperation",
+            "Passwords.getContext",
+            "Passwords.listCredentials",
+            "Passwords.addCredential",
+            "Passwords.fillCredential",
+            "Passwords.cancelOperation",
+        ],
+        raw_params: &[],
+    },
+    FeatureSpec {
+        feature: NativeFeature::PaymentCards,
+        label: "payment cards",
+        min_browseros: BrowserOsVersion::new(0, 51, 2, 7),
+        raw_methods: &[
+            "Payments.getContext",
+            "Payments.listCards",
+            "Payments.addCard",
+            "Payments.fillCard",
+            "Payments.cancelOperation",
         ],
         raw_params: &[],
     },

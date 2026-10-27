@@ -621,6 +621,7 @@ fn catalog_order_is_stable() {
             "tab_groups",
             "history",
             "credentials",
+            "payment_cards",
             "navigate",
             "snapshot",
             "diff",
@@ -654,6 +655,7 @@ fn catalog_page_metadata_matches_host_dispatch_contract() {
             ("tab_groups", false),
             ("history", false),
             ("credentials", true),
+            ("payment_cards", true),
             ("navigate", true),
             ("snapshot", true),
             ("diff", true),
@@ -829,7 +831,13 @@ fn structured_tools_advertise_output_schemas() {
         .collect::<Vec<_>>();
     assert_eq!(
         advertised,
-        ["browser_profiles", "browser_target", "credentials", "run"]
+        [
+            "browser_profiles",
+            "browser_target",
+            "credentials",
+            "payment_cards",
+            "run"
+        ]
     );
 }
 
@@ -1890,3 +1898,5 @@ fn optional_enum_arguments_keep_their_variants_and_stay_optional() {
 
 #[path = "credentials_tests.rs"]
 mod credentials_tests;
+#[path = "payment_cards_tests.rs"]
+mod payment_cards_tests;

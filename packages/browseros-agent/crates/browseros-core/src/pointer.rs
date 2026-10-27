@@ -2,10 +2,12 @@
 //!
 //! All pointer state lives in the page: `assets/agent-pointer.js` keeps one player
 //! per document under `Symbol.for('browseros.agentPointer')` and removes it when
-//! idle. This module holds no state; every call is one bounded `Runtime.evaluate`
-//! through the caller's guarded session, and a drawing failure never fails input.
+//! idle. This module holds no state; every call is one bounded isolated-world evaluation
+//! (`PageJs::isolated`) through the caller's guarded session, and a drawing failure never
+//! fails input. Move, ripple, hide and show must share that world: a pointer drawn in one world
+//! is invisible to a hide sent to another, and would then show up in screenshots.
 
-use crate::{ProtocolSession, input::Point, timeouts};
+use crate::{PageJs, ProtocolSession, input::Point, timeouts};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::OnceLock;
@@ -54,14 +56,11 @@ impl Pointer {
         let expression = template.replace("__BROWSEROS_POINTER_CMD__", &command.to_string());
         match timeout(
             timeouts::POINTER_MOVE_DEADLINE,
-            session.send::<_, Value>(
-                "Runtime.evaluate",
-                json!({ "expression": expression, "awaitPromise": true, "returnByValue": true }),
-            ),
+            PageJs::isolated(session).eval::<Value>(&expression),
         )
         .await
         {
-            Ok(Ok(reply)) => match reply["result"]["value"]["status"].as_str() {
+            Ok(Ok(reply)) => match reply["status"].as_str() {
                 Some("skipped") => {
                     tracing::debug!("agent pointer move skipped");
                     false
@@ -108,17 +107,13 @@ pub async fn restore_after_capture(session: &ProtocolSession) {
 }
 
 async fn evaluate_bool(session: &ProtocolSession, expression: &str) -> Option<bool> {
-    let reply = timeout(
+    timeout(
         timeouts::POINTER_EFFECT_DEADLINE,
-        session.send::<_, Value>(
-            "Runtime.evaluate",
-            json!({ "expression": expression, "returnByValue": true, "awaitPromise": false }),
-        ),
+        PageJs::isolated(session).eval::<Option<bool>>(expression),
     )
     .await
     .ok()?
-    .ok()?;
-    reply.get("result")?.get("value")?.as_bool()
+    .ok()?
 }
 
 #[cfg(test)]
@@ -225,7 +220,6 @@ mod tests {
             .await;
         let calls = connection.calls()?;
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].params["awaitPromise"], false);
         assert_eq!(calls[0].params["returnByValue"], true);
         let expression = calls[0].params["expression"]
             .as_str()

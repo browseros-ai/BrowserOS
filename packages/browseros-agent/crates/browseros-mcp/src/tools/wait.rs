@@ -2,7 +2,7 @@ use crate::framework::{
     ToolCtx, ToolExecResult, ToolResult, abortable_delay, clamp_timeout, error_result, parse_args,
     pending_dialog_result, text_result,
 };
-use browseros_core::PageId;
+use browseros_core::{CoreError, PageId, PageJs};
 use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -55,16 +55,6 @@ struct WaitArgs {
     value: Option<WaitValue>,
     /// Max wait in ms. For "text"/"selector" it caps polling before giving up (default 10000, capped at 30000). For "time" it optionally caps the pause from above (default: pause for value).
     timeout: Option<f64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct EvaluateResult {
-    result: RemoteObject,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteObject {
-    value: Option<Value>,
 }
 
 pub fn definition() -> crate::framework::ToolDef {
@@ -120,14 +110,16 @@ fn handler<'a>(
         let deadline = Instant::now() + Duration::from_millis(timeout);
         while Instant::now() < deadline {
             ctx.throw_if_cancelled()?;
-            let result: EvaluateResult = page
-                .session
-                .send(
-                    "Runtime.evaluate",
-                    json!({ "expression": expression, "returnByValue": true }),
-                )
-                .await?;
-            if result.result.value.as_ref().and_then(Value::as_bool) == Some(true) {
+            // A throwing predicate (an invalid selector) has not matched; keep polling.
+            let matched = match PageJs::isolated(&page.session)
+                .eval::<Option<bool>>(&expression)
+                .await
+            {
+                Ok(matched) => matched,
+                Err(CoreError::PageScript(_)) => None,
+                Err(error) => return Err(error.into()),
+            };
+            if matched == Some(true) {
                 return Ok(Some(text_result(
                     format!("matched ({})", wait_for_name(&args.wait_for)),
                     Some(json!({ "matched": true })),

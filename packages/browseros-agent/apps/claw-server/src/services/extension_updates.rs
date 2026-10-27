@@ -4,7 +4,7 @@
 //! third-party extension state are read or modified by this service.
 
 use super::{browser::BrowserService, sessions::Sessions};
-use browseros_core::{BrowserSession, SessionId};
+use browseros_core::{BrowserSession, CoreError, PageJs, SessionId};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
@@ -219,21 +219,15 @@ async fn evaluate(
     session: &SessionId,
     expression: String,
 ) -> Result<Value, String> {
-    let response = browser
-        .cdp(
-            "Runtime.evaluate",
-            json!({"expression":expression,"awaitPromise":true,"returnByValue":true}),
-            Some(session),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    if response.get("exceptionDetails").is_some() {
-        return Err("extension update API rejected the request".into());
+    let worker = browser.protocol_session(session.clone());
+    // A service worker has one JavaScript context, which is what the page world names there.
+    match PageJs::page_world(&worker).eval_value(&expression).await {
+        Ok(result) => result
+            .value
+            .ok_or_else(|| "extension update API returned no value".into()),
+        Err(CoreError::PageScript(_)) => Err("extension update API rejected the request".into()),
+        Err(error) => Err(error.to_string()),
     }
-    response["result"]
-        .get("value")
-        .cloned()
-        .ok_or_else(|| "extension update API returned no value".into())
 }
 
 /// A cancelled timeout must not strand a debugger session on the worker. Normal

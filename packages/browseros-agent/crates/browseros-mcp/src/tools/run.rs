@@ -318,6 +318,9 @@ const BOOTSTRAP_JS: &str = r#"
       ...(__browserosFeatures.viewport
         ? { setViewport: (opts) => call('viewport.set', [pageId, opts]) }
         : {}),
+      ...(__browserosFeatures.paymentCards
+        ? { paymentCards: (opts) => tool('payment_cards', opts) }
+        : {}),
       screenshot: (opts) => tool('screenshot', opts),
       pdf: (opts) => tool('pdf', opts),
       // A real function is serialized here, before the JSON boundary drops it.
@@ -351,6 +354,9 @@ const BOOTSTRAP_JS: &str = r#"
     history: (opts) => call('tool:history', [opts]),
     ...(__browserosFeatures.credentials
       ? { credentials: (opts) => call('tool:credentials', [opts]) }
+      : {}),
+    ...(__browserosFeatures.paymentCards
+      ? { paymentCards: (opts) => call('tool:payment_cards', [opts]) }
       : {}),
     // Discovery only: Rust refuses tool:browser_profiles/browser_target on older natives
     // whether or not a script finds a way to call them.
@@ -847,6 +853,23 @@ fn install_globals<'js>(
 }
 
 impl BrowserBridge {
+    /// The page a primitive fills a card into, including raw
+    /// `browser.cdp(method, params, sessionId)` sent to a page's session.
+    async fn card_fill_page(&self, method: &str, args: &[Value]) -> Option<u32> {
+        if let Some(page) = crate::tools::sensitive::primitive_card_fill_page(method, args) {
+            return Some(page);
+        }
+        if method != "cdp" || !crate::tools::sensitive::fills_card(args.first()?.as_str()?) {
+            return None;
+        }
+        let session = SessionId::from(args.get(2)?.as_str()?.to_owned());
+        self.ctx
+            .browser
+            .page_for_session(&session)
+            .await
+            .map(|page| page.0)
+    }
+
     async fn call(
         &self,
         method: &str,
@@ -856,16 +879,19 @@ impl BrowserBridge {
         let args = parse_bridge_args(args_json)?;
         let page = target_page(method, &args);
         // Mark before host authorization/native gating: even a rejected call may
-        // have a password literal in its parent script or serialized CDP input.
-        let credential_input = crate::tools::credentials::is_credential_primitive(method, &args);
-        if credential_input && let Some(hook) = &self.ctx.inner_call_hook {
-            hook.mark_credential_input();
+        // have a password or card literal in its parent script or serialized CDP input.
+        let sensitive_input = crate::tools::sensitive::is_sensitive_primitive(method, &args);
+        if sensitive_input && let Some(hook) = &self.ctx.inner_call_hook {
+            hook.mark_sensitive_input();
         }
         // Kept for the audit record and the self-healing distiller; dispatch
         // consumes the owned args below.
         let recorded_args = Value::Array(args.clone());
         if let Some(hook) = &self.ctx.inner_call_hook {
             hook.authorize(page).await?;
+            if let Some(card_page) = self.card_fill_page(method, &args).await {
+                hook.hold_card_data(card_page).await;
+            }
         }
         // Tool-backed primitives restore inside execute_tool; taking the window twice would
         // wait on itself.
@@ -1340,6 +1366,7 @@ fn tool_def(name: &str) -> Option<ToolDef> {
         "act" => tools::act::definition(),
         "history" => tools::history::definition(),
         "credentials" => tools::credentials::definition(),
+        "payment_cards" => tools::payment_cards::definition(),
         "browser_profiles" => tools::browser_profiles::definition(),
         "browser_target" => tools::browser_target::definition(),
         _ => return None,
@@ -1406,7 +1433,9 @@ fn parse_bridge_args(args_json: &str) -> Result<Vec<Value>, String> {
 /// variants) carry the page id as their first argument; the rest address no
 /// specific page.
 fn target_page(method: &str, args: &[Value]) -> Option<u32> {
-    if method == "tool:credentials" && args.first().is_some_and(Value::is_object) {
+    if matches!(method, "tool:credentials" | "tool:payment_cards")
+        && args.first().is_some_and(Value::is_object)
+    {
         return args
             .first()?
             .get("page")?

@@ -1444,6 +1444,15 @@ impl BrowserView {
         }
         self.scoped_root_cdp(method, params).await
     }
+    /// The page whose attached CDP session is `session`, if the registry knows it.
+    pub async fn page_for_session(&self, session: &SessionId) -> Option<PageId> {
+        self.session
+            .pages
+            .page_for_session(session)
+            .await
+            .map(|page| page.page_id)
+    }
+
     pub async fn cdp_json_for_page(
         &self,
         page: PageId,
@@ -1556,16 +1565,14 @@ impl BrowserView {
                 {
                     return Err(cdp_policy::unsupported("Runtime.evaluate"));
                 }
-                let result = crate::ProtocolSession::for_session(
-                    self.session.connection(),
-                    session.clone(),
-                )
-                .with_epoch_guard(Some(worker_guard.clone()))
-                .send_value(
-                    "Runtime.evaluate",
-                    json!({"expression":expression,"returnByValue":true,"awaitPromise":true}),
-                )
-                .await?;
+                let worker =
+                    crate::ProtocolSession::for_session(self.session.connection(), session.clone())
+                        .with_epoch_guard(Some(worker_guard.clone()));
+                // A service worker has a single JavaScript context, which is what the page
+                // world names for it.
+                let result = crate::PageJs::page_world(&worker)
+                    .eval_value(expression)
+                    .await?;
                 self.validate_live().await?;
                 Ok::<_, CoreError>(result)
             };
@@ -1580,9 +1587,9 @@ impl BrowserView {
                 .await;
             detach?;
             match evaluation {
-                Ok(result) if result.get("exceptionDetails").is_none() => {
-                    if let Some(value) = result["result"].get("value") {
-                        values.push(value.clone());
+                Ok(result) => {
+                    if let Some(value) = result.value {
+                        values.push(value);
                     }
                 }
                 Err(CoreError::Target(err)) => return Err(err.into()),
@@ -1602,5 +1609,11 @@ impl BrowserView {
 #[cfg(test)]
 mod tests;
 
+#[path = "native_operation.rs"]
+mod native_operation;
+
 #[path = "credential_routing.rs"]
 mod credentials;
+
+#[path = "payment_card_routing.rs"]
+mod payment_cards;

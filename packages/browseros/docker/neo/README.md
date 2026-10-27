@@ -161,6 +161,15 @@ Recreate the container after changing it; `docker restart` keeps the old setting
 With an existing data volume, Neo may uninstall its bundled extensions and
 install them again when re-enabled.
 
+### Graphics
+
+Containers and microVMs rarely have a GPU, so Neo draws with Mesa's llvmpipe, which runs on the
+CPU. Chromium turns WebGL off on llvmpipe by default, so the entrypoint starts Neo with
+`--ignore-gpu-blocklist`: pages get WebGL1 and WebGL2, drawn by the CPU, so 3D-heavy pages cost
+more CPU than on a desktop. It also passes `--disable-gpu-compositing`, which keeps compositing,
+page painting and video on Chromium's own software path, as in earlier images. WebGPU stays
+unavailable: Chromium offers pages no WebGPU adapter without a GPU.
+
 ## Read what your agent did
 
 In `hosted` mode, port 9010 also serves `/v1`, a read-only API for your backend. Its
@@ -222,6 +231,12 @@ default `docker run` example already provide one at `/data`; neither changes.
   in the folder stay yours. Docker Desktop on a Mac handles this for you.
 - **A desktop profile can't be copied in with its logins.** Desktop Neo on a Mac encrypts
   cookies with the macOS Keychain, which Linux can't read.
+- **Guard the folder like the logins in it.** A container has no keyring, so Neo encrypts saved
+  passwords and cookies with Chromium's built-in key (`--password-store=basic`). Anyone who can
+  read the folder can read them.
+- **Cards stay out of the profile.** A managed policy turns payment autofill off, so Neo never
+  offers to save a card. Agents fill cards from your own secure storage through the
+  `payment_cards` tool, which fills a supplied card without saving it.
 
 ## Security
 
@@ -250,7 +265,8 @@ AppArmor, so they may also need `--security-opt apparmor=unconfined`. In compose
 ## Check that it works
 
 [`smoke.py`](smoke.py) checks a running container from your machine: the viewer, MCP from
-outside the container, the human-help setting, and an agent opening a tab.
+outside the container, the human-help setting, an agent opening a tab, the blank new tab page,
+and WebGL drawing (see [Graphics](#graphics)).
 
 ```sh
 python3 smoke.py                          # default ports

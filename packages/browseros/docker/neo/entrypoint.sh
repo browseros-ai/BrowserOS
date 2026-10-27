@@ -161,6 +161,15 @@ if is_true "$NEO_DISABLE_BROWSEROS_EXTENSIONS"; then
   browseros_extension_flags=(--disable-browseros-extensions)
 fi
 
+# Containers and microVMs rarely have a GPU, so Chromium draws with Mesa's
+# llvmpipe, which runs on the CPU. Chromium's software-rendering list turns
+# every GPU feature off for llvmpipe, which leaves pages with no WebGL at all.
+# --ignore-gpu-blocklist skips that list so WebGL runs on llvmpipe. Skipping it
+# would also move compositing, painting and video onto llvmpipe;
+# --disable-gpu-compositing keeps those on Chromium's software path, as before.
+# WebGPU stays off: Chromium offers pages no WebGPU adapter without a GPU.
+gpu_flags=(--ignore-gpu-blocklist --disable-gpu-compositing)
+
 # The viewer is for watching agents and for a person taking over a login, code
 # or payment, so Neo hides the browser controls neither needs (README lists the
 # names). --disable-browseros-features forces their prefs for this run only:
@@ -175,11 +184,18 @@ readonly HIDDEN_BROWSEROS_FEATURES=VerticalTabs,HomeButton,SplitTabButton,TabSea
 # flag" bar for it. Written only in that mode: the same policy would also hide
 # warnings for risky flags passed through NEO_ARGS. This build reads policies
 # from /etc/chromium/policies.
+#
+# Cards are filled from the deployment's own secure storage (payment_cards
+# with a supplied card), never kept in the profile: /data/profile is encrypted
+# only with Chromium's fixed --password-store=basic key. Turning payment
+# autofill off stops Chromium offering to save a submitted card; supplied fills
+# still work.
 apply_policies() {
   local managed=/etc/chromium/policies/managed
+  mkdir -p "$managed"
+  echo '{"AutofillCreditCardEnabled": false}' > "$managed/neo-payments.json"
   rm -f "$managed/neo-docker.json"
   if [ "${#sandbox_flags[@]}" -gt 0 ]; then
-    mkdir -p "$managed"
     echo '{"CommandLineFlagSecurityWarningsEnabled": false}' > "$managed/neo-docker.json"
   fi
 }
@@ -211,6 +227,7 @@ start_neo() {
   spawn_as_neo browserclaw \
     "${sandbox_flags[@]}" \
     "${browseros_extension_flags[@]}" \
+    "${gpu_flags[@]}" \
     --user-data-dir="$PROFILE" \
     --no-first-run \
     --no-default-browser-check \

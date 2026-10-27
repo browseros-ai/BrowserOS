@@ -75,6 +75,10 @@ pub struct Config {
     pub session_retention: Duration,
     pub session_sweep_interval: Duration,
     pub replay_retention_days: u64,
+    /// A dev server is a guest beside the installed BrowserOS neo, which owns the shared
+    /// agent configs (MCP entries and skills under `$HOME`, all named `browseros-neo`). It
+    /// keeps its own default state dir and never provisions those configs on its own; an
+    /// explicit Connect still does. Set by the sidecar's `flags.devMode`, else debug builds.
     pub dev_mode: bool,
     /// Read once per process. Every discovery and execution path gates native features on
     /// this one value, which `BrowserService` copies into each browser session.
@@ -123,6 +127,10 @@ impl ServerMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Behavior {
     pub tab_grouping: TabGrouping,
+    /// Whether BrowserOS's DOM-only page scripts run in its isolated JavaScript world, which the
+    /// page cannot see or tamper with (`browseros_core::page_js`). Off runs every script in the
+    /// page's own world, as before isolated worlds; it is the rollout's off switch.
+    pub isolated_world: bool,
 }
 
 impl Behavior {
@@ -133,6 +141,7 @@ impl Behavior {
                 ServerMode::Desktop => TabGrouping::Automatic,
                 ServerMode::Hosted => TabGrouping::Explicit,
             },
+            isolated_world: true,
         }
     }
 }
@@ -180,12 +189,20 @@ impl TabGrouping {
 struct BehaviorFile {
     #[serde(default)]
     tabs: TabsSection,
+    #[serde(default)]
+    scripts: ScriptsSection,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TabsSection {
     grouping: Option<TabGrouping>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptsSection {
+    isolated_world: Option<bool>,
 }
 
 /// The connected browser's native identity as this process learned it.
@@ -416,6 +433,10 @@ fn resolve_behavior(env: &ConfigEnv, mode: ServerMode) -> anyhow::Result<Behavio
         toml::from_str(&raw).with_context(|| format!("invalid behaviour file {path}"))?;
     Ok(Behavior {
         tab_grouping: file.tabs.grouping.unwrap_or(defaults.tab_grouping),
+        isolated_world: file
+            .scripts
+            .isolated_world
+            .unwrap_or(defaults.isolated_world),
     })
 }
 
@@ -862,6 +883,26 @@ mod tests {
                 .behavior
                 .tab_grouping,
             TabGrouping::Explicit
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn isolated_world_defaults_on_in_both_modes_and_the_behavior_file_can_turn_it_off()
+    -> anyhow::Result<()> {
+        assert!(load_native("{}", &[])?.behavior.isolated_world);
+        assert!(
+            load_native("{}", &[(HOSTED_MODE_ENV, "1")])?
+                .behavior
+                .isolated_world
+        );
+        let off = "[scripts]\nisolated_world = false\n";
+        assert!(!load_with_behavior_file("1", off)?.behavior.isolated_world);
+        assert!(!load_with_behavior_file("0", off)?.behavior.isolated_world);
+        assert!(
+            load_with_behavior_file("1", "[scripts]\n")?
+                .behavior
+                .isolated_world
         );
         Ok(())
     }

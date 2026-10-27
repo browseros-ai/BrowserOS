@@ -8,8 +8,10 @@ pub mod frames;
 pub mod input;
 pub mod navigation;
 pub mod observer;
+pub mod page_js;
 pub mod page_signals;
 pub mod pages;
+pub mod payment_cards;
 pub mod pointer;
 pub mod profiles;
 pub mod screenshot;
@@ -25,6 +27,7 @@ pub use browser::Browser;
 pub use capabilities::{BrowserOsVersion, NativeCapabilities, NativeFeature};
 pub use connection::{CdpConnection, ProtocolSession};
 pub use error::{CoreError, CoveredElementTarget, TargetError};
+pub use page_js::PageJs;
 pub use page_signals::{ConsoleEntry, ConsoleLevel, PageDialog, PageSignals};
 pub use profiles::{
     BrowserProfileInfo, DEFAULT_PROFILE_DIRECTORY, LoadProfileOutcome, ProfileCandidate,

@@ -29,6 +29,9 @@ type dogfoodSidecarDirectories struct {
 
 type dogfoodSidecarFlags struct {
 	AllowRemoteInMCP bool `json:"allow_remote_in_mcp"`
+	// DevMode is always written false: dogfood runs claw-server from a debug build, which
+	// would otherwise count as dev mode and stop provisioning agent harnesses.
+	DevMode bool `json:"devMode"`
 }
 
 type dogfoodSidecarInstance struct {

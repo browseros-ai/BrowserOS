@@ -817,6 +817,7 @@ async fn tests_that_explicit_grouping_never_sends_the_cleanup_tip() -> anyhow::R
         ServerMode::Desktop,
         Behavior {
             tab_grouping: TabGrouping::Explicit,
+            ..Behavior::default()
         },
     )
     .await?;

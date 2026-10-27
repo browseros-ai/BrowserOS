@@ -189,6 +189,24 @@ impl BrowserSession {
         Ok(Some(capture))
     }
 
+    /// A protocol handle for a session the host attached itself, such as an extension service
+    /// worker, outside the page registry. Scripts on it still go through [`crate::PageJs`].
+    #[must_use]
+    pub fn protocol_session(&self, session_id: crate::SessionId) -> crate::ProtocolSession {
+        crate::ProtocolSession::for_session(self.connection.clone(), session_id)
+    }
+
+    /// The page's main-frame document identity (`<frame id>:<loader id>`, as
+    /// snapshot refs carry it). A cross-document navigation changes it; a
+    /// same-document one keeps it.
+    pub async fn main_document_id(
+        &self,
+        page_id: PageId,
+    ) -> Result<Option<crate::snapshot::DocumentId>, CoreError> {
+        let page = self.pages.get_session(page_id).await?;
+        crate::observer::main_document_id(&page.session).await
+    }
+
     pub async fn cdp(
         &self,
         method: &str,

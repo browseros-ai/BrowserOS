@@ -4,7 +4,7 @@ pub mod keyboard;
 pub mod mouse;
 
 use crate::{
-    CoreError, CoveredElementTarget, PageId, ProtocolSession, Ref,
+    CoreError, CoveredElementTarget, PageId, PageJs, ProtocolSession, Ref,
     observer::Observer,
     pages::PageManager,
     pointer::{Pointer, PointerAction},
@@ -12,8 +12,7 @@ use crate::{
     target::page_access::PageAccess,
 };
 use geometry::{
-    call_on_element, click_blocker_at_point, focus_element_js, get_element_center, js_click,
-    scroll_into_view,
+    click_blocker_at_point, focus_element_js, get_element_center, js_click, scroll_into_view,
 };
 use mouse::{
     MouseButton, dispatch_click, dispatch_click_with_options, dispatch_drag, dispatch_hover,
@@ -379,26 +378,17 @@ impl Input {
         value: &str,
     ) -> Result<Option<String>, CoreError> {
         scroll_into_view(session, backend_node_id).await;
-        let selected = call_on_element(
-            session,
-            backend_node_id,
-            SELECT_OPTION_FN,
-            Some(vec![json!(value)]),
-        )
-        .await?;
-        Ok(selected.as_str().map(ToString::to_string))
+        PageJs::isolated(session)
+            .call(backend_node_id, SELECT_OPTION_FN, &[json!(value)])
+            .await
     }
 
     pub async fn check(&self, ref_id: &Ref) -> Result<bool, CoreError> {
         let resolved = self.observer.resolve_ref(ref_id).await?;
-        let checked = call_on_element(
-            &resolved.session,
-            resolved.backend_node_id,
-            "function(){return this.checked}",
-            None,
-        )
-        .await?;
-        if checked.as_bool() != Some(true) {
+        let checked: Option<bool> = PageJs::isolated(&resolved.session)
+            .call(resolved.backend_node_id, CHECKED_FN, &[])
+            .await?;
+        if checked != Some(true) {
             let _ = self
                 .click_node(
                     &resolved.session,
@@ -412,14 +402,10 @@ impl Input {
 
     pub async fn uncheck(&self, ref_id: &Ref) -> Result<bool, CoreError> {
         let resolved = self.observer.resolve_ref(ref_id).await?;
-        let checked = call_on_element(
-            &resolved.session,
-            resolved.backend_node_id,
-            "function(){return this.checked}",
-            None,
-        )
-        .await?;
-        if checked.as_bool() == Some(true) {
+        let checked: Option<bool> = PageJs::isolated(&resolved.session)
+            .call(resolved.backend_node_id, CHECKED_FN, &[])
+            .await?;
+        if checked == Some(true) {
             let _ = self
                 .click_node(
                     &resolved.session,
@@ -519,14 +505,8 @@ impl Input {
             return Ok(());
         }
         let session = self.page_session().await?;
-        let _: Value = session
-            .send(
-                "Runtime.evaluate",
-                json!({
-                    "expression": format!("window.scrollBy({delta_x}, {delta_y})"),
-                    "returnByValue": true
-                }),
-            )
+        let _: Value = PageJs::isolated(&session)
+            .eval(&format!("window.scrollBy({delta_x}, {delta_y})"))
             .await?;
         Ok(())
     }
@@ -538,16 +518,12 @@ impl Input {
         let Ok(resolved) = self.observer.resolve_ref(ref_id).await else {
             return false;
         };
-        call_on_element(
-            &resolved.session,
-            resolved.backend_node_id,
-            &sensitive_field_fn(),
-            None,
-        )
-        .await
-        .ok()
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false)
+        PageJs::isolated(&resolved.session)
+            .call::<Option<bool>>(resolved.backend_node_id, &sensitive_field_fn(), &[])
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(false)
     }
 
     /// Best-effort: true when the currently focused element is a password or
@@ -577,15 +553,11 @@ impl Input {
         let Ok(session) = self.page_session().await else {
             return false;
         };
-        let result: Result<Value, _> = session
-            .send(
-                "Runtime.evaluate",
-                json!({ "expression": expression, "returnByValue": true }),
-            )
-            .await;
-        result
+        PageJs::isolated(&session)
+            .eval::<Option<bool>>(expression)
+            .await
             .ok()
-            .and_then(|value| value.get("result")?.get("value")?.as_bool())
+            .flatten()
             .unwrap_or(false)
     }
 
@@ -690,6 +662,8 @@ const POINT_SENSITIVE_JS: &str = "(()=>{const pred=__PRED__;\
     break;\
   }\
   return pred(el);})()";
+
+const CHECKED_FN: &str = "function(){return this.checked}";
 
 const SELECT_OPTION_FN: &str = "function(val){\
   for(var i=0;i<this.options.length;i++){\
@@ -890,7 +864,10 @@ mod tests {
                         "nodes": ax_tree(self.target_role, self.target_name)
                     })),
                     "Runtime.evaluate" => {
-                        if params["awaitPromise"] == true {
+                        let pointer_move = params["expression"]
+                            .as_str()
+                            .is_some_and(|expression| expression.contains(r#""op":"move""#));
+                        if pointer_move {
                             let response = {
                                 let mut state =
                                     self.state.lock().map_err(|_| CdpError::Protocol {
@@ -1303,13 +1280,14 @@ mod tests {
             }
             assert!(mouse[5].1.duration_since(mouse[4].1) >= Duration::from_millis(90));
             let calls = connection.take_calls()?;
-            let position = |pending: bool| {
-                calls.iter().position(|call| {
-                    call.method == "Runtime.evaluate" && call.params["awaitPromise"] == pending
-                })
-            };
-            let movement = position(true).ok_or("missing pointer move")?;
-            let effect = position(false).ok_or("missing click effect")?;
+            let movement = calls
+                .iter()
+                .position(is_pointer_move)
+                .ok_or("missing pointer move")?;
+            let effect = calls
+                .iter()
+                .position(is_pointer_effect)
+                .ok_or("missing click effect")?;
             assert!(
                 calls[effect].params["expression"]
                     .as_str()
@@ -1400,20 +1378,38 @@ mod tests {
             );
             fingerprints.push(protocol_fingerprint(&calls)?);
         }
-        // Frozen from the pre-pointer implementation, including every method,
-        // parameter and call order. FNV keeps the six protocol fixtures compact.
+        // Frozen input protocol with the pointer disabled, including every method, parameter
+        // and call order. Element calls go through `PageJs`, which awaits their result and
+        // releases each node wrapper it resolves. FNV keeps the six protocol fixtures compact.
         assert_eq!(
             fingerprints,
             [
-                330485151911381825,
-                4901122941126342504,
-                3409248084207721572,
-                10110058399755172322,
+                14638203640916461425,
+                7395435797475900152,
+                6586471237564934084,
+                5034337445415157506,
                 5312967615472211188,
                 4986025384446686415,
             ]
         );
         Ok(())
+    }
+
+    fn is_pointer_move(call: &TestCall) -> bool {
+        call.method == "Runtime.evaluate"
+            && call.params["expression"]
+                .as_str()
+                .is_some_and(|expression| expression.contains(r#""op":"move""#))
+    }
+
+    /// The ripple is a short call into the installed pointer; a move carries the whole player,
+    /// which also mentions `.click(`.
+    fn is_pointer_effect(call: &TestCall) -> bool {
+        call.method == "Runtime.evaluate"
+            && !is_pointer_move(call)
+            && call.params["expression"]
+                .as_str()
+                .is_some_and(|expression| expression.contains(".click("))
     }
 
     fn pointer_calls(calls: &[TestCall]) -> impl Iterator<Item = &TestCall> {
@@ -1487,9 +1483,7 @@ mod tests {
             assert_eq!(tab_checks[0].1.params, json!({ "tabId": 101 }));
             let movement = calls
                 .iter()
-                .position(|call| {
-                    call.method == "Runtime.evaluate" && call.params["awaitPromise"] == true
-                })
+                .position(is_pointer_move)
                 .ok_or("missing pointer move")?;
             assert!(tab_checks[0].0 < movement, "{action:?}");
             let real_input = calls
@@ -1503,7 +1497,7 @@ mod tests {
                 .ok_or("missing real input")?;
             assert!(movement < real_input, "{action:?}");
             let effects: Vec<_> = pointer_calls(&calls)
-                .filter(|call| call.params["awaitPromise"] == false)
+                .filter(|call| is_pointer_effect(call))
                 .collect();
             assert_eq!(
                 effects.len(),
@@ -1562,7 +1556,7 @@ mod tests {
             );
             if action.has_effect() {
                 let effect = pointer_calls(&calls)
-                    .find(|call| call.params["awaitPromise"] == false)
+                    .find(|call| is_pointer_effect(call))
                     .ok_or("missing click effect")?;
                 assert!(
                     effect.params["expression"]
@@ -1826,7 +1820,7 @@ mod tests {
             assert_real_input_once(&calls, action);
             assert_eq!(
                 pointer_calls(&calls)
-                    .filter(|call| call.params["awaitPromise"] == true)
+                    .filter(|call| is_pointer_move(call))
                     .count(),
                 1
             );
@@ -1858,7 +1852,7 @@ mod tests {
             assert_real_input_once(&calls, action);
             assert_eq!(
                 pointer_calls(&calls)
-                    .filter(|call| call.params["awaitPromise"] == true)
+                    .filter(|call| is_pointer_move(call))
                     .count(),
                 1
             );

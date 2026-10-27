@@ -7,11 +7,12 @@ use crate::{
     output_file::write_temp_tool_output_file,
     trust_boundary::wrap_untrusted,
 };
-use browseros_core::{PageId, settle, timeouts};
+use browseros_core::{CoreError, PageId, PageJs, settle, timeouts};
 use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::time::Duration;
 
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const MAX_TIMEOUT_MS: u64 = 30_000;
@@ -67,25 +68,6 @@ struct EvaluateArgs {
     max_chars: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct EvaluateResult {
-    result: RemoteObject,
-    exception_details: Option<ExceptionDetails>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteObject {
-    value: Option<Value>,
-    description: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ExceptionDetails {
-    text: String,
-    exception: Option<RemoteObject>,
-}
-
 pub fn definition() -> crate::framework::ToolDef {
     super::def::<EvaluateArgs>(
         "evaluate",
@@ -121,25 +103,20 @@ fn handler<'a>(
         // afterwards and guessing how long. Two cheap CDP reads on a script that
         // changes nothing.
         let before = settle::read_readiness(&page.session).await.ok();
-        let result: EvaluateResult = page
-            .session
-            .send(
-                "Runtime.evaluate",
-                json!({
-                    "expression": expression,
-                    "returnByValue": true,
-                    "awaitPromise": true,
-                    "timeout": timeout,
-                    "userGesture": true
-                }),
-            )
-            .await?;
-        if let Some(exception) = result.exception_details {
-            return Ok(Some(error_result(format!(
-                "evaluate: {}",
-                exception_message(exception)
-            ))));
-        }
+        // Agent code reads site globals and app state, so it runs where the page's own
+        // JavaScript does.
+        let result = match PageJs::page_world(&page.session)
+            .user_gesture()
+            .timeout(Duration::from_millis(timeout))
+            .eval_value(&expression)
+            .await
+        {
+            Ok(result) => result,
+            Err(CoreError::PageScript(message)) => {
+                return Ok(Some(error_result(format!("evaluate: {message}"))));
+            }
+            Err(error) => return Err(error.into()),
+        };
         let moved = page_moved(
             before.as_ref(),
             settle::read_readiness(&page.session).await.ok().as_ref(),
@@ -157,11 +134,10 @@ fn handler<'a>(
             false
         };
 
-        let value = result.result.value;
+        let value = result.value;
         let text = match &value {
             Some(value) => safe_stringify(value),
             None => result
-                .result
                 .description
                 .unwrap_or_else(|| "undefined".to_string()),
         };
@@ -314,13 +290,6 @@ fn safe_stringify(value: &Value) -> String {
         return value.to_string();
     }
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
-}
-
-fn exception_message(exception: ExceptionDetails) -> String {
-    exception
-        .exception
-        .and_then(|exception| exception.description)
-        .unwrap_or(exception.text)
 }
 
 fn safe_prefix(text: &str, max_chars: usize) -> String {

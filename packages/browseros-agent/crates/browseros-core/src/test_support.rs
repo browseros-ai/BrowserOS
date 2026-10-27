@@ -8,6 +8,29 @@ use std::{
 };
 use tokio::sync::broadcast;
 
+const TEST_ERROR_KEY: &str = "__test_cdp_error";
+const TEST_PENDING_KEY: &str = "__test_cdp_pending";
+
+/// A queued response that makes the call fail with a CDP protocol error carrying `message`.
+pub fn cdp_error(message: &str) -> Value {
+    serde_json::json!({ TEST_ERROR_KEY: message })
+}
+
+/// A queued response the browser never sends: the call stays pending until its future is dropped.
+pub fn cdp_pending() -> Value {
+    serde_json::json!({ TEST_PENDING_KEY: true })
+}
+
+async fn answer(response: Result<Value, CdpError>) -> Result<Value, CdpError> {
+    if response
+        .as_ref()
+        .is_ok_and(|response| response.get(TEST_PENDING_KEY).is_some())
+    {
+        std::future::pending::<()>().await;
+    }
+    response
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TestCall {
     pub method: String,
@@ -60,7 +83,8 @@ impl TestConnection {
             method: method.to_string(),
             params,
         });
-        self.responses
+        let response = self
+            .responses
             .lock()
             .map_err(|_| test_state_error())?
             .get_mut(method)
@@ -68,7 +92,14 @@ impl TestConnection {
             .ok_or_else(|| CdpError::Protocol {
                 code: -1,
                 message: format!("unexpected test CDP call: {method}"),
-            })
+            })?;
+        match response.get(TEST_ERROR_KEY).and_then(Value::as_str) {
+            Some(message) => Err(CdpError::Protocol {
+                code: -32000,
+                message: message.to_string(),
+            }),
+            None => Ok(response),
+        }
     }
 }
 
@@ -79,7 +110,7 @@ impl CdpConnection for TestConnection {
         params: Value,
         _session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
-        Box::pin(async move { self.reply(None, method, params) })
+        Box::pin(async move { answer(self.reply(None, method, params)).await })
     }
 
     fn send_raw_json<'a>(
@@ -102,7 +133,7 @@ impl CdpConnection for TestConnection {
         params: Value,
         _session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
-        Box::pin(async move { self.reply(Some(expected), method, params) })
+        Box::pin(async move { answer(self.reply(Some(expected), method, params)).await })
     }
 
     fn send_raw_json_at_epoch<'a>(

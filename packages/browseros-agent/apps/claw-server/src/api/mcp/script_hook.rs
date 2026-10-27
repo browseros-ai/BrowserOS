@@ -39,10 +39,14 @@ impl ScriptInnerCallHook {
 }
 
 impl InnerCallHook for ScriptInnerCallHook {
-    fn mark_credential_input(&self) {
+    fn mark_sensitive_input(&self) {
         self.call
-            .sensitive_credentials
+            .sensitive_input
             .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn hold_card_data<'a>(&'a self, page: u32) -> BoxFuture<'a, ()> {
+        Box::pin(self.call.state.visuals.hold_card_data(page))
     }
 
     fn acquire_tool_guard<'a>(
@@ -196,7 +200,7 @@ impl InnerCallHook for ScriptInnerCallHook {
                     if page.is_some()
                         && !self
                             .call
-                            .sensitive_credentials
+                            .sensitive_input
                             .load(std::sync::atomic::Ordering::Relaxed)
                     {
                         crate::api::mcp::observers::audit::persist_screenshot(

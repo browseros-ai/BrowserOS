@@ -61,7 +61,7 @@ async fn credentials_mcp_live_profile_and_fill_acceptance() -> anyhow::Result<()
     let session = BrowserSession::new_with_native(
         Arc::new(client.clone()),
         BrowserSessionHooks::default(),
-        NativeCapabilities::from_browseros_version(Some("0.51.2.1")),
+        NativeCapabilities::from_browseros_version(Some("0.51.2.7")),
     );
     let target = Arc::new(StaticTargetStore::new());
     let ctx = context(session.clone(), target.clone()).await?;
