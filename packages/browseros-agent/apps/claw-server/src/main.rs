@@ -136,6 +136,16 @@ fn log_native_identity(config: &claw_server::config::Config) {
         file_env = claw_server::config::BEHAVIOR_FILE_ENV,
         "server behaviour"
     );
+    // The file may come from a newer or older server than this one; what it says that this
+    // build does not know kept its default instead of stopping startup.
+    for ignored in &config.behavior_ignored {
+        warn!(
+            key = %ignored.key,
+            reason = %ignored.reason,
+            file_env = claw_server::config::BEHAVIOR_FILE_ENV,
+            "behaviour file entry ignored"
+        );
+    }
 }
 
 async fn run(
@@ -451,6 +461,7 @@ mod tests {
             native: Default::default(),
             mode: Default::default(),
             behavior: Default::default(),
+            behavior_ignored: Vec::new(),
         });
         let state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
         let shutdown = state.shutdown.clone();
@@ -503,6 +514,7 @@ mod tests {
             native: Default::default(),
             mode: Default::default(),
             behavior: Default::default(),
+            behavior_ignored: Vec::new(),
         });
         let state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
         let mut runtime = AppRuntime::start(state);

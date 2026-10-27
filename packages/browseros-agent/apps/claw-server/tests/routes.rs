@@ -115,6 +115,7 @@ async fn test_app_with_behavior(
         },
         mode,
         behavior,
+        behavior_ignored: Vec::new(),
     });
     let state = AppState::new_with_home(config, dir.path().join("home")).await?;
     let browser_task = if start_browser {

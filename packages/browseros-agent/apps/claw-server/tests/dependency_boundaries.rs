@@ -443,6 +443,8 @@ fn classify(relative: &Path) -> Result<Layer, String> {
         [db, ..] if db == "db" => Ok(Layer::Db),
         [identity, ..] if identity == "identity" => Ok(Layer::Identity),
         [analytics, ..] if analytics == "analytics" => Ok(Layer::Support),
+        // `config.rs`'s submodules, such as the behaviour file reader.
+        [config, ..] if config == "config" => Ok(Layer::Support),
         [file] if matches!(file.as_str(), "app.rs" | "runtime.rs" | "main.rs") => {
             Ok(Layer::Composition)
         }

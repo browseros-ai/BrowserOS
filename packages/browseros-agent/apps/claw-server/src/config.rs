@@ -1,3 +1,7 @@
+mod behavior;
+
+pub use behavior::{Behavior, Ignored, TabGrouping};
+
 use anyhow::Context;
 use browseros_core::NativeCapabilities;
 use clap::Parser;
@@ -87,6 +91,9 @@ pub struct Config {
     pub mode: ServerMode,
     /// Read once per process: `mode`'s defaults, overridden by [`BEHAVIOR_FILE_ENV`].
     pub behavior: Behavior,
+    /// What the behaviour file said that this build could not apply. Config is read before
+    /// logging starts, so startup logs these once it can.
+    pub behavior_ignored: Vec<Ignored>,
 }
 
 /// How this server is deployed, fixed for the process by [`HOSTED_MODE_ENV`].
@@ -116,93 +123,6 @@ impl ServerMode {
     pub fn is_hosted(self) -> bool {
         self == Self::Hosted
     }
-}
-
-/// What a deployment can tune about how this server behaves, fixed for the process.
-///
-/// [`ServerMode`] supplies every default and the file named by [`BEHAVIOR_FILE_ENV`] may
-/// override any of them. Code asks these fields, not the mode, so a new knob is one field here,
-/// one key in `BehaviorFile` and one commented line in the Docker image's `neo.toml`, rather
-/// than another environment variable for every deployment to carry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Behavior {
-    pub tab_grouping: TabGrouping,
-    /// Whether BrowserOS's DOM-only page scripts run in its isolated JavaScript world, which the
-    /// page cannot see or tamper with (`browseros_core::page_js`). Off runs every script in the
-    /// page's own world, as before isolated worlds; it is the rollout's off switch.
-    pub isolated_world: bool,
-}
-
-impl Behavior {
-    #[must_use]
-    pub fn defaults(mode: ServerMode) -> Self {
-        Self {
-            tab_grouping: match mode {
-                ServerMode::Desktop => TabGrouping::Automatic,
-                ServerMode::Hosted => TabGrouping::Explicit,
-            },
-            isolated_world: true,
-        }
-    }
-}
-
-/// The desktop defaults, matching [`ServerMode`]'s own default.
-impl Default for Behavior {
-    fn default() -> Self {
-        Self::defaults(ServerMode::Desktop)
-    }
-}
-
-/// Who decides which tab group an agent's page joins.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TabGrouping {
-    /// The server keeps each session's pages in a `<client>/<task>` group that it creates,
-    /// titles, collapses and closes. The desktop app's behaviour.
-    #[serde(rename = "auto")]
-    Automatic,
-    /// The server never creates, moves, titles or closes a group: a page joins one only when the
-    /// call names `groupId`. For hosts whose own harness owns the tab layout.
-    Explicit,
-}
-
-impl TabGrouping {
-    /// The spelling the behaviour file uses.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Automatic => "auto",
-            Self::Explicit => "explicit",
-        }
-    }
-
-    #[must_use]
-    pub fn is_automatic(self) -> bool {
-        self == Self::Automatic
-    }
-}
-
-/// The behaviour file as written. Every key is optional; unknown keys are rejected, so a typo
-/// stops startup instead of being ignored while the default it meant to change stays on.
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BehaviorFile {
-    #[serde(default)]
-    tabs: TabsSection,
-    #[serde(default)]
-    scripts: ScriptsSection,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TabsSection {
-    grouping: Option<TabGrouping>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ScriptsSection {
-    isolated_world: Option<bool>,
 }
 
 /// The connected browser's native identity as this process learned it.
@@ -328,7 +248,10 @@ impl Config {
         let browserclaw_dir = resolve_browserclaw_dir(env, dev_mode, &cwd);
         let native = resolve_native_identity(env, sidecar.instance.as_ref());
         let mode = resolve_mode(env)?;
-        let behavior = resolve_behavior(env, mode)?;
+        let behavior::Applied {
+            behavior,
+            ignored: behavior_ignored,
+        } = resolve_behavior(env, mode)?;
 
         Ok(Self {
             server_port,
@@ -359,6 +282,7 @@ impl Config {
             native,
             mode,
             behavior,
+            behavior_ignored,
         })
     }
 
@@ -420,24 +344,20 @@ fn resolve_mode(env: &ConfigEnv) -> anyhow::Result<ServerMode> {
     }
 }
 
-/// The mode's defaults with the behaviour file's keys applied. A file that cannot be read or
-/// parsed fails startup, naming the file; toml's error carries the offending line and key.
-fn resolve_behavior(env: &ConfigEnv, mode: ServerMode) -> anyhow::Result<Behavior> {
+/// The mode's defaults with the behaviour file applied. A file that cannot be read or is not
+/// TOML fails startup, naming the file; toml's error carries the offending line. Anything else
+/// this build cannot apply comes back as ignored rather than failing (see [`behavior`]).
+fn resolve_behavior(env: &ConfigEnv, mode: ServerMode) -> anyhow::Result<behavior::Applied> {
     let defaults = Behavior::defaults(mode);
     let Some(path) = env.get(BEHAVIOR_FILE_ENV).and_then(clean_string) else {
-        return Ok(defaults);
+        return Ok(behavior::Applied {
+            behavior: defaults,
+            ignored: Vec::new(),
+        });
     };
     let raw = fs::read_to_string(&path)
         .with_context(|| format!("{BEHAVIOR_FILE_ENV} names {path}, which cannot be read"))?;
-    let file: BehaviorFile =
-        toml::from_str(&raw).with_context(|| format!("invalid behaviour file {path}"))?;
-    Ok(Behavior {
-        tab_grouping: file.tabs.grouping.unwrap_or(defaults.tab_grouping),
-        isolated_world: file
-            .scripts
-            .isolated_world
-            .unwrap_or(defaults.isolated_world),
-    })
+    behavior::read(&raw, defaults).with_context(|| format!("invalid behaviour file {path}"))
 }
 
 fn resolve_path(cwd: &Path, path: PathBuf) -> PathBuf {
@@ -502,8 +422,8 @@ mod tests {
     }
 
     use super::{
-        BEHAVIOR_FILE_ENV, Cli, CliAction, Config, ConfigEnv, HOSTED_MODE_ENV, NATIVE_VERSION_ENV,
-        ServerMode, TabGrouping,
+        BEHAVIOR_FILE_ENV, Behavior, Cli, CliAction, Config, ConfigEnv, HOSTED_MODE_ENV,
+        NATIVE_VERSION_ENV, ServerMode, TabGrouping,
     };
     use browseros_core::{BrowserOsVersion, NativeFeature};
     use clap::{Parser, error::ErrorKind};
@@ -953,20 +873,37 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_key_or_value_in_the_behavior_file_fails_startup() {
+    fn an_unknown_key_or_value_keeps_its_default_and_is_reported_instead_of_failing_startup()
+    -> anyhow::Result<()> {
         for (contents, culprit) in [
-            ("[tabs]\ngrouping = \"off\"\n", "off"),
-            ("[tabs]\ngroupng = \"auto\"\n", "groupng"),
+            ("[tabs]\ngrouping = \"off\"\n", "tabs.grouping"),
+            ("[tabs]\ngroupng = \"auto\"\n", "tabs.groupng"),
             ("[tab]\ngrouping = \"auto\"\n", "tab"),
             ("grouping = \"auto\"\n", "grouping"),
         ] {
-            let error = load_with_behavior_file("1", contents)
-                .err()
-                .map(|error| format!("{error:#}"))
-                .unwrap_or_default();
-            assert!(error.contains("neo.toml"), "{contents:?}: {error}");
-            assert!(error.contains(culprit), "{contents:?}: {error}");
+            let config = load_with_behavior_file("1", contents)?;
+            assert_eq!(config.behavior, Behavior::defaults(ServerMode::Hosted));
+            assert_eq!(
+                config
+                    .behavior_ignored
+                    .iter()
+                    .map(|ignored| ignored.key.as_str())
+                    .collect::<Vec<_>>(),
+                [culprit],
+                "{contents:?}"
+            );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn a_behavior_file_that_is_not_toml_fails_startup_naming_the_file() {
+        let error = load_with_behavior_file("1", "[tabs\ngrouping = auto\n")
+            .err()
+            .map(|error| format!("{error:#}"))
+            .unwrap_or_default();
+        assert!(error.contains("invalid behaviour file"), "{error}");
+        assert!(error.contains("neo.toml"), "{error}");
     }
 
     #[test]

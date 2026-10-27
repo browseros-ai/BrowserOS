@@ -204,8 +204,10 @@ GitHub documents package Actions access in
   their own. Hosted mode defaults `[tabs] grouping` to `"explicit"`, so the server never
   groups an agent's pages on its own. `[scripts] isolated_world` defaults to `true`; `false`
   runs BrowserOS's DOM-only page scripts in the page's own JavaScript world instead of an
-  isolated one, and a claw-server older than that key refuses the table. A key or value claw-server does not know stops it at
-  startup.
+  isolated one. A key or value claw-server does not know keeps its default and is logged as
+  a warning, so the shipped file and the bundled server may be different versions; a file
+  that is not TOML stops it at startup. claw-server 0.0.84 and earlier stop on any unknown
+  key, which is why the shipped file keeps every key commented.
 - **The server updater is disabled by the entrypoint.** It cannot replace the
   packaged/overlaid server that passed the release checks, even when `NEO_ARGS` is
   overridden. Server changes ship through a rebuilt image.

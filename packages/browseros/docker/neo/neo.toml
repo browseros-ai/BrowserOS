@@ -2,8 +2,10 @@
 #
 # Every key is optional. A commented-out key keeps the default for the server's
 # mode (BROWSERCLAW_HOSTED_MODE); the values shown are the hosted defaults.
-# Unknown keys or values stop the server at startup, with the reason in
-# `docker logs`.
+# A key or value the server does not know keeps its default and is reported
+# as a warning in `docker logs`; a file that is not valid TOML stops it. A
+# claw-server at 0.0.84 or earlier stops on any key it does not know instead,
+# so keep a key commented unless the image's claw-server has it.
 #
 # To change them, replace this file: mount your own over it with
 #   docker run -v ./neo.toml:/etc/neo/neo.toml:ro ...
@@ -21,6 +23,5 @@
 # Whether BrowserOS's own page scripts that only touch the DOM (settle probes,
 # the agent pointer, element geometry, screenshot overlays) run in an isolated
 # JavaScript world the page cannot see. false runs them in the page's own
-# world. Keep the table commented unless the image's claw-server knows it:
-# servers that predate it reject the table and do not start.
+# world. Needs a claw-server newer than 0.0.84.
 # isolated_world = true

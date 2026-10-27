@@ -101,8 +101,12 @@ docker run ... -v ./neo.toml:/etc/neo/neo.toml:ro ghcr.io/browseros-ai/neo
 
 or uncomment the `neo.toml` line in `compose.yaml`, or `COPY` one to `/etc/neo/neo.toml` in
 an image built `FROM` Neo. A key you leave out keeps the default for the mode
-(`BROWSERCLAW_HOSTED_MODE`). Unknown keys or values stop the server at startup, and the
-reason is in `docker logs`; so does a `BROWSERCLAW_CONFIG_FILE` that names a missing file.
+(`BROWSERCLAW_HOSTED_MODE`). A key or value the server does not know keeps its default and
+is logged as a warning in `docker logs`, naming the key it probably meant when it looks like a
+typo, so a file written for a newer server still starts an older one. A file that is not valid
+TOML stops the server with the reason in `docker logs`, and so does a
+`BROWSERCLAW_CONFIG_FILE` that names a missing file. claw-server 0.0.84 and earlier stop on any
+key they do not know.
 Recreate the container after editing the file.
 
 | Key | Values | Hosted default | Desktop default |

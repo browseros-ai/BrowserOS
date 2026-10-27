@@ -173,6 +173,12 @@ describe('computeAffectedSuites', () => {
     })
   })
 
+  it('tests that a change to the shipped behaviour file selects the claw-server suite', () => {
+    expect(suiteNames([], ['packages/browseros/docker/neo/neo.toml'])).toEqual([
+      'claw-server',
+    ])
+  })
+
   it('unions and de-duplicates across packages and paths, in declared order', () => {
     const result = suiteNames(
       [

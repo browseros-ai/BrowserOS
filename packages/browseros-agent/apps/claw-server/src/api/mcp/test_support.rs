@@ -68,6 +68,7 @@ pub async fn tool_call_with_behavior(
         },
         mode,
         behavior,
+        behavior_ignored: Vec::new(),
     });
     let state = AppState::new_with_home(config, home).await?;
     let session = Session::new(
