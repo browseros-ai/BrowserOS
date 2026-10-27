@@ -148,6 +148,25 @@ docker run ... -e NEO_ARGS="--disable-browseros-features=VerticalTabs,HomeButton
 The bookmarks bar and the window buttons have no names. Every container start turns the bar
 off with a managed policy and gives the window an empty GTK button layout.
 
+### Zoom
+
+Neo never zooms: the page in the viewer is the page your agent works in. To see it bigger,
+zoom your own browser or device.
+
+- Neo starts with `--disable-pinch`, which stops touch pinch, and `--browseros-disable-zoom`,
+  which keeps every tab at 100% whatever zoom keys, Ctrl + mouse wheel, the menu, extensions or
+  saved zoom levels ask for. Browsers without that switch ignore it, Neo 0.51.2.7 among them.
+- The window manager also takes the zoom keys (Ctrl + `=`, `-` or `0`, on the keypad too) and
+  Ctrl + mouse wheel, which is how noVNC sends a two-finger pinch, so browsers without the switch
+  never see them. Pages don't get them either, so maps and drawing tools zoom with their own
+  buttons. It never sees an agent's DevTools input, and in browsers without the switch the
+  menu's zoom buttons still work.
+- Every start resets zoom levels the profile saved earlier, per site or as a changed default.
+- `--disable-pinch` also drops pinch gestures an agent sends over DevTools
+  (`Input.synthesizePinchGesture`).
+- `setViewport`'s `zoom` scales its mobile preview through DevTools emulation, not browser zoom,
+  and still works, as does F11 fullscreen.
+
 ### Bundled extensions
 
 Neo runs without the bundled BrowserOS extensions, since agents drive it over MCP. MCP browser
@@ -301,6 +320,13 @@ and WebGL1/2 rendering with the hosted GPU identity (see [Graphics](#graphics)).
 ```sh
 python3 smoke.py                          # default ports
 python3 smoke.py --vnc-port 7080 --mcp-port 7010
+```
+
+[`check_zoom.py`](check_zoom.py) runs inside the container. It sends a pinch and the zoom keys
+the way the viewer does and fails if the page zooms (see [Zoom](#zoom)):
+
+```sh
+docker exec -i neo python3 - < check_zoom.py
 ```
 
 ## Build it yourself

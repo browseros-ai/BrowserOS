@@ -123,6 +123,18 @@ prepare_data() {
   # application data; the browser/server processes have not started yet.
   rm -f "$PROFILE/.browseros/current_version" \
     "$PROFILE/.browseros/BrowserClawServer/current_version"
+
+  forget_zoom_levels
+}
+
+# Neo never zooms (see start_neo), so pages zoomed before, per site or through
+# a changed default, go back to 100%. Only zoom levels are dropped, and a
+# profile whose preferences cannot be read keeps them and still starts.
+forget_zoom_levels() {
+  local prefs="$PROFILE/Default/Preferences"
+  [ -s "$prefs" ] || return 0
+  merge_json "$prefs" 'del(.partition.per_host_zoom_levels, .partition.default_zoom_level)' \
+    || log "Could not clear saved zoom levels in $prefs"
 }
 
 start_display() {
@@ -224,6 +236,13 @@ apply_minimal_ui() {
   chown -R neo:neo "$NEO_HOME/.config"
 }
 
+# Neo never zooms: the page a viewer pinches is the page agents work in, so
+# viewers zoom their own browser instead (README "Zoom"). --disable-pinch stops
+# touch pinch. --browseros-disable-zoom keeps every tab at 100% whatever the
+# keyboard, Ctrl + mouse wheel, menu or saved zoom levels ask for; browsers
+# without it ignore the switch, and openbox-rc.xml takes the zoom keys and
+# Ctrl + mouse wheel (noVNC's pinch) before they reach the browser.
+# setViewport's zoom is DevTools emulation, not browser zoom, and still works.
 start_neo() {
   # Releases verify the packaged/overlaid server, so pin it for the image's
   # lifetime. Keep this outside NEO_ARGS, which Compose/callers may replace.
@@ -243,6 +262,8 @@ start_neo() {
     --disable-browseros-server-updater \
     --hide-crash-restore-bubble \
     --start-maximized \
+    --disable-pinch \
+    --browseros-disable-zoom \
     --disable-browseros-features="$HIDDEN_BROWSEROS_FEATURES" \
     $NEO_ARGS
   neo_pid=$!

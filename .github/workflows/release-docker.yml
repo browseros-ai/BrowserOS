@@ -188,6 +188,7 @@ jobs:
               port=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "9010/tcp") 0).HostPort}}' "$name")
               python3 packages/browseros/docker/neo/captcha_smoke.py "http://127.0.0.1:$port" "$hosted" "$KEYED"
               docker exec -i "$name" python3 - "$extensions_disabled" < packages/browseros/docker/neo/check_extensions.py
+              docker exec -i "$name" python3 - < packages/browseros/docker/neo/check_zoom.py
               if [ "$hosted" = 1 ]; then
                 vnc=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "6080/tcp") 0).HostPort}}' "$name")
                 python3 packages/browseros/docker/neo/smoke.py --mcp-port "$port" --vnc-port "$vnc"

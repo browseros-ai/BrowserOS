@@ -15,6 +15,7 @@ for building and publishing it.
 | `docker/neo/entrypoint.sh` | Container supervisor: Xvnc, openbox, websockify, Neo restart loop, profile setup, clean shutdown |
 | `docker/neo/smoke.py` | End-to-end check from the host: viewer, MCP from outside the container, hosted tool set, an agent tab |
 | `docker/neo/captcha_smoke.py` | Checks CAPTCHA tool availability with hosted mode on/off, including keyless builds |
+| `docker/neo/check_zoom.py` | In the container: a pinch and the zoom keys, sent through the VNC server like the viewer's, must not zoom the page |
 | `bos_build/release/docker_image.py` | `build_image`: preflight that each architecture was published, tag and label policy, buildx invocation |
 | `bos_build/cli/release_docker.py` | `browseros release docker`, a thin wrapper |
 | `.github/workflows/release-docker.yml` | Build servers, verify both native images, then push one multi-architecture image |
@@ -222,6 +223,12 @@ GitHub documents package Actions access in
   policy for the bar and an empty GTK button layout on every container start. Browsers
   before 0.51.2.5 ignore the switch; `smoke.py` catches that because a new tab page is
   then not `about:blank`.
+- **Neo never zooms.** `start_neo` passes `--disable-pinch` and `--browseros-disable-zoom`,
+  which holds every tab at 100%; browsers without the switch (0.51.2.7 and earlier) ignore it.
+  `openbox-rc.xml` also takes Chromium's zoom keys and Ctrl + mouse wheel (noVNC's pinch)
+  before Neo sees them, which covers those browsers, and `forget_zoom_levels` drops zoom levels
+  saved in the profile on every start. The release smoke runs `check_zoom.py`, which drives the
+  VNC server like the viewer and fails if the page zooms, so it covers both mechanisms.
 - **Bundled BrowserOS extensions are off by default** (`NEO_DISABLE_BROWSEROS_EXTENSIONS=true`),
   which also leaves rrweb recordings empty. The release smoke sets the variable explicitly
   for both values, so it covers the extensions-on image too.
