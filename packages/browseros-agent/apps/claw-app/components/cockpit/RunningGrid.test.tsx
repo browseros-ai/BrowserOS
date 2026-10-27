@@ -171,6 +171,12 @@ async function render(sessions: LiveSessionCardRecord[]) {
 }
 
 describe('RunningGrid', () => {
+  it('shows nothing while no agent is working', async () => {
+    await render([])
+
+    expect(container.innerHTML).toBe('')
+  })
+
   it('renders and cancels two same-profile sessions by distinct session ids', async () => {
     await render([
       session({ sessionId: 'session-a' }),
