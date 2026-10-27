@@ -2,7 +2,8 @@
  * name_session (3) + the claw-layer cross-cutting invariants: two-session
  * ownership labeling [1], browser-down guidance [2], trust-boundary
  * nonce fencing [3], auto-context embedding [4], REST audit tie-in [5],
- * and cancellation [6]. ([7] transport lives in cases-transport.)
+ * cancellation [6], and card screenshots [8]. ([7] transport lives in
+ * cases-transport.)
  *
  * The browser-kill case POISONS the shared browser, so it is registered
  * LAST and the runner skips per-case page cleanup once the browser is
@@ -394,6 +395,78 @@ export const clawLayerCases: ContractCase[] = [
       const tools = await session.listTools()
       if (tools.length === 0) {
         throw new Error('cancel closed the underlying MCP transport')
+      }
+    },
+  },
+
+  // [8] card screenshots ---------------------------------------------------
+  {
+    name: 'audit: a card fill keeps its page out of screenshots until the page reloads',
+    async run(ctx) {
+      const session = await ctx.openSession('card-audit-client')
+      await waitUntil(
+        async () =>
+          !(await session.callTool('tabs', { action: 'list' })).isError,
+        'the card audit session to attach',
+        { timeoutMs: 30_000 },
+      )
+      // Natives without the Payments domain hide the tool.
+      const tools = await session.listTools()
+      if (!tools.some((tool) => tool.name === 'payment_cards')) return
+      const sessionId = session.sessionId
+      if (!sessionId) throw new Error('card audit session has no id')
+      const opened = await session.callTool('tabs', {
+        action: 'new',
+        url: ctx.fixture('/checkout.html'),
+      })
+      const page = Number(textOf(opened).match(/opened page (\d+)/)?.[1])
+      // Snapshots the page and reports whether its audit row got a screenshot
+      // within the window; rows appear first, screenshots attach after.
+      const snapshotScreenshotted = async (windowMs: number) => {
+        const count = async () =>
+          (await auditSession(ctx, sessionId)).dispatches.filter(
+            (d) => d.toolName === 'snapshot',
+          )
+        const before = (await count()).length
+        expectOk(await session.callTool('snapshot', { page }), 'snapshot')
+        const deadline = Date.now() + windowMs
+        for (;;) {
+          const rows = await count()
+          if (rows.length > before && rows.at(-1)?.screenshotId !== undefined) {
+            return true
+          }
+          if (Date.now() > deadline) return false
+          await new Promise((resolve) => setTimeout(resolve, 250))
+        }
+      }
+      if (!(await snapshotScreenshotted(15_000))) {
+        throw new Error(
+          'the checkout page was never screenshotted before the fill',
+        )
+      }
+      expectOk(
+        await session.callTool('payment_cards', {
+          action: 'fill',
+          page,
+          card: {
+            number: '4111 1111 1111 1111',
+            expiryMonth: 12,
+            expiryYear: 2030,
+          },
+        }),
+        'payment card fill',
+      )
+      if (await snapshotScreenshotted(4_000)) {
+        throw new Error(
+          'a screenshot was stored while the page showed a filled card',
+        )
+      }
+      expectOk(
+        await session.callTool('navigate', { page, action: 'reload' }),
+        'reload',
+      )
+      if (!(await snapshotScreenshotted(15_000))) {
+        throw new Error('screenshots stayed off after the page reloaded')
       }
     },
   },

@@ -370,6 +370,13 @@ async fn dispatch_tool_call_with(
             );
         }
 
+        // A filled card number shows in plain text. Hold the page out of every
+        // capture before the fill starts, until the page shows another document.
+        if let Some(page) =
+            browseros_mcp::tools::sensitive::card_fill_page(call.tool().name, &call.raw_args)
+        {
+            call.state.visuals.hold_card_data(page).await;
+        }
         match execute_with_cancellation(&call).await {
             DispatchExecution::ProtocolCancelled => {
                 tracing::info!(

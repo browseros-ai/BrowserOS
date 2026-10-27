@@ -10,9 +10,10 @@ use crate::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use browseros_core::{
-    PageId, TargetId,
+    BrowserSession, PageId, TargetId,
     pages::PageInfo,
     screenshot::{ScreenshotCaptureOptions, ScreenshotFormat},
+    snapshot::DocumentId,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -60,6 +61,55 @@ impl InFlightCaptures {
     }
 }
 
+/// Pages a card fill wrote into, each with the main-frame document it wrote to
+/// (`None` when that couldn't be read). A filled card number shows in plain
+/// text, so captures skip such a page until it shows another document.
+#[derive(Default)]
+struct CardDocuments {
+    held: Mutex<HashMap<u32, Option<DocumentId>>>,
+}
+
+impl CardDocuments {
+    async fn hold(&self, page_id: u32, document: Option<DocumentId>) {
+        self.held.lock().await.insert(page_id, document);
+    }
+
+    /// The document a held page was filled in, after dropping closed pages.
+    async fn held(&self, page_id: u32, open: &[PageInfo]) -> Option<Option<DocumentId>> {
+        let mut held = self.held.lock().await;
+        held.retain(|page, _| open.iter().any(|info| info.page_id.0 == *page));
+        held.get(&page_id).cloned()
+    }
+
+    /// Releases the page once it shows another document. An unreadable
+    /// document on either side keeps it held.
+    async fn release_if_changed(
+        &self,
+        page_id: u32,
+        filled: &Option<DocumentId>,
+        current: Option<DocumentId>,
+    ) -> bool {
+        let changed =
+            matches!((filled, &current), (Some(filled), Some(current)) if filled != current);
+        if changed {
+            let mut held = self.held.lock().await;
+            // A newer fill may have held the page again meanwhile.
+            if held.get(&page_id) == Some(filled) {
+                held.remove(&page_id);
+            }
+        }
+        changed
+    }
+}
+
+async fn main_document_id(browser: &BrowserSession, page_id: u32) -> Option<DocumentId> {
+    timeout(CAPTURE_TIMEOUT, browser.main_document_id(PageId(page_id)))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten()
+}
+
 /// Resolves a live session's current owned tab and captures it through browser-core's serialized screenshot path.
 pub struct SessionVisualService {
     sessions: Arc<Sessions>,
@@ -69,6 +119,9 @@ pub struct SessionVisualService {
     /// Entries retain the process-wide capture slot until the underlying CDP task resolves, even
     /// after caller timeout, so stuck tasks cannot escape the concurrency bound.
     in_flight: Arc<InFlightCaptures>,
+    /// Every capture path (audit rows, script steps, live previews) passes the
+    /// candidate page through this before shooting it.
+    card_documents: CardDocuments,
 }
 
 impl SessionVisualService {
@@ -85,7 +138,19 @@ impl SessionVisualService {
             browser,
             tab_activity,
             in_flight: Arc::new(InFlightCaptures::default()),
+            card_documents: CardDocuments::default(),
         })
+    }
+
+    /// Keeps the page out of captures until its main-frame document changes.
+    /// Call before a card fill: the number then shows in plain text, and a
+    /// capture would store it in an audit screenshot.
+    pub async fn hold_card_data(&self, page_id: u32) {
+        let document = match self.browser.session().await {
+            Some(browser) => main_document_id(&browser, page_id).await,
+            None => None,
+        };
+        self.card_documents.hold(page_id, document).await;
     }
 
     pub async fn capture(
@@ -162,6 +227,16 @@ impl SessionVisualService {
         else {
             return Ok(None);
         };
+        if let Some(filled) = self.card_documents.held(candidate.page_id, &pages).await {
+            let current = main_document_id(&browser, candidate.page_id).await;
+            if !self
+                .card_documents
+                .release_if_changed(candidate.page_id, &filled, current)
+                .await
+            {
+                return Ok(None);
+            }
+        }
         if !self.in_flight.begin(candidate.page_id).await {
             return Ok(None);
         }
@@ -293,7 +368,7 @@ fn capture_options() -> ScreenshotCaptureOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::{InFlightCaptures, capture_options};
+    use super::{CardDocuments, InFlightCaptures, capture_options};
     use browseros_core::screenshot::ScreenshotFormat;
 
     #[test]
@@ -316,5 +391,66 @@ mod tests {
 
         captures.finish(7).await;
         assert!(captures.begin(9).await);
+    }
+
+    fn page(id: u32) -> browseros_core::pages::PageInfo {
+        browseros_core::pages::PageInfo {
+            page_id: browseros_core::PageId(id),
+            target_id: browseros_core::TargetId::from(format!("target-{id}")),
+            tab_id: browseros_core::TabId(i64::from(id)),
+            url: "https://shop.test/checkout".into(),
+            title: "Checkout".into(),
+            is_active: true,
+            is_loading: false,
+            load_progress: 1.0,
+            is_pinned: false,
+            window_id: None,
+            index: None,
+            group_id: None,
+            browser_profile_id: None,
+            live_browser_context_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn card_pages_stay_held_until_their_document_changes() -> anyhow::Result<()> {
+        let cards = CardDocuments::default();
+        let open = [page(1), page(2)];
+        assert_eq!(cards.held(1, &open).await, None);
+
+        cards.hold(1, Some("main:loader-a".into())).await;
+        let filled = cards
+            .held(1, &open)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("page 1 not held"))?;
+        // The same document, or one that can't be read, keeps the page held.
+        assert!(
+            !cards
+                .release_if_changed(1, &filled, Some("main:loader-a".into()))
+                .await
+        );
+        assert!(!cards.release_if_changed(1, &filled, None).await);
+        assert!(cards.held(1, &open).await.is_some());
+        // A new document releases it.
+        assert!(
+            cards
+                .release_if_changed(1, &filled, Some("main:loader-b".into()))
+                .await
+        );
+        assert_eq!(cards.held(1, &open).await, None);
+
+        // An unreadable fill document holds until the page closes.
+        cards.hold(2, None).await;
+        let filled = cards
+            .held(2, &open)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("page 2 not held"))?;
+        assert!(
+            !cards
+                .release_if_changed(2, &filled, Some("main:loader-c".into()))
+                .await
+        );
+        assert_eq!(cards.held(2, &[page(1)]).await, None);
+        Ok(())
     }
 }

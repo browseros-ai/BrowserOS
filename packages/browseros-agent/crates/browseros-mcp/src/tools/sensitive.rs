@@ -37,6 +37,35 @@ pub fn is_sensitive_cdp_method(method: &str) -> bool {
         || (method.starts_with("Autofill.") && method.to_ascii_lowercase().contains("credential"))
 }
 
+/// The page a tool call fills a card into. Unlike a password, a filled card
+/// number shows in plain text, so hosts keep that page out of screenshots
+/// until its document changes.
+#[must_use]
+pub fn card_fill_page(tool: &str, args: &Value) -> Option<u32> {
+    if tool != "payment_cards" || args.get("action").and_then(Value::as_str) != Some("fill") {
+        return None;
+    }
+    args.get("page")?.as_u64()?.try_into().ok()
+}
+
+/// The page a script bridge primitive fills a card into: the `payment_cards`
+/// tool, raw `Payments.fillCard`, or upstream `Autofill.trigger`.
+#[must_use]
+pub fn primitive_card_fill_page(method: &str, args: &[Value]) -> Option<u32> {
+    match method {
+        "tool:payment_cards" => card_fill_page("payment_cards", args.first()?),
+        "cdpJsonForPage"
+            if matches!(
+                args.get(1).and_then(Value::as_str),
+                Some("Payments.fillCard" | "Autofill.trigger")
+            ) =>
+        {
+            args.first()?.as_u64()?.try_into().ok()
+        }
+        _ => None,
+    }
+}
+
 /// Conservative classification of `run` source before admission or execution:
 /// a script that fails before reaching its sensitive call still contains it.
 #[must_use]
@@ -77,6 +106,38 @@ mod tests {
         ));
         assert!(!is_sensitive_primitive("cdp", &[json!("Autofill.enable")]));
         assert!(!is_sensitive_primitive("tool:tabs", &[json!({})]));
+    }
+
+    #[test]
+    fn card_fills_name_the_page_they_write_into() {
+        assert_eq!(
+            card_fill_page("payment_cards", &json!({"action":"fill","page":3})),
+            Some(3)
+        );
+        assert_eq!(
+            card_fill_page("payment_cards", &json!({"action":"list","page":3})),
+            None
+        );
+        assert_eq!(
+            card_fill_page("credentials", &json!({"action":"fill","page":3})),
+            None
+        );
+        assert_eq!(
+            primitive_card_fill_page("tool:payment_cards", &[json!({"action":"fill","page":4})]),
+            Some(4)
+        );
+        assert_eq!(
+            primitive_card_fill_page("cdpJsonForPage", &[json!(5), json!("Payments.fillCard")]),
+            Some(5)
+        );
+        assert_eq!(
+            primitive_card_fill_page("cdpJsonForPage", &[json!(6), json!("Autofill.trigger")]),
+            Some(6)
+        );
+        assert_eq!(
+            primitive_card_fill_page("cdpJsonForPage", &[json!(7), json!("Payments.listCards")]),
+            None
+        );
     }
 
     #[test]
