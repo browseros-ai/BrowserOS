@@ -385,6 +385,18 @@ async fn tests_that_run_offers_set_viewport_only_when_hosted() -> TestResult {
         run_value(&run(&hosted, "return typeof browser.page(1).setViewport").await)?,
         "function"
     );
+    let hint = run_value(
+        &run(
+            &hosted,
+            "try { browser.page(1).setViewportSize({ width: 390, height: 844 }); return 'present' } catch (e) { return String(e.message) }",
+        )
+        .await,
+    )?;
+    assert!(
+        hint.as_str()
+            .is_some_and(|message| message.contains("width?, height?")),
+        "{hint}"
+    );
     let desktop = ctx(&native, false);
     let missing = run_value(
         &run(

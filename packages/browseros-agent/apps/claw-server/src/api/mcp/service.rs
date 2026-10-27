@@ -2637,6 +2637,18 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("setViewport missing from the hosted list"))?;
         assert!(tool.input_schema["properties"].get("taskName").is_some());
         assert!(hosted.get_tool("setViewport").is_some());
+        let run = hosted
+            .listed_tools(true)
+            .into_iter()
+            .find(|tool| tool.name == "run")
+            .ok_or_else(|| anyhow::anyhow!("run missing from the hosted list"))?;
+        let run_description = run.description.as_deref().unwrap_or_default();
+        assert!(
+            run_description.contains(
+                "page.setViewport({ mode: 'mobile' | 'desktop' | 'default', zoom?, width?, height? })"
+            ),
+            "{run_description}"
+        );
         // Dispatched to the tool, which admits the page before anything else.
         let refused = call_tool_value(hosted, "setViewport", json!({"page": 1, "mode": "mobile"}))
             .await?

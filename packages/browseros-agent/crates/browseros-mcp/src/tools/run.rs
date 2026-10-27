@@ -194,7 +194,7 @@ const BOOTSTRAP_JS: &str = r#"
     mainFrame: 'Frames are not addressable. Use page.cdp(method, paramsJson).',
     setContent: 'Set content from inside page.evaluate instead.',
     setViewportSize: __browserosFeatures.viewport
-      ? 'Use page.setViewport({ mode: "mobile" | "desktop" | "default", zoom }).'
+      ? 'Use page.setViewport({ mode: "mobile" | "desktop" | "default", zoom?, width?, height? }).'
       : 'The viewport is the user\'s. Pass { size } to page.screenshot to cap a capture.',
     addInitScript: 'There is no init-script hook. Run the script with page.evaluate after page.goto.',
     exposeFunction: 'There is no binding hook. Return a value from page.evaluate instead.',

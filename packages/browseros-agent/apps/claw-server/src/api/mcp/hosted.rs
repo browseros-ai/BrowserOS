@@ -67,7 +67,7 @@ pub fn with_viewport_sdk_note(mut tool: Tool) -> Tool {
     {
         tool.description = Some(
             format!(
-                "{description}\n\nHosted: page.setViewport({{ mode: 'mobile' | 'desktop' | 'default', zoom? }}) sets the tab's viewport like the setViewport tool and returns the same report."
+                "{description}\n\nHosted: page.setViewport({{ mode: 'mobile' | 'desktop' | 'default', zoom?, width?, height? }}) sets the tab's viewport like the setViewport tool and returns the same report. width and height (CSS px, 100-4096) go together and only with mobile or desktop."
             )
             .into(),
         );
