@@ -8,7 +8,7 @@ use crate::{
     trust_boundary::wrap_untrusted,
 };
 use browseros_core::{
-    PageId,
+    CoreError, PageId, PageJs,
     content_markdown::{ContentMarkdownOptions, build_content_markdown_expression},
 };
 use futures_util::future::BoxFuture;
@@ -47,25 +47,6 @@ struct ReadArgs {
     /// For markdown reads, include image references.
     #[serde(rename = "includeImages")]
     include_images: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct EvaluateResult {
-    result: RemoteObject,
-    exception_details: Option<ExceptionDetails>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteObject {
-    value: Option<Value>,
-    description: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ExceptionDetails {
-    text: String,
-    exception: Option<RemoteObject>,
 }
 
 pub fn definition() -> crate::framework::ToolDef {
@@ -115,24 +96,20 @@ fn handler<'a>(
         }
         let page = ctx.browser.page_session(PageId(args.page)).await?;
         let expression = expression_for(&args)?;
-        let result: EvaluateResult = page
-            .session
-            .send(
-                "Runtime.evaluate",
-                json!({ "expression": expression, "returnByValue": true }),
-            )
-            .await?;
-        if let Some(exception) = result.exception_details {
-            return Ok(Some(error_result(format!(
-                "read: {}",
-                exception_message(exception)
-            ))));
-        }
+        let result = match PageJs::isolated(&page.session)
+            .eval_value(&expression)
+            .await
+        {
+            Ok(result) => result,
+            Err(CoreError::PageScript(message)) => {
+                return Ok(Some(error_result(format!("read: {message}"))));
+            }
+            Err(error) => return Err(error.into()),
+        };
         let text = result
-            .result
             .value
             .and_then(|value| value.as_str().map(ToString::to_string))
-            .or(result.result.description)
+            .or(result.description)
             .unwrap_or_default();
         if text.len() <= INLINE_PAGE_CONTENT_MAX_CHARS {
             return Ok(Some(text_result(
@@ -208,13 +185,6 @@ fn root_expression(selector: Option<&str>) -> ToolExecResult<String> {
         ),
         None => "document.body".to_string(),
     })
-}
-
-fn exception_message(exception: ExceptionDetails) -> String {
-    exception
-        .exception
-        .and_then(|exception| exception.description)
-        .unwrap_or(exception.text)
 }
 
 fn format_name(format: &ReadFormat) -> &'static str {

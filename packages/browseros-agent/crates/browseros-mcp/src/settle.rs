@@ -5,22 +5,11 @@
 //! context, and target-incarnation admission, including awaited readback work.
 
 use browseros_core::{
-    BrowserView, CoreError, PageId, ProtocolSession, settle::SettleOutcome, timeouts,
+    BrowserView, CoreError, PageId, PageJs, ProtocolSession, settle::SettleOutcome, timeouts,
 };
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{future::Future, time::Duration};
 use tokio::time::{Instant, sleep, timeout};
-
-#[derive(Debug, Deserialize)]
-struct EvaluateResult {
-    result: RemoteObject,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteObject {
-    value: Option<Value>,
-}
 
 const INSTALL_OBSERVER_JS: &str = r#"
 (() => {
@@ -160,20 +149,9 @@ async fn evaluate_counter(
     expression: &str,
     deadline: Instant,
 ) -> Result<u64, SettleOutcome> {
-    let result: EvaluateResult = call_with_deadline(
-        session.send(
-            "Runtime.evaluate",
-            json!({ "expression": expression, "returnByValue": true }),
-        ),
-        deadline,
-    )
-    .await?;
-    Ok(result
-        .result
-        .value
-        .as_ref()
-        .and_then(Value::as_u64)
-        .unwrap_or(0))
+    let value: Value =
+        call_with_deadline(PageJs::isolated(session).eval(expression), deadline).await?;
+    Ok(value.as_u64().unwrap_or(0))
 }
 
 async fn call_with_deadline<T, Fut>(future: Fut, deadline: Instant) -> Result<T, SettleOutcome>

@@ -6,7 +6,7 @@ use std::{
 
 use browseros_cdp::CdpError;
 use browseros_core::{
-    BrowserView, CoreError, FrameId, PageId, ProtocolSession, TargetError,
+    BrowserView, CoreError, FrameId, PageId, PageJs, ProtocolSession, TargetError,
     input::{ClickOptions, Point},
     screenshot::{ScreenshotCaptureOptions, ScreenshotFormat, Viewport},
 };
@@ -16,6 +16,8 @@ use tokio::sync::Mutex;
 use super::types::{DocumentId, FrameRef, PageError, Rect};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+/// Chromium-side limit on one widget evaluation, inside the request timeout above.
+const EVAL_TIMEOUT: Duration = Duration::from_secs(2);
 // Turnstile overlays a transparent input on its visible checkbox.
 const VISIBLE_RECT: &str = r"function(selector) {
     for (const element of this.querySelectorAll(selector)) {
@@ -112,8 +114,15 @@ impl LivePage {
 }
 
 impl CaptchaPage for LivePage {
+    /// The page world: widget probes read provider globals such as `turnstile` and `grecaptcha`.
     async fn eval_main(&self, expression: &str) -> Result<Value, PageError> {
-        evaluate(&self.top().await?, expression, None).await
+        let top = self.top().await?;
+        browser(
+            PageJs::page_world(&top)
+                .timeout(EVAL_TIMEOUT)
+                .eval(expression),
+        )
+        .await
     }
     async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
         self.frame_operation(async {
@@ -198,16 +207,14 @@ impl CaptchaPage for LivePage {
     async fn eval_in_frame(&self, frame: &FrameRef, expression: &str) -> Result<Value, PageError> {
         self.frame_operation(async {
             let session = self.frame(&frame.frame_id).await?;
-            let world = send(
-                &session,
-                "Page.createIsolatedWorld",
-                json!({"frameId":frame.frame_id,"worldName":"browseros-captcha-read"}),
+            let frame_id = FrameId(frame.frame_id.clone());
+            browser(
+                PageJs::isolated(&session)
+                    .in_frame(&frame_id)
+                    .timeout(EVAL_TIMEOUT)
+                    .eval(expression),
             )
-            .await?;
-            let context = world["executionContextId"]
-                .as_i64()
-                .ok_or_else(|| bad("Missing frame execution context"))?;
-            evaluate(&session, expression, Some(context)).await
+            .await
         })
         .await
     }
@@ -231,30 +238,14 @@ impl CaptchaPage for LivePage {
                 find_document(&dom["root"], &frame.frame_id)
             }
             .ok_or_else(|| bad("Frame document is unavailable"))?;
-            let resolved = send(
-                &session,
-                "DOM.resolveNode",
-                json!({"backendNodeId":document["backendNodeId"]}),
-            )
-            .await?;
-            let object = text(&resolved["object"], "objectId")?;
-            let response = send(
-                &session,
-                "Runtime.callFunctionOn",
-                json!({
-                    "objectId":object,
-                    "functionDeclaration":format!("function() {{ return ({expression}); }}"),
-                    "returnByValue":true,"awaitPromise":true
-                }),
-            )
-            .await;
-            let _ = send(
-                &session,
-                "Runtime.releaseObject",
-                json!({"objectId":object}),
-            )
-            .await;
-            evaluation_value(response?)
+            // A function called on the frame's document runs in that document's page world,
+            // where the provider's callbacks live.
+            browser(PageJs::page_world(&session).call(
+                node_id(document)?,
+                &format!("function() {{ return ({expression}); }}"),
+                &[],
+            ))
+            .await
         })
         .await
     }
@@ -280,14 +271,14 @@ impl CaptchaPage for LivePage {
                 values.push(json!({"widgets":[],"frames":[],"checked":null,"expired":false,"complete":false}));
             }
             for root in roots.into_iter().take(64) {
-                let resolved = send(&session, "DOM.resolveNode", json!({"backendNodeId":root["backendNodeId"]})).await?;
-                let object = text(&resolved["object"], "objectId")?;
-                let result = send(&session, "Runtime.callFunctionOn", json!({
-                    "objectId":object,"functionDeclaration":function_declaration,
-                    "returnByValue":true,"awaitPromise":true
-                })).await;
-                let _ = send(&session, "Runtime.releaseObject", json!({"objectId":object})).await;
-                values.push(evaluation_value(result?)?);
+                values.push(
+                    browser(PageJs::page_world(&session).call(
+                        node_id(root)?,
+                        function_declaration,
+                        &[],
+                    ))
+                    .await?,
+                );
             }
             Ok(values)
         }).await
@@ -374,21 +365,12 @@ impl CaptchaPage for LivePage {
             let mut roots = vec![document];
             collect_shadow_roots(document, &mut roots);
             for root in roots {
-                let resolved = send(
-                    &session,
-                    "DOM.resolveNode",
-                    json!({"backendNodeId":root["backendNodeId"]}),
-                )
+                let value: Value = browser(PageJs::page_world(&session).call(
+                    node_id(root)?,
+                    VISIBLE_RECT,
+                    &[json!(selector)],
+                ))
                 .await?;
-                let object = text(&resolved["object"], "objectId")?;
-                let response = send(&session,"Runtime.callFunctionOn",json!({"objectId":object,"functionDeclaration":VISIBLE_RECT,"arguments":[{"value":selector}],"returnByValue":true,"awaitPromise":true})).await;
-                let _ = send(
-                    &session,
-                    "Runtime.releaseObject",
-                    json!({"objectId":object}),
-                )
-                .await;
-                let value = evaluation_value(response?)?;
                 if !value.is_null() {
                     let rect: Rect =
                         serde_json::from_value(value).map_err(|error| bad(&error.to_string()))?;
@@ -418,29 +400,10 @@ fn browser<T>(
 async fn send(session: &ProtocolSession, method: &str, params: Value) -> Result<Value, PageError> {
     browser(session.send_value(method, params)).await
 }
-async fn evaluate(
-    session: &ProtocolSession,
-    expression: &str,
-    context: Option<i64>,
-) -> Result<Value, PageError> {
-    let mut params =
-        json!({"expression":expression,"returnByValue":true,"awaitPromise":true,"timeout":2000});
-    if let Some(context) = context {
-        params["contextId"] = json!(context);
-    }
-    evaluation_value(send(session, "Runtime.evaluate", params).await?)
-}
-fn evaluation_value(response: Value) -> Result<Value, PageError> {
-    if let Some(details) = response.get("exceptionDetails") {
-        return Err(bad(details["exception"]["description"]
-            .as_str()
-            .or_else(|| details["text"].as_str())
-            .unwrap_or("JavaScript exception")));
-    }
-    response
-        .get("result")
-        .ok_or_else(|| bad("Missing JavaScript result"))?;
-    Ok(response["result"]["value"].clone())
+fn node_id(node: &Value) -> Result<i64, PageError> {
+    node["backendNodeId"]
+        .as_i64()
+        .ok_or_else(|| bad("DOM node has no backend id"))
 }
 fn page_error(error: CoreError) -> PageError {
     match error {
@@ -1092,19 +1055,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tests_that_main_and_child_evaluation_use_the_right_worlds() -> TestResult {
+    async fn tests_that_main_and_child_evaluation_run_in_their_own_sessions() -> TestResult {
         let (native, page) = fixture();
         assert_eq!(page.eval_main("location.href").await?, json!("main"));
         assert_eq!(
             page.eval_in_frame(&widget(), "location.href").await?,
-            json!("https://widget.test")
+            json!("main")
         );
+        // Which world `eval_in_frame` uses follows the isolated-world switch, which tests leave
+        // off; `PageJs` owns and tests that choice.
         let calls = native.calls("Runtime.evaluate")?;
         assert!(calls[0].1.get("contextId").is_none());
-        assert_eq!(calls[1].1["contextId"], 77);
+        assert_eq!(calls[0].2.as_ref().map(SessionId::as_str), Some("s-page"));
         assert_eq!(calls[1].2.as_ref().map(SessionId::as_str), Some("s-widget"));
         assert_eq!(calls[0].1["awaitPromise"], true);
         assert_eq!(calls[0].1["returnByValue"], true);
+        assert_eq!(calls[0].1["timeout"], 2000);
         Ok(())
     }
     #[tokio::test]
@@ -1184,7 +1150,6 @@ mod tests {
     async fn tests_that_detached_children_are_distinguished_from_closed_pages() -> TestResult {
         for method in [
             "Page.getFrameTree",
-            "Page.createIsolatedWorld",
             "Runtime.evaluate",
             "DOM.getDocument",
             "Runtime.callFunctionOn",

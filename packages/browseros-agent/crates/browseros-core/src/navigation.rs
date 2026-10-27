@@ -1,5 +1,5 @@
 use crate::{
-    CoreError, PageId, ProtocolSession,
+    CoreError, PageId, PageJs, ProtocolSession,
     page_signals::PageSignals,
     pages::{PageManager, PageSession},
     target::page_access::PageAccess,
@@ -89,12 +89,8 @@ impl Navigation {
         }
         self.throw_if_dialog_open()?;
         let page = self.page_session().await?;
-        let _: Value = page
-            .session
-            .send(
-                "Runtime.evaluate",
-                json!({ "expression": format!("history.{direction}()"), "awaitPromise": true }),
-            )
+        let _: Value = PageJs::isolated(&page.session)
+            .eval(&format!("history.{direction}()"))
             .await?;
         wait_for_load(
             &page.session,

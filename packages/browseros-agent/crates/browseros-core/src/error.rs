@@ -78,6 +78,10 @@ pub enum CoreError {
     Cdp(#[from] CdpError),
     #[error(transparent)]
     Target(#[from] TargetError),
+    /// A page script threw; carries the exception's description, or its text when the
+    /// thrown value had none. See `crate::page_js`.
+    #[error("{0}")]
+    PageScript(String),
     #[error("{0}")]
     Message(String),
 }

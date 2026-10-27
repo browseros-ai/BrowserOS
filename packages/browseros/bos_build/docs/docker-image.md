@@ -202,7 +202,9 @@ GitHub documents package Actions access in
 - **Server behaviour comes from `/etc/neo/neo.toml`** (`BROWSERCLAW_CONFIG_FILE`). The
   shipped file only documents the defaults, all commented out; deployments mount or `COPY`
   their own. Hosted mode defaults `[tabs] grouping` to `"explicit"`, so the server never
-  groups an agent's pages on its own. A key or value claw-server does not know stops it at
+  groups an agent's pages on its own. `[scripts] isolated_world` defaults to `true`; `false`
+  runs BrowserOS's DOM-only page scripts in the page's own JavaScript world instead of an
+  isolated one, and a claw-server older than that key refuses the table. A key or value claw-server does not know stops it at
   startup.
 - **The server updater is disabled by the entrypoint.** It cannot replace the
   packaged/overlaid server that passed the release checks, even when `NEO_ARGS` is

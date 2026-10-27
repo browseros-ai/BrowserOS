@@ -3609,7 +3609,10 @@ mod tests {
                     "tabs",
                     json!({}),
                     mode,
-                    Behavior { tab_grouping },
+                    Behavior {
+                        tab_grouping,
+                        ..Behavior::default()
+                    },
                 )
                 .await?;
                 let service = ClawMcpService::new(call.state);
@@ -3661,6 +3664,7 @@ mod tests {
                 mode,
                 Behavior {
                     tab_grouping: TabGrouping::Automatic,
+                    ..Behavior::default()
                 },
             )
             .await?;
