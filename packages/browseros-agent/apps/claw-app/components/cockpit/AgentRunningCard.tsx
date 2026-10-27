@@ -2,11 +2,14 @@ import { Eye, Hand, Square } from 'lucide-react'
 import { AgentProgress } from '@/components/agents/loading-states/agent-progress'
 import { SiteChip } from '@/components/favicon/SiteChip'
 import { AgentMark } from '@/components/harness/AgentMark'
-import { AnimatedBadge } from '@/components/motion/animated-badge'
+import {
+  AnimatedBadge,
+  type AnimatedBadgeStatus,
+} from '@/components/motion/animated-badge'
 import { AspectRatio } from '@/components/motion/aspect-ratio'
 import { Button } from '@/components/motion/button/base'
 import { Card } from '@/components/motion/card'
-import { describeLiveStep } from '@/lib/step-sentences'
+import { describeIdleStep, describeLiveStep } from '@/lib/step-sentences'
 import { cn } from '@/lib/utils'
 import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
 import { helpRequestSite, siteOf } from '@/screens/cockpit/cockpit.helpers'
@@ -23,6 +26,18 @@ interface AgentRunningCardProps {
   onStop: () => void
   isFocusPending?: boolean
   isCancelPending?: boolean
+}
+
+/** The corner badge: the one thing about this task a person should notice first. */
+function cardBadge(
+  inControl: boolean | undefined,
+  waiting: boolean,
+  idle: boolean,
+): { status: AnimatedBadgeStatus; label: string } {
+  const status = waiting ? 'warning' : idle ? 'neutral' : 'loading'
+  if (inControl) return { status, label: 'You’re in control' }
+  if (waiting) return { status, label: 'Waiting for you' }
+  return { status, label: idle ? 'Idle' : 'Working' }
 }
 
 /**
@@ -42,6 +57,10 @@ export function AgentRunningCard({
   const tab = session.browserTabs[0]
   const help = session.helpRequest
   const waiting = help !== undefined
+  // No tool call for a minute: the agent may be thinking or already finished. The card stays
+  // until the session ends, but stops claiming the agent is busy.
+  const idle = !waiting && !inControl && session.state === 'idle'
+  const badge = cardBadge(inControl, waiting, idle)
   const site = help
     ? helpRequestSite(help)
     : tab
@@ -59,7 +78,7 @@ export function AgentRunningCard({
         'gap-0 border-border-2 p-3 shadow-card',
         // Working cards take the same calm blue as Home's promotion bar;
         // waiting ones stay plain so amber alone says "needs you".
-        waiting || inControl ? 'bg-card' : 'bg-accent-tint',
+        waiting || inControl || idle ? 'bg-card' : 'bg-accent-tint',
       )}
     >
       <AspectRatio
@@ -75,15 +94,11 @@ export function AgentRunningCard({
           className="h-full w-full"
         />
         <AnimatedBadge
-          status={waiting ? 'warning' : 'loading'}
+          status={badge.status}
           size="sm"
           className="absolute top-2 left-2 shadow-card"
         >
-          {inControl
-            ? 'You’re in control'
-            : waiting
-              ? 'Waiting for you'
-              : 'Working'}
+          {badge.label}
         </AnimatedBadge>
         {pageUrl ? (
           <SiteChip
@@ -101,7 +116,7 @@ export function AgentRunningCard({
           <p className="text-[14px] text-ink-2">{help.reason}</p>
         ) : (
           <AgentProgress
-            label={describeLiveStep(tab)}
+            label={idle ? describeIdleStep(tab) : describeLiveStep(tab)}
             initialSeconds={startedSeconds}
             running={session.state === 'active'}
             className="min-w-0 gap-2 font-sans text-[14px] text-ink-2 [&>span:last-child]:whitespace-nowrap [&>span:nth-child(2)]:min-w-0 [&>span:nth-child(2)]:truncate"

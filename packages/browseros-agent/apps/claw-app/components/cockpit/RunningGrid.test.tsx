@@ -203,6 +203,20 @@ describe('RunningGrid', () => {
     ])
   })
 
+  it('says Idle, not Working, once the agent stops making tool calls', async () => {
+    await render([
+      session({ sessionId: 'session-busy' }),
+      session({ sessionId: 'session-quiet', state: 'idle' }),
+    ])
+
+    const busy = container.querySelector('[data-session-card="session-busy"]')
+    const quiet = container.querySelector('[data-session-card="session-quiet"]')
+    expect(busy?.textContent).toContain('Working')
+    expect(quiet?.textContent).not.toContain('Working')
+    expect(quiet?.textContent).toContain('Idle')
+    expect(quiet?.textContent).toContain('Last active on Example')
+  })
+
   it('watches the tab the agent is using', async () => {
     const selectedTab = browserTab({ browserTabId: 42 })
     await render([session({ selectedTab, browserTabs: [selectedTab] })])
