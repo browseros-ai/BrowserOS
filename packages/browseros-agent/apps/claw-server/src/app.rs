@@ -190,11 +190,16 @@ impl AppState {
             live_recordings.clone(),
         );
         let tab_activity = Arc::new(TabActivityService::default());
+        let viewports = config
+            .mode
+            .is_hosted()
+            .then(|| Arc::new(browseros_core::viewport::Viewports::default()));
         let visuals = SessionVisualService::new(
             sessions.clone(),
             session_tabs.clone(),
             browser.clone(),
             tab_activity.clone(),
+            viewports.clone(),
         );
         let shutdown = ShutdownHandle::new();
         let capture = CaptureHub::new(
@@ -230,10 +235,6 @@ impl AppState {
             tab_activity.clone(),
         ));
         let captcha = crate::services::captcha::CaptchaService::from_env(config.mode);
-        let viewports = config
-            .mode
-            .is_hosted()
-            .then(|| Arc::new(browseros_core::viewport::Viewports::default()));
         Ok(Self {
             config,
             audit_log,

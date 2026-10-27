@@ -151,10 +151,6 @@ impl Native {
         }
     }
 
-    fn close_tab(&self, tab: i64) {
-        self.lock().tabs.retain(|entry| entry["tabId"] != tab);
-    }
-
     fn set_window_state(&self, id: i64, state: &str) {
         if let Some(window) = self.lock().windows.get_mut(&id) {
             window.window_state = state.to_string();
@@ -1058,28 +1054,6 @@ async fn tests_that_default_tabs_sharing_a_fixed_window_do_not_wait_for_each_oth
 }
 
 #[tokio::test]
-async fn tests_that_a_closed_fixed_tab_stops_holding_its_window() -> TestResult {
-    let fixture = Fixture::new(&[(1, 10), (2, 10), (3, 10)]);
-    let closed = fixture.page(1).await?;
-    let natural = fixture.page(2).await?;
-    let fixed = fixture.page(3).await?;
-    fixture.set(&closed, ViewportMode::Mobile, None).await?;
-    fixture.native.close_tab(1);
-    fixture.view.list_pages().await?;
-
-    let lease = fixture.view.prepare_viewport(natural).await?;
-    let view = fixture.view.clone();
-    let mut set = Box::pin(async move {
-        view.set_viewport(fixed, ViewportRequest::new(ViewportMode::Desktop, None)?)
-            .await
-            .map_err(|error| error.to_string())
-    });
-    assert!(!still_waiting(&mut set).await);
-    drop(lease);
-    Ok(())
-}
-
-#[tokio::test]
 async fn tests_that_a_failed_switch_to_default_keeps_the_mode() -> TestResult {
     let fixture = Fixture::new(&[(1, 10)]);
     let page = fixture.page(1).await?;
@@ -1230,5 +1204,81 @@ async fn tests_that_a_call_without_size_returns_to_the_mode_size() -> TestResult
         (report.viewport.width, report.viewport.height),
         (400.0, 906.0)
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_held_page_makes_viewport_changes_wait() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10), (2, 10)]);
+    let fixed = fixture.page(1).await?;
+    let neighbour = fixture.page(2).await?;
+    fixture.set(&fixed, ViewportMode::Mobile, None).await?;
+    fixture.native.clear_calls();
+
+    // A capture in flight holds the page and changes nothing itself; a default tab beside it
+    // is not held up.
+    let held = fixture.view.hold_viewport(fixed.clone()).await;
+    assert!(fixture.native.methods().is_empty());
+    let view = fixture.view.clone();
+    let mut beside = Box::pin(async move { view.prepare_viewport(neighbour).await });
+    assert!(!still_waiting(&mut beside).await);
+    let view = fixture.view.clone();
+    let page = fixed.clone();
+    let mut change = Box::pin(async move {
+        view.set_viewport(page, ViewportRequest::new(ViewportMode::Desktop, None)?)
+            .await
+            .map_err(|error| error.to_string())
+    });
+    assert!(still_waiting(&mut change).await);
+    let view = fixture.view.clone();
+    let page = fixed.clone();
+    let mut operation = Box::pin(async move { view.prepare_viewport(page).await });
+    assert!(still_waiting(&mut operation).await);
+    drop(held);
+    change.await?;
+    drop(operation.await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_capture_on_a_default_tab_holds_off_its_first_mode_change() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+
+    let capture = fixture.view.hold_viewport(page.clone()).await;
+    let view = fixture.view.clone();
+    let target = page.clone();
+    let mut change = Box::pin(async move {
+        view.set_viewport(target, ViewportRequest::new(ViewportMode::Mobile, None)?)
+            .await
+            .map_err(|error| error.to_string())
+    });
+    assert!(still_waiting(&mut change).await);
+    assert!(emulation_methods(&fixture.native.methods()).is_empty());
+    drop(capture);
+    change.await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_capture_after_a_switch_to_default_holds_off_the_next_change() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    fixture.set(&page, ViewportMode::Mobile, None).await?;
+    fixture.set(&page, ViewportMode::Default, None).await?;
+    fixture.native.clear_calls();
+
+    let capture = fixture.view.hold_viewport(page.clone()).await;
+    let view = fixture.view.clone();
+    let target = page.clone();
+    let mut change = Box::pin(async move {
+        view.set_viewport(target, ViewportRequest::new(ViewportMode::Desktop, None)?)
+            .await
+            .map_err(|error| error.to_string())
+    });
+    assert!(still_waiting(&mut change).await);
+    assert!(emulation_methods(&fixture.native.methods()).is_empty());
+    drop(capture);
+    change.await?;
     Ok(())
 }

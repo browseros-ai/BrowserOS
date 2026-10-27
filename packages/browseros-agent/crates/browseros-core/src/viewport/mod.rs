@@ -227,7 +227,6 @@ struct Tab {
     fixed: Fixed,
     /// The page session the emulation lives on; it dies with that session.
     applied: Option<SessionId>,
-    window: Option<WindowId>,
 }
 
 #[derive(Default)]
@@ -278,13 +277,13 @@ impl Viewports {
         };
         // Recorded before applying: a failure leaves the tab pending, so the next operation
         // retries instead of acting on a half-applied device.
-        self.record(&page, fixed, None, info.window_id);
+        self.record(&page, fixed, None);
         let chrome_version = self.chrome_version(view).await?;
         for (method, params) in fixed.commands(&chrome_version) {
             view.send_at_capture(method, params, Some(&session)).await?;
         }
         let metrics = device::settle(view, &session, &page, fixed).await?;
-        self.record(&page, fixed, Some(session.clone()), info.window_id);
+        self.record(&page, fixed, Some(session.clone()));
         let placement = window::locate(view, &page, &info.target_id, info.window_id).await?;
         let fit = window::fit(view, &session, placement, fixed.preview(), true).await?;
         if let Some(slot) = slot.as_mut() {
@@ -302,16 +301,7 @@ impl Viewports {
         if self.tab(&page).is_none() {
             // A default tab changes nothing, but must not act while a fixed tab's operation
             // owns the window it shares.
-            self.retain(&view.known_page_ids().await);
-            let window = view
-                .cached_page(&page)
-                .await
-                .and_then(|info| info.window_id);
-            let shared = window.filter(|window| self.holds_fixed_tab(*window));
-            return Ok(ViewportLease {
-                _shared: self.share_window(shared).await,
-                _exclusive: None,
-            });
+            return Ok(self.hold(view, page).await);
         }
         let info = view.page(page.clone()).await?;
         let mut slot = self.lock_window(info.window_id).await;
@@ -337,7 +327,7 @@ impl Viewports {
                 view.send_at_capture(method, params, Some(&session)).await?;
             }
             device::settle(view, &session, &page, tab.fixed).await?;
-            self.record(&page, tab.fixed, Some(session.clone()), info.window_id);
+            self.record(&page, tab.fixed, Some(session.clone()));
         }
         let placement = window::locate(view, &page, &info.target_id, info.window_id).await?;
         let contents = tab.fixed.preview();
@@ -358,12 +348,18 @@ impl Viewports {
         })
     }
 
-    fn holds_fixed_tab(&self, window: WindowId) -> bool {
-        self.tabs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .values()
-            .any(|tab| tab.window == Some(window))
+    /// Shares the page's window: fits and fixed tabs' operations wait for every holder, other
+    /// holders do not. Taken whatever the tab's mode, because a mode change can start while
+    /// the holder still works (a capture restores the emulation it saw when it began).
+    pub(crate) async fn hold(&self, view: &BrowserView, page: PageId) -> ViewportLease {
+        let window = view
+            .cached_page(&page)
+            .await
+            .and_then(|info| info.window_id);
+        ViewportLease {
+            _shared: self.share_window(window).await,
+            _exclusive: None,
+        }
     }
 
     fn tab(&self, page: &PageId) -> Option<Tab> {
@@ -374,24 +370,11 @@ impl Viewports {
             .cloned()
     }
 
-    fn record(
-        &self,
-        page: &PageId,
-        fixed: Fixed,
-        applied: Option<SessionId>,
-        window: Option<WindowId>,
-    ) {
+    fn record(&self, page: &PageId, fixed: Fixed, applied: Option<SessionId>) {
         self.tabs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(
-                page.clone(),
-                Tab {
-                    fixed,
-                    applied,
-                    window,
-                },
-            );
+            .insert(page.clone(), Tab { fixed, applied });
     }
 
     fn forget(&self, page: &PageId) {
@@ -399,14 +382,6 @@ impl Viewports {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(page);
-    }
-
-    /// Closed tabs stop holding their window.
-    fn retain(&self, open: &std::collections::BTreeSet<PageId>) {
-        self.tabs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|page, _| open.contains(page));
     }
 
     fn slot(&self, window: WindowId) -> Arc<RwLock<WindowSlot>> {
