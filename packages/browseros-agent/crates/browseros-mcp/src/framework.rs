@@ -511,8 +511,8 @@ async fn execute_tool_inner(
         None
     };
     ctx.throw_if_cancelled()?;
-    // A tab in a fixed viewport is restored before the tool reads or acts, and keeps its window
-    // until the readback is done. setViewport applies its own; tab management needs none.
+    // A tab in a fixed viewport gets back a mode it lost before the tool reads or acts, and is
+    // held until the readback is done. setViewport applies its own; tab management needs none.
     let viewport = match &primary_page {
         Some(page) if restores_viewport(def.name) => {
             tokio::select! {

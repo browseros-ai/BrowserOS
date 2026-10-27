@@ -37,7 +37,7 @@ const SKILLS_REFUSAL: &str = "Skills are not available on this hosted BrowserOS 
 const HUMAN_HELP_REFUSAL: &str = "Human help is not available on this hosted BrowserOS neo server. Do not wait for a human here: stop and tell the user in your chat what you need.";
 
 /// The browser tools this mode offers. Hosted adds `setViewport`, whose per-tab device
-/// emulation and window fitting only make sense where the windows are infrastructure.
+/// emulation only makes sense where the browser is infrastructure.
 #[must_use]
 pub fn catalog(mode: ServerMode) -> Vec<ToolDef> {
     let mut tools = browseros_mcp::catalog();

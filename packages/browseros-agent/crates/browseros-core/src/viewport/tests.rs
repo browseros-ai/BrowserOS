@@ -1,6 +1,6 @@
-//! Viewport behaviour through `BrowserView` against a fake browser that sizes windows the way
-//! Chromium's `Browser.setContentsSize` does and clamps them like macOS (measured, see the
-//! design's probe results). Real-Chromium acceptance lives in the live harness.
+//! Viewport behaviour through `BrowserView` against a fake browser. Its windows exist only so
+//! tests can show that nothing reads or changes them. Real-Chromium acceptance lives in the live
+//! harness.
 use super::*;
 use crate::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId};
 use browseros_cdp::{CdpError, CdpEvent};
@@ -17,9 +17,13 @@ use tokio_util::sync::CancellationToken;
 type TestResult = Result<(), Box<dyn Error>>;
 
 const CHROME_HEIGHT: i64 = 121;
-const MIN_WINDOW_WIDTH: i64 = 500;
-const WORK_AREA_WIDTH: i64 = 2056;
-const WORK_AREA_HEIGHT: i64 = 1285;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WindowBounds {
+    width: i64,
+    height: i64,
+    window_state: String,
+}
 
 #[derive(Clone, Debug)]
 struct Call {
@@ -45,8 +49,6 @@ struct Fake {
     attached: u64,
     emulation: HashMap<String, Emulated>,
     ignore_metrics: bool,
-    /// Where `Browser.getWindowForTarget` says a tab is, when a person moved it mid-call.
-    moved_to: Option<i64>,
     /// Page scripts override `screen` and `devicePixelRatio` in the main world.
     tampered: bool,
     /// `Emulation.clearDeviceMetricsOverride` fails, as on a page that just went away.
@@ -75,8 +77,6 @@ impl Native {
             windows.insert(
                 *window,
                 WindowBounds {
-                    left: 44,
-                    top: 88,
                     width: 1200,
                     height: 1241,
                     window_state: "normal".to_string(),
@@ -102,7 +102,6 @@ impl Native {
                 attached: 0,
                 emulation: HashMap::new(),
                 ignore_metrics: false,
-                moved_to: None,
                 tampered: false,
                 fail_clear: false,
                 fail: None,
@@ -258,7 +257,6 @@ impl Native {
         let target = session_key
             .as_ref()
             .and_then(|session| fake.sessions.get(session).cloned());
-        let window_id = params["windowId"].as_i64();
         Ok(match method {
             "Browser.getTabs" => json!({"tabs": fake.tabs}),
             "Browser.getTabInfo" => json!({"tab": fake.tabs.iter()
@@ -276,60 +274,6 @@ impl Native {
                 "revision":"@0","jsVersion":"15.5",
                 "userAgent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"})
             }
-            "Browser.getWindowForTarget" => {
-                let target = params["targetId"].as_str().unwrap_or_default();
-                let id = match fake.moved_to {
-                    Some(moved) => moved,
-                    None => Self::window_of(&fake, target)?,
-                };
-                json!({"windowId": id, "bounds": fake.windows.get(&id)})
-            }
-            "Browser.getWindowBounds" => {
-                json!({"bounds": window_id.and_then(|id| fake.windows.get(&id)).ok_or(CdpError::SessionGone)?})
-            }
-            "Browser.setWindowBounds" => {
-                let window = window_id
-                    .and_then(|id| fake.windows.get_mut(&id))
-                    .ok_or(CdpError::SessionGone)?;
-                let bounds = &params["bounds"];
-                if let Some(state) = bounds["windowState"].as_str() {
-                    window.window_state = state.to_string();
-                }
-                if let Some(width) = bounds["width"].as_i64() {
-                    window.width = width.clamp(MIN_WINDOW_WIDTH, WORK_AREA_WIDTH);
-                }
-                if let Some(height) = bounds["height"].as_i64() {
-                    window.height = height.min(WORK_AREA_HEIGHT);
-                }
-                json!({})
-            }
-            "Browser.setContentsSize" => {
-                let window = window_id
-                    .and_then(|id| fake.windows.get_mut(&id))
-                    .ok_or(CdpError::SessionGone)?;
-                if window.window_state != "normal" {
-                    return Err(CdpError::Protocol {
-                        code: -32000,
-                        message: "Restore window to normal state before setting content size"
-                            .into(),
-                    });
-                }
-                // Chromium: bounds + (requested - current contents); the OS then clamps.
-                let contents = (window.width, window.height - CHROME_HEIGHT);
-                if let Some(width) = params["width"].as_i64() {
-                    window.width = (window.width + width - contents.0)
-                        .clamp(MIN_WINDOW_WIDTH, WORK_AREA_WIDTH);
-                }
-                if let Some(height) = params["height"].as_i64() {
-                    window.height = (window.height + height - contents.1).min(WORK_AREA_HEIGHT);
-                }
-                json!({})
-            }
-            "Emulation.getScreenInfos" => json!({"screenInfos":[{"left":0,"top":0,"width":2056,
-                "height":1329,"availLeft":0,"availTop":44,"availWidth":WORK_AREA_WIDTH,
-                "availHeight":WORK_AREA_HEIGHT,"devicePixelRatio":2,
-                "orientation":{"type":"landscapePrimary","angle":0},"colorDepth":30,
-                "isExtended":false,"isInternal":true,"isPrimary":true,"label":"Built-in","id":"1"}]}),
             "Emulation.setDeviceMetricsOverride" => {
                 if !fake.ignore_metrics {
                     let session = session_key.ok_or(CdpError::SessionGone)?;
@@ -502,13 +446,17 @@ impl Fixture {
     }
 }
 
+/// Every way to read or change a window. setViewport and page operations send none of them.
 fn window_methods(methods: &[String]) -> Vec<String> {
     methods
         .iter()
         .filter(|method| {
             matches!(
                 method.as_str(),
-                "Browser.setContentsSize" | "Browser.setWindowBounds"
+                "Browser.getWindowForTarget"
+                    | "Browser.getWindowBounds"
+                    | "Browser.setContentsSize"
+                    | "Browser.setWindowBounds"
             )
         })
         .cloned()
@@ -551,9 +499,10 @@ fn tests_that_zoom_is_a_mobile_percentage_between_25_and_400() -> TestResult {
 }
 
 #[tokio::test]
-async fn tests_that_mobile_emulates_the_device_and_fits_the_window() -> TestResult {
+async fn tests_that_mobile_emulates_the_device_and_leaves_the_window() -> TestResult {
     let fixture = Fixture::new(&[(1, 10)]);
     let page = fixture.page(1).await?;
+    let before = fixture.native.window(10)?;
     let report = fixture.set(&page, ViewportMode::Mobile, None).await?;
 
     assert_eq!(report.mode, ViewportMode::Mobile);
@@ -606,25 +555,13 @@ async fn tests_that_mobile_emulates_the_device_and_fits_the_window() -> TestResu
     assert_eq!(identity["userAgentMetadata"]["mobile"], true);
     assert_eq!(identity["userAgentMetadata"]["platform"], "Android");
 
-    // Chrome's 500 px minimum keeps the window wider than the 400 px preview; height fits.
-    let window = report.window.ok_or("missing window fit")?;
-    assert_eq!(window.window_id, 10);
+    // The page renders at the device size inside whatever window it has.
+    let methods = fixture.native.methods();
+    assert!(window_methods(&methods).is_empty(), "{methods:?}");
+    assert_eq!(fixture.native.window(10)?, before);
     assert_eq!(
-        window.contents,
-        Size {
-            width: 400,
-            height: 906
-        }
-    );
-    assert_eq!((window.bounds.width, window.bounds.height), (500, 1027));
-    assert_eq!(fixture.native.window(10)?, window.bounds);
-    assert!(!window.exact);
-    assert_eq!(
-        window.limited,
-        vec![WindowLimit {
-            dimension: Dimension::Width,
-            by: LimitedBy::Minimum
-        }]
+        fixture.native.only("Emulation.setVisibleSize")?.params,
+        json!({"width": 400, "height": 906})
     );
     Ok(())
 }
@@ -649,24 +586,12 @@ async fn tests_that_zoom_scales_the_preview_and_never_the_page() -> TestResult {
             .params["scale"],
         1.5
     );
-    // 906 at 150 % is 1359 tall plus the frame, more than the 1285 px work area.
-    let window = report.window.ok_or("missing window fit")?;
+    // The view holds the whole zoomed preview, even where the window is smaller.
     assert_eq!(
-        window.contents,
-        Size {
-            width: 600,
-            height: 1359
-        }
+        fixture.native.only("Emulation.setVisibleSize")?.params,
+        json!({"width": 600, "height": 1359})
     );
-    assert_eq!((window.bounds.width, window.bounds.height), (600, 1285));
-    assert!(!window.exact);
-    assert_eq!(
-        window.limited,
-        vec![WindowLimit {
-            dimension: Dimension::Height,
-            by: LimitedBy::Screen
-        }]
-    );
+    assert!(window_methods(&fixture.native.methods()).is_empty());
     Ok(())
 }
 
@@ -707,10 +632,7 @@ async fn tests_that_desktop_uses_the_native_identity_without_touch() -> TestResu
             .params,
         json!({"userAgent": ""})
     );
-    let window = report.window.ok_or("missing window fit")?;
-    assert_eq!((window.bounds.width, window.bounds.height), (1920, 1201));
-    assert!(window.exact);
-    assert!(window.limited.is_empty());
+    assert!(window_methods(&fixture.native.methods()).is_empty());
     Ok(())
 }
 
@@ -738,15 +660,14 @@ async fn tests_that_mobile_without_zoom_resets_a_previous_zoom() -> TestResult {
 async fn tests_that_default_clears_only_our_overrides_and_leaves_the_window() -> TestResult {
     let fixture = Fixture::new(&[(1, 10)]);
     let page = fixture.page(1).await?;
+    let before = fixture.native.window(10)?;
     fixture.set(&page, ViewportMode::Mobile, None).await?;
-    let fitted = fixture.native.window(10)?;
     fixture.native.clear_calls();
 
     let report = fixture.set(&page, ViewportMode::Default, None).await?;
     assert_eq!((report.mode, report.zoom), (ViewportMode::Default, None));
-    assert!(report.window.is_none());
     assert!(window_methods(&fixture.native.methods()).is_empty());
-    assert_eq!(fixture.native.window(10)?, fitted);
+    assert_eq!(fixture.native.window(10)?, before);
     assert_eq!(
         emulation_methods(&fixture.native.methods()),
         vec![
@@ -760,7 +681,7 @@ async fn tests_that_default_clears_only_our_overrides_and_leaves_the_window() ->
     // Natural again: the page follows its window.
     assert_eq!(
         (report.viewport.width, report.viewport.height),
-        (500.0, 906.0)
+        (1200.0, 1120.0)
     );
 
     fixture.native.clear_calls();
@@ -784,21 +705,33 @@ async fn tests_that_a_new_tab_is_default_and_untouched() -> TestResult {
 }
 
 #[tokio::test]
-async fn tests_that_a_maximized_window_is_restored_before_fitting() -> TestResult {
-    let fixture = Fixture::new(&[(1, 10)]);
-    fixture.native.set_window_state(10, "maximized");
-    let page = fixture.page(1).await?;
-    let report = fixture.set(&page, ViewportMode::Desktop, None).await?;
+async fn tests_that_a_fullscreen_or_maximized_window_stays_as_it_is() -> TestResult {
+    for state in ["fullscreen", "maximized"] {
+        let fixture = Fixture::new(&[(1, 10)]);
+        fixture.native.set_window_state(10, state);
+        let page = fixture.page(1).await?;
+        let before = fixture.native.window(10)?;
 
-    let window = report.window.ok_or("missing window fit")?;
-    assert_eq!(window.restored_from.as_deref(), Some("maximized"));
-    assert_eq!(window.bounds.window_state, "normal");
-    let order = window_methods(&fixture.native.methods());
-    assert_eq!(
-        order.first().map(String::as_str),
-        Some("Browser.setWindowBounds")
-    );
-    assert!(order.contains(&"Browser.setContentsSize".to_string()));
+        // A phone-sized owner view: the caller made the window fullscreen at the phone's size.
+        let phone = ViewportRequest::new(ViewportMode::Mobile, None)?.with_size(Size {
+            width: 390,
+            height: 844,
+        })?;
+        fixture
+            .view
+            .set_viewport(page.clone(), phone, &CancellationToken::new())
+            .await?;
+        for _ in 0..3 {
+            drop(fixture.view.prepare_viewport(page.clone()).await?);
+        }
+        fixture.set(&page, ViewportMode::Desktop, None).await?;
+        drop(fixture.view.prepare_viewport(page.clone()).await?);
+        fixture.set(&page, ViewportMode::Default, None).await?;
+
+        let methods = fixture.native.methods();
+        assert!(window_methods(&methods).is_empty(), "{state}: {methods:?}");
+        assert_eq!(fixture.native.window(10)?, before, "{state}");
+    }
     Ok(())
 }
 
@@ -927,8 +860,11 @@ async fn tests_that_a_failed_pin_is_retried_by_the_next_operation() -> TestResul
         json!({"width": 600, "height": 1359})
     );
 
-    // A person resizes; the operation refits the window, then its pin fails.
-    fixture.native.resize(10, 900, 700);
+    // A re-application whose pin fails is retried in turn.
+    fixture
+        .view
+        .cdp_json_for_page(page.clone(), "Emulation.clearDeviceMetricsOverride", "{}")
+        .await?;
     fixture.native.lock().fail = Some("Emulation.setVisibleSize");
     assert!(fixture.view.prepare_viewport(page.clone()).await.is_err());
     fixture.native.lock().fail = None;
@@ -1015,55 +951,6 @@ async fn tests_that_a_raw_override_during_a_change_is_not_lost() -> TestResult {
 }
 
 #[tokio::test]
-async fn tests_that_a_raw_override_landing_before_a_refit_is_not_lost() -> TestResult {
-    let fixture = Fixture::new(&[(1, 10)]);
-    let page = fixture.page(1).await?;
-    fixture
-        .set(&page, ViewportMode::Mobile, Some(150.0))
-        .await?;
-    let session = fixture.view.page_session(page.clone()).await?.session_id;
-    // A person resized the window, so the next operation only refits. It has read the tab and
-    // is locating its window when the caller's raw override lands.
-    fixture.native.resize(10, 900, 700);
-    let gate = Arc::new(tokio::sync::Notify::new());
-    fixture.native.lock().gate = Some(("Browser.getWindowForTarget", gate.clone()));
-    let view = fixture.view.clone();
-    let target = page.clone();
-    let operation = tokio::spawn(async move {
-        view.prepare_viewport(target)
-            .await
-            .map(drop)
-            .map_err(|error| error.to_string())
-    });
-    tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        while fixture.native.lock().parked == 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-        }
-    })
-    .await?;
-    fixture
-        .view
-        .cdp(
-            "Emulation.setDeviceMetricsOverride",
-            json!({"width": 400, "height": 906, "screenWidth": 400, "screenHeight": 906,
-                "deviceScaleFactor": 2, "mobile": true, "scale": 1}),
-            Some(&session),
-        )
-        .await?;
-    fixture.native.lock().gate = None;
-    gate.notify_one();
-    operation.await??;
-
-    // The operation put the mode back over the override rather than marking it applied.
-    let overrides = fixture.native.calls("Emulation.setDeviceMetricsOverride");
-    assert_eq!(
-        overrides.last().map(|call| call.params["scale"].clone()),
-        Some(json!(1.5))
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn tests_that_default_clears_what_a_failed_change_left_on_the_page() -> TestResult {
     let fixture = Fixture::new(&[(1, 10)]);
     let page = fixture.page(1).await?;
@@ -1145,27 +1032,24 @@ async fn tests_that_prepare_leaves_default_tabs_alone() -> TestResult {
 }
 
 #[tokio::test]
-async fn tests_that_prepare_restores_the_window_after_a_manual_resize() -> TestResult {
+async fn tests_that_operations_send_nothing_while_the_mode_holds() -> TestResult {
     let fixture = Fixture::new(&[(1, 10)]);
     let page = fixture.page(1).await?;
-    fixture.set(&page, ViewportMode::Mobile, None).await?;
-    let fitted = fixture.native.window(10)?;
+    fixture
+        .set(&page, ViewportMode::Mobile, Some(150.0))
+        .await?;
+    // A person resizes the window, then makes it fullscreen.
     fixture.native.resize(10, 700, 500);
+    fixture.native.set_window_state(10, "fullscreen");
+    let left = fixture.native.window(10)?;
     fixture.native.clear_calls();
 
-    let lease = fixture.view.prepare_viewport(page.clone()).await?;
-    // The operation runs on the restored window, not the size the person left.
-    assert_eq!(fixture.native.window(10)?, fitted);
-    assert!(!fixture.native.calls("Browser.setContentsSize").is_empty());
-    assert_eq!(
-        emulation_methods(&fixture.native.methods()),
-        vec!["Emulation.setVisibleSize"]
-    );
-    drop(lease);
-
-    fixture.native.clear_calls();
-    drop(fixture.view.prepare_viewport(page).await?);
-    assert!(window_methods(&fixture.native.methods()).is_empty());
+    for _ in 0..3 {
+        drop(fixture.view.prepare_viewport(page.clone()).await?);
+    }
+    let methods = fixture.native.methods();
+    assert!(methods.is_empty(), "{methods:?}");
+    assert_eq!(fixture.native.window(10)?, left);
     Ok(())
 }
 
@@ -1212,55 +1096,64 @@ async fn tests_that_a_failed_restore_fails_the_operation() -> TestResult {
 }
 
 #[tokio::test]
-async fn tests_that_a_window_serves_one_operation_at_a_time() -> TestResult {
-    let fixture = Fixture::new(&[(1, 10), (2, 10)]);
-    let mobile = fixture.page(1).await?;
-    let desktop = fixture.page(2).await?;
-    fixture.set(&desktop, ViewportMode::Desktop, None).await?;
-    fixture.set(&mobile, ViewportMode::Mobile, None).await?;
+async fn tests_that_tabs_sharing_a_window_do_not_wait_for_each_other() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10), (2, 10), (3, 10)]);
+    let busy = fixture.page(1).await?;
+    let fixed = fixture.page(2).await?;
+    let natural = fixture.page(3).await?;
+    fixture.set(&busy, ViewportMode::Mobile, None).await?;
+    fixture.set(&fixed, ViewportMode::Desktop, None).await?;
 
-    let lease = fixture.view.prepare_viewport(mobile).await?;
-    let mobile_window = fixture.native.window(10)?;
+    // A fixed tab's operation holds only its own tab.
+    let lease = fixture.view.prepare_viewport(busy).await?;
     let view = fixture.view.clone();
-    let mut queued = Box::pin(async move { view.prepare_viewport(desktop).await });
-    assert!(still_waiting(&mut queued).await);
-    assert_eq!(fixture.native.window(10)?, mobile_window);
-
+    let page = fixed.clone();
+    let mut operation = Box::pin(async move { view.prepare_viewport(page).await });
+    assert!(!still_waiting(&mut operation).await);
+    let view = fixture.view.clone();
+    let page = natural.clone();
+    let mut beside = Box::pin(async move { view.prepare_viewport(page).await });
+    assert!(!still_waiting(&mut beside).await);
+    for (page, mode) in [
+        (fixed, ViewportMode::Mobile),
+        (natural, ViewportMode::Desktop),
+    ] {
+        let view = fixture.view.clone();
+        let mut change = Box::pin(async move {
+            view.set_viewport(
+                page,
+                ViewportRequest::new(mode, None)?,
+                &CancellationToken::new(),
+            )
+            .await
+            .map(drop)
+            .map_err(|error| error.to_string())
+        });
+        assert!(!still_waiting(&mut change).await, "{mode:?}");
+    }
     drop(lease);
-    drop(queued.await?);
-    assert_eq!(fixture.native.window(10)?.width, 1920);
     Ok(())
 }
 
 #[tokio::test]
-async fn tests_that_a_default_tab_waits_while_its_window_serves_a_fixed_tab() -> TestResult {
-    let fixture = Fixture::new(&[(1, 10), (2, 10)]);
-    let mobile = fixture.page(1).await?;
-    let natural = fixture.page(2).await?;
-    fixture.set(&mobile, ViewportMode::Mobile, None).await?;
+async fn tests_that_a_fixed_tab_serves_one_operation_at_a_time() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    fixture.set(&page, ViewportMode::Mobile, None).await?;
 
-    let lease = fixture.view.prepare_viewport(mobile).await?;
+    let lease = fixture.view.prepare_viewport(page.clone()).await?;
     let view = fixture.view.clone();
-    let mut queued = Box::pin(async move { view.prepare_viewport(natural).await });
-    assert!(still_waiting(&mut queued).await);
-    drop(lease);
-    drop(queued.await?);
-    Ok(())
-}
-
-#[tokio::test]
-async fn tests_that_other_windows_do_not_wait() -> TestResult {
-    let fixture = Fixture::new(&[(1, 10), (3, 20)]);
-    let here = fixture.page(1).await?;
-    let elsewhere = fixture.page(3).await?;
-    fixture.set(&here, ViewportMode::Mobile, None).await?;
-    fixture.set(&elsewhere, ViewportMode::Mobile, None).await?;
-
-    let lease = fixture.view.prepare_viewport(here).await?;
+    let target = page.clone();
+    let mut operation = Box::pin(async move { view.prepare_viewport(target).await });
+    assert!(still_waiting(&mut operation).await);
+    // A capture in flight would restore the emulation it saw when it began.
     let view = fixture.view.clone();
-    let mut other = Box::pin(async move { view.prepare_viewport(elsewhere).await });
-    assert!(!still_waiting(&mut other).await);
+    let target = page.clone();
+    let mut capture = Box::pin(async move { view.hold_viewport(target).await });
+    assert!(still_waiting(&mut capture).await);
     drop(lease);
+    drop(operation.await?);
+    drop(capture.await);
     Ok(())
 }
 
@@ -1285,7 +1178,6 @@ async fn tests_that_prepare_leaves_a_dialog_blocked_page_to_dialog_actions() -> 
         .pages
         .detach_session(&SessionId::from("session-1"))
         .await;
-    fixture.native.resize(10, 700, 500);
     fixture.native.clear_calls();
 
     drop(fixture.view.prepare_viewport(page).await?);
@@ -1343,24 +1235,6 @@ async fn tests_that_desktop_and_default_pointer_input_is_not_scaled() -> TestRes
 }
 
 #[tokio::test]
-async fn tests_that_a_tab_moved_to_another_window_mid_call_is_not_fitted() -> TestResult {
-    let fixture = Fixture::new(&[(1, 10), (2, 20)]);
-    let page = fixture.page(1).await?;
-    fixture.native.lock().moved_to = Some(20);
-    let before = fixture.native.window(20)?;
-
-    let error = fixture
-        .set(&page, ViewportMode::Desktop, None)
-        .await
-        .err()
-        .ok_or("a window the call did not lock must not be resized")?;
-    assert!(error.to_string().contains("page_target_changed"), "{error}");
-    assert_eq!(fixture.native.window(20)?, before);
-    assert!(window_methods(&fixture.native.methods()).is_empty());
-    Ok(())
-}
-
-#[tokio::test]
 async fn tests_that_page_scripts_cannot_fake_or_fail_the_check() -> TestResult {
     let fixture = Fixture::new(&[(1, 10)]);
     fixture.native.lock().tampered = true;
@@ -1374,27 +1248,6 @@ async fn tests_that_page_scripts_cannot_fake_or_fail_the_check() -> TestResult {
         ),
         (400.0, 2.0)
     );
-    Ok(())
-}
-
-#[tokio::test]
-async fn tests_that_default_tabs_sharing_a_fixed_window_do_not_wait_for_each_other() -> TestResult {
-    let fixture = Fixture::new(&[(1, 10), (2, 10), (3, 10)]);
-    let fixed = fixture.page(1).await?;
-    let first = fixture.page(2).await?;
-    let second = fixture.page(3).await?;
-    fixture.set(&fixed, ViewportMode::Mobile, None).await?;
-
-    let lease = fixture.view.prepare_viewport(first).await?;
-    let view = fixture.view.clone();
-    let mut other = Box::pin(async move { view.prepare_viewport(second).await });
-    assert!(!still_waiting(&mut other).await);
-    // A fit still waits for the default tab's operation in flight.
-    let view = fixture.view.clone();
-    let mut fitting = Box::pin(async move { view.prepare_viewport(fixed).await });
-    assert!(still_waiting(&mut fitting).await);
-    drop(lease);
-    drop(fitting.await?);
     Ok(())
 }
 
@@ -1502,14 +1355,11 @@ async fn tests_that_a_custom_size_replaces_the_device_size() -> TestResult {
         ),
         (&json!(390), &json!(844), &json!(1.5))
     );
-    let window = report.window.ok_or("missing window fit")?;
     assert_eq!(
-        window.contents,
-        Size {
-            width: 585,
-            height: 1266
-        }
+        fixture.native.only("Emulation.setVisibleSize")?.params,
+        json!({"width": 585, "height": 1266})
     );
+    fixture.native.clear_calls();
 
     let desktop = ViewportRequest::new(ViewportMode::Desktop, None)?.with_size(Size {
         width: 1440,
@@ -1527,9 +1377,11 @@ async fn tests_that_a_custom_size_replaces_the_device_size() -> TestResult {
         ),
         (1440.0, 900.0, 1.0)
     );
-    let window = report.window.ok_or("missing window fit")?;
-    assert_eq!((window.bounds.width, window.bounds.height), (1440, 1021));
-    assert!(window.exact);
+    assert_eq!(
+        fixture.native.only("Emulation.setVisibleSize")?.params,
+        json!({"width": 1440, "height": 900})
+    );
+    assert!(window_methods(&fixture.native.methods()).is_empty());
     Ok(())
 }
 
@@ -1599,18 +1451,15 @@ async fn tests_that_a_held_page_makes_viewport_changes_wait() -> TestResult {
 }
 
 #[tokio::test]
-async fn tests_that_an_operation_queued_behind_a_mode_change_restores_that_mode() -> TestResult {
-    let fixture = Fixture::new(&[(1, 10), (2, 10), (3, 10)]);
-    let a = fixture.page(1).await?;
-    let b = fixture.page(2).await?;
-    let holder = fixture.page(3).await?;
-    fixture.set(&holder, ViewportMode::Mobile, None).await?;
-    let held = fixture.view.prepare_viewport(holder).await?;
+async fn tests_that_an_operation_queued_behind_a_mode_change_holds_its_tab_alone() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    let capture = fixture.view.hold_viewport(page.clone()).await;
 
-    // Queued in this order: A becomes mobile, B desktop, then an operation on A, which still
-    // looked default when it started waiting.
+    // Queued in this order: the tab becomes mobile, then an operation on it, which still saw it
+    // default when it started waiting.
     let view = fixture.view.clone();
-    let target = a.clone();
+    let target = page.clone();
     let mut to_mobile = Box::pin(async move {
         view.set_viewport(
             target,
@@ -1623,40 +1472,20 @@ async fn tests_that_an_operation_queued_behind_a_mode_change_restores_that_mode(
     });
     assert!(still_waiting(&mut to_mobile).await);
     let view = fixture.view.clone();
-    let mut to_desktop = Box::pin(async move {
-        view.set_viewport(
-            b,
-            ViewportRequest::new(ViewportMode::Desktop, None)?,
-            &CancellationToken::new(),
-        )
-        .await
-        .map(drop)
-        .map_err(|error| error.to_string())
-    });
-    assert!(still_waiting(&mut to_desktop).await);
-    let view = fixture.view.clone();
-    let target = a.clone();
-    let mut operation = Box::pin(async move {
-        view.prepare_viewport(target)
-            .await
-            .map(drop)
-            .map_err(|error| error.to_string())
-    });
+    let target = page.clone();
+    let mut operation = Box::pin(async move { view.prepare_viewport(target).await });
     assert!(still_waiting(&mut operation).await);
-    fixture.native.clear_calls();
-    drop(held);
-    let (mobile, desktop, operated) = tokio::join!(to_mobile, to_desktop, operation);
-    mobile?;
-    desktop?;
-    operated?;
+    drop(capture);
+    to_mobile.await?;
+    let lease = operation.await?;
 
-    // The operation on A refitted the window for A's preview after B's desktop fit.
-    let fits = fixture.native.calls("Browser.setContentsSize");
-    assert_eq!(
-        fits.last().map(|call| call.params["width"].clone()),
-        Some(json!(400)),
-        "{fits:?}"
-    );
+    // It runs as a fixed tab's operation: a capture waits until it is done.
+    let view = fixture.view.clone();
+    let target = page.clone();
+    let mut next = Box::pin(async move { view.hold_viewport(target).await });
+    assert!(still_waiting(&mut next).await);
+    drop(lease);
+    drop(next.await);
     Ok(())
 }
 
@@ -1712,13 +1541,11 @@ async fn tests_that_a_capture_after_a_switch_to_default_holds_off_the_next_chang
 }
 
 #[tokio::test]
-async fn tests_that_a_change_cancelled_while_it_waits_for_the_window_changes_nothing() -> TestResult
-{
-    let fixture = Fixture::new(&[(1, 10), (2, 10)]);
-    let busy = fixture.page(1).await?;
-    let page = fixture.page(2).await?;
-    fixture.set(&busy, ViewportMode::Mobile, None).await?;
-    let held = fixture.view.prepare_viewport(busy).await?;
+async fn tests_that_a_change_cancelled_while_it_waits_for_its_tab_changes_nothing() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    // A capture in flight holds the tab.
+    let held = fixture.view.hold_viewport(page.clone()).await;
     fixture.native.clear_calls();
 
     let cancel = CancellationToken::new();
@@ -1822,7 +1649,7 @@ async fn tests_that_mobile_identity_matches_google_chrome_on_android() -> TestRe
 }
 
 #[tokio::test]
-async fn tests_that_a_dialog_blocked_page_never_waits_for_its_window() -> TestResult {
+async fn tests_that_a_dialog_blocked_page_never_waits_for_its_tab() -> TestResult {
     let fixture = Fixture::new(&[(1, 10)]);
     let page = fixture.page(1).await?;
     fixture.set(&page, ViewportMode::Mobile, None).await?;
@@ -1838,7 +1665,7 @@ async fn tests_that_a_dialog_blocked_page_never_waits_for_its_window() -> TestRe
     })
     .await?;
 
-    // Something else holds the window, such as a capture that the dialog stalls.
+    // Something else holds the tab, such as a capture that the dialog stalls.
     let held = fixture.view.hold_viewport(page.clone()).await;
     let quick = std::time::Duration::from_millis(300);
     let lease = tokio::time::timeout(quick, fixture.view.prepare_viewport(page.clone())).await??;
@@ -1860,8 +1687,8 @@ async fn tests_that_a_dialog_blocked_page_never_waits_for_its_window() -> TestRe
 }
 
 #[tokio::test]
-async fn tests_that_closed_tabs_and_their_windows_are_forgotten() -> TestResult {
-    let fixture = Fixture::new(&[(1, 10), (2, 20), (3, 30)]);
+async fn tests_that_closed_tabs_are_forgotten() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10), (2, 10), (3, 10)]);
     for tab in [1, 2] {
         let page = fixture.page(tab).await?;
         fixture.set(&page, ViewportMode::Mobile, None).await?;

@@ -30,7 +30,6 @@ struct State {
     calls: Vec<String>,
     width: i64,
     height: i64,
-    window_state: String,
     metrics: Option<Value>,
     touch: bool,
     user_agent: String,
@@ -50,7 +49,6 @@ impl Native {
                 calls: Vec::new(),
                 width: 1200,
                 height: 900,
-                window_state: "normal".to_string(),
                 metrics: None,
                 touch: false,
                 user_agent: String::new(),
@@ -89,14 +87,28 @@ impl Native {
         self.calls().iter().position(|call| call == method)
     }
 
+    /// Calls that read or change the window; setViewport and page tools send none.
+    fn window_calls(&self) -> Vec<String> {
+        self.calls()
+            .into_iter()
+            .filter(|call| {
+                matches!(
+                    call.as_str(),
+                    "Browser.getWindowForTarget"
+                        | "Browser.getWindowBounds"
+                        | "Browser.setWindowBounds"
+                        | "Browser.setContentsSize"
+                )
+            })
+            .collect()
+    }
+
     fn reply(&self, method: &str, params: &Value) -> Value {
         let mut state = self.lock();
         state.calls.push(method.to_string());
         let tab = json!({"tabId":1,"targetId":"target-1","windowId":7,"url":"https://site.test/",
             "title":"t","isActive":true,"isLoading":false,"loadProgress":1.0,"isPinned":false,
             "isHidden":false});
-        let bounds = json!({"left":0,"top":0,"width":state.width,"height":state.height,
-            "windowState":state.window_state});
         match method {
             "Browser.getTabs" if state.closed => json!({"tabs": []}),
             "Browser.getTabs" => json!({"tabs": [tab]}),
@@ -107,21 +119,6 @@ impl Native {
             }
             "Target.attachToTarget" => json!({"sessionId": "session-1"}),
             "Browser.getVersion" => json!({"product": "Chrome/155.0.8315.26"}),
-            "Browser.getWindowForTarget" => json!({"windowId": 7, "bounds": bounds}),
-            "Browser.getWindowBounds" => json!({"bounds": bounds}),
-            "Browser.setWindowBounds" => {
-                if let Some(window_state) = params["bounds"]["windowState"].as_str() {
-                    state.window_state = window_state.to_string();
-                }
-                json!({})
-            }
-            "Browser.setContentsSize" => {
-                state.width = params["width"].as_i64().unwrap_or(state.width).max(500);
-                state.height = params["height"].as_i64().unwrap_or(state.height) + CHROME_HEIGHT;
-                json!({})
-            }
-            "Emulation.getScreenInfos" => json!({"screenInfos": [{"availLeft": 0, "availTop": 0,
-                "availWidth": 3000, "availHeight": 3000}]}),
             "Emulation.setDeviceMetricsOverride" => {
                 state.metrics = Some(params.clone());
                 json!({})
@@ -333,12 +330,16 @@ async fn tests_that_set_viewport_is_refused_without_hosted_viewports() -> TestRe
     Ok(())
 }
 
+/// A caller's raw call that replaces the tab's mode; the tab's next operation puts it back.
+const RAW_CLEAR: &str =
+    "await browser.page(1).cdp('Emulation.clearDeviceMetricsOverride', '{}'); return 1";
+
 #[tokio::test]
-async fn tests_that_page_tools_restore_a_fixed_viewport_before_running() -> TestResult {
+async fn tests_that_page_tools_put_back_a_lost_mode_and_leave_the_window() -> TestResult {
     let native = Native::new();
     let ctx = ctx(&native, true);
     set_viewport(&ctx, json!({"page": 1, "mode": "mobile"})).await;
-    let fitted = native.window();
+    run_value(&run(&ctx, RAW_CLEAR).await)?;
     native.resize(900, 700);
     native.clear();
 
@@ -349,14 +350,33 @@ async fn tests_that_page_tools_restore_a_fixed_viewport_before_running() -> Test
     )
     .await;
     assert!(!result.is_error, "{}", text(&result));
-    assert_eq!(native.window(), fitted);
-    let fit = native
-        .position("Browser.setContentsSize")
-        .ok_or("window not restored")?;
+    let restored = native
+        .position("Emulation.setDeviceMetricsOverride")
+        .ok_or("mode not put back")?;
     let capture = native
         .position("Page.captureScreenshot")
         .ok_or("no capture")?;
-    assert!(fit < capture, "{:?}", native.calls());
+    assert!(restored < capture, "{:?}", native.calls());
+    assert!(native.window_calls().is_empty(), "{:?}", native.calls());
+    assert_eq!(native.window(), (900, 700));
+
+    // While the mode holds, the next tool sends nothing before its own work.
+    native.clear();
+    let result = call(
+        &ctx,
+        tools::screenshot::definition(),
+        json!({"page": 1, "format": "png"}),
+    )
+    .await;
+    assert!(!result.is_error, "{}", text(&result));
+    assert!(
+        !native
+            .calls()
+            .iter()
+            .any(|call| call.starts_with("Emulation.")),
+        "{:?}",
+        native.calls()
+    );
     Ok(())
 }
 
@@ -375,7 +395,7 @@ async fn tests_that_tab_management_leaves_the_window_alone() -> TestResult {
     )
     .await;
     assert!(!result.is_error, "{}", text(&result));
-    assert_eq!(native.position("Browser.setContentsSize"), None);
+    assert!(native.window_calls().is_empty(), "{:?}", native.calls());
     assert_eq!(native.window(), (900, 700));
     Ok(())
 }
@@ -443,23 +463,24 @@ async fn tests_that_run_set_viewport_returns_the_report() -> TestResult {
 }
 
 #[tokio::test]
-async fn tests_that_run_page_primitives_restore_the_viewport_first() -> TestResult {
+async fn tests_that_run_page_primitives_put_back_a_lost_mode_first() -> TestResult {
     let native = Native::new();
     let ctx = ctx(&native, true);
     set_viewport(&ctx, json!({"page": 1, "mode": "mobile"})).await;
-    let fitted = native.window();
+    run_value(&run(&ctx, RAW_CLEAR).await)?;
     native.resize(900, 700);
     native.clear();
 
     run_value(&run(&ctx, "await browser.page(1).type('x'); return 1").await)?;
-    assert_eq!(native.window(), fitted);
-    let fit = native
-        .position("Browser.setContentsSize")
-        .ok_or("window not restored")?;
+    let restored = native
+        .position("Emulation.setDeviceMetricsOverride")
+        .ok_or("mode not put back")?;
     let key = native
         .position("Input.dispatchKeyEvent")
         .ok_or("no key event")?;
-    assert!(fit < key, "{:?}", native.calls());
+    assert!(restored < key, "{:?}", native.calls());
+    assert!(native.window_calls().is_empty(), "{:?}", native.calls());
+    assert_eq!(native.window(), (900, 700));
     Ok(())
 }
 
@@ -478,7 +499,7 @@ async fn tests_that_run_tool_primitives_on_fixed_tabs_do_not_wait_on_themselves(
         .await,
     )?;
     assert_eq!(value, 1);
-    assert_eq!(native.window(), (1920, 1080 + CHROME_HEIGHT));
+    assert_eq!(native.window(), (900, 700));
     Ok(())
 }
 
@@ -510,14 +531,13 @@ async fn tests_that_set_viewport_takes_an_optional_device_size() -> TestResult {
 }
 
 #[tokio::test]
-async fn tests_that_a_cancelled_set_viewport_waiting_for_its_window_changes_nothing() -> TestResult
-{
+async fn tests_that_a_cancelled_set_viewport_waiting_for_its_tab_changes_nothing() -> TestResult {
     let native = Native::new();
     let ctx = ctx(&native, true);
     set_viewport(&ctx, json!({"page": 1, "mode": "mobile"})).await;
-    let fitted = native.window();
-    // Another operation on the tab holds its window.
+    // Another operation on the tab holds it.
     let held = ctx.browser.prepare_viewport(PageId(1)).await?;
+    native.clear();
 
     let def = tools::viewport::definition();
     let mut change = Box::pin(execute_tool(
@@ -534,6 +554,13 @@ async fn tests_that_a_cancelled_set_viewport_waiting_for_its_window_changes_noth
     let outcome = tokio::time::timeout(Duration::from_secs(2), change).await?;
     assert!(matches!(outcome, Err(ToolError::Cancelled)), "{outcome:?}");
     drop(held);
-    assert_eq!(native.window(), fitted);
+    assert!(
+        !native
+            .calls()
+            .iter()
+            .any(|call| call.starts_with("Emulation.")),
+        "{:?}",
+        native.calls()
+    );
     Ok(())
 }

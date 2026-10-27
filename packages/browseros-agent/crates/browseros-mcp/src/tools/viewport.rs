@@ -5,9 +5,7 @@ use crate::framework::{
 };
 use browseros_core::{
     PageId,
-    viewport::{
-        Dimension, LimitedBy, Size, ViewportMode, ViewportReport, ViewportRequest, WindowFit,
-    },
+    viewport::{Size, ViewportMode, ViewportReport, ViewportRequest},
 };
 use futures_util::future::BoxFuture;
 use rmcp::model::ToolAnnotations;
@@ -17,7 +15,7 @@ use serde_json::Value;
 
 pub const NAME: &str = "setViewport";
 
-const DESCRIPTION: &str = "Set how one tab renders. mobile: a 400x906 CSS px phone at device scale 2 with touch and a mobile user agent and client hints. desktop: 1920x1080 at device scale 1 with the browser's own identity. width and height (together, CSS px) give mobile or desktop another device size. default: the tab's natural size; removes only what setViewport set. Tabs start in default. The mode stays with the tab through reloads and navigation, and every later call on the tab first restores it and refits the tab's window, including after a person resized it. zoom (mobile only, percent 25-400, default 100) scales the on-screen preview, not the page's CSS size. The page is not reloaded: servers that vary by user agent see the new identity from the next navigation. The result reports what the page and window actually show, including window sizes the screen or browser would not allow.";
+const DESCRIPTION: &str = "Set how one tab renders. mobile: a 400x906 CSS px phone at device scale 2 with touch and a mobile user agent and client hints. desktop: 1920x1080 at device scale 1 with the browser's own identity. width and height (together, CSS px) give mobile or desktop another device size. default: the tab's natural size; removes only what setViewport set. Tabs start in default. The mode stays with the tab through reloads, navigation and reconnects. The browser window is never moved, resized or taken out of fullscreen: the page renders at the given size inside whatever window it has. zoom (mobile only, percent 25-400, default 100) scales the on-screen preview, not the page's CSS size. The page is not reloaded: servers that vary by user agent see the new identity from the next navigation. The result reports what the page actually shows.";
 
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -156,12 +154,9 @@ fn summary(report: &ViewportReport) -> String {
         ),
         (ViewportMode::Desktop, _) => format!("Page {page} is desktop: {size}."),
         (ViewportMode::Default, _) => format!(
-            "Page {page} is default: its natural size, now {size}. setViewport's overrides, if any, are removed; the window is left as it is."
+            "Page {page} is default: its natural size, now {size}. setViewport's overrides, if any, are removed."
         ),
     }];
-    if let Some(window) = &report.window {
-        lines.push(window_summary(window));
-    }
     if report.mode != ViewportMode::Default {
         lines.push(
             "The page was not reloaded; servers that vary by user agent see the new identity from the next navigation."
@@ -169,46 +164,4 @@ fn summary(report: &ViewportReport) -> String {
         );
     }
     lines.join(" ")
-}
-
-fn window_summary(fit: &WindowFit) -> String {
-    let bounds = &fit.bounds;
-    let mut line = format!(
-        "Window {} fitted around the {}x{} preview: now {}x{} at ({}, {})",
-        fit.window_id,
-        fit.contents.width,
-        fit.contents.height,
-        bounds.width,
-        bounds.height,
-        bounds.left,
-        bounds.top
-    );
-    if let Some(state) = &fit.restored_from {
-        line.push_str(&format!(", restored from {state}"));
-    }
-    if fit.exact {
-        line.push('.');
-        return line;
-    }
-    let limits = fit
-        .limited
-        .iter()
-        .map(|limit| {
-            let dimension = match limit.dimension {
-                Dimension::Width => "width",
-                Dimension::Height => "height",
-            };
-            match limit.by {
-                LimitedBy::Screen => format!(
-                    "its {dimension} is limited by the screen, so part of the preview is off-screen"
-                ),
-                LimitedBy::Minimum => format!(
-                    "its {dimension} is held at the browser's minimum, so the window is larger than the preview"
-                ),
-                LimitedBy::Unknown => format!("its {dimension} could not match the preview"),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("; ");
-    format!("{line}; {limits}. The page's own size is unaffected.")
 }

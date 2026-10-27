@@ -893,8 +893,8 @@ impl BrowserBridge {
                 hook.hold_card_data(card_page).await;
             }
         }
-        // Tool-backed primitives restore inside execute_tool; taking the window twice would
-        // wait on itself.
+        // Tool-backed primitives restore inside execute_tool; taking the page twice would wait
+        // on itself.
         let viewport = match page {
             Some(page) if restores_viewport(method) => Some(
                 self.control
