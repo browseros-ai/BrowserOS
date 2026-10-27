@@ -25,6 +25,7 @@ const FRAME_REF_LABELS = [
   'Frame A action ready',
   'Frame A cursor ready',
   'Grandchild action ready',
+  'Grandchild cursor ready',
   'Frame B action ready',
   'Frame B cursor ready',
 ] as const
@@ -34,6 +35,7 @@ const FRAME_TEXT_ORDER = [
   'Frame A action ready',
   'Frame A cursor ready',
   'Grandchild action ready',
+  'Grandchild cursor ready',
   'Frame B action ready',
   'Frame B cursor ready',
 ] as const
@@ -440,7 +442,11 @@ export const snapshotConcurrencyCases: ContractCase[] = [
       const snapshot = await waitForSnapshotLabels(ctx, page, [
         'Frame B action ready',
         'Deep frame action ready',
+        'Deep frame cursor ready',
       ])
+      // A pointer-only element has no accessibility role of its own: its ref comes from the DOM
+      // capture on the nested frame's own session, not its parent's.
+      refFor(snapshot, 'Deep frame cursor ready')
 
       expectOk(
         await ctx.mcp.callTool('act', {
