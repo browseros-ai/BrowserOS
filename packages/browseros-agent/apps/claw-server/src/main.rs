@@ -248,6 +248,13 @@ async fn serve(
         async move {
             // Only the HTTP process that acquired the listener owns provisioning.
             // Keep repair off request handling and stop it with this runtime.
+            if heal_state.config.dev_mode {
+                info!(
+                    "dev mode: automatic harness provisioning is off; agent configs stay with \
+                     the installed BrowserOS neo, connect from the app to link one"
+                );
+                return;
+            }
             heal_state
                 .harness
                 .maintain_integrations(
