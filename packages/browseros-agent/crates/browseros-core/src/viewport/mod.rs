@@ -400,9 +400,10 @@ impl Viewports {
         let refit = !window::unchanged(&placement, last);
         if reapply || refit {
             // Pending until pinned again: a step that fails or is cut short leaves the next
-            // operation to redo it, pin included.
-            let generation = self.invalidate(&page);
-            if reapply {
+            // operation to redo it, pin included. A raw override that landed since the tab was
+            // read means the emulation goes back on too.
+            let (generation, touched) = self.restart(&page, tab.generation);
+            if reapply || touched {
                 let chrome_version = self.chrome_version(view).await?;
                 for (method, params) in tab.fixed.commands(&chrome_version) {
                     view.send_at_capture(method, params, Some(&session)).await?;
@@ -509,6 +510,23 @@ impl Viewports {
             tab.generation = generation;
         }
         generation
+    }
+
+    /// Starts a change on the tab, pending until it is pinned again. Returns the change's
+    /// generation and whether the tab's emulation was touched since the caller read it at `seen`.
+    fn restart(&self, page: &PageId, seen: u64) -> (u64, bool) {
+        let generation = self.next_generation();
+        let mut tabs = self
+            .tabs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(tab) = tabs.get_mut(page) else {
+            return (generation, false);
+        };
+        let touched = tab.generation != seen;
+        tab.applied = None;
+        tab.generation = generation;
+        (generation, touched)
     }
 
     fn next_generation(&self) -> u64 {

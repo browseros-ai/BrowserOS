@@ -57,6 +57,9 @@ struct Fake {
     stall: Option<&'static str>,
     /// The page reports its natural screen on this many more checks before the emulated one.
     lagging_measures: u32,
+    /// Calls to this method wait until the gate is opened; `parked` counts the waiting ones.
+    gate: Option<(&'static str, Arc<tokio::sync::Notify>)>,
+    parked: usize,
     chrome_version: String,
 }
 
@@ -105,6 +108,8 @@ impl Native {
                 fail: None,
                 stall: None,
                 lagging_measures: 0,
+                gate: None,
+                parked: 0,
                 chrome_version: "155.0.8315.26".to_string(),
             }),
             events,
@@ -112,9 +117,23 @@ impl Native {
     }
 
     async fn stall(&self, method: &str) {
-        let stalled = self.lock().stall == Some(method);
+        let (stalled, gate) = {
+            let mut fake = self.lock();
+            let gate = fake
+                .gate
+                .as_ref()
+                .filter(|(gated, _)| *gated == method)
+                .map(|(_, gate)| gate.clone());
+            if gate.is_some() {
+                fake.parked += 1;
+            }
+            (fake.stall == Some(method), gate)
+        };
         if stalled {
             std::future::pending::<()>().await;
+        }
+        if let Some(gate) = gate {
+            gate.notified().await;
         }
     }
 
@@ -991,6 +1010,52 @@ async fn tests_that_a_raw_override_during_a_change_is_not_lost() -> TestResult {
             .only("Emulation.setDeviceMetricsOverride")?
             .params["scale"],
         json!(1.5)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_raw_override_landing_before_a_refit_is_not_lost() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    fixture
+        .set(&page, ViewportMode::Mobile, Some(150.0))
+        .await?;
+    let session = fixture.view.page_session(page.clone()).await?.session_id;
+    // A person resized the window, so the next operation only refits. It has read the tab and
+    // is locating its window when the caller's raw override lands.
+    fixture.native.resize(10, 900, 700);
+    let gate = Arc::new(tokio::sync::Notify::new());
+    fixture.native.lock().gate = Some(("Browser.getWindowForTarget", gate.clone()));
+    let view = fixture.view.clone();
+    let target = page.clone();
+    let operation = tokio::spawn(async move {
+        view.prepare_viewport(target)
+            .await
+            .map(drop)
+            .map_err(|error| error.to_string())
+    });
+    while fixture.native.lock().parked == 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    fixture
+        .view
+        .cdp(
+            "Emulation.setDeviceMetricsOverride",
+            json!({"width": 400, "height": 906, "screenWidth": 400, "screenHeight": 906,
+                "deviceScaleFactor": 2, "mobile": true, "scale": 1}),
+            Some(&session),
+        )
+        .await?;
+    fixture.native.lock().gate = None;
+    gate.notify_one();
+    operation.await??;
+
+    // The operation put the mode back over the override rather than marking it applied.
+    let overrides = fixture.native.calls("Emulation.setDeviceMetricsOverride");
+    assert_eq!(
+        overrides.last().map(|call| call.params["scale"].clone()),
+        Some(json!(1.5))
     );
     Ok(())
 }
