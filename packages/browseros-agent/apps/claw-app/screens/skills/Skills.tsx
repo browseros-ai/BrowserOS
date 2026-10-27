@@ -5,7 +5,7 @@
  */
 
 import type { Skill } from '@browseros/claw-api'
-import { Bookmark, Globe, Plus, TriangleAlert } from 'lucide-react'
+import { Bookmark, Globe, Lightbulb, Plus, TriangleAlert } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { NavLink } from 'react-router'
 import { CopyButton } from '@/components/copy/CopyButton'
@@ -36,7 +36,7 @@ export function Skills() {
   const now = Date.now()
 
   return (
-    <Page className="gap-7 md:gap-7">
+    <Page className="gap-6 md:gap-6">
       <PageHeader
         title="Skills"
         lede="Things you ask for often. Copy one into any of your AI agents to run it again."
@@ -53,41 +53,37 @@ export function Skills() {
         }
       />
 
-      <div className="flex flex-col gap-5">
-        {agents.length > 0 ? <WorksIn agents={agents} /> : null}
+      <div className="flex flex-col gap-4">
+        <SaveTip />
 
-        {isError ? (
-          <EmptyCard
-            tone="error"
-            icon={<TriangleAlert className="size-5" />}
-            title="Couldn’t load your skills"
-            hint="Check that BrowserOS is running, then open this page again."
-          />
-        ) : isLoading ? (
-          <CardsSkeleton />
-        ) : skills.length === 0 ? (
-          <>
+        <div className="flex flex-col gap-5">
+          {agents.length > 0 ? <WorksIn agents={agents} /> : null}
+
+          {isError ? (
+            <EmptyCard
+              tone="error"
+              icon={<TriangleAlert className="size-5" />}
+              title="Couldn’t load your skills"
+              hint="Check that BrowserOS is running, then open this page again."
+            />
+          ) : isLoading ? (
+            <CardsSkeleton />
+          ) : skills.length === 0 ? (
             <EmptyCard
               icon={<Bookmark className="size-5" />}
               title="No skills yet"
               hint="Finish a task with one of your AI agents, then ask it to save it as a skill. It shows up here."
             />
-            <div className={GRID_CLASS}>
-              <SaveTipCard />
-            </div>
-          </>
-        ) : (
-          <ul className={GRID_CLASS}>
-            {skills.map((skill) => (
-              <li key={skill.name} className="flex">
-                <SkillCard skill={skill} now={now} />
-              </li>
-            ))}
-            <li className="flex">
-              <SaveTipCard />
-            </li>
-          </ul>
-        )}
+          ) : (
+            <ul className={GRID_CLASS}>
+              {skills.map((skill) => (
+                <li key={skill.name} className="flex">
+                  <SkillCard skill={skill} now={now} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
 
       <SkillFormDialog
@@ -100,6 +96,29 @@ export function Skills() {
 }
 
 // ---------------------------------------------------------------------------
+
+/** One quiet line, so the skills stay the first thing on the page. */
+function SaveTip() {
+  return (
+    <p className="flex flex-wrap items-center gap-x-2.5 gap-y-2 text-[14.5px] text-ink-2">
+      <span>
+        <Lightbulb
+          aria-hidden
+          className="mr-2 inline size-4 align-[-3px] text-primary"
+        />
+        To add a skill, finish a task, then tell your AI agent{' '}
+        <Phrase>{SAVE_PHRASE}</Phrase>
+      </span>
+      <CopyButton
+        text={SAVE_PHRASE}
+        what="the phrase"
+        variant="ghost"
+        size="sm"
+        className="h-[30px] px-2 font-semibold text-[13.5px] text-primary"
+      />
+    </p>
+  )
+}
 
 /**
  * The connected agents, shown once for every skill. A skill records the
@@ -187,35 +206,6 @@ function SkillCard({ skill, now }: { skill: Skill; now: number }) {
         menuClassName="relative col-start-3 row-start-1 -my-2 -mr-2.5 justify-self-end"
       />
     </Card>
-  )
-}
-
-/**
- * The last cell of the grid: how a skill gets here, with the phrase to copy.
- * Copy sits on the title row because the hint and phrase already fill a
- * two-column card's line.
- */
-function SaveTipCard() {
-  return (
-    <div className="flex min-h-[108px] w-full flex-col justify-center gap-2 rounded-xl border border-accent-ink/25 border-dashed px-[18px] py-4">
-      <div className="flex items-center justify-between gap-3">
-        <span className="flex items-center gap-2 font-semibold text-[15px] text-cyanotype-ink leading-5">
-          <Plus aria-hidden className="size-4 text-accent-ink" />
-          Add a skill
-        </span>
-        <CopyButton
-          text={SAVE_PHRASE}
-          what="the phrase"
-          variant="ghost"
-          size="sm"
-          className="-my-[5px] -mr-2 h-[30px] px-2 font-semibold text-[13.5px] text-primary"
-        />
-      </div>
-      <p className="text-[13.5px] text-ink-2 leading-5">
-        Finish a task, then tell your agent{' '}
-        <Phrase className="whitespace-nowrap">{SAVE_PHRASE}</Phrase>
-      </p>
-    </div>
   )
 }
 
