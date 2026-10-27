@@ -8,8 +8,8 @@ allow_remote_in_mcp setting works through Docker's port forwarding), agents get
 the hosted tool set (BROWSERCLAW_HOSTED_MODE=1), an agent-opened tab loads
 and, in hosted mode, stays out of any tab group (the shipped neo.toml keeps the
 explicit grouping default), a new tab page is blank (the entrypoint's
---disable-browseros-features list reached the browser), and WebGL draws on the
-container's software GPU (the entrypoint's --ignore-gpu-blocklist reached it).
+--disable-browseros-features list reached the browser). WebGL1/2 must render a
+triangle and WebGPU must execute a compute shader; API presence alone is not a pass.
 
   python3 smoke.py [--vnc-port 6080] [--mcp-port 9010]
 
@@ -177,10 +177,10 @@ def main() -> None:
         new_tab["taskName"] = "docker smoke"
     opened = client.tool("tabs", new_tab)
     check("agent opened a tab", "opened page" in opened, opened.splitlines()[0] if opened else "")
+    check_graphics(client, int(re.search(r"opened page (\d+)", opened).group(1)))
     if hosted:
         check_ungrouped(client, int(re.search(r"opened page (\d+)", opened).group(1)))
-    page = check_new_tab_blank(client)
-    check_webgl(client, page)
+    check_new_tab_blank(client)
 
 
 def evaluate(client: McpClient, page: int, code: str) -> str:
@@ -209,34 +209,86 @@ def check_new_tab_blank(client: McpClient) -> int:
     return page
 
 
-# Clears a WebGL1 and a WebGL2 canvas to green and reads one pixel of each back.
-WEBGL_DRAW = """
-const results = [];
-for (const kind of ["webgl", "webgl2"]) {
-  const gl = document.createElement("canvas").getContext(kind);
-  if (!gl) {
-    results.push(kind + "=none");
-    continue;
-  }
-  gl.clearColor(0, 1, 0, 1);
-  gl.clear(gl.COLOR_BUFFER_BIT);
-  const pixel = new Uint8Array(4);
-  gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
-  results.push(kind + "=" + pixel.join(","));
-}
-return results.join(" ");
-"""
+def check_graphics(client: McpClient, page: int) -> None:
+    """Exercise GPU work through the same native evaluation path agents use.
 
-
-def check_webgl(client: McpClient, page: int) -> None:
-    """WebGL draws on the container's software GPU.
-
-    Without a GPU, Chromium draws with Mesa's llvmpipe and refuses every WebGL context
-    on it unless the entrypoint's --ignore-gpu-blocklist reached the browser. A context
-    alone proves little, so the page also draws and reads the pixel back.
+    The shipped image targets machines without a GPU. A renderer name or an
+    exposed navigator.gpu does not prove that its software backends can run work.
+    Keep the workloads tiny so the release smoke check remains cheap on ARM VMs.
     """
-    drawn = evaluate(client, page, WEBGL_DRAW)
-    check("WebGL1 and WebGL2 draw", drawn == "webgl=0,255,0,255 webgl2=0,255,0,255", drawn)
+    reply = client.tool("evaluate", {"page": page, "code": r"""
+const result = {secure: isSecureContext, webgl: {}, webgpu: {}};
+for (const kind of ['webgl', 'webgl2']) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 4;
+  const gl = canvas.getContext(kind);
+  if (!gl) { result.webgl[kind] = {context: false}; continue; }
+  try {
+    const modern = kind === 'webgl2';
+    const prefix = modern ? '#version 300 es\n' : '';
+    const vertex = prefix + (modern ? 'in' : 'attribute') +
+      ' vec2 position; void main() { gl_Position = vec4(position, 0., 1.); }';
+    const fragment = prefix + 'precision mediump float; ' +
+      (modern ? 'out vec4 color; ' : '') + 'void main() { ' +
+      (modern ? 'color' : 'gl_FragColor') + ' = vec4(1., 0.25, 0., 1.); }';
+    const program = gl.createProgram();
+    for (const [type, source] of [[gl.VERTEX_SHADER, vertex], [gl.FRAGMENT_SHADER, fragment]]) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source); gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw Error(gl.getShaderInfoLog(shader));
+      gl.attachShader(program, shader); gl.deleteShader(shader);
+    }
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw Error(gl.getProgramInfoLog(program));
+    gl.useProgram(program);
+    const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+    const position = gl.getAttribLocation(program, 'position');
+    gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const pixels = new Uint8Array(4);
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    result.webgl[kind] = {context: true, pixels: Array.from(pixels), error: gl.getError()};
+    gl.deleteBuffer(buffer); gl.deleteProgram(program);
+  } catch (error) { result.webgl[kind] = {context: true, error: String(error)}; }
+  finally { gl.getExtension('WEBGL_lose_context')?.loseContext(); }
+}
+let device;
+try {
+  const adapter = await navigator.gpu?.requestAdapter();
+  result.webgpu.adapter = !!adapter;
+  if (adapter) {
+    device = await adapter.requestDevice();
+    device.pushErrorScope('validation');
+    const data = device.createBuffer({size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC});
+    const readback = device.createBuffer({size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});
+    const module = device.createShaderModule({code: `
+      @group(0) @binding(0) var<storage, read_write> data: array<u32>;
+      @compute @workgroup_size(4) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+        data[id.x] = id.x * 3u + 7u;
+      }`});
+    const pipeline = device.createComputePipeline({layout: 'auto', compute: {module, entryPoint: 'main'}});
+    const bind = device.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries: [{binding: 0, resource: {buffer: data}}]});
+    const encoder = device.createCommandEncoder(); const pass = encoder.beginComputePass();
+    pass.setPipeline(pipeline); pass.setBindGroup(0, bind); pass.dispatchWorkgroups(1); pass.end();
+    encoder.copyBufferToBuffer(data, 0, readback, 0, 16); device.queue.submit([encoder.finish()]);
+    await readback.mapAsync(GPUMapMode.READ);
+    result.webgpu.values = Array.from(new Uint32Array(readback.getMappedRange())); readback.unmap();
+    result.webgpu.error = (await device.popErrorScope())?.message ?? null;
+  }
+} catch (error) { result.webgpu.error = String(error); }
+finally { device?.destroy(); }
+return result;
+"""})
+    # MCP wraps the JSON value in its untrusted-content markers and may append a
+    # session tip. Decode just the first JSON object, not that presentation text.
+    result, _ = json.JSONDecoder().raw_decode(reply[reply.index("{"):])
+    check("graphics origin is secure", result["secure"], "--url must use HTTPS or loopback")
+    for kind in ("webgl", "webgl2"):
+        value = result["webgl"][kind]
+        check(f"{kind} renders and reads back", value.get("pixels") == [255, 64, 0, 255] and value.get("error") == 0, json.dumps(value))
+    value = result["webgpu"]
+    check("WebGPU computes and reads back", value.get("values") == [7, 10, 13, 16] and not value.get("error"), json.dumps(value))
 
 
 def check_ungrouped(client: McpClient, page: int) -> None:
