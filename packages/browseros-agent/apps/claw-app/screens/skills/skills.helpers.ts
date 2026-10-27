@@ -3,7 +3,7 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Pure formatters for the Saved tasks list and page. No React, no side effects.
+ * Pure formatters for the Skills list and page. No React, no side effects.
  */
 
 import { verbForTool } from '@/lib/step-sentences'

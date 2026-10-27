@@ -30,7 +30,11 @@ import {
   useUpdateSkill,
 } from '@/modules/api/skills.hooks'
 import { toastPromise } from '@/modules/toast/toast'
-import { neoName, parseSkillBody } from '@/screens/skills/skills.helpers'
+import {
+  neoName,
+  parseSkillBody,
+  skillCommand,
+} from '@/screens/skills/skills.helpers'
 
 const createSchema = z.object({
   name: z
@@ -78,7 +82,7 @@ type SkillFormDialogProps = (CreateProps | EditProps) & {
   onOpenChange: (open: boolean) => void
 }
 
-/** Writing a saved task by hand, or changing one an agent saved. */
+/** Writing a skill by hand, or changing one an agent saved. */
 export function SkillFormDialog(props: SkillFormDialogProps) {
   const close = () => props.onOpenChange(false)
   return (
@@ -164,8 +168,8 @@ function CreateForm({ onClose }: { onClose: () => void }) {
         }),
       {
         loading: 'Saving…',
-        success: `Saved /${name}`,
-        error: 'Couldn’t save this task',
+        success: 'Saved the skill',
+        error: 'Couldn’t save this skill',
       },
     )
   })
@@ -174,7 +178,7 @@ function CreateForm({ onClose }: { onClose: () => void }) {
     <Form {...form}>
       <form onSubmit={onSubmit} className="flex flex-col gap-4">
         <FormHeader
-          title="Make a saved task"
+          title="Make a skill"
           hint="Write the steps once. Your AI agents can then run them again from a short phrase."
         />
         <FormField
@@ -196,9 +200,11 @@ function CreateForm({ onClose }: { onClose: () => void }) {
                 </div>
               </FormControl>
               <FormDescription>
-                Your AI agents run it as /
-                {field.value ? neoName(field.value) : 'neo-<name>'}. Lowercase
-                letters, digits and hyphens.
+                Its phrase will be “
+                {skillCommand(
+                  field.value ? neoName(field.value) : 'neo-<name>',
+                )}
+                ”. Lowercase letters, digits and hyphens.
               </FormDescription>
               <FormMessage />
             </FormItem>
@@ -307,8 +313,8 @@ function EditForm({
         }),
       {
         loading: 'Saving…',
-        success: `Saved /${name}`,
-        error: 'Couldn’t save this task',
+        success: 'Saved the skill',
+        error: 'Couldn’t save this skill',
       },
     )
   })
@@ -317,12 +323,12 @@ function EditForm({
     <Form {...form}>
       <form onSubmit={onSubmit} className="flex flex-col gap-4">
         <FormHeader
-          title="Edit saved task"
+          title="Edit skill"
           hint={
             <>
-              Changes reach your AI agents the next time they run{' '}
+              Your AI agents use the changes the next time they run{' '}
               <span className="font-mono text-[13px] text-accent-ink">
-                /{name}
+                {skillCommand(name)}
               </span>
               .
             </>

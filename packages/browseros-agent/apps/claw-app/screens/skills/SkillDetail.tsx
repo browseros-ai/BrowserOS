@@ -34,9 +34,9 @@ import {
   usedLabel,
 } from './skills.helpers'
 
-const BACK = { to: '/skills', label: 'Saved tasks' }
+const BACK = { to: '/skills', label: 'Skills' }
 
-/** One saved task: the steps neo follows, what it learned, and its runs. */
+/** One skill: the steps neo follows, what it learned, and its runs. */
 export function SkillDetail() {
   const { detail, isLoading, isError } = useSkillDetailData()
   const navigate = useNavigate()
@@ -44,7 +44,7 @@ export function SkillDetail() {
   if (isError) {
     return (
       <Page>
-        <PageHeader back={BACK} title="This saved task isn’t here" />
+        <PageHeader back={BACK} title="This skill isn’t here" />
         <Card
           size="compact"
           className="flex-row items-center gap-4 border-border-2 bg-card px-[22px] py-5 shadow-card"
@@ -57,7 +57,7 @@ export function SkillDetail() {
           </span>
           <span className="text-[14.5px] text-ink-2">
             It may have been deleted, or BrowserOS isn’t running. Your other
-            saved tasks are in the list.
+            skills are in the list.
           </span>
         </Card>
       </Page>
@@ -229,9 +229,7 @@ function RecentRuns({ runs }: { runs: SkillRun[] }) {
           ))}
         </ul>
       ) : (
-        <p className="text-[14.5px] text-ink-2">
-          This saved task has not run yet.
-        </p>
+        <p className="text-[14.5px] text-ink-2">This skill hasn’t run yet.</p>
       )}
     </Section>
   )

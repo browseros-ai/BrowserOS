@@ -37,8 +37,8 @@ export function Skills() {
   return (
     <Page>
       <PageHeader
-        title="Saved tasks"
-        lede="Things you ask for often. Each one has a short phrase that runs it again in any of your AI agents."
+        title="Skills"
+        lede="Things you ask for often. Copy a skill’s phrase and paste it into any of your AI agents to run it again."
         actions={
           <Button
             variant="ghost"
@@ -58,7 +58,7 @@ export function Skills() {
         <EmptyCard
           tone="error"
           icon={<TriangleAlert className="size-5" />}
-          title="Couldn’t load your saved tasks"
+          title="Couldn’t load your skills"
           hint="Check that BrowserOS is running, then open this page again."
         />
       ) : isLoading ? (
@@ -66,8 +66,8 @@ export function Skills() {
       ) : skills.length === 0 ? (
         <EmptyCard
           icon={<Bookmark className="size-5" />}
-          title="No saved tasks yet"
-          hint="Your first one shows up here after your AI agents save it."
+          title="No skills yet"
+          hint="Finish a task with one of your AI agents, then ask it to save it as a skill. It shows up here."
         />
       ) : (
         <Card
@@ -103,7 +103,7 @@ function SaveTip() {
       <Lightbulb aria-hidden className="size-5 shrink-0 text-primary" />
       <AlertContent className="min-w-0 flex-1 space-y-0">
         <AlertDescription className="text-[14.5px] text-ink">
-          To save a task, let it finish, then tell your AI agents{' '}
+          To add a skill, finish a task, then tell your AI agent{' '}
           <Phrase>{SAVE_PHRASE}</Phrase>
         </AlertDescription>
       </AlertContent>

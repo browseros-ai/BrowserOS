@@ -1,7 +1,7 @@
 import { Globe } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-/** The square that stands for the website a saved task works on. */
+/** The square that stands for the website a skill works on. */
 export function SiteBadge({ className }: { className?: string }) {
   return (
     <span
