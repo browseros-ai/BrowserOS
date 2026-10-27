@@ -99,7 +99,13 @@ recreate their containers to receive the new files.
 gh workflow run release-docker.yml --ref main -f version=0.52.0.1
 gh workflow run release-docker.yml --ref main -f version=0.52.0.1 -f latest=true
 gh workflow run release-docker.yml --ref main -f version=0.52.0.1 -f push=false
+gh workflow run release-docker.yml --ref main -f version=0.52.0.1 -f keys=false
 ```
+
+`keys=false` builds a keyless image: no provider key files and no `solve_captcha`.
+It publishes only the `<version>-<commit>` tag, so `<version>` and `latest` keep
+pointing at keyed images; `latest=true` is refused. The CLI equivalent is
+`--no-version-tag` without key files.
 
 The workflow builds this commit's server for both architectures, then builds and
 tests each image natively: amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`.
@@ -122,7 +128,7 @@ packaging, so each run publishes:
 | Tag | Example | Points at |
 |---|---|---|
 | `<version>-<commit>` | `0.52.0.1-169e41f` | The newest run from that commit. A different commit always gets a different tag |
-| `<version>` | `0.52.0.1` | The newest run for that browser version |
+| `<version>` | `0.52.0.1` | The newest keyed run for that browser version |
 | `latest` | `latest` | The newest run with `latest=true` |
 
 To ship a claw-server or entrypoint change for a browser that is already released,
