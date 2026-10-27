@@ -51,6 +51,12 @@ struct Fake {
     tampered: bool,
     /// `Emulation.clearDeviceMetricsOverride` fails, as on a page that just went away.
     fail_clear: bool,
+    /// This method fails, as on a page that just went away.
+    fail: Option<&'static str>,
+    /// This method never answers, as when a caller's deadline cuts the call short.
+    stall: Option<&'static str>,
+    /// The page reports its natural screen on this many more checks before the emulated one.
+    lagging_measures: u32,
     chrome_version: String,
 }
 
@@ -96,10 +102,20 @@ impl Native {
                 moved_to: None,
                 tampered: false,
                 fail_clear: false,
+                fail: None,
+                stall: None,
+                lagging_measures: 0,
                 chrome_version: "155.0.8315.26".to_string(),
             }),
             events,
         })
+    }
+
+    async fn stall(&self, method: &str) {
+        let stalled = self.lock().stall == Some(method);
+        if stalled {
+            std::future::pending::<()>().await;
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, Fake> {
@@ -213,6 +229,12 @@ impl Native {
             params: params.clone(),
             session: session.map(|session| session.as_str().to_string()),
         });
+        if fake.fail == Some(method) {
+            return Err(CdpError::Protocol {
+                code: -32000,
+                message: "Target closed".into(),
+            });
+        }
         let session_key = session.map(|session| session.as_str().to_string());
         let target = session_key
             .as_ref()
@@ -329,6 +351,10 @@ impl Native {
                         .is_some_and(|e| e.contains("screenWidth")) =>
                 {
                     let mut value = Self::metrics(&fake, &target);
+                    if fake.lagging_measures > 0 {
+                        fake.lagging_measures -= 1;
+                        value["screenWidth"] = json!(2056);
+                    }
                     if fake.tampered && params.get("contextId").is_none() {
                         value["screenWidth"] = json!(123);
                         value["deviceScaleFactor"] = json!(7);
@@ -349,7 +375,10 @@ impl CdpConnection for Native {
         params: Value,
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
-        Box::pin(async move { self.reply(method, params, session) })
+        Box::pin(async move {
+            self.stall(method).await;
+            self.reply(method, params, session)
+        })
     }
 
     fn send_raw_json<'a>(
@@ -359,6 +388,7 @@ impl CdpConnection for Native {
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<String, CdpError>> {
         Box::pin(async move {
+            self.stall(method).await;
             let value = self.reply(method, serde_json::from_str(params_json)?, session)?;
             serde_json::to_string(&value).map_err(CdpError::from)
         })
@@ -371,7 +401,10 @@ impl CdpConnection for Native {
         params: Value,
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
-        Box::pin(async move { self.reply(method, params, session) })
+        Box::pin(async move {
+            self.stall(method).await;
+            self.reply(method, params, session)
+        })
     }
 
     fn send_raw_json_at_epoch<'a>(
@@ -382,6 +415,7 @@ impl CdpConnection for Native {
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<String, CdpError>> {
         Box::pin(async move {
+            self.stall(method).await;
             let value = self.reply(method, serde_json::from_str(params_json)?, session)?;
             serde_json::to_string(&value).map_err(CdpError::from)
         })
@@ -821,6 +855,143 @@ async fn tests_that_a_raw_override_on_a_fixed_tab_is_undone_by_its_next_operatio
     fixture.native.clear_calls();
     drop(fixture.view.prepare_viewport(page).await?);
     assert!(emulation_methods(&fixture.native.methods()).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_default_change_failing_midway_leaves_the_mode_to_be_restored() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    fixture
+        .set(&page, ViewportMode::Mobile, Some(150.0))
+        .await?;
+    // The metrics clear lands, then the identity reset fails.
+    fixture.native.lock().fail = Some("Emulation.setUserAgentOverride");
+    assert!(
+        fixture
+            .set(&page, ViewportMode::Default, None)
+            .await
+            .is_err()
+    );
+    fixture.native.lock().fail = None;
+    fixture.native.clear_calls();
+
+    // The tab is still mobile at 150 %, so its next operation puts the whole mode back.
+    drop(fixture.view.prepare_viewport(page.clone()).await?);
+    let methods = emulation_methods(&fixture.native.methods());
+    for method in [
+        "Emulation.setDeviceMetricsOverride",
+        "Emulation.setVisibleSize",
+    ] {
+        assert!(methods.iter().any(|sent| sent == method), "{methods:?}");
+    }
+    assert!(fixture.viewports.pointer_scale(&page) == 1.5);
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_failed_pin_is_retried_by_the_next_operation() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    fixture.native.lock().fail = Some("Emulation.setVisibleSize");
+    assert!(
+        fixture
+            .set(&page, ViewportMode::Mobile, Some(150.0))
+            .await
+            .is_err()
+    );
+    fixture.native.lock().fail = None;
+    fixture.native.clear_calls();
+    drop(fixture.view.prepare_viewport(page.clone()).await?);
+    assert_eq!(
+        fixture.native.only("Emulation.setVisibleSize")?.params,
+        json!({"width": 600, "height": 1359})
+    );
+
+    // A person resizes; the operation refits the window, then its pin fails.
+    fixture.native.resize(10, 900, 700);
+    fixture.native.lock().fail = Some("Emulation.setVisibleSize");
+    assert!(fixture.view.prepare_viewport(page.clone()).await.is_err());
+    fixture.native.lock().fail = None;
+    fixture.native.clear_calls();
+    drop(fixture.view.prepare_viewport(page).await?);
+    assert_eq!(
+        fixture.native.only("Emulation.setVisibleSize")?.params,
+        json!({"width": 600, "height": 1359})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_change_cut_short_while_pinning_is_finished_by_the_next_operation()
+-> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    fixture.native.lock().stall = Some("Emulation.setVisibleSize");
+    let change = fixture.set(&page, ViewportMode::Mobile, Some(150.0));
+    // A run deadline drops the call while the pin is in flight.
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(300), change)
+            .await
+            .is_err()
+    );
+    fixture.native.lock().stall = None;
+    fixture.native.clear_calls();
+
+    drop(fixture.view.prepare_viewport(page).await?);
+    assert_eq!(
+        fixture.native.only("Emulation.setVisibleSize")?.params,
+        json!({"width": 600, "height": 1359})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_raw_override_during_a_change_is_not_lost() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    let session = fixture.view.page_session(page.clone()).await?.session_id;
+    // The page reports the mode only on its fourth check, so the change is still waiting for
+    // it when the caller's raw override lands.
+    fixture.native.lock().lagging_measures = 3;
+    let view = fixture.view.clone();
+    let target = page.clone();
+    let request = ViewportRequest::new(ViewportMode::Mobile, Some(150.0))?;
+    let change = tokio::spawn(async move {
+        view.set_viewport(target, request, &CancellationToken::new())
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    });
+    while !fixture
+        .native
+        .methods()
+        .iter()
+        .any(|method| method == "Emulation.setDeviceMetricsOverride")
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+    // Same screen and device scale, so the change still sees its mode; only the zoom differs.
+    fixture
+        .view
+        .cdp(
+            "Emulation.setDeviceMetricsOverride",
+            json!({"width": 400, "height": 906, "screenWidth": 400, "screenHeight": 906,
+                "deviceScaleFactor": 2, "mobile": true, "scale": 1}),
+            Some(&session),
+        )
+        .await?;
+    change.await??;
+    fixture.native.clear_calls();
+
+    drop(fixture.view.prepare_viewport(page).await?);
+    assert_eq!(
+        fixture
+            .native
+            .only("Emulation.setDeviceMetricsOverride")?
+            .params["scale"],
+        json!(1.5)
+    );
     Ok(())
 }
 

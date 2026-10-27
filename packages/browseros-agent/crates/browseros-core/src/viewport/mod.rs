@@ -15,7 +15,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use tokio::sync::{OnceCell, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -220,14 +223,20 @@ pub struct Viewports {
     tabs: Mutex<HashMap<PageId, Tab>>,
     windows: Mutex<HashMap<WindowId, Arc<RwLock<WindowSlot>>>>,
     chrome_version: OnceCell<String>,
+    generations: AtomicU64,
 }
 
 /// A tab in a fixed mode. Default tabs have no entry.
 #[derive(Debug, Clone)]
 struct Tab {
     fixed: Fixed,
-    /// The page session the emulation lives on; it dies with that session.
+    /// The page session on which the mode is wholly in place: emulation applied and the view
+    /// pinned. It dies with that session. `None` while a change is pending: whatever failed or
+    /// was cut short, the tab's next operation does it again.
     applied: Option<SessionId>,
+    /// Moves whenever the tab's emulation may change under us. A change that began under an
+    /// older generation never marks the tab applied.
+    generation: u64,
 }
 
 #[derive(Default)]
@@ -254,15 +263,7 @@ pub(crate) struct Reapply {
 
 impl Drop for Reapply {
     fn drop(&mut self) {
-        if let Some(tab) = self
-            .viewports
-            .tabs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get_mut(&self.page)
-        {
-            tab.applied = None;
-        }
+        self.viewports.invalidate(&self.page);
     }
 }
 
@@ -321,6 +322,9 @@ impl Viewports {
             // was interrupted after sending them. Forgotten only once cleared: a failed clear
             // leaves the tab in its mode.
             if self.tab(&page).is_some() {
+                // Pending until cleared: a clear that fails or is cut short midway leaves the
+                // tab's next operation to put its whole mode back.
+                self.invalidate(&page);
                 for (method, params) in device::clear_commands() {
                     view.send_at_capture(method, params, Some(&session)).await?;
                 }
@@ -330,15 +334,14 @@ impl Viewports {
             view.page(page.clone()).await?;
             return Ok(report(&page, request, metrics, None));
         };
-        // Recorded before applying: a failure leaves the tab pending, so the next operation
-        // retries instead of acting on a half-applied device.
-        self.record(&page, fixed, None);
+        // Recorded as pending before anything is sent, and applied only once the view is
+        // pinned: a step that fails or is cut short leaves the next operation to redo it.
+        let generation = self.begin(&page, fixed);
         let chrome_version = self.chrome_version(view).await?;
         for (method, params) in fixed.commands(&chrome_version) {
             view.send_at_capture(method, params, Some(&session)).await?;
         }
         let metrics = device::settle(view, &session, &page, fixed).await?;
-        self.record(&page, fixed, Some(session.clone()));
         let placement = window::locate(view, &page, &info.target_id, info.window_id).await?;
         let fit = window::fit(view, &session, placement, fixed.preview(), true).await?;
         if let Some(slot) = slot.as_mut() {
@@ -346,6 +349,7 @@ impl Viewports {
         }
         let (method, params) = fixed.pin();
         view.send_at_capture(method, params, Some(&session)).await?;
+        self.applied(&page, &session, generation);
         view.page(page.clone()).await?;
         Ok(report(&page, request, metrics, Some(fit)))
     }
@@ -383,16 +387,7 @@ impl Viewports {
             });
         }
         let session = view.page_session(page.clone()).await?.session_id;
-        let mut changed = false;
-        if tab.applied.as_ref() != Some(&session) {
-            let chrome_version = self.chrome_version(view).await?;
-            for (method, params) in tab.fixed.commands(&chrome_version) {
-                view.send_at_capture(method, params, Some(&session)).await?;
-            }
-            device::settle(view, &session, &page, tab.fixed).await?;
-            self.record(&page, tab.fixed, Some(session.clone()));
-            changed = true;
-        }
+        let reapply = tab.applied.as_ref() != Some(&session);
         let placement = window::locate(view, &page, &info.target_id, info.window_id).await?;
         let contents = tab.fixed.preview();
         let last = slot
@@ -400,16 +395,27 @@ impl Viewports {
             .and_then(|slot| slot.fitted.as_ref())
             .filter(|(fitted, _)| *fitted == contents)
             .map(|(_, bounds)| bounds);
-        if !window::unchanged(&placement, last) {
-            let fit = window::fit(view, &session, placement, contents, false).await?;
-            if let Some(slot) = slot.as_mut() {
-                slot.fitted = Some((contents, fit.bounds));
+        let refit = !window::unchanged(&placement, last);
+        if reapply || refit {
+            // Pending until pinned again: a step that fails or is cut short leaves the next
+            // operation to redo it, pin included.
+            let generation = self.invalidate(&page);
+            if reapply {
+                let chrome_version = self.chrome_version(view).await?;
+                for (method, params) in tab.fixed.commands(&chrome_version) {
+                    view.send_at_capture(method, params, Some(&session)).await?;
+                }
+                device::settle(view, &session, &page, tab.fixed).await?;
             }
-            changed = true;
-        }
-        if changed {
+            if refit {
+                let fit = window::fit(view, &session, placement, contents, false).await?;
+                if let Some(slot) = slot.as_mut() {
+                    slot.fitted = Some((contents, fit.bounds));
+                }
+            }
             let (method, params) = tab.fixed.pin();
             view.send_at_capture(method, params, Some(&session)).await?;
+            self.applied(&page, &session, generation);
         }
         Ok(ViewportLease {
             _shared: None,
@@ -455,11 +461,56 @@ impl Viewports {
             .cloned()
     }
 
-    fn record(&self, page: &PageId, fixed: Fixed, applied: Option<SessionId>) {
+    /// Records `fixed` as the tab's mode, pending, and returns the generation its change runs
+    /// under.
+    fn begin(&self, page: &PageId, fixed: Fixed) -> u64 {
+        let generation = self.next_generation();
         self.tabs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(page.clone(), Tab { fixed, applied });
+            .insert(
+                page.clone(),
+                Tab {
+                    fixed,
+                    applied: None,
+                    generation,
+                },
+            );
+        generation
+    }
+
+    /// The mode is wholly in place on `session`, unless something touched the tab's emulation
+    /// after the change began.
+    fn applied(&self, page: &PageId, session: &SessionId, generation: u64) {
+        if let Some(tab) = self
+            .tabs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(page)
+            && tab.generation == generation
+        {
+            tab.applied = Some(session.clone());
+        }
+    }
+
+    /// The tab's emulation may have changed under us: its next operation applies the mode again,
+    /// and no change already under way marks it applied. Returns the new generation.
+    fn invalidate(&self, page: &PageId) -> u64 {
+        let generation = self.next_generation();
+        if let Some(tab) = self
+            .tabs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(page)
+        {
+            tab.applied = None;
+            tab.generation = generation;
+        }
+        generation
+    }
+
+    fn next_generation(&self) -> u64 {
+        self.generations.fetch_add(1, Ordering::Relaxed) + 1
     }
 
     fn forget(&self, page: &PageId) {
