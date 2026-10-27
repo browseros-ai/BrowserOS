@@ -909,6 +909,7 @@ async fn test_router(browserclaw_dir: &Path, home: &Path) -> anyhow::Result<Rout
         native: Default::default(),
         mode: Default::default(),
         behavior: Default::default(),
+        behavior_ignored: Vec::new(),
     });
     let state = AppState::new_with_home(config, home.to_path_buf()).await?;
     Ok(build_router(state))

@@ -383,6 +383,7 @@ mod tests {
             native: Default::default(),
             mode: Default::default(),
             behavior: Default::default(),
+            behavior_ignored: Vec::new(),
         });
         let state = AppState::new_with_home(config, root.path().join("home")).await?;
         let audit_log = state.audit_log.clone();
@@ -438,6 +439,7 @@ mod tests {
             native: Default::default(),
             mode: Default::default(),
             behavior: Default::default(),
+            behavior_ignored: Vec::new(),
         });
         let state = AppState::new_with_home(config, root.path().join("home")).await?;
         let preview_started = Arc::new(Notify::new());
@@ -487,6 +489,7 @@ mod tests {
             native: Default::default(),
             mode: Default::default(),
             behavior: Default::default(),
+            behavior_ignored: Vec::new(),
         });
         let state = AppState::new_with_home(config, root.path().join("home")).await?;
         state
@@ -541,6 +544,7 @@ mod tests {
             native: Default::default(),
             mode: Default::default(),
             behavior: Default::default(),
+            behavior_ignored: Vec::new(),
         });
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let host = format!("http://{}", listener.local_addr()?);
@@ -697,6 +701,7 @@ mod tests {
             native: Default::default(),
             mode: Default::default(),
             behavior: Default::default(),
+            behavior_ignored: Vec::new(),
         });
         let mut state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
         let analytics = Arc::new(

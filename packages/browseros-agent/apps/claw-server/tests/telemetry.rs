@@ -152,6 +152,7 @@ async fn test_router(root: &Path) -> anyhow::Result<Router> {
         native: Default::default(),
         mode: Default::default(),
         behavior: Default::default(),
+        behavior_ignored: Vec::new(),
     });
     let state = AppState::new_with_home(config, root.join("home")).await?;
     Ok(build_router(state))

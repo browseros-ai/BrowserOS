@@ -189,6 +189,7 @@ impl HttpPeer {
             },
             mode: Default::default(),
             behavior: Default::default(),
+            behavior_ignored: Vec::new(),
         });
         let state = AppState::new_with_home(config, dir.path().join("home")).await?;
         let native = NativeProfiles::new();
