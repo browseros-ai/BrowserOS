@@ -335,11 +335,11 @@ impl<'a> View<'a> {
     }
 
     fn attribute(&self, i: usize, name: &str) -> Option<&'a str> {
-        let attributes = self.document.nodes.attributes.get(i)?;
-        attributes.chunks_exact(2).find_map(|pair| {
-            self.string(pair[0])
+        let (pairs, _) = self.document.nodes.attributes.get(i)?.as_chunks::<2>();
+        pairs.iter().find_map(|&[key, value]| {
+            self.string(key)
                 .filter(|key| key.eq_ignore_ascii_case(name))
-                .and_then(|_| self.string(pair[1]))
+                .and_then(|_| self.string(value))
         })
     }
 
