@@ -71,7 +71,7 @@ export function ReplayTheater({
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: reduce ? 0.1 : 0.2, ease: EASE_OUT }}
-                  className="fixed inset-0 z-[100] h-full w-full cursor-default bg-cyanotype-ink/85"
+                  className="fixed inset-0 z-[100] h-full w-full cursor-default bg-ink-deep/80"
                 />
                 <div
                   inert={!isPresent}
@@ -95,7 +95,7 @@ export function ReplayTheater({
                     }}
                     // Portaled outside the task page's ph-no-capture wrapper,
                     // so it blocks its own private content from recordings.
-                    className="ph-no-capture flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-card shadow-[0_30px_80px_-20px_rgb(1_18_63/0.4)] outline-none"
+                    className="ph-no-capture flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-card shadow-2xl outline-none"
                   >
                     <header className="flex items-center justify-between gap-4 border-border-2 border-b pt-4 pr-5 pb-3.5 pl-6">
                       <div className="flex min-w-0 items-center gap-3">
@@ -125,7 +125,10 @@ export function ReplayTheater({
                         <X aria-hidden className="size-4" />
                       </Button>
                     </header>
-                    <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_minmax(300px,480px)]">
+                    {/* A narrow window stacks the steps under the player
+                        rather than hiding them: hidden steps would still be
+                        in the modal scope's Tab wrap, out of reach. */}
+                    <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(0,38%)] lg:grid-cols-[minmax(0,1fr)_minmax(300px,480px)] lg:grid-rows-[minmax(0,1fr)]">
                       <div className="flex min-h-0 min-w-0 flex-col px-6 py-5">
                         <ReplayPanel
                           session={replay}
@@ -133,9 +136,7 @@ export function ReplayTheater({
                           onToggleFullScreen={close}
                         />
                       </div>
-                      {/* The player is the point here; a narrow window keeps
-                          it and leaves the steps to the page underneath. */}
-                      <div className="hidden min-h-0 flex-col gap-1 border-border-2 border-l bg-bg-canvas p-5 lg:flex">
+                      <div className="flex min-h-0 flex-col gap-1 border-border-2 border-t bg-bg-canvas p-5 lg:border-t-0 lg:border-l">
                         {steps}
                         <p className="px-2 text-[13px] text-ink-3 leading-[18px]">
                           Click a step to jump there. Esc to close.
