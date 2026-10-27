@@ -65,7 +65,8 @@ impl Input {
         // Native focus delivery can be deferred on background tabs until the
         // first input event. Click before checking focus so a page focus handler
         // cannot redirect the subsequent text insertion to another field.
-        dispatch_click(session, point.x, point.y, MouseButton::Left, 1, 0).await?;
+        let at = self.dispatch_point(session, point).await;
+        dispatch_click(session, at.x, at.y, MouseButton::Left, 1, 0).await?;
         focus_element_js(session, target.backend_node_id).await?;
         let selection = prepare_fill(
             session,

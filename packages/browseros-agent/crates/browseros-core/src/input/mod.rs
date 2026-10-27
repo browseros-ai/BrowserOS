@@ -1955,6 +1955,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tests_that_a_zoomed_fill_clicks_the_field_where_the_preview_shows_it()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        let input = input.with_pointer_scale(1.5);
+        connection.take_calls()?;
+        input.fill(&ref_id, "value", true).await?;
+        let calls = connection.take_calls()?;
+        let pressed = calls
+            .iter()
+            .find(|call| {
+                call.method == "Input.dispatchMouseEvent" && call.params["type"] == "mousePressed"
+            })
+            .ok_or("no mousePressed")?;
+        // The field's centre (50, 25) in CSS px, where a 150 % preview shows it.
+        assert_eq!(
+            (&pressed.params["x"], &pressed.params["y"]),
+            (&json!(75.0), &json!(37.5))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn tests_that_browser_views_enable_pointer_input_only_on_the_configured_clone()
     -> Result<(), Box<dyn std::error::Error>> {
         let (connection, _input, _ref_id) = input_harness(HitTestResponse::Clear).await?;
