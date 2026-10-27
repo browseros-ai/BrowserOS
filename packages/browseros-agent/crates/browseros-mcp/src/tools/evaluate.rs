@@ -9,10 +9,10 @@ use crate::{
 };
 use browseros_core::{CoreError, PageId, PageJs, settle, timeouts};
 use futures_util::future::BoxFuture;
-use std::time::Duration;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::time::Duration;
 
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const MAX_TIMEOUT_MS: u64 = 30_000;
