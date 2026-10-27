@@ -77,7 +77,7 @@ export function UltrafastKey({ source }: { source: JevTokenSource }) {
             aria-describedby={KEY_DESCRIPTION_ID}
             placeholder="Paste your key"
             disabled={busy}
-            className="h-10 max-w-sm flex-1 rounded-xl"
+            className="h-10 max-w-sm flex-1"
           />
           <Button type="submit" disabled={busy} className="font-semibold">
             Save

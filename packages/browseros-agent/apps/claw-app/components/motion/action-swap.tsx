@@ -327,7 +327,7 @@ export function ActionSwapButton({
       whileTap={reduce || disabled ? undefined : { scale: 0.97 }}
       transition={{ ...SPRING_PRESS, layout: layoutTransition }}
       // Layout animations only correct a radius set inline.
-      style={{ borderRadius: size === "icon" ? 9999 : 6, ...style }}
+      style={{ borderRadius: size === "icon" ? 9999 : 8, ...style }}
       className={cn(
         "inline-flex items-center justify-center overflow-hidden font-medium transition-colors",
         "disabled:pointer-events-none disabled:opacity-50",

@@ -180,15 +180,15 @@ export function Tabs({
   );
 }
 
-// The segment track's corner is its 6px selected segment plus the 4px inset,
-// so the two curves stay concentric. Change the radius, inset and indicator
-// corner together.
-const SEGMENT_TRACK_RADIUS = "rounded-[10px]";
+// A track's corner is its 8px selected tab plus the 4px inset, so the two
+// curves stay concentric. Change the radius, inset and indicator corner
+// together.
+const TRACK_RADIUS = "rounded-[12px]";
 
 const listClasses: Record<Variant, string> = {
-  pill: "inline-flex items-center gap-1 rounded-lg bg-card p-1",
+  pill: `inline-flex items-center gap-1 bg-card p-1 ${TRACK_RADIUS}`,
   underline: "inline-flex items-center gap-1 border-b border-border",
-  segment: `inline-flex items-center gap-0.5 bg-card p-1 ${SEGMENT_TRACK_RADIUS}`,
+  segment: `inline-flex items-center gap-0.5 bg-card p-1 ${TRACK_RADIUS}`,
 };
 
 export function TabsList({
@@ -409,12 +409,12 @@ export function TabsList({
     if (viewport) viewport.scrollBy({ left: direction * viewport.clientWidth * 0.8, behavior: reduce ? "instant" : "smooth" });
   };
   const controlClass = "absolute inset-y-0 z-20 inline-flex w-9 items-center justify-center text-foreground transition-opacity hover:opacity-70 focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-0";
-  const surfaceClass = variant === "pill" ? "rounded-lg bg-card" : variant === "segment" ? `${SEGMENT_TRACK_RADIUS} bg-card` : "";
+  const surfaceClass = variant === "pill" || variant === "segment" ? `${TRACK_RADIUS} bg-card` : "";
 
   return (
     <div ref={rootRef} className={cn("relative isolate flex w-full max-w-full min-w-0 items-center", edges.overflow && surfaceClass, wrapperClassName)}>
       {edges.overflow && (
-        <button type="button" aria-label="Scroll tabs left" aria-controls={viewportId} disabled={!edges.left} onClick={() => scroll(-1)} className={cn(controlClass, "left-0 rounded-l-lg")}>
+        <button type="button" aria-label="Scroll tabs left" aria-controls={viewportId} disabled={!edges.left} onClick={() => scroll(-1)} className={cn(controlClass, "left-0 rounded-l-[inherit]")}>
           <ChevronLeft size={20} aria-hidden="true" />
         </button>
       )}
@@ -441,7 +441,7 @@ export function TabsList({
         <span aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 z-10 w-10 rounded-r-[inherit] backdrop-blur-[2px] [mask-image:linear-gradient(to_left,black,transparent)]" />
       )}
       {edges.overflow && (
-        <button type="button" aria-label="Scroll tabs right" aria-controls={viewportId} disabled={!edges.right} onClick={() => scroll(1)} className={cn(controlClass, "right-0 rounded-r-lg")}>
+        <button type="button" aria-label="Scroll tabs right" aria-controls={viewportId} disabled={!edges.right} onClick={() => scroll(1)} className={cn(controlClass, "right-0 rounded-r-[inherit]")}>
           <ChevronRight size={20} aria-hidden="true" />
         </button>
       )}
@@ -584,7 +584,7 @@ export function TabsTrigger({
         <motion.span
           key="tracked"
           data-tabs-indicator=""
-          style={{ ...track, borderRadius: 6 }}
+          style={{ ...track, borderRadius: 8 }}
           className={cn("absolute top-0 left-0 rounded-md bg-primary", indicatorClassName)}
         />
       ) : active ? (
@@ -593,7 +593,7 @@ export function TabsTrigger({
           data-tabs-indicator=""
           layoutId={layoutId}
           layout
-          style={{ borderRadius: 6 }}
+          style={{ borderRadius: 8 }}
           className={cn(
             "absolute inset-0 rounded-md bg-primary",
             indicatorClassName,

@@ -226,7 +226,7 @@ export function AlertClose({ className, children, onClick, ...props }: AlertClos
       layout={reduce ? false : "position"}
       transition={SPRING_PRESS}
       whileTap={reduce ? undefined : { scale: 0.94 }}
-      className={cn("-m-1.5 inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50", className)}
+      className={cn("-m-1.5 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-foreground/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50", className)}
       onClick={(event) => {
         onClick?.(event);
         if (!event.defaultPrevented) dismiss();

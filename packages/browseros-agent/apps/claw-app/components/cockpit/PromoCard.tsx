@@ -42,7 +42,7 @@ export function PromoCard({
       onOpenChange={(open) => {
         if (!open) onDismiss()
       }}
-      className="rounded-lg py-1.5 pr-2 pl-4"
+      className="rounded-xl py-1.5 pr-2 pl-4"
       contentClassName="min-h-9 flex-wrap items-center gap-x-3.5 gap-y-1 md:flex-nowrap"
     >
       <span aria-hidden className="shrink-0 text-primary [&>svg]:size-4">

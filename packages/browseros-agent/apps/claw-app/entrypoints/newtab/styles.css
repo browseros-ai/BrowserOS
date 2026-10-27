@@ -195,24 +195,26 @@
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
-  /* The crisp radius scale: no surface rounds past 8px. Cards, dialogs,
-     popovers, inputs, selects and pill tab lists are 8; text buttons,
-     selected tabs, tiles, thumbnails, preview frames, text badges and nav or
-     row highlights are 6 (rounded-md). The one exception is the segment
-     switcher's track (motion/tabs.tsx) at 10: its 6px selected segment plus
-     the 4px inset, so the two corners stay concentric. xl through 3xl
-     collapse to 8 so the Card, dialogs and vendored components written
-     against the older, curvier ramp follow without a per-file sweep.
-     rounded-full is only for circles: avatars, dots, switches and round
-     icon buttons. Motion layout animations need their corner inline
-     (action-swap buttons, tab indicators, the select), so those literals
-     move with this scale by hand. */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 8px;
-  --radius-2xl: 8px;
-  --radius-3xl: 8px;
+  /* The radius scale, one role per step. sm 6: the 22px site chip and the
+     21px phrase chip, where 8 would read as a pill. md 8: text buttons,
+     selected tabs, tiles, thumbnails, preview frames, favicon and icon
+     tiles, text badges, tooltips and nav or row highlights. lg 10: inputs,
+     textareas, selects and the replay scrubber. xl 12: cards, dialogs,
+     popovers, menus and toasts. 2xl and 3xl collapse to 12 so the Card,
+     dialogs and vendored components written against the older, curvier ramp
+     follow without a per-file sweep. Tab list tracks
+     (motion/tabs.tsx) are their 8px selected tab plus the 4px inset, so the
+     two corners stay concentric. rounded-full is only for circles: avatars,
+     dots, switches and round icon buttons. Motion layout animations need
+     their corner inline (action-swap buttons, tab indicators, the select, the
+     centered modal's clip, popover-morph), and the takeover bar's CSS is
+     injected into pages, so those literals move with this scale by hand. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-2xl: 12px;
+  --radius-3xl: 12px;
   --radius-4xl: 9999px;
 }
 
