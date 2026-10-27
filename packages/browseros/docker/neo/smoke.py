@@ -190,7 +190,7 @@ def evaluate(client: McpClient, page: int, code: str) -> str:
 
     The value is the one line between the reply's [UNTRUSTED...] markers and its tip.
     """
-    reply = client.tool("evaluate", {"page": page, "code": code})
+    reply = client.tool("evaluate_in_page", {"page": page, "code": code})
     return next((line for line in reply.splitlines() if line and not line.startswith(("[", "Tip:"))), "")
 
 
@@ -226,7 +226,7 @@ def check_graphics(client: McpClient, page: int, hosted: bool) -> None:
     launcher that passes one fails here. Keep the workloads tiny so the release smoke
     check remains cheap on ARM VMs.
     """
-    reply = client.tool("evaluate", {"page": page, "code": r"""
+    reply = client.tool("evaluate_in_page", {"page": page, "code": r"""
 const result = {};
 for (const kind of ['webgl', 'webgl2']) {
   const canvas = document.createElement('canvas');
