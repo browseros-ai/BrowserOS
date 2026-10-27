@@ -19,6 +19,8 @@ on:
       - .github/workflows/publish-server-ota.yml
       - .github/workflows/release-*.yml
       - packages/browseros-agent/**
+      # claw-server's tests check every key the shipped behaviour file documents.
+      - packages/browseros/docker/neo/neo.toml
   workflow_dispatch:
 
 permissions:

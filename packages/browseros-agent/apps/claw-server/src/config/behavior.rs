@@ -110,7 +110,7 @@ const KNOBS: &[Knob] = &[
         section: "tabs",
         key: "grouping",
         apply: |behavior, value| {
-            behavior.tab_grouping = value.try_into()?;
+            behavior.tab_grouping = named(value)?;
             Ok(())
         },
     },
@@ -123,6 +123,13 @@ const KNOBS: &[Knob] = &[
         },
     },
 ];
+
+/// Decodes a knob whose values are names. Decoding the enum straight from the value would also
+/// accept TOML's table spelling of a variant (`{ auto = {} }`), applying a value of the wrong type.
+fn named<T: serde::de::DeserializeOwned>(value: toml::Value) -> Result<T, toml::de::Error> {
+    let name: String = value.try_into()?;
+    toml::Value::String(name).try_into()
+}
 
 /// Applies a behaviour file to `defaults`. Fails only when `raw` is not TOML.
 pub fn read(raw: &str, defaults: Behavior) -> Result<Applied, toml::de::Error> {
@@ -301,6 +308,20 @@ mod tests {
                 ),
                 ignored("tab", "unknown section; did you mean `tabs`?"),
             ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_a_named_value_written_as_a_table_is_reported() -> Result<(), toml::de::Error> {
+        let applied = read("[tabs]\ngrouping = { auto = {} }\n", hosted())?;
+        assert_eq!(applied.behavior, hosted());
+        assert_eq!(
+            applied.ignored,
+            [ignored(
+                "tabs.grouping",
+                "invalid type: map, expected a string"
+            )]
         );
         Ok(())
     }

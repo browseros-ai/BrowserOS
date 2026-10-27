@@ -267,6 +267,10 @@ export function computeAffectedSuites(
   }
   if (changedFiles.some((f) => f.startsWith(`${AGENT}tools/captcha-testbed/`)))
     keys.add('captcha')
+  // claw-server's tests check that every key the shipped behaviour file
+  // documents applies on this server.
+  if (changedFiles.includes('packages/browseros/docker/neo/neo.toml'))
+    keys.add('claw-server')
 
   return Object.keys(SUITES)
     .filter((key) => keys.has(key))
