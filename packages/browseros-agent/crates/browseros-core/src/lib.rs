@@ -20,6 +20,7 @@ pub mod snapshot;
 pub mod target;
 pub mod timeouts;
 pub mod types;
+pub mod viewport;
 pub mod windows;
 
 pub use browser::Browser;

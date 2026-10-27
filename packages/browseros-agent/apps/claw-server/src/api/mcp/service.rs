@@ -25,7 +25,7 @@ use crate::{
     },
 };
 use browseros_core::target::BrowserView;
-use browseros_mcp::{OutputFileAccess, TargetStore, ToolDef, ToolResult, catalog};
+use browseros_mcp::{OutputFileAccess, TargetStore, ToolDef, ToolResult};
 use claw_api::models::HelpRequestKind;
 use rmcp::{
     ErrorData as McpError, RoleServer,
@@ -236,8 +236,8 @@ impl ClawMcpService {
     #[must_use]
     pub fn new(state: AppState) -> Self {
         Self {
+            catalog: Arc::new(hosted::catalog(state.config.mode)),
             state,
-            catalog: Arc::new(catalog()),
             name_session_tool: name_session_tool(),
             save_skill_tool: save_skill_tool(),
             mark_skill_run_tool: mark_skill_run_tool(),
@@ -296,7 +296,7 @@ impl ClawMcpService {
         let decorate = |tool: Tool| {
             let mut tool = with_session_arg(with_pursue_fallback_note(tool, pursue));
             if mode.is_hosted() {
-                tool = hosted::with_task_name_arg(tool);
+                tool = hosted::with_viewport_sdk_note(hosted::with_task_name_arg(tool));
             }
             if declare_agent_name {
                 tool = with_agent_name_arg(tool, mode);
@@ -1608,7 +1608,8 @@ impl ServerHandler for ClawMcpService {
                 }
                 Some(browser) => Some(BrowserView::capture(browser.clone(), binding, None).await),
                 None => None,
-            };
+            }
+            .map(|view| hosted::with_viewports(view, self.state.viewports.as_ref()));
             let target_store: Arc<dyn TargetStore> = Arc::new(ClawTargetStore {
                 bindings: self.state.targets.clone(),
                 session: started.session.id().clone(),
@@ -2586,6 +2587,113 @@ mod tests {
             .await;
         assert!(matches!(result, Err(error) if error.code.0 == -32601));
         running.cancel().await?;
+        Ok(())
+    }
+
+    async fn viewport_test_service(mode: ServerMode) -> anyhow::Result<ClawMcpService> {
+        use crate::api::mcp::test_support::{ProfileConnection, current_session};
+        let call =
+            crate::api::mcp::test_support::tool_call_in_mode("tabs", json!({}), mode).await?;
+        call.state
+            .browser
+            .set_session_for_testing(current_session(
+                ProfileConnection::new().with_default_profile(),
+            ))
+            .await;
+        Ok(ClawMcpService::new(call.state))
+    }
+
+    async fn call_tool_value(
+        service: ClawMcpService,
+        name: &'static str,
+        args: Value,
+    ) -> anyhow::Result<Result<Value, rmcp::ErrorData>> {
+        let (_client, transport) = tokio::io::duplex(4096);
+        let running = rmcp::service::serve_directly(service, transport, None);
+        let context =
+            RequestContext::new(rmcp::model::RequestId::Number(1), running.peer().clone());
+        let response = running
+            .service()
+            .call_tool(
+                CallToolRequestParams::new(name).with_arguments(serde_json::from_value(args)?),
+                context,
+            )
+            .await;
+        running.cancel().await?;
+        Ok(match response {
+            Ok(CallToolResponse::Complete(result)) => Ok(serde_json::to_value(result)?),
+            Ok(_) => anyhow::bail!("unexpected task response"),
+            Err(error) => Err(error),
+        })
+    }
+
+    #[tokio::test]
+    async fn tests_that_only_hosted_servers_offer_set_viewport() -> anyhow::Result<()> {
+        let hosted = viewport_test_service(ServerMode::Hosted).await?;
+        let tool = hosted
+            .listed_tools(true)
+            .into_iter()
+            .find(|tool| tool.name == "setViewport")
+            .ok_or_else(|| anyhow::anyhow!("setViewport missing from the hosted list"))?;
+        assert!(tool.input_schema["properties"].get("taskName").is_some());
+        assert!(hosted.get_tool("setViewport").is_some());
+        let run = hosted
+            .listed_tools(true)
+            .into_iter()
+            .find(|tool| tool.name == "run")
+            .ok_or_else(|| anyhow::anyhow!("run missing from the hosted list"))?;
+        let run_description = run.description.as_deref().unwrap_or_default();
+        assert!(
+            run_description.contains(
+                "page.setViewport({ mode: 'mobile' | 'desktop' | 'default', zoom?, width?, height? })"
+            ),
+            "{run_description}"
+        );
+        // Dispatched to the tool, which admits the page before anything else.
+        let refused = call_tool_value(hosted, "setViewport", json!({"page": 1, "mode": "mobile"}))
+            .await?
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(refused["isError"], true);
+        let text = refused["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(
+            text.starts_with("setViewport failed: page_out_of_scope"),
+            "{text}"
+        );
+
+        let desktop = viewport_test_service(ServerMode::Desktop).await?;
+        assert!(
+            !desktop
+                .listed_tools(true)
+                .iter()
+                .any(|tool| tool.name == "setViewport")
+        );
+        assert!(desktop.get_tool("setViewport").is_none());
+        let missing =
+            call_tool_value(desktop, "setViewport", json!({"page": 1, "mode": "mobile"})).await?;
+        assert!(matches!(missing, Err(error) if error.code.0 == -32601));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_only_hosted_run_scripts_get_page_set_viewport() -> anyhow::Result<()> {
+        let code = "try { return typeof browser.page(1).setViewport } catch (e) { return 'refused: ' + e.message }";
+        for (mode, expected) in [
+            (ServerMode::Hosted, "function"),
+            (
+                ServerMode::Desktop,
+                "refused: page.setViewport is not a method",
+            ),
+        ] {
+            let service = viewport_test_service(mode).await?;
+            let result = call_tool_value(service, "run", json!({"code": code}))
+                .await?
+                .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            let value = result["structuredContent"]["value"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            assert!(value.starts_with(expected), "{mode:?}: {result}");
+        }
         Ok(())
     }
 

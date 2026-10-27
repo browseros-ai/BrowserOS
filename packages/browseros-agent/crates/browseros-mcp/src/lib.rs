@@ -19,6 +19,8 @@ pub mod trust_boundary;
 mod targeting_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod viewport_tests;
 
 pub use framework::{
     AuditHints, BrowserToolDefaults, BrowserToolOptions, FeatureNote, InnerCallHook,

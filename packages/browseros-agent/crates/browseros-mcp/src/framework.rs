@@ -511,6 +511,21 @@ async fn execute_tool_inner(
         None
     };
     ctx.throw_if_cancelled()?;
+    // A tab in a fixed viewport is restored before the tool reads or acts, and keeps its window
+    // until the readback is done. setViewport applies its own; tab management needs none.
+    let viewport = match &primary_page {
+        Some(page) if restores_viewport(def.name) => {
+            tokio::select! {
+                biased;
+                () = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
+                lease = ctx.browser.prepare_viewport(page.clone()) => match lease {
+                    Ok(lease) => Some(lease),
+                    Err(err) => return Ok(ToolResult::error(format!("{} failed: {err}", def.name))),
+                },
+            }
+        }
+        _ => None,
+    };
     let mut response = ToolResponse::new();
     match (def.handler)(raw_args, ctx, &mut response).await {
         Ok(Some(result)) => response.append_result(result),
@@ -535,8 +550,13 @@ async fn execute_tool_inner(
     let result = result.into_tool_result();
     // The script bridge records its child audit only after execute_tool returns.
     // Releasing here prevents host audit work from retaining an operation lock.
+    drop(viewport);
     drop(tool_guard);
     Ok(result)
+}
+
+fn restores_viewport(tool: &str) -> bool {
+    !matches!(tool, "tabs" | tools::viewport::NAME)
 }
 
 #[must_use]

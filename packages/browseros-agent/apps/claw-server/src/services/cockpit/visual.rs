@@ -145,6 +145,7 @@ pub struct SessionVisualService {
     session_tabs: Arc<SessionTabLedger>,
     browser: Arc<BrowserService>,
     tab_activity: Arc<TabActivityService>,
+    viewports: Option<Arc<browseros_core::viewport::Viewports>>,
     /// Entries retain the process-wide capture slot until the underlying CDP task resolves, even
     /// after caller timeout, so stuck tasks cannot escape the concurrency bound.
     in_flight: Arc<InFlightCaptures>,
@@ -160,12 +161,14 @@ impl SessionVisualService {
         session_tabs: Arc<SessionTabLedger>,
         browser: Arc<BrowserService>,
         tab_activity: Arc<TabActivityService>,
+        viewports: Option<Arc<browseros_core::viewport::Viewports>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             sessions,
             session_tabs,
             browser,
             tab_activity,
+            viewports,
             in_flight: Arc::new(InFlightCaptures::default()),
             card_documents: CardDocuments::default(),
         })
@@ -256,6 +259,15 @@ impl SessionVisualService {
         else {
             return Ok(None);
         };
+        // A JavaScript dialog stalls the renderer: the capture would only wait on it while
+        // holding the page's window.
+        if browser
+            .page_signals
+            .pending_dialog(&PageId(candidate.page_id))
+            .is_some()
+        {
+            return Ok(None);
+        }
         if let Some(hold) = self.card_documents.held(candidate.page_id, &pages).await {
             let current = main_document_id(&browser, candidate.page_id).await;
             if !self
@@ -274,7 +286,19 @@ impl SessionVisualService {
         let target_id = TargetId::from(candidate.target_id);
         let options = capture_options();
         let capture_browser = browser.clone();
+        let viewports = self.viewports.clone();
         let worker = tokio::spawn(async move {
+            // A capture rewrites an emulated page's viewport until it finishes, then restores
+            // what it saw first; viewport changes and fixed tabs' operations must not overlap.
+            let _held = match viewports {
+                Some(viewports) => Some(
+                    browseros_core::BrowserView::unbound(capture_browser.clone(), None)
+                        .with_viewports(viewports)
+                        .hold_viewport(page_id.clone())
+                        .await,
+                ),
+                None => None,
+            };
             capture_browser
                 .screenshot_for_target(page_id, &target_id, options)
                 .await

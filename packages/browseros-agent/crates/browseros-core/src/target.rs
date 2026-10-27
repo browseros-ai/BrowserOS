@@ -118,6 +118,8 @@ pub struct BrowserView {
     // call (Promise.all in a run) would open its own window. Shared by clones; the async lock
     // makes creation single-flight.
     default_window: Arc<tokio::sync::Mutex<Option<WindowId>>>,
+    /// Hosted viewport modes; `None` keeps every page's geometry as it is.
+    viewports: Option<Arc<crate::viewport::Viewports>>,
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -340,6 +342,7 @@ impl BrowserView {
             expected_creation_epoch: None,
             creation_receipts: Arc::new(std::sync::RwLock::new(HashMap::new())),
             default_window: Arc::new(tokio::sync::Mutex::new(None)),
+            viewports: None,
             signals: session.page_signals.clone(),
             signal_windows: Arc::new(std::sync::RwLock::new(BTreeSet::new())),
             session,
@@ -355,6 +358,69 @@ impl BrowserView {
     pub fn with_pointer(mut self, pointer: Pointer) -> Self {
         self.pointer = Some(pointer);
         self
+    }
+    /// Enables viewport modes for this view's calls. Without it, `set_viewport` is refused and
+    /// `prepare_viewport` does nothing.
+    #[must_use]
+    pub fn with_viewports(mut self, viewports: Arc<crate::viewport::Viewports>) -> Self {
+        self.viewports = Some(viewports);
+        self
+    }
+    #[must_use]
+    pub fn offers_viewport(&self) -> bool {
+        self.viewports.is_some()
+    }
+    pub async fn set_viewport(
+        &self,
+        page: PageId,
+        request: crate::viewport::ViewportRequest,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<crate::viewport::ViewportReport, CoreError> {
+        match &self.viewports {
+            Some(viewports) => viewports.set(self, page, request, cancel).await,
+            None => Err(CoreError::Message(
+                "setViewport is only available on a hosted BrowserOS neo server".to_string(),
+            )),
+        }
+    }
+    /// Holds the page's window without changing anything, for work outside a page operation
+    /// that must not overlap viewport changes, such as a background screenshot: a capture
+    /// rewrites the page's emulation until it finishes.
+    pub async fn hold_viewport(&self, page: PageId) -> crate::viewport::ViewportLease {
+        match &self.viewports {
+            Some(viewports) => viewports.hold(self, page).await,
+            None => crate::viewport::ViewportLease::default(),
+        }
+    }
+    /// A caller's raw `method` can replace what a fixed viewport set on its page session. The
+    /// guard, dropped when the call ends however it ends, makes that tab's next operation put
+    /// its mode back.
+    async fn viewport_reapply(
+        &self,
+        method: &str,
+        page: Option<PageId>,
+        session: Option<&SessionId>,
+    ) -> Option<crate::viewport::Reapply> {
+        let viewports = self.viewports.as_ref()?;
+        if !crate::viewport::overrides(method) {
+            return None;
+        }
+        let page = match page {
+            Some(page) => page,
+            None => self.session.pages.page_for_session(session?).await?.page_id,
+        };
+        Some(viewports.reapply(page))
+    }
+    /// Restores the page's fixed viewport and window before a page operation. Hold the lease
+    /// until the operation, including its readback, is done.
+    pub async fn prepare_viewport(
+        &self,
+        page: PageId,
+    ) -> Result<crate::viewport::ViewportLease, CoreError> {
+        match &self.viewports {
+            Some(viewports) => viewports.prepare(self, page).await,
+            None => Ok(crate::viewport::ViewportLease::default()),
+        }
     }
     pub fn binding(&self) -> Option<&TargetBinding> {
         self.binding.as_ref()
@@ -481,7 +547,16 @@ impl BrowserView {
 
     /// Policy-free native discovery/cleanup still uses the capture's atomic transport guard.
     /// Callers own routing admission; using this helper does not authorize a new root method.
-    async fn send_at_capture(
+    /// The registry's last known incarnation of `page`, without a browser round trip or
+    /// admission. Only for decisions that touch nothing, such as which lock to wait on.
+    pub(crate) async fn cached_page(&self, page: &PageId) -> Option<PageInfo> {
+        self.session.pages.get_info(page.clone()).await
+    }
+    /// Every page the registry knows, as of its last reconciliation.
+    pub(crate) async fn known_page_ids(&self) -> BTreeSet<PageId> {
+        self.session.pages.known_page_ids().await
+    }
+    pub(crate) async fn send_at_capture(
         &self,
         method: &str,
         params: Value,
@@ -1047,6 +1122,10 @@ impl BrowserView {
     pub async fn input(&self, page: PageId) -> Result<Input, CoreError> {
         let access = self.page_access(page.clone()).await?;
         let observer = self.session.observe(page.clone()).await;
+        let scale = self
+            .viewports
+            .as_ref()
+            .map_or(1.0, |viewports| viewports.pointer_scale(&page));
         let input = match access {
             Some(access) => Input::new(
                 Arc::new(observer.with_access(access.clone())),
@@ -1056,7 +1135,7 @@ impl BrowserView {
             .with_access(access),
             None => Input::new(observer, self.session.pages.clone(), page),
         };
-        Ok(input.with_pointer(self.pointer))
+        Ok(input.with_pointer(self.pointer).with_pointer_scale(scale))
     }
     pub async fn nav(&self, page: PageId) -> Result<Navigation, CoreError> {
         let access = self.page_access(page.clone()).await?;
@@ -1338,6 +1417,7 @@ impl BrowserView {
         // Raw CDP passes the native gate before any routing. Only methods and (method,
         // parameter) pairs a FEATURES row lists can be refused; internal calls never send them.
         self.native().check_raw(method, &params)?;
+        let _reapply = self.viewport_reapply(method, None, session).await;
         if self.scope()?.is_none() {
             if self.expected_created_page.is_some() {
                 // An unbound creation callback remains global in routing, but it cannot
@@ -1380,6 +1460,9 @@ impl BrowserView {
         params_json: &str,
     ) -> Result<String, CoreError> {
         self.native().check_raw_json(method, params_json)?;
+        let _reapply = self
+            .viewport_reapply(method, Some(page.clone()), None)
+            .await;
         if self.epoch_guard()?.is_none() {
             return self
                 .session

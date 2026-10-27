@@ -11,6 +11,7 @@ import {
 } from '../fixtures/server'
 
 const EXPECTED_PAGES = [
+  'checkout.html',
   'console.html',
   'cursor.html',
   'dialog.html',
