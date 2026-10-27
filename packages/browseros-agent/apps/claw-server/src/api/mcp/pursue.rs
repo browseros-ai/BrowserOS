@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use browseros_core::{
-    BrowserSession, BrowserView, PageId,
+    BrowserSession, BrowserView, DocumentMark, PageId,
     snapshot::{SnapshotMode, SnapshotOptions},
 };
 use browseros_decide::drive::{ActError, Driver, Journey, Move, Performed};
@@ -65,25 +65,42 @@ const WAITED_FOR_BUDGET: std::time::Duration = std::time::Duration::from_millis(
 
 /// Waits for the page to stop changing, for a bounded time.
 ///
-/// The readiness wait goto and tab creation use: the page's DOM holding still
-/// for one quiet interval, with something showing or the document complete.
-/// It never waits on images or the load event, which the snapshot read next
-/// does not see. A move's own navigation is already waited out by the tool
-/// that made it (`act` waits for the new document before its diff, `navigate`
-/// for readiness), so this only has to catch a page still filling in. jev
-/// cannot write a selector or a substring for the `wait` tool, and a wait
-/// decision costs it a whole request, so it passes its own budget instead.
+/// Core's action settle, counted from the mark the last move took before it
+/// ran: a navigation that move started is waited out to its new document's
+/// DOMContentLoaded, then the DOM has to hold still for one quiet interval.
+/// Moves ask `act` for no diff, so `act`'s own settle never runs and this is
+/// the only one. jev cannot write a selector or a substring for the `wait`
+/// tool, and a wait decision costs it a whole request, so it passes its own
+/// budget instead.
 ///
-/// The outcome is deliberately discarded. `StillMoving` means the ceiling was
-/// reached, which is the case the ceiling is for; `Unknown` means the page
-/// could not be evaluated, and a snapshot is still the right next move. There
-/// is nothing a caller could do differently with either.
+/// The outcome is deliberately discarded. `BudgetExpired` means the page is
+/// still moving and the ceiling was reached, which is the case the ceiling is
+/// for; `Skipped` means the page could not be evaluated, and a snapshot is
+/// still the right next move. There is nothing a caller could do differently
+/// with either.
 async fn settle(
-    pages: &browseros_core::pages::PageManager,
+    session: &BrowserSession,
     page: u32,
+    mark: DocumentMark,
     budget: std::time::Duration,
 ) {
-    let _ = browseros_core::settle::wait_for_page_ready(pages, PageId(page), budget).await;
+    let page_id = PageId(page);
+    let Ok(Ok(attached)) = tokio::time::timeout(
+        browseros_core::timeouts::ACTION_SETTLE_CDP_CALL_TIMEOUT,
+        session.pages.get_session(page_id.clone()),
+    )
+    .await
+    else {
+        return;
+    };
+    let _ = browseros_core::settle::wait_for_action_settle(
+        &attached,
+        &session.page_signals,
+        &page_id,
+        mark,
+        budget,
+    )
+    .await;
 }
 
 /// Where each tool sits in the connected peer's catalogue.
@@ -137,6 +154,10 @@ pub struct PageDriver {
     state: AppState,
     output_files: OutputFileAccess,
     cancel: CancellationToken,
+    /// The page's document mark from just before the last move, so the next look waits out
+    /// a navigation that move started. Taken by that look; a look with no move before it
+    /// counts from its own start.
+    move_mark: std::sync::Mutex<Option<DocumentMark>>,
 }
 
 impl PageDriver {
@@ -170,7 +191,18 @@ impl PageDriver {
             state,
             output_files,
             cancel,
+            move_mark: std::sync::Mutex::new(None),
         })
+    }
+
+    fn document_mark(&self) -> DocumentMark {
+        self.session.page_signals.document_mark(&PageId(self.page))
+    }
+
+    fn move_mark(&self) -> std::sync::MutexGuard<'_, Option<DocumentMark>> {
+        self.move_mark
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     pub fn page(&self) -> u32 {
@@ -377,7 +409,9 @@ impl Driver for PageDriver {
     }
 
     async fn observe(&self) -> Result<PageView, String> {
-        settle(self.session.pages.as_ref(), self.page, SETTLE_BUDGET).await;
+        let mark = self.move_mark().take();
+        let mark = mark.unwrap_or_else(|| self.document_mark());
+        settle(&self.session, self.page, mark, SETTLE_BUDGET).await;
         let observer = self.session.observe(PageId(self.page)).await;
         let snapshot = observer
             .snapshot_with_options(SnapshotOptions {
@@ -404,17 +438,20 @@ impl Driver for PageDriver {
     async fn perform(&self, act: &Move) -> Result<Performed, ActError> {
         match act {
             Move::Act(decision) => {
+                *self.move_mark() = Some(self.document_mark());
                 self.act(decision).await?;
                 // Whether it moved is decided by the loop looking again, not by
                 // what the tool said about itself.
                 Ok(Performed::Moved)
             }
             Move::Travel(journey) => {
+                *self.move_mark() = Some(self.document_mark());
                 self.travel(journey).await?;
                 Ok(Performed::Moved)
             }
             Move::Settle => {
-                settle(self.session.pages.as_ref(), self.page, WAITED_FOR_BUDGET).await;
+                let mark = self.document_mark();
+                settle(&self.session, self.page, mark, WAITED_FOR_BUDGET).await;
                 Ok(Performed::Unmoved)
             }
         }

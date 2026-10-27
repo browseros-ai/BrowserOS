@@ -11,10 +11,6 @@ use tracing::{debug, warn};
 const CONSOLE_RING_CAPACITY: usize = 50;
 const ALERT_NOTE_CAPACITY: usize = 10;
 const SUMMARY_TEXT_MAX_CHARS: usize = 240;
-/// Document events kept per page. A settle reads only the events after its own mark, a second
-/// or so of history, and out-of-process frames report on sessions of their own, so a page
-/// rarely produces more than a handful in that window.
-const DOCUMENT_EVENT_CAPACITY: usize = 32;
 
 /// A position in a page's document events, taken before an action so a settle can tell the
 /// navigations that action caused from earlier ones.
@@ -33,20 +29,14 @@ pub enum DocumentSince {
     Arrived,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DocumentEventKind {
-    NavigationStarted,
-    /// `Page.domContentEventFired`, which Chromium sends only for the session's root frame.
-    ContentLoaded,
-    LoadingStopped,
-}
-
-#[derive(Debug, Clone)]
-struct DocumentEvent {
-    sequence: u64,
-    kind: DocumentEventKind,
-    /// The frame the event names; `None` for the root-frame-only DOMContentLoaded.
-    frame: Option<String>,
+/// The latest navigation events of one frame, as positions in its page's event sequence.
+///
+/// Latest-only per frame rather than a shared history, so no amount of iframe traffic can push
+/// the main frame's pending navigation out of memory before its document arrives.
+#[derive(Debug, Clone, Copy, Default)]
+struct FrameDocument {
+    started: Option<u64>,
+    stopped: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,7 +139,12 @@ struct PageSignalState {
     alert_notes: VecDeque<String>,
     console_entries: VecDeque<ConsoleEntry>,
     next_console_sequence: u64,
-    document_events: VecDeque<DocumentEvent>,
+    /// Frames that live on the page's own session, keyed by frame id. Out-of-process frames
+    /// report on sessions of their own and never land here; same-process ones leave on
+    /// `Page.frameDetached`.
+    frame_documents: HashMap<String, FrameDocument>,
+    /// The latest `Page.domContentEventFired`, which Chromium sends only for the root frame.
+    content_loaded: Option<u64>,
     next_document_sequence: u64,
 }
 
@@ -335,25 +330,18 @@ impl PageSignals {
         let Some(page) = state.pages.get(page_id) else {
             return DocumentSince::Unchanged;
         };
-        let mut since = DocumentSince::Unchanged;
-        for event in page
-            .document_events
-            .iter()
-            .filter(|event| event.sequence >= mark.0)
-        {
-            let main = event.frame.as_deref() == Some(main_frame);
-            since = match (event.kind, since) {
-                (DocumentEventKind::NavigationStarted, _) if main => DocumentSince::Loading,
-                (DocumentEventKind::ContentLoaded, DocumentSince::Loading) => {
-                    DocumentSince::Arrived
-                }
-                (DocumentEventKind::LoadingStopped, DocumentSince::Loading) if main => {
-                    DocumentSince::Arrived
-                }
-                (_, unchanged) => unchanged,
-            };
+        let Some(main) = page.frame_documents.get(main_frame) else {
+            return DocumentSince::Unchanged;
+        };
+        let Some(started) = main.started.filter(|started| *started >= mark.0) else {
+            return DocumentSince::Unchanged;
+        };
+        let after_start = |sequence: Option<u64>| sequence.is_some_and(|at| at > started);
+        if after_start(page.content_loaded) || after_start(main.stopped) {
+            DocumentSince::Arrived
+        } else {
+            DocumentSince::Loading
         }
-        since
     }
 
     /// Changes whenever a document event is recorded on any page. Subscribe before reading
@@ -420,41 +408,56 @@ impl PageSignals {
                     )
                 );
                 if cross_document {
-                    self.record_document_event(&event, DocumentEventKind::NavigationStarted);
+                    self.record_document_event(&event, |page, sequence| {
+                        frame_document(page, &event).started = Some(sequence);
+                    });
                 }
             }
             "Page.domContentEventFired" => {
-                self.record_document_event(&event, DocumentEventKind::ContentLoaded);
+                self.record_document_event(&event, |page, sequence| {
+                    page.content_loaded = Some(sequence);
+                });
             }
             "Page.frameStoppedLoading" => {
-                self.record_document_event(&event, DocumentEventKind::LoadingStopped);
+                self.record_document_event(&event, |page, sequence| {
+                    frame_document(page, &event).stopped = Some(sequence);
+                });
+            }
+            // A `swap` moves a frame to another process and it keeps navigating; only a
+            // removed frame is gone for good.
+            "Page.frameDetached"
+                if event.params.get("reason").and_then(Value::as_str) == Some("remove") =>
+            {
+                let Some((page_id, _session_id)) = self.page_for_event(&event) else {
+                    return;
+                };
+                if let (Some(page), Some(frame)) = (
+                    self.state().pages.get_mut(&page_id),
+                    event.params.get("frameId").and_then(Value::as_str),
+                ) {
+                    page.frame_documents.remove(frame);
+                }
             }
             _ => {}
         }
     }
 
-    fn record_document_event(&self, event: &CdpEvent, kind: DocumentEventKind) {
+    /// Stamps the next position in the page's document sequence through `apply`, then wakes
+    /// anyone waiting on [`Self::document_changes`].
+    fn record_document_event(
+        &self,
+        event: &CdpEvent,
+        apply: impl FnOnce(&mut PageSignalState, u64),
+    ) {
         let Some((page_id, _session_id)) = self.page_for_event(event) else {
             return;
         };
-        let frame = event
-            .params
-            .get("frameId")
-            .and_then(Value::as_str)
-            .map(ToString::to_string);
         {
             let mut state = self.state();
             let page = state.pages.entry(page_id).or_default();
             let sequence = page.next_document_sequence;
             page.next_document_sequence = sequence.saturating_add(1);
-            if page.document_events.len() == DOCUMENT_EVENT_CAPACITY {
-                page.document_events.pop_front();
-            }
-            page.document_events.push_back(DocumentEvent {
-                sequence,
-                kind,
-                frame,
-            });
+            apply(page, sequence);
         }
         self.document_changes
             .send_modify(|changes| *changes = changes.wrapping_add(1));
@@ -545,6 +548,17 @@ impl PageSignals {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+/// The named frame's entry, created on its first event. An event without a frame id is
+/// malformed and lands under the empty id, which no target id ever matches.
+fn frame_document<'a>(page: &'a mut PageSignalState, event: &CdpEvent) -> &'a mut FrameDocument {
+    let frame = event
+        .params
+        .get("frameId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    page.frame_documents.entry(frame.to_string()).or_default()
 }
 
 fn dialog_from_params(params: &Value) -> PageDialog {
@@ -905,6 +919,46 @@ mod tests {
         assert_eq!(
             signals.document_since(&page_id, "main", mark),
             DocumentSince::Unchanged
+        );
+    }
+
+    #[tokio::test]
+    async fn iframe_traffic_never_hides_a_pending_main_frame_navigation() {
+        let (signals, connection, page_id) = harness();
+        let mark = signals.document_mark(&page_id);
+        connection.emit(
+            "Page.frameStartedNavigating",
+            navigation("main", "differentDocument"),
+            Some("session-7"),
+        );
+        // A process swap moves the main frame; its navigation is still pending.
+        connection.emit(
+            "Page.frameDetached",
+            json!({ "frameId": "main", "reason": "swap" }),
+            Some("session-7"),
+        );
+        for index in 0..40 {
+            let frame = format!("child-{index}");
+            connection.emit(
+                "Page.frameStartedNavigating",
+                navigation(&frame, "differentDocument"),
+                Some("session-7"),
+            );
+            connection.emit(
+                "Page.frameStoppedLoading",
+                json!({ "frameId": frame }),
+                Some("session-7"),
+            );
+            connection.emit(
+                "Page.frameDetached",
+                json!({ "frameId": frame, "reason": "remove" }),
+                Some("session-7"),
+            );
+        }
+        eventually(|| signals.document_mark(&page_id).0 == mark.0 + 81).await;
+        assert_eq!(
+            signals.document_since(&page_id, "main", mark),
+            DocumentSince::Loading
         );
     }
 

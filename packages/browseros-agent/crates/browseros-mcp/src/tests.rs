@@ -317,6 +317,7 @@ impl CdpConnection for HarnessConnection {
                 | "Accessibility.enable"
                 | "Runtime.runIfWaitingForDebugger"
                 | "Target.setAutoAttach"
+                | "Page.reload"
                 | "Page.handleJavaScriptDialog" => Ok(json!({})),
                 "Page.getFrameTree" => Ok(json!({
                     "frameTree": {
@@ -1844,6 +1845,63 @@ async fn settle_stops_for_an_open_dialog() {
     assert!(
         matches!(&outcome, SettleOutcome::Skipped { reason } if reason.contains("dialog open")),
         "unexpected outcome {outcome:?}"
+    );
+}
+
+/// Chromium acknowledges a reload before the new document replaces the old one, which reads
+/// as quiet meanwhile; the snapshot `navigate` attaches must not be of the page being left.
+#[tokio::test]
+async fn navigate_reload_waits_for_the_new_document() {
+    let (ctx, connection, page) = harness_ctx().await;
+    emit_later(
+        &connection,
+        vec![
+            (
+                60,
+                "Page.frameStartedNavigating",
+                started_navigating("target-1", "reload"),
+            ),
+            (
+                400,
+                "Page.domContentEventFired",
+                json!({ "timestamp": 1.0 }),
+            ),
+        ],
+    );
+    let start = tokio::time::Instant::now();
+    let result = execute_tool(
+        &tool_by_name("navigate"),
+        json!({ "page": page, "action": "reload" }),
+        &ctx,
+    )
+    .await
+    .unwrap_or_else(|err| panic!("reload should execute: {err}"));
+    assert!(!result.is_error, "{}", result_text(&result));
+    assert!(
+        start.elapsed() >= Duration::from_millis(400),
+        "returned before the new document loaded: {:?}",
+        start.elapsed()
+    );
+}
+
+/// A history step within the document (pushState, a fragment) never starts a navigation; it
+/// waits out the start grace, not the arrival ceiling.
+#[tokio::test]
+async fn a_same_document_history_step_does_not_wait_for_a_navigation() {
+    let (ctx, _connection, page) = harness_ctx().await;
+    let start = tokio::time::Instant::now();
+    let result = execute_tool(
+        &tool_by_name("navigate"),
+        json!({ "page": page, "action": "back" }),
+        &ctx,
+    )
+    .await
+    .unwrap_or_else(|err| panic!("back should execute: {err}"));
+    assert!(!result.is_error, "{}", result_text(&result));
+    assert!(
+        start.elapsed() < Duration::from_millis(700),
+        "took {:?}",
+        start.elapsed()
     );
 }
 

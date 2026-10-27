@@ -24,6 +24,9 @@ pub const NEW_PAGE_READY_POLL: Duration = Duration::from_millis(100);
 /// action that starts a navigation gets `ARRIVAL_READY_BUDGET` instead.
 pub const ACTION_SETTLE_DEFAULT_TIMEOUT: Duration = Duration::from_millis(600);
 pub const ACTION_SETTLE_DOM_QUIET: Duration = Duration::from_millis(100);
+/// How long a reload or history step may take to report its navigation starting before the
+/// load wait takes it to have stayed in the document (a fragment or pushState entry).
+pub const NAVIGATION_START_GRACE: Duration = Duration::from_millis(150);
 pub const ACTION_SETTLE_CDP_CALL_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Ceiling for deciding a freshly arrived page is ready to be acted on.

@@ -1,10 +1,17 @@
-use crate::{CoreError, PageId, PageJs, ProtocolSession, pages::PageManager, timeouts};
+use crate::{
+    CoreError, PageId, PageJs, ProtocolSession,
+    page_signals::{DocumentMark, DocumentSince, PageSignals},
+    pages::{PageManager, PageSession},
+    timeouts,
+};
 use serde::Deserialize;
 use std::{future::Future, time::Duration};
-use tokio::time::{Instant, sleep, timeout};
+use tokio::{
+    sync::watch,
+    time::{Instant, sleep, timeout, timeout_at},
+};
 
-/// How the automatic settle between an action and its diff ended (browseros-mcp's
-/// `wait_for_action_settle`). Every outcome lets the caller read the page.
+/// How [`wait_for_action_settle`] ended. Every outcome lets the caller read the page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettleOutcome {
     Settled { navigation_observed: bool },
@@ -192,6 +199,111 @@ async fn read_reading(
     reading.ok_or_else(|| Readiness::Unknown {
         reason: "the readiness probe returned nothing".to_string(),
     })
+}
+
+/// Waits until the effect of something done after `mark` has landed on the page.
+///
+/// What lands is what the accessibility tree shows, which is what callers read next: a
+/// main-frame document that started after the mark reaching DOMContentLoaded, then the DOM
+/// holding still for one quiet interval. Images, iframes and the load event are not waited on.
+///
+/// ```text
+///  mark ─▶ main-frame navigation since the mark?    PageSignals, pushed by CDP
+///           ├─ none ────────────────────────────┐
+///           └─ wait for its DOMContentLoaded ───┴─▶ readiness probe quiet for one interval
+/// ```
+///
+/// `budget` covers an in-page change. A navigation raises it to the arrival ceiling: a new
+/// document takes longer, and a read of half of it misleads. Used after an MCP action (before
+/// its diff) and after a decision-loop move (before its next look); the mark must be taken
+/// before the action, since a link's navigation can be reported before the click's own reply.
+pub async fn wait_for_action_settle(
+    page: &PageSession,
+    signals: &PageSignals,
+    page_id: &PageId,
+    mark: DocumentMark,
+    budget: Duration,
+) -> SettleOutcome {
+    let started = Instant::now();
+    let mut deadline = started + budget;
+    let mut changes = signals.document_changes();
+    let main_frame = page.target_id.as_str();
+    let mut navigation_observed = false;
+    let mut previous: Option<u64> = None;
+    loop {
+        // A dialog freezes the renderer: no document or probe answer comes until it closes.
+        if let Some(line) = signals.pending_dialog_line(page_id) {
+            return SettleOutcome::Skipped { reason: line };
+        }
+        let since = signals.document_since(page_id, main_frame, mark);
+        if since != DocumentSince::Unchanged && !navigation_observed {
+            navigation_observed = true;
+            deadline = deadline.max(started + timeouts::ARRIVAL_READY_BUDGET);
+        }
+        if since == DocumentSince::Loading {
+            // The old document is still showing; reading it now would settle on the page
+            // being left.
+            if let Err(outcome) = wait_for_document_event(&mut changes, deadline).await {
+                return outcome;
+            }
+            previous = None;
+            continue;
+        }
+        match read_with_deadline(&page.session, deadline).await {
+            Ok(Some(reading)) => {
+                if !reading.installed && previous == Some(reading.count) && reading.settled_enough()
+                {
+                    return SettleOutcome::Settled {
+                        navigation_observed,
+                    };
+                }
+                previous = Some(reading.count);
+            }
+            Ok(None) => previous = None,
+            Err(outcome) => return outcome,
+        }
+        if let Err(outcome) = sleep_for_budget(timeouts::ACTION_SETTLE_DOM_QUIET, deadline).await {
+            return outcome;
+        }
+    }
+}
+
+/// Waits for the next document event on any page, for at most one quiet interval, so the
+/// caller re-checks dialogs and its own page often even if an event never comes.
+async fn wait_for_document_event(
+    changes: &mut watch::Receiver<u64>,
+    deadline: Instant,
+) -> Result<(), SettleOutcome> {
+    let until = deadline.min(Instant::now() + timeouts::ACTION_SETTLE_DOM_QUIET);
+    match timeout_at(until, changes.changed()).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_closed)) => Err(SettleOutcome::Skipped {
+            reason: "page signals stopped".to_string(),
+        }),
+        Err(_elapsed) if Instant::now() >= deadline => Err(SettleOutcome::BudgetExpired),
+        Err(_elapsed) => Ok(()),
+    }
+}
+
+/// One readiness reading; `None` when the page could not answer this time, as while a
+/// committing navigation replaces its context. Only a lost target ends the wait early, the way
+/// navigation's own readiness wait treats it.
+async fn read_with_deadline(
+    session: &ProtocolSession,
+    deadline: Instant,
+) -> Result<Option<ReadinessReading>, SettleOutcome> {
+    let call_budget = remaining(deadline)?.min(timeouts::ACTION_SETTLE_CDP_CALL_TIMEOUT);
+    match timeout(call_budget, read_readiness(session)).await {
+        Ok(Ok(reading)) => Ok(Some(reading)),
+        Ok(Err(error @ CoreError::Target(_))) => Err(SettleOutcome::Skipped {
+            reason: error.to_string(),
+        }),
+        Ok(Err(_)) => Ok(None),
+        Err(_elapsed) => {
+            remaining(deadline)?;
+            Ok(None)
+        }
+    }
 }
 
 fn into_readiness(outcome: SettleOutcome) -> Readiness {
