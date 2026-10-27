@@ -112,7 +112,7 @@ export function AgentRow({
     >
       <span
         aria-hidden
-        className="grid size-11 place-items-center rounded-xl border border-border-2 bg-card"
+        className="grid size-11 place-items-center rounded-md border border-border-2 bg-card"
       >
         {logo}
       </span>

@@ -92,10 +92,14 @@ COPY --chmod=0755 entrypoint.sh /usr/local/bin/neo-entrypoint
 COPY --chmod=0755 healthcheck.sh /usr/local/bin/neo-healthcheck
 COPY --chmod=0755 neo-quit.py /usr/local/bin/neo-quit
 
+# CLAW_ANALYTICS_ENABLED=0 turns off the bundled server's product analytics:
+# every container would otherwise report to the desktop PostHog project as a
+# separate install. The browser's native metrics do not read it.
 ENV NEO_SCREEN=1600x1000 \
     NEO_DATA_DIR=/data \
     BROWSERCLAW_HOSTED_MODE=1 \
     BROWSERCLAW_CONFIG_FILE=/etc/neo/neo.toml \
+    CLAW_ANALYTICS_ENABLED=0 \
     NEO_SANDBOX=false \
     NEO_SOFTWARE_GRAPHICS=true \
     BROWSEROS_CAPSOLVER_API_KEY_FILE=/home/neo/.config/browseros/captcha/capsolver-api-key \

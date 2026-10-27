@@ -74,7 +74,7 @@ export function SkillDetail() {
         back={BACK}
         eyebrow={
           <>
-            <SiteBadge site={skill.site} className="size-8 rounded-[10px]" />
+            <SiteBadge site={skill.site} className="size-8" />
             <span className="text-[14px] text-ink-3">
               {skill.site ?? 'Any website'}
             </span>
@@ -183,7 +183,7 @@ function WorksIn({ skill }: { skill: Skill }) {
             <AgentMark
               key={agent}
               harness={agent}
-              className="rounded-full border border-border-2 bg-bg-sunken px-3 py-1.5 font-semibold text-[13.5px] text-ink-2"
+              className="rounded-md border border-border-2 bg-bg-sunken px-3 py-1.5 font-semibold text-[13.5px] text-ink-2"
             />
           ))}
         </div>
@@ -207,7 +207,7 @@ function RecentRuns({ runs }: { runs: SkillRun[] }) {
             <li key={run.id}>
               <NavLink
                 to={`/audit/${encodeURIComponent(run.sessionId)}`}
-                className="flex items-start gap-3 rounded-xl px-2 py-2.5 outline-none transition-colors hover:bg-bg-sunken focus-visible:ring-2 focus-visible:ring-ring"
+                className="flex items-start gap-3 rounded-md px-2 py-2.5 outline-none transition-colors hover:bg-bg-sunken focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <span className="font-semibold text-[14px] text-cyanotype-ink">

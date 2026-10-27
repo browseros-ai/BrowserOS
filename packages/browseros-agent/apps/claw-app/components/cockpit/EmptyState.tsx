@@ -18,7 +18,7 @@ export function EmptyState({ title, hint, icon }: EmptyStateProps) {
     <div className="flex flex-col items-center gap-3 rounded-2xl border border-border-2 bg-card p-8 text-center">
       <span
         aria-hidden
-        className="flex size-10 items-center justify-center rounded-xl bg-bg-sunken text-ink-3"
+        className="flex size-10 items-center justify-center rounded-md bg-bg-sunken text-ink-3"
       >
         {icon ?? <Activity className="size-5" />}
       </span>

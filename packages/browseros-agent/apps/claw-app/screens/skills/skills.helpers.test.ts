@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'bun:test'
+import type { Skill } from '@browseros/claw-api'
 import {
   neoName,
   parseSkillBody,
   skillCommand,
+  skillSites,
   stuckWhile,
   usedLabel,
+  worksInAgents,
 } from './skills.helpers'
 
 describe('skillCommand', () => {
@@ -81,9 +84,66 @@ describe('usedLabel', () => {
     expect(usedLabel(4, new Date(2026, 9, 22, 23).getTime(), now)).toBe(
       'Used 4 times · last used yesterday',
     )
-    expect(usedLabel(4, new Date(2026, 9, 2).getTime(), now)).toMatch(
-      /^Used 4 times · last used on /,
-    )
+  })
+
+  it('names an older day by its date alone, as in "last used Oct 2"', () => {
+    const label = usedLabel(4, new Date(2026, 9, 2).getTime(), now)
+    expect(label).toMatch(/^Used 4 times · last used \S/)
+    expect(label).not.toContain('last used on ')
+  })
+})
+
+describe('skillSites', () => {
+  it('has no sites when the skill names none', () => {
+    expect(skillSites(undefined)).toEqual([])
+    expect(skillSites('  ')).toEqual([])
+  })
+
+  it('keeps a single site as it was saved', () => {
+    expect(skillSites('x.com')).toEqual(['x.com'])
+  })
+
+  it('names each site by its host, as a person would read it', () => {
+    expect(
+      skillSites('https://www.microsoftazuresponsorships.com/usage'),
+    ).toEqual(['microsoftazuresponsorships.com'])
+    expect(skillSites('https://trmnl.com')).toEqual(['trmnl.com'])
+  })
+
+  it('splits a comma list and drops empty entries', () => {
+    expect(skillSites('x.com, linkedin.com,reddit.com, ')).toEqual([
+      'x.com',
+      'linkedin.com',
+      'reddit.com',
+    ])
+  })
+})
+
+describe('worksInAgents', () => {
+  const linked = (...agents: Skill['linkedAgents']) => ({
+    linkedAgents: agents,
+  })
+  const everyone = ['Claude Code', 'Codex', 'Cursor'] as const
+
+  it('lists every connected agent any skill is linked into, once, in the usual order', () => {
+    expect(
+      worksInAgents(
+        [linked('Cursor', 'Claude Code'), linked('Codex', 'Claude Code')],
+        everyone,
+      ),
+    ).toEqual(['Claude Code', 'Codex', 'Cursor'])
+  })
+
+  it('leaves out an agent that was disconnected after the skill was saved', () => {
+    expect(
+      worksInAgents([linked('Claude Code', 'Codex')], ['Claude Code']),
+    ).toEqual(['Claude Code'])
+    expect(worksInAgents([linked('Codex')], [])).toEqual([])
+  })
+
+  it('is empty when no skill is linked into an agent', () => {
+    expect(worksInAgents([linked(), linked()], everyone)).toEqual([])
+    expect(worksInAgents([], everyone)).toEqual([])
   })
 })
 

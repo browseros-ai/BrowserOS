@@ -38,10 +38,12 @@ export function DemoChatGptWindow({
 }) {
   const typing = frame.composer.length > 0
   const work = frame.switched
+  // The frame keeps macOS's 12px corners and the chat keeps ChatGPT's own
+  // radii, so the drawn app reads as itself rather than as neo.
   return (
     <div
       style={CHATGPT_DARK}
-      className="flex size-full overflow-hidden rounded-xl bg-(--chatgpt-main) text-(--chatgpt-ink) shadow-[0_0_0_1px_rgb(0_0_0/0.35),0_34px_60px_-28px_rgb(1_18_63/0.55),0_10px_24px_-12px_rgb(1_18_63/0.3)]"
+      className="flex size-full overflow-hidden rounded-[12px] bg-(--chatgpt-main) text-(--chatgpt-ink) shadow-[0_0_0_1px_rgb(0_0_0/0.35),0_34px_60px_-28px_rgb(1_18_63/0.55),0_10px_24px_-12px_rgb(1_18_63/0.3)]"
     >
       <div className="flex w-[140px] flex-none flex-col gap-0.5 border-(--chatgpt-border) border-r bg-(--chatgpt-sidebar) px-2.5 pb-3">
         <div className="flex h-9 flex-none items-center pl-0.5">
@@ -124,7 +126,7 @@ export function DemoChatGptWindow({
         >
           {frame.sent ? (
             <Transcript gap={6}>
-              <div className="max-w-[236px] animate-demo-rise self-end rounded-2xl bg-(--chatgpt-selected) px-[13px] py-2 text-[13px] leading-[18px]">
+              <div className="max-w-[236px] animate-demo-rise self-end rounded-[16px] bg-(--chatgpt-selected) px-[13px] py-2 text-[13px] leading-[18px]">
                 {DEMO_PROMPT}
               </div>
               <DemoToolRows

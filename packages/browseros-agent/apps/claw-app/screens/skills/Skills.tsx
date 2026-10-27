@@ -5,37 +5,41 @@
  */
 
 import type { Skill } from '@browseros/claw-api'
-import { Bookmark, Lightbulb, Plus, TriangleAlert } from 'lucide-react'
+import { Bookmark, Globe, Lightbulb, Plus, TriangleAlert } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { NavLink } from 'react-router'
 import { CopyButton } from '@/components/copy/CopyButton'
+import { Favicon } from '@/components/favicon/Favicon'
 import { HarnessIcon } from '@/components/harness/HarnessIcon'
-import { asHarness } from '@/components/harness/harness.types'
+import type { Harness } from '@/components/harness/harness.types'
 import { Page } from '@/components/layout/Page'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/motion/button/base'
 import { CARD_TARGET_CLASS, Card } from '@/components/motion/card'
 import { Phrase } from '@/components/skills/Phrase'
 import { RunSkillButton } from '@/components/skills/RunSkillButton'
-import { SiteBadge } from '@/components/skills/SiteBadge'
 import { SkillActions } from '@/components/skills/SkillActions'
 import { SkillFormDialog } from '@/components/skills/SkillFormDialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { useSkillsScreenData } from './skills.data'
-import { SAVE_PHRASE, usedLabel } from './skills.helpers'
+import { SAVE_PHRASE, skillSites, usedLabel } from './skills.helpers'
+
+/** Two columns at the page's full width, one on narrow screens. */
+const GRID_CLASS =
+  'grid grid-cols-[repeat(auto-fill,minmax(min(360px,100%),1fr))] gap-3'
 
 /** Things you ask for often, as cards that each copy the phrase that runs it again. */
 export function Skills() {
-  const { skills, isLoading, isError } = useSkillsScreenData()
+  const { skills, agents, isLoading, isError } = useSkillsScreenData()
   const [creating, setCreating] = useState(false)
   const now = Date.now()
 
   return (
-    <Page>
+    <Page className="gap-6 md:gap-6">
       <PageHeader
         title="Skills"
-        lede="Things you ask for often. Copy a skill’s phrase and paste it into any of your AI agents to run it again."
+        lede="Things you ask for often. Copy one into any of your AI agents to run it again."
         actions={
           <Button
             variant="ghost"
@@ -49,32 +53,38 @@ export function Skills() {
         }
       />
 
-      <SaveTip />
+      <div className="flex flex-col gap-4">
+        <SaveTip />
 
-      {isError ? (
-        <EmptyCard
-          tone="error"
-          icon={<TriangleAlert className="size-5" />}
-          title="Couldn’t load your skills"
-          hint="Check that BrowserOS is running, then open this page again."
-        />
-      ) : isLoading ? (
-        <CardsSkeleton />
-      ) : skills.length === 0 ? (
-        <EmptyCard
-          icon={<Bookmark className="size-5" />}
-          title="No skills yet"
-          hint="Finish a task with one of your AI agents, then ask it to save it as a skill. It shows up here."
-        />
-      ) : (
-        <ul className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
-          {skills.map((skill) => (
-            <li key={skill.name} className="flex">
-              <SkillCard skill={skill} now={now} />
-            </li>
-          ))}
-        </ul>
-      )}
+        <div className="flex flex-col gap-5">
+          {agents.length > 0 ? <WorksIn agents={agents} /> : null}
+
+          {isError ? (
+            <EmptyCard
+              tone="error"
+              icon={<TriangleAlert className="size-5" />}
+              title="Couldn’t load your skills"
+              hint="Check that BrowserOS is running, then open this page again."
+            />
+          ) : isLoading ? (
+            <CardsSkeleton />
+          ) : skills.length === 0 ? (
+            <EmptyCard
+              icon={<Bookmark className="size-5" />}
+              title="No skills yet"
+              hint="Finish a task with one of your AI agents, then ask it to save it as a skill. It shows up here."
+            />
+          ) : (
+            <ul className={GRID_CLASS}>
+              {skills.map((skill) => (
+                <li key={skill.name} className="flex">
+                  <SkillCard skill={skill} now={now} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
 
       <SkillFormDialog
         mode="create"
@@ -110,60 +120,91 @@ function SaveTip() {
   )
 }
 
+/**
+ * The connected agents, shown once for every skill. A skill records the
+ * agents it was linked into when it was saved, so they can differ between
+ * skills and the line makes no claim about how many.
+ */
+function WorksIn({ agents }: { agents: Harness[] }) {
+  return (
+    <div className="flex items-center gap-2.5">
+      <span role="img" aria-label={agents.join(', ')} className="flex shrink-0">
+        {agents.map((harness, index) => (
+          <span
+            key={harness}
+            className={cn(
+              'grid size-6 place-items-center rounded-full bg-card shadow-[0_0_0_1px_var(--color-border-2)]',
+              index > 0 && '-ml-2',
+            )}
+          >
+            <HarnessIcon harness={harness} className="size-3.5" />
+          </span>
+        ))}
+      </span>
+      <p className="text-[14px] text-ink-2 leading-[18px]">
+        Works in your connected agents.
+      </p>
+    </div>
+  )
+}
+
+/**
+ * The title links to the skill's page across the whole card. Copy and the
+ * menu sit above that link only because they are positioned and come after
+ * it in the DOM, with no z-index: SkillActions renders its edit dialog in
+ * place, so a stacking context around it would trap the dialog under the
+ * cards after it. That is why the card is a grid: the menu is drawn on the
+ * top row but written last. The card is not `interactive` either, since its
+ * press scale is a transform, which would re-anchor that fixed dialog to the
+ * card while pressed.
+ */
 function SkillCard({ skill, now }: { skill: Skill; now: number }) {
-  const agents = skill.linkedAgents.flatMap((name) => {
-    const harness = asHarness(name)
-    return harness ? [harness] : []
-  })
+  const sites = skillSites(skill.site)
+  const favicon = sites.length === 1 ? sites[0] : undefined
+  // A hand-edited SKILL.md can carry a blank description; the name keeps the card titled.
+  const title = skill.description.trim() || skill.name
   return (
     <Card
       size="compact"
-      interactive
-      className="relative w-full gap-2.5 border-border-2 bg-card px-4 pt-4 pb-3.5 shadow-card transition-[border-color,box-shadow] hover:border-primary/35 hover:shadow-pop has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring"
+      className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2.5 border-border-2 bg-card px-4 pt-4 pb-3.5 shadow-card hover:border-primary/35 has-[a:focus-visible]:ring-2 has-[a:focus-visible]:ring-ring"
     >
-      <div className="flex min-h-8 items-center gap-2.5">
-        <SiteBadge site={skill.site} className="size-8 rounded-[10px]" />
-        <span className="min-w-0 flex-1 truncate text-[13.5px] text-ink-3">
-          {skill.site ?? 'Any website'}
-        </span>
-        <span className="relative z-10 -my-1.5">
-          <SkillActions skill={skill} />
-        </span>
-      </div>
+      <span
+        aria-hidden
+        className="col-start-1 row-start-1 grid size-7 place-items-center rounded-md bg-accent-tint text-ink-3"
+      >
+        {favicon ? (
+          <Favicon site={favicon} className="size-4 rounded-[3px]" />
+        ) : (
+          <Globe className="size-4" />
+        )}
+      </span>
+      <span className="col-start-2 row-start-1 truncate text-[13px] text-ink-3 leading-4">
+        {sites.length > 0 ? sites.join(', ') : 'Any website'}
+      </span>
       <NavLink
         to={`/skills/${encodeURIComponent(skill.name)}`}
+        title={title}
         className={cn(
           CARD_TARGET_CLASS,
-          'line-clamp-2 font-semibold text-[16px] text-cyanotype-ink leading-[1.4] outline-none',
+          'col-span-full row-start-2 truncate font-semibold text-[15.5px] text-cyanotype-ink leading-[21px] outline-none',
         )}
       >
-        {skill.description}
+        {title}
       </NavLink>
-      <p className="text-[13.5px] text-ink-3">
-        {usedLabel(skill.runCount, skill.lastRunAt, now)}
-      </p>
-      <div className="mt-auto flex items-center justify-between gap-3 pt-1.5">
-        <RunSkillButton name={skill.name} className="relative z-10" />
-        {agents.length > 0 ? (
-          <span
-            role="img"
-            aria-label={`Works in ${agents.join(', ')}`}
-            className="flex shrink-0"
-          >
-            {agents.map((harness, index) => (
-              <span
-                key={harness}
-                className={cn(
-                  'grid size-6 place-items-center rounded-full border-2 border-card bg-card shadow-[0_0_0_1px_var(--color-border-2)]',
-                  index > 0 && '-ml-1.5',
-                )}
-              >
-                <HarnessIcon harness={harness} className="size-3.5" />
-              </span>
-            ))}
-          </span>
-        ) : null}
+      <div className="col-span-full row-start-3 flex items-center justify-between gap-3">
+        <span className="truncate text-[13px] text-ink-3 leading-4">
+          {usedLabel(skill.runCount, skill.lastRunAt, now)}
+        </span>
+        <RunSkillButton
+          name={skill.name}
+          variant="tinted"
+          className="relative h-[30px] shrink-0 px-2.5 text-[13px] [&_svg]:size-[13px]"
+        />
       </div>
+      <SkillActions
+        skill={skill}
+        menuClassName="relative col-start-3 row-start-1 -my-2 -mr-2.5 justify-self-end"
+      />
     </Card>
   )
 }
@@ -207,20 +248,22 @@ function EmptyCard({
 
 function CardsSkeleton() {
   return (
-    <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
+    <div className={GRID_CLASS}>
       {['s1', 's2', 's3', 's4'].map((id) => (
         <Card
           key={id}
           size="compact"
-          className="gap-3 border-border-2 bg-card px-4 pt-4 pb-3.5 shadow-card"
+          className="gap-2.5 border-border-2 bg-card px-4 pt-4 pb-3.5 shadow-card"
         >
           <div className="flex items-center gap-2.5">
-            <Skeleton className="size-8 rounded-[10px]" />
+            <Skeleton className="size-7" />
             <Skeleton className="h-3.5 w-1/3" />
           </div>
-          <Skeleton className="h-4 w-4/5" />
-          <Skeleton className="h-3.5 w-2/5" />
-          <Skeleton className="h-[34px] w-32 rounded-full" />
+          <Skeleton className="my-[3px] h-4 w-4/5" />
+          <div className="flex items-center justify-between">
+            <Skeleton className="h-3.5 w-2/5" />
+            <Skeleton className="h-[30px] w-[72px]" />
+          </div>
         </Card>
       ))}
     </div>
