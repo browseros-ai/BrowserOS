@@ -77,16 +77,14 @@ class ImageRequest:
     server binaries override the package's server. `revision` is the full sha of
     the commit those servers and the Docker context come from. A revision
     requires the servers and pushing requires both, so every commit tag runs
-    that commit's server. Without `version_tag` only that commit tag is
-    published, so the shared <version> alias keeps pointing where it did. Key
-    paths are BuildKit inputs; their contents are intentionally installed in the
-    image, never read here."""
+    that commit's server. Key paths are
+    BuildKit inputs; their contents are intentionally installed in the image,
+    never read here."""
 
     version: str = ""
     repository: str = DEFAULT_REPOSITORY
     push: bool = False
     latest: bool = False
-    version_tag: bool = True
     platforms: tuple[str, ...] = ()
     deb: Optional[Path] = None
     server_dir: Optional[Path] = None
@@ -199,10 +197,6 @@ def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> I
         raise ImageError(f"Invalid Neo version '{request.version}'; expected e.g. 0.52.0.1")
     if request.latest and not request.push:
         raise ImageError("--latest requires --push")
-    if request.latest and not request.version_tag:
-        raise ImageError("--latest also needs the version tag")
-    if not request.version_tag and not request.revision:
-        raise ImageError("An image without the version tag needs --revision for its commit tag")
     if (request.push or request.revision) and request.server_dir is None:
         raise ImageError("A commit-tagged build needs that commit's servers; pass --server-dir")
     if (request.push or request.revision) and not _REVISION.match(request.revision):
@@ -236,8 +230,7 @@ def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> I
     if request.revision:
         image_version += f"-{request.revision[:_SHORT_REVISION]}"
         tags += (f"{request.repository}:{image_version}",)
-    if request.version_tag:
-        tags += (f"{request.repository}:{request.version}",)
+    tags += (f"{request.repository}:{request.version}",)
     if request.latest:
         tags += (f"{request.repository}:latest",)
     argv = ["--platform", ",".join(platforms)]
