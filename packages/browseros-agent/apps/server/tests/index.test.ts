@@ -26,6 +26,7 @@ describe('server end-to-end over HTTP and real BrowserOS CDP', () => {
         const { tools } = await client.listTools(undefined, { timeout: 5_000 })
         assert.deepEqual(tools.map((tool) => tool.name).sort(), [
           'act',
+          'connector_mcp_servers',
           'diff',
           'download',
           'evaluate',
