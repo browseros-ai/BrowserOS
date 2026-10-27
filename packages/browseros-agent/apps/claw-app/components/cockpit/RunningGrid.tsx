@@ -90,7 +90,7 @@ export function RunningGrid({
               key={session.sessionId}
               session={session}
               inControl={inControlSessionId === session.sessionId}
-              onWatch={tabId !== undefined ? () => onWatch(tabId) : undefined}
+              onGoToTab={onWatch}
               onTakeOver={
                 help && onTakeOver
                   ? () => onTakeOver(session.sessionId, help.browserTabId)

@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import type { SessionBrowserTab } from '@browseros/claw-api'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { parseHTML } from 'linkedom'
-import { act } from 'react'
+import { act, type ComponentProps, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { Root } from 'react-dom/client'
+import * as _popover from '@/components/ui/popover'
 import * as _auditHooks from '@/modules/api/audit.hooks'
 import * as _cancelHooks from '@/modules/api/cancel.hooks'
 import * as _focusHooks from '@/modules/api/focus.hooks'
@@ -41,6 +43,24 @@ mock.module('@/modules/api/focus.hooks', () => ({
     variables: undefined,
     mutate: (variables: { browserTabId: number }) => focusCalls.push(variables),
   }),
+}))
+
+// Keep the tab list always open, portalled to the body as the real one is.
+mock.module('@/components/ui/popover', () => ({
+  ..._popover,
+  Popover: ({ children }: { children?: ReactNode }) => <>{children}</>,
+  PopoverTrigger: (props: ComponentProps<'button'>) => <button {...props} />,
+  PopoverContent: ({
+    align: _align,
+    alignOffset: _alignOffset,
+    sideOffset: _sideOffset,
+    ...props
+  }: ComponentProps<'div'> & {
+    align?: string
+    alignOffset?: number
+    sideOffset?: number
+  }) =>
+    createPortal(<div data-slot="popover-content" {...props} />, document.body),
 }))
 
 const globalDescriptors = new Map(
@@ -187,5 +207,61 @@ describe('RunningGrid', () => {
       watch.dispatchEvent(new window.Event('click', { bubbles: true }))
     })
     expect(focusCalls).toEqual([{ browserTabId: 42 }])
+  })
+
+  it('counts the tabs only when the agent has more than one', async () => {
+    const tabs = [
+      browserTab({ browserTabId: 1 }),
+      browserTab({ browserTabId: 2 }),
+      browserTab({ browserTabId: 3 }),
+    ]
+    await render([
+      session({ sessionId: 'one-tab' }),
+      session({ sessionId: 'three-tabs', browserTabs: tabs }),
+    ])
+
+    const count = (sessionId: string) =>
+      container
+        .querySelector(`[data-session-card="${sessionId}"]`)
+        ?.querySelector('[data-tab-count]')
+    expect(count('one-tab')).toBeNull()
+    expect(count('three-tabs')?.textContent).toBe('3 tabs')
+  })
+
+  it('goes to the tab picked from the list', async () => {
+    const tabs = [
+      browserTab({ browserTabId: 1, title: 'Messaging | LinkedIn' }),
+      browserTab({ browserTabId: 2, title: 'Sales Navigator' }),
+    ]
+    await render([session({ browserTabs: tabs })])
+
+    const row = document.querySelector('[data-go-to-browser-tab="2"]')
+    if (!row) throw new Error('Sales Navigator row missing')
+    await act(async () => {
+      row.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
+    expect(focusCalls).toEqual([{ browserTabId: 2 }])
+  })
+
+  it('names each tab and marks the one on the preview', async () => {
+    const tabs = [
+      browserTab({ browserTabId: 1, title: 'Messaging | LinkedIn' }),
+      browserTab({
+        browserTabId: 2,
+        title: '',
+        url: 'https://news.ycombinator.com/',
+      }),
+    ]
+    await render([session({ browserTabs: tabs })])
+
+    const rows = [...document.querySelectorAll('[data-go-to-browser-tab]')]
+    expect(rows.map((row) => row.getAttribute('aria-label'))).toEqual([
+      'Go to Messaging | LinkedIn',
+      'Go to news.ycombinator.com',
+    ])
+    expect(rows.map((row) => row.getAttribute('aria-current'))).toEqual([
+      'true',
+      null,
+    ])
   })
 })

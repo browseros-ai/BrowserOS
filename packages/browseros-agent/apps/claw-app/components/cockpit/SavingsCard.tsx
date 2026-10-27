@@ -5,11 +5,9 @@
  */
 
 import type { CockpitStats } from '@browseros/claw-api'
-import { ArrowRight, Clock } from 'lucide-react'
-import { useState } from 'react'
-import { AnimatedNumber } from '@/components/motion/animated-number'
+import { ArrowRight } from 'lucide-react'
+import { type ReactNode, useState } from 'react'
 import { Button } from '@/components/motion/button/base'
-import { Card } from '@/components/motion/card'
 import {
   CenterMorphModal,
   CenterMorphModalContent,
@@ -28,47 +26,83 @@ import {
   usageComparison,
 } from './savings.helpers'
 
-/** Time saved in words, with the AI tokens neo saved drawn and counted underneath. */
-export function SavingsCard({ stats }: { stats: CockpitStats }) {
-  const { sessionCount, humanTimeSavedMs } = stats.allTime
-  const saved = roundTimeSaved(humanTimeSavedMs)
-  const tasks = sessionCount === 1 ? 'task' : 'tasks'
+/** Time and AI tokens neo saved, one line under the greeting with the token split drawn beneath. */
+export function SavingsCard({
+  stats,
+  className,
+}: {
+  stats: CockpitStats
+  className?: string
+}) {
+  const { humanTimeSavedMs } = stats.allTime
   const usage = usageComparison(stats, stats.allTime)
 
   return (
-    <Card
-      size="compact"
-      role="region"
+    <section
       aria-label="Savings"
-      className="gap-4 border-border-2 bg-card px-[18px] pt-4 pb-[18px] shadow-card"
+      className={cn('@container flex flex-col gap-3.5', className)}
     >
-      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1.5">
-        <span
-          aria-hidden
-          className="grid size-[42px] shrink-0 place-items-center rounded-full bg-green-tint text-green-ink"
-        >
-          <Clock className="size-[18px]" strokeWidth={1.75} />
-        </span>
-        <div className="flex min-w-0 flex-1 basis-[calc(100%-56px)] flex-col gap-px md:basis-auto">
-          <p className="font-bold text-[15.5px] text-cyanotype-ink">
-            {saved ? (
-              <>
-                About <AnimatedNumber value={saved.amount} />{' '}
-                {saved.amount === 1 ? saved.unit : `${saved.unit}s`} saved
-              </>
-            ) : (
-              'Your time saved starts here'
-            )}
-          </p>
-          <p className="text-[14px] text-ink-2">
-            neo has finished {sessionCount.toLocaleString()} {tasks} for you so
-            far.
-          </p>
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-[22px] gap-y-1">
+          {roundTimeSaved(humanTimeSavedMs) ? (
+            <Stat value={timeSavedAmount(humanTimeSavedMs)} label="saved" />
+          ) : (
+            <p className="text-[14px] text-ink-2">
+              Your time saved starts here
+            </p>
+          )}
+          {usage ? (
+            <>
+              {/* Narrower, the figures can wrap and the rule would dangle at a line end. */}
+              <span
+                aria-hidden
+                className="@2xl:block hidden h-[18px] w-px shrink-0 bg-border-2"
+              />
+              <Stat
+                value={formatTokens(usage.saved)}
+                label={
+                  <>
+                    AI tokens saved ·{' '}
+                    <span className="font-semibold text-accent-ink">
+                      {usage.percentLess}% fewer
+                    </span>
+                  </>
+                }
+              />
+            </>
+          ) : null}
         </div>
         <SavingsDialog stats={stats} />
       </div>
-      {usage ? <UsageBars usage={usage} className="md:pl-14" /> : null}
-    </Card>
+      {usage ? (
+        <div
+          role="img"
+          aria-label={usageLabel(usage)}
+          className="-mt-0.5 flex flex-col gap-1.5"
+        >
+          <SplitBar usage={usage} className="h-1.5 gap-0.5" />
+          <div className="flex justify-between gap-3 text-[12.5px] leading-4">
+            <span className="font-semibold text-accent-ink">
+              saved {formatTokens(usage.saved)}
+            </span>
+            <span className="text-ink-3">
+              neo used {formatTokens(usage.withNeo)}
+            </span>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+function Stat({ value, label }: { value: string; label: ReactNode }) {
+  return (
+    <p className="flex items-baseline gap-1.5">
+      <span className="font-extrabold text-[20px] text-cyanotype-ink leading-6 tracking-[-0.015em]">
+        {value}
+      </span>
+      <span className="text-[14px] text-ink-2 leading-[18px]">{label}</span>
+    </p>
   )
 }
 
@@ -85,7 +119,7 @@ function SavingsDialog({ stats }: { stats: CockpitStats }) {
         <Button
           variant="ghost"
           size="sm"
-          className="ml-14 h-[34px] shrink-0 font-semibold text-[13.5px] text-ink-2 md:ml-auto"
+          className="-my-[5px] -mr-2 h-[34px] shrink-0 font-semibold text-[13.5px] text-ink-2"
         >
           Details
           <ArrowRight aria-hidden className="size-[15px]" />
@@ -127,13 +161,10 @@ function SavingsDialog({ stats }: { stats: CockpitStats }) {
               label="steps taken"
             />
           </dl>
-          {usage ? <UsageBars usage={usage} large /> : null}
-          <p className="text-[13.5px] text-ink-3">
-            AI tokens are the small pieces of text an AI reads and writes, and
-            what AI use is measured and paid in. neo hands your AI agents short
-            descriptions of each page instead of screenshots, so they use far
-            fewer. “Without neo” is our estimate for the same tasks done from
-            screenshots.
+          {usage ? <UsageMeter usage={usage} /> : null}
+          <p className="text-[13.5px] text-ink-3 leading-5">
+            neo gives your AI agents short page descriptions instead of
+            screenshots, so they use fewer tokens, the units AI is paid in.
           </p>
         </div>
       </CenterMorphModalContent>
@@ -152,70 +183,57 @@ function Figure({ value, label }: { value: string; label: string }) {
   )
 }
 
-// "Without neo" is amber, the cost, rather than a gray that reads as switched off.
-const WITHOUT_NEO_BAR =
-  'bg-[color-mix(in_srgb,var(--color-amber)_62%,var(--color-card))]'
-
-function UsageBars({
-  usage,
-  large = false,
-  className,
-}: {
-  usage: UsageComparison
-  large?: boolean
-  className?: string
-}) {
-  const lane = cn('flex min-w-0 gap-[3px]', large ? 'h-6' : 'h-5')
-  const row = cn(
-    'grid items-center gap-3 text-[13.5px] text-ink-2',
-    large
-      ? 'grid-cols-[100px_minmax(0,1fr)_52px]'
-      : 'grid-cols-[84px_minmax(0,1fr)_44px] md:grid-cols-[92px_minmax(0,1fr)_48px]',
-  )
+function UsageMeter({ usage }: { usage: UsageComparison }) {
   return (
     <div
       role="img"
-      aria-label={`${formatTokens(usage.saved)} AI tokens saved, ${usage.percentLess}% less with neo than without. With neo: ${formatTokens(usage.withNeo)} tokens. Without neo: ${formatTokens(usage.withoutNeo)} tokens.`}
-      className={cn('grid gap-2.5', className)}
+      aria-label={usageLabel(usage)}
+      className="flex flex-col gap-2.5"
     >
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <span className="text-[14px] text-ink-2">
-          <strong className="font-bold text-[16px] text-cyanotype-ink tracking-[-0.01em]">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <span className="text-[14px] text-ink-2 leading-[18px]">
+          <strong className="font-extrabold text-[17px] text-cyanotype-ink tracking-[-0.01em]">
             {formatTokens(usage.saved)}
           </strong>{' '}
           AI tokens saved
         </span>
-        <span className="rounded-full bg-green-tint px-2.5 py-0.5 font-semibold text-[12.5px] text-green-ink">
-          {usage.percentLess}% less
+        <span className="font-semibold text-[13.5px] text-accent-ink leading-[18px]">
+          {usage.percentLess}% fewer
         </span>
       </div>
-      <div className={row}>
-        <span>With neo</span>
-        <span className={lane}>
-          <span
-            className="shrink rounded-full bg-green"
-            style={{ flexBasis: barWidth(usage.withNeo, usage.withoutNeo) }}
-          />
-          <span
-            className="grid shrink place-items-center overflow-hidden rounded-full border-[1.5px] border-green/70 border-dashed bg-green/10 font-semibold text-[11.5px] text-green-ink"
-            style={{ flexBasis: barWidth(usage.saved, usage.withoutNeo) }}
-          >
-            <span className="truncate px-1.5">saved</span>
+      <SplitBar usage={usage} className="h-2 gap-[3px]" />
+      <div className="flex justify-between gap-3 text-[13px] leading-4">
+        <span className="font-semibold text-accent-ink">saved</span>
+        <span className="text-ink-2">
+          neo used{' '}
+          <span className="font-semibold text-ink">
+            {formatTokens(usage.withNeo)}
           </span>
-        </span>
-        <span className="text-right font-semibold text-[13px] text-ink">
-          {formatTokens(usage.withNeo)}
-        </span>
-      </div>
-      <div className={row}>
-        <span>Without neo</span>
-        <span className={lane}>
-          <span className={cn('w-full rounded-full', WITHOUT_NEO_BAR)} />
-        </span>
-        <span className="text-right font-semibold text-[13px] text-ink">
-          {formatTokens(usage.withoutNeo)}
         </span>
       </div>
     </div>
   )
+}
+
+/** The token split, darker share first: saved in blue from the left, what neo used after it. */
+function SplitBar({
+  usage,
+  className,
+}: {
+  usage: UsageComparison
+  className?: string
+}) {
+  return (
+    <div className={cn('flex', className)}>
+      <span
+        className="rounded-[2px] bg-primary"
+        style={{ flexBasis: barWidth(usage.saved, usage.withoutNeo) }}
+      />
+      <span className="flex-1 rounded-[2px] bg-border-2" />
+    </div>
+  )
+}
+
+function usageLabel(usage: UsageComparison): string {
+  return `${formatTokens(usage.saved)} AI tokens saved, ${usage.percentLess}% fewer. neo used ${formatTokens(usage.withNeo)}.`
 }

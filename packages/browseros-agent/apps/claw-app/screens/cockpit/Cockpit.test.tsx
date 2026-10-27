@@ -260,11 +260,32 @@ describe('Cockpit', () => {
     expect(html).not.toContain('Your turn')
   })
 
-  it('shows time saved only once neo has finished a task', () => {
+  it('shows savings right under the greeting once neo has finished a task', () => {
     const measured = renderApp({ connections: 'installed', stats: 'measured' })
-    expect(measured).toContain('neo has finished 12 tasks for you so far.')
+    expect(measured).toMatch(/<\/header><section aria-label="Savings"/)
+    expect(measured).toContain('AI tokens saved')
+
+    const waiting = renderApp({
+      connections: 'installed',
+      stats: 'measured',
+      liveSessions: [
+        {
+          ...liveSession,
+          helpRequest: {
+            requestId: 'help-1',
+            reason: 'Enter the verification code',
+            browserTabId: 77,
+            requestedAt: 100,
+          },
+        },
+      ],
+    })
+    expect(waiting.indexOf('aria-label="Savings"')).toBeGreaterThan(-1)
+    expect(waiting.indexOf('aria-label="Savings"')).toBeLessThan(
+      waiting.indexOf('aria-label="Waiting for you"'),
+    )
 
     const none = renderApp({ connections: 'installed', stats: 'unmeasured' })
-    expect(none).not.toContain('neo has finished')
+    expect(none).not.toContain('aria-label="Savings"')
   })
 })
