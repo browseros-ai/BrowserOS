@@ -1077,17 +1077,39 @@ describe('Replay full screen', () => {
     await clickAct(inPanel('inline', '[data-playback-toggle]'))
     expect(playing('full-screen')).toBe('false')
     expect(time('full-screen')).toBe('9')
+  })
+
+  it('mounts one recording while full screen and puts the inline one back at the shared time', async () => {
+    replayResult.replay = twoTabs()
+    await renderReplay({ onToggleFullScreen: () => {}, withFullScreen: true })
+
+    // Each viewport builds its own rrweb Replayer; the parked page player
+    // holds a still in the same frame instead.
+    const viewports = [...container.querySelectorAll('[data-viewport-tab]')]
+    expect(viewports).toHaveLength(1)
     expect(
-      attr(
-        inPanel('full-screen', '[data-viewport-tab]'),
-        'data-viewport-track-time',
-      ),
-    ).toBe(
+      viewports[0]?.closest('[data-panel]')?.getAttribute('data-panel'),
+    ).toBe('full-screen')
+    expect(
+      attr(inPanel('inline', '[data-viewport-poster]'), 'data-viewport-poster'),
+    ).toBe('poster.png')
+
+    await clickAct(inPanel('full-screen', '[data-playback-seek="9"]'))
+    const fullScreenTrackTime = attr(
+      inPanel('full-screen', '[data-viewport-tab]'),
+      'data-viewport-track-time',
+    )
+
+    await renderReplay({ onToggleFullScreen: () => {} })
+    expect(container.querySelectorAll('[data-viewport-tab]')).toHaveLength(1)
+    expect(container.querySelector('[data-viewport-poster]')).toBeNull()
+    expect(
       attr(
         inPanel('inline', '[data-viewport-tab]'),
         'data-viewport-track-time',
       ),
-    )
+    ).toBe(fullScreenTrackTime)
+    expect(attr('[data-playback-time]', 'data-playback-time')).toBe('9')
   })
 })
 
@@ -1118,6 +1140,7 @@ function ReplayHarness({
           }
           posterSrc="poster.png"
           onToggleFullScreen={onToggleFullScreen}
+          parked={withFullScreen}
         />
       </div>
       {withFullScreen ? (

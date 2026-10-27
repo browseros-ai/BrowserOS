@@ -20,6 +20,13 @@ interface ReplayPanelProps {
   onToggleFullScreen?: () => void
   /** This panel is the full-screen player. */
   fullScreen?: boolean
+  /**
+   * The full-screen player is showing this session, so hold a still in the
+   * same frame. Each viewport builds its own rrweb Replayer; a second one would
+   * rebuild the page under the overlay for nothing. Unparking remounts it at
+   * the shared playback time.
+   */
+  parked?: boolean
 }
 
 /** The replay player: tab strip, recording warnings, viewport and transport. */
@@ -29,6 +36,7 @@ export function ReplayPanel({
   posterSrc,
   onToggleFullScreen,
   fullScreen = false,
+  parked = false,
 }: ReplayPanelProps) {
   const {
     replay,
@@ -105,6 +113,11 @@ export function ReplayPanel({
           {loading ? (
             <ReplayPoster
               url={replay.frames.find((frame) => frame.url)?.url ?? replay.site}
+              src={posterSrc}
+            />
+          ) : parked ? (
+            <ReplayPoster
+              url={plan.urlAt(visibleTabId, playback.time) ?? replay.site}
               src={posterSrc}
             />
           ) : track ? (

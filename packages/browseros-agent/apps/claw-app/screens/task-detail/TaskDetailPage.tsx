@@ -138,6 +138,7 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
               : null
           }
           onFullScreen={() => setFullScreen(true)}
+          fullScreen={fullScreen}
         />
         <TaskSteps {...stepList} />
       </div>
