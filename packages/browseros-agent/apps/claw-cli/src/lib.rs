@@ -8,11 +8,15 @@
 //! needs `page` and every tool accepts `session`; both live in a scope file, so
 //! `browseros click @e3` carries nothing the caller has to remember.
 
+pub mod cli;
 pub mod client;
 pub mod endpoint;
+pub mod exec;
 pub mod exit;
 pub mod io;
+pub mod plan;
 pub mod refs;
+pub mod render;
 pub mod state;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
