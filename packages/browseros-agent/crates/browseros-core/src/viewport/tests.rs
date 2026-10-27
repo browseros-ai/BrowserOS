@@ -795,7 +795,7 @@ async fn tests_that_a_raw_override_on_a_fixed_tab_is_undone_by_its_next_operatio
         }
     }
 
-    // A raw call that leaves the mode's overrides alone changes nothing.
+    // A raw call that leaves the mode's overrides alone puts nothing back but the view pin.
     fixture
         .view
         .cdp_json_for_page(
@@ -806,7 +806,10 @@ async fn tests_that_a_raw_override_on_a_fixed_tab_is_undone_by_its_next_operatio
         .await?;
     fixture.native.clear_calls();
     drop(fixture.view.prepare_viewport(page).await?);
-    assert!(emulation_methods(&fixture.native.methods()).is_empty());
+    assert_eq!(
+        emulation_methods(&fixture.native.methods()),
+        vec!["Emulation.setVisibleSize"]
+    );
     Ok(())
 }
 
@@ -1032,7 +1035,7 @@ async fn tests_that_prepare_leaves_default_tabs_alone() -> TestResult {
 }
 
 #[tokio::test]
-async fn tests_that_operations_send_nothing_while_the_mode_holds() -> TestResult {
+async fn tests_that_operations_only_put_the_view_back_while_the_mode_holds() -> TestResult {
     let fixture = Fixture::new(&[(1, 10)]);
     let page = fixture.page(1).await?;
     fixture
@@ -1044,11 +1047,16 @@ async fn tests_that_operations_send_nothing_while_the_mode_holds() -> TestResult
     let left = fixture.native.window(10)?;
     fixture.native.clear_calls();
 
+    // Chromium sizes the view to its window again on every resize; each operation pins it back
+    // to the preview and sends nothing else.
     for _ in 0..3 {
         drop(fixture.view.prepare_viewport(page.clone()).await?);
     }
     let methods = fixture.native.methods();
-    assert!(methods.is_empty(), "{methods:?}");
+    assert_eq!(methods, vec!["Emulation.setVisibleSize"; 3], "{methods:?}");
+    for pin in fixture.native.calls("Emulation.setVisibleSize") {
+        assert_eq!(pin.params, json!({"width": 600, "height": 1359}));
+    }
     assert_eq!(fixture.native.window(10)?, left);
     Ok(())
 }
