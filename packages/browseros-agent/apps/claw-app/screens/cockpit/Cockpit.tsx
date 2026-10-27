@@ -89,6 +89,10 @@ export function Cockpit() {
           title={`Good ${partOfDay(hour)}`}
           lede={homeLede(sessions, takeover.inControlSession)}
         />
+        {/* Pulled up so the strip reads as part of the greeting, not the next section. */}
+        {stats.data && stats.data.allTime.sessionCount > 0 ? (
+          <SavingsCard stats={stats.data} className="-mt-3" />
+        ) : null}
         <NeedsYouBanner
           sessions={sessions}
           onTakeOver={takeover.takeOver}
@@ -96,9 +100,6 @@ export function Cockpit() {
           pendingTakeOverSessionId={takeover.pendingTakeOverSessionId}
           cancelPendingSessionId={takeover.stopPendingSessionId}
         />
-        {stats.data && stats.data.allTime.sessionCount > 0 ? (
-          <SavingsCard stats={stats.data} />
-        ) : null}
         <RunningGrid
           sessions={sessions}
           onTakeOver={takeover.takeOver}
