@@ -158,6 +158,9 @@ fn mobile_identity(chrome_version: &str) -> Value {
         "userAgent": format!(
             "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Mobile Safari/537.36"
         ),
+        // navigator.platform: Chromium's reduced value on Android phones ("armv81" as written
+        // in navigator_base.cc), never the host's.
+        "platform": "Linux armv81",
         "userAgentMetadata": {
             "brands": chrome_brands(major, None),
             "fullVersionList": chrome_brands(major, Some(chrome_version)),

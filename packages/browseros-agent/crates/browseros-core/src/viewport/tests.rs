@@ -1486,6 +1486,9 @@ async fn tests_that_mobile_identity_matches_google_chrome_on_android() -> TestRe
                 "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Mobile Safari/537.36"
             )
         );
+        // navigator.platform as Chrome on an Android phone reports it (Chromium's reduced value,
+        // navigator_base.cc), not the host's.
+        assert_eq!(identity["platform"], "Linux armv81");
         let metadata = &identity["userAgentMetadata"];
         let majors: Vec<Value> = brands
             .iter()
