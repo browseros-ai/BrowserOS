@@ -80,6 +80,9 @@ impl Fixed {
             "scale": self.scale(),
             "screenWidth": size.width,
             "screenHeight": size.height,
+            // Otherwise a hidden tab's view shrinks to the unscaled device size, and zoomed
+            // wheel input aimed beyond it misses the scroller under the pointer.
+            "dontSetVisibleSize": true,
         });
         if self.mobile() {
             metrics["screenOrientation"] = json!({"type": "portraitPrimary", "angle": 0});

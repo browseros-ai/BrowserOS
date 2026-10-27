@@ -521,6 +521,8 @@ async fn tests_that_mobile_emulates_the_device_and_fits_the_window() -> TestResu
         (&metrics["mobile"], &metrics["scale"]),
         (&json!(true), &json!(1.0))
     );
+    // Hidden tabs keep their window-sized view, so zoomed pointer input stays inside it.
+    assert_eq!(metrics["dontSetVisibleSize"], true);
     assert_eq!(
         fixture
             .native
