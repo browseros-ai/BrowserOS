@@ -7,6 +7,10 @@
 import { Globe } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { cn } from '@/lib/utils'
+import {
+  canReadBrowserFavicons,
+  webFaviconSources,
+} from '@/modules/favicon/favicon'
 import { useFaviconSources } from '@/modules/favicon/favicon.hooks'
 
 interface FaviconProps {
@@ -26,7 +30,13 @@ export function Favicon({
   className,
   fallback = <Globe aria-hidden className={cn('size-[18px]', className)} />,
 }: FaviconProps) {
-  const sources = useFaviconSources({ variables: { site, size } })
+  const sources = useFaviconSources({
+    variables: { site, size },
+    // Outside the extension there is no cache to check, so the answer needs no lookup.
+    initialData: canReadBrowserFavicons()
+      ? undefined
+      : webFaviconSources(site, size),
+  })
   if (sources.isPending || sources.isError || sources.data.length === 0) {
     return fallback
   }

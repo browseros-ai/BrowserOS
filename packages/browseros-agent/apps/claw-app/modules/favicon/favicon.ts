@@ -45,9 +45,20 @@ async function isCachedIcon(url: string, size: number): Promise<boolean> {
   return !fallback || !sameBytes(icon, fallback)
 }
 
+/** True inside the extension, where the browser's favicon cache can be read. */
+export function canReadBrowserFavicons(): boolean {
+  return browserFaviconUrl(NEVER_VISITED_PAGE, 16) !== null
+}
+
+/** DuckDuckGo then Google. They only ever see the host. */
+export function webFaviconSources(site: string, size: number): string[] {
+  const host = siteHost(site)
+  return host ? [duckDuckGoFaviconUrl(host), googleFaviconUrl(host, size)] : []
+}
+
 /**
  * Where to load a site's icon from, best first: the browser's favicon cache,
- * then DuckDuckGo, then Google. The two web services only ever see the host.
+ * then DuckDuckGo, then Google.
  */
 export async function faviconSources(
   site: string,
@@ -55,7 +66,7 @@ export async function faviconSources(
 ): Promise<string[]> {
   const host = siteHost(site)
   if (!host) return []
-  const web = [duckDuckGoFaviconUrl(host), googleFaviconUrl(host, size)]
+  const web = webFaviconSources(host, size)
   const cached = browserFaviconUrl(`https://${host}`, size)
   if (!cached) return web
   return (await isCachedIcon(cached, size)) ? [cached, ...web] : web

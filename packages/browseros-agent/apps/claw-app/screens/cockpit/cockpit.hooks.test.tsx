@@ -202,8 +202,6 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  // Async queries (the cards' site icons) notify on a timer; let that run while the DOM exists.
-  await act(() => new Promise((resolve) => setTimeout(resolve, 0)))
   await act(async () => root.unmount())
   for (const [name, descriptor] of globalDescriptors) {
     if (descriptor) Object.defineProperty(globalThis, name, descriptor)
