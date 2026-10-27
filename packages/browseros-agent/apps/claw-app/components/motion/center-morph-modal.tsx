@@ -165,9 +165,11 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(",");
 
+// The open clip stays applied, so its radius is the corner the panel shows; it
+// must match the panel's rounded-lg or it cuts the border off at the corners.
 const CENTER_FOLDED_CLIP =
-  "inset(48% 48% 48% 48% round 30px)";
-const CENTER_OPEN_CLIP = "inset(0% 0% 0% 0% round 30px)";
+  "inset(48% 48% 48% 48% round 8px)";
+const CENTER_OPEN_CLIP = "inset(0% 0% 0% 0% round 8px)";
 
 // Complex clip-path strings can snap when a spring resolves its final distance.
 // Keep the radius constant so the whole duration reads as surface unfolding,
@@ -321,7 +323,7 @@ export function CenterMorphModalContent({
                         : CENTER_UNFOLD_TRANSITION
                     }
                     className={cn(
-                      "pointer-events-auto relative w-full max-w-[26rem] origin-center overflow-hidden rounded-[30px] border border-border bg-background will-change-[clip-path]",
+                      "pointer-events-auto relative w-full max-w-[26rem] origin-center overflow-hidden rounded-lg border border-border bg-background will-change-[clip-path]",
                       className,
                     )}
                   >

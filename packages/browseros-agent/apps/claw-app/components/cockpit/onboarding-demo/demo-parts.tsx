@@ -201,7 +201,7 @@ export function NeoConnectedChip({ className }: { className?: string }) {
   return (
     <span
       className={cn(
-        'inline-flex h-[22px] flex-none items-center gap-1.5 self-start rounded-full pr-2 pl-1 font-medium text-[11.5px] leading-[14px]',
+        'inline-flex h-[22px] flex-none items-center gap-1.5 self-start rounded-md pr-2 pl-1 font-medium text-[11.5px] leading-[14px]',
         className,
       )}
     >
