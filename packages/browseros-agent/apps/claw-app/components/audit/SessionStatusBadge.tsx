@@ -4,16 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type {
-  LiveSessionActivityState,
-  SessionStatus,
-} from '@browseros/claw-api'
+import type { SessionStatus } from '@browseros/claw-api'
 import { Check, CircleAlert, Hand } from 'lucide-react'
 import {
   AnimatedBadge,
   type AnimatedBadgeSize,
 } from '@/components/motion/animated-badge'
 import { sessionStatusBadge } from '@/lib/status'
+import { useLiveSessionState } from '@/modules/api/audit.hooks'
 
 const ICON_SIZE: Record<AnimatedBadgeSize, string> = {
   sm: 'size-3',
@@ -23,16 +21,19 @@ const ICON_SIZE: Record<AnimatedBadgeSize, string> = {
 /** A task's status in plain words, with an icon that says the same thing. */
 export function SessionStatusBadge({
   status,
-  liveState,
+  sessionId,
   size = 'sm',
   className,
 }: {
   status: SessionStatus
-  /** A live task's activity, so a quiet one reads Idle rather than Working. */
-  liveState?: LiveSessionActivityState
+  /** The task's session, so a live one that has gone quiet reads Idle rather than Working. */
+  sessionId?: string
   size?: AnimatedBadgeSize
   className?: string
 }) {
+  const liveState = useLiveSessionState(
+    status === 'live' ? sessionId : undefined,
+  )
   const meta = sessionStatusBadge(status, liveState)
   const iconClass = ICON_SIZE[size]
   // Working keeps beUI's own loading spinner.

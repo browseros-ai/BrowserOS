@@ -100,7 +100,7 @@ export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
       </span>
       <SessionStatusBadge
         status={task.status}
-        liveState={task.live?.state}
+        sessionId={task.sessionId}
         className="col-start-2 justify-self-start sm:col-start-auto sm:justify-self-end"
       />
     </NavLink>

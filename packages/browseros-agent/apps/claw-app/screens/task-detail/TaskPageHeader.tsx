@@ -34,7 +34,7 @@ export function TaskPageHeader({ session, lastPageUrl }: TaskPageHeaderProps) {
         <>
           <SessionStatusBadge
             status={session.status}
-            liveState={session.live?.state}
+            sessionId={session.sessionId}
             size="md"
           />
           <span className="flex flex-wrap items-center gap-2 text-[13.5px] text-ink-3">
