@@ -1,6 +1,7 @@
 pub mod analytics;
 pub mod api;
 pub mod app;
+pub mod cli;
 mod clock;
 pub mod config;
 pub mod db;

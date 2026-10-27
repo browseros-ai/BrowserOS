@@ -4,7 +4,7 @@
 //! agent-browser users type `@e12`. All three normalize here so nobody has to
 //! think about it, and a ref pasted straight out of a snapshot works unedited.
 
-use crate::exit::Failure;
+use crate::cli::exit::Failure;
 
 /// Normalizes `@e12`, `e12` and `[ref=e12]` to `e12`.
 ///

@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::io;
+use crate::cli::io;
 
 /// How long to wait for the scope lock before giving up and proceeding
 /// read-only. A stuck lock must never make the browser unusable.
@@ -139,7 +139,7 @@ pub fn scope_key(scope: &Scope) -> String {
 /// so a dev server and a release server never share a session.
 #[must_use]
 pub fn state_dir() -> Option<PathBuf> {
-    crate::endpoint::release_dir().map(|dir| dir.join("cli"))
+    crate::cli::endpoint::release_dir().map(|dir| dir.join("cli"))
 }
 
 pub struct Store {
@@ -153,7 +153,7 @@ impl Store {
     /// Fails only when the state directory cannot be created.
     pub fn open(scope: &Scope) -> anyhow::Result<Self> {
         let dir = state_dir().ok_or_else(|| {
-            crate::exit::Failure::usage("cannot locate a home directory for the session file")
+            crate::cli::exit::Failure::usage("cannot locate a home directory for the session file")
         })?;
         Self::open_in(&dir, scope)
     }

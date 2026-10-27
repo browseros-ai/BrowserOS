@@ -13,6 +13,13 @@ path = "src/lib.rs"
 name = "browseros-claw-server-rs"
 path = "src/main.rs"
 
+# The command line over this server's own MCP endpoint. A second binary rather
+# than its own crate: the two are released together and the CLI needs no
+# dependency this crate does not already declare.
+[[bin]]
+name = "browseros"
+path = "src/bin/browseros.rs"
+
 [dependencies]
 os_info = "3.15.0"
 harness-integrations.workspace = true

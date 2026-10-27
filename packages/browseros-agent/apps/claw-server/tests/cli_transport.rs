@@ -8,11 +8,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use claw_cli::client::transport::{
+use claw_server::cli::client::transport::{
     Transport, call_message, decode_body, initialize_message, initialized_message,
 };
-use claw_cli::client::{Session, cancel_in_flight};
-use claw_cli::state::{Store, scope};
+use claw_server::cli::client::{Session, cancel_in_flight};
+use claw_server::cli::state::{Store, scope};
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -309,8 +309,8 @@ async fn a_connection_failure_is_classified_as_no_browser_rather_than_a_tool_err
         .err()
         .unwrap_or_else(|| panic!("a dead port must fail"));
     assert_eq!(
-        claw_cli::exit::code_of(&error),
-        claw_cli::exit::Code::NoBrowser
+        claw_server::cli::exit::code_of(&error),
+        claw_server::cli::exit::Code::NoBrowser
     );
 }
 
@@ -436,8 +436,8 @@ async fn a_retry_that_also_fails_stops_rather_than_handshaking_again() {
         .err()
         .unwrap_or_else(|| panic!("a second 404 must not be swallowed"));
     assert_eq!(
-        claw_cli::exit::code_of(&error),
-        claw_cli::exit::Code::NoBrowser
+        claw_server::cli::exit::code_of(&error),
+        claw_server::cli::exit::Code::NoBrowser
     );
 
     let seen = fixture
@@ -494,8 +494,8 @@ async fn no_auto_session_refuses_to_pair_rather_than_pairing_quietly() {
         .err()
         .unwrap_or_else(|| panic!("it must refuse"));
     assert_eq!(
-        claw_cli::exit::code_of(&error),
-        claw_cli::exit::Code::NoBrowser
+        claw_server::cli::exit::code_of(&error),
+        claw_server::cli::exit::Code::NoBrowser
     );
 
     let seen = fixture

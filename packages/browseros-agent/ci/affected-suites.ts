@@ -186,11 +186,7 @@ export interface AffectedPackage {
 }
 
 function isRustPackage(path: string): boolean {
-  return (
-    path.startsWith('crates/') ||
-    path === 'apps/claw-server' ||
-    path === 'apps/claw-cli'
-  )
+  return path.startsWith('crates/') || path === 'apps/claw-server'
 }
 
 const AGENT = 'packages/browseros-agent/'

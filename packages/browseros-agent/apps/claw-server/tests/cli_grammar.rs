@@ -7,14 +7,14 @@
 //! only at runtime otherwise.
 
 use clap::Parser;
-use claw_cli::cli::Cli;
-use claw_cli::plan::{External, Local, Plan, needs_external};
+use claw_server::cli::grammar::Cli;
+use claw_server::cli::plan::{External, Local, Plan, needs_external};
 use serde_json::{Value, json};
 
 /// Parses an argv and returns the tool name plus its arguments.
 fn call(argv: &[&str]) -> (String, Value) {
     let cli = Cli::try_parse_from(argv).unwrap_or_else(|error| panic!("{argv:?}: {error}"));
-    match claw_cli::plan::build(&cli.command, None) {
+    match claw_server::cli::plan::build(&cli.command, None) {
         Ok(Plan::Tool(plan)) => (plan.tool.to_string(), Value::Object(plan.args)),
         Ok(Plan::Local(local)) => panic!("{argv:?} planned a local action: {local:?}"),
         Err(error) => panic!("{argv:?}: {error}"),
@@ -24,7 +24,7 @@ fn call(argv: &[&str]) -> (String, Value) {
 /// Parses an argv that is expected to be handled without the server.
 fn local(argv: &[&str]) -> Local {
     let cli = Cli::try_parse_from(argv).unwrap_or_else(|error| panic!("{argv:?}: {error}"));
-    match claw_cli::plan::build(&cli.command, None) {
+    match claw_server::cli::plan::build(&cli.command, None) {
         Ok(Plan::Local(local)) => local,
         other => panic!("{argv:?} did not plan a local action: {other:?}"),
     }
@@ -35,7 +35,7 @@ fn refused(argv: &[&str]) -> String {
     let Ok(cli) = Cli::try_parse_from(argv) else {
         return "clap refused it".to_string();
     };
-    match claw_cli::plan::build(&cli.command, None) {
+    match claw_server::cli::plan::build(&cli.command, None) {
         Err(error) => error.message,
         Ok(plan) => panic!("{argv:?} was accepted: {plan:?}"),
     }
@@ -244,7 +244,7 @@ fn values_the_server_would_reject_are_refused_locally() {
 fn a_run_timeout_over_the_cap_is_clamped_with_a_notice_rather_than_refused() {
     let cli = Cli::try_parse_from(["browseros", "run", "x", "--script-timeout", "120000"])
         .unwrap_or_else(|error| panic!("{error}"));
-    let Ok(Plan::Tool(plan)) = claw_cli::plan::build(&cli.command, None) else {
+    let Ok(Plan::Tool(plan)) = claw_server::cli::plan::build(&cli.command, None) else {
         panic!("run should plan a tool call");
     };
     assert_eq!(plan.args["timeout"], 30000.0);
@@ -261,7 +261,7 @@ fn a_run_timeout_over_the_cap_is_clamped_with_a_notice_rather_than_refused() {
 fn run_wants_the_page_bound_and_no_page_opts_out() {
     let cli = Cli::try_parse_from(["browseros", "run", "return 1"])
         .unwrap_or_else(|error| panic!("{error}"));
-    let Ok(Plan::Tool(plan)) = claw_cli::plan::build(&cli.command, None) else {
+    let Ok(Plan::Tool(plan)) = claw_server::cli::plan::build(&cli.command, None) else {
         panic!("run should plan a tool call");
     };
     assert!(plan.wrap_page);
@@ -269,7 +269,7 @@ fn run_wants_the_page_bound_and_no_page_opts_out() {
 
     let cli = Cli::try_parse_from(["browseros", "run", "return 1", "--no-page"])
         .unwrap_or_else(|error| panic!("{error}"));
-    let Ok(Plan::Tool(plan)) = claw_cli::plan::build(&cli.command, None) else {
+    let Ok(Plan::Tool(plan)) = claw_server::cli::plan::build(&cli.command, None) else {
         panic!("run should plan a tool call");
     };
     assert!(!plan.wrap_page);
@@ -402,7 +402,7 @@ fn session_end_leaves_tabs_alone_unless_asked() {
 fn the_group_is_carried_on_tab_creation_and_nowhere_else() {
     let cli = Cli::try_parse_from(["browseros", "open", "https://x.test"])
         .unwrap_or_else(|error| panic!("{error}"));
-    let Ok(Plan::Tool(plan)) = claw_cli::plan::build(&cli.command, None) else {
+    let Ok(Plan::Tool(plan)) = claw_server::cli::plan::build(&cli.command, None) else {
         panic!("open should plan a tool call");
     };
     assert!(plan.with_group, "work must stay in one group");
@@ -410,7 +410,7 @@ fn the_group_is_carried_on_tab_creation_and_nowhere_else() {
 
     let cli = Cli::try_parse_from(["browseros", "goto", "https://x.test"])
         .unwrap_or_else(|error| panic!("{error}"));
-    let Ok(Plan::Tool(plan)) = claw_cli::plan::build(&cli.command, None) else {
+    let Ok(Plan::Tool(plan)) = claw_server::cli::plan::build(&cli.command, None) else {
         panic!("goto should plan a tool call");
     };
     assert!(!plan.with_group);
@@ -420,7 +420,7 @@ fn the_group_is_carried_on_tab_creation_and_nowhere_else() {
 fn a_screenshot_is_written_to_a_file_because_a_terminal_cannot_render_one() {
     let cli = Cli::try_parse_from(["browseros", "screenshot", "shot.png"])
         .unwrap_or_else(|error| panic!("{error}"));
-    let Ok(Plan::Tool(plan)) = claw_cli::plan::build(&cli.command, None) else {
+    let Ok(Plan::Tool(plan)) = claw_server::cli::plan::build(&cli.command, None) else {
         panic!("screenshot should plan a tool call");
     };
     assert_eq!(plan.save_image, Some(Some("shot.png".to_string())));
@@ -442,7 +442,7 @@ fn page_scoped_commands_ask_for_a_page_and_page_free_ones_do_not() {
     ];
     for argv in needs {
         let cli = Cli::try_parse_from(&argv).unwrap_or_else(|error| panic!("{argv:?}: {error}"));
-        let Ok(Plan::Tool(plan)) = claw_cli::plan::build(&cli.command, None) else {
+        let Ok(Plan::Tool(plan)) = claw_server::cli::plan::build(&cli.command, None) else {
             panic!("{argv:?} should plan a tool call");
         };
         assert!(plan.needs_page, "{argv:?} must carry a page");
@@ -458,7 +458,7 @@ fn page_scoped_commands_ask_for_a_page_and_page_free_ones_do_not() {
     ];
     for argv in free {
         let cli = Cli::try_parse_from(&argv).unwrap_or_else(|error| panic!("{argv:?}: {error}"));
-        let Ok(Plan::Tool(plan)) = claw_cli::plan::build(&cli.command, None) else {
+        let Ok(Plan::Tool(plan)) = claw_server::cli::plan::build(&cli.command, None) else {
             panic!("{argv:?} should plan a tool call");
         };
         assert!(!plan.needs_page, "{argv:?} must not carry a page");

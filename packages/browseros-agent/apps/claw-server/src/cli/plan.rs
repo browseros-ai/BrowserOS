@@ -8,12 +8,12 @@
 
 use serde_json::{Map, Value, json};
 
-use crate::cli::{
+use crate::cli::exit::Failure;
+use crate::cli::grammar::{
     Command, DialogCmd, DiffFlag, GroupCmd, HelpCmd, HelpersCmd, ProfileCmd, SessionCmd, SkillCmd,
     SkillsCmd, TabCmd, TargetCmd, WindowCmd,
 };
-use crate::exit::Failure;
-use crate::refs;
+use crate::cli::refs;
 
 /// A value the executor must read before the plan can be built.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -30,6 +30,9 @@ enum Layer {
     Identity,
     Support,
     Composition,
+    /// The `browseros` command line. It drives this server over HTTP like any
+    /// other MCP client, so it may not reach into the server's own layers.
+    Cli,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +46,7 @@ enum Target {
     Identity,
     Support,
     Composition,
+    Cli,
 }
 
 #[derive(Default)]
@@ -445,9 +449,12 @@ fn classify(relative: &Path) -> Result<Layer, String> {
         [analytics, ..] if analytics == "analytics" => Ok(Layer::Support),
         // `config.rs`'s submodules, such as the behaviour file reader.
         [config, ..] if config == "config" => Ok(Layer::Support),
+        [cli, ..] if cli == "cli" => Ok(Layer::Cli),
         [file] if matches!(file.as_str(), "app.rs" | "runtime.rs" | "main.rs") => {
             Ok(Layer::Composition)
         }
+        // Binary entry points: parse, dispatch, map the error to an exit code.
+        [dir, _] if dir == "bin" => Ok(Layer::Composition),
         [api, file] if api == "api" && file == "mod.rs" => Ok(Layer::Support),
         [file]
             if matches!(
@@ -489,6 +496,7 @@ fn crate_target(path: &[String], failures: &mut Vec<String>, display: &str) -> O
         "db" => Some(Target::Db),
         "identity" => Some(Target::Identity),
         "app" | "runtime" => Some(Target::Composition),
+        "cli" => Some(Target::Cli),
         "AppState" => Some(Target::AppState),
         "analytics" | "clock" | "config" | "error" | "ids" | "storage" | "AppResult" => {
             Some(Target::Support)
@@ -500,6 +508,12 @@ fn crate_target(path: &[String], failures: &mut Vec<String>, display: &str) -> O
 fn edge_allowed(source: &Layer, target: &Target) -> bool {
     match source {
         Layer::Composition => true,
+        // The command line is a client, not a layer of the server. It reaches
+        // the browser the same way any MCP client does, over HTTP to /mcp, so
+        // it must never import a service, the database, an API surface or
+        // AppState. That is the whole reason it can live in this crate without
+        // entangling it: the only thing it shares is the dependency set.
+        Layer::Cli => matches!(target, Target::Cli | Target::Support),
         Layer::ApiHttp => matches!(
             target,
             Target::ApiHttp
@@ -535,7 +549,8 @@ fn edge_allowed(source: &Layer, target: &Target) -> bool {
             | Target::ApiHosted
             | Target::ApiMcp
             | Target::AppState
-            | Target::Composition => false,
+            | Target::Composition
+            | Target::Cli => false,
         },
         Layer::Db => matches!(target, Target::Db | Target::Support),
         Layer::Identity | Layer::Support => matches!(target, Target::Identity | Target::Support),
@@ -566,6 +581,7 @@ fn layer_name(layer: &Layer) -> String {
         Layer::Identity => "identity".to_string(),
         Layer::Support => "support".to_string(),
         Layer::Composition => "composition".to_string(),
+        Layer::Cli => "cli".to_string(),
     }
 }
 
@@ -580,6 +596,7 @@ fn target_name(target: &Target) -> String {
         Target::Identity => "identity".to_string(),
         Target::Support => "support".to_string(),
         Target::Composition => "composition".to_string(),
+        Target::Cli => "cli".to_string(),
     }
 }
 

@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::exit::{Code, Failure};
-use crate::io;
+use crate::cli::exit::{Code, Failure};
+use crate::cli::io;
 
 /// Where a link is placed, best first. `~/.local/bin` leads because it needs
 /// no privilege.

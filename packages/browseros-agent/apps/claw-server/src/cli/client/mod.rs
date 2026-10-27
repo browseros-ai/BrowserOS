@@ -13,9 +13,9 @@ use std::time::Duration;
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::exit::{Code, Failure};
-use crate::io;
-use crate::state::{State, Store};
+use crate::cli::exit::{Code, Failure};
+use crate::cli::io;
+use crate::cli::state::{State, Store};
 use result::ToolOutput;
 use transport::Transport;
 
@@ -104,7 +104,7 @@ impl Session {
         self.persist(|state| {
             state.mcp_session_id = Some(session_id.clone());
             if state.started_at.is_none() {
-                state.started_at = Some(crate::state::now_stamp());
+                state.started_at = Some(crate::cli::state::now_stamp());
             }
         })?;
 
@@ -338,12 +338,12 @@ pub async fn connect(
     read_timeout: Duration,
 ) -> Result<Session> {
     let dir = std::env::current_dir()?;
-    let root = crate::state::worktree_root(&dir);
-    let scope = crate::state::scope(&dir, root.as_deref());
+    let root = crate::cli::state::worktree_root(&dir);
+    let scope = crate::cli::state::scope(&dir, root.as_deref());
     let store = Store::open(&scope)?;
     let cached = store.load();
 
-    let resolved = crate::endpoint::resolve(endpoint_flag, cached.endpoint.as_deref()).await?;
+    let resolved = crate::cli::endpoint::resolve(endpoint_flag, cached.endpoint.as_deref()).await?;
     if let Some(other) = &resolved.ambiguous_with {
         io::note(&format!(
             "[both a release and a dev server are running; using {} ({}). The other is {other}.\n Pass --endpoint or set BROWSERCLAW_DIR to choose.]",

@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use crate::client::transport::Transport;
+use crate::cli::client::transport::Transport;
 
 /// `config.rs: DEFAULT_SERVER_PORT`. Not 9100, which is a sidecar launch
 /// config value rather than the server's own default.
@@ -132,7 +132,7 @@ pub struct Resolved {
 /// Probes each candidate in order and returns the first that answers.
 ///
 /// # Errors
-/// Returns [`crate::exit::Code::NoBrowser`] listing everything that was tried,
+/// Returns [`crate::cli::exit::Code::NoBrowser`] listing everything that was tried,
 /// because "connection refused" with no list is the least useful thing a CLI
 /// can say here.
 pub async fn resolve(flag: Option<&str>, cached: Option<&str>) -> anyhow::Result<Resolved> {
@@ -165,7 +165,7 @@ pub async fn resolve(flag: Option<&str>, cached: Option<&str>) -> anyhow::Result
             .map(|candidate| format!("  {:<28} {}", candidate.origin.label(), candidate.url))
             .collect::<Vec<_>>()
             .join("\n");
-        return Err(crate::exit::Failure::no_browser(format!(
+        return Err(crate::cli::exit::Failure::no_browser(format!(
             "BrowserOS neo is not answering. Tried:\n{tried}\n\n  Start it, or pass --endpoint <url>.\n  A runtime.json is written at startup and is not cleaned up, so a stale one is normal."
         ))
         .into());

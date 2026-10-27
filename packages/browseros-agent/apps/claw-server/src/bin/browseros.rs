@@ -1,8 +1,14 @@
+//! The `browseros` command line.
+//!
+//! A second binary of this crate rather than a crate of its own: the CLI and
+//! the server are released together, and the CLI needs no dependency the
+//! server does not already declare.
+
 use std::process::ExitCode;
 
 use clap::Parser;
 
-use claw_cli::{capability, cli::Cli, exec, exit, io};
+use claw_server::cli::{exec, exit, grammar::Cli, io};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
@@ -53,5 +59,5 @@ fn teach_instead() -> Option<String> {
     if attempted.starts_with('-') {
         return None;
     }
-    capability::teach(&attempted)
+    claw_server::cli::capability::teach(&attempted)
 }

@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use claw_cli::state::{Scope, State, Store, scope, scope_key, scopes_in, worktree_root};
+use claw_server::cli::state::{Scope, State, Store, scope, scope_key, scopes_in, worktree_root};
 
 fn scope_named(label: &str) -> Scope {
     scope(Path::new(label), None)

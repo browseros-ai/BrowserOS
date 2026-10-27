@@ -6,11 +6,11 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::cli::{Cli, Command, Globals};
-use crate::client::{self, Session, result::ToolOutput};
-use crate::exit::{Code, Failure};
-use crate::plan::{self, External, Local, Plan, ToolPlan};
-use crate::{capability, guides, install, io, render, script, state};
+use crate::cli::client::{self, Session, result::ToolOutput};
+use crate::cli::exit::{Code, Failure};
+use crate::cli::grammar::{Cli, Command, Globals};
+use crate::cli::plan::{self, External, Local, Plan, ToolPlan};
+use crate::cli::{capability, guides, install, io, render, script, state};
 
 /// Parses, plans and runs one invocation.
 ///

@@ -13,7 +13,7 @@
 
 use serde_json::Value;
 
-use crate::client::result::ToolOutput;
+use crate::cli::client::result::ToolOutput;
 
 /// Wraps a script so `page` is already bound to the current page.
 ///

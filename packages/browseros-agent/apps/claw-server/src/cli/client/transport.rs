@@ -24,7 +24,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use crate::exit::{Code, Failure};
+use crate::cli::exit::{Code, Failure};
 
 /// Advertises both framings, which is why [`decode_body`] has to handle both.
 const ACCEPT: &str = "application/json, text/event-stream";

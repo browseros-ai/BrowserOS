@@ -6,7 +6,7 @@
 
 use serde_json::{Value, json};
 
-use crate::client::result::ToolOutput;
+use crate::cli::client::result::ToolOutput;
 
 /// The `--json` envelope.
 #[must_use]

@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::exit::Code;
+use crate::cli::exit::Code;
 
 /// A tool result, flattened out of the MCP envelope.
 #[derive(Debug, Clone, Default)]

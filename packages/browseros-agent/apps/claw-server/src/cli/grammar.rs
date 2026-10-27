@@ -11,7 +11,7 @@
 //! tool costs schema tokens in every session. It is wrong here, where
 //! `--help` is free. It expands into verbs.
 //!
-//! Three: refs have three spellings. [`crate::refs`] normalizes them.
+//! Three: refs have three spellings. [`crate::cli::refs`] normalizes them.
 
 use clap::{Args, Parser, Subcommand};
 

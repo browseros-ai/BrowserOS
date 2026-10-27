@@ -24,7 +24,7 @@ describe('BrowserClaw Rust compiler', () => {
   })
 
   it('builds the CLI on the same driver and target as the server', () => {
-    // The CLI ships beside the server out of one workspace, so it must never
+    // The CLI ships as a second binary of the same crate, so it must never
     // drift onto a different cross-compiler or a different glibc floor.
     for (const target of resolveTargets('all')) {
       const server = rustBuildInvocation(target)
@@ -33,12 +33,14 @@ describe('BrowserClaw Rust compiler', () => {
       expect(cli.rustTarget).toBe(server.rustTarget)
       // Same driver and same --target, differing only in what is built.
       expect(cli.args[0]).toBe(server.args[0])
+      // Same package, different binary: the CLI is a second [[bin]] of
+      // claw-server, so only --bin distinguishes the two invocations.
       expect(cli.args).toContain('-p')
-      expect(cli.args).toContain('claw-cli')
+      expect(cli.args).toContain('claw-server')
       expect(cli.args).toContain('--bin')
       expect(cli.args).toContain('browseros')
       expect(cli.args).toContain('--locked')
-      expect(cli.args).not.toContain('claw-server')
+      expect(cli.args).not.toContain('browseros-claw-server-rs')
       expect(cli.binaryName).toBe(
         target.os === 'windows' ? 'browseros.exe' : 'browseros',
       )

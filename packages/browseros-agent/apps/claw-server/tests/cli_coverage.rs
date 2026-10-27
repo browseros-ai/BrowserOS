@@ -8,8 +8,8 @@
 use std::collections::BTreeSet;
 
 use clap::Parser;
-use claw_cli::cli::Cli;
-use claw_cli::plan::{Plan, build};
+use claw_server::cli::grammar::Cli;
+use claw_server::cli::plan::{Plan, build};
 use serde_json::Value;
 
 /// Every argv worth planning, which between them must touch every tool.
@@ -61,8 +61,8 @@ fn wrapped() -> BTreeSet<String> {
 }
 
 fn snapshot() -> Value {
-    let raw = include_str!("fixtures/tools.json");
-    serde_json::from_str(raw).unwrap_or_else(|error| panic!("fixtures/tools.json: {error}"))
+    let raw = include_str!("fixtures/cli-tools.json");
+    serde_json::from_str(raw).unwrap_or_else(|error| panic!("fixtures/cli-tools.json: {error}"))
 }
 
 fn names(snapshot: &Value, key: &str) -> Vec<String> {
@@ -99,7 +99,7 @@ fn every_tool_in_the_snapshot_is_wrapped_or_skipped_with_a_reason() {
     assert!(
         unaccounted.is_empty(),
         "these server tools have no command and no recorded skip: {unaccounted:?}\n\
-         Add a command, or add an entry to tests/fixtures/tools.json explaining why not."
+         Add a command, or add an entry to tests/fixtures/cli-tools.json explaining why not."
     );
 }
 

@@ -11,10 +11,10 @@ import {
 
 const BINARY_BASE_NAME = 'browseros-claw-server-rs'
 const PACKAGE_NAME = 'claw-server'
-// The CLI ships beside the server out of the same workspace and the same five
-// targets. It is a second binary rather than a second pipeline.
+// The CLI ships beside the server as a second binary of the same crate, built
+// for the same five targets. It is not a second pipeline and not a second
+// package: it needs no dependency claw-server does not already declare.
 const CLI_BINARY_BASE_NAME = 'browseros'
-const CLI_PACKAGE_NAME = 'claw-cli'
 const CROSS_TOOL_VERSION = '0.23.0'
 const LINUX_GLIBC_VERSION = '2.17'
 const VERSION_MARKER_PREFIX = 'browseros-claw-server-version='
@@ -110,7 +110,7 @@ export function rustBuildInvocation(target: BuildTarget): RustBuildInvocation {
 export function rustCliBuildInvocation(
   target: BuildTarget,
 ): RustBuildInvocation {
-  return invocationFor(target, CLI_PACKAGE_NAME, CLI_BINARY_BASE_NAME)
+  return invocationFor(target, PACKAGE_NAME, CLI_BINARY_BASE_NAME)
 }
 
 function invocationFor(
