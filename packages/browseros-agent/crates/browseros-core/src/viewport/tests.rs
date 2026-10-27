@@ -825,7 +825,10 @@ async fn tests_that_prepare_restores_the_window_after_a_manual_resize() -> TestR
     // The operation runs on the restored window, not the size the person left.
     assert_eq!(fixture.native.window(10)?, fitted);
     assert!(!fixture.native.calls("Browser.setContentsSize").is_empty());
-    assert!(emulation_methods(&fixture.native.methods()).is_empty());
+    assert_eq!(
+        emulation_methods(&fixture.native.methods()),
+        vec!["Emulation.setVisibleSize"]
+    );
     drop(lease);
 
     fixture.native.clear_calls();
@@ -1413,5 +1416,39 @@ async fn tests_that_closed_tabs_and_their_windows_are_forgotten() -> TestResult 
     let page = fixture.page(3).await?;
     fixture.set(&page, ViewportMode::Desktop, None).await?;
     assert_eq!(fixture.viewports.tracked(), (1, 1));
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_fixed_modes_pin_the_tab_view_to_the_preview() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    fixture
+        .set(&page, ViewportMode::Mobile, Some(150.0))
+        .await?;
+    // Whatever size an earlier caller or capture left the tab's view at, it now matches the
+    // preview, so zoomed input aimed anywhere on the preview lands inside it.
+    let methods = emulation_methods(&fixture.native.methods());
+    let metrics = methods
+        .iter()
+        .position(|method| method == "Emulation.setDeviceMetricsOverride");
+    let pinned = methods
+        .iter()
+        .position(|method| method == "Emulation.setVisibleSize");
+    assert!(metrics < pinned && pinned.is_some(), "{methods:?}");
+    assert_eq!(
+        fixture.native.only("Emulation.setVisibleSize")?.params,
+        json!({"width": 600, "height": 1359})
+    );
+
+    fixture.native.clear_calls();
+    fixture.set(&page, ViewportMode::Desktop, None).await?;
+    assert_eq!(
+        fixture.native.only("Emulation.setVisibleSize")?.params,
+        json!({"width": 1920, "height": 1080})
+    );
+    fixture.native.clear_calls();
+    fixture.set(&page, ViewportMode::Default, None).await?;
+    assert!(fixture.native.calls("Emulation.setVisibleSize").is_empty());
     Ok(())
 }

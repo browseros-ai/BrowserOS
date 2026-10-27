@@ -101,6 +101,16 @@ impl Fixed {
         ]
     }
 
+    /// Sizes the tab's view to the preview. A hidden tab's view otherwise keeps whatever size
+    /// an earlier override or capture left, and zoomed input beyond it misses.
+    pub(super) fn pin(self) -> (&'static str, Value) {
+        let preview = self.preview();
+        (
+            "Emulation.setVisibleSize",
+            json!({"width": preview.width, "height": preview.height}),
+        )
+    }
+
     fn reported_by(self, metrics: &PageMetrics) -> bool {
         let size = self.size();
         let screen = metrics.screen_width == size.width as f64

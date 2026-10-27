@@ -296,6 +296,8 @@ impl Viewports {
         if let Some(slot) = slot.as_mut() {
             slot.fitted = Some((fit.contents, fit.bounds.clone()));
         }
+        let (method, params) = fixed.pin();
+        view.send_at_capture(method, params, Some(&session)).await?;
         view.page(page.clone()).await?;
         Ok(report(&page, request, metrics, Some(fit)))
     }
@@ -333,6 +335,7 @@ impl Viewports {
             });
         }
         let session = view.page_session(page.clone()).await?.session_id;
+        let mut changed = false;
         if tab.applied.as_ref() != Some(&session) {
             let chrome_version = self.chrome_version(view).await?;
             for (method, params) in tab.fixed.commands(&chrome_version) {
@@ -340,6 +343,7 @@ impl Viewports {
             }
             device::settle(view, &session, &page, tab.fixed).await?;
             self.record(&page, tab.fixed, Some(session.clone()));
+            changed = true;
         }
         let placement = window::locate(view, &page, &info.target_id, info.window_id).await?;
         let contents = tab.fixed.preview();
@@ -353,6 +357,11 @@ impl Viewports {
             if let Some(slot) = slot.as_mut() {
                 slot.fitted = Some((contents, fit.bounds));
             }
+            changed = true;
+        }
+        if changed {
+            let (method, params) = tab.fixed.pin();
+            view.send_at_capture(method, params, Some(&session)).await?;
         }
         Ok(ViewportLease {
             _shared: None,
