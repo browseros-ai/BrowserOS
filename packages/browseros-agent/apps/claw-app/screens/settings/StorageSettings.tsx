@@ -196,7 +196,7 @@ export function StorageSettings() {
         <CenterMorphModalContent
           ariaLabel="Clean up task history now?"
           showCloseButton={false}
-          className="ph-no-capture max-w-[440px] rounded-[22px] border-border-2 bg-card"
+          className="ph-no-capture max-w-[440px] border-border-2 bg-card"
         >
           <div className="flex flex-col gap-5 p-6">
             <div className="flex flex-col gap-2">

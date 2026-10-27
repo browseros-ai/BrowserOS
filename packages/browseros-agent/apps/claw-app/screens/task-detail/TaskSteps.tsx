@@ -195,7 +195,7 @@ function StepRow({
         aria-current={current ? 'step' : undefined}
         onClick={() => onSelect(step)}
         className={cn(
-          'grid w-full grid-cols-[30px_minmax(0,1fr)_auto] items-start gap-3 rounded-xl px-2 py-2.5 text-left outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-ring',
+          'grid w-full grid-cols-[30px_minmax(0,1fr)_auto] items-start gap-3 rounded-md px-2 py-2.5 text-left outline-none transition-colors duration-200 focus-visible:ring-2 focus-visible:ring-ring',
           current ? 'bg-accent-tint' : 'hover:bg-bg-sunken',
         )}
       >

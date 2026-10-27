@@ -50,7 +50,7 @@ export function TabCountChip({
         align="start"
         alignOffset={-2}
         sideOffset={8}
-        className="ph-no-capture max-h-(--available-height) w-[270px] gap-px overflow-y-auto rounded-[10px] border border-border-2 bg-card p-[5px] shadow-pop ring-0"
+        className="ph-no-capture max-h-(--available-height) w-[270px] gap-px overflow-y-auto rounded-lg border border-border-2 bg-card p-[5px] shadow-pop ring-0"
       >
         <ul className="flex flex-col gap-px">
           {browserTabs.map((tab) => {

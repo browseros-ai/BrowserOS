@@ -36,8 +36,10 @@ export function DemoTerminalWindow({
   spinGlyph: string
 }) {
   const started = frame.switched
+  // macOS draws this window frame, not neo, so it keeps the OS's 12px
+  // corners instead of following the app's radius scale.
   return (
-    <div className="flex size-full flex-col overflow-hidden rounded-xl bg-[#01123F] font-mono text-white shadow-[0_0_0_1px_rgb(1_18_63/0.4),0_34px_60px_-28px_rgb(1_18_63/0.6),0_10px_24px_-12px_rgb(1_18_63/0.35)]">
+    <div className="flex size-full flex-col overflow-hidden rounded-[12px] bg-[#01123F] font-mono text-white shadow-[0_0_0_1px_rgb(1_18_63/0.4),0_34px_60px_-28px_rgb(1_18_63/0.6),0_10px_24px_-12px_rgb(1_18_63/0.35)]">
       <div className="relative flex h-8 flex-none items-center border-[#EAF1FF]/8 border-b px-3">
         <TrafficLights size={11} />
         <span className="absolute inset-x-0 top-[9px] text-center text-[#8C97B3] text-[11.5px] leading-[14px]">
