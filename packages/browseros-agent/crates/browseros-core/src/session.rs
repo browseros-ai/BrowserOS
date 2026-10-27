@@ -196,6 +196,17 @@ impl BrowserSession {
         crate::ProtocolSession::for_session(self.connection.clone(), session_id)
     }
 
+    /// The page's main-frame document identity (`<frame id>:<loader id>`, as
+    /// snapshot refs carry it). A cross-document navigation changes it; a
+    /// same-document one keeps it.
+    pub async fn main_document_id(
+        &self,
+        page_id: PageId,
+    ) -> Result<Option<crate::snapshot::DocumentId>, CoreError> {
+        let page = self.pages.get_session(page_id).await?;
+        crate::observer::main_document_id(&page.session).await
+    }
+
     pub async fn cdp(
         &self,
         method: &str,

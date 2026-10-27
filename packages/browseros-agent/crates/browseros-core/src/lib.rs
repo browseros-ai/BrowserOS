@@ -11,6 +11,7 @@ pub mod observer;
 pub mod page_js;
 pub mod page_signals;
 pub mod pages;
+pub mod payment_cards;
 pub mod pointer;
 pub mod profiles;
 pub mod screenshot;

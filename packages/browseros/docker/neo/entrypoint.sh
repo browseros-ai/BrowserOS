@@ -184,11 +184,18 @@ readonly HIDDEN_BROWSEROS_FEATURES=VerticalTabs,HomeButton,SplitTabButton,TabSea
 # flag" bar for it. Written only in that mode: the same policy would also hide
 # warnings for risky flags passed through NEO_ARGS. This build reads policies
 # from /etc/chromium/policies.
+#
+# Cards are filled from the deployment's own secure storage (payment_cards
+# with a supplied card), never kept in the profile: /data/profile is encrypted
+# only with Chromium's fixed --password-store=basic key. Turning payment
+# autofill off stops Chromium offering to save a submitted card; supplied fills
+# still work.
 apply_policies() {
   local managed=/etc/chromium/policies/managed
+  mkdir -p "$managed"
+  echo '{"AutofillCreditCardEnabled": false}' > "$managed/neo-payments.json"
   rm -f "$managed/neo-docker.json"
   if [ "${#sandbox_flags[@]}" -gt 0 ]; then
-    mkdir -p "$managed"
     echo '{"CommandLineFlagSecurityWarningsEnabled": false}' > "$managed/neo-docker.json"
   fi
 }

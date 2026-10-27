@@ -1079,7 +1079,7 @@ pub fn redacted_args_json(
     // prevented the handler from supplying runtime hints. Scrub before bounding,
     // since truncation can otherwise persist a prefix of the secret.
     let mut redacted = value.clone();
-    redact_password_fields(&mut redacted);
+    redact_secret_fields(&mut redacted);
     if let Some(hints) = hints {
         redact_args(&mut redacted, hints);
     }
@@ -1087,12 +1087,12 @@ pub fn redacted_args_json(
 }
 
 /// Script CDP parameters can be malformed, so parsing cannot authorize keeping
-/// their bytes. Credential params are omitted wholesale at this string boundary;
-/// typed tool options still retain metadata and scrub explicit password fields.
+/// their bytes. Password and card params are omitted wholesale at this string
+/// boundary; typed tool options keep metadata and scrub password and card fields.
 pub fn redacted_script_args(method: &str, args: &serde_json::Value) -> String {
     let mut sanitized = args.clone();
     if let Some(values) = sanitized.as_array_mut()
-        && browseros_mcp::tools::credentials::is_credential_primitive(method, values)
+        && browseros_mcp::tools::sensitive::is_sensitive_primitive(method, values)
     {
         let parameter = match method {
             "cdp" => Some(1),
@@ -1106,22 +1106,23 @@ pub fn redacted_script_args(method: &str, args: &serde_json::Value) -> String {
     redacted_args_json(&sanitized, None)
 }
 
-fn redact_password_fields(value: &mut serde_json::Value) -> bool {
+fn redact_secret_fields(value: &mut serde_json::Value) -> bool {
     let mut changed = false;
     match value {
         serde_json::Value::Object(object) => {
             for (key, value) in object {
-                if key == "password" {
+                // `card` holds a card number and security code.
+                if key == "password" || key == "card" {
                     *value = json!(REDACTED_MARKER);
                     changed = true;
                 } else {
-                    changed |= redact_password_fields(value);
+                    changed |= redact_secret_fields(value);
                 }
             }
         }
         serde_json::Value::Array(values) => {
             for value in values {
-                changed |= redact_password_fields(value);
+                changed |= redact_secret_fields(value);
             }
         }
         serde_json::Value::String(text) => {
@@ -1130,7 +1131,7 @@ fn redact_password_fields(value: &mut serde_json::Value) -> bool {
             // formatting the script might rely on. Parent source uses its hint.
             if let Ok(mut nested) = serde_json::from_str::<serde_json::Value>(text)
                 && (nested.is_object() || nested.is_array())
-                && redact_password_fields(&mut nested)
+                && redact_secret_fields(&mut nested)
                 && let Ok(scrubbed) = serde_json::to_string(&nested)
             {
                 *text = scrubbed;
@@ -1273,20 +1274,45 @@ mod tests {
     fn malformed_credential_cdp_parameters_are_redacted_before_parsing() {
         let args = json!([
             1,
-            "Autofill.fillCredential",
+            "Passwords.fillCredential",
             "{\"password\":\"synthetic-malformed-secret\",}"
         ]);
         let out = super::redacted_script_args("cdpJsonForPage", &args);
         assert!(!out.contains("synthetic-malformed-secret"));
-        assert!(out.contains("Autofill.fillCredential"));
+        assert!(out.contains("Passwords.fillCredential"));
         assert!(out.contains("[redacted]"));
+    }
+
+    #[test]
+    fn malformed_card_cdp_parameters_are_redacted_before_parsing() {
+        for method in ["Payments.fillCard", "Autofill.trigger"] {
+            let args = json!([1, method, "{\"card\":{\"number\":\"4111111111111111\",}"]);
+            let out = super::redacted_script_args("cdpJsonForPage", &args);
+            assert!(!out.contains("4111111111111111"));
+            assert!(out.contains(method));
+            assert!(out.contains("[redacted]"));
+        }
+    }
+
+    #[test]
+    fn redacts_card_objects_in_tool_options() {
+        let args = json!({
+            "action": "fill",
+            "page": 1,
+            "card": {"number": "4111111111111111", "expiryMonth": 12, "expiryYear": 2030, "cvc": "987"}
+        });
+        let output = redacted_args_json(&args, None);
+        assert!(!output.contains("4111111111111111"));
+        assert!(!output.contains("987"));
+        assert!(output.contains("\"action\":\"fill\""));
+        assert!(output.contains("[redacted]"));
     }
 
     #[test]
     fn redacts_passwords_in_script_arrays_and_serialized_cdp_parameters() {
         let args = json!([
             1,
-            "Autofill.fillCredential",
+            "Passwords.fillCredential",
             json!({"username":"synthetic-user", "password":"synthetic-cdp-secret"}).to_string()
         ]);
         let output = redacted_args_json(&args, None);

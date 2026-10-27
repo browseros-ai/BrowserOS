@@ -705,6 +705,14 @@ fn visit_frame_documents(
     }
 }
 
+/// The main frame's current document identity, as snapshot refs carry it.
+pub(crate) async fn main_document_id(
+    session: &ProtocolSession,
+) -> Result<Option<DocumentId>, CoreError> {
+    let result: GetFrameTreeResult = session.send("Page.getFrameTree", json!({})).await?;
+    Ok(frame_document_id(&result.frame_tree.frame))
+}
+
 fn frame_document_id(frame: &Frame) -> Option<DocumentId> {
     frame
         .loader_id
