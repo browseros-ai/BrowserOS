@@ -1,5 +1,6 @@
 //! Live views of the tabs an agent session is working in, behind the hosted `/v1/sessions/{id}`
-//! `/screencast` (MJPEG) and `/video` (fragmented AV1 MP4) endpoints.
+//! `/screencast` (MJPEG) and `/video` (fragmented AV1 MP4) endpoints, and the cockpit's
+//! `/api/v1/screencasts` socket, which watches many sessions at once through a [`Watcher`].
 //!
 //! ```text
 //!  viewer ─┐                      ┌─ Capture(tab A, screencast, high) ── Page.startScreencast ──────┐
@@ -21,11 +22,13 @@ mod presets;
 mod tab_capture;
 #[doc(hidden)]
 pub mod testing;
+mod watcher;
 
 pub use ports::{
     CaptureTab, CaptureTransport, CdpPortTransport, LiveSessionTabs, SessionTabs, SessionView,
 };
 pub use presets::Quality;
+pub use watcher::{Watch, Watcher};
 
 use crate::error::AppError;
 use bytes::Bytes;
@@ -164,6 +167,13 @@ impl CaptureHub {
             latest,
         ));
         Ok(Frames::new(frames))
+    }
+
+    /// One viewer's live view of any number of sessions, all at `quality`: the cockpit shows
+    /// every running session over one socket rather than a stream per card.
+    #[must_use]
+    pub fn watcher(self: &Arc<Self>, quality: Quality) -> Watcher {
+        Watcher::new(self.clone(), quality)
     }
 
     /// Streams `tab`, or the session's current tab, as fragmented AV1 MP4. The video stays on

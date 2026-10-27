@@ -41,8 +41,8 @@ pub(super) struct Preset {
 pub(super) const fn preset(quality: Quality) -> Preset {
     match quality {
         Quality::Low => Preset {
-            max_width: 480,
-            max_height: 300,
+            max_width: 640,
+            max_height: 400,
             screencast_fps: 4,
             video_fps: 10,
             jpeg_quality: 50,
