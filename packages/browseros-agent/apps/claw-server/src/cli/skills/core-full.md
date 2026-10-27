@@ -207,6 +207,28 @@ Helpers are saved per host and are hot-loaded as `helpers.<name>(browser, page)`
 where page is the id number. They are only callable inside `run`, even though
 the roster is advertised in other tools' output.
 
+### Saved passwords and cards, by reference only
+
+```bash
+browseros credentials list [--query Q] [--limit N] [--all] [--cursor C]
+browseros credentials fill --id <credentialId>
+browseros cards list
+browseros cards fill --id <cardId>
+```
+
+`credentials list` matches the current page's site; `--all` lists the whole
+profile. Listings never contain a password, a card number or a security code.
+Filling acknowledges the fields and does not submit, confirm a login, or pay,
+and a saved card keeps the browser's own payment checks, so it may report that
+the user has to finish in the browser.
+
+The tools behind these also support adding an entry and filling a supplied
+username, password or card number. **The CLI does not expose those, and will
+not.** They are the only ways to get a secret onto a command line, where it
+lands in shell history and in `ps` output. A human saves credentials in the
+browser; the CLI uses what is already there. For a secret that is not saved,
+use `help request`.
+
 ### Skills, humans and the decision loop
 
 ```bash
@@ -266,7 +288,7 @@ them prints the nearest working command.
 |---|---|
 | cookies | `browseros run "return await page.cdp('Network.getCookies')"` |
 | localStorage and sessionStorage | `browseros eval "return JSON.stringify(localStorage)"` |
-| saved auth state, the auth vault | nothing: neo drives the user's real profile, already signed in |
+| saved auth state, the auth vault | not needed: neo drives the user's real profile, and `credentials list` / `credentials fill --id` use its saved passwords by reference |
 | network interception, HAR, request inspection | call the site's own API from inside `eval` |
 | route, abort, waitForRequest, waitForResponse | nothing |
 | device and viewport emulation | `setViewport` exists only on a hosted server |

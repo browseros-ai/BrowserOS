@@ -136,8 +136,22 @@ large page.
 **Never pass a password, API key, token or card number as an argument.** A CLI
 argument lands in shell history and in `ps` output. Use `--value-stdin`,
 `--value-env VAR`, or `--sensitive` to keep the value out of the audit log and
-skip its screenshot. For a secret a human should type, use
-`browseros help request "sign in" --kind login`.
+skip its screenshot.
+
+Better still, do not handle the secret at all. The browser already holds the
+user's saved passwords and cards, and they can be used by reference:
+
+```bash
+browseros credentials list              # saved accounts for this page
+browseros credentials fill --id <id>    # the password never enters this process
+browseros cards list                    # network, last four, expiry, name
+browseros cards fill --id <id>          # the number never enters this process
+```
+
+Neither submits: check the page and submit yourself. There is deliberately no
+way to *add* a credential or card from the CLI, and no flag that takes a
+password or a card number. For a secret that is not saved yet, hand the page to
+a person with `browseros help request "sign in" --kind login`.
 
 ## Waiting
 

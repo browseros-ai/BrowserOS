@@ -600,6 +600,8 @@ fn command_label(command: &Command) -> &'static str {
         Command::Window(_) => "window",
         Command::Profile(_) => "profile",
         Command::Target(_) => "target",
+        Command::Credentials(_) => "credentials",
+        Command::Cards(_) => "cards",
         Command::Snapshot { .. } => "snapshot",
         Command::Diff => "diff",
         Command::Read { .. } => "read",

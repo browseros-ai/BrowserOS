@@ -46,6 +46,16 @@ pub const OPTIONAL: &[Optional] = &[
         tool: "save_skill",
         absent_because: "a hosted server cannot link skills into an agent beside it",
     },
+    Optional {
+        command: "credentials",
+        tool: "credentials",
+        absent_because: "this BrowserOS build does not expose its password store",
+    },
+    Optional {
+        command: "cards",
+        tool: "payment_cards",
+        absent_because: "this BrowserOS build does not expose its payment cards",
+    },
 ];
 
 /// Why a command the CLI knows is not available on this server, if so.

@@ -121,6 +121,12 @@ pub enum Command {
     /// The profile this task is bound to, where the native supports it.
     #[command(subcommand)]
     Target(TargetCmd),
+    /// Saved passwords in the browser's own store, by reference only.
+    #[command(subcommand)]
+    Credentials(CredentialsCmd),
+    /// Saved payment cards in the browser's own store, by reference only.
+    #[command(subcommand)]
+    Cards(CardsCmd),
 
     /// The page as an accessibility tree, with [ref=eN] handles.
     Snapshot {
@@ -493,6 +499,55 @@ pub enum TargetCmd {
     },
     ClearWindow,
     Clear,
+}
+
+/// Saved passwords, reachable only by reference.
+///
+/// `add`, and the form of `fill` that takes a username and password, are
+/// deliberately absent. Those are the only ways to put a password on a command
+/// line, and a command line is the worst place for one: it lands in shell
+/// history and in `ps` output, where an MCP argument does not. The browser is
+/// where a human saves a credential; this reaches the ones already there.
+#[derive(Debug, Subcommand)]
+pub enum CredentialsCmd {
+    /// Saved accounts for the current page, or for the whole profile.
+    List {
+        /// Case-insensitive substring of the username or site.
+        #[arg(long)]
+        query: Option<String>,
+        #[arg(long)]
+        limit: Option<u32>,
+        /// List the whole profile rather than matches for the current page.
+        #[arg(long)]
+        all: bool,
+        #[arg(long, value_name = "CURSOR")]
+        cursor: Option<String>,
+    },
+    /// Fill a saved credential by its id from `credentials list`.
+    ///
+    /// The password never passes through this process. Filling acknowledges
+    /// the fields and does not submit, so check the page and submit yourself.
+    Fill {
+        #[arg(long = "id", value_name = "CREDENTIAL_ID")]
+        credential_id: String,
+    },
+}
+
+/// Saved payment cards, reachable only by reference. Same rule as
+/// [`CredentialsCmd`]: no `add`, and no supplied-card `fill`, because a card
+/// number on a command line is the thing to prevent.
+#[derive(Debug, Subcommand)]
+pub enum CardsCmd {
+    /// Saved cards as metadata: network, last four, expiry, name.
+    List,
+    /// Fill a saved card by its id from `cards list`.
+    ///
+    /// Does not submit or pay. The browser's own payment checks still apply,
+    /// so a card may report that the user must finish in the browser.
+    Fill {
+        #[arg(long = "id", value_name = "CARD_ID")]
+        card_id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]

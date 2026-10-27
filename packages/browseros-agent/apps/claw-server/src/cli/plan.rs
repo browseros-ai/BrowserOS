@@ -10,8 +10,8 @@ use serde_json::{Map, Value, json};
 
 use crate::cli::exit::Failure;
 use crate::cli::grammar::{
-    Command, DialogCmd, DiffFlag, GroupCmd, HelpCmd, HelpersCmd, ProfileCmd, SessionCmd, SkillCmd,
-    SkillsCmd, TabCmd, TargetCmd, WindowCmd,
+    CardsCmd, Command, CredentialsCmd, DialogCmd, DiffFlag, GroupCmd, HelpCmd, HelpersCmd,
+    ProfileCmd, SessionCmd, SkillCmd, SkillsCmd, TabCmd, TargetCmd, WindowCmd,
 };
 use crate::cli::refs;
 
@@ -333,6 +333,43 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
         Command::Target(TargetCmd::Clear) => {
             Plan::tool(ToolPlan::new("browser_target").arg("action", json!("clear")))
         }
+
+        // Only the by-reference half of these two tools is wrapped. `add` and
+        // the supplied-value `fill` are the only ways to get a password or a
+        // card number onto a command line, so the CLI does not offer them.
+        Command::Credentials(CredentialsCmd::List {
+            query,
+            limit,
+            all,
+            cursor,
+        }) => {
+            let mut plan = ToolPlan::new("credentials")
+                .arg("action", json!("list"))
+                .arg("query", opt(query))
+                .arg("cursor", opt(cursor))
+                .arg("limit", limit.map_or(Value::Null, Value::from));
+            // Omitting the page lists the whole profile; passing it narrows to
+            // the page's site, which is what a sign-in usually wants.
+            if !all {
+                plan = plan.page();
+            }
+            Plan::tool(plan)
+        }
+        Command::Credentials(CredentialsCmd::Fill { credential_id }) => Plan::tool(
+            ToolPlan::new("credentials")
+                .page()
+                .arg("action", json!("fill"))
+                .arg("credentialId", json!(credential_id)),
+        ),
+        Command::Cards(CardsCmd::List) => {
+            Plan::tool(ToolPlan::new("payment_cards").arg("action", json!("list")))
+        }
+        Command::Cards(CardsCmd::Fill { card_id }) => Plan::tool(
+            ToolPlan::new("payment_cards")
+                .page()
+                .arg("action", json!("fill"))
+                .arg("cardId", json!(card_id)),
+        ),
 
         Command::Snapshot { interactive, depth } => {
             if let Some(depth) = depth

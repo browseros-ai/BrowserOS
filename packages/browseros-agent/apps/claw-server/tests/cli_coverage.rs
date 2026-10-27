@@ -36,6 +36,8 @@ const PROBES: &[&[&str]] = &[
     &["browseros", "eval", "return 1"],
     &["browseros", "run", "return 1"],
     &["browseros", "profile", "list"],
+    &["browseros", "credentials", "list"],
+    &["browseros", "cards", "list"],
     &["browseros", "target", "get"],
     &["browseros", "session", "name", "price check"],
     &["browseros", "skill", "save", "x", "--description", "d"],
@@ -101,6 +103,92 @@ fn every_tool_in_the_snapshot_is_wrapped_or_skipped_with_a_reason() {
         "these server tools have no command and no recorded skip: {unaccounted:?}\n\
          Add a command, or add an entry to tests/fixtures/cli-tools.json explaining why not."
     );
+}
+
+/// A tool the CLI wraps only part of must say which part and why.
+///
+/// `credentials` and `payment_cards` each have a safe half that works by
+/// reference and a half that carries a password or a card number. The CLI
+/// offers the first and not the second, and that is a decision worth being
+/// unable to lose.
+#[test]
+fn a_partly_wrapped_tool_records_which_part_and_why() {
+    let snapshot = snapshot();
+    let wrapped = wrapped();
+    let partial = snapshot
+        .get("partial")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    assert!(!partial.is_empty(), "the partial list should not be empty");
+
+    for (tool, reason) in &partial {
+        assert!(
+            wrapped.contains(tool),
+            "{tool} is recorded as partly wrapped but no command calls it"
+        );
+        let reason = reason.as_str().unwrap_or_default();
+        assert!(
+            reason.len() > 60,
+            "{tool}'s partial reason is too thin to be a decision: {reason}"
+        );
+    }
+}
+
+/// The dangerous halves must stay unreachable. If a future change adds
+/// `credentials add` or a card number flag, this fails.
+#[test]
+fn no_command_can_put_a_password_or_a_card_number_on_the_command_line() {
+    for argv in [
+        vec!["browseros", "credentials", "add"],
+        vec!["browseros", "credentials", "fill", "--password", "hunter2"],
+        vec![
+            "browseros",
+            "credentials",
+            "fill",
+            "--username",
+            "a",
+            "--password",
+            "b",
+        ],
+        vec!["browseros", "cards", "add"],
+        vec!["browseros", "cards", "fill", "--number", "4111111111111111"],
+        vec!["browseros", "cards", "fill", "--cvc", "123"],
+    ] {
+        assert!(
+            Cli::try_parse_from(&argv).is_err(),
+            "{argv:?} must not parse: a CLI argument lands in shell history and ps output"
+        );
+    }
+}
+
+/// And the safe halves must stay reachable, carrying only an opaque id.
+#[test]
+fn a_saved_credential_is_reachable_by_reference_with_no_secret() {
+    let cli = Cli::try_parse_from(["browseros", "credentials", "fill", "--id", "cred-7"])
+        .unwrap_or_else(|error| panic!("{error}"));
+    let Ok(Plan::Tool(plan)) = build(&cli.command, None) else {
+        panic!("it should plan a tool call");
+    };
+    assert_eq!(plan.tool, "credentials");
+    assert_eq!(plan.args["action"], "fill");
+    assert_eq!(plan.args["credentialId"], "cred-7");
+    assert!(plan.needs_page, "filling targets a page's login form");
+    for secret in ["password", "username", "number", "cvc"] {
+        assert!(
+            plan.args.get(secret).is_none(),
+            "{secret} must never be sent"
+        );
+    }
+
+    let cli = Cli::try_parse_from(["browseros", "cards", "fill", "--id", "card-2"])
+        .unwrap_or_else(|error| panic!("{error}"));
+    let Ok(Plan::Tool(plan)) = build(&cli.command, None) else {
+        panic!("it should plan a tool call");
+    };
+    assert_eq!(plan.tool, "payment_cards");
+    assert_eq!(plan.args["cardId"], "card-2");
+    assert!(plan.args.get("card").is_none(), "no supplied card");
 }
 
 #[test]

@@ -76,7 +76,19 @@ returns the moment it appears. Opening and navigating already return settled.
 
 **Never pass a password, API key, token or card number as an argument.** A CLI
 argument lands in shell history and in `ps` output. Use `--value-stdin`,
-`--value-env VAR`, or `--sensitive`. For a secret a human should type, use
+`--value-env VAR`, or `--sensitive`.
+
+Usually you should not handle the secret at all. The browser holds the user's
+saved passwords and cards, usable by reference:
+
+```bash
+browseros credentials list && browseros credentials fill --id <id>
+browseros cards list && browseros cards fill --id <id>
+```
+
+The secret never enters this process, and neither command submits. There is no
+way to add a credential or card from the CLI, and no flag that takes one. For a
+secret that is not saved yet, use
 `browseros help request "sign in to <site>" --kind login`, which hands the page
 to a person in the real browser.
 

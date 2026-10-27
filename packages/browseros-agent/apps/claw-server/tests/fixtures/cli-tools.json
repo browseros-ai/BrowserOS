@@ -32,11 +32,16 @@
     "request_human_help",
     "await_human_help"
   ],
-  "hostedOnly": ["setViewport", "solve_captcha"],
+  "hostedOnly": [
+    "setViewport",
+    "solve_captcha"
+  ],
   "skipped": {
-    "credentials": "A saved-credential picker belongs in the browser, where a human confirms it. Exposing it as a flag would make a CLI argument the natural way to pass one, which is exactly what the secret rules forbid.",
-    "payment_cards": "A saved-card picker belongs in the browser, where a human confirms the card. The CLI must never make a card number look like an ordinary argument.",
     "setViewport": "Hosted only, where the windows are infrastructure. A desktop CLI would offer a command this server always refuses.",
-    "solve_captcha": "Offered only where the server has a captcha provider, and a captcha is a human handoff from a CLI: use `browseros help request --kind captcha`."
+    "solve_captcha": "Offered only where the server has a captcha provider, and a captcha from a CLI is a human handoff: use `browseros help request --kind captcha`."
+  },
+  "partial": {
+    "credentials": "Only list and fill-by-credentialId are wrapped. add, and the fill that takes a username and password, are the only ways to put a password on a command line, where it lands in shell history and ps output. A human saves credentials in the browser.",
+    "payment_cards": "Only list and fill-by-cardId are wrapped, for the same reason: a card number must never be a CLI argument."
   }
 }
