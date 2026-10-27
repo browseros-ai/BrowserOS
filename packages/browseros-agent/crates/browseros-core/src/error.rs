@@ -82,6 +82,10 @@ pub enum CoreError {
     /// thrown value had none. See `crate::page_js`.
     #[error("{0}")]
     PageScript(String),
+    /// Chromium gave the frame no BrowserOS isolated world, so a script that must not run where
+    /// the page can see it was not run at all. See `PageJs::isolated_only`.
+    #[error("The page gave BrowserOS no isolated world for this script, so it did not run.")]
+    IsolatedWorldUnavailable,
     #[error("{0}")]
     Message(String),
 }

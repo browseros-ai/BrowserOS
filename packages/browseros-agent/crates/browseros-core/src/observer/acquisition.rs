@@ -1,40 +1,34 @@
 //! Unordered Chrome acquisition for accessibility snapshots.
 //!
-//! Cursor candidates and their backend-node lookups may complete in any order, but this module
-//! restores scan order before exposing results to rendering. `SnapshotBudget` is shared by every
-//! acquisition stage in one capture so concurrency is bounded without scheduling CDP work onto a
-//! separate runtime or throttling unrelated browser commands.
+//! A frame's accessibility tree, clickable elements and document identity are fetched
+//! concurrently and may complete in any order. `SnapshotBudget` is shared by every acquisition
+//! stage in one capture so concurrency is bounded without scheduling CDP work onto a separate
+//! runtime or throttling unrelated browser commands. Nothing here runs JavaScript in the page.
 
 use super::{
     AxTreeResult, CaptureContext, DescribeNodeResult, GetFrameTreeResult, Observer,
+    clickable::{ClickableDocument, find_clickables},
     collect_frame_documents,
 };
 use crate::{
-    CoreError, FrameId, PageId, PageJs, ProtocolSession,
+    CoreError, FrameId, PageId, ProtocolSession,
     frames::FrameTarget,
-    page_js::{RemoteValue, Returns},
     snapshot::{AxNode, DocumentId, IframeStitch},
 };
-use browseros_cdp::runtime::GetPropertiesResult;
 use futures_util::{StreamExt, stream::FuturesUnordered};
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use serde_json::json;
 use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::sync::Semaphore;
-use uuid::Uuid;
 
 const MAX_IN_FLIGHT_REQUESTS: usize = 8;
-const MAX_MARKER_COLLISION_RETRIES: usize = 3;
-const CURSOR_SCAN_JS: &str = include_str!("../assets/cursor-augment.js");
 
 #[derive(Clone, Copy)]
 pub(super) enum SnapshotStage {
     Capture,
     Ax,
     CursorScan,
-    CursorDescribe,
     DocumentValidation,
     SiblingAcquisition,
     Assembly,
@@ -47,7 +41,6 @@ impl SnapshotStage {
         Self::Capture,
         Self::Ax,
         Self::CursorScan,
-        Self::CursorDescribe,
         Self::DocumentValidation,
         Self::SiblingAcquisition,
         Self::Assembly,
@@ -59,7 +52,6 @@ impl SnapshotStage {
             Self::Capture => "capture",
             Self::Ax => "ax",
             Self::CursorScan => "cursor_scan",
-            Self::CursorDescribe => "cursor_describe",
             Self::DocumentValidation => "document_validation",
             Self::SiblingAcquisition => "sibling_acquisition",
             Self::Assembly => "assembly",
@@ -190,16 +182,7 @@ impl Observer {
         } else {
             runtime_document_id
         };
-        acquire_frame_data(
-            target,
-            frame_id,
-            runtime_document_id,
-            &context.root_session,
-            &context.frame_documents,
-            &context.budget,
-            Some(&context.trace),
-        )
-        .await
+        acquire_frame_data(target, frame_id, runtime_document_id, context).await
     }
 
     pub(super) async fn acquire_child_frames(
@@ -280,18 +263,22 @@ async fn acquire_frame_data(
     target: FrameTarget,
     frame_id: Option<FrameId>,
     runtime_document_id: Option<i64>,
-    root_session: &ProtocolSession,
-    frame_documents: &HashMap<Option<FrameId>, DocumentId>,
-    budget: &SnapshotBudget,
-    trace: Option<&CaptureTrace>,
+    context: &CaptureContext,
 ) -> Result<AcquiredFrame, CoreError> {
+    let CaptureContext {
+        root_session,
+        frame_documents,
+        dom_snapshots,
+        budget,
+        trace,
+    } = context;
     let acquired_frame_id = frame_id.clone();
-    let cursor_document = if target.cursor_uses_session_default {
-        CursorDocument::SessionDefault
+    let clickable_document = if target.cursor_uses_session_default {
+        ClickableDocument::SessionDefault
     } else if let Some(backend_node_id) = runtime_document_id {
-        CursorDocument::BackendNode(backend_node_id)
+        ClickableDocument::BackendNode(backend_node_id)
     } else {
-        CursorDocument::Unavailable
+        ClickableDocument::Unavailable
     };
     let ax_tree = async {
         let started = Instant::now();
@@ -302,24 +289,28 @@ async fn acquire_frame_data(
                 target.ax_params.clone(),
             )
             .await;
-        if let Some(trace) = trace {
-            trace_stage(
-                trace,
-                acquired_frame_id.as_ref(),
-                SnapshotStage::Ax,
-                started,
-                if result.is_ok() { "success" } else { "failure" },
-            );
-        }
+        trace_stage(
+            trace,
+            acquired_frame_id.as_ref(),
+            SnapshotStage::Ax,
+            started,
+            if result.is_ok() { "success" } else { "failure" },
+        );
         result
     };
-    let cursor_hits = find_cursor_hits_with_trace(
-        &target.session,
-        cursor_document,
-        acquired_frame_id.as_ref(),
-        budget,
-        trace,
-    );
+    let cursor_hits = async {
+        let started = Instant::now();
+        let result =
+            find_clickables(dom_snapshots, &target.session, clickable_document, budget).await;
+        trace_stage(
+            trace,
+            acquired_frame_id.as_ref(),
+            SnapshotStage::CursorScan,
+            started,
+            if result.is_ok() { "success" } else { "failure" },
+        );
+        result
+    };
     let document_started = Instant::now();
     let document_id =
         eager_document_id_for_frame(root_session, frame_id.clone(), frame_documents, budget);
@@ -330,15 +321,13 @@ async fn acquire_frame_data(
     let (document_id, document_outcome) =
         revalidate_document_after_acquisition(root_session, frame_id.as_ref(), document_id, budget)
             .await;
-    if let Some(trace) = trace {
-        trace_stage(
-            trace,
-            frame_id.as_ref(),
-            SnapshotStage::DocumentValidation,
-            document_started,
-            document_outcome,
-        );
-    }
+    trace_stage(
+        trace,
+        frame_id.as_ref(),
+        SnapshotStage::DocumentValidation,
+        document_started,
+        document_outcome,
+    );
 
     Ok(AcquiredFrame {
         frame_id: acquired_frame_id,
@@ -437,475 +426,12 @@ async fn revalidate_document_after_acquisition(
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct RemoteObject {
-    #[serde(rename = "objectId")]
-    object_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResolveNodeResult {
-    object: RemoteObject,
-}
-
-#[derive(Clone, Copy)]
-enum CursorDocument {
-    SessionDefault,
-    BackendNode(i64),
-    Unavailable,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct CursorScanResult {
-    collision: bool,
-    candidates: Vec<CursorHit>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CursorHit {
-    marker: String,
-    reasons: Vec<String>,
-}
-
-struct CursorCleanup {
-    session: ProtocolSession,
-    budget: SnapshotBudget,
-    marker_attribute: Option<String>,
-    marker_token: Option<String>,
-    object_group: String,
-    document_object_id: Option<String>,
-    armed: bool,
-}
-
-impl CursorCleanup {
-    fn arm_marker(&mut self, marker_attribute: String, marker_token: String) {
-        self.marker_attribute = Some(marker_attribute);
-        self.marker_token = Some(marker_token);
-    }
-
-    async fn clear_marker(&mut self) {
-        if let (Some(marker_attribute), Some(marker_token)) =
-            (&self.marker_attribute, &self.marker_token)
-        {
-            cleanup_cursor_marker(
-                &self.session,
-                &self.budget,
-                marker_attribute,
-                marker_token,
-                self.document_object_id.as_deref(),
-            )
-            .await;
-            self.marker_attribute = None;
-            self.marker_token = None;
-        }
-    }
-
-    async fn finish(&mut self) {
-        self.clear_marker().await;
-        release_cursor_objects(&self.session, &self.budget, &self.object_group).await;
-        self.armed = false;
-    }
-}
-
-impl Drop for CursorCleanup {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        let session = self.session.clone();
-        let budget = self.budget.clone();
-        let marker_attribute = self.marker_attribute.clone();
-        let marker_token = self.marker_token.clone();
-        let object_group = self.object_group.clone();
-        let document_object_id = self.document_object_id.clone();
-
-        // Cancellation skips the async epilogue, so detach one idempotent cleanup task for the
-        // capture token. Cleanup matches both attribute and token, preserving page-owned values
-        // even if a generated attribute name collides.
-        drop(handle.spawn(async move {
-            if let (Some(marker_attribute), Some(marker_token)) = (marker_attribute, marker_token) {
-                cleanup_cursor_marker(
-                    &session,
-                    &budget,
-                    &marker_attribute,
-                    &marker_token,
-                    document_object_id.as_deref(),
-                )
-                .await;
-            }
-            release_cursor_objects(&session, &budget, &object_group).await;
-        }));
-    }
-}
-
-#[cfg(test)]
-async fn find_cursor_hits(
-    session: &ProtocolSession,
-    runtime_document_id: Option<i64>,
-    budget: &SnapshotBudget,
-) -> Result<HashMap<i64, Vec<String>>, CoreError> {
-    let document =
-        runtime_document_id.map_or(CursorDocument::SessionDefault, CursorDocument::BackendNode);
-    find_cursor_hits_with_trace(session, document, None, budget, None).await
-}
-
-async fn find_cursor_hits_with_trace(
-    session: &ProtocolSession,
-    document: CursorDocument,
-    frame_id: Option<&FrameId>,
-    budget: &SnapshotBudget,
-    trace: Option<&CaptureTrace>,
-) -> Result<HashMap<i64, Vec<String>>, CoreError> {
-    let setup_started = Instant::now();
-    let capture_id = Uuid::new_v4().simple().to_string();
-    let object_group = format!("browseros-snapshot-cursor-{capture_id}");
-    // Arm object-group release before resolving a document wrapper: cancellation can arrive after
-    // Chrome creates that remote object but before its response reaches this future.
-    let mut cleanup = CursorCleanup {
-        session: session.clone(),
-        budget: budget.clone(),
-        marker_attribute: None,
-        marker_token: None,
-        object_group: object_group.clone(),
-        document_object_id: None,
-        armed: true,
-    };
-    let document_object_id =
-        match resolve_cursor_document(session, budget, document, &object_group).await {
-            Ok(document_object_id) => document_object_id,
-            Err(error) => {
-                if let Some(trace) = trace {
-                    trace_stage(
-                        trace,
-                        frame_id,
-                        SnapshotStage::CursorScan,
-                        setup_started,
-                        "failure",
-                    );
-                }
-                return Err(error);
-            }
-        };
-    cleanup.document_object_id = document_object_id;
-    for _attempt in 0..MAX_MARKER_COLLISION_RETRIES {
-        // The random attribute isolates overlapping captures; the separate token lets cancellation
-        // cleanup prove ownership before removing anything from the inspected document.
-        let marker_token = Uuid::new_v4().simple().to_string();
-        let marker_attribute = format!("data-__bcid-{marker_token}");
-        cleanup.arm_marker(marker_attribute.clone(), marker_token.clone());
-        let acquisition = CursorAcquisitionContext {
-            marker_attribute: &marker_attribute,
-            marker_token: &marker_token,
-            object_group: &object_group,
-            document_object_id: cleanup.document_object_id.as_deref(),
-            frame_id,
-            trace,
-        };
-        let result = acquire_cursor_hits(session, budget, &acquisition).await;
-        cleanup.clear_marker().await;
-        match result? {
-            CursorAcquisition::Complete(hits) => {
-                cleanup.finish().await;
-                return Ok(hits);
-            }
-            CursorAcquisition::MarkerCollision => continue,
-        }
-    }
-    cleanup.finish().await;
-    Err(CoreError::Message(
-        "Could not reserve a cursor marker namespace".to_string(),
-    ))
-}
-
-async fn resolve_cursor_document(
-    session: &ProtocolSession,
-    budget: &SnapshotBudget,
-    document: CursorDocument,
-    object_group: &str,
-) -> Result<Option<String>, CoreError> {
-    match document {
-        CursorDocument::SessionDefault => Ok(None),
-        CursorDocument::Unavailable => Err(CoreError::Message(
-            "Child frame document was unavailable for cursor acquisition".to_string(),
-        )),
-        CursorDocument::BackendNode(backend_node_id) => {
-            // Resolving the child Document without an execution-context override returns its
-            // default-world wrapper. Calling the scan on that object keeps page-assigned
-            // `onclick` properties visible while still targeting the exact same-process frame.
-            let resolved: ResolveNodeResult = budget
-                .send(
-                    session,
-                    "DOM.resolveNode",
-                    json!({
-                        "backendNodeId": backend_node_id,
-                        "objectGroup": object_group
-                    }),
-                )
-                .await?;
-            resolved.object.object_id.map(Some).ok_or_else(|| {
-                CoreError::Message("Resolved frame document had no remote object".to_string())
-            })
-        }
-    }
-}
-
-enum CursorAcquisition {
-    Complete(HashMap<i64, Vec<String>>),
-    MarkerCollision,
-}
-
-struct CursorAcquisitionContext<'a> {
-    marker_attribute: &'a str,
-    marker_token: &'a str,
-    object_group: &'a str,
-    document_object_id: Option<&'a str>,
-    frame_id: Option<&'a FrameId>,
-    trace: Option<&'a CaptureTrace>,
-}
-
-async fn acquire_cursor_hits(
-    session: &ProtocolSession,
-    budget: &SnapshotBudget,
-    context: &CursorAcquisitionContext<'_>,
-) -> Result<CursorAcquisition, CoreError> {
-    let scan_started = Instant::now();
-    let scan_result = async {
-        let scan = call_document_function(
-            session,
-            budget,
-            context.document_object_id,
-            CURSOR_SCAN_JS,
-            &[context.marker_attribute, context.marker_token],
-            Returns::Value,
-        )
-        .await?;
-        let scan = scan
-            .value
-            .and_then(|value| serde_json::from_value::<CursorScanResult>(value).ok())
-            .unwrap_or_default();
-        if scan.collision {
-            return Ok(CursorScanBatch::MarkerCollision);
-        }
-        let candidates = scan.candidates;
-        if candidates.is_empty() {
-            return Ok(CursorScanBatch::Candidates(candidates, Vec::new()));
-        }
-
-        // Markers are indexes in the full DOM scan, while `candidates` is compacted to matching
-        // elements. Preserve the sparse markers in the remote array, then translate property names
-        // back through each candidate's marker; otherwise skipped DOM nodes would mis-pair handles
-        // and reasons. A node that disappears before collection leaves a hole instead of shifting
-        // later candidates.
-        let collection = call_document_function(
-            session,
-            budget,
-            context.document_object_id,
-            "function(a,t){var out=[],p=t+':';this.querySelectorAll('['+a+']').forEach(function(e){var v=e.getAttribute(a);if(v&&v.indexOf(p)===0)out[Number(v.slice(p.length))]=e;});return out;}",
-            &[context.marker_attribute, context.marker_token],
-            Returns::Handle {
-                object_group: context.object_group,
-            },
-        )
-        .await?;
-        let Some(collection_id) = collection.object_id else {
-            return Ok(CursorScanBatch::Candidates(candidates, Vec::new()));
-        };
-        let properties: GetPropertiesResult = budget
-            .send(
-                session,
-                "Runtime.getProperties",
-                json!({
-                    "objectId": collection_id,
-                    "ownProperties": true
-                }),
-            )
-            .await?;
-        let candidate_indexes = candidates
-            .iter()
-            .enumerate()
-            .map(|(index, candidate)| (candidate.marker.as_str(), index))
-            .collect::<HashMap<_, _>>();
-        let mut handles = properties
-            .result
-            .into_iter()
-            .filter_map(|property| {
-                let index = *candidate_indexes.get(property.name.as_str())?;
-                let object_id = property.value?.object_id?;
-                Some((index, object_id))
-            })
-            .collect::<Vec<_>>();
-        handles.sort_by_key(|(index, _object_id)| *index);
-        Ok::<_, CoreError>(CursorScanBatch::Candidates(candidates, handles))
-    }
-    .await;
-    let (candidates, handles) = match scan_result {
-        Ok(CursorScanBatch::Candidates(candidates, handles)) => {
-            if let Some(trace) = context.trace {
-                trace_stage(
-                    trace,
-                    context.frame_id,
-                    SnapshotStage::CursorScan,
-                    scan_started,
-                    "success",
-                );
-            }
-            (candidates, handles)
-        }
-        Ok(CursorScanBatch::MarkerCollision) => {
-            if let Some(trace) = context.trace {
-                trace_stage(
-                    trace,
-                    context.frame_id,
-                    SnapshotStage::CursorScan,
-                    scan_started,
-                    "marker_collision",
-                );
-            }
-            return Ok(CursorAcquisition::MarkerCollision);
-        }
-        Err(error) => {
-            if let Some(trace) = context.trace {
-                trace_stage(
-                    trace,
-                    context.frame_id,
-                    SnapshotStage::CursorScan,
-                    scan_started,
-                    "failure",
-                );
-            }
-            return Err(error);
-        }
-    };
-    if candidates.is_empty() {
-        if let Some(trace) = context.trace {
-            trace_stage(
-                trace,
-                context.frame_id,
-                SnapshotStage::CursorDescribe,
-                Instant::now(),
-                "skipped",
-            );
-        }
-        return Ok(CursorAcquisition::Complete(HashMap::new()));
-    }
-
-    // Chrome may answer these in any order. Store each result in its scan-index slot and pair
-    // reasons only after the whole batch completes; renderer input is therefore deterministic.
-    let describe_started = Instant::now();
-    let mut pending = FuturesUnordered::new();
-    for (index, object_id) in handles {
-        let session = session.clone();
-        let budget = budget.clone();
-        pending.push(async move {
-            let described = budget
-                .send::<DescribeNodeResult>(
-                    &session,
-                    "DOM.describeNode",
-                    json!({ "objectId": object_id }),
-                )
-                .await;
-            (index, described)
-        });
-    }
-
-    let mut ordered = vec![None; candidates.len()];
-    while let Some((index, described)) = pending.next().await {
-        if let Ok(described) = described
-            && let Some(backend_node_id) = described.node.backend_node_id
-        {
-            ordered[index] = Some(backend_node_id);
-        }
-    }
-
-    let mut hits = HashMap::new();
-    for (candidate, backend_node_id) in candidates.into_iter().zip(ordered) {
-        if let Some(backend_node_id) = backend_node_id {
-            hits.insert(backend_node_id, candidate.reasons);
-        }
-    }
-    if let Some(trace) = context.trace {
-        trace_stage(
-            trace,
-            context.frame_id,
-            SnapshotStage::CursorDescribe,
-            describe_started,
-            "success",
-        );
-    }
-    Ok(CursorAcquisition::Complete(hits))
-}
-
-enum CursorScanBatch {
-    Candidates(Vec<CursorHit>, Vec<(usize, String)>),
-    MarkerCollision,
-}
-
-/// Calls a cursor-scan function with a document as `this`. It runs in the page world: the scan
-/// counts `onclick` handlers the page assigned from script, which only that world can see.
-async fn call_document_function(
-    session: &ProtocolSession,
-    budget: &SnapshotBudget,
-    document_object_id: Option<&str>,
-    function_declaration: &str,
-    arguments: &[&str],
-    returns: Returns<'_>,
-) -> Result<RemoteValue, CoreError> {
-    let page = PageJs::page_world(session);
-    if let Some(object_id) = document_object_id {
-        let arguments = arguments
-            .iter()
-            .map(|value| json!(value))
-            .collect::<Vec<_>>();
-        return budget
-            .run(page.call_on_object(object_id, function_declaration, &arguments, returns))
-            .await;
-    }
-    let arguments =
-        serde_json::to_string(arguments).map_err(|error| CoreError::Message(error.to_string()))?;
-    let expression = format!("({function_declaration}).apply(document,{arguments})");
-    budget.run(page.eval_returning(&expression, returns)).await
-}
-
-async fn cleanup_cursor_marker(
-    session: &ProtocolSession,
-    budget: &SnapshotBudget,
-    marker_attribute: &str,
-    marker_token: &str,
-    document_object_id: Option<&str>,
-) {
-    let _ = call_document_function(
-        session,
-        budget,
-        document_object_id,
-        "function(a,t){var p=t+':';this.querySelectorAll('['+a+']').forEach(function(e){var v=e.getAttribute(a);if(v&&v.indexOf(p)===0)e.removeAttribute(a);});}",
-        &[marker_attribute, marker_token],
-        Returns::Value,
-    )
-    .await;
-}
-
-async fn release_cursor_objects(
-    session: &ProtocolSession,
-    budget: &SnapshotBudget,
-    object_group: &str,
-) {
-    let _ = budget
-        .send::<Value>(
-            session,
-            "Runtime.releaseObjectGroup",
-            json!({ "objectGroup": object_group }),
-        )
-        .await;
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{SnapshotBudget, SnapshotStage, find_cursor_hits};
+    use super::{CaptureContext, CaptureTrace, SnapshotBudget, SnapshotStage};
+    use crate::observer::clickable::DomSnapshots;
     use crate::{
-        CoreError, FrameId, ProtocolSession, SessionId, connection::CdpConnection,
+        CoreError, FrameId, PageId, ProtocolSession, SessionId, connection::CdpConnection,
         frames::FrameTarget,
     };
     use browseros_cdp::{CdpError, CdpEvent};
@@ -920,66 +446,20 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Call {
         method: String,
-        params: Value,
         session: Option<SessionId>,
     }
 
-    struct CursorConnection {
+    /// Answers a capture holding two documents: the session's root (document node 900) with
+    /// clickable 100, and a same-process child (document node 901) with clickables 101 and 102.
+    #[derive(Default)]
+    struct CaptureConnection {
         calls: Mutex<Vec<Call>>,
-        candidate_markers: [usize; 3],
-        marker_collisions_remaining: AtomicUsize,
-        omitted_candidate: Option<usize>,
-        failed_candidate: Option<usize>,
         fail_ax_tree: bool,
-        fail_cursor_scan: bool,
-        child_loader_id: &'static str,
+        fail_capture: bool,
+        child_loader_id: Option<&'static str>,
     }
 
-    #[test]
-    fn snapshot_trace_stages_are_distinct_and_complete() {
-        let stages = SnapshotStage::ALL
-            .iter()
-            .map(|stage| stage.as_str())
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            stages,
-            vec![
-                "capture",
-                "ax",
-                "cursor_scan",
-                "cursor_describe",
-                "document_validation",
-                "sibling_acquisition",
-                "assembly",
-                "retry",
-            ]
-        );
-        assert_eq!(
-            stages
-                .iter()
-                .collect::<std::collections::HashSet<_>>()
-                .len(),
-            stages.len()
-        );
-    }
-
-    impl Default for CursorConnection {
-        fn default() -> Self {
-            Self {
-                calls: Mutex::new(Vec::new()),
-                candidate_markers: [0, 1, 2],
-                marker_collisions_remaining: AtomicUsize::new(0),
-                omitted_candidate: None,
-                failed_candidate: None,
-                fail_ax_tree: false,
-                fail_cursor_scan: false,
-                child_loader_id: "child-loader",
-            }
-        }
-    }
-
-    impl CursorConnection {
+    impl CaptureConnection {
         fn calls(&self) -> Vec<Call> {
             self.calls
                 .lock()
@@ -987,188 +467,75 @@ mod tests {
                 .unwrap_or_default()
         }
 
-        fn take_marker_collision(&self) -> bool {
-            self.marker_collisions_remaining
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
-                    remaining.checked_sub(1)
-                })
-                .is_ok()
+        fn count(&self, method: &str) -> usize {
+            self.calls()
+                .iter()
+                .filter(|call| call.method == method)
+                .count()
         }
     }
 
-    impl CdpConnection for CursorConnection {
+    /// A document whose body holds one pointer `div` per backend id.
+    fn captured_document(document_backend_id: i64, hits: &[i64]) -> Value {
+        let mut parent_index = vec![-1, 0, 1];
+        let mut node_type = vec![9, 1, 1];
+        let mut node_name = vec![0, 1, 2];
+        let mut backend_node_id = vec![document_backend_id, 1, 2];
+        let mut layout_nodes = vec![1, 2];
+        for &hit in hits {
+            layout_nodes.push(parent_index.len());
+            parent_index.push(2);
+            node_type.push(1);
+            node_name.push(3);
+            backend_node_id.push(hit);
+        }
+        json!({
+            "nodes": {
+                "parentIndex": parent_index,
+                "nodeType": node_type,
+                "nodeName": node_name,
+                "backendNodeId": backend_node_id,
+                "attributes": vec![Vec::<i64>::new(); backend_node_id.len()],
+            },
+            "layout": {
+                "nodeIndex": layout_nodes,
+                "styles": layout_nodes.iter().enumerate().map(|(i, _)| vec![if i < 2 { 5 } else { 4 }]).collect::<Vec<_>>(),
+                "bounds": vec![vec![0.0, 0.0, 40.0, 20.0]; layout_nodes.len()],
+            }
+        })
+    }
+
+    impl CdpConnection for CaptureConnection {
         fn send<'a>(
             &'a self,
             method: &'a str,
-            params: Value,
+            _params: Value,
             session: Option<&'a SessionId>,
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
             Box::pin(async move {
                 if let Ok(mut calls) = self.calls.lock() {
                     calls.push(Call {
                         method: method.to_string(),
-                        params: params.clone(),
                         session: session.cloned(),
                     });
                 }
                 match method {
-                    "Runtime.evaluate"
-                        if params
-                            .get("expression")
-                            .and_then(Value::as_str)
-                            .is_some_and(|expression| expression.contains("interactiveTags")) =>
-                    {
-                        if self.fail_cursor_scan {
-                            return Err(CdpError::Protocol {
-                                code: -32000,
-                                message: "cursor scan failed".to_string(),
-                            });
-                        }
-                        if self.take_marker_collision() {
-                            return Ok(json!({
-                                "result": {
-                                    "type": "object",
-                                    "value": {"collision": true, "candidates": []}
-                                }
-                            }));
-                        }
-                        Ok(json!({
-                            "result": {
-                                "type": "object",
-                                "value": {
-                                    "collision": false,
-                                    "candidates": [
-                                        {"marker": self.candidate_markers[0].to_string(), "reasons": ["cursor:pointer"]},
-                                        {"marker": self.candidate_markers[1].to_string(), "reasons": ["onclick"]},
-                                        {"marker": self.candidate_markers[2].to_string(), "reasons": ["contenteditable"]}
-                                    ]
-                                }
-                            }
-                        }))
-                    }
-                    "Runtime.evaluate"
-                        if params.get("returnByValue") == Some(&Value::Bool(false)) =>
-                    {
-                        Ok(json!({
-                            "result": {
-                                "type": "object",
-                                "objectId": "candidate-array"
-                            }
-                        }))
-                    }
-                    "Runtime.callFunctionOn"
-                        if params
-                            .get("functionDeclaration")
-                            .and_then(Value::as_str)
-                            .is_some_and(|expression| expression.contains("interactiveTags")) =>
-                    {
-                        if self.fail_cursor_scan {
-                            return Err(CdpError::Protocol {
-                                code: -32000,
-                                message: "cursor scan failed".to_string(),
-                            });
-                        }
-                        if self.take_marker_collision() {
-                            return Ok(json!({
-                                "result": {
-                                    "type": "object",
-                                    "value": {"collision": true, "candidates": []}
-                                }
-                            }));
-                        }
-                        Ok(json!({
-                            "result": {
-                                "type": "object",
-                                "value": {
-                                    "collision": false,
-                                    "candidates": [
-                                        {"marker": self.candidate_markers[0].to_string(), "reasons": ["cursor:pointer"]},
-                                        {"marker": self.candidate_markers[1].to_string(), "reasons": ["onclick"]},
-                                        {"marker": self.candidate_markers[2].to_string(), "reasons": ["contenteditable"]}
-                                    ]
-                                }
-                            }
-                        }))
-                    }
-                    "Runtime.callFunctionOn"
-                        if params.get("returnByValue") == Some(&Value::Bool(false)) =>
-                    {
-                        Ok(json!({
-                            "result": {
-                                "type": "object",
-                                "objectId": "candidate-array"
-                            }
-                        }))
-                    }
-                    "Runtime.callFunctionOn" => Ok(json!({
-                        "result": {"type": "undefined"}
+                    "DOMSnapshot.captureSnapshot" if self.fail_capture => Err(CdpError::Protocol {
+                        code: -32000,
+                        message: "capture failed".to_string(),
+                    }),
+                    "DOMSnapshot.captureSnapshot" => Ok(json!({
+                        "documents": [
+                            captured_document(900, &[100]),
+                            captured_document(901, &[101, 102]),
+                        ],
+                        "strings": ["#document", "HTML", "BODY", "DIV", "pointer", "auto"],
                     })),
-                    "DOM.resolveNode" => Ok(json!({
-                        "object": {"type": "object", "objectId": "document-object"}
-                    })),
-                    "Runtime.evaluate" => Ok(json!({
-                        "result": {"type": "undefined"}
-                    })),
-                    "Runtime.getProperties" => {
-                        let mut properties = vec![
-                            json!({
-                                "name": self.candidate_markers[2].to_string(),
-                                "value": {"type": "object", "objectId": "candidate-2"},
-                                "configurable": true,
-                                "enumerable": true
-                            }),
-                            json!({
-                                "name": self.candidate_markers[0].to_string(),
-                                "value": {"type": "object", "objectId": "candidate-0"},
-                                "configurable": true,
-                                "enumerable": true
-                            }),
-                            json!({
-                                "name": self.candidate_markers[1].to_string(),
-                                "value": {"type": "object", "objectId": "candidate-1"},
-                                "configurable": true,
-                                "enumerable": true
-                            }),
-                            json!({
-                                "name": "length",
-                                "value": {"type": "number", "value": 3},
-                                "configurable": false,
-                                "enumerable": false
-                            }),
-                        ];
-                        if let Some(index) = self.omitted_candidate {
-                            let name = self.candidate_markers[index].to_string();
-                            properties.retain(|property| property["name"] != name);
-                        }
-                        Ok(json!({ "result": properties }))
-                    }
-                    "DOM.describeNode" => {
-                        let index = params
-                            .get("objectId")
-                            .and_then(Value::as_str)
-                            .and_then(|object_id| object_id.rsplit('-').next())
-                            .and_then(|index| index.parse::<usize>().ok());
-                        if index == self.failed_candidate {
-                            return Err(CdpError::Protocol {
-                                code: -32000,
-                                message: "candidate vanished".to_string(),
-                            });
-                        }
-                        Ok(json!({
-                            "node": {
-                                "backendNodeId": index.map(|index| index as i64 + 100)
-                            }
-                        }))
-                    }
-                    "Accessibility.getFullAXTree" => {
-                        if self.fail_ax_tree {
-                            return Err(CdpError::Protocol {
-                                code: -32000,
-                                message: "AX tree failed".to_string(),
-                            });
-                        }
-                        Ok(json!({"nodes": []}))
-                    }
+                    "Accessibility.getFullAXTree" if self.fail_ax_tree => Err(CdpError::Protocol {
+                        code: -32000,
+                        message: "AX tree failed".to_string(),
+                    }),
+                    "Accessibility.getFullAXTree" => Ok(json!({"nodes": []})),
                     "Page.getFrameTree" => Ok(json!({
                         "frameTree": {
                             "frame": {
@@ -1179,13 +546,12 @@ mod tests {
                             "childFrames": [{
                                 "frame": {
                                     "id": "child-frame",
-                                    "loaderId": self.child_loader_id,
+                                    "loaderId": self.child_loader_id.unwrap_or("child-loader"),
                                     "url": "https://example.com/frame"
                                 }
                             }]
                         }
                     })),
-                    "Runtime.releaseObjectGroup" => Ok(json!({})),
                     _ => Ok(json!({})),
                 }
             })
@@ -1214,39 +580,249 @@ mod tests {
         }
     }
 
+    fn child_documents() -> std::collections::HashMap<Option<FrameId>, String> {
+        std::collections::HashMap::from([(
+            Some(FrameId("child-frame".to_string())),
+            "child-frame:child-loader".to_string(),
+        )])
+    }
+
+    fn context(
+        root_session: &ProtocolSession,
+        dom_snapshots: &DomSnapshots,
+        budget: &SnapshotBudget,
+    ) -> CaptureContext {
+        CaptureContext {
+            root_session: root_session.clone(),
+            frame_documents: child_documents(),
+            dom_snapshots: dom_snapshots.clone(),
+            budget: budget.clone(),
+            trace: CaptureTrace::new(PageId(1), 0),
+        }
+    }
+
+    fn target(session: &ProtocolSession, session_default: bool) -> FrameTarget {
+        FrameTarget {
+            session: session.clone(),
+            ax_params: json!({"frameId": "child-frame"}),
+            cursor_uses_session_default: session_default,
+        }
+    }
+
+    #[test]
+    fn snapshot_trace_stages_are_distinct_and_complete() {
+        let stages = SnapshotStage::ALL
+            .iter()
+            .map(|stage| stage.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            stages,
+            vec![
+                "capture",
+                "ax",
+                "cursor_scan",
+                "document_validation",
+                "sibling_acquisition",
+                "assembly",
+                "retry",
+            ]
+        );
+        assert_eq!(
+            stages
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            stages.len()
+        );
+    }
+
     #[tokio::test]
     async fn acquired_frame_contains_only_raw_inputs() -> Result<(), CoreError> {
-        let connection = Arc::new(CursorConnection::default());
+        let connection = Arc::new(CaptureConnection::default());
         let session =
             ProtocolSession::for_session(connection, SessionId::from("page-session".to_string()));
-        let frame_id = FrameId("child-frame".to_string());
-        let target = FrameTarget {
-            session: session.clone(),
-            ax_params: json!({"frameId": frame_id.0}),
-            cursor_uses_session_default: false,
-        };
-        let frame_documents = std::collections::HashMap::from([(
-            Some(frame_id.clone()),
-            "child-frame:child-loader".to_string(),
-        )]);
 
         let acquired = super::acquire_frame_data(
-            target,
-            Some(frame_id),
+            target(&session, false),
+            Some(FrameId("child-frame".to_string())),
             Some(901),
-            &session,
-            &frame_documents,
-            &SnapshotBudget::new(),
-            None,
+            &context(&session, &DomSnapshots::default(), &SnapshotBudget::new()),
         )
         .await?;
 
         assert!(acquired.nodes.is_empty());
-        assert_eq!(acquired.cursor_hits.len(), 3);
+        let mut hits = acquired.cursor_hits.keys().copied().collect::<Vec<_>>();
+        hits.sort_unstable();
+        assert_eq!(hits, vec![101, 102]);
         assert_eq!(
             acquired.document_id.as_deref(),
             Some("child-frame:child-loader")
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn acquisition_reads_the_dom_without_running_page_script() -> Result<(), CoreError> {
+        let connection = Arc::new(CaptureConnection::default());
+        let session = ProtocolSession::root(connection.clone());
+
+        super::acquire_frame_data(
+            target(&session, true),
+            None,
+            None,
+            &context(&session, &DomSnapshots::default(), &SnapshotBudget::new()),
+        )
+        .await?;
+
+        let calls = connection.calls();
+        assert!(
+            calls
+                .iter()
+                .any(|call| call.method == "DOMSnapshot.captureSnapshot")
+        );
+        for call in &calls {
+            assert!(
+                !call.method.starts_with("Runtime.")
+                    && !matches!(
+                        call.method.as_str(),
+                        "DOM.resolveNode" | "DOM.setAttributeValue" | "DOM.removeAttribute"
+                    ),
+                "snapshot acquisition sent {}",
+                call.method
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn frames_of_one_session_share_a_capture_and_read_their_own_document()
+    -> Result<(), CoreError> {
+        let connection = Arc::new(CaptureConnection::default());
+        let session = ProtocolSession::for_session(
+            connection.clone(),
+            SessionId::from("page-session".to_string()),
+        );
+        let snapshots = DomSnapshots::default();
+        let budget = SnapshotBudget::new();
+
+        let top = super::acquire_frame_data(
+            target(&session, true),
+            None,
+            None,
+            &context(&session, &snapshots, &budget),
+        )
+        .await?;
+        let child = super::acquire_frame_data(
+            target(&session, false),
+            Some(FrameId("child-frame".to_string())),
+            Some(901),
+            &context(&session, &snapshots, &budget),
+        )
+        .await?;
+
+        assert_eq!(
+            top.cursor_hits.keys().copied().collect::<Vec<_>>(),
+            vec![100]
+        );
+        assert_eq!(child.cursor_hits.len(), 2);
+        assert_eq!(connection.count("DOMSnapshot.captureSnapshot"), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn another_session_gets_its_own_capture() -> Result<(), CoreError> {
+        let connection = Arc::new(CaptureConnection::default());
+        let page = ProtocolSession::for_session(
+            connection.clone(),
+            SessionId::from("page-session".to_string()),
+        );
+        let oopif = ProtocolSession::for_session(
+            connection.clone(),
+            SessionId::from("oopif-session".to_string()),
+        );
+        let snapshots = DomSnapshots::default();
+        let budget = SnapshotBudget::new();
+
+        for session in [&page, &oopif] {
+            super::acquire_frame_data(
+                target(session, true),
+                None,
+                None,
+                &context(&page, &snapshots, &budget),
+            )
+            .await?;
+        }
+
+        let captured_on = connection
+            .calls()
+            .into_iter()
+            .filter(|call| call.method == "DOMSnapshot.captureSnapshot")
+            .filter_map(|call| call.session.map(|session| session.0))
+            .collect::<Vec<_>>();
+        assert_eq!(captured_on, vec!["page-session", "oopif-session"]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn frame_acquisition_preserves_required_and_best_effort_failures() -> Result<(), CoreError>
+    {
+        let frame_id = FrameId("child-frame".to_string());
+
+        let ax_failure = Arc::new(CaptureConnection {
+            fail_ax_tree: true,
+            ..CaptureConnection::default()
+        });
+        let ax_session = ProtocolSession::root(ax_failure);
+        let result = super::acquire_frame_data(
+            target(&ax_session, false),
+            Some(frame_id.clone()),
+            Some(901),
+            &context(
+                &ax_session,
+                &DomSnapshots::default(),
+                &SnapshotBudget::new(),
+            ),
+        )
+        .await;
+        assert!(result.is_err());
+
+        let optional_failures = Arc::new(CaptureConnection {
+            fail_capture: true,
+            child_loader_id: Some("changed-loader"),
+            ..CaptureConnection::default()
+        });
+        let optional_session = ProtocolSession::root(optional_failures.clone());
+        let snapshots = DomSnapshots::default();
+        for _ in 0..2 {
+            let acquired = super::acquire_frame_data(
+                target(&optional_session, false),
+                Some(frame_id.clone()),
+                Some(901),
+                &context(&optional_session, &snapshots, &SnapshotBudget::new()),
+            )
+            .await?;
+            assert!(acquired.cursor_hits.is_empty());
+            assert!(acquired.document_id.is_none());
+        }
+        // A failed capture is remembered for the attempt instead of retried per frame.
+        assert_eq!(optional_failures.count("DOMSnapshot.captureSnapshot"), 1);
+
+        let unresolved = Arc::new(CaptureConnection::default());
+        let unresolved_session = ProtocolSession::root(unresolved.clone());
+        let acquired = super::acquire_frame_data(
+            target(&unresolved_session, false),
+            Some(frame_id),
+            None,
+            &context(
+                &unresolved_session,
+                &DomSnapshots::default(),
+                &SnapshotBudget::new(),
+            ),
+        )
+        .await?;
+        assert!(acquired.cursor_hits.is_empty());
+        assert_eq!(unresolved.count("DOMSnapshot.captureSnapshot"), 0);
         Ok(())
     }
 
@@ -1316,7 +892,7 @@ mod tests {
         fn send<'a>(
             &'a self,
             method: &'a str,
-            params: Value,
+            _params: Value,
             _session: Option<&'a SessionId>,
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
             Box::pin(async move {
@@ -1325,39 +901,9 @@ mod tests {
                         self.mark_and_wait(0b001, self.ax_gate.clone()).await?;
                         Ok(json!({"nodes": []}))
                     }
-                    "Runtime.evaluate"
-                        if params
-                            .get("expression")
-                            .and_then(Value::as_str)
-                            .is_some_and(|expression| expression.contains("interactiveTags")) =>
-                    {
+                    "DOMSnapshot.captureSnapshot" => {
                         self.mark_and_wait(0b010, self.cursor_gate.clone()).await?;
-                        Ok(json!({
-                            "result": {
-                                "type": "object",
-                                "value": {
-                                    "collision": false,
-                                    "candidates": []
-                                }
-                            }
-                        }))
-                    }
-                    "Runtime.callFunctionOn"
-                        if params
-                            .get("functionDeclaration")
-                            .and_then(Value::as_str)
-                            .is_some_and(|expression| expression.contains("interactiveTags")) =>
-                    {
-                        self.mark_and_wait(0b010, self.cursor_gate.clone()).await?;
-                        Ok(json!({
-                            "result": {
-                                "type": "object",
-                                "value": {
-                                    "collision": false,
-                                    "candidates": []
-                                }
-                            }
-                        }))
+                        Ok(json!({"documents": [], "strings": []}))
                     }
                     "Page.getFrameTree" => {
                         let read_index = self.document_reads.fetch_add(1, Ordering::SeqCst);
@@ -1389,12 +935,6 @@ mod tests {
                             }
                         }))
                     }
-                    "DOM.resolveNode" => Ok(json!({
-                        "object": {"type": "object", "objectId": "document-object"}
-                    })),
-                    "Runtime.callFunctionOn" => Ok(json!({"result": {"type": "undefined"}})),
-                    "Runtime.evaluate" => Ok(json!({"result": {"type": "undefined"}})),
-                    "Runtime.releaseObjectGroup" => Ok(json!({})),
                     _ => Ok(json!({})),
                 }
             })
@@ -1423,613 +963,25 @@ mod tests {
         }
     }
 
-    struct GatedCursorConnection {
-        candidate_count: usize,
-        gates: Vec<Arc<Semaphore>>,
-        active: AtomicUsize,
-        max_active: AtomicUsize,
-        entered: Notify,
-        completions: Mutex<Vec<usize>>,
-        completed: Notify,
-        cleanup_evaluations: AtomicUsize,
-        released_groups: AtomicUsize,
-        cleaned: Notify,
-        document_resolve_gate: Arc<Semaphore>,
-        document_resolve_calls: AtomicUsize,
-        document_resolve_started: Notify,
-    }
-
-    impl GatedCursorConnection {
-        fn new(candidate_count: usize) -> Self {
-            Self {
-                candidate_count,
-                gates: (0..candidate_count)
-                    .map(|_index| Arc::new(Semaphore::new(0)))
-                    .collect(),
-                active: AtomicUsize::new(0),
-                max_active: AtomicUsize::new(0),
-                entered: Notify::new(),
-                completions: Mutex::new(Vec::new()),
-                completed: Notify::new(),
-                cleanup_evaluations: AtomicUsize::new(0),
-                released_groups: AtomicUsize::new(0),
-                cleaned: Notify::new(),
-                document_resolve_gate: Arc::new(Semaphore::new(0)),
-                document_resolve_calls: AtomicUsize::new(0),
-                document_resolve_started: Notify::new(),
-            }
-        }
-
-        async fn wait_for_entries(&self, target: usize) {
-            loop {
-                let notified = self.entered.notified();
-                if self.max_active.load(Ordering::SeqCst) >= target {
-                    return;
-                }
-                notified.await;
-            }
-        }
-
-        async fn wait_for_completions(&self, target: usize) {
-            loop {
-                let notified = self.completed.notified();
-                if self
-                    .completions
-                    .lock()
-                    .map(|completions| completions.len())
-                    .unwrap_or_default()
-                    >= target
-                {
-                    return;
-                }
-                notified.await;
-            }
-        }
-
-        async fn wait_for_cleanup(&self) {
-            loop {
-                let notified = self.cleaned.notified();
-                if self.released_groups.load(Ordering::SeqCst) > 0 {
-                    return;
-                }
-                notified.await;
-            }
-        }
-
-        async fn wait_for_document_resolve(&self) {
-            loop {
-                let notified = self.document_resolve_started.notified();
-                if self.document_resolve_calls.load(Ordering::SeqCst) > 0 {
-                    return;
-                }
-                notified.await;
-            }
-        }
-
-        fn completion_order(&self) -> Vec<usize> {
-            self.completions
-                .lock()
-                .map(|completions| completions.clone())
-                .unwrap_or_default()
-        }
-    }
-
-    impl CdpConnection for GatedCursorConnection {
-        fn send<'a>(
-            &'a self,
-            method: &'a str,
-            params: Value,
-            _session: Option<&'a SessionId>,
-        ) -> BoxFuture<'a, Result<Value, CdpError>> {
-            Box::pin(async move {
-                match method {
-                    "Runtime.evaluate"
-                        if params
-                            .get("expression")
-                            .and_then(Value::as_str)
-                            .is_some_and(|expression| expression.contains("interactiveTags")) =>
-                    {
-                        let candidates = (0..self.candidate_count)
-                            .map(|index| {
-                                json!({
-                                    "marker": index.to_string(),
-                                    "reasons": [format!("reason-{index}")]
-                                })
-                            })
-                            .collect::<Vec<_>>();
-                        Ok(json!({
-                            "result": {
-                                "type": "object",
-                                "value": {
-                                    "collision": false,
-                                    "candidates": candidates
-                                }
-                            }
-                        }))
-                    }
-                    "Runtime.evaluate"
-                        if params.get("returnByValue") == Some(&Value::Bool(false)) =>
-                    {
-                        Ok(json!({
-                            "result": {
-                                "type": "object",
-                                "objectId": "candidate-array"
-                            }
-                        }))
-                    }
-                    "Runtime.evaluate" => {
-                        if params
-                            .get("expression")
-                            .and_then(Value::as_str)
-                            .is_some_and(|expression| expression.contains("removeAttribute(a)"))
-                        {
-                            self.cleanup_evaluations.fetch_add(1, Ordering::SeqCst);
-                        }
-                        Ok(json!({"result": {"type": "undefined"}}))
-                    }
-                    "Runtime.getProperties" => {
-                        let properties = (0..self.candidate_count)
-                            .map(|index| {
-                                json!({
-                                    "name": index.to_string(),
-                                    "value": {
-                                        "type": "object",
-                                        "objectId": format!("candidate-{index}")
-                                    },
-                                    "configurable": true,
-                                    "enumerable": true
-                                })
-                            })
-                            .collect::<Vec<_>>();
-                        Ok(json!({ "result": properties }))
-                    }
-                    "DOM.describeNode" => {
-                        let Some(index) = params
-                            .get("objectId")
-                            .and_then(Value::as_str)
-                            .and_then(|object_id| object_id.rsplit('-').next())
-                            .and_then(|index| index.parse::<usize>().ok())
-                        else {
-                            return Err(CdpError::Protocol {
-                                code: -1,
-                                message: "missing candidate index".to_string(),
-                            });
-                        };
-                        let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
-                        self.max_active.fetch_max(active, Ordering::SeqCst);
-                        self.entered.notify_waiters();
-                        let permit =
-                            self.gates[index]
-                                .clone()
-                                .acquire_owned()
-                                .await
-                                .map_err(|error| CdpError::Protocol {
-                                    code: -1,
-                                    message: error.to_string(),
-                                })?;
-                        permit.forget();
-                        self.active.fetch_sub(1, Ordering::SeqCst);
-                        if let Ok(mut completions) = self.completions.lock() {
-                            completions.push(index);
-                        }
-                        self.completed.notify_waiters();
-                        Ok(json!({"node": {"backendNodeId": index as i64 + 100}}))
-                    }
-                    "DOM.resolveNode" => {
-                        self.document_resolve_calls.fetch_add(1, Ordering::SeqCst);
-                        self.document_resolve_started.notify_waiters();
-                        let permit = self
-                            .document_resolve_gate
-                            .clone()
-                            .acquire_owned()
-                            .await
-                            .map_err(|error| CdpError::Protocol {
-                                code: -1,
-                                message: error.to_string(),
-                            })?;
-                        permit.forget();
-                        Ok(json!({
-                            "object": {"type": "object", "objectId": "document-object"}
-                        }))
-                    }
-                    "Runtime.releaseObjectGroup" => {
-                        self.released_groups.fetch_add(1, Ordering::SeqCst);
-                        self.cleaned.notify_waiters();
-                        Ok(json!({}))
-                    }
-                    _ => Ok(json!({})),
-                }
-            })
-        }
-
-        fn send_raw_json<'a>(
-            &'a self,
-            _method: &'a str,
-            _params_json: &'a str,
-            _session: Option<&'a SessionId>,
-        ) -> BoxFuture<'a, Result<String, CdpError>> {
-            Box::pin(async { Ok("{}".to_string()) })
-        }
-
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
-            let (_tx, rx) = broadcast::channel(1);
-            rx
-        }
-
-        fn is_connected(&self) -> bool {
-            true
-        }
-
-        fn connection_epoch(&self) -> u64 {
-            1
-        }
-    }
-
-    #[tokio::test]
-    async fn cursor_scan_batches_handles_and_restores_candidate_pairing() -> Result<(), CoreError> {
-        let connection = Arc::new(CursorConnection::default());
-        let session = ProtocolSession::for_session(
-            connection.clone(),
-            SessionId::from("page-session".to_string()),
-        );
-
-        let hits = find_cursor_hits(&session, None, &SnapshotBudget::new()).await?;
-
-        assert_eq!(hits.get(&100), Some(&vec!["cursor:pointer".to_string()]));
-        assert_eq!(hits.get(&101), Some(&vec!["onclick".to_string()]));
-        assert_eq!(hits.get(&102), Some(&vec!["contenteditable".to_string()]));
-
-        let calls = connection.calls();
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|call| call.method == "Runtime.getProperties")
-                .count(),
-            1
-        );
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|call| call.method == "DOM.describeNode")
-                .count(),
-            3
-        );
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|call| call.method == "Runtime.releaseObjectGroup")
-                .count(),
-            1
-        );
-        assert!(calls.iter().all(
-            |call| call.session.as_ref().map(|session| session.0.as_str()) == Some("page-session")
-        ));
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|call| call.method == "Runtime.evaluate")
-                .count(),
-            3
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn sparse_cursor_markers_restore_compact_candidate_order() -> Result<(), CoreError> {
-        let connection = Arc::new(CursorConnection {
-            candidate_markers: [12, 37, 90],
-            ..CursorConnection::default()
-        });
+    fn spawn_child_acquisition(
+        connection: Arc<StageOverlapConnection>,
+    ) -> tokio::task::JoinHandle<Result<super::AcquiredFrame, CoreError>> {
         let session = ProtocolSession::root(connection);
-
-        let hits = find_cursor_hits(&session, None, &SnapshotBudget::new()).await?;
-
-        assert_eq!(hits.get(&100), Some(&vec!["cursor:pointer".to_string()]));
-        assert_eq!(hits.get(&101), Some(&vec!["onclick".to_string()]));
-        assert_eq!(hits.get(&102), Some(&vec!["contenteditable".to_string()]));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn cursor_resolution_omits_vanished_candidates_and_cleans_its_namespace()
-    -> Result<(), CoreError> {
-        let connection = Arc::new(CursorConnection {
-            omitted_candidate: Some(1),
-            failed_candidate: Some(2),
-            ..CursorConnection::default()
-        });
-        let session = ProtocolSession::root(connection.clone());
-
-        let hits = find_cursor_hits(&session, None, &SnapshotBudget::new()).await?;
-
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits.get(&100), Some(&vec!["cursor:pointer".to_string()]));
-        let calls = connection.calls();
-        let cleanup = calls.iter().find(|call| {
-            call.method == "Runtime.evaluate"
-                && call
-                    .params
-                    .get("expression")
-                    .and_then(Value::as_str)
-                    .is_some_and(|expression| expression.contains("removeAttribute(a)"))
-        });
-        let released = calls
-            .iter()
-            .find(|call| call.method == "Runtime.releaseObjectGroup");
-        assert!(cleanup.is_some());
-        assert!(released.is_some());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn cursor_scans_use_unique_markers() -> Result<(), CoreError> {
-        let connection = Arc::new(CursorConnection::default());
-        let session = ProtocolSession::root(connection.clone());
-        let budget = SnapshotBudget::new();
-
-        let _first = find_cursor_hits(&session, None, &budget).await?;
-        let _second = find_cursor_hits(&session, None, &budget).await?;
-
-        let scan_expressions = connection
-            .calls()
-            .into_iter()
-            .filter(|call| call.method == "Runtime.evaluate")
-            .filter_map(|call| {
-                call.params
-                    .get("expression")
-                    .and_then(Value::as_str)
-                    .filter(|expression| expression.contains("interactiveTags"))
-                    .map(ToString::to_string)
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(scan_expressions.len(), 2);
-        assert_ne!(scan_expressions[0], scan_expressions[1]);
-        assert!(
-            scan_expressions
-                .iter()
-                .all(|expression| expression.contains("data-__bcid-"))
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn colliding_page_marker_is_preserved_and_retried() -> Result<(), CoreError> {
-        let connection = Arc::new(CursorConnection {
-            marker_collisions_remaining: AtomicUsize::new(1),
-            ..CursorConnection::default()
-        });
-        let session = ProtocolSession::root(connection.clone());
-
-        let hits = find_cursor_hits(&session, None, &SnapshotBudget::new()).await?;
-
-        assert_eq!(hits.len(), 3);
-        let calls = connection.calls();
-        let scans = calls
-            .iter()
-            .filter(|call| {
-                call.method == "Runtime.evaluate"
-                    && call
-                        .params
-                        .get("expression")
-                        .and_then(Value::as_str)
-                        .is_some_and(|expression| expression.contains("interactiveTags"))
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(scans.len(), 2);
-        assert_ne!(scans[0].params["expression"], scans[1].params["expression"]);
-        let cleanups = calls
-            .iter()
-            .filter_map(|call| {
-                call.params
-                    .get("expression")
-                    .and_then(Value::as_str)
-                    .filter(|expression| expression.contains("removeAttribute(a)"))
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(cleanups.len(), 2);
-        assert!(
-            cleanups
-                .iter()
-                .all(|expression| expression.contains("v.indexOf(p)===0"))
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn child_cursor_scan_uses_main_world_document_in_target_session() -> Result<(), CoreError>
-    {
-        let connection = Arc::new(CursorConnection::default());
-        let session = ProtocolSession::for_session(
-            connection.clone(),
-            SessionId::from("page-session".to_string()),
-        );
-
-        let _hits = find_cursor_hits(&session, Some(901), &SnapshotBudget::new()).await?;
-
-        let calls = connection.calls();
-        let resolved_document = calls.iter().find(|call| call.method == "DOM.resolveNode");
-        assert_eq!(
-            resolved_document.and_then(|call| call.params.get("backendNodeId")),
-            Some(&json!(901))
-        );
-        assert!(calls.iter().all(|call| {
-            call.session
-                .as_ref()
-                .is_some_and(|session| session.0 == "page-session")
-        }));
-        let scan = calls.iter().find(|call| {
-            call.method == "Runtime.callFunctionOn"
-                && call
-                    .params
-                    .get("functionDeclaration")
-                    .and_then(Value::as_str)
-                    .is_some_and(|function| function.contains("interactiveTags"))
-        });
-        assert_eq!(
-            scan.and_then(|call| call.params.get("objectId")),
-            Some(&json!("document-object"))
-        );
-        assert!(
-            scan.and_then(|call| call.params.get("functionDeclaration"))
-                .and_then(Value::as_str)
-                .is_some_and(|function| function.contains("el.onclick!==null"))
-        );
-        assert!(
-            calls
-                .iter()
-                .all(|call| call.method != "Page.createIsolatedWorld")
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn oopif_cursor_scan_uses_target_session_default_main_world() -> Result<(), CoreError> {
-        let connection = Arc::new(CursorConnection::default());
-        let session = ProtocolSession::for_session(
-            connection.clone(),
-            SessionId::from("oopif-session".to_string()),
-        );
-
-        let _hits = find_cursor_hits(&session, None, &SnapshotBudget::new()).await?;
-
-        let calls = connection.calls();
-        let scan = calls.iter().find(|call| {
-            call.method == "Runtime.evaluate"
-                && call
-                    .params
-                    .get("expression")
-                    .and_then(Value::as_str)
-                    .is_some_and(|expression| expression.contains("interactiveTags"))
-        });
-        assert!(scan.is_some());
-        assert_eq!(
-            scan.and_then(|call| call.session.as_ref())
-                .map(|session| session.0.as_str()),
-            Some("oopif-session")
-        );
-        assert!(calls.iter().all(|call| call.method != "DOM.resolveNode"));
-        assert!(
-            calls
-                .iter()
-                .all(|call| call.params.get("contextId").is_none())
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn cursor_describe_requests_never_exceed_capture_budget() -> Result<(), CoreError> {
-        let connection = Arc::new(GatedCursorConnection::new(12));
-        let session = ProtocolSession::root(connection.clone());
-        let task =
-            tokio::spawn(
-                async move { find_cursor_hits(&session, None, &SnapshotBudget::new()).await },
-            );
-
-        connection.wait_for_entries(8).await;
-        assert_eq!(connection.max_active.load(Ordering::SeqCst), 8);
-        assert_eq!(connection.active.load(Ordering::SeqCst), 8);
-        for gate in &connection.gates {
-            gate.add_permits(1);
-        }
-
-        let hits = task
+        tokio::spawn(async move {
+            super::acquire_frame_data(
+                target(&session, false),
+                Some(FrameId("child-frame".to_string())),
+                Some(901),
+                &context(&session, &DomSnapshots::default(), &SnapshotBudget::new()),
+            )
             .await
-            .map_err(|error| CoreError::Message(error.to_string()))??;
-        assert_eq!(hits.len(), 12);
-        assert_eq!(connection.max_active.load(Ordering::SeqCst), 8);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn out_of_order_cursor_describes_keep_candidate_reasons_aligned() -> Result<(), CoreError>
-    {
-        let connection = Arc::new(GatedCursorConnection::new(3));
-        let session = ProtocolSession::root(connection.clone());
-        let task =
-            tokio::spawn(
-                async move { find_cursor_hits(&session, None, &SnapshotBudget::new()).await },
-            );
-
-        connection.wait_for_entries(3).await;
-        connection.gates[2].add_permits(1);
-        connection.wait_for_completions(1).await;
-        connection.gates[0].add_permits(1);
-        connection.wait_for_completions(2).await;
-        connection.gates[1].add_permits(1);
-
-        let hits = task
-            .await
-            .map_err(|error| CoreError::Message(error.to_string()))??;
-        assert_eq!(connection.completion_order(), vec![2, 0, 1]);
-        assert_eq!(hits.get(&100), Some(&vec!["reason-0".to_string()]));
-        assert_eq!(hits.get(&101), Some(&vec!["reason-1".to_string()]));
-        assert_eq!(hits.get(&102), Some(&vec!["reason-2".to_string()]));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn cancelling_cursor_resolution_still_cleans_marker_and_object_group()
-    -> Result<(), CoreError> {
-        let connection = Arc::new(GatedCursorConnection::new(1));
-        let session = ProtocolSession::root(connection.clone());
-        let task =
-            tokio::spawn(
-                async move { find_cursor_hits(&session, None, &SnapshotBudget::new()).await },
-            );
-
-        connection.wait_for_entries(1).await;
-        task.abort();
-        assert!(task.await.is_err());
-        connection.wait_for_cleanup().await;
-        assert_eq!(connection.cleanup_evaluations.load(Ordering::SeqCst), 1);
-        assert_eq!(connection.released_groups.load(Ordering::SeqCst), 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn cancelling_document_resolution_still_releases_its_object_group()
-    -> Result<(), CoreError> {
-        let connection = Arc::new(GatedCursorConnection::new(1));
-        let session = ProtocolSession::root(connection.clone());
-        let task = tokio::spawn(async move {
-            find_cursor_hits(&session, Some(901), &SnapshotBudget::new()).await
-        });
-
-        connection.wait_for_document_resolve().await;
-        task.abort();
-        assert!(task.await.is_err());
-        connection.wait_for_cleanup().await;
-        assert_eq!(connection.cleanup_evaluations.load(Ordering::SeqCst), 0);
-        assert_eq!(connection.released_groups.load(Ordering::SeqCst), 1);
-        Ok(())
+        })
     }
 
     #[tokio::test]
     async fn frame_ax_cursor_and_document_acquisition_overlap() -> Result<(), CoreError> {
         let connection = Arc::new(StageOverlapConnection::new());
-        let session = ProtocolSession::root(connection.clone());
-        let frame_id = FrameId("child-frame".to_string());
-        let target = FrameTarget {
-            session: session.clone(),
-            ax_params: json!({"frameId": frame_id.0}),
-            cursor_uses_session_default: false,
-        };
-        let frame_documents = std::collections::HashMap::from([(
-            Some(frame_id.clone()),
-            "child-frame:child-loader".to_string(),
-        )]);
-        let task = tokio::spawn(async move {
-            super::acquire_frame_data(
-                target,
-                Some(frame_id),
-                Some(901),
-                &session,
-                &frame_documents,
-                &SnapshotBudget::new(),
-                None,
-            )
-            .await
-        });
+        let task = spawn_child_acquisition(connection.clone());
 
         tokio::time::timeout(
             std::time::Duration::from_secs(1),
@@ -2056,29 +1008,7 @@ mod tests {
     #[tokio::test]
     async fn child_navigation_after_eager_validation_uses_fallback_refs() -> Result<(), CoreError> {
         let connection = Arc::new(StageOverlapConnection::new());
-        let session = ProtocolSession::root(connection.clone());
-        let frame_id = FrameId("child-frame".to_string());
-        let target = FrameTarget {
-            session: session.clone(),
-            ax_params: json!({"frameId": frame_id.0}),
-            cursor_uses_session_default: false,
-        };
-        let frame_documents = std::collections::HashMap::from([(
-            Some(frame_id.clone()),
-            "child-frame:child-loader".to_string(),
-        )]);
-        let task = tokio::spawn(async move {
-            super::acquire_frame_data(
-                target,
-                Some(frame_id),
-                Some(901),
-                &session,
-                &frame_documents,
-                &SnapshotBudget::new(),
-                None,
-            )
-            .await
-        });
+        let task = spawn_child_acquisition(connection.clone());
 
         connection.wait_for_all_stages().await;
         connection.document_gate.add_permits(1);
@@ -2092,63 +1022,6 @@ mod tests {
             .map_err(|error| CoreError::Message(error.to_string()))??;
         assert!(acquired.document_id.is_none());
         assert_eq!(connection.document_reads.load(Ordering::SeqCst), 2);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn frame_acquisition_preserves_required_and_best_effort_failures() -> Result<(), CoreError>
-    {
-        let frame_id = FrameId("child-frame".to_string());
-        let frame_documents = std::collections::HashMap::from([(
-            Some(frame_id.clone()),
-            "child-frame:child-loader".to_string(),
-        )]);
-
-        let ax_failure = Arc::new(CursorConnection {
-            fail_ax_tree: true,
-            ..CursorConnection::default()
-        });
-        let ax_session = ProtocolSession::root(ax_failure);
-        let ax_target = FrameTarget {
-            session: ax_session.clone(),
-            ax_params: json!({"frameId": frame_id.0}),
-            cursor_uses_session_default: false,
-        };
-        let result = super::acquire_frame_data(
-            ax_target,
-            Some(frame_id.clone()),
-            Some(901),
-            &ax_session,
-            &frame_documents,
-            &SnapshotBudget::new(),
-            None,
-        )
-        .await;
-        assert!(result.is_err());
-
-        let optional_failures = Arc::new(CursorConnection {
-            fail_cursor_scan: true,
-            child_loader_id: "changed-loader",
-            ..CursorConnection::default()
-        });
-        let optional_session = ProtocolSession::root(optional_failures);
-        let optional_target = FrameTarget {
-            session: optional_session.clone(),
-            ax_params: json!({"frameId": frame_id.0}),
-            cursor_uses_session_default: false,
-        };
-        let acquired = super::acquire_frame_data(
-            optional_target,
-            Some(frame_id),
-            Some(901),
-            &optional_session,
-            &frame_documents,
-            &SnapshotBudget::new(),
-            None,
-        )
-        .await?;
-        assert!(acquired.cursor_hits.is_empty());
-        assert!(acquired.document_id.is_none());
         Ok(())
     }
 }

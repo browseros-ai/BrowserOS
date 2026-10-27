@@ -339,6 +339,33 @@ impl FixtureConnection {
                 }))
             }
             "Page.captureScreenshot" => Ok(json!({ "data": "cG5n" })),
+            // One plain `div` the accessibility tree calls generic; only the DOM capture
+            // shows it is a pointer-cursor click target.
+            "Accessibility.getFullAXTree" => Ok(json!({ "nodes": [
+                { "nodeId": "1", "ignored": false, "role": { "type": "role", "value": "RootWebArea" },
+                  "name": { "type": "computedString", "value": "eng" }, "childIds": ["2"], "backendDOMNodeId": 1 },
+                { "nodeId": "2", "ignored": false, "role": { "type": "role", "value": "generic" },
+                  "childIds": ["3"], "backendDOMNodeId": 7, "parentId": "1" },
+                { "nodeId": "3", "ignored": false, "role": { "type": "role", "value": "StaticText" },
+                  "name": { "type": "computedString", "value": "Open card" }, "parentId": "2" }
+            ] })),
+            "DOMSnapshot.captureSnapshot" => Ok(json!({
+                "documents": [{
+                    "nodes": {
+                        "parentIndex": [-1, 0, 1, 2],
+                        "nodeType": [9, 1, 1, 1],
+                        "nodeName": [0, 1, 2, 3],
+                        "backendNodeId": [1, 5, 6, 7],
+                        "attributes": [[], [], [], []]
+                    },
+                    "layout": {
+                        "nodeIndex": [1, 2, 3],
+                        "styles": [[4], [4], [5]],
+                        "bounds": [[0, 0, 800, 600], [0, 0, 800, 600], [0, 0, 80, 20]]
+                    }
+                }],
+                "strings": ["#document", "HTML", "BODY", "DIV", "auto", "pointer"]
+            })),
             "Page.enable"
             | "DOM.enable"
             | "Runtime.enable"
@@ -804,7 +831,7 @@ async fn granular_and_script_paths_project_normal_windows_after_global_reconcili
     {
         let rejected = call(
             &ctx,
-            "evaluate",
+            "evaluate_in_page",
             json!({ "page": tab.page_id.0, "code": "return 1" }),
         )
         .await?;
@@ -2242,6 +2269,46 @@ async fn one_run_without_a_default_window_opens_one_window_for_all_pages() -> an
             .count(),
         1,
         "{created:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn bound_snapshots_find_clickables_through_the_dom_capture() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new();
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
+    let global = session.pages.list().await?;
+    let store = Arc::new(StaticTargetStore::new());
+    store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
+    let ctx = ctx(session.clone(), store).await?;
+    let page = global
+        .iter()
+        .find(|tab| tab.tab_id.0 == 102)
+        .ok_or_else(|| anyhow::anyhow!("eng tab missing"))?
+        .page_id
+        .0;
+
+    let snapshot = call(&ctx, "snapshot", json!({ "page": page })).await?;
+
+    let output = text(&snapshot);
+    assert!(!snapshot.is_error, "{output}");
+    assert!(output.contains("[cursor=pointer]"), "{output}");
+    let calls = connection.calls();
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.method == "DOMSnapshot.captureSnapshot"),
+        "the bound scope refused the DOM capture"
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.method == "Runtime.callFunctionOn"),
+        "snapshot ran a page function"
     );
     Ok(())
 }
