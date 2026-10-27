@@ -1035,9 +1035,12 @@ async fn tests_that_a_raw_override_landing_before_a_refit_is_not_lost() -> TestR
             .map(drop)
             .map_err(|error| error.to_string())
     });
-    while fixture.native.lock().parked == 0 {
-        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-    }
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while fixture.native.lock().parked == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    })
+    .await?;
     fixture
         .view
         .cdp(
@@ -1592,6 +1595,68 @@ async fn tests_that_a_held_page_makes_viewport_changes_wait() -> TestResult {
     drop(held);
     change.await?;
     drop(operation.await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_an_operation_queued_behind_a_mode_change_restores_that_mode() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10), (2, 10), (3, 10)]);
+    let a = fixture.page(1).await?;
+    let b = fixture.page(2).await?;
+    let holder = fixture.page(3).await?;
+    fixture.set(&holder, ViewportMode::Mobile, None).await?;
+    let held = fixture.view.prepare_viewport(holder).await?;
+
+    // Queued in this order: A becomes mobile, B desktop, then an operation on A, which still
+    // looked default when it started waiting.
+    let view = fixture.view.clone();
+    let target = a.clone();
+    let mut to_mobile = Box::pin(async move {
+        view.set_viewport(
+            target,
+            ViewportRequest::new(ViewportMode::Mobile, None)?,
+            &CancellationToken::new(),
+        )
+        .await
+        .map(drop)
+        .map_err(|error| error.to_string())
+    });
+    assert!(still_waiting(&mut to_mobile).await);
+    let view = fixture.view.clone();
+    let mut to_desktop = Box::pin(async move {
+        view.set_viewport(
+            b,
+            ViewportRequest::new(ViewportMode::Desktop, None)?,
+            &CancellationToken::new(),
+        )
+        .await
+        .map(drop)
+        .map_err(|error| error.to_string())
+    });
+    assert!(still_waiting(&mut to_desktop).await);
+    let view = fixture.view.clone();
+    let target = a.clone();
+    let mut operation = Box::pin(async move {
+        view.prepare_viewport(target)
+            .await
+            .map(drop)
+            .map_err(|error| error.to_string())
+    });
+    assert!(still_waiting(&mut operation).await);
+    fixture.native.clear_calls();
+    drop(held);
+    let (mobile, desktop, operated) = tokio::join!(to_mobile, to_desktop, operation);
+    mobile?;
+    desktop?;
+    operated?;
+
+    // The operation on A refitted the window for A's preview after B's desktop fit.
+    let fits = fixture.native.calls("Browser.setContentsSize");
+    assert_eq!(
+        fits.last().map(|call| call.params["width"].clone()),
+        Some(json!(400)),
+        "{fits:?}"
+    );
     Ok(())
 }
 

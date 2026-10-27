@@ -369,7 +369,12 @@ impl Viewports {
         if self.tab(&page).is_none() {
             // A default tab changes nothing, but must not act while a fixed tab's operation
             // owns the window it shares.
-            return Ok(self.hold(view, page).await);
+            let lease = self.hold(view, page.clone()).await;
+            // A setViewport queued ahead of this operation may have made the tab fixed; the
+            // shared lease is released here and the fixed path below restores it.
+            if self.tab(&page).is_none() {
+                return Ok(lease);
+            }
         }
         let info = view.page(page.clone()).await?;
         let mut slot = self.lock_window(view, info.window_id).await;
