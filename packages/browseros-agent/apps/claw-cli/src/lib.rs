@@ -8,6 +8,7 @@
 //! needs `page` and every tool accepts `session`; both live in a scope file, so
 //! `browseros click @e3` carries nothing the caller has to remember.
 
+pub mod capability;
 pub mod cli;
 pub mod client;
 pub mod endpoint;

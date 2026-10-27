@@ -2,10 +2,15 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use claw_cli::{cli::Cli, exec, exit, io};
+use claw_cli::{capability, cli::Cli, exec, exit, io};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
+    if let Some(lesson) = teach_instead() {
+        io::fail(&format!("browseros: {lesson}"));
+        return ExitCode::from(code_byte(exit::Code::Usage));
+    }
+
     let parsed = match Cli::try_parse() {
         Ok(parsed) => parsed,
         Err(error) => {
@@ -32,4 +37,21 @@ async fn main() -> ExitCode {
 
 fn code_byte(code: exit::Code) -> u8 {
     u8::try_from(code.value()).unwrap_or(1)
+}
+
+/// Turns "no such command" into the nearest thing neo can actually do.
+///
+/// An agent that has driven agent-browser will reach for `cookies`, `network`
+/// or `state`. Answering with a bare usage error costs it several turns to
+/// discover neo has no such tool; answering with the workaround costs one.
+///
+/// Checked before clap rather than from its error, because clap populates the
+/// attempted name only when it has a suggestion to make, and these names have
+/// no near neighbour in the grammar by design.
+fn teach_instead() -> Option<String> {
+    let attempted = std::env::args().nth(1)?;
+    if attempted.starts_with('-') {
+        return None;
+    }
+    capability::teach(&attempted)
 }

@@ -10,7 +10,7 @@ use crate::cli::{Cli, Command, Globals};
 use crate::client::{self, Session, result::ToolOutput};
 use crate::exit::{Code, Failure};
 use crate::plan::{self, External, Local, Plan, ToolPlan};
-use crate::{io, render, script, state};
+use crate::{capability, io, render, script, state};
 
 /// Parses, plans and runs one invocation.
 ///
@@ -83,6 +83,14 @@ async fn run_tool(
         plan.args
             .entry("groupId".to_string())
             .or_insert(Value::String(group));
+    }
+
+    if let Some(reason) = capability::unavailable(plan.tool, &session.state().tools) {
+        return Err(Failure::tool(format!(
+            "this server does not offer `{}`: {reason}.\n  Run `browseros status` to see what it does offer.",
+            plan.tool
+        ))
+        .into());
     }
 
     let started = Instant::now();
@@ -167,6 +175,10 @@ async fn run_local(session: &mut Session, globals: &Globals, local: Local) -> Re
 async fn status(session: &mut Session, globals: &Globals) -> Result<Code> {
     let ready = session.transport().ready().await;
     let link = client::link_summary(ready.clone());
+    // One tools/list, cached against the server version. It is the largest
+    // response the CLI ever reads, so asking once per pairing rather than per
+    // command is the whole cost argument for a CLI over MCP.
+    let offered = session.refresh_tools().await.unwrap_or_default();
     let state = session.state().clone();
 
     let rows = vec![
@@ -200,6 +212,14 @@ async fn status(session: &mut Session, globals: &Globals) -> Result<Code> {
             },
         ),
         ("scope", state.scope_path.clone().unwrap_or_default()),
+        (
+            "server",
+            state
+                .server_version
+                .clone()
+                .map(|version| format!("{version}  {} tools", offered.len()))
+                .unwrap_or_default(),
+        ),
     ];
 
     if globals.json {
@@ -208,9 +228,36 @@ async fn status(session: &mut Session, globals: &Globals) -> Result<Code> {
             "endpoint": session.transport().endpoint(),
             "browser": link,
             "state": state,
+            "tools": offered,
         }))?);
     } else {
         io::out(&render::fields(&rows));
+        if !offered.is_empty() {
+            io::out("");
+            let optional = capability::OPTIONAL
+                .iter()
+                .map(|entry| {
+                    let verdict = if offered.iter().any(|name| name == entry.tool) {
+                        "offered".to_string()
+                    } else {
+                        format!("not offered ({})", entry.absent_because)
+                    };
+                    (entry.command, verdict)
+                })
+                .collect::<Vec<_>>();
+            let rendered = optional
+                .iter()
+                .map(|(command, verdict)| (*command, verdict.clone()))
+                .collect::<Vec<_>>();
+            io::out("optional");
+            io::out(
+                &render::fields(&rendered)
+                    .lines()
+                    .map(|line| format!("  {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+        }
     }
     Ok(match ready {
         Some((200, _)) => Code::Ok,
