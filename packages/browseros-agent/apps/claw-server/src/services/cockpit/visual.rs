@@ -165,6 +165,15 @@ impl SessionVisualService {
         else {
             return Ok(None);
         };
+        // A JavaScript dialog stalls the renderer: the capture would only wait on it while
+        // holding the page's window.
+        if browser
+            .page_signals
+            .pending_dialog(&PageId(candidate.page_id))
+            .is_some()
+        {
+            return Ok(None);
+        }
         if !self.in_flight.begin(candidate.page_id).await {
             return Ok(None);
         }

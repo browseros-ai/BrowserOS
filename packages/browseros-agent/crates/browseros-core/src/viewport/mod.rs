@@ -255,12 +255,18 @@ impl Viewports {
         page: PageId,
         request: ViewportRequest,
     ) -> Result<ViewportReport, CoreError> {
+        let dialog_open = || {
+            CoreError::Message(format!(
+                "a JavaScript dialog is open on page {page}; accept or dismiss it first"
+            ))
+        };
+        if view.signals().pending_dialog(&page).is_some() {
+            return Err(dialog_open());
+        }
         let info = view.page(page.clone()).await?;
         let mut slot = self.lock_window(info.window_id).await;
         if view.signals().pending_dialog(&page).is_some() {
-            return Err(CoreError::Message(format!(
-                "a JavaScript dialog is open on page {page}; accept or dismiss it first"
-            )));
+            return Err(dialog_open());
         }
         let session = view.page_session(page.clone()).await?.session_id;
         let Some(fixed) = request.fixed() else {
@@ -298,6 +304,12 @@ impl Viewports {
         view: &BrowserView,
         page: PageId,
     ) -> Result<ViewportLease, CoreError> {
+        // An open dialog blocks the renderer; only the dialog actions can run, and they need
+        // no geometry. They must not wait for the window either: work stalled by the same
+        // dialog may hold it. The next operation after the dialog restores the tab.
+        if view.signals().pending_dialog(&page).is_some() {
+            return Ok(ViewportLease::default());
+        }
         if self.tab(&page).is_none() {
             // A default tab changes nothing, but must not act while a fixed tab's operation
             // owns the window it shares.
@@ -312,8 +324,7 @@ impl Viewports {
                 _exclusive: slot,
             });
         };
-        // An open dialog blocks the renderer; only the dialog actions can run, and they need
-        // no geometry. The next operation after the dialog restores it.
+        // The dialog may have opened while this operation waited for the window.
         if view.signals().pending_dialog(&page).is_some() {
             return Ok(ViewportLease {
                 _shared: None,

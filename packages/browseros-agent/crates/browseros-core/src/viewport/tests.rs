@@ -1354,3 +1354,39 @@ async fn tests_that_mobile_identity_matches_google_chrome_on_android() -> TestRe
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn tests_that_a_dialog_blocked_page_never_waits_for_its_window() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    fixture.set(&page, ViewportMode::Mobile, None).await?;
+    fixture.emit(
+        "Page.javascriptDialogOpening",
+        json!({"type": "confirm", "message": "Leave?", "url": "https://site.test/1"}),
+        "session-1",
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while fixture.view.signals().pending_dialog(&page).is_none() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+
+    // Something else holds the window, such as a capture that the dialog stalls.
+    let held = fixture.view.hold_viewport(page.clone()).await;
+    let quick = std::time::Duration::from_millis(300);
+    let lease = tokio::time::timeout(quick, fixture.view.prepare_viewport(page.clone())).await??;
+    drop(lease);
+    let refused = tokio::time::timeout(
+        quick,
+        fixture
+            .view
+            .set_viewport(page, ViewportRequest::new(ViewportMode::Desktop, None)?),
+    )
+    .await?
+    .err()
+    .ok_or("a mode change on a dialog-blocked page must be refused")?;
+    assert!(refused.to_string().contains("dialog"), "{refused}");
+    drop(held);
+    Ok(())
+}
