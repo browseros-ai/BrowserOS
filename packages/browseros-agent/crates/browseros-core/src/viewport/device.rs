@@ -165,14 +165,30 @@ pub(super) fn chrome_version(reply: &Value) -> Option<String> {
     from(&reply["product"]).or_else(|| from(&reply["userAgent"]))
 }
 
+/// Reads the metrics in an isolated world: page scripts may redefine `screen` or
+/// `devicePixelRatio` in their own world, which must neither fake nor fail this check.
 pub(super) async fn measure(
     view: &BrowserView,
     session: &SessionId,
 ) -> Result<PageMetrics, CoreError> {
+    let tree = view
+        .send_at_capture("Page.getFrameTree", json!({}), Some(session))
+        .await?;
+    let world = view
+        .send_at_capture(
+            "Page.createIsolatedWorld",
+            json!({"frameId": tree["frameTree"]["frame"]["id"], "worldName": "browseros-viewport"}),
+            Some(session),
+        )
+        .await?;
     let reply = view
         .send_at_capture(
             "Runtime.evaluate",
-            json!({"expression": METRICS_EXPRESSION, "returnByValue": true}),
+            json!({
+                "expression": METRICS_EXPRESSION,
+                "contextId": world["executionContextId"],
+                "returnByValue": true
+            }),
             Some(session),
         )
         .await?;

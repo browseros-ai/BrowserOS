@@ -46,6 +46,8 @@ struct Fake {
     ignore_metrics: bool,
     /// Where `Browser.getWindowForTarget` says a tab is, when a person moved it mid-call.
     moved_to: Option<i64>,
+    /// Page scripts override `screen` and `devicePixelRatio` in the main world.
+    tampered: bool,
 }
 
 struct Native {
@@ -88,6 +90,7 @@ impl Native {
                 emulation: HashMap::new(),
                 ignore_metrics: false,
                 moved_to: None,
+                tampered: false,
             }),
             events,
         })
@@ -299,13 +302,22 @@ impl Native {
                     params["userAgent"].as_str().unwrap_or_default().to_string();
                 json!({})
             }
+            "Page.getFrameTree" => {
+                json!({"frameTree": {"frame": {"id": format!("frame-{}", target.unwrap_or_default())}}})
+            }
+            "Page.createIsolatedWorld" => json!({"executionContextId": 77}),
             "Runtime.evaluate" => match target {
                 Some(target)
                     if params["expression"]
                         .as_str()
                         .is_some_and(|e| e.contains("screenWidth")) =>
                 {
-                    json!({"result": {"type": "object", "value": Self::metrics(&fake, &target)}})
+                    let mut value = Self::metrics(&fake, &target);
+                    if fake.tampered && params.get("contextId").is_none() {
+                        value["screenWidth"] = json!(123);
+                        value["deviceScaleFactor"] = json!(7);
+                    }
+                    json!({"result": {"type": "object", "value": value}})
                 }
                 _ => json!({"result": {"type": "string", "value": "complete"}}),
             },
@@ -991,5 +1003,22 @@ async fn tests_that_a_tab_moved_to_another_window_mid_call_is_not_fitted() -> Te
     assert!(error.to_string().contains("page_target_changed"), "{error}");
     assert_eq!(fixture.native.window(20)?, before);
     assert!(window_methods(&fixture.native.methods()).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_page_scripts_cannot_fake_or_fail_the_check() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    fixture.native.lock().tampered = true;
+    let page = fixture.page(1).await?;
+    let report = fixture.set(&page, ViewportMode::Mobile, None).await?;
+
+    assert_eq!(
+        (
+            report.viewport.screen_width,
+            report.viewport.device_scale_factor
+        ),
+        (400.0, 2.0)
+    );
     Ok(())
 }
