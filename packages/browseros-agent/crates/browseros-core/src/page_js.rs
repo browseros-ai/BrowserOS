@@ -42,7 +42,7 @@ use std::{
 const WORLD_NAME: &str = "browseros";
 
 /// Returned by a guarded isolated call whose node is not in the document of the world it was
-/// resolved into. The call is then repeated in the page world. See [`guard_top_document`].
+/// resolved into. The call is then repeated in the page world. See [`guard_document`].
 const OTHER_DOCUMENT: &str = "__browserosOtherDocument";
 
 /// Top-frame ids are a property of a session (a page target's main frame id is its target id),
@@ -143,7 +143,9 @@ impl<'a> PageJs<'a> {
         self
     }
 
-    /// Chromium terminates an [`eval`](Self::eval) that runs longer. `call` has no such limit.
+    /// Chromium terminates an [`eval`](Self::eval) that runs longer. `call` has no such limit,
+    /// and neither has a page-world `eval` in a same-process child frame: that frame's main-world
+    /// context has no id to evaluate in, so it runs as a call on the frame's document.
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
@@ -172,15 +174,10 @@ impl<'a> PageJs<'a> {
         args: &[Value],
     ) -> Result<T, CoreError> {
         if self.isolated {
-            // Without a named frame the node might sit in a same-process child frame, where the
-            // top document's world would bind `document` and `window` to the wrong document.
-            let guarded;
-            let function = if self.frame.is_none() {
-                guarded = guard_top_document(function);
-                guarded.as_str()
-            } else {
-                function
-            };
+            // The node might sit in another document than the frame whose world resolves it (a
+            // same-process child frame), where `document` and `window` would be the wrong ones.
+            let guarded = guard_document(function);
+            let function = guarded.as_str();
             let attempt = self
                 .with_isolated_context(|context| {
                     self.call_node(
@@ -297,14 +294,14 @@ impl<'a> PageJs<'a> {
         let Some(object_id) = resolved.object.and_then(|object| object.object_id) else {
             return Ok(None);
         };
+        let wrapper = NodeWrapper {
+            session: self.session,
+            object_id: Some(object_id),
+        };
         let result = self
-            .call_on_object(&object_id, function, args, returns)
+            .call_on_object(wrapper.id(), function, args, returns)
             .await;
-        // The wrapper would otherwise live until the document goes away.
-        let _ = self
-            .session
-            .send::<_, Value>("Runtime.releaseObject", json!({ "objectId": object_id }))
-            .await;
+        wrapper.release().await;
         result.map(Some)
     }
 
@@ -385,10 +382,49 @@ impl<'a> PageJs<'a> {
     }
 }
 
+/// A node wrapper resolved for one call. It would otherwise live until its document goes away, so
+/// it is released after the call, and also when a caller's timeout drops the call mid-script, which
+/// skips the awaited release.
+struct NodeWrapper<'a> {
+    session: &'a ProtocolSession,
+    object_id: Option<String>,
+}
+
+impl NodeWrapper<'_> {
+    fn id(&self) -> &str {
+        self.object_id.as_deref().unwrap_or_default()
+    }
+
+    async fn release(mut self) {
+        if let Some(object_id) = self.object_id.take() {
+            release_object(self.session, object_id).await;
+        }
+    }
+}
+
+impl Drop for NodeWrapper<'_> {
+    fn drop(&mut self) {
+        let Some(object_id) = self.object_id.take() else {
+            return;
+        };
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let session = self.session.clone();
+        drop(handle.spawn(async move { release_object(&session, object_id).await }));
+    }
+}
+
+async fn release_object(session: &ProtocolSession, object_id: String) {
+    let _ = session
+        .send::<_, Value>("Runtime.releaseObject", json!({ "objectId": object_id }))
+        .await;
+}
+
 /// Wraps `function` so it reports [`OTHER_DOCUMENT`] instead of running when its node belongs to
 /// another document than the one whose world is calling it. The trailing newline keeps a line
 /// comment at the end of `function` from swallowing the call.
-fn guard_top_document(function: &str) -> String {
+fn guard_document(function: &str) -> String {
     format!(
         "function(...args){{if((this.ownerDocument||this)!==document)return {{{OTHER_DOCUMENT}:true}};return (\n{function}\n).apply(this,args);}}"
     )

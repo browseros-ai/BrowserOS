@@ -9,10 +9,26 @@ use std::{
 use tokio::sync::broadcast;
 
 const TEST_ERROR_KEY: &str = "__test_cdp_error";
+const TEST_PENDING_KEY: &str = "__test_cdp_pending";
 
 /// A queued response that makes the call fail with a CDP protocol error carrying `message`.
 pub fn cdp_error(message: &str) -> Value {
     serde_json::json!({ TEST_ERROR_KEY: message })
+}
+
+/// A queued response the browser never sends: the call stays pending until its future is dropped.
+pub fn cdp_pending() -> Value {
+    serde_json::json!({ TEST_PENDING_KEY: true })
+}
+
+async fn answer(response: Result<Value, CdpError>) -> Result<Value, CdpError> {
+    if response
+        .as_ref()
+        .is_ok_and(|response| response.get(TEST_PENDING_KEY).is_some())
+    {
+        std::future::pending::<()>().await;
+    }
+    response
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -94,7 +110,7 @@ impl CdpConnection for TestConnection {
         params: Value,
         _session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
-        Box::pin(async move { self.reply(None, method, params) })
+        Box::pin(async move { answer(self.reply(None, method, params)).await })
     }
 
     fn send_raw_json<'a>(
@@ -117,7 +133,7 @@ impl CdpConnection for TestConnection {
         params: Value,
         _session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
-        Box::pin(async move { self.reply(Some(expected), method, params) })
+        Box::pin(async move { answer(self.reply(Some(expected), method, params)).await })
     }
 
     fn send_raw_json_at_epoch<'a>(

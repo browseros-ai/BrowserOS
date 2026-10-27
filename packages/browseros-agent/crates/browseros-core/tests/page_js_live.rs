@@ -13,7 +13,8 @@ use browseros_core::{
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-const PAGE: &str = "data:text/html,<button id=b>go</button><iframe id=f srcdoc='<p id=p>child</p>'></iframe>";
+const PAGE: &str =
+    "data:text/html,<button id=b>go</button><iframe id=f srcdoc='<p id=p>child</p>'></iframe>";
 
 #[tokio::test]
 #[ignore = "needs a browser with CDP on BROWSEROS_CDP_PORT (default 9005)"]
@@ -29,7 +30,10 @@ async fn tests_that_isolated_scripts_share_the_dom_but_not_javascript_with_the_p
     let target = root
         .send_value("Target.createTarget", json!({ "url": PAGE }))
         .await?;
-    let target_id = target["targetId"].as_str().ok_or("no target id")?.to_string();
+    let target_id = target["targetId"]
+        .as_str()
+        .ok_or("no target id")?
+        .to_string();
     let result = exercise(&client, &root, &target_id).await;
     let _ = root
         .send_value("Target.closeTarget", json!({ "targetId": target_id }))
@@ -56,15 +60,21 @@ async fn exercise(
     wait_for_child_frame(&page).await?;
 
     // Globals stay on their own side, and the isolated world persists between calls.
-    let _: Value = PageJs::isolated(&page).eval("window.__isolatedOnly = 1").await?;
-    let _: Value = PageJs::page_world(&page).eval("window.__pageOnly = 1").await?;
+    let _: Value = PageJs::isolated(&page)
+        .eval("window.__isolatedOnly = 1")
+        .await?;
+    let _: Value = PageJs::page_world(&page)
+        .eval("window.__pageOnly = 1")
+        .await?;
     let seen_by_page: String = PageJs::page_world(&page)
         .eval("typeof window.__isolatedOnly")
         .await?;
     let seen_by_isolated: String = PageJs::isolated(&page)
         .eval("typeof window.__pageOnly")
         .await?;
-    let kept: i64 = PageJs::isolated(&page).eval("window.__isolatedOnly").await?;
+    let kept: i64 = PageJs::isolated(&page)
+        .eval("window.__isolatedOnly")
+        .await?;
     assert_eq!(seen_by_page, "undefined");
     assert_eq!(seen_by_isolated, "undefined");
     assert_eq!(kept, 1);

@@ -1,7 +1,7 @@
 use super::{OTHER_DOCUMENT, PageJs};
 use crate::{
     CoreError, FrameId, ProtocolSession, SessionId,
-    test_support::{TestCall, TestConnection, cdp_error},
+    test_support::{TestCall, TestConnection, cdp_error, cdp_pending},
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -274,6 +274,79 @@ async fn tests_that_isolated_call_reruns_in_the_page_world_for_a_node_in_another
     assert_eq!(
         calls[6].params["functionDeclaration"],
         "function(){return this.offsetWidth}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_an_isolated_call_in_a_named_frame_is_still_guarded_against_other_documents()
+-> Result<(), Box<dyn std::error::Error>> {
+    let connection = TestConnection::new([
+        (
+            "Page.createIsolatedWorld",
+            json!({ "executionContextId": 11 }),
+        ),
+        (
+            "DOM.resolveNode",
+            json!({ "object": { "objectId": "framed-node" } }),
+        ),
+        (
+            "Runtime.callFunctionOn",
+            json!({ "result": { "value": 1 } }),
+        ),
+        ("Runtime.releaseObject", json!({})),
+    ]);
+    let session = session(&connection, "isolated-named-frame-call");
+    let parent = FrameId("parent".into());
+
+    let value: i64 = isolated(&session)
+        .in_frame(&parent)
+        .call(7, "function(){return 1}", &[])
+        .await?;
+
+    assert_eq!(value, 1);
+    let calls = connection.calls()?;
+    assert_eq!(calls[1].params["executionContextId"], 11);
+    let declaration = calls[2].params["functionDeclaration"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(declaration.contains(OTHER_DOCUMENT));
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_call_abandoned_mid_script_still_releases_its_node_wrapper()
+-> Result<(), Box<dyn std::error::Error>> {
+    let connection = TestConnection::new([
+        (
+            "DOM.resolveNode",
+            json!({ "object": { "objectId": "slow-node" } }),
+        ),
+        ("Runtime.callFunctionOn", cdp_pending()),
+        ("Runtime.releaseObject", json!({})),
+    ]);
+    let session = session(&connection, "abandoned-call");
+
+    let call = PageJs::page_world(&session).call::<Value>(3, "function(){for(;;){}}", &[]);
+    let timed_out = tokio::time::timeout(std::time::Duration::from_millis(20), call).await;
+
+    assert!(timed_out.is_err());
+    for _ in 0..10 {
+        if connection
+            .calls()?
+            .iter()
+            .any(|call| call.method == "Runtime.releaseObject")
+        {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    let calls = connection.calls()?;
+    assert_eq!(
+        calls
+            .last()
+            .map(|call| (call.method.as_str(), call.params.clone())),
+        Some(("Runtime.releaseObject", json!({ "objectId": "slow-node" })))
     );
     Ok(())
 }
