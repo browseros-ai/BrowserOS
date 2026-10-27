@@ -48,6 +48,8 @@ struct Fake {
     moved_to: Option<i64>,
     /// Page scripts override `screen` and `devicePixelRatio` in the main world.
     tampered: bool,
+    /// `Emulation.clearDeviceMetricsOverride` fails, as on a page that just went away.
+    fail_clear: bool,
 }
 
 struct Native {
@@ -91,6 +93,7 @@ impl Native {
                 ignore_metrics: false,
                 moved_to: None,
                 tampered: false,
+                fail_clear: false,
             }),
             events,
         })
@@ -146,6 +149,10 @@ impl Native {
             window.width = width;
             window.height = height;
         }
+    }
+
+    fn close_tab(&self, tab: i64) {
+        self.lock().tabs.retain(|entry| entry["tabId"] != tab);
     }
 
     fn set_window_state(&self, id: i64, state: &str) {
@@ -285,6 +292,12 @@ impl Native {
                     fake.emulation.entry(session).or_default().metrics = Some(params);
                 }
                 json!({})
+            }
+            "Emulation.clearDeviceMetricsOverride" if fake.fail_clear => {
+                return Err(CdpError::Protocol {
+                    code: -32000,
+                    message: "Target closed".into(),
+                });
             }
             "Emulation.clearDeviceMetricsOverride" => {
                 let session = session_key.ok_or(CdpError::SessionGone)?;
@@ -1019,6 +1032,84 @@ async fn tests_that_page_scripts_cannot_fake_or_fail_the_check() -> TestResult {
             report.viewport.device_scale_factor
         ),
         (400.0, 2.0)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_default_tabs_sharing_a_fixed_window_do_not_wait_for_each_other() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10), (2, 10), (3, 10)]);
+    let fixed = fixture.page(1).await?;
+    let first = fixture.page(2).await?;
+    let second = fixture.page(3).await?;
+    fixture.set(&fixed, ViewportMode::Mobile, None).await?;
+
+    let lease = fixture.view.prepare_viewport(first).await?;
+    let view = fixture.view.clone();
+    let mut other = Box::pin(async move { view.prepare_viewport(second).await });
+    assert!(!still_waiting(&mut other).await);
+    // A fit still waits for the default tab's operation in flight.
+    let view = fixture.view.clone();
+    let mut fitting = Box::pin(async move { view.prepare_viewport(fixed).await });
+    assert!(still_waiting(&mut fitting).await);
+    drop(lease);
+    drop(fitting.await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_closed_fixed_tab_stops_holding_its_window() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10), (2, 10), (3, 10)]);
+    let closed = fixture.page(1).await?;
+    let natural = fixture.page(2).await?;
+    let fixed = fixture.page(3).await?;
+    fixture.set(&closed, ViewportMode::Mobile, None).await?;
+    fixture.native.close_tab(1);
+    fixture.view.list_pages().await?;
+
+    let lease = fixture.view.prepare_viewport(natural).await?;
+    let view = fixture.view.clone();
+    let mut set = Box::pin(async move {
+        view.set_viewport(fixed, ViewportRequest::new(ViewportMode::Desktop, None)?)
+            .await
+            .map_err(|error| error.to_string())
+    });
+    assert!(!still_waiting(&mut set).await);
+    drop(lease);
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_failed_switch_to_default_keeps_the_mode() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    fixture
+        .set(&page, ViewportMode::Mobile, Some(200.0))
+        .await?;
+    fixture.native.lock().fail_clear = true;
+    assert!(
+        fixture
+            .set(&page, ViewportMode::Default, None)
+            .await
+            .is_err()
+    );
+
+    // Still mobile at 200 %: pointer input keeps its scale, and a retry clears for real.
+    fixture.native.clear_calls();
+    let input = fixture.view.input(page.clone()).await?;
+    input
+        .click_at(10.0, 10.0, crate::input::ClickOptions::default())
+        .await?;
+    assert_eq!(pressed_at(&fixture.native)?, (json!(20.0), json!(20.0)));
+    fixture.native.lock().fail_clear = false;
+    fixture.native.clear_calls();
+    fixture.set(&page, ViewportMode::Default, None).await?;
+    assert_eq!(
+        fixture
+            .native
+            .calls("Emulation.clearDeviceMetricsOverride")
+            .len(),
+        1
     );
     Ok(())
 }

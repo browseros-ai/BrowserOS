@@ -523,6 +523,10 @@ impl BrowserView {
     pub(crate) async fn cached_page(&self, page: &PageId) -> Option<PageInfo> {
         self.session.pages.get_info(page.clone()).await
     }
+    /// Every page the registry knows, as of its last reconciliation.
+    pub(crate) async fn known_page_ids(&self) -> BTreeSet<PageId> {
+        self.session.pages.known_page_ids().await
+    }
     pub(crate) async fn send_at_capture(
         &self,
         method: &str,

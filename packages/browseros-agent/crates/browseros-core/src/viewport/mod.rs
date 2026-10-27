@@ -17,7 +17,7 @@ use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
-use tokio::sync::{Mutex as AsyncMutex, OnceCell, OwnedMutexGuard};
+use tokio::sync::{OnceCell, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 
 pub const MIN_ZOOM: f64 = 25.0;
 pub const MAX_ZOOM: f64 = 400.0;
@@ -176,7 +176,7 @@ pub struct WindowFit {
 #[derive(Default)]
 pub struct Viewports {
     tabs: Mutex<HashMap<PageId, Tab>>,
-    windows: Mutex<HashMap<WindowId, Arc<AsyncMutex<WindowSlot>>>>,
+    windows: Mutex<HashMap<WindowId, Arc<RwLock<WindowSlot>>>>,
     chrome_version: OnceCell<String>,
 }
 
@@ -197,9 +197,11 @@ struct WindowSlot {
 
 /// Holds the page's window for one operation, so no other tab's fit can change the window
 /// while the operation reads, captures or acts. Dropping it releases the window.
+/// A fixed tab's operation owns its window; default tabs beside it only exclude fits.
 #[derive(Default)]
 pub struct ViewportLease {
-    _window: Option<OwnedMutexGuard<WindowSlot>>,
+    _shared: Option<OwnedRwLockReadGuard<WindowSlot>>,
+    _exclusive: Option<OwnedRwLockWriteGuard<WindowSlot>>,
 }
 
 impl Viewports {
@@ -222,12 +224,13 @@ impl Viewports {
         }
         let session = view.page_session(page.clone()).await?.session_id;
         let Some(fixed) = request.fixed() else {
-            let owned = self.forget(&page);
-            if owned.and_then(|tab| tab.applied) == Some(session.clone()) {
+            // Forgotten only once cleared: a failed clear leaves the tab in its mode.
+            if self.tab(&page).and_then(|tab| tab.applied) == Some(session.clone()) {
                 for (method, params) in device::clear_commands() {
                     view.send_at_capture(method, params, Some(&session)).await?;
                 }
             }
+            self.forget(&page);
             let metrics = device::measure(view, &session).await?;
             view.page(page.clone()).await?;
             return Ok(report(&page, request, metrics, None));
@@ -258,25 +261,33 @@ impl Viewports {
         if self.tab(&page).is_none() {
             // A default tab changes nothing, but must not act while a fixed tab's operation
             // owns the window it shares.
+            self.retain(&view.known_page_ids().await);
             let window = view
                 .cached_page(&page)
                 .await
                 .and_then(|info| info.window_id);
             let shared = window.filter(|window| self.holds_fixed_tab(*window));
             return Ok(ViewportLease {
-                _window: self.lock_window(shared).await,
+                _shared: self.share_window(shared).await,
+                _exclusive: None,
             });
         }
         let info = view.page(page.clone()).await?;
         let mut slot = self.lock_window(info.window_id).await;
         // Re-read under the lock: a setViewport may have changed the tab while we waited.
         let Some(tab) = self.tab(&page) else {
-            return Ok(ViewportLease { _window: slot });
+            return Ok(ViewportLease {
+                _shared: None,
+                _exclusive: slot,
+            });
         };
         // An open dialog blocks the renderer; only the dialog actions can run, and they need
         // no geometry. The next operation after the dialog restores it.
         if view.signals().pending_dialog(&page).is_some() {
-            return Ok(ViewportLease { _window: slot });
+            return Ok(ViewportLease {
+                _shared: None,
+                _exclusive: slot,
+            });
         }
         let session = view.page_session(page.clone()).await?.session_id;
         if tab.applied.as_ref() != Some(&session) {
@@ -300,7 +311,10 @@ impl Viewports {
                 slot.fitted = Some((contents, fit.bounds));
             }
         }
-        Ok(ViewportLease { _window: slot })
+        Ok(ViewportLease {
+            _shared: None,
+            _exclusive: slot,
+        })
     }
 
     fn holds_fixed_tab(&self, window: WindowId) -> bool {
@@ -339,23 +353,42 @@ impl Viewports {
             );
     }
 
-    fn forget(&self, page: &PageId) -> Option<Tab> {
+    fn forget(&self, page: &PageId) {
         self.tabs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(page)
+            .remove(page);
     }
 
-    async fn lock_window(&self, window: Option<WindowId>) -> Option<OwnedMutexGuard<WindowSlot>> {
-        let window = window?;
-        let slot = self
-            .windows
+    /// Closed tabs stop holding their window.
+    fn retain(&self, open: &std::collections::BTreeSet<PageId>) {
+        self.tabs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|page, _| open.contains(page));
+    }
+
+    fn slot(&self, window: WindowId) -> Arc<RwLock<WindowSlot>> {
+        self.windows
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .entry(window)
             .or_default()
-            .clone();
-        Some(slot.lock_owned().await)
+            .clone()
+    }
+
+    async fn lock_window(
+        &self,
+        window: Option<WindowId>,
+    ) -> Option<OwnedRwLockWriteGuard<WindowSlot>> {
+        Some(self.slot(window?).write_owned().await)
+    }
+
+    async fn share_window(
+        &self,
+        window: Option<WindowId>,
+    ) -> Option<OwnedRwLockReadGuard<WindowSlot>> {
+        Some(self.slot(window?).read_owned().await)
     }
 
     async fn chrome_version(&self, view: &BrowserView) -> Result<String, CoreError> {
