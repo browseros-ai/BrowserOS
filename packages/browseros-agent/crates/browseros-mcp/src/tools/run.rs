@@ -313,6 +313,9 @@ const BOOTSTRAP_JS: &str = r#"
       ...(__browserosFeatures.credentials
         ? { credentials: (opts) => tool('credentials', opts) }
         : {}),
+      ...(__browserosFeatures.paymentCards
+        ? { paymentCards: (opts) => tool('payment_cards', opts) }
+        : {}),
       screenshot: (opts) => tool('screenshot', opts),
       pdf: (opts) => tool('pdf', opts),
       // A real function is serialized here, before the JSON boundary drops it.
@@ -346,6 +349,9 @@ const BOOTSTRAP_JS: &str = r#"
     history: (opts) => call('tool:history', [opts]),
     ...(__browserosFeatures.credentials
       ? { credentials: (opts) => call('tool:credentials', [opts]) }
+      : {}),
+    ...(__browserosFeatures.paymentCards
+      ? { paymentCards: (opts) => call('tool:payment_cards', [opts]) }
       : {}),
     // Discovery only: Rust refuses tool:browser_profiles/browser_target on older natives
     // whether or not a script finds a way to call them.
@@ -846,10 +852,10 @@ impl BrowserBridge {
         let args = parse_bridge_args(args_json)?;
         let page = target_page(method, &args);
         // Mark before host authorization/native gating: even a rejected call may
-        // have a password literal in its parent script or serialized CDP input.
-        let credential_input = crate::tools::credentials::is_credential_primitive(method, &args);
-        if credential_input && let Some(hook) = &self.ctx.inner_call_hook {
-            hook.mark_credential_input();
+        // have a password or card literal in its parent script or serialized CDP input.
+        let sensitive_input = crate::tools::sensitive::is_sensitive_primitive(method, &args);
+        if sensitive_input && let Some(hook) = &self.ctx.inner_call_hook {
+            hook.mark_sensitive_input();
         }
         // Kept for the audit record and the self-healing distiller; dispatch
         // consumes the owned args below.
@@ -1302,6 +1308,7 @@ fn tool_def(name: &str) -> Option<ToolDef> {
         "act" => tools::act::definition(),
         "history" => tools::history::definition(),
         "credentials" => tools::credentials::definition(),
+        "payment_cards" => tools::payment_cards::definition(),
         "browser_profiles" => tools::browser_profiles::definition(),
         "browser_target" => tools::browser_target::definition(),
         _ => return None,
@@ -1368,7 +1375,9 @@ fn parse_bridge_args(args_json: &str) -> Result<Vec<Value>, String> {
 /// variants) carry the page id as their first argument; the rest address no
 /// specific page.
 fn target_page(method: &str, args: &[Value]) -> Option<u32> {
-    if method == "tool:credentials" && args.first().is_some_and(Value::is_object) {
+    if matches!(method, "tool:credentials" | "tool:payment_cards")
+        && args.first().is_some_and(Value::is_object)
+    {
         return args
             .first()?
             .get("page")?

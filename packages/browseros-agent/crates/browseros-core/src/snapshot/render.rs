@@ -307,10 +307,64 @@ fn format_line(
         && !value.is_empty()
     {
         line.push_str(": ");
-        line.push_str(&json_quote(&value));
+        line.push_str(&json_quote(&visible_value(name, &value)));
     }
 
     line
+}
+
+/// Card numbers and security codes stay out of snapshots. After a payment card
+/// fill they sit in plain text fields, unlike passwords, which the browser
+/// already masks. A checksum-valid 13-19 digit value keeps its last four
+/// digits; a 3-4 digit value in a field named like a security code is hidden.
+fn visible_value<'a>(name: &str, value: &'a str) -> std::borrow::Cow<'a, str> {
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == ' ' || c == '-')
+    {
+        return value.into();
+    }
+    let digits: Vec<u32> = value.chars().filter_map(|c| c.to_digit(10)).collect();
+    if (13..=19).contains(&digits.len()) && passes_luhn(&digits) {
+        let last_four: String = digits[digits.len() - 4..]
+            .iter()
+            .map(|digit| char::from_digit(*digit, 10).unwrap_or('0'))
+            .collect();
+        return format!("•••• {last_four}").into();
+    }
+    let name = name.to_ascii_lowercase();
+    if (3..=4).contains(&digits.len())
+        && [
+            "cvc",
+            "cvv",
+            "csc",
+            "security code",
+            "card code",
+            "verification",
+        ]
+        .iter()
+        .any(|label| name.contains(label))
+    {
+        return "•••".into();
+    }
+    value.into()
+}
+
+fn passes_luhn(digits: &[u32]) -> bool {
+    let sum: u32 = digits
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(index, digit)| {
+            if index % 2 == 1 {
+                let doubled = digit * 2;
+                if doubled > 9 { doubled - 9 } else { doubled }
+            } else {
+                *digit
+            }
+        })
+        .sum();
+    sum.is_multiple_of(10)
 }
 
 fn format_states(node: &AxNode) -> Vec<String> {
@@ -857,5 +911,35 @@ mod tests {
         let with_defaults = apply_snapshot_options(&full, SnapshotOptions::default());
 
         assert_eq!(with_defaults, full);
+    }
+
+    #[test]
+    fn snapshots_mask_card_numbers_and_security_codes() {
+        let field = |id: &str, label: &str, value: &str| {
+            let mut node = ax(id, "textbox", &[]);
+            node.name = Some(name(label));
+            node.value = Some(AxValue {
+                value_type: "string".to_string(),
+                value: Some(json!(value)),
+            });
+            node
+        };
+        let mut refs = RefMap::default();
+        let text = render(
+            &[
+                ax("1", "RootWebArea", &["2", "3", "4", "5"]),
+                field("2", "Card number", "4111 1111 1111 1111"),
+                field("3", "CVC", "123"),
+                field("4", "Quantity", "123"),
+                field("5", "Order number", "4111111111111112"),
+            ],
+            &mut refs,
+        );
+        assert!(text.contains("\"•••• 1111\""), "{text}");
+        assert!(!text.contains("4111 1111 1111 1111"), "{text}");
+        assert!(text.contains("\"CVC\": \"•••\""), "{text}");
+        assert!(text.contains("\"Quantity\": \"123\""), "{text}");
+        // Not checksum-valid, so not a card number.
+        assert!(text.contains("4111111111111112"), "{text}");
     }
 }

@@ -159,9 +159,10 @@ impl ToolCtx {
 /// only for operations the host selects. `browseros-mcp` cannot reach the host's guards
 /// or audit store, so the host supplies this through [`ToolCtx::inner_call_hook`].
 pub trait InnerCallHook: Send + Sync {
-    /// Marks password-bearing script input before authorization or dispatch can
-    /// fail. Hosts suppress parent source/audit previews even after cancellation.
-    fn mark_credential_input(&self) {}
+    /// Marks password- or card-bearing script input before authorization or
+    /// dispatch can fail. Hosts suppress parent source/audit previews even after
+    /// cancellation.
+    fn mark_sensitive_input(&self) {}
 
     /// Authorize a primitive about to run against the caller's ownership.
     /// `page` is the primitive's target page id, when it addresses one.
@@ -452,7 +453,7 @@ pub async fn execute_tool(
     ctx: &ToolCtx,
 ) -> ToolExecResult<ToolResult> {
     let mut result = execute_tool_inner(def, raw_args, ctx).await?;
-    if def.name == "credentials" {
+    if crate::tools::sensitive::is_sensitive_tool(def.name) {
         result.audit_hints = Some(AuditHints {
             redact_all_values: true,
             skip_screenshot: true,

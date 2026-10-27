@@ -39,9 +39,9 @@ impl ScriptInnerCallHook {
 }
 
 impl InnerCallHook for ScriptInnerCallHook {
-    fn mark_credential_input(&self) {
+    fn mark_sensitive_input(&self) {
         self.call
-            .sensitive_credentials
+            .sensitive_input
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -196,7 +196,7 @@ impl InnerCallHook for ScriptInnerCallHook {
                     if page.is_some()
                         && !self
                             .call
-                            .sensitive_credentials
+                            .sensitive_input
                             .load(std::sync::atomic::Ordering::Relaxed)
                     {
                         crate::api::mcp::observers::audit::persist_screenshot(

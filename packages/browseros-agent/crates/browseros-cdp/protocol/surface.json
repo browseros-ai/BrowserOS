@@ -6,17 +6,6 @@
       "commands": ["enable", "getFullAXTree"]
     },
     {
-      "domain": "Autofill",
-      "types": ["CredentialInfo", "CredentialContext", "CredentialResult"],
-      "commands": [
-        "getCredentialContext",
-        "listCredentials",
-        "addCredential",
-        "fillCredential",
-        "cancelCredentialOperation"
-      ]
-    },
-    {
       "domain": "Bookmarks",
       "types": ["BookmarkNode"],
       "commands": ["getBookmarks"]
@@ -117,6 +106,28 @@
         "javascriptDialogClosed",
         "javascriptDialogOpening",
         "screencastFrame"
+      ]
+    },
+    {
+      "domain": "Passwords",
+      "types": ["Context", "Credential", "CredentialResult"],
+      "commands": [
+        "getContext",
+        "listCredentials",
+        "addCredential",
+        "fillCredential",
+        "cancelOperation"
+      ]
+    },
+    {
+      "domain": "Payments",
+      "types": ["Card", "CardResult", "Context", "SuppliedCard"],
+      "commands": [
+        "getContext",
+        "listCards",
+        "addCard",
+        "fillCard",
+        "cancelOperation"
       ]
     },
     {

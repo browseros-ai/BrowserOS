@@ -15,8 +15,8 @@ fn protocol_source_matches_pinned_chromium_input() -> Result<(), Box<dyn Error>>
     let protocol: Value = serde_json::from_slice(PROTOCOL)?;
     assert_eq!(
         protocol["domains"].as_array().map(Vec::len),
-        Some(60),
-        "the pinned ch1 combined protocol has 60 domains"
+        Some(62),
+        "the pinned combined protocol has 62 domains, BrowserOS's Passwords and Payments included"
     );
     // These upstream additions belong to the full snapshot even though the Rust
     // client does not compile them into its focused surface.
@@ -30,8 +30,8 @@ fn protocol_source_matches_pinned_chromium_input() -> Result<(), Box<dyn Error>>
     let surface: Value = serde_json::from_slice(SURFACE)?;
     assert_eq!(
         surface["domains"].as_array().map(Vec::len),
-        Some(10),
-        "the compiled Rust surface includes the credential Autofill commands"
+        Some(11),
+        "the compiled Rust surface includes BrowserOS's Passwords and Payments domains"
     );
     Ok(())
 }

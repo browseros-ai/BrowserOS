@@ -1517,5 +1517,11 @@ impl BrowserView {
 #[cfg(test)]
 mod tests;
 
+#[path = "native_operation.rs"]
+mod native_operation;
+
 #[path = "credential_routing.rs"]
 mod credentials;
+
+#[path = "payment_card_routing.rs"]
+mod payment_cards;
