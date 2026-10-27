@@ -271,8 +271,10 @@ impl Viewports {
         }
         let session = view.page_session(page.clone()).await?.session_id;
         let Some(fixed) = request.fixed() else {
-            // Forgotten only once cleared: a failed clear leaves the tab in its mode.
-            if self.tab(&page).and_then(|tab| tab.applied) == Some(session.clone()) {
+            // Any record may have overrides on this session, including a change that failed or
+            // was interrupted after sending them. Forgotten only once cleared: a failed clear
+            // leaves the tab in its mode.
+            if self.tab(&page).is_some() {
                 for (method, params) in device::clear_commands() {
                     view.send_at_capture(method, params, Some(&session)).await?;
                 }

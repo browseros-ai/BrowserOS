@@ -760,6 +760,33 @@ async fn tests_that_a_page_ignoring_emulation_is_reported_as_a_failure() -> Test
 }
 
 #[tokio::test]
+async fn tests_that_default_clears_what_a_failed_change_left_on_the_page() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    // The change sends its overrides, then fails because the page never reports the mode.
+    fixture.native.lock().ignore_metrics = true;
+    assert!(
+        fixture
+            .set(&page, ViewportMode::Mobile, Some(150.0))
+            .await
+            .is_err()
+    );
+    fixture.native.lock().ignore_metrics = false;
+    fixture.native.clear_calls();
+
+    fixture.set(&page, ViewportMode::Default, None).await?;
+    let methods = emulation_methods(&fixture.native.methods());
+    for method in [
+        "Emulation.clearDeviceMetricsOverride",
+        "Emulation.setTouchEmulationEnabled",
+        "Emulation.setUserAgentOverride",
+    ] {
+        assert!(methods.iter().any(|sent| sent == method), "{methods:?}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn tests_that_views_without_viewports_refuse_and_prepare_nothing() -> TestResult {
     let native = Native::new(&[(1, 10)]);
     let session = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
