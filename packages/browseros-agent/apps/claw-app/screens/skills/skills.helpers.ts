@@ -6,8 +6,11 @@
  * Pure formatters for the Skills list and page. No React, no side effects.
  */
 
+import type { Skill } from '@browseros/claw-api'
+import { HARNESSES, type Harness } from '@/components/harness/harness.types'
 import { verbForTool } from '@/lib/step-sentences'
 import type { ReplayVerb } from '@/modules/api/replay.hooks'
+import { siteHost } from '@/modules/favicon/favicon.helpers'
 
 /** Every skill is namespaced under this prefix so it never collides with a
  *  user's own agent skills and the whole set autocompletes on `/neo`. */
@@ -82,16 +85,15 @@ function startOfDay(ms: number): number {
   return day.getTime()
 }
 
-/** "today", "yesterday", then "on Oct 21" in the reader's locale. */
+/** "today", "yesterday", then "Oct 21" in the reader's locale. */
 export function lastUsedLabel(epochMs: number, now: number): string {
   const days = Math.round((startOfDay(now) - startOfDay(epochMs)) / DAY_MS)
   if (days <= 0) return 'today'
   if (days === 1) return 'yesterday'
-  const date = new Date(epochMs).toLocaleDateString(undefined, {
+  return new Date(epochMs).toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
   })
-  return `on ${date}`
 }
 
 /** "Used 4 times · last used yesterday", or "Not used yet". */
@@ -107,10 +109,33 @@ export function usedLabel(
     : `${times} · last used ${lastUsedLabel(lastRunAt, now)}`
 }
 
-/** The Skills list's short count: "14 runs", "1 run", or "Not used yet". */
-export function runsLabel(runCount: number): string {
-  if (runCount <= 0) return 'Not used yet'
-  return runCount === 1 ? '1 run' : `${runCount} runs`
+/**
+ * The sites a skill works on, by host ("trmnl.com" for "https://trmnl.com").
+ * A skill stores one free-text site, which a person or an agent may have
+ * written as a full address or as a comma list ("x.com, reddit.com").
+ */
+export function skillSites(site: string | undefined): string[] {
+  return (site ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => siteHost(entry)?.replace(/^www\./, '') ?? entry)
+}
+
+/**
+ * The connected agents any skill is linked into, once, in the usual harness
+ * order. A skill records its links when it is saved and keeps them after an
+ * agent is disconnected, so the saved links alone can name agents that are gone.
+ */
+export function worksInAgents(
+  skills: Pick<Skill, 'linkedAgents'>[],
+  connected: readonly Harness[],
+): Harness[] {
+  return HARNESSES.filter(
+    (harness) =>
+      connected.includes(harness) &&
+      skills.some((skill) => skill.linkedAgents.includes(harness)),
+  )
 }
 
 const STUCK_WHILE: Record<ReplayVerb, string> = {
