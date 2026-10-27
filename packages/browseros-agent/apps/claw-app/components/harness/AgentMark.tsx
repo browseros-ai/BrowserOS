@@ -28,15 +28,19 @@ export function AgentMark({
   const agent = agentIdentity(harness, label)
   return (
     <span className={cn('inline-flex min-w-0 items-center gap-1.5', className)}>
-      {agent.harness ? (
-        <HarnessIcon harness={agent.harness} className="size-4 shrink-0" />
-      ) : (
-        <span
-          aria-hidden
-          className="size-2.5 shrink-0 rounded-full"
-          style={{ background: color ?? 'currentColor' }}
-        />
-      )}
+      <span
+        aria-hidden
+        className="grid size-[22px] shrink-0 place-items-center rounded-full border border-border-2 bg-card"
+      >
+        {agent.harness ? (
+          <HarnessIcon harness={agent.harness} className="size-[13px]" />
+        ) : (
+          <span
+            className="size-2 rounded-full"
+            style={{ background: color ?? 'currentColor' }}
+          />
+        )}
+      </span>
       <span className="truncate">{agent.name}</span>
     </span>
   )
