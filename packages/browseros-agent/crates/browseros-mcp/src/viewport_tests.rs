@@ -98,6 +98,7 @@ impl Native {
                         | "Browser.getWindowBounds"
                         | "Browser.setWindowBounds"
                         | "Browser.setContentsSize"
+                        | "Emulation.getScreenInfos"
                 )
             })
             .collect()

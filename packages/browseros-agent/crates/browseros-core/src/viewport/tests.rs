@@ -457,6 +457,7 @@ fn window_methods(methods: &[String]) -> Vec<String> {
                     | "Browser.getWindowBounds"
                     | "Browser.setContentsSize"
                     | "Browser.setWindowBounds"
+                    | "Emulation.getScreenInfos"
             )
         })
         .cloned()
@@ -1012,6 +1013,13 @@ impl Fixture {
     }
 }
 
+/// What `future` returns, if it finishes within a moment in which an unblocked call would.
+async fn finishes<F: std::future::Future>(future: F) -> Option<F::Output> {
+    tokio::time::timeout(std::time::Duration::from_millis(300), future)
+        .await
+        .ok()
+}
+
 /// Whether `future` is still waiting after a moment in which an unblocked call would finish.
 async fn still_waiting<F: std::future::Future>(future: &mut std::pin::Pin<Box<F>>) -> bool {
     tokio::time::timeout(std::time::Duration::from_millis(300), future.as_mut())
@@ -1112,32 +1120,26 @@ async fn tests_that_tabs_sharing_a_window_do_not_wait_for_each_other() -> TestRe
     fixture.set(&busy, ViewportMode::Mobile, None).await?;
     fixture.set(&fixed, ViewportMode::Desktop, None).await?;
 
-    // A fixed tab's operation holds only its own tab.
+    // A fixed tab's operation holds only its own tab: the others run, and succeed, meanwhile.
     let lease = fixture.view.prepare_viewport(busy).await?;
-    let view = fixture.view.clone();
-    let page = fixed.clone();
-    let mut operation = Box::pin(async move { view.prepare_viewport(page).await });
-    assert!(!still_waiting(&mut operation).await);
-    let view = fixture.view.clone();
-    let page = natural.clone();
-    let mut beside = Box::pin(async move { view.prepare_viewport(page).await });
-    assert!(!still_waiting(&mut beside).await);
+    for page in [&fixed, &natural] {
+        let other = finishes(fixture.view.prepare_viewport(page.clone()))
+            .await
+            .ok_or("an operation on another tab waited")??;
+        drop(other);
+    }
     for (page, mode) in [
         (fixed, ViewportMode::Mobile),
         (natural, ViewportMode::Desktop),
     ] {
-        let view = fixture.view.clone();
-        let mut change = Box::pin(async move {
-            view.set_viewport(
-                page,
-                ViewportRequest::new(mode, None)?,
-                &CancellationToken::new(),
-            )
-            .await
-            .map(drop)
-            .map_err(|error| error.to_string())
-        });
-        assert!(!still_waiting(&mut change).await, "{mode:?}");
+        let request = ViewportRequest::new(mode, None)?;
+        finishes(
+            fixture
+                .view
+                .set_viewport(page, request, &CancellationToken::new()),
+        )
+        .await
+        .ok_or("a mode change on another tab waited")??;
     }
     drop(lease);
     Ok(())
