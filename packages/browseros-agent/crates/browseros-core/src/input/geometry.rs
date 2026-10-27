@@ -1,4 +1,4 @@
-use crate::{CoreError, ProtocolSession, input::Point};
+use crate::{CoreError, PageJs, ProtocolSession, input::Point};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -75,23 +75,6 @@ struct BoxModel {
 }
 
 #[derive(Debug, Deserialize)]
-struct ResolveNodeResult {
-    object: Option<RemoteObject>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RemoteObject {
-    object_id: Option<String>,
-    value: Option<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CallFunctionResult {
-    result: RemoteObject,
-}
-
-#[derive(Debug, Deserialize)]
 struct PushNodesResult {
     #[serde(rename = "nodeIds")]
     node_ids: Vec<i64>,
@@ -137,23 +120,10 @@ pub async fn get_element_center(
         return Ok(quad_center(&model.content));
     }
 
-    let object_id = resolve_object_id(session, backend_node_id, None).await?;
-    let bounds: CallFunctionResult = session
-        .send(
-            "Runtime.callFunctionOn",
-            json!({
-                "functionDeclaration": BOUNDS_JS,
-                "objectId": object_id,
-                "returnByValue": true
-            }),
-        )
-        .await?;
-    let value = bounds
-        .result
-        .value
+    let rect: Bounds = PageJs::isolated(session)
+        .call::<Option<Bounds>>(backend_node_id, BOUNDS_JS, &[])
+        .await?
         .ok_or_else(|| CoreError::Message("Could not get element bounds.".to_string()))?;
-    let rect: Bounds =
-        serde_json::from_value(value).map_err(|err| CoreError::Message(err.to_string()))?;
     Ok(Point {
         x: rect.x + rect.w / 2.0,
         y: rect.y + rect.h / 2.0,
@@ -174,25 +144,13 @@ pub async fn click_blocker_at_point(
     backend_node_id: i64,
     point: Point,
 ) -> Result<Option<String>, CoreError> {
-    let object_id = resolve_object_id(session, backend_node_id, None).await?;
-    let result: CallFunctionResult = session
-        .send(
-            "Runtime.callFunctionOn",
-            json!({
-                "functionDeclaration": HIT_TEST_BLOCKER_JS,
-                "objectId": object_id,
-                "returnByValue": true,
-                "arguments": [
-                    { "value": point.x },
-                    { "value": point.y }
-                ]
-            }),
+    PageJs::isolated(session)
+        .call(
+            backend_node_id,
+            HIT_TEST_BLOCKER_JS,
+            &[json!(point.x), json!(point.y)],
         )
-        .await?;
-    Ok(result
-        .result
-        .value
-        .and_then(|value| value.as_str().map(ToString::to_string)))
+        .await
 }
 
 pub async fn focus_element(
@@ -231,14 +189,14 @@ pub async fn focus_element_js(
     session: &ProtocolSession,
     backend_node_id: i64,
 ) -> Result<(), CoreError> {
-    let focused = call_on_element(
-        session,
-        backend_node_id,
-        "function(){if(typeof this.focus!=='function'){return false}this.focus();return this.getRootNode().activeElement===this}",
-        None,
-    )
-    .await?;
-    if focused.as_bool().unwrap_or(false) {
+    let focused: Option<bool> = PageJs::isolated(session)
+        .call(
+            backend_node_id,
+            "function(){if(typeof this.focus!=='function'){return false}this.focus();return this.getRootNode().activeElement===this}",
+            &[],
+        )
+        .await?;
+    if focused.unwrap_or(false) {
         Ok(())
     } else {
         Err(CoreError::Message(
@@ -248,12 +206,8 @@ pub async fn focus_element_js(
 }
 
 pub async fn js_click(session: &ProtocolSession, backend_node_id: i64) -> Result<(), CoreError> {
-    let object_id = resolve_object_id(session, backend_node_id, None).await?;
-    let _: Value = session
-        .send(
-            "Runtime.callFunctionOn",
-            json!({ "functionDeclaration": "function(){this.click()}", "objectId": object_id }),
-        )
+    let _: Value = PageJs::isolated(session)
+        .call(backend_node_id, "function(){this.click()}", &[])
         .await?;
     Ok(())
 }
@@ -263,8 +217,10 @@ pub async fn get_input_value(
     session: &ProtocolSession,
     backend_node_id: i64,
 ) -> Result<String, CoreError> {
-    let value = call_on_element(session, backend_node_id, READ_INPUT_VALUE_JS, None).await?;
-    value.as_str().map(ToString::to_string).ok_or_else(|| {
+    let value: Option<String> = PageJs::isolated(session)
+        .call(backend_node_id, READ_INPUT_VALUE_JS, &[])
+        .await?;
+    value.ok_or_else(|| {
         CoreError::Message("Could not read the field value. Take a new snapshot.".to_string())
     })
 }
@@ -282,71 +238,6 @@ function() {
 }
 "#;
 
-pub async fn call_on_element(
-    session: &ProtocolSession,
-    backend_node_id: i64,
-    function_declaration: &str,
-    args: Option<Vec<Value>>,
-) -> Result<Value, CoreError> {
-    let object_id = resolve_object_id(session, backend_node_id, None).await?;
-    let result: CallFunctionResult = session
-        .send(
-            "Runtime.callFunctionOn",
-            call_function_params(function_declaration, object_id, args),
-        )
-        .await?;
-    Ok(result.result.value.unwrap_or(Value::Null))
-}
-
-fn call_function_params(
-    function_declaration: &str,
-    object_id: String,
-    args: Option<Vec<Value>>,
-) -> Value {
-    let mut params = serde_json::Map::new();
-    params.insert(
-        "functionDeclaration".to_string(),
-        Value::String(function_declaration.to_string()),
-    );
-    params.insert("objectId".to_string(), Value::String(object_id));
-    params.insert("returnByValue".to_string(), Value::Bool(true));
-    if let Some(args) = args {
-        params.insert(
-            "arguments".to_string(),
-            Value::Array(
-                args.into_iter()
-                    .map(|value| json!({ "value": value }))
-                    .collect(),
-            ),
-        );
-    }
-    Value::Object(params)
-}
-
-pub async fn resolve_object_id(
-    session: &ProtocolSession,
-    backend_node_id: i64,
-    object_group: Option<&str>,
-) -> Result<String, CoreError> {
-    let mut params = serde_json::Map::new();
-    params.insert("backendNodeId".to_string(), Value::from(backend_node_id));
-    if let Some(object_group) = object_group {
-        params.insert(
-            "objectGroup".to_string(),
-            Value::String(object_group.to_string()),
-        );
-    }
-    let resolved: ResolveNodeResult = session
-        .send("DOM.resolveNode", Value::Object(params))
-        .await?;
-    resolved
-        .object
-        .and_then(|object| object.object_id)
-        .ok_or_else(|| {
-            CoreError::Message("Element not found in DOM. Take a new snapshot.".to_string())
-        })
-}
-
 fn quad_center(quad: &[f64]) -> Point {
     Point {
         x: (quad[0] + quad[2] + quad[4] + quad[6]) / 4.0,
@@ -356,7 +247,7 @@ fn quad_center(quad: &[f64]) -> Point {
 
 #[cfg(test)]
 mod tests {
-    use super::{call_function_params, click_blocker_at_point, focus_element_js};
+    use super::{click_blocker_at_point, focus_element_js};
     use crate::{CoreError, ProtocolSession, connection::CdpConnection, input::Point};
     use browseros_cdp::{CdpError, CdpEvent};
     use futures_util::future::BoxFuture;
@@ -439,13 +330,6 @@ mod tests {
             calls: Mutex::new(Vec::new()),
         });
         (connection.clone(), ProtocolSession::root(connection))
-    }
-
-    #[test]
-    fn call_function_omits_absent_arguments() {
-        let params = call_function_params("function(){return this.checked}", "node-1".into(), None);
-
-        assert_eq!(params.get("arguments"), None);
     }
 
     #[tokio::test]

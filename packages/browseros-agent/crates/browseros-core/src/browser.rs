@@ -1,5 +1,6 @@
 use crate::{
-    BrowserView, CoreError, NativeCapabilities, PageId, ProtocolSession, TabId, TargetBinding,
+    BrowserView, CoreError, NativeCapabilities, PageId, PageJs, ProtocolSession, TabId,
+    TargetBinding,
     connection::CdpConnection,
     pages::PageInfo,
     pointer,
@@ -150,20 +151,14 @@ impl Browser {
             pointer::restore_after_capture(&session).await;
         }
         let screenshot = screenshot?;
-        let dpr_result = session
-            .send::<_, EvaluateResult>(
-                "Runtime.evaluate",
-                json!({"expression":"window.devicePixelRatio","returnByValue":true}),
-            )
+        let dpr_result = PageJs::isolated(&session)
+            .eval::<Option<f64>>("window.devicePixelRatio")
             .await;
         // DPR is advisory for an unbound transport failure, but a target admission error must
         // invalidate the whole capture instead of publishing bytes from an expired capability.
         let dpr = match dpr_result {
             Err(error @ CoreError::Target(_)) => return Err(error),
-            result => result
-                .ok()
-                .and_then(|result| result.result.value.and_then(|value| value.as_f64()))
-                .unwrap_or(1.0),
+            result => result.ok().flatten().unwrap_or(1.0),
         };
         Ok(BrowserScreenshot {
             data: screenshot.data,
@@ -178,29 +173,19 @@ impl Browser {
         expression: &str,
     ) -> Result<EvaluateOutput, CoreError> {
         let session = self.resolve_session(page_id).await?;
-        let result: EvaluateResult = session
-            .send(
-                "Runtime.evaluate",
-                json!({ "expression": expression, "returnByValue": true, "awaitPromise": true }),
-            )
-            .await?;
-        if let Some(exception) = result.exception_details {
-            return Ok(EvaluateOutput {
+        match PageJs::page_world(&session).eval_value(expression).await {
+            Ok(result) => Ok(EvaluateOutput {
+                value: result.value,
+                error: None,
+                description: result.description,
+            }),
+            Err(CoreError::PageScript(error)) => Ok(EvaluateOutput {
                 value: None,
-                error: Some(
-                    exception
-                        .exception
-                        .and_then(|exception| exception.description)
-                        .unwrap_or(exception.text),
-                ),
+                error: Some(error),
                 description: None,
-            });
+            }),
+            Err(error) => Err(error),
         }
-        Ok(EvaluateOutput {
-            value: result.result.value,
-            error: None,
-            description: result.result.description,
-        })
     }
 
     async fn resolve_session(&self, page_id: PageId) -> Result<ProtocolSession, CoreError> {
@@ -242,21 +227,3 @@ struct CaptureScreenshotResult {
     data: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct EvaluateResult {
-    result: RemoteObject,
-    exception_details: Option<ExceptionDetails>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteObject {
-    value: Option<Value>,
-    description: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ExceptionDetails {
-    text: String,
-    exception: Option<RemoteObject>,
-}

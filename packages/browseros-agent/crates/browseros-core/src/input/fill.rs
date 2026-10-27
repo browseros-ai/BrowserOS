@@ -4,13 +4,11 @@
 
 use super::{
     Input, InputTarget, Point,
-    geometry::{
-        call_on_element, focus_element_js, get_element_center, get_input_value, scroll_into_view,
-    },
+    geometry::{focus_element_js, get_element_center, get_input_value, scroll_into_view},
     keyboard::press_combo,
     mouse::{MouseButton, dispatch_click},
 };
-use crate::{CoreError, ProtocolSession, Ref, pointer::PointerAction};
+use crate::{CoreError, PageJs, ProtocolSession, Ref, pointer::PointerAction};
 use serde_json::{Value, json};
 
 const PREPARE_FILL_JS: &str = include_str!("../assets/prepare-fill.js");
@@ -121,13 +119,9 @@ async fn prepare_fill(
     backend_node_id: i64,
     mode: &str,
 ) -> Result<PreparedSelection, CoreError> {
-    let result = call_on_element(
-        session,
-        backend_node_id,
-        PREPARE_FILL_JS,
-        Some(vec![json!(mode)]),
-    )
-    .await?;
+    let result: Value = PageJs::isolated(session)
+        .call(backend_node_id, PREPARE_FILL_JS, &[json!(mode)])
+        .await?;
     if result == Value::Bool(true) {
         Ok(PreparedSelection::Ready)
     } else if result.as_str() == Some("collapseToEnd") {

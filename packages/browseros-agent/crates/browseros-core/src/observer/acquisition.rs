@@ -10,7 +10,8 @@ use super::{
     collect_frame_documents,
 };
 use crate::{
-    CoreError, FrameId, PageId, ProtocolSession,
+    CoreError, FrameId, PageId, PageJs, ProtocolSession,
+    page_js::{RemoteValue, Returns},
     frames::FrameTarget,
     snapshot::{AxNode, DocumentId, IframeStitch},
 };
@@ -119,6 +120,14 @@ impl SnapshotBudget {
     where
         R: DeserializeOwned,
     {
+        self.run(session.send(method, params)).await
+    }
+
+    /// Holds one permit while `call` awaits a single CDP response.
+    pub(super) async fn run<T>(
+        &self,
+        call: impl std::future::Future<Output = Result<T, CoreError>>,
+    ) -> Result<T, CoreError> {
         // A permit represents one pending CDP response, not a worker thread. Releasing it here
         // prevents dependent operations from holding capacity while they prepare their next call.
         let permit = self
@@ -126,7 +135,7 @@ impl SnapshotBudget {
             .acquire()
             .await
             .map_err(|error| CoreError::Message(error.to_string()))?;
-        let result = session.send(method, params).await;
+        let result = call.await;
         drop(permit);
         result
     }
@@ -429,13 +438,7 @@ async fn revalidate_document_after_acquisition(
 }
 
 #[derive(Debug, Deserialize)]
-struct RuntimeEvalResult {
-    result: RemoteObject,
-}
-
-#[derive(Debug, Deserialize)]
 struct RemoteObject {
-    value: Option<Value>,
     #[serde(rename = "objectId")]
     object_id: Option<String>,
 }
@@ -676,12 +679,10 @@ async fn acquire_cursor_hits(
             context.document_object_id,
             CURSOR_SCAN_JS,
             &[context.marker_attribute, context.marker_token],
-            true,
-            None,
+            Returns::Value,
         )
         .await?;
         let scan = scan
-            .result
             .value
             .and_then(|value| serde_json::from_value::<CursorScanResult>(value).ok())
             .unwrap_or_default();
@@ -704,11 +705,12 @@ async fn acquire_cursor_hits(
             context.document_object_id,
             "function(a,t){var out=[],p=t+':';this.querySelectorAll('['+a+']').forEach(function(e){var v=e.getAttribute(a);if(v&&v.indexOf(p)===0)out[Number(v.slice(p.length))]=e;});return out;}",
             &[context.marker_attribute, context.marker_token],
-            false,
-            Some(context.object_group),
+            Returns::Handle {
+                object_group: context.object_group,
+            },
         )
         .await?;
-        let Some(collection_id) = collection.result.object_id else {
+        let Some(collection_id) = collection.object_id else {
             return Ok(CursorScanBatch::Candidates(candidates, Vec::new()));
         };
         let properties: GetPropertiesResult = budget
@@ -841,42 +843,27 @@ enum CursorScanBatch {
     MarkerCollision,
 }
 
+/// Calls a cursor-scan function with a document as `this`. It runs in the page world: the scan
+/// counts `onclick` handlers the page assigned from script, which only that world can see.
 async fn call_document_function(
     session: &ProtocolSession,
     budget: &SnapshotBudget,
     document_object_id: Option<&str>,
     function_declaration: &str,
     arguments: &[&str],
-    return_by_value: bool,
-    object_group: Option<&str>,
-) -> Result<RuntimeEvalResult, CoreError> {
-    let mut params = if let Some(object_id) = document_object_id {
-        json!({
-            "functionDeclaration": function_declaration,
-            "objectId": object_id,
-            "arguments": arguments
-                .iter()
-                .map(|value| json!({ "value": value }))
-                .collect::<Vec<_>>(),
-            "returnByValue": return_by_value
-        })
-    } else {
-        let arguments = serde_json::to_string(arguments)
-            .map_err(|error| CoreError::Message(error.to_string()))?;
-        json!({
-            "expression": format!("({function_declaration}).apply(document,{arguments})"),
-            "returnByValue": return_by_value
-        })
-    };
-    if let Some(object_group) = object_group {
-        params["objectGroup"] = Value::String(object_group.to_string());
+    returns: Returns<'_>,
+) -> Result<RemoteValue, CoreError> {
+    let page = PageJs::page_world(session);
+    if let Some(object_id) = document_object_id {
+        let arguments = arguments.iter().map(|value| json!(value)).collect::<Vec<_>>();
+        return budget
+            .run(page.call_on_object(object_id, function_declaration, &arguments, returns))
+            .await;
     }
-    let method = if document_object_id.is_some() {
-        "Runtime.callFunctionOn"
-    } else {
-        "Runtime.evaluate"
-    };
-    budget.send(session, method, params).await
+    let arguments = serde_json::to_string(arguments)
+        .map_err(|error| CoreError::Message(error.to_string()))?;
+    let expression = format!("({function_declaration}).apply(document,{arguments})");
+    budget.run(page.eval_returning(&expression, returns)).await
 }
 
 async fn cleanup_cursor_marker(
@@ -892,8 +879,7 @@ async fn cleanup_cursor_marker(
         document_object_id,
         "function(a,t){var p=t+':';this.querySelectorAll('['+a+']').forEach(function(e){var v=e.getAttribute(a);if(v&&v.indexOf(p)===0)e.removeAttribute(a);});}",
         &[marker_attribute, marker_token],
-        true,
-        None,
+        Returns::Value,
     )
     .await;
 }

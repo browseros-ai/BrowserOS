@@ -84,7 +84,10 @@ impl Returns<'_> {
     fn apply(self, params: &mut Value) {
         match self {
             Self::Value => params["returnByValue"] = json!(true),
-            Self::Handle { object_group } => params["objectGroup"] = json!(object_group),
+            Self::Handle { object_group } => {
+                params["returnByValue"] = json!(false);
+                params["objectGroup"] = json!(object_group);
+            }
         }
     }
 }
@@ -149,20 +152,20 @@ impl<'a> PageJs<'a> {
     /// Evaluates an expression, awaiting a returned promise, and decodes its value. A missing
     /// value (`undefined`) decodes as JSON `null`; a thrown exception is
     /// [`CoreError::PageScript`].
-    pub async fn eval<T: DeserializeOwned>(&self, expression: &str) -> Result<T, CoreError> {
+    pub async fn eval<T: DeserializeOwned>(self, expression: &str) -> Result<T, CoreError> {
         decode(self.eval_value(expression).await?.value)
     }
 
     /// [`eval`](Self::eval) for callers that report results: keeps CDP's description of values
     /// that do not serialize.
-    pub async fn eval_value(&self, expression: &str) -> Result<RemoteValue, CoreError> {
+    pub async fn eval_value(self, expression: &str) -> Result<RemoteValue, CoreError> {
         self.eval_returning(expression, Returns::Value).await
     }
 
     /// Calls `function` with the node as `this` and `args` as its arguments, awaiting a returned
     /// promise, and decodes its value.
     pub async fn call<T: DeserializeOwned>(
-        &self,
+        self,
         backend_node_id: i64,
         function: &str,
         args: &[Value],
@@ -198,7 +201,7 @@ impl<'a> PageJs<'a> {
     }
 
     pub(crate) async fn eval_returning(
-        &self,
+        self,
         expression: &str,
         returns: Returns<'_>,
     ) -> Result<RemoteValue, CoreError> {
@@ -226,7 +229,7 @@ impl<'a> PageJs<'a> {
     /// Calls `function` on an object the caller already holds. It runs in the world that object
     /// belongs to, whichever constructor built this `PageJs`.
     pub(crate) async fn call_on_object(
-        &self,
+        self,
         object_id: &str,
         function: &str,
         args: &[Value],

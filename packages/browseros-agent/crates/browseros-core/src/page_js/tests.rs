@@ -192,6 +192,7 @@ async fn tests_that_isolated_call_runs_on_the_nodes_isolated_wrapper_and_release
     assert!(declaration.contains("function(){return this.tagName}"));
     assert!(declaration.contains(OTHER_DOCUMENT));
     assert_eq!(calls[3].params["objectId"], "isolated-node");
+    assert!(calls[3].params.get("arguments").is_none());
     assert_eq!(calls[4].params, json!({ "objectId": "isolated-node" }));
     Ok(())
 }

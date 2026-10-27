@@ -1,6 +1,6 @@
-use crate::{CoreError, PageId, ProtocolSession, pages::PageManager, timeouts};
+use crate::{CoreError, PageId, PageJs, ProtocolSession, pages::PageManager, timeouts};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{future::Future, time::Duration};
 use tokio::time::{Instant, sleep, timeout};
 
@@ -9,16 +9,6 @@ pub enum SettleOutcome {
     Settled { navigation_observed: bool },
     BudgetExpired,
     Skipped { reason: String },
-}
-
-#[derive(Debug, Deserialize)]
-struct EvaluateResult {
-    result: RemoteObject,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteObject {
-    value: Option<Value>,
 }
 
 const INSTALL_OBSERVER_JS: &str = r#"
@@ -116,16 +106,6 @@ const READINESS_PROBE_JS: &str = r#"
 })()
 "#;
 
-#[derive(Debug, Deserialize)]
-struct ReadingResult {
-    result: ReadingObject,
-}
-
-#[derive(Debug, Deserialize)]
-struct ReadingObject {
-    value: Option<ReadinessReading>,
-}
-
 /// One reading of a page's readiness counter.
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub struct ReadinessReading {
@@ -160,16 +140,12 @@ impl ReadinessReading {
 /// For callers running their own loop and their own timeout, such as the
 /// navigation wait, which has a dialog check to interleave.
 pub async fn read_readiness(session: &ProtocolSession) -> Result<ReadinessReading, CoreError> {
-    let call = session.send(
-        "Runtime.evaluate",
-        json!({ "expression": READINESS_PROBE_JS, "returnByValue": true }),
-    );
+    let call = PageJs::isolated(session).eval::<Option<ReadinessReading>>(READINESS_PROBE_JS);
     // Bounded like every other call on the settle path. The probe is advisory,
     // so a page whose main thread is busy must not park it for the transport's
     // default, which is two orders of magnitude longer than the budget any
     // caller of this function is working to.
-    let result: ReadingResult = match timeout(timeouts::ACTION_SETTLE_CDP_CALL_TIMEOUT, call).await
-    {
+    let reading = match timeout(timeouts::ACTION_SETTLE_CDP_CALL_TIMEOUT, call).await {
         Ok(result) => result?,
         Err(_elapsed) => {
             return Err(CoreError::Message(format!(
@@ -178,10 +154,7 @@ pub async fn read_readiness(session: &ProtocolSession) -> Result<ReadinessReadin
             )));
         }
     };
-    result
-        .result
-        .value
-        .ok_or_else(|| CoreError::Message("the readiness probe returned nothing".to_string()))
+    reading.ok_or_else(|| CoreError::Message("the readiness probe returned nothing".to_string()))
 }
 
 /// Waits until the page's content stops changing, or the ceiling is reached.
@@ -239,16 +212,13 @@ async fn read_reading(
     session: &ProtocolSession,
     deadline: Instant,
 ) -> Result<ReadinessReading, Readiness> {
-    let result: ReadingResult = call_with_deadline(
-        session.send(
-            "Runtime.evaluate",
-            json!({ "expression": READINESS_PROBE_JS, "returnByValue": true }),
-        ),
+    let reading = call_with_deadline(
+        PageJs::isolated(session).eval::<Option<ReadinessReading>>(READINESS_PROBE_JS),
         deadline,
     )
     .await
     .map_err(into_readiness)?;
-    result.result.value.ok_or_else(|| Readiness::Unknown {
+    reading.ok_or_else(|| Readiness::Unknown {
         reason: "the readiness probe returned nothing".to_string(),
     })
 }
@@ -367,20 +337,9 @@ async fn evaluate_counter(
     expression: &str,
     deadline: Instant,
 ) -> Result<u64, SettleOutcome> {
-    let result: EvaluateResult = call_with_deadline(
-        session.send(
-            "Runtime.evaluate",
-            json!({ "expression": expression, "returnByValue": true }),
-        ),
-        deadline,
-    )
-    .await?;
-    Ok(result
-        .result
-        .value
-        .as_ref()
-        .and_then(Value::as_u64)
-        .unwrap_or(0))
+    let value: Value =
+        call_with_deadline(PageJs::isolated(session).eval(expression), deadline).await?;
+    Ok(value.as_u64().unwrap_or(0))
 }
 
 async fn call_with_deadline<T, Fut>(future: Fut, deadline: Instant) -> Result<T, SettleOutcome>
