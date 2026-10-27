@@ -6,11 +6,11 @@
   - Dialogs and pop-ups keep their size and open centered.
   - One desktop and no shortcut that can switch the view away from Neo or
     close it.
-  - Neo never zooms (README, "Zoom"). Openbox takes Chromium's zoom keys and
-    Ctrl + mouse wheel, which is how noVNC sends a two-finger pinch, so even a
-    browser without the browseros-disable-zoom switch never sees them. A
-    binding needs an action, and Focus changes nothing here. "Frame" bindings
-    also cover the page, and unlike "Client" ones they are not passed on.
+  - Viewers can't zoom Neo (README, "Zoom"). Openbox takes Chromium's zoom
+    keys and Ctrl + mouse wheel, which is how noVNC sends a two-finger pinch,
+    so the browser never sees them. A binding needs an action, and Focus
+    changes nothing here. "Frame" bindings also cover the page, and unlike
+    "Client" ones they are not passed on.
 -->
 <openbox_config xmlns="http://openbox.org/3.4/rc">
   <focus>

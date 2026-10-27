@@ -150,17 +150,14 @@ off with a managed policy and gives the window an empty GTK button layout.
 
 ### Zoom
 
-Neo never zooms: the page in the viewer is the page your agent works in. To see it bigger,
+Viewers can't zoom Neo: the page in the viewer is the page your agent works in. To see it bigger,
 zoom your own browser or device.
 
-- Neo starts with `--disable-pinch`, which stops touch pinch, and `--browseros-disable-zoom`,
-  which keeps every tab at 100% whatever zoom keys, Ctrl + mouse wheel, the menu, extensions or
-  saved zoom levels ask for. Browsers without that switch ignore it, Neo 0.51.2.7 among them.
-- The window manager also takes the zoom keys (Ctrl + `=`, `-` or `0`, on the keypad too) and
-  Ctrl + mouse wheel, which is how noVNC sends a two-finger pinch, so browsers without the switch
-  never see them. Pages don't get them either, so maps and drawing tools zoom with their own
-  buttons. It never sees an agent's DevTools input, and in browsers without the switch the
-  menu's zoom buttons still work.
+- Neo starts with `--disable-pinch`, which stops touch pinch.
+- The window manager takes the zoom keys (Ctrl + `=`, `-` or `0`, on the keypad too) and
+  Ctrl + mouse wheel, which is how noVNC sends a two-finger pinch, so the browser never sees them.
+  Pages don't get them either, so maps and drawing tools zoom with their own buttons. It never
+  sees an agent's DevTools input, and the menu's zoom buttons still work.
 - Each time Neo starts, including after someone closed it, it forgets zoom levels the profile
   saved, per site or as a changed default.
 - `--disable-pinch` also drops pinch gestures an agent sends over DevTools
