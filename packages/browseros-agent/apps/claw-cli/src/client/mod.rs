@@ -226,9 +226,23 @@ impl Session {
         let id = next_id();
         let message = transport::call_message(id, tool, arguments);
         let session_id = self.state.mcp_session_id.clone();
-        // A transport error here means the request never reached the tool, so
-        // there is nothing to cancel; the classified error is the whole answer.
-        self.transport.post(&message, session_id.as_deref()).await
+        tokio::select! {
+            // A transport error here means the request never reached the tool,
+            // so there is nothing to cancel; the classified error is the whole
+            // answer.
+            reply = self.transport.post(&message, session_id.as_deref()) => reply,
+            // Dying on ctrl-C without telling the server leaves it running a
+            // tool nobody will read, and on a page-changing tool that keeps
+            // acting on the user's browser after the caller has gone.
+            () = interrupted() => {
+                cancel_in_flight(&self.transport, id, session_id.as_deref()).await;
+                Err(Failure::new(
+                    Code::Interrupted,
+                    "interrupted. The server was told to stop the call.",
+                )
+                .into())
+            }
+        }
     }
 
     /// `agentName` is a fallback identity for the calling product, gated on
@@ -344,6 +358,34 @@ pub async fn connect(
         session.persist(|state| state.agent = Some(agent.to_string()))?;
     }
     Ok(session)
+}
+
+/// Resolves when the caller presses ctrl-C.
+///
+/// A failure to install the handler must never cancel a working call, so it
+/// resolves to a future that never completes instead.
+async fn interrupted() {
+    if tokio::signal::ctrl_c().await.is_err() {
+        std::future::pending::<()>().await;
+    }
+}
+
+/// Tells the server to stop the call this client is abandoning.
+///
+/// `dispatch.rs` distinguishes this from a human pressing Stop in the cockpit:
+/// this one is `client_cancel`, which yields `ProtocolCancelled` rather than an
+/// operator cancellation, so the session is not retired.
+///
+/// Best effort on purpose. The caller is already leaving, and a server that
+/// cannot be told is not a reason to hold the process open.
+pub async fn cancel_in_flight(transport: &Transport, id: u64, session: Option<&str>) {
+    let _ = transport
+        .post_within(
+            &transport::cancelled_message(id),
+            session,
+            Some(transport::CANCEL_TIMEOUT),
+        )
+        .await;
 }
 
 /// First eight characters of an id, which is how the cockpit prints them.

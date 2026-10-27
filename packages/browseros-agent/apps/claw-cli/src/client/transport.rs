@@ -94,11 +94,31 @@ impl Transport {
     /// Connection failures become [`Code::NoBrowser`] and read timeouts become
     /// [`Code::Timeout`], so the caller never has to inspect a reqwest error.
     pub async fn post(&self, message: &Value, session: Option<&str>) -> Result<Reply> {
+        self.post_within(message, session, None).await
+    }
+
+    /// The same POST, but with its own deadline.
+    ///
+    /// Used for the cancellation notification, which must not inherit the
+    /// 180 second read timeout: a caller who has pressed ctrl-C is waiting,
+    /// and a second interrupt should not be needed to get the process back.
+    ///
+    /// # Errors
+    /// Classified the same way as [`Self::post`].
+    pub async fn post_within(
+        &self,
+        message: &Value,
+        session: Option<&str>,
+        deadline: Option<Duration>,
+    ) -> Result<Reply> {
         let mut request = self
             .http
             .post(self.mcp_url())
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .header(reqwest::header::ACCEPT, ACCEPT);
+        if let Some(deadline) = deadline {
+            request = request.timeout(deadline);
+        }
         if let Some(session) = session {
             request = request.header(SESSION_HEADER, session);
         }
@@ -273,6 +293,10 @@ pub fn call_message(id: u64, tool: &str, arguments: &Value) -> Value {
 pub fn list_message(id: u64) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "method": "tools/list", "params": {} })
 }
+
+/// How long the cancellation notification gets. Short, because the caller
+/// has already pressed ctrl-C and is waiting on the process to go away.
+pub const CANCEL_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Tells the server to stop a call this client is abandoning.
 ///

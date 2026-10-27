@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 use claw_cli::client::transport::{
     Transport, call_message, decode_body, initialize_message, initialized_message,
 };
+use claw_cli::client::{Session, cancel_in_flight};
+use claw_cli::state::{Store, scope};
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -323,4 +325,214 @@ fn the_notification_that_completes_the_handshake_carries_no_id() {
 fn an_empty_or_unparsable_body_decodes_to_nothing_rather_than_panicking() {
     assert_eq!(decode_body("application/json", ""), None);
     assert_eq!(decode_body("application/json", "not json"), None);
+}
+
+/// What the JSON-RPC body of a recorded request says it is.
+fn method_of(request: &Recorded) -> String {
+    serde_json::from_str::<serde_json::Value>(&request.body)
+        .ok()
+        .and_then(|body| {
+            body.get("method")
+                .and_then(|method| method.as_str())
+                .map(ToString::to_string)
+        })
+        .unwrap_or_default()
+}
+
+fn session_for(url: &str, dir: &std::path::Path) -> Session {
+    let scope = scope(std::path::Path::new("/repo"), None);
+    let store = Store::open_in(dir, &scope).unwrap_or_else(|error| panic!("{error}"));
+    let transport = Transport::new(url, std::time::Duration::from_secs(5))
+        .unwrap_or_else(|error| panic!("{error}"));
+    let state = store.load();
+    Session::new(transport, store, state)
+}
+
+#[tokio::test]
+async fn a_dead_session_triggers_exactly_one_re_handshake_and_one_retry() {
+    let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
+    // The server restarted, so the stored id is gone. The recovery is a
+    // re-handshake and a single retry: a loop here is how a restarting server
+    // turns into a tab storm.
+    let fixture = fixture(vec![
+        Canned::text(404, "Not Found: Session not found"),
+        Canned::json(200, json!({ "jsonrpc": "2.0", "id": 1, "result": {} }))
+            .with_session("fresh-session"),
+        Canned::text(202, ""),
+        Canned::json(
+            200,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "result": { "content": [{ "type": "text", "text": "ok" }] }
+            }),
+        ),
+        // A fifth response is queued so an extra attempt would be recorded
+        // rather than hanging the test.
+        Canned::text(404, "Not Found: Session not found"),
+    ])
+    .await;
+
+    let mut session = session_for(&fixture.url, dir.path());
+    session
+        .persist(|state| state.mcp_session_id = Some("stale-session".into()))
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    let output = session
+        .call("tabs", json!({ "action": "list" }), true)
+        .await
+        .unwrap_or_else(|error| panic!("the retry should have succeeded: {error}"));
+    assert_eq!(output.text, "ok");
+
+    let seen = fixture
+        .seen
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let methods: Vec<String> = seen.iter().map(method_of).collect();
+    assert_eq!(
+        methods,
+        vec![
+            "tools/call",
+            "initialize",
+            "notifications/initialized",
+            "tools/call",
+        ],
+        "exactly one re-handshake and one retry"
+    );
+
+    // The first call presented the dead id; the retry presented the new one.
+    assert_eq!(seen[0].header("mcp-session-id"), Some("stale-session"));
+    assert_eq!(seen[1].header("mcp-session-id"), None);
+    assert_eq!(seen[3].header("mcp-session-id"), Some("fresh-session"));
+    // And the new id is what the next process will read.
+    assert_eq!(
+        session.state().mcp_session_id.as_deref(),
+        Some("fresh-session")
+    );
+}
+
+#[tokio::test]
+async fn a_retry_that_also_fails_stops_rather_than_handshaking_again() {
+    let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
+    let fixture = fixture(vec![
+        Canned::text(404, "Not Found: Session not found"),
+        Canned::json(200, json!({ "jsonrpc": "2.0", "id": 1, "result": {} }))
+            .with_session("fresh-session"),
+        Canned::text(202, ""),
+        Canned::text(404, "Not Found: Session not found"),
+        Canned::json(200, json!({ "jsonrpc": "2.0", "id": 1, "result": {} }))
+            .with_session("third-session"),
+    ])
+    .await;
+
+    let mut session = session_for(&fixture.url, dir.path());
+    session
+        .persist(|state| state.mcp_session_id = Some("stale-session".into()))
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    let error = session
+        .call("tabs", json!({ "action": "list" }), true)
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("a second 404 must not be swallowed"));
+    assert_eq!(
+        claw_cli::exit::code_of(&error),
+        claw_cli::exit::Code::NoBrowser
+    );
+
+    let seen = fixture
+        .seen
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    assert_eq!(
+        seen.iter().filter(|r| method_of(r) == "initialize").count(),
+        1,
+        "exactly one retry, then stop"
+    );
+}
+
+#[tokio::test]
+async fn an_unpaired_scope_handshakes_before_the_first_call() {
+    let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
+    let fixture = fixture(vec![
+        Canned::json(200, json!({ "jsonrpc": "2.0", "id": 1, "result": {} }))
+            .with_session("first-session"),
+        Canned::text(202, ""),
+        Canned::json(
+            200,
+            json!({ "jsonrpc": "2.0", "id": 2, "result": { "content": [] } }),
+        ),
+    ])
+    .await;
+
+    let mut session = session_for(&fixture.url, dir.path());
+    session
+        .call("tabs", json!({ "action": "list" }), true)
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+
+    let seen = fixture
+        .seen
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let methods: Vec<String> = seen.iter().map(method_of).collect();
+    assert_eq!(
+        methods,
+        vec!["initialize", "notifications/initialized", "tools/call"]
+    );
+}
+
+#[tokio::test]
+async fn no_auto_session_refuses_to_pair_rather_than_pairing_quietly() {
+    let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
+    let fixture = fixture(vec![Canned::text(200, "")]).await;
+    let mut session = session_for(&fixture.url, dir.path());
+
+    let error = session
+        .call("tabs", json!({}), false)
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("it must refuse"));
+    assert_eq!(
+        claw_cli::exit::code_of(&error),
+        claw_cli::exit::Code::NoBrowser
+    );
+
+    let seen = fixture
+        .seen
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    assert!(seen.is_empty(), "nothing should have been sent: {seen:?}");
+}
+
+#[tokio::test]
+async fn the_cancellation_notification_names_the_request_it_abandons() {
+    // Sent on ctrl-C. dispatch.rs has a client_cancel path that stops the tool
+    // server side; dying without this leaves it running one nobody will read.
+    let fixture = fixture(vec![Canned::text(202, "")]).await;
+    let transport = transport(&fixture.url);
+    cancel_in_flight(&transport, 42, Some("sess")).await;
+
+    let seen = fixture
+        .seen
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let request = seen.first().unwrap_or_else(|| panic!("nothing was sent"));
+    let body: serde_json::Value =
+        serde_json::from_str(&request.body).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(body["method"], "notifications/cancelled");
+    assert_eq!(body["params"]["requestId"], 42);
+    // A notification carries no id, so the server never tries to answer it.
+    assert!(body.get("id").is_none(), "{body}");
+    assert_eq!(request.header("mcp-session-id"), Some("sess"));
+}
+
+#[tokio::test]
+async fn a_cancellation_the_server_cannot_take_does_not_hold_the_process_open() {
+    // The caller has already pressed ctrl-C. A dead port must not make them
+    // press it again.
+    let transport = transport("http://127.0.0.1:1");
+    let started = std::time::Instant::now();
+    cancel_in_flight(&transport, 1, None).await;
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }
