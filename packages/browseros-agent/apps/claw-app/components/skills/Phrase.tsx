@@ -12,7 +12,7 @@ export function Phrase({
   return (
     <span
       className={cn(
-        'rounded-full bg-accent-tint px-2 py-0.5 font-mono text-[12.5px] text-accent-ink',
+        'rounded-md bg-accent-tint px-2 py-0.5 font-mono text-[12.5px] text-accent-ink',
         className,
       )}
     >

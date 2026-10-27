@@ -141,12 +141,12 @@ function AgentRows({
 function RowsSkeleton() {
   return ['s1', 's2', 's3'].map((id) => (
     <li key={id} className="flex items-center gap-4 px-[18px] py-4">
-      <Skeleton className="size-11 rounded-xl" />
+      <Skeleton className="size-11 rounded-md" />
       <div className="flex flex-1 flex-col gap-2">
         <Skeleton className="h-4 w-32" />
         <Skeleton className="h-3.5 w-24" />
       </div>
-      <Skeleton className="h-8 w-24 rounded-full" />
+      <Skeleton className="h-8 w-24 rounded-md" />
     </li>
   ))
 }

@@ -68,6 +68,7 @@ on one source commit, use its `<version>-<commit>` tag (e.g. `0.52.0.1-169e41f`)
 replaces it. To pin exact image contents, use the digest.
 The server updater is disabled so the server stays at the version verified with
 the image. Pull a newer image and recreate the container to update it.
+The server's product analytics are off (`CLAW_ANALYTICS_ENABLED=0`).
 
 `BROWSERCLAW_HOSTED_MODE=1` gives agents the browser tools only. Skills (`save_skill`,
 `mark_skill_run`) and human help (`request_human_help`, `await_human_help`) are hidden, since

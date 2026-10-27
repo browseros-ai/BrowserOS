@@ -128,7 +128,7 @@ function SavingsDialog({ stats }: { stats: CockpitStats }) {
       <CenterMorphModalContent
         ariaLabel="Your savings"
         showCloseButton
-        className="max-w-[560px] rounded-[22px] border-border-2 bg-card"
+        className="max-w-[560px] border-border-2 bg-card"
       >
         <div className="flex flex-col gap-[18px] px-6 pt-6 pb-6">
           <h2 className="pr-10 font-bold text-[20px] text-cyanotype-ink tracking-[-0.015em]">
@@ -174,7 +174,7 @@ function SavingsDialog({ stats }: { stats: CockpitStats }) {
 
 function Figure({ value, label }: { value: string; label: string }) {
   return (
-    <div className="flex flex-col-reverse gap-0.5 rounded-[14px] bg-bg-canvas px-4 py-3.5">
+    <div className="flex flex-col-reverse gap-0.5 rounded-md bg-bg-canvas px-4 py-3.5">
       <dt className="text-[13.5px] text-ink-2">{label}</dt>
       <dd className="font-bold text-[24px] text-cyanotype-ink tracking-[-0.02em]">
         {value}

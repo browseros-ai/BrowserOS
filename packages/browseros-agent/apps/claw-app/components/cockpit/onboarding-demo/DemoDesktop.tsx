@@ -232,7 +232,7 @@ function Dock({
         )
       })}
       <div aria-hidden className="flex flex-col items-center gap-[5px]">
-        <DemoNeoMark className="size-11 rounded-xl" />
+        <DemoNeoMark className="size-11 rounded-[11px]" />
         <RunningDot on />
       </div>
     </div>
@@ -346,7 +346,7 @@ function AgentPointer({
       )}
     >
       <PointerArrow />
-      <span className="flex h-5 items-center gap-[5px] rounded-[10px] bg-[#01123F] px-2 font-medium font-mono text-[11px] text-white leading-3 shadow-[0_4px_10px_rgb(1_18_63/0.25)]">
+      <span className="flex h-5 items-center gap-[5px] rounded-md bg-[#01123F] px-2 font-medium font-mono text-[11px] text-white leading-3 shadow-[0_4px_10px_rgb(1_18_63/0.25)]">
         <i className="size-1.5 rounded-full bg-[#F5B957]" />
         {agent}
       </span>

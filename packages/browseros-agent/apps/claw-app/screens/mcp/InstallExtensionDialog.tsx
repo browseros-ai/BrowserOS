@@ -48,7 +48,7 @@ export function InstallExtensionDialog({
       onClose={() => onOpenChange(false)}
       placement="center"
       ariaLabel="Set up the Claude desktop app"
-      className="max-h-[calc(100dvh-32px)] max-w-[58rem] overflow-y-auto rounded-[22px] border-border-2 bg-card"
+      className="max-h-[calc(100dvh-32px)] max-w-[58rem] overflow-y-auto border-border-2 bg-card"
     >
       <div className="-m-5 flex flex-col sm:flex-row">
         <nav className="shrink-0 border-border-2 border-b bg-bg-sunken px-5 py-5 sm:w-60 sm:border-r sm:border-b-0">
@@ -69,7 +69,7 @@ export function InstallExtensionDialog({
                     onClick={() => setIndex(railIndex)}
                     aria-current={isActive ? 'step' : undefined}
                     className={cn(
-                      'flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors',
+                      'flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors',
                       isActive
                         ? 'bg-accent-tint text-accent-ink'
                         : 'text-ink-3 hover:bg-card-tint hover:text-ink-2',
@@ -117,7 +117,7 @@ export function InstallExtensionDialog({
             className={cn(
               // Fixed aspect keeps the modal from jumping between steps; the
               // vh cap keeps it inside short viewports.
-              'mt-4 aspect-[4/3] max-h-[46vh] w-full overflow-hidden rounded-xl border border-border-2 bg-card-tint',
+              'mt-4 aspect-[4/3] max-h-[46vh] w-full overflow-hidden rounded-md border border-border-2 bg-card-tint',
               !step.image && 'border-dashed',
             )}
           >
@@ -142,7 +142,7 @@ export function InstallExtensionDialog({
               )
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
-                <span className="inline-flex size-14 items-center justify-center rounded-2xl bg-accent-tint text-accent">
+                <span className="inline-flex size-14 items-center justify-center rounded-md bg-accent-tint text-accent">
                   <Download aria-hidden className="size-6" />
                 </span>
                 <p className="font-mono text-[12px] text-ink-2">
