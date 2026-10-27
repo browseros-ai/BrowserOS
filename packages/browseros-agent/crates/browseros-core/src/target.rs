@@ -1473,11 +1473,9 @@ impl BrowserView {
                 {
                     return Err(cdp_policy::unsupported("Runtime.evaluate"));
                 }
-                let worker = crate::ProtocolSession::for_session(
-                    self.session.connection(),
-                    session.clone(),
-                )
-                .with_epoch_guard(Some(worker_guard.clone()));
+                let worker =
+                    crate::ProtocolSession::for_session(self.session.connection(), session.clone())
+                        .with_epoch_guard(Some(worker_guard.clone()));
                 // A service worker has a single JavaScript context, which is what the page
                 // world names for it.
                 let result = crate::PageJs::page_world(&worker)

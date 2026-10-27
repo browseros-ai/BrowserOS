@@ -226,4 +226,3 @@ pub struct EvaluateOutput {
 struct CaptureScreenshotResult {
     data: String,
 }
-

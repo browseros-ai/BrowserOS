@@ -189,6 +189,13 @@ impl BrowserSession {
         Ok(Some(capture))
     }
 
+    /// A protocol handle for a session the host attached itself, such as an extension service
+    /// worker, outside the page registry. Scripts on it still go through [`crate::PageJs`].
+    #[must_use]
+    pub fn protocol_session(&self, session_id: crate::SessionId) -> crate::ProtocolSession {
+        crate::ProtocolSession::for_session(self.connection.clone(), session_id)
+    }
+
     pub async fn cdp(
         &self,
         method: &str,

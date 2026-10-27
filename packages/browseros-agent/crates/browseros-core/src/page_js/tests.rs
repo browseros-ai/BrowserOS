@@ -28,7 +28,8 @@ fn top_frame(id: &str) -> Value {
 #[tokio::test]
 async fn tests_that_page_world_eval_sends_a_single_main_world_evaluate()
 -> Result<(), Box<dyn std::error::Error>> {
-    let connection = TestConnection::new([("Runtime.evaluate", json!({ "result": { "value": 42 } }))]);
+    let connection =
+        TestConnection::new([("Runtime.evaluate", json!({ "result": { "value": 42 } }))]);
     let session = session(&connection, "page-world-eval");
 
     let answer: i64 = PageJs::page_world(&session).eval("6 * 7").await?;
@@ -49,10 +50,22 @@ async fn tests_that_isolated_eval_runs_in_the_browseros_world_of_the_top_frame()
 -> Result<(), Box<dyn std::error::Error>> {
     let connection = TestConnection::new([
         ("Page.getFrameTree", top_frame("main")),
-        ("Page.createIsolatedWorld", json!({ "executionContextId": 7 })),
-        ("Runtime.evaluate", json!({ "result": { "value": "first" } })),
-        ("Page.createIsolatedWorld", json!({ "executionContextId": 7 })),
-        ("Runtime.evaluate", json!({ "result": { "value": "second" } })),
+        (
+            "Page.createIsolatedWorld",
+            json!({ "executionContextId": 7 }),
+        ),
+        (
+            "Runtime.evaluate",
+            json!({ "result": { "value": "first" } }),
+        ),
+        (
+            "Page.createIsolatedWorld",
+            json!({ "executionContextId": 7 }),
+        ),
+        (
+            "Runtime.evaluate",
+            json!({ "result": { "value": "second" } }),
+        ),
     ]);
     let session = session(&connection, "isolated-eval");
 
@@ -85,7 +98,10 @@ async fn tests_that_isolated_eval_runs_in_the_browseros_world_of_the_top_frame()
 async fn tests_that_isolated_eval_in_a_named_frame_uses_that_frames_world()
 -> Result<(), Box<dyn std::error::Error>> {
     let connection = TestConnection::new([
-        ("Page.createIsolatedWorld", json!({ "executionContextId": 11 })),
+        (
+            "Page.createIsolatedWorld",
+            json!({ "executionContextId": 11 }),
+        ),
         ("Runtime.evaluate", json!({ "result": { "value": true } })),
     ]);
     let session = session(&connection, "isolated-named-frame");
@@ -95,7 +111,10 @@ async fn tests_that_isolated_eval_in_a_named_frame_uses_that_frames_world()
 
     assert!(ready);
     let calls = connection.calls()?;
-    assert_eq!(methods(&calls), ["Page.createIsolatedWorld", "Runtime.evaluate"]);
+    assert_eq!(
+        methods(&calls),
+        ["Page.createIsolatedWorld", "Runtime.evaluate"]
+    );
     assert_eq!(calls[0].params["frameId"], "child");
     assert_eq!(calls[1].params["contextId"], 11);
     Ok(())
@@ -128,13 +147,22 @@ async fn tests_that_isolated_eval_retries_once_in_a_fresh_world_when_the_context
 -> Result<(), Box<dyn std::error::Error>> {
     let connection = TestConnection::new([
         ("Page.getFrameTree", top_frame("main")),
-        ("Page.createIsolatedWorld", json!({ "executionContextId": 7 })),
+        (
+            "Page.createIsolatedWorld",
+            json!({ "executionContextId": 7 }),
+        ),
         (
             "Runtime.evaluate",
             cdp_error("Cannot find context with specified id"),
         ),
-        ("Page.createIsolatedWorld", json!({ "executionContextId": 8 })),
-        ("Runtime.evaluate", json!({ "result": { "value": "fresh" } })),
+        (
+            "Page.createIsolatedWorld",
+            json!({ "executionContextId": 8 }),
+        ),
+        (
+            "Runtime.evaluate",
+            json!({ "result": { "value": "fresh" } }),
+        ),
     ]);
     let session = session(&connection, "isolated-stale");
 
@@ -169,9 +197,18 @@ async fn tests_that_isolated_call_runs_on_the_nodes_isolated_wrapper_and_release
 -> Result<(), Box<dyn std::error::Error>> {
     let connection = TestConnection::new([
         ("Page.getFrameTree", top_frame("main")),
-        ("Page.createIsolatedWorld", json!({ "executionContextId": 7 })),
-        ("DOM.resolveNode", json!({ "object": { "objectId": "isolated-node" } })),
-        ("Runtime.callFunctionOn", json!({ "result": { "value": "INPUT" } })),
+        (
+            "Page.createIsolatedWorld",
+            json!({ "executionContextId": 7 }),
+        ),
+        (
+            "DOM.resolveNode",
+            json!({ "object": { "objectId": "isolated-node" } }),
+        ),
+        (
+            "Runtime.callFunctionOn",
+            json!({ "result": { "value": "INPUT" } }),
+        ),
         ("Runtime.releaseObject", json!({})),
     ]);
     let session = session(&connection, "isolated-call");
@@ -202,15 +239,27 @@ async fn tests_that_isolated_call_reruns_in_the_page_world_for_a_node_in_another
 -> Result<(), Box<dyn std::error::Error>> {
     let connection = TestConnection::new([
         ("Page.getFrameTree", top_frame("main")),
-        ("Page.createIsolatedWorld", json!({ "executionContextId": 7 })),
-        ("DOM.resolveNode", json!({ "object": { "objectId": "isolated-node" } })),
+        (
+            "Page.createIsolatedWorld",
+            json!({ "executionContextId": 7 }),
+        ),
+        (
+            "DOM.resolveNode",
+            json!({ "object": { "objectId": "isolated-node" } }),
+        ),
         (
             "Runtime.callFunctionOn",
             json!({ "result": { "value": { OTHER_DOCUMENT: true } } }),
         ),
         ("Runtime.releaseObject", json!({})),
-        ("DOM.resolveNode", json!({ "object": { "objectId": "page-node" } })),
-        ("Runtime.callFunctionOn", json!({ "result": { "value": 12.5 } })),
+        (
+            "DOM.resolveNode",
+            json!({ "object": { "objectId": "page-node" } }),
+        ),
+        (
+            "Runtime.callFunctionOn",
+            json!({ "result": { "value": 12.5 } }),
+        ),
         ("Runtime.releaseObject", json!({})),
     ]);
     let session = session(&connection, "isolated-other-document");
@@ -233,10 +282,19 @@ async fn tests_that_isolated_call_reruns_in_the_page_world_for_a_node_in_another
 async fn tests_that_page_world_call_passes_arguments_and_reports_a_missing_node()
 -> Result<(), Box<dyn std::error::Error>> {
     let connection = TestConnection::new([
-        ("DOM.resolveNode", json!({ "object": { "objectId": "node" } })),
-        ("Runtime.callFunctionOn", json!({ "result": { "value": "picked" } })),
+        (
+            "DOM.resolveNode",
+            json!({ "object": { "objectId": "node" } }),
+        ),
+        (
+            "Runtime.callFunctionOn",
+            json!({ "result": { "value": "picked" } }),
+        ),
         ("Runtime.releaseObject", json!({})),
-        ("DOM.resolveNode", json!({ "object": { "type": "object", "subtype": "null" } })),
+        (
+            "DOM.resolveNode",
+            json!({ "object": { "type": "object", "subtype": "null" } }),
+        ),
     ]);
     let session = session(&connection, "page-world-call");
 
@@ -252,7 +310,9 @@ async fn tests_that_page_world_call_passes_arguments_and_reports_a_missing_node(
         connection.calls()?[1].params["arguments"],
         json!([{ "value": "picked" }])
     );
-    assert!(matches!(missing, Err(CoreError::Message(message)) if message.contains("Take a new snapshot")));
+    assert!(
+        matches!(missing, Err(CoreError::Message(message)) if message.contains("Take a new snapshot"))
+    );
     Ok(())
 }
 
@@ -266,8 +326,14 @@ async fn tests_that_page_world_eval_in_a_child_frame_runs_on_that_frames_documen
             "DOM.describeNode",
             json!({ "node": { "contentDocument": { "backendNodeId": 9 } } }),
         ),
-        ("DOM.resolveNode", json!({ "object": { "objectId": "child-document" } })),
-        ("Runtime.callFunctionOn", json!({ "result": { "value": "child" } })),
+        (
+            "DOM.resolveNode",
+            json!({ "object": { "objectId": "child-document" } }),
+        ),
+        (
+            "Runtime.callFunctionOn",
+            json!({ "result": { "value": "child" } }),
+        ),
         ("Runtime.releaseObject", json!({})),
     ]);
     let session = session(&connection, "page-world-child-frame");

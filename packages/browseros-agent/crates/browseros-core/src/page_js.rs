@@ -9,9 +9,10 @@
 //! - [`PageJs::page_world`] is for scripts that need the page's own JavaScript: the agent's
 //!   `evaluate`, site globals, handlers the page assigned. They always run in the page's main world.
 //!
-//! An isolated script must behave the same in either world. The rollout switch
-//! ([`set_isolated_world_enabled`]) sends every script to the page world, and a single call falls
-//! back there when Chromium cannot give its frame a world or its node lives in another document.
+//! An isolated script must behave the same in either world. With the rollout switch
+//! ([`set_isolated_world_enabled`]) off every script runs in the page world, and with it on a
+//! single call still falls back there when Chromium cannot give its frame a world or its node
+//! lives in another document. `tests/page_js_guard.rs` fails on page JavaScript sent elsewhere.
 //!
 //! ```text
 //! eval(expr)                          call(node, fn, args)
@@ -182,7 +183,13 @@ impl<'a> PageJs<'a> {
             };
             let attempt = self
                 .with_isolated_context(|context| {
-                    self.call_node(Some(context), backend_node_id, function, args, Returns::Value)
+                    self.call_node(
+                        Some(context),
+                        backend_node_id,
+                        function,
+                        args,
+                        Returns::Value,
+                    )
                 })
                 .await;
             match attempt {

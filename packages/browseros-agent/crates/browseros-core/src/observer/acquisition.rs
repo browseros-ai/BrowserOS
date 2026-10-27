@@ -11,8 +11,8 @@ use super::{
 };
 use crate::{
     CoreError, FrameId, PageId, PageJs, ProtocolSession,
-    page_js::{RemoteValue, Returns},
     frames::FrameTarget,
+    page_js::{RemoteValue, Returns},
     snapshot::{AxNode, DocumentId, IframeStitch},
 };
 use browseros_cdp::runtime::GetPropertiesResult;
@@ -855,13 +855,16 @@ async fn call_document_function(
 ) -> Result<RemoteValue, CoreError> {
     let page = PageJs::page_world(session);
     if let Some(object_id) = document_object_id {
-        let arguments = arguments.iter().map(|value| json!(value)).collect::<Vec<_>>();
+        let arguments = arguments
+            .iter()
+            .map(|value| json!(value))
+            .collect::<Vec<_>>();
         return budget
             .run(page.call_on_object(object_id, function_declaration, &arguments, returns))
             .await;
     }
-    let arguments = serde_json::to_string(arguments)
-        .map_err(|error| CoreError::Message(error.to_string()))?;
+    let arguments =
+        serde_json::to_string(arguments).map_err(|error| CoreError::Message(error.to_string()))?;
     let expression = format!("({function_declaration}).apply(document,{arguments})");
     budget.run(page.eval_returning(&expression, returns)).await
 }

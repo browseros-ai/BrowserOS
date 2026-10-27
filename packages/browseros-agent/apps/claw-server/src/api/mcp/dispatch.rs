@@ -775,9 +775,17 @@ mod tests {
                     } else {
                         ("tabs", json!({"action": "new", "url": url}))
                     };
-                    let (call, group) =
-                        open_with_behavior(tool, args, url, mode, Behavior { tab_grouping })
-                            .await?;
+                    let (call, group) = open_with_behavior(
+                        tool,
+                        args,
+                        url,
+                        mode,
+                        Behavior {
+                            tab_grouping,
+                            ..Behavior::default()
+                        },
+                    )
+                    .await?;
                     let key = call
                         .identity
                         .as_ref()
@@ -805,6 +813,7 @@ mod tests {
         };
         let explicit = Behavior {
             tab_grouping: TabGrouping::Explicit,
+            ..Behavior::default()
         };
         let native = ProfileConnection::new().with_default_profile();
         let browser = current_session(native.clone());

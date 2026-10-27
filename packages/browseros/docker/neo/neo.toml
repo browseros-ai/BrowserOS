@@ -16,3 +16,10 @@
 #   "auto"      Neo keeps each task's pages in a <client>/<task> group that it
 #               titles, collapses and closes. The desktop app's behaviour.
 # grouping = "explicit"
+
+[scripts]
+# Whether BrowserOS's own page scripts that only touch the DOM (settle probes,
+# the agent pointer, element geometry, screenshot overlays) run in an isolated
+# JavaScript world the page cannot see. false runs them in the page's own
+# world. Set explicitly while isolated worlds roll out; true is also the default.
+isolated_world = true
