@@ -161,7 +161,8 @@ zoom your own browser or device.
   never see them. Pages don't get them either, so maps and drawing tools zoom with their own
   buttons. It never sees an agent's DevTools input, and in browsers without the switch the
   menu's zoom buttons still work.
-- Every start resets zoom levels the profile saved earlier, per site or as a changed default.
+- Each time Neo starts, including after someone closed it, it forgets zoom levels the profile
+  saved, per site or as a changed default.
 - `--disable-pinch` also drops pinch gestures an agent sends over DevTools
   (`Input.synthesizePinchGesture`).
 - `setViewport`'s `zoom` scales its mobile preview through DevTools emulation, not browser zoom,

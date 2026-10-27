@@ -26,12 +26,14 @@ def run_bash(script: str) -> subprocess.CompletedProcess:
 
 
 class StartNeoTest(unittest.TestCase):
-    def launch(self, neo_args: str) -> list[str]:
-        """The browser's argv from start_neo, with the image's default settings."""
+    def launch(self, neo_args: str) -> tuple[list[str], list[str]]:
+        """start_neo's calls in order, and the browser's argv, with the image's defaults."""
         with tempfile.TemporaryDirectory() as directory:
-            argv = Path(directory) / "argv"
+            calls, argv = Path(directory) / "calls", Path(directory) / "argv"
             run_bash(
-                f"spawn_as_neo() {{ printf '%s\\n' \"$@\" > '{argv}' & }}\n"
+                f"forget_zoom_levels() {{ echo forget_zoom_levels >> '{calls}'; }}\n"
+                f"spawn_as_neo() {{ echo spawn_as_neo >> '{calls}'; "
+                f"printf '%s\\n' \"$@\" > '{argv}' & }}\n"
                 "sandbox_flags=(--no-sandbox)\n"
                 "browseros_extension_flags=(--disable-browseros-extensions)\n"
                 "gpu_flags=(--ignore-gpu-blocklist --disable-gpu-compositing)\n"
@@ -41,20 +43,26 @@ class StartNeoTest(unittest.TestCase):
                 + shell_function("start_neo")
                 + "start_neo\nwait\n"
             )
-            return argv.read_text().splitlines()
+            return calls.read_text().split(), argv.read_text().splitlines()
 
     def test_neo_starts_with_zoom_off(self):
-        argv = self.launch("")
+        _, argv = self.launch("")
 
         self.assertEqual(argv[0], "browserclaw")
         self.assertIn("--disable-pinch", argv)
         self.assertIn("--browseros-disable-zoom", argv)
 
     def test_neo_args_still_come_last(self):
-        argv = self.launch("--lang=de --disable-browseros-features=")
+        _, argv = self.launch("--lang=de --disable-browseros-features=")
 
         self.assertEqual(argv[-2:], ["--lang=de", "--disable-browseros-features="])
         self.assertLess(argv.index("--browseros-disable-zoom"), len(argv) - 2)
+
+    def test_every_launch_first_drops_saved_zoom_levels(self):
+        # The supervisor loop relaunches Neo through start_neo after it closes.
+        calls, _ = self.launch("")
+
+        self.assertEqual(calls, ["forget_zoom_levels", "spawn_as_neo"])
 
 
 @unittest.skipUnless(shutil.which("jq"), "needs jq, as the image has")

@@ -123,13 +123,13 @@ prepare_data() {
   # application data; the browser/server processes have not started yet.
   rm -f "$PROFILE/.browseros/current_version" \
     "$PROFILE/.browseros/BrowserClawServer/current_version"
-
-  forget_zoom_levels
 }
 
 # Neo never zooms (see start_neo), so pages zoomed before, per site or through
-# a changed default, go back to 100%. Only zoom levels are dropped, and a
-# profile whose preferences cannot be read keeps them and still starts.
+# a changed default, go back to 100%. start_neo runs it before every launch,
+# while Neo is stopped, so a level saved before Neo closed is gone when it
+# comes back. Only zoom levels are dropped, and a profile whose preferences
+# cannot be read keeps them and still starts.
 forget_zoom_levels() {
   local prefs="$PROFILE/Default/Preferences"
   [ -s "$prefs" ] || return 0
@@ -244,6 +244,7 @@ apply_minimal_ui() {
 # Ctrl + mouse wheel (noVNC's pinch) before they reach the browser.
 # setViewport's zoom is DevTools emulation, not browser zoom, and still works.
 start_neo() {
+  forget_zoom_levels
   # Releases verify the packaged/overlaid server, so pin it for the image's
   # lifetime. Keep this outside NEO_ARGS, which Compose/callers may replace.
   # NEO_ARGS goes last so a caller's value for a repeated switch wins.

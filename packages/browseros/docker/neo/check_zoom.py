@@ -3,9 +3,11 @@
 
 noVNC sends a two-finger pinch as Ctrl + mouse wheel, and keyboard zoom arrives
 as Ctrl +/-/0. This sends both to the VNC server the way the viewer does and
-reads the page's zoom over the loopback CDP endpoint. It also checks that keys
-without Ctrl still type and that a plain mouse wheel still scrolls, which shows
-the input reached the page. The release workflow streams it to the container:
+reads the page's zoom over the loopback CDP endpoint. Ctrl + 0 only changes a
+page that is not at 100%, so it is sent to a zoomed-out mobile preview, the
+DevTools emulation setViewport uses. Keys without Ctrl must still type and a
+plain mouse wheel must still scroll, which shows the input reached the page.
+The release workflow streams this script to the container:
 
   docker exec -i <container> python3 - < check_zoom.py
 
@@ -13,6 +15,7 @@ Standard library only, like neo-quit.py: the image has no VNC or WebSocket clien
 """
 
 import base64
+import contextlib
 import json
 import os
 import socket
@@ -102,30 +105,35 @@ def cdp(path: str, method: str = "GET") -> dict:
     return json.loads(body) if body.strip().startswith(b"{") else {}
 
 
-def evaluate(target: dict, expression: str):
-    """Runtime.evaluate in one page, over a minimal WebSocket client."""
-    url = urllib.parse.urlparse(target["webSocketDebuggerUrl"])
-    sock = socket.create_connection((url.hostname, url.port), timeout=5)
-    try:
+class Page:
+    """One DevTools session on the check page, over a minimal WebSocket client.
+
+    It stays open for the whole check, since closing it would also end its
+    device emulation.
+    """
+
+    def __init__(self, target: dict) -> None:
+        url = urllib.parse.urlparse(target["webSocketDebuggerUrl"])
+        self.sock = socket.create_connection((url.hostname, url.port), timeout=5)
         key = base64.b64encode(os.urandom(16)).decode()
-        sock.sendall(
+        self.sock.sendall(
             (
                 f"GET {url.path} HTTP/1.1\r\nHost: {url.netloc}\r\n"
                 "Upgrade: websocket\r\nConnection: Upgrade\r\n"
                 f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
             ).encode()
         )
-        reader = sock.makefile("rb")
-        if b" 101 " not in reader.readline():
+        self.reader = self.sock.makefile("rb")
+        if b" 101 " not in self.reader.readline():
             raise RuntimeError("CDP refused the WebSocket upgrade")
-        while reader.readline() not in (b"\r\n", b""):
+        while self.reader.readline() not in (b"\r\n", b""):
             pass
+        self.last_id = 0
+
+    def call(self, method: str, params: dict | None = None) -> dict:
+        self.last_id += 1
         payload = json.dumps(
-            {
-                "id": 1,
-                "method": "Runtime.evaluate",
-                "params": {"expression": expression, "returnByValue": True},
-            }
+            {"id": self.last_id, "method": method, "params": params or {}}
         ).encode()
         # Clients mask every frame (RFC 6455).
         mask = os.urandom(4)
@@ -134,31 +142,36 @@ def evaluate(target: dict, expression: str):
         else:
             header = bytes([0x81, 0x80 | 126]) + struct.pack(">H", len(payload))
         masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
-        sock.sendall(header + mask + masked)
+        self.sock.sendall(header + mask + masked)
         while True:
-            first, second = reader.read(2)
+            first, second = self.reader.read(2)
             size = second & 0x7F
             if size == 126:
-                size = struct.unpack(">H", reader.read(2))[0]
+                size = struct.unpack(">H", self.reader.read(2))[0]
             elif size == 127:
-                size = struct.unpack(">Q", reader.read(8))[0]
-            message = reader.read(size)
-            if first & 0x0F != 0x1 or (reply := json.loads(message)).get("id") != 1:
+                size = struct.unpack(">Q", self.reader.read(8))[0]
+            message = self.reader.read(size)
+            if first & 0x0F != 0x1 or (reply := json.loads(message)).get("id") != self.last_id:
                 continue
-            if "error" in reply or "exceptionDetails" in reply["result"]:
-                raise RuntimeError(f"evaluate failed: {message[:200]!r}")
-            return reply["result"]["result"].get("value")
-    finally:
-        sock.close()
+            if "error" in reply:
+                raise RuntimeError(f"{method} failed: {message[:200]!r}")
+            return reply["result"]
 
+    def evaluate(self, expression: str):
+        result = self.call("Runtime.evaluate", {"expression": expression, "returnByValue": True})
+        if "exceptionDetails" in result:
+            raise RuntimeError(f"evaluate failed: {expression}")
+        return result["result"].get("value")
 
-def page_state(target: dict) -> dict:
-    """Browser zoom shows in devicePixelRatio, pinch zoom in the visual viewport."""
-    return evaluate(
-        target,
-        "({zoom: devicePixelRatio, pinch: visualViewport.scale, scrollY,"
-        " typed: document.getElementById('typed').value})",
-    )
+    def state(self) -> dict:
+        """Browser zoom shows in devicePixelRatio, pinch zoom in the visual viewport."""
+        return self.evaluate(
+            "({zoom: devicePixelRatio, pinch: visualViewport.scale, scrollY,"
+            " typed: document.getElementById('typed').value})"
+        )
+
+    def close(self) -> None:
+        self.sock.close()
 
 
 def report(label: str, passed: bool, detail: str) -> bool:
@@ -166,28 +179,27 @@ def report(label: str, passed: bool, detail: str) -> bool:
     return passed
 
 
-def run(vnc: Vnc, target: dict) -> bool:
-    cdp(f"/json/activate/{target['id']}")
+def run(vnc: Vnc, page: Page, target_id: str) -> bool:
+    cdp(f"/json/activate/{target_id}")
     deadline = time.monotonic() + 10
-    while evaluate(target, "document.readyState") != "complete":
+    while page.evaluate("document.readyState") != "complete":
         if time.monotonic() > deadline:
             raise RuntimeError("the check page did not load")
         time.sleep(0.2)
-    evaluate(target, "document.getElementById('typed').focus()")
+    page.evaluate("document.getElementById('typed').focus()")
     # Lets the activated tab take keyboard focus before input arrives.
     time.sleep(1)
 
     passed = True
-    before = page_state(target)
+    before = page.state()
     for label, send in (
         ("a viewer's pinch (Ctrl + wheel) does not zoom", lambda: vnc.wheel(WHEEL_UP, 3, control=True)),
         ("Ctrl + = does not zoom", lambda: vnc.tap(EQUAL, control=True)),
         ("Ctrl + - does not zoom", lambda: vnc.tap(MINUS, control=True)),
-        ("Ctrl + 0 does not zoom", lambda: vnc.tap(ZERO, control=True)),
     ):
         send()
         time.sleep(1)
-        after = page_state(target)
+        after = page.state()
         detail = f"zoom {before['zoom']} -> {after['zoom']}, pinch {before['pinch']} -> {after['pinch']}"
         unchanged = (after["zoom"], after["pinch"]) == (before["zoom"], before["pinch"])
         passed &= report(label, unchanged, detail)
@@ -197,12 +209,31 @@ def run(vnc: Vnc, target: dict) -> bool:
         vnc.tap(keysym)
     vnc.wheel(WHEEL_DOWN, 3)
     time.sleep(1)
-    after = page_state(target)
+    after = page.state()
     passed &= report("keys without Ctrl still type", after["typed"] == "=-0", f"typed {after['typed']!r}")
     passed &= report(
         "a plain wheel still scrolls",
         after["scrollY"] > before["scrollY"],
         f"scrollY {before['scrollY']} -> {after['scrollY']}",
+    )
+
+    # Without a viewport tag, a phone-sized preview lays the page out 980 px
+    # wide and shows it zoomed out to fit, which Chromium's Ctrl + 0 undoes.
+    page.call(
+        "Emulation.setDeviceMetricsOverride",
+        {"width": 400, "height": 906, "deviceScaleFactor": 2, "mobile": True},
+    )
+    deadline = time.monotonic() + 5
+    while (before := page.state())["pinch"] >= 1 and time.monotonic() < deadline:
+        time.sleep(0.2)
+    vnc.tap(ZERO, control=True)
+    time.sleep(1)
+    after = page.state()
+    page.call("Emulation.clearDeviceMetricsOverride")
+    passed &= report(
+        "Ctrl + 0 keeps a zoomed-out mobile preview",
+        before["pinch"] < 1 and after["pinch"] == before["pinch"],
+        f"pinch {before['pinch']} -> {after['pinch']}",
     )
     return passed
 
@@ -210,14 +241,13 @@ def run(vnc: Vnc, target: dict) -> bool:
 def main() -> int:
     # Chromium opens pages only for a PUT to /json/new.
     target = cdp("/json/new?" + urllib.parse.quote(PAGE, safe=""), method="PUT")
-    try:
+    with contextlib.ExitStack() as cleanup:
+        cleanup.callback(cdp, f"/json/close/{target['id']}")
+        page = Page(target)
+        cleanup.callback(page.close)
         vnc = Vnc()
-        try:
-            return 0 if run(vnc, target) else 1
-        finally:
-            vnc.close()
-    finally:
-        cdp(f"/json/close/{target['id']}")
+        cleanup.callback(vnc.close)
+        return 0 if run(vnc, page, target["id"]) else 1
 
 
 if __name__ == "__main__":
