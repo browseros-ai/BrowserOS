@@ -193,7 +193,9 @@ const BOOTSTRAP_JS: &str = r#"
     frames: 'Frames are not addressable. Use page.cdp(method, paramsJson).',
     mainFrame: 'Frames are not addressable. Use page.cdp(method, paramsJson).',
     setContent: 'Set content from inside page.evaluate instead.',
-    setViewportSize: 'The viewport is the user\'s. Pass { size } to page.screenshot to cap a capture.',
+    setViewportSize: __browserosFeatures.viewport
+      ? 'Use page.setViewport({ mode: "mobile" | "desktop" | "default", zoom }).'
+      : 'The viewport is the user\'s. Pass { size } to page.screenshot to cap a capture.',
     addInitScript: 'There is no init-script hook. Run the script with page.evaluate after page.goto.',
     exposeFunction: 'There is no binding hook. Return a value from page.evaluate instead.',
     ariaSnapshot: 'Use page.snapshot(), which returns { text, refs, url } rather than YAML.',
@@ -312,6 +314,9 @@ const BOOTSTRAP_JS: &str = r#"
 
       ...(__browserosFeatures.credentials
         ? { credentials: (opts) => tool('credentials', opts) }
+        : {}),
+      ...(__browserosFeatures.viewport
+        ? { setViewport: (opts) => call('viewport.set', [pageId, opts]) }
         : {}),
       screenshot: (opts) => tool('screenshot', opts),
       pdf: (opts) => tool('pdf', opts),
@@ -775,7 +780,7 @@ fn install_globals<'js>(
 ) -> Result<(), RunError> {
     // The JS/Rust boundary for native features: the SDK reads one flag per feature to decide
     // which exports to define. The flags only shape discovery; refusals stay in Rust.
-    let features = NativeFeature::ALL
+    let mut features = NativeFeature::ALL
         .iter()
         .map(|feature| {
             (
@@ -784,6 +789,11 @@ fn install_globals<'js>(
             )
         })
         .collect::<serde_json::Map<_, _>>();
+    // Not a native feature: the host decides, by attaching viewport state (hosted only).
+    features.insert(
+        "viewport".to_string(),
+        Value::Bool(tool_ctx.browser.offers_viewport()),
+    );
     let bridge = BrowserBridge {
         ctx: tool_ctx,
         control,
@@ -857,8 +867,19 @@ impl BrowserBridge {
         if let Some(hook) = &self.ctx.inner_call_hook {
             hook.authorize(page).await?;
         }
+        // Tool-backed primitives restore inside execute_tool; taking the window twice would
+        // wait on itself.
+        let viewport = match page {
+            Some(page) if restores_viewport(method) => Some(
+                self.control
+                    .race(self.ctx.browser.prepare_viewport(PageId(page)))
+                    .await?,
+            ),
+            _ => None,
+        };
         let started = Instant::now();
         let outcome = self.dispatch(method, args).await;
+        drop(viewport);
         if let Some(hook) = &self.ctx.inner_call_hook {
             if method == "pages.newPage"
                 && let Ok(BrowserCallValue::Json(Value::Number(number))) = &outcome
@@ -1201,6 +1222,19 @@ impl BrowserBridge {
                     None => Ok(BrowserCallValue::Json(Value::Null)),
                 }
             }
+            "viewport.set" => {
+                let page_id = page_arg(&args, 0)?;
+                let mut raw = optional_object_arg(&args, 1)?.cloned().unwrap_or_default();
+                raw.insert("page".to_string(), json!(page_id.0));
+                let (page_id, request) = super::viewport::parse_for_script(Value::Object(raw))?;
+                let report = self
+                    .control
+                    .race(self.ctx.browser.set_viewport(page_id, request))
+                    .await?;
+                Ok(BrowserCallValue::Json(super::viewport::report_json(
+                    &report,
+                )))
+            }
             method if method.starts_with("tool:") => {
                 let tool_name = &method["tool:".len()..];
                 self.run_tool(tool_name, build_tool_args(&args)).await
@@ -1379,13 +1413,24 @@ fn target_page(method: &str, args: &[Value]) -> Option<u32> {
         || method.starts_with("input.")
         || method.starts_with("nav.")
         || method.starts_with("tool:")
-        || matches!(method, "pages.close" | "pages.getInfo" | "cdpJsonForPage");
+        || matches!(
+            method,
+            "pages.close" | "pages.getInfo" | "cdpJsonForPage" | "viewport.set"
+        );
     if !page_first {
         return None;
     }
     args.first()
         .and_then(Value::as_u64)
         .and_then(|value| u32::try_from(value).ok())
+}
+
+/// Direct primitives that read, capture or act on a page restore its fixed viewport first.
+fn restores_viewport(method: &str) -> bool {
+    method.starts_with("observe.")
+        || method.starts_with("input.")
+        || method.starts_with("nav.")
+        || method == "cdpJsonForPage"
 }
 
 fn page_arg(args: &[Value], index: usize) -> Result<PageId, String> {

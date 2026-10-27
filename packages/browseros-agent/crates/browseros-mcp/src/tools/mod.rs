@@ -22,6 +22,7 @@ pub mod tab_groups;
 pub mod tabs;
 mod target_output_schema;
 pub mod upload;
+pub mod viewport;
 pub mod wait;
 pub mod windows;
 
@@ -136,6 +137,7 @@ fn metadata_for_tool(name: &str) -> ToolMetadata {
                 | "pdf"
                 | "wait"
                 | "evaluate"
+                | "setViewport"
         ),
     }
 }
