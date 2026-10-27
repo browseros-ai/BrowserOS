@@ -33,6 +33,7 @@ describe('usageComparison', () => {
     expect(usageComparison(stats(all), all)).toEqual({
       withNeo: 1_900_000,
       withoutNeo: 8_800_000,
+      saved: 6_900_000,
       percentLess: 78,
     })
   })
