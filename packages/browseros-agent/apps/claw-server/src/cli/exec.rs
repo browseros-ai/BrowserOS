@@ -62,6 +62,17 @@ async fn run_tool(
         io::note(notice);
     }
 
+    // Before anything else, including resolving a page. A tool this server
+    // does not have cannot be fixed by opening one, so "no current page" would
+    // send the caller after the wrong problem.
+    if let Some(reason) = capability::unavailable(plan.tool, &session.state().tools) {
+        return Err(Failure::tool(format!(
+            "this server does not offer `{}`: {reason}.\n  Run `browseros status` to see what it does offer.",
+            plan.tool
+        ))
+        .into());
+    }
+
     let page = if plan.needs_page {
         let page = globals
             .page
@@ -93,14 +104,6 @@ async fn run_tool(
             .or_insert(Value::String(group));
     }
 
-    if let Some(reason) = capability::unavailable(plan.tool, &session.state().tools) {
-        return Err(Failure::tool(format!(
-            "this server does not offer `{}`: {reason}.\n  Run `browseros status` to see what it does offer.",
-            plan.tool
-        ))
-        .into());
-    }
-
     let started = Instant::now();
     let arguments = Value::Object(plan.args.clone());
     let output = session
@@ -128,9 +131,39 @@ async fn run_tool(
         session.persist(|state| state.page_url = Some(url.clone()))?;
     }
 
+    // The server creates the task's tab group when the first tab is opened and
+    // does not name it in that reply, so learn it from one listing. Once
+    // recorded this never runs again: it is the durable half of the session
+    // identity, and without it `session end --close-tabs` has nothing to close
+    // and a restart cannot re-claim the group.
+    if plan.with_group
+        && !output.is_error
+        && session.state().group_id.is_none()
+        && let Some(opened) = render::page_from(&output)
+    {
+        let listed = session
+            .call("tabs", json!({ "action": "list" }), false)
+            .await
+            .ok();
+        if let Some(group) = listed.as_ref().and_then(|l| render::group_of(l, opened)) {
+            session.persist(|state| state.group_id = Some(group.clone()))?;
+        }
+    }
+
     let mut files = Vec::new();
     if let Some(target) = plan.save_image.clone() {
         files = write_images(&output, target.as_deref())?;
+    }
+    if let Some(destination) = plan.copy_to.clone()
+        && !output.is_error
+        && let Some(written) = render::written_path(&output)
+    {
+        std::fs::copy(&written, &destination).map_err(|error| {
+            Failure::tool(format!(
+                "the browser wrote {written} but it could not be copied to {destination}: {error}"
+            ))
+        })?;
+        files.push(destination);
     }
 
     if plan.wrap_page
@@ -326,28 +359,21 @@ async fn session_start(
     session.handshake(false).await?;
 
     // The server's own guidance prescribes a list on the first call of a
-    // connection, and it is how a group left behind by a previous session for
-    // this scope is adopted rather than a second one being started.
-    let listed = session
+    // connection, so make it. It also proves the browser link before anything
+    // is opened.
+    let _ = session
         .call(
             "tabs",
             json!({ "action": "list" }),
             !globals.no_auto_session,
         )
         .await?;
-    let adopted = session.state().group_id.clone().or_else(|| {
-        listed
-            .structured
-            .as_ref()
-            .and_then(|value| value.get("pages"))
-            .and_then(Value::as_array)
-            .and_then(|pages| {
-                pages
-                    .iter()
-                    .find_map(|page| page.get("groupId").and_then(Value::as_str))
-            })
-            .map(ToString::to_string)
-    });
+    // The group this scope already owns, if any. It is deliberately not
+    // guessed from the listing: an id there may belong to the user or to
+    // another agent, and claiming one would put this task's tabs in someone
+    // else's group. A session with no recorded group learns its own from the
+    // first tab it opens, which is where the server creates it.
+    let adopted = session.state().group_id.clone();
 
     if let Some(name) = task.clone() {
         let arguments = client::object(vec![
@@ -419,6 +445,18 @@ async fn session_end(session: &mut Session, close_tabs: bool, all: bool) -> Resu
     // flag. Leaving tabs open matches the guidance that useful pages should
     // survive the end of a task unless asked otherwise.
     if close_tabs {
+        // Resolve the group from a live listing when the scope file has none:
+        // this is the one destructive command, and "nothing recorded" is a
+        // worse answer than one extra round trip.
+        if session.state().group_id.is_none()
+            && let Some(page) = session.state().page
+            && let Ok(listed) = session
+                .call("tabs", json!({ "action": "list" }), false)
+                .await
+            && let Some(group) = render::group_of(&listed, page)
+        {
+            session.persist(|state| state.group_id = Some(group.clone()))?;
+        }
         if let Some(group) = session.state().group_id.clone() {
             let arguments = json!({ "action": "close", "groupId": group });
             let closed = session.call("tab_groups", arguments, false).await?;

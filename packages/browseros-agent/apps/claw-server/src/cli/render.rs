@@ -69,6 +69,68 @@ pub fn listed_pages(output: &ToolOutput) -> Vec<u32> {
         .collect()
 }
 
+/// The path a tool reports having written.
+///
+/// `pdf` and `download` write into the browser's own output directory and name
+/// the file in their reply. Both are on this machine, so a caller who asked
+/// for a destination can have the file copied there.
+#[must_use]
+pub fn written_path(output: &ToolOutput) -> Option<String> {
+    if let Some(path) = output
+        .structured
+        .as_ref()
+        .and_then(|value| value.get("path"))
+        .and_then(Value::as_str)
+    {
+        return Some(path.to_string());
+    }
+    output
+        .text
+        .split(" to: ")
+        .nth(1)
+        .and_then(|rest| rest.lines().next())
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+}
+
+/// The tab group a listing reports for one page.
+///
+/// The group id is the durable half of the session identity: the transport id
+/// dies with the server, while a known group can be re-claimed on `tabs new`.
+/// It is only discoverable from a listing, as `[group <ID>]` on the page's
+/// line, because the server creates the group when the first tab is opened
+/// and does not name it in that reply.
+#[must_use]
+pub fn group_of(output: &ToolOutput, page: u32) -> Option<String> {
+    if let Some(group) = output
+        .structured
+        .as_ref()
+        .and_then(|value| value.get("pages"))
+        .and_then(Value::as_array)
+        .and_then(|pages| {
+            pages
+                .iter()
+                .find(|entry| entry.get("page").and_then(Value::as_u64) == Some(u64::from(page)))
+                .and_then(|entry| entry.get("groupId"))
+                .and_then(Value::as_str)
+        })
+    {
+        return Some(group.to_string());
+    }
+    let prefix = format!("[{page}]");
+    output
+        .text
+        .lines()
+        .map(str::trim_start)
+        .find(|line| line.starts_with(&prefix))
+        .and_then(|line| line.split("[group ").nth(1))
+        .and_then(|rest| rest.split(']').next())
+        .map(str::trim)
+        .filter(|group| !group.is_empty())
+        .map(str::to_string)
+}
+
 /// A key/value block, used by `status` and `session list`.
 #[must_use]
 pub fn fields(rows: &[(&str, String)]) -> String {
@@ -161,6 +223,30 @@ mod tests {
     }
 
     #[test]
+    fn the_written_path_is_read_from_the_tools_own_report() {
+        // The real wire shape of `pdf`, which has no output schema and so
+        // arrives as text only.
+        let output = ToolOutput {
+            text: "Saved page 4 as PDF (51204 bytes) to: /home/u/.browseros/tool-output/pdf-1.pdf"
+                .into(),
+            ..ToolOutput::default()
+        };
+        assert_eq!(
+            written_path(&output).as_deref(),
+            Some("/home/u/.browseros/tool-output/pdf-1.pdf")
+        );
+    }
+
+    #[test]
+    fn a_result_that_wrote_nothing_reports_no_path() {
+        let output = ToolOutput {
+            text: "ok".into(),
+            ..ToolOutput::default()
+        };
+        assert_eq!(written_path(&output), None);
+    }
+
+    #[test]
     fn an_empty_field_is_left_out_rather_than_printed_blank() {
         let block = fields(&[("session", "abc".into()), ("task", String::new())]);
         assert_eq!(block, "session  abc");
@@ -245,6 +331,29 @@ mod tests {
             ..ToolOutput::default()
         };
         assert_eq!(listed_pages(&output), vec![1, 2]);
+    }
+
+    /// The real wire shape, captured live. Without this the scope file never
+    /// learns the group, so `session end --close-tabs` has nothing to close
+    /// and a restart cannot re-claim the task's group.
+    #[test]
+    fn the_group_for_a_page_is_read_from_its_listing_line() {
+        let output = ToolOutput {
+            text: "Your tabs:\n[2] http://x.test/ (CLI check) [group 5D033B84]\n[3] http://y.test/ (Other) [group AABBCC]".into(),
+            ..ToolOutput::default()
+        };
+        assert_eq!(group_of(&output, 2).as_deref(), Some("5D033B84"));
+        assert_eq!(group_of(&output, 3).as_deref(), Some("AABBCC"));
+        assert_eq!(group_of(&output, 9), None);
+    }
+
+    #[test]
+    fn an_ungrouped_page_reports_no_group_rather_than_an_empty_one() {
+        let output = ToolOutput {
+            text: "[2] http://x.test/ (CLI check)".into(),
+            ..ToolOutput::default()
+        };
+        assert_eq!(group_of(&output, 2), None);
     }
 
     #[test]

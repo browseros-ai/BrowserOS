@@ -39,6 +39,9 @@ pub struct ToolPlan {
     /// Bind `page` in a `run` script, so it loses the preamble that exists
     /// only because MCP has no current page.
     pub wrap_page: bool,
+    /// Copy the file the tool wrote to this path. The server writes into its
+    /// own output directory; a caller who named a destination meant it.
+    pub copy_to: Option<String>,
     /// Lines for stderr, decided here so they can be asserted in a test.
     pub notices: Vec<String>,
 }
@@ -467,11 +470,10 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
                 .page()
                 .arg("landscape", flag(*landscape))
                 .arg("printBackground", json!(!no_background));
-            if let Some(path) = path {
-                plan.notices.push(format!(
-                    "[pdf is written by the browser; {path} is where this CLI will copy it]"
-                ));
-            }
+            // The browser writes the PDF into its own output directory and
+            // reports the path. When the caller named one, the CLI copies it
+            // there, which it can because both are on this machine.
+            plan.copy_to = path.clone();
             Plan::tool(plan)
         }
 
@@ -727,28 +729,36 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
         }
         // Helpers only work inside run, despite the roster being advertised in
         // other tools' output, so these are run scripts rather than tools.
-        Command::Helpers(HelpersCmd::List) => Plan::tool(
-            ToolPlan::new("run").arg("code", json!("return await browser.listHelpers({});")),
-        ),
-        Command::Helpers(HelpersCmd::Read { name }) => Plan::tool(ToolPlan::new("run").arg(
-            "code",
-            json!(format!(
-                "return await browser.readHelper({}, {{}});",
-                json!(name)
-            )),
-        )),
+        // They are also scoped per host, and the host comes from a page, so
+        // each one goes through the page handle the wrapper binds.
+        Command::Helpers(HelpersCmd::List) => {
+            let mut plan =
+                ToolPlan::new("run").arg("code", json!("return await page.listHelpers();"));
+            plan.wrap_page = true;
+            Plan::tool(plan)
+        }
+        Command::Helpers(HelpersCmd::Read { name }) => {
+            let mut plan = ToolPlan::new("run").arg(
+                "code",
+                json!(format!("return await page.readHelper({});", json!(name))),
+            );
+            plan.wrap_page = true;
+            Plan::tool(plan)
+        }
         Command::Helpers(HelpersCmd::Save { name, .. }) => {
             let source = external.ok_or_else(|| {
                 Failure::usage("helpers save needs -f <file>, or the source on stdin.")
             })?;
-            Plan::tool(ToolPlan::new("run").arg(
+            let mut plan = ToolPlan::new("run").arg(
                 "code",
                 json!(format!(
-                    "return await browser.saveHelper({}, {}, {{}});",
+                    "return await page.saveHelper({}, {});",
                     json!(name),
                     json!(source)
                 )),
-            ))
+            );
+            plan.wrap_page = true;
+            Plan::tool(plan)
         }
 
         Command::Skill(SkillCmd::Save {

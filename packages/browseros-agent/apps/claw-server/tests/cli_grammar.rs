@@ -464,3 +464,53 @@ fn page_scoped_commands_ask_for_a_page_and_page_free_ones_do_not() {
         assert!(!plan.needs_page, "{argv:?} must not carry a page");
     }
 }
+
+/// `session start` must not claim a group id it merely saw in a listing.
+///
+/// A listing names the user's groups and other agents' groups too, and the
+/// structured content it would have been read from is stripped on the wire
+/// anyway. A session with no recorded group learns its own from the first tab
+/// it opens, where the server creates it.
+#[test]
+fn starting_a_session_plans_no_group_guess() {
+    let cli = Cli::try_parse_from(["browseros", "session", "start", "--task", "x"])
+        .unwrap_or_else(|error| panic!("{error}"));
+    match claw_server::cli::plan::build(&cli.command, None) {
+        Ok(Plan::Local(Local::SessionStart { task, .. })) => {
+            assert_eq!(task.as_deref(), Some("x"));
+        }
+        other => panic!("session start should stay local: {other:?}"),
+    }
+}
+
+/// The group rides on tab creation and nowhere else, so a page-scoped command
+/// can never move a tab into this task's group as a side effect.
+#[test]
+fn only_tab_creation_carries_the_group() {
+    let carries: Vec<Vec<&str>> = vec![
+        vec!["browseros", "open", "https://x.test"],
+        vec!["browseros", "tab", "new"],
+    ];
+    for argv in carries {
+        let cli = Cli::try_parse_from(&argv).unwrap_or_else(|error| panic!("{argv:?}: {error}"));
+        let Ok(Plan::Tool(plan)) = claw_server::cli::plan::build(&cli.command, None) else {
+            panic!("{argv:?} should plan a tool call");
+        };
+        assert!(plan.with_group, "{argv:?} must carry the group");
+    }
+
+    let does_not: Vec<Vec<&str>> = vec![
+        vec!["browseros", "goto", "https://x.test"],
+        vec!["browseros", "click", "@e1"],
+        vec!["browseros", "snapshot"],
+        vec!["browseros", "tab", "list"],
+        vec!["browseros", "group", "list"],
+    ];
+    for argv in does_not {
+        let cli = Cli::try_parse_from(&argv).unwrap_or_else(|error| panic!("{argv:?}: {error}"));
+        let Ok(Plan::Tool(plan)) = claw_server::cli::plan::build(&cli.command, None) else {
+            panic!("{argv:?} should plan a tool call");
+        };
+        assert!(!plan.with_group, "{argv:?} must not carry the group");
+    }
+}
