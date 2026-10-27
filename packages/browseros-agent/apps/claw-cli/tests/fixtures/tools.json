@@ -32,10 +32,7 @@
     "request_human_help",
     "await_human_help"
   ],
-  "hostedOnly": [
-    "setViewport",
-    "solve_captcha"
-  ],
+  "hostedOnly": ["setViewport", "solve_captcha"],
   "skipped": {
     "credentials": "A saved-credential picker belongs in the browser, where a human confirms it. Exposing it as a flag would make a CLI argument the natural way to pass one, which is exactly what the secret rules forbid.",
     "payment_cards": "A saved-card picker belongs in the browser, where a human confirms the card. The CLI must never make a card number look like an ordinary argument.",

@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { S3Client } from '@aws-sdk/client-s3'
@@ -120,6 +128,64 @@ describe('resource manifest and artifact staging', () => {
     expect(stagedBinaryName(product, target)).toBe('browseros-claw-server')
     expect(await readFile(stagedPath, 'utf8')).toBe('server')
     expect((await stat(stagedPath)).mode & 0o111).not.toBe(0)
+  })
+
+  it('stages extra binaries beside the product binary, executable', async () => {
+    // A product that ships two binaries out of one compile, such as the
+    // server and its CLI, should not need a second pipeline for the second.
+    tempDir = await mkdtemp(join(tmpdir(), 'build-server-tools-'))
+    const distRoot = join(tempDir, 'dist')
+    const binaryPath = join(tempDir, 'compiled')
+    const cliPath = join(tempDir, 'compiled-cli')
+    const product = testProduct({
+      distRoot,
+      stagedBinaryBaseName: 'browseros-claw-server',
+    })
+    const target = testTarget('darwin-arm64')
+    await writeFile(binaryPath, 'server')
+    await writeFile(cliPath, 'cli')
+
+    const artifact = await stageCompiledArtifact(
+      product,
+      binaryPath,
+      target,
+      '0.0.0-test',
+      [],
+      process.cwd(),
+      undefined,
+      [{ name: 'browseros', path: cliPath }],
+    )
+
+    const stagedCli = join(artifact.resourcesDir, 'bin/browseros')
+    expect(await readFile(stagedCli, 'utf8')).toBe('cli')
+    expect((await stat(stagedCli)).mode & 0o111).not.toBe(0)
+    // The product binary is untouched by the addition.
+    expect(
+      await readFile(
+        join(artifact.resourcesDir, 'bin/browseros-claw-server'),
+        'utf8',
+      ),
+    ).toBe('server')
+  })
+
+  it('stages nothing extra when a product declares none', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'build-server-tools-'))
+    const binaryPath = join(tempDir, 'compiled')
+    const product = testProduct({
+      distRoot: join(tempDir, 'dist'),
+      stagedBinaryBaseName: 'browseros-claw-server',
+    })
+    await writeFile(binaryPath, 'server')
+
+    const artifact = await stageCompiledArtifact(
+      product,
+      binaryPath,
+      testTarget('darwin-arm64'),
+      '0.0.0-test',
+    )
+
+    const entries = await readdir(join(artifact.resourcesDir, 'bin'))
+    expect(entries).toEqual(['browseros-claw-server'])
   })
 
   it('adds .exe to staged Windows binaries', async () => {

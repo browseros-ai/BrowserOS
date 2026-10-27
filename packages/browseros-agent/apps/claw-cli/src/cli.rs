@@ -372,6 +372,13 @@ pub enum Command {
     /// The CLI's own guides, for an agent learning the API.
     #[command(subcommand)]
     Skills(SkillsCmd),
+    /// Offer to link this binary onto PATH. You do not need it: the skill
+    /// names the binary by its full path, which always works.
+    InstallCli {
+        /// Actually write the link. Without this it only reports what it would do.
+        #[arg(long)]
+        confirm: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

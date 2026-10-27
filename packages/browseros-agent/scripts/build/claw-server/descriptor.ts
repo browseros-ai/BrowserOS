@@ -25,7 +25,9 @@ export const clawServerBuildProduct: ResourceBuildProductDescriptor = {
   archiveFilesOnly: true,
   expectedArtifactFiles: (target) => [
     `resources/bin/browseros-claw-server${target.os === 'windows' ? '.exe' : ''}`,
+    `resources/bin/browseros${target.os === 'windows' ? '.exe' : ''}`,
     'resources/skills/browserclaw/SKILL.md',
+    'resources/skills/browseros-neo-cli/SKILL.md',
   ],
   env: {
     requiredInlineEnvKeys: ['CLAW_POSTHOG_KEY'],

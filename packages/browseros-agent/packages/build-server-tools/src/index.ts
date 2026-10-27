@@ -50,6 +50,7 @@ export type {
   BuildProductDescriptor,
   BuildTarget,
   CompiledServerBinary,
+  ExtraBinary,
   ProductBuildSpec,
   ProductCompiler,
   ProductVersionSource,

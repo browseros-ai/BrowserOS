@@ -84,6 +84,9 @@ pub enum Local {
         name: String,
         full: bool,
     },
+    InstallCli {
+        confirm: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -190,6 +193,7 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
             name: name.clone(),
             full: *full,
         }),
+        Command::InstallCli { confirm } => Plan::Local(Local::InstallCli { confirm: *confirm }),
 
         // `tabs action=new` navigates and returns once the page has stopped
         // changing, so `open` is one call rather than a fused pair.

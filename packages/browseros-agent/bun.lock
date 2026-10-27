@@ -210,6 +210,10 @@
         "wxt": "^0.21.4",
       },
     },
+    "apps/claw-cli": {
+      "name": "@browseros/claw-cli",
+      "version": "0.0.0",
+    },
     "apps/claw-onboard": {
       "name": "@browseros/claw-onboard",
       "version": "0.0.19",
@@ -653,6 +657,8 @@
     "@browseros/claw-api-rust": ["@browseros/claw-api-rust@workspace:crates/claw-api"],
 
     "@browseros/claw-app": ["@browseros/claw-app@workspace:apps/claw-app"],
+
+    "@browseros/claw-cli": ["@browseros/claw-cli@workspace:apps/claw-cli"],
 
     "@browseros/claw-onboard": ["@browseros/claw-onboard@workspace:apps/claw-onboard"],
 

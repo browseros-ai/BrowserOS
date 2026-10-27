@@ -10,7 +10,7 @@ use crate::cli::{Cli, Command, Globals};
 use crate::client::{self, Session, result::ToolOutput};
 use crate::exit::{Code, Failure};
 use crate::plan::{self, External, Local, Plan, ToolPlan};
-use crate::{capability, guides, io, render, script, state};
+use crate::{capability, guides, install, io, render, script, state};
 
 /// Parses, plans and runs one invocation.
 ///
@@ -174,6 +174,10 @@ fn run_offline(local: &Local) -> Result<Option<Code>> {
             session_list();
             Ok(Some(Code::Ok))
         }
+        Local::InstallCli { confirm } => {
+            let path = std::env::var("PATH").ok();
+            install::run(*confirm, path.as_deref()).map(Some)
+        }
         _ => Ok(None),
     }
 }
@@ -196,7 +200,10 @@ async fn run_local(session: &mut Session, globals: &Globals, local: Local) -> Re
         } => session_start(session, globals, task, category, summary).await,
         Local::SessionEnd { close_tabs, all } => session_end(session, close_tabs, all).await,
         // Already answered by run_offline before the server was contacted.
-        Local::SkillsList | Local::SkillsGet { .. } | Local::SessionList => Ok(Code::Ok),
+        Local::SkillsList
+        | Local::SkillsGet { .. }
+        | Local::SessionList
+        | Local::InstallCli { .. } => Ok(Code::Ok),
     }
 }
 
@@ -612,6 +619,7 @@ fn command_label(command: &Command) -> &'static str {
         Command::Help(_) => "help",
         Command::Pursue { .. } => "pursue",
         Command::Skills(_) => "skills",
+        Command::InstallCli { .. } => "install-cli",
     }
 }
 

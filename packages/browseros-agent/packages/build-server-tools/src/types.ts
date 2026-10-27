@@ -134,6 +134,19 @@ export interface ResourceManifest {
 export interface CompiledServerBinary {
   target: BuildTarget
   binaryPath: string
+  /**
+   * Further binaries from the same compile, staged beside the product binary
+   * under `resources/bin/<name>`. Optional, so a product that ships one
+   * binary is unaffected.
+   */
+  extraBinaries?: ReadonlyArray<ExtraBinary>
+}
+
+export interface ExtraBinary {
+  /** The staged filename, including any `.exe` the target needs. */
+  name: string
+  /** Where the compiler left it. */
+  path: string
 }
 
 export type ProductCompiler<

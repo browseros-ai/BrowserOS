@@ -8,6 +8,7 @@ import { downloadObjectToFile } from './r2'
 import type {
   ArtifactMetadataIdentity,
   BuildTarget,
+  ExtraBinary,
   R2Config,
   ResourceBuildProductDescriptor,
   ResourceRule,
@@ -57,6 +58,7 @@ async function createArtifactRoot(
   product: ResourceBuildProductDescriptor,
   compiledBinaryPath: string,
   target: BuildTarget,
+  extraBinaries: ReadonlyArray<ExtraBinary> = [],
 ): Promise<string> {
   const rootDir = artifactRoot(product, target)
   await rm(rootDir, { recursive: true, force: true })
@@ -66,6 +68,13 @@ async function createArtifactRoot(
     binaryDestinationPath(product, rootDir, target),
     target,
   )
+  for (const extra of extraBinaries) {
+    await copyProductBinary(
+      extra.path,
+      join(rootDir, 'resources', 'bin', extra.name),
+      target,
+    )
+  }
   return rootDir
 }
 
@@ -152,8 +161,14 @@ export async function stageTargetArtifact(
   r2: R2Config,
   version: string,
   identity?: ArtifactMetadataIdentity,
+  extraBinaries: ReadonlyArray<ExtraBinary> = [],
 ): Promise<StagedArtifact> {
-  const rootDir = await createArtifactRoot(product, compiledBinaryPath, target)
+  const rootDir = await createArtifactRoot(
+    product,
+    compiledBinaryPath,
+    target,
+    extraBinaries,
+  )
 
   for (const rule of rules) {
     await stageRule(rootDir, sourceRoot, rule, target, client, r2)
@@ -170,8 +185,14 @@ export async function stageCompiledArtifact(
   rules: ResourceRule[] = [],
   sourceRoot = process.cwd(),
   identity?: ArtifactMetadataIdentity,
+  extraBinaries: ReadonlyArray<ExtraBinary> = [],
 ): Promise<StagedArtifact> {
-  const rootDir = await createArtifactRoot(product, compiledBinaryPath, target)
+  const rootDir = await createArtifactRoot(
+    product,
+    compiledBinaryPath,
+    target,
+    extraBinaries,
+  )
 
   for (const rule of rules) {
     if (rule.source.type !== 'local') {

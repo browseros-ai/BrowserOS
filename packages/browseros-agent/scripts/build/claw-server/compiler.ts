@@ -11,6 +11,10 @@ import {
 
 const BINARY_BASE_NAME = 'browseros-claw-server-rs'
 const PACKAGE_NAME = 'claw-server'
+// The CLI ships beside the server out of the same workspace and the same five
+// targets. It is a second binary rather than a second pipeline.
+const CLI_BINARY_BASE_NAME = 'browseros'
+const CLI_PACKAGE_NAME = 'claw-cli'
 const CROSS_TOOL_VERSION = '0.23.0'
 const LINUX_GLIBC_VERSION = '2.17'
 const VERSION_MARKER_PREFIX = 'browseros-claw-server-version='
@@ -95,6 +99,25 @@ const defaultProbe: RustToolchainProbe = {
 }
 
 export function rustBuildInvocation(target: BuildTarget): RustBuildInvocation {
+  return invocationFor(target, PACKAGE_NAME, BINARY_BASE_NAME)
+}
+
+/**
+ * The CLI, built on the same driver and target as the server. Separate from
+ * the server invocation so a cross-compiler failure names which binary it was
+ * building.
+ */
+export function rustCliBuildInvocation(
+  target: BuildTarget,
+): RustBuildInvocation {
+  return invocationFor(target, CLI_PACKAGE_NAME, CLI_BINARY_BASE_NAME)
+}
+
+function invocationFor(
+  target: BuildTarget,
+  packageName: string,
+  binaryBaseName: string,
+): RustBuildInvocation {
   const spec = RUST_BUILD_SPECS[target.id]
   const build =
     spec.driver === 'cargo'
@@ -110,11 +133,11 @@ export function rustBuildInvocation(target: BuildTarget): RustBuildInvocation {
       '--target',
       spec.buildTarget,
       '-p',
-      PACKAGE_NAME,
+      packageName,
       '--bin',
-      BINARY_BASE_NAME,
+      binaryBaseName,
     ],
-    binaryName: `${BINARY_BASE_NAME}${spec.binaryExtension}`,
+    binaryName: `${binaryBaseName}${spec.binaryExtension}`,
     rustTarget: spec.rustTarget,
   }
 }
@@ -266,7 +289,23 @@ export const compileClawServerBinaries: ProductCompiler = async (
       invocation.binaryName,
     )
     await validateCompiledBinary(binaryPath, version, posthogKey)
-    compiled.push({ target, binaryPath })
+
+    // The CLI carries no inlined keys, so it has nothing to validate: it
+    // speaks only to the server, which owns the analytics identity.
+    const cli = rustCliBuildInvocation(target)
+    await runCommand('cargo', cli.args, env, rootDir)
+    const cliPath = join(
+      cargoTargetDir,
+      cli.rustTarget,
+      'release',
+      cli.binaryName,
+    )
+
+    compiled.push({
+      target,
+      binaryPath,
+      extraBinaries: [{ name: cli.binaryName, path: cliPath }],
+    })
   }
 
   return compiled

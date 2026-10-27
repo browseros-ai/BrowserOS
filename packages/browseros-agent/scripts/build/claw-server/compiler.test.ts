@@ -9,6 +9,7 @@ import {
   preflightRustBuild,
   type RustToolchainProbe,
   rustBuildInvocation,
+  rustCliBuildInvocation,
   validateCompiledBinary,
 } from './compiler'
 
@@ -19,6 +20,28 @@ describe('BrowserClaw Rust compiler', () => {
     if (tempDir) {
       await rm(tempDir, { recursive: true, force: true })
       tempDir = null
+    }
+  })
+
+  it('builds the CLI on the same driver and target as the server', () => {
+    // The CLI ships beside the server out of one workspace, so it must never
+    // drift onto a different cross-compiler or a different glibc floor.
+    for (const target of resolveTargets('all')) {
+      const server = rustBuildInvocation(target)
+      const cli = rustCliBuildInvocation(target)
+
+      expect(cli.rustTarget).toBe(server.rustTarget)
+      // Same driver and same --target, differing only in what is built.
+      expect(cli.args[0]).toBe(server.args[0])
+      expect(cli.args).toContain('-p')
+      expect(cli.args).toContain('claw-cli')
+      expect(cli.args).toContain('--bin')
+      expect(cli.args).toContain('browseros')
+      expect(cli.args).toContain('--locked')
+      expect(cli.args).not.toContain('claw-server')
+      expect(cli.binaryName).toBe(
+        target.os === 'windows' ? 'browseros.exe' : 'browseros',
+      )
     }
   })
 

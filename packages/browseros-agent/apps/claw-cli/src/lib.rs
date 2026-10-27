@@ -15,6 +15,7 @@ pub mod endpoint;
 pub mod exec;
 pub mod exit;
 pub mod guides;
+pub mod install;
 pub mod io;
 pub mod plan;
 pub mod refs;

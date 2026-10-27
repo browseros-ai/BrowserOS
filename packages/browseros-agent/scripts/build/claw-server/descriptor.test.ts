@@ -46,7 +46,7 @@ describe('BrowserClaw Rust build descriptor', () => {
     expect(config.envVars.CLAW_POSTHOG_KEY).toBe('phc_browseros_ci')
   })
 
-  it('defaults to all five uploads and stages only the canonical skill', () => {
+  it('defaults to all five uploads and stages both skills beside both binaries', () => {
     const args = parseBuildArgs([], clawServerBuildProduct)
     const manifest = loadManifest(
       resolve(agentRoot, clawServerBuildProduct.defaultManifestPath),
@@ -57,9 +57,14 @@ describe('BrowserClaw Rust build descriptor', () => {
       resolveTargets('all').map((target) => target.id),
     )
     for (const target of args.targets) {
+      // The CLI ships beside the server out of the same workspace and the
+      // same five targets, with its own skill: the MCP one names tools, and
+      // an agent holding a shell needs the one that names commands.
       expect(clawServerBuildProduct.expectedArtifactFiles?.(target)).toEqual([
         `resources/bin/browseros-claw-server${target.os === 'windows' ? '.exe' : ''}`,
+        `resources/bin/browseros${target.os === 'windows' ? '.exe' : ''}`,
         'resources/skills/browserclaw/SKILL.md',
+        'resources/skills/browseros-neo-cli/SKILL.md',
       ])
       expect(getTargetRules(manifest, target)).toEqual([
         {
@@ -69,6 +74,16 @@ describe('BrowserClaw Rust build descriptor', () => {
             path: 'resources/skills/browserclaw/SKILL.md',
           },
           destination: 'resources/skills/browserclaw/SKILL.md',
+          executable: false,
+          recursive: false,
+        },
+        {
+          name: 'BrowserOS neo CLI skill',
+          source: {
+            type: 'local',
+            path: 'resources/skills/browseros-neo-cli/SKILL.md',
+          },
+          destination: 'resources/skills/browseros-neo-cli/SKILL.md',
           executable: false,
           recursive: false,
         },

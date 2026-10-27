@@ -7,6 +7,14 @@
         "path": "resources/skills/browserclaw/SKILL.md"
       },
       "destination": "resources/skills/browserclaw/SKILL.md"
+    },
+    {
+      "name": "BrowserOS neo CLI skill",
+      "source": {
+        "type": "local",
+        "path": "resources/skills/browseros-neo-cli/SKILL.md"
+      },
+      "destination": "resources/skills/browseros-neo-cli/SKILL.md"
     }
   ]
 }

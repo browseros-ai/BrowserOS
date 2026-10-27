@@ -250,6 +250,7 @@ export async function runCompiledResourceBuild<
         rules,
         rootDir,
         artifactIdentity,
+        binary.extraBinaries,
       )
       localArtifacts.push(staged)
       log.success(`Packaged ${binary.target.id}`)
@@ -316,6 +317,7 @@ export async function runCompiledResourceBuild<
               r2,
               buildConfig.version,
               artifactIdentity,
+              binary.extraBinaries,
             )
           : await stageCompiledArtifact(
               product,
@@ -325,6 +327,7 @@ export async function runCompiledResourceBuild<
               rules,
               rootDir,
               artifactIdentity,
+              binary.extraBinaries,
             )
       stagedArtifacts.push(staged)
       log.success(`Staged ${binary.target.id}`)
