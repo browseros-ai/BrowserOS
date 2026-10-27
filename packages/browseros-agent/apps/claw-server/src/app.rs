@@ -59,6 +59,8 @@ pub struct AppState {
     pub session_efficiency: Arc<SessionEfficiencyService>,
     pub browser: Arc<BrowserService>,
     pub captcha: Option<Arc<crate::services::captcha::CaptchaService>>,
+    /// Per-tab viewport modes; hosted only, so desktop page geometry is never touched.
+    pub viewports: Option<Arc<browseros_core::viewport::Viewports>>,
     pub visuals: Arc<SessionVisualService>,
     /// Live screencast and video of session tabs for the hosted `/v1` API; idle (no browser
     /// connection, no captures) until someone watches.
@@ -228,6 +230,10 @@ impl AppState {
             tab_activity.clone(),
         ));
         let captcha = crate::services::captcha::CaptchaService::from_env(config.mode);
+        let viewports = config
+            .mode
+            .is_hosted()
+            .then(|| Arc::new(browseros_core::viewport::Viewports::default()));
         Ok(Self {
             config,
             audit_log,
@@ -255,6 +261,7 @@ impl AppState {
             session_efficiency,
             browser,
             captcha,
+            viewports,
             visuals,
             capture,
             cockpit,

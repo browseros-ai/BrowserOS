@@ -42,10 +42,18 @@ pub(super) async fn call_solve_captcha(
             Ok(binding) => binding,
             Err(error) => return browseros_mcp::ToolResult::error(format!("solve_captcha: {error}")),
         };
-        let view = browseros_core::BrowserView::capture(browser, binding, None).await;
+        let view = super::hosted::with_viewports(
+            browseros_core::BrowserView::capture(browser, binding, None).await,
+            state.viewports.as_ref(),
+        );
         let cancel = linked_cancel_token(session.child_token(), client_cancel, dispatch_cancel);
         let Some(captcha) = &state.captcha else {
             return browseros_mcp::ToolResult::error("solve_captcha: no provider is configured");
+        };
+        // The solver reads, captures and clicks the page like any other page operation.
+        let _viewport = match view.prepare_viewport(browseros_core::PageId(page)).await {
+            Ok(lease) => lease,
+            Err(error) => return browseros_mcp::ToolResult::error(format!("solve_captcha: {error}")),
         };
         match captcha.solve(view, browseros_core::PageId(page), cancel, human_help_on).await {
             Ok(outcome) => {

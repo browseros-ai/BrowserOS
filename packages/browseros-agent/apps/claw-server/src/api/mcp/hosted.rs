@@ -19,6 +19,8 @@ use super::{
     },
 };
 use crate::config::ServerMode;
+use browseros_core::target::BrowserView;
+use browseros_mcp::ToolDef;
 use rmcp::model::{JsonObject, Tool};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -33,6 +35,45 @@ pub(super) const TASK_NAME_GROUPING: &str = "; your tabs are grouped as <client>
 const NAME_SESSION_REFUSAL: &str = "name_session is not available on this hosted BrowserOS neo server. Pass taskName=\"<2-3 word task label>\" on any tool call instead.";
 const SKILLS_REFUSAL: &str = "Skills are not available on this hosted BrowserOS neo server: nothing was saved or recorded. Keep repeatable workflows in your own agent instead.";
 const HUMAN_HELP_REFUSAL: &str = "Human help is not available on this hosted BrowserOS neo server. Do not wait for a human here: stop and tell the user in your chat what you need.";
+
+/// The browser tools this mode offers. Hosted adds `setViewport`, whose per-tab device
+/// emulation and window fitting only make sense where the windows are infrastructure.
+#[must_use]
+pub fn catalog(mode: ServerMode) -> Vec<ToolDef> {
+    let mut tools = browseros_mcp::catalog();
+    if mode.is_hosted() {
+        tools.push(browseros_mcp::tools::viewport::definition());
+    }
+    tools
+}
+
+/// A captured view with this server's viewport state attached, when it has any (hosted).
+#[must_use]
+pub fn with_viewports(
+    view: BrowserView,
+    viewports: Option<&std::sync::Arc<browseros_core::viewport::Viewports>>,
+) -> BrowserView {
+    match viewports {
+        Some(viewports) => view.with_viewports(viewports.clone()),
+        None => view,
+    }
+}
+
+/// Teaches `run` the hosted SDK member that only hosted scripts get.
+#[must_use]
+pub fn with_viewport_sdk_note(mut tool: Tool) -> Tool {
+    if tool.name == "run"
+        && let Some(description) = &tool.description
+    {
+        tool.description = Some(
+            format!(
+                "{description}\n\nHosted: page.setViewport({{ mode: 'mobile' | 'desktop' | 'default', zoom? }}) sets the tab's viewport like the setViewport tool and returns the same report."
+            )
+            .into(),
+        );
+    }
+    tool
+}
 
 /// Why the server refuses `tool` in `mode`, or `None` when the mode offers it.
 ///
