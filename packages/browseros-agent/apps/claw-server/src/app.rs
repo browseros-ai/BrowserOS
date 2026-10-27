@@ -15,7 +15,7 @@ use crate::{
         capture::{CaptureHub, CdpPortTransport, LiveSessionTabs},
         cockpit::{CockpitQuery, SessionVisualService, TabActivityRecord, TabActivityService},
         harness::HarnessService,
-        harness_skills::load_browserclaw_skill,
+        harness_skills::{load_browserclaw_skill, load_cli_skill},
         profiles::ProfileService,
         recordings::{LiveRecordingBus, RecordingIngestService, RecordingStore},
         replay::ReplayService,
@@ -137,11 +137,24 @@ impl AppState {
             &home_dir,
             config.browserclaw_dir.join("claude-desktop"),
         ));
-        let harness = Arc::new(HarnessService::new_with_managed_skill(
+        // The CLI guide joins it only when the binary it names is actually
+        // beside this server. They ship in one artifact, but a partial install
+        // is possible, and a guide naming a missing command is worse than none.
+        let mut managed_skills = vec![(
+            crate::services::harness_skills::MANAGED_SKILL_DIRECTORY,
+            skill,
+        )];
+        if let Some(cli_skill) = load_cli_skill(&config.resources_dir) {
+            managed_skills.push((
+                crate::services::harness_skills::MANAGED_CLI_SKILL_DIRECTORY,
+                cli_skill,
+            ));
+        }
+        let harness = Arc::new(HarnessService::new_with_managed_skills(
             config.browserclaw_dir.join("mcp-manager"),
             config.browserclaw_dir.join("harness-integrations"),
             home_dir,
-            skill,
+            managed_skills,
             analytics_sink.clone(),
         ));
         let skills = Arc::new(SkillService::new(

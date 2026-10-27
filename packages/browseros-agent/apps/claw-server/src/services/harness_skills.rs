@@ -14,6 +14,16 @@ use crate::error::{AppError, AppResult};
 const EMBEDDED_BROWSERCLAW_SKILL: &str =
     include_str!("../../../../resources/skills/browserclaw/SKILL.md");
 const SKILL_FRONTMATTER_NAME: &str = "browseros-neo";
+/// The CLI's own guide. It names commands rather than tools, so it is only
+/// installed where the binary it names is actually present.
+const EMBEDDED_CLI_SKILL: &str =
+    include_str!("../../../../resources/skills/browseros-neo-cli/SKILL.md");
+const CLI_SKILL_FRONTMATTER_NAME: &str = "browseros-neo-cli";
+/// On-disk directory for the CLI guide, matching its frontmatter `name`.
+pub(crate) const MANAGED_CLI_SKILL_DIRECTORY: &str = "browseros-neo-cli";
+/// Where the CLI ships, relative to the resources directory the server was
+/// launched with. The two travel together in one artifact.
+const CLI_BINARY_RELATIVE_PATH: &str = "bin/browseros";
 /// On-disk directory name for the managed skill; matches the SKILL.md frontmatter
 /// `name` so agents that require `name == parent directory` accept it.
 pub(crate) const MANAGED_SKILL_DIRECTORY: &str = "browseros-neo";
@@ -88,6 +98,65 @@ pub fn load_browserclaw_skill(
     })
 }
 
+/// The CLI guide, but only when the binary it describes is on this machine.
+///
+/// A guide that names a command the machine does not have is worse than no
+/// guide: the agent reads it, believes it, and spends a turn discovering the
+/// binary is missing. So presence of the binary is the gate, not a flag and
+/// not a build-time decision, because the server and the CLI ship in one
+/// artifact but a partial install is still possible.
+///
+/// Unlike the MCP guide there is no embedded fallback path that installs
+/// anyway: if the resource is unreadable, the honest answer is to install
+/// nothing.
+pub fn load_cli_skill(resources_dir: &Path) -> Option<SkillSpec> {
+    let binary = cli_binary_path(resources_dir);
+    if !binary.is_file() {
+        tracing::info!(
+            path = %binary.display(),
+            "browseros CLI not present; its skill will not be installed"
+        );
+        return None;
+    }
+    let path = resources_dir.join("skills/browseros-neo-cli/SKILL.md");
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "CLI skill resource unavailable; using embedded copy");
+            EMBEDDED_CLI_SKILL.to_string()
+        }
+    };
+    match parse_cli_skill(content) {
+        Ok(spec) => Some(spec),
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "invalid CLI skill; not installing it");
+            None
+        }
+    }
+}
+
+/// Where the CLI binary sits beside the server, with the platform's suffix.
+fn cli_binary_path(resources_dir: &Path) -> std::path::PathBuf {
+    let mut path = resources_dir.join(CLI_BINARY_RELATIVE_PATH);
+    if cfg!(windows) {
+        path.set_extension("exe");
+    }
+    path
+}
+
+fn parse_cli_skill(content: String) -> Result<SkillSpec, String> {
+    let frontmatter = read_frontmatter(&content)?;
+    if frontmatter.name != CLI_SKILL_FRONTMATTER_NAME {
+        return Err(format!(
+            "frontmatter `name` must be `{CLI_SKILL_FRONTMATTER_NAME}`"
+        ));
+    }
+    if frontmatter.description.trim().is_empty() {
+        return Err("frontmatter requires a non-empty `description`".to_string());
+    }
+    SkillSpec::new(MANAGED_CLI_SKILL_DIRECTORY, content).map_err(|error| error.to_string())
+}
+
 /// Swaps the tool-choice paragraph when the decision loop is offered.
 ///
 /// A guide whose text does not match the catalogue it describes is worse than
@@ -113,7 +182,8 @@ fn with_tab_grouping(content: String, tab_grouping: TabGrouping) -> String {
         })
 }
 
-fn parse_browserclaw_skill(content: String) -> Result<SkillSpec, String> {
+/// The YAML frontmatter of a skill file, shared by both guides.
+fn read_frontmatter(content: &str) -> Result<SkillFrontmatter, String> {
     let normalized = content.replace("\r\n", "\n");
     let mut lines = normalized.lines();
     if lines.next() != Some("---") {
@@ -131,8 +201,12 @@ fn parse_browserclaw_skill(content: String) -> Result<SkillSpec, String> {
     if !closed {
         return Err("frontmatter is missing its closing `---`".to_string());
     }
-    let frontmatter: SkillFrontmatter = serde_saphyr::from_str(&frontmatter.join("\n"))
-        .map_err(|error| format!("frontmatter is not valid YAML: {error}"))?;
+    serde_saphyr::from_str(&frontmatter.join("\n"))
+        .map_err(|error| format!("frontmatter is not valid YAML: {error}"))
+}
+
+fn parse_browserclaw_skill(content: String) -> Result<SkillSpec, String> {
+    let frontmatter = read_frontmatter(&content)?;
     if frontmatter.name != SKILL_FRONTMATTER_NAME {
         return Err(format!(
             "frontmatter `name` must be `{SKILL_FRONTMATTER_NAME}`"
@@ -156,9 +230,100 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        PursueOffering, SKILL_GROUP_PROMISES, SKILL_PURSUE_FIRST, SKILL_RUN_FIRST, TabGrouping,
-        embedded_browserclaw_skill, load_browserclaw_skill, with_tool_choice,
+        CLI_BINARY_RELATIVE_PATH, EMBEDDED_CLI_SKILL, MANAGED_CLI_SKILL_DIRECTORY, PursueOffering,
+        SKILL_GROUP_PROMISES, SKILL_PURSUE_FIRST, SKILL_RUN_FIRST, TabGrouping,
+        embedded_browserclaw_skill, load_browserclaw_skill, load_cli_skill, with_tool_choice,
     };
+
+    /// Plants a CLI guide and, optionally, the binary it describes.
+    fn cli_resources(root: &std::path::Path, with_binary: bool) -> Result<(), std::io::Error> {
+        let skill_dir = root.join("skills/browseros-neo-cli");
+        fs::create_dir_all(&skill_dir)?;
+        fs::write(skill_dir.join("SKILL.md"), EMBEDDED_CLI_SKILL)?;
+        if with_binary {
+            let binary = root.join(CLI_BINARY_RELATIVE_PATH);
+            if let Some(parent) = binary.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let binary = if cfg!(windows) {
+                binary.with_extension("exe")
+            } else {
+                binary
+            };
+            fs::write(binary, b"#!/bin/sh\n")?;
+        }
+        Ok(())
+    }
+
+    /// The guide names commands. Installing it where the binary is absent
+    /// means the agent reads it, believes it, and spends a turn finding out.
+    #[test]
+    fn the_cli_guide_is_withheld_when_its_binary_is_not_there()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        cli_resources(root.path(), false)?;
+        assert!(load_cli_skill(root.path()).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn the_cli_guide_installs_under_its_own_directory_when_the_binary_is_present()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        cli_resources(root.path(), true)?;
+        let spec = load_cli_skill(root.path()).ok_or("the guide should have loaded")?;
+        // Its own directory, so withdrawing one guide never disturbs the other.
+        assert_eq!(spec.name(), MANAGED_CLI_SKILL_DIRECTORY);
+        assert_ne!(spec.name(), super::MANAGED_SKILL_DIRECTORY);
+        Ok(())
+    }
+
+    /// Unlike the MCP guide there is no install-anyway fallback: a resource
+    /// that cannot be parsed means installing nothing, not installing a
+    /// guide whose frontmatter the agent's loader may reject.
+    #[test]
+    fn an_unparsable_cli_guide_installs_nothing_rather_than_falling_back()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        cli_resources(root.path(), true)?;
+        fs::write(
+            root.path().join("skills/browseros-neo-cli/SKILL.md"),
+            "no frontmatter here",
+        )?;
+        assert!(load_cli_skill(root.path()).is_none());
+        Ok(())
+    }
+
+    /// A missing resource file falls back to the embedded copy, because the
+    /// binary being present is the thing that matters and the guide travels
+    /// in the same artifact.
+    #[test]
+    fn a_missing_cli_resource_uses_the_embedded_copy() -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempdir()?;
+        cli_resources(root.path(), true)?;
+        fs::remove_file(root.path().join("skills/browseros-neo-cli/SKILL.md"))?;
+        assert!(load_cli_skill(root.path()).is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn the_embedded_cli_guide_is_valid_and_names_the_cli() {
+        let root = match tempdir() {
+            Ok(root) => root,
+            Err(_) => return,
+        };
+        if cli_resources(root.path(), true).is_err() {
+            return;
+        }
+        assert!(load_cli_skill(root.path()).is_some());
+        // It must teach the commands, not the tools, or it duplicates the
+        // other guide and costs context for nothing.
+        assert!(EMBEDDED_CLI_SKILL.contains("browseros run"), "run first");
+        assert!(
+            EMBEDDED_CLI_SKILL.contains("shell history"),
+            "the secret hazard is CLI-specific and must be in it"
+        );
+    }
 
     /// Each promise is removed by an exact string replace, so a reword of the shipped guide
     /// would silently keep it in the explicit-grouping install.

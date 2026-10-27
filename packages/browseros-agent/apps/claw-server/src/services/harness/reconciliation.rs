@@ -89,8 +89,16 @@ impl HarnessService {
                 tracing::warn!(%error, "MCP ownership unavailable; will retry");
             }
         }
-        if let Some(managed) = &self.managed_skill {
-            outcome.skills = reconcile_managed_skill(&self.manager, &self.workspace_dir, managed)?;
+        // One pass per managed skill, merged into the periodic outcome. The
+        // counts are what the log line reports, so a pair that installs
+        // together has to be reported together.
+        for managed in &self.managed_skills {
+            let skills = reconcile_managed_skill(&self.manager, &self.workspace_dir, managed)?;
+            outcome.skills.installed += skills.installed;
+            outcome.skills.updated += skills.updated;
+            outcome.skills.removed += skills.removed;
+            outcome.skills.unchanged += skills.unchanged;
+            outcome.skills.warnings.extend(skills.warnings);
         }
         Ok(outcome)
     }

@@ -171,7 +171,13 @@ pub struct HarnessService {
     workspace_dir: PathBuf,
     skill_workspace_dir: PathBuf,
     home_dir: PathBuf,
-    managed_skill: Option<ManagedSkill>,
+    /// Zero or more skills this server keeps installed in connected harnesses.
+    ///
+    /// A list rather than one, because the CLI ships its own guide and is
+    /// installed only where its binary is actually present: a guide naming a
+    /// command the machine does not have is worse than no guide, since the
+    /// agent reads it and believes it.
+    managed_skills: Vec<ManagedSkill>,
     mutex: Arc<Mutex<()>>,
     analytics: Arc<dyn AnalyticsSink>,
 }
@@ -201,7 +207,7 @@ impl HarnessService {
             skill_workspace_dir,
             home_dir,
             analytics,
-            None,
+            Vec::new(),
         )
     }
 
@@ -213,20 +219,43 @@ impl HarnessService {
         spec: SkillSpec,
         analytics: Arc<dyn AnalyticsSink>,
     ) -> Self {
+        Self::new_with_managed_skills(
+            workspace_dir,
+            skill_workspace_dir,
+            home_dir,
+            vec![(super::harness_skills::MANAGED_SKILL_DIRECTORY, spec)],
+            analytics,
+        )
+    }
+
+    /// Each pair is the directory the reconciler owns and the guide to plant in
+    /// it. Owning the directory by name is what lets one skill be withdrawn
+    /// later without touching the other.
+    #[must_use]
+    pub fn new_with_managed_skills(
+        workspace_dir: PathBuf,
+        skill_workspace_dir: PathBuf,
+        home_dir: PathBuf,
+        specs: Vec<(&'static str, SkillSpec)>,
+        analytics: Arc<dyn AnalyticsSink>,
+    ) -> Self {
         let environment = SkillEnvironment::current(&home_dir);
-        let managed_skill = ManagedSkill {
-            reconciler: SkillReconciler::new(skill_workspace_dir.clone())
-                .with_provisioned_roots(environment.common_skill_roots())
-                .with_owned_name(super::harness_skills::MANAGED_SKILL_DIRECTORY),
-            spec,
-            environment,
-        };
+        let managed_skills = specs
+            .into_iter()
+            .map(|(owned_name, spec)| ManagedSkill {
+                reconciler: SkillReconciler::new(skill_workspace_dir.clone())
+                    .with_provisioned_roots(environment.common_skill_roots())
+                    .with_owned_name(owned_name),
+                spec,
+                environment: environment.clone(),
+            })
+            .collect();
         Self::build(
             workspace_dir,
             skill_workspace_dir,
             home_dir,
             analytics,
-            Some(managed_skill),
+            managed_skills,
         )
     }
 
@@ -235,14 +264,14 @@ impl HarnessService {
         skill_workspace_dir: PathBuf,
         home_dir: PathBuf,
         analytics: Arc<dyn AnalyticsSink>,
-        managed_skill: Option<ManagedSkill>,
+        managed_skills: Vec<ManagedSkill>,
     ) -> Self {
         Self {
             manager: McpManager::new(&workspace_dir),
             workspace_dir,
             skill_workspace_dir,
             home_dir,
-            managed_skill,
+            managed_skills,
             mutex: Arc::new(Mutex::new(())),
             analytics,
         }
@@ -311,7 +340,7 @@ impl HarnessService {
         let spec = spec_for(agent, mcp_url).map_err(manager_app_error)?;
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();
-        let managed_skill = self.managed_skill.clone();
+        let managed_skills = self.managed_skills.clone();
         let result = tokio::task::spawn_blocking(move || {
             // A cancelled HTTP request does not cancel blocking filesystem work.
             // Keep ownership until it finishes so periodic repair cannot race it.
@@ -356,7 +385,7 @@ impl HarnessService {
             // must not silently undo a previously saved Disconnect choice.
             Preferences::set_disconnected(&workspace_dir, agent, false)
                 .map_err(HarnessOperationError::Manager)?;
-            let skill_warning = managed_skill.as_ref().and_then(|managed_skill| {
+            let skill_warning = managed_skills.iter().find_map(|managed_skill| {
                 reconcile_skill_warning(&manager, &workspace_dir, managed_skill)
             });
             Ok((
@@ -396,7 +425,7 @@ impl HarnessService {
         let agent = harness.agent_id();
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();
-        let managed_skill = self.managed_skill.clone();
+        let managed_skills = self.managed_skills.clone();
         let result = tokio::task::spawn_blocking(move || {
             let _guard = guard;
             Preferences::initialize(&workspace_dir, &manager)
@@ -431,7 +460,7 @@ impl HarnessService {
             if let Some(error) = first_error {
                 return Err(HarnessOperationError::Manager(error));
             }
-            let skill_warning = managed_skill.as_ref().and_then(|managed_skill| {
+            let skill_warning = managed_skills.iter().find_map(|managed_skill| {
                 reconcile_skill_warning(&manager, &workspace_dir, managed_skill)
             });
             Ok((unlinked, removed_manifest, skill_warning))
@@ -565,16 +594,29 @@ impl HarnessService {
 
     pub async fn run_skill_reconciliation(&self) -> AppResult<SkillReconcileOutcome> {
         let guard = self.mutex.clone().lock_owned().await;
-        let Some(managed_skill) = self.managed_skill.clone() else {
+        let managed_skills = self.managed_skills.clone();
+        if managed_skills.is_empty() {
             return Ok(SkillReconcileOutcome::default());
-        };
+        }
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();
         tokio::task::spawn_blocking(move || {
             // The worker may be aborted during shutdown, but its blocking pass
             // still owns the mutation lock until the filesystem work completes.
             let _guard = guard;
-            reconcile_managed_skill(&manager, &workspace_dir, &managed_skill)
+            // One pass per skill, merged. A failure on either is the whole
+            // pass's failure: a half-installed pair is the state that makes an
+            // agent read one guide and act on the other.
+            let mut merged = SkillReconcileOutcome::default();
+            for managed_skill in &managed_skills {
+                let outcome = reconcile_managed_skill(&manager, &workspace_dir, managed_skill)?;
+                merged.installed += outcome.installed;
+                merged.updated += outcome.updated;
+                merged.removed += outcome.removed;
+                merged.unchanged += outcome.unchanged;
+                merged.warnings.extend(outcome.warnings);
+            }
+            Ok(merged)
         })
         .await?
         .map_err(manager_app_error)
