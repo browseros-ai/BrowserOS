@@ -188,7 +188,7 @@ function CreateForm({ onClose }: { onClose: () => void }) {
             <FormItem>
               <FormLabel>Phrase</FormLabel>
               <FormControl>
-                <div className="flex h-9 w-full items-center overflow-hidden rounded-md border border-input bg-transparent shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
+                <div className="flex h-9 w-full items-center overflow-hidden rounded-lg border border-input bg-transparent shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
                   <span className="flex h-full select-none items-center bg-card-tint px-2.5 font-mono text-ink-2 text-sm">
                     neo-
                   </span>
