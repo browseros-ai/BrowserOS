@@ -361,7 +361,7 @@ async fn tests_that_page_tools_put_back_a_lost_mode_and_leave_the_window() -> Te
     assert!(native.window_calls().is_empty(), "{:?}", native.calls());
     assert_eq!(native.window(), (900, 700));
 
-    // While the mode holds, the next tool only pins the view back before its own work.
+    // While the mode holds, the next tool sends nothing before its own work.
     native.clear();
     let result = call(
         &ctx,
@@ -370,19 +370,14 @@ async fn tests_that_page_tools_put_back_a_lost_mode_and_leave_the_window() -> Te
     )
     .await;
     assert!(!result.is_error, "{}", text(&result));
-    let emulation: Vec<String> = native
-        .calls()
-        .into_iter()
-        .filter(|call| call.starts_with("Emulation."))
-        .collect();
-    assert_eq!(emulation, vec!["Emulation.setVisibleSize"]);
-    let pinned = native
-        .position("Emulation.setVisibleSize")
-        .ok_or("view not pinned")?;
-    let capture = native
-        .position("Page.captureScreenshot")
-        .ok_or("no capture")?;
-    assert!(pinned < capture, "{:?}", native.calls());
+    assert!(
+        !native
+            .calls()
+            .iter()
+            .any(|call| call.starts_with("Emulation.")),
+        "{:?}",
+        native.calls()
+    );
     Ok(())
 }
 

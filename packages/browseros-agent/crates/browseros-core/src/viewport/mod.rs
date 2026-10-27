@@ -328,10 +328,6 @@ impl Viewports {
             return Ok(lease);
         };
         if tab.applied.as_ref() == Some(&session) {
-            // Chromium sizes the view to its window again on every resize, which undoes the pin.
-            // Putting it back touches no window and changes nothing while the view still matches.
-            let (method, params) = tab.fixed.pin();
-            view.send_at_capture(method, params, Some(&session)).await?;
             return Ok(lease);
         }
         // Lost with its session or replaced by a caller's raw override. Pending until pinned
