@@ -11,17 +11,23 @@ import { skillCommand } from '@/screens/skills/skills.helpers'
 
 interface RunSkillButtonProps {
   name: string
+  /** Outlined on a skill's page; ghost in the Skills list rows. */
+  variant?: 'secondary' | 'ghost'
   className?: string
 }
 
 /** Copies the phrase a person pastes into one of their AI agents to run a skill. */
-export function RunSkillButton({ name, className }: RunSkillButtonProps) {
+export function RunSkillButton({
+  name,
+  variant = 'secondary',
+  className,
+}: RunSkillButtonProps) {
   const phrase = skillCommand(name)
   return (
     <CopyButton
       text={phrase}
-      label="Copy phrase"
       what={phrase}
+      variant={variant}
       size="sm"
       onCopied={() =>
         toastSuccess(

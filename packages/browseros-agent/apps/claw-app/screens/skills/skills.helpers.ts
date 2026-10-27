@@ -107,6 +107,12 @@ export function usedLabel(
     : `${times} · last used ${lastUsedLabel(lastRunAt, now)}`
 }
 
+/** The Skills list's short count: "14 runs", "1 run", or "Not used yet". */
+export function runsLabel(runCount: number): string {
+  if (runCount <= 0) return 'Not used yet'
+  return runCount === 1 ? '1 run' : `${runCount} runs`
+}
+
 const STUCK_WHILE: Record<ReplayVerb, string> = {
   navigate: 'opening a page',
   read: 'reading a page',

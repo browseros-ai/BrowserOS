@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   neoName,
   parseSkillBody,
+  runsLabel,
   skillCommand,
   stuckWhile,
   usedLabel,
@@ -84,6 +85,17 @@ describe('usedLabel', () => {
     expect(usedLabel(4, new Date(2026, 9, 2).getTime(), now)).toMatch(
       /^Used 4 times · last used on /,
     )
+  })
+})
+
+describe('runsLabel', () => {
+  it('says when a skill has never run', () => {
+    expect(runsLabel(0)).toBe('Not used yet')
+  })
+
+  it('counts runs in a short label', () => {
+    expect(runsLabel(1)).toBe('1 run')
+    expect(runsLabel(14)).toBe('14 runs')
   })
 })
 

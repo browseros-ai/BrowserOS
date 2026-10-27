@@ -31,7 +31,7 @@ export function isUserFacingHarness(h: Harness): boolean {
 }
 
 /** The known harness for a session's harness name, if it is one we draw. */
-export function asHarness(name: string | undefined): Harness | undefined {
+function asHarness(name: string | undefined): Harness | undefined {
   return HARNESSES.find((harness) => harness === name)
 }
 
