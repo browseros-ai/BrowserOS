@@ -275,8 +275,9 @@ return result;
         value = result[kind]
         check(f"{kind} renders and reads back", value.get("pixels") == [255, 64, 0, 255] and value.get("error") == 0, json.dumps(value))
     if hosted:
-        renderer = result["webgl"].get("renderer", "")
-        check("hosted WebGL reports the GPU identity", not SOFTWARE_RENDERER.search(renderer), renderer)
+        for kind in ("webgl", "webgl2"):
+            renderer = result[kind].get("renderer", "")
+            check(f"hosted {kind} reports the GPU identity", not SOFTWARE_RENDERER.search(renderer), renderer)
 
 
 def check_ungrouped(client: McpClient, page: int) -> None:
