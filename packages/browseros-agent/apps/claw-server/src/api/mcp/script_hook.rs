@@ -45,6 +45,10 @@ impl InnerCallHook for ScriptInnerCallHook {
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
+    fn hold_card_data<'a>(&'a self, page: u32) -> BoxFuture<'a, ()> {
+        Box::pin(self.call.state.visuals.hold_card_data(page))
+    }
+
     fn acquire_tool_guard<'a>(
         &'a self,
         tool_name: &'a str,
@@ -128,15 +132,7 @@ impl InnerCallHook for ScriptInnerCallHook {
         let output_token_estimate = record.output_token_estimate;
         let raw_args = record.args.clone();
         let args_json = redacted_script_args(record.method, record.args);
-        let card_page = record.args.as_array().and_then(|args| {
-            browseros_mcp::tools::sensitive::primitive_card_fill_page(record.method, args)
-        });
         Box::pin(async move {
-            // The script's own step screenshots already stop at this primitive
-            // (sensitive input); this keeps later calls from shooting the card.
-            if let Some(page) = card_page {
-                self.call.state.visuals.hold_card_data(page).await;
-            }
             let Some(identity) = self.identity() else {
                 return;
             };

@@ -61,44 +61,73 @@ impl InFlightCaptures {
     }
 }
 
-/// Pages a card fill wrote into, each with the main-frame document it wrote to
-/// (`None` when that couldn't be read). A filled card number shows in plain
-/// text, so captures skip such a page until it shows another document.
+/// One card fill's hold on a page: the main-frame document it wrote into
+/// (`None` when that couldn't be read), and a generation that tells this hold
+/// apart from a newer fill's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CardHold {
+    generation: u64,
+    document: Option<DocumentId>,
+}
+
+/// Pages a card fill wrote into. A filled card number shows in plain text, so
+/// captures skip such a page until it shows another document.
 #[derive(Default)]
 struct CardDocuments {
-    held: Mutex<HashMap<u32, Option<DocumentId>>>,
+    held: Mutex<HashMap<u32, CardHold>>,
+    next_generation: std::sync::atomic::AtomicU64,
 }
 
 impl CardDocuments {
     async fn hold(&self, page_id: u32, document: Option<DocumentId>) {
-        self.held.lock().await.insert(page_id, document);
+        let generation = self
+            .next_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.held.lock().await.insert(
+            page_id,
+            CardHold {
+                generation,
+                document,
+            },
+        );
     }
 
-    /// The document a held page was filled in, after dropping closed pages.
-    async fn held(&self, page_id: u32, open: &[PageInfo]) -> Option<Option<DocumentId>> {
+    /// The hold on a page, after dropping holds on closed pages.
+    async fn held(&self, page_id: u32, open: &[PageInfo]) -> Option<CardHold> {
         let mut held = self.held.lock().await;
         held.retain(|page, _| open.iter().any(|info| info.page_id.0 == *page));
         held.get(&page_id).cloned()
     }
 
-    /// Releases the page once it shows another document. An unreadable
-    /// document on either side keeps it held.
+    async fn holds(&self, page_id: u32) -> bool {
+        self.held.lock().await.contains_key(&page_id)
+    }
+
+    /// Releases `checked` once the page shows another document, and says
+    /// whether a capture may proceed. A newer hold, or a document that can't
+    /// be read on either side, keeps the page held.
     async fn release_if_changed(
         &self,
         page_id: u32,
-        filled: &Option<DocumentId>,
+        checked: &CardHold,
         current: Option<DocumentId>,
     ) -> bool {
-        let changed =
-            matches!((filled, &current), (Some(filled), Some(current)) if filled != current);
-        if changed {
-            let mut held = self.held.lock().await;
-            // A newer fill may have held the page again meanwhile.
-            if held.get(&page_id) == Some(filled) {
-                held.remove(&page_id);
-            }
+        let changed = matches!(
+            (&checked.document, &current),
+            (Some(filled), Some(current)) if filled != current
+        );
+        if !changed {
+            return false;
         }
-        changed
+        let mut held = self.held.lock().await;
+        match held.get(&page_id) {
+            Some(hold) if hold.generation == checked.generation => {
+                held.remove(&page_id);
+                true
+            }
+            Some(_) => false,
+            None => true,
+        }
     }
 }
 
@@ -227,11 +256,11 @@ impl SessionVisualService {
         else {
             return Ok(None);
         };
-        if let Some(filled) = self.card_documents.held(candidate.page_id, &pages).await {
+        if let Some(hold) = self.card_documents.held(candidate.page_id, &pages).await {
             let current = main_document_id(&browser, candidate.page_id).await;
             if !self
                 .card_documents
-                .release_if_changed(candidate.page_id, &filled, current)
+                .release_if_changed(candidate.page_id, &hold, current)
                 .await
             {
                 return Ok(None);
@@ -274,7 +303,9 @@ impl SessionVisualService {
         let bytes = STANDARD
             .decode(capture.data)
             .map_err(|error| AppError::Internal(format!("invalid screenshot data: {error}")))?;
-        if bytes.is_empty() {
+        // A fill that started while the screenshot was taken holds the page
+        // before it dispatches, so the image may show its card.
+        if bytes.is_empty() || self.card_documents.holds(candidate.page_id).await {
             return Ok(None);
         }
 
@@ -419,38 +450,61 @@ mod tests {
         assert_eq!(cards.held(1, &open).await, None);
 
         cards.hold(1, Some("main:loader-a".into())).await;
-        let filled = cards
+        let checked = cards
             .held(1, &open)
             .await
             .ok_or_else(|| anyhow::anyhow!("page 1 not held"))?;
         // The same document, or one that can't be read, keeps the page held.
         assert!(
             !cards
-                .release_if_changed(1, &filled, Some("main:loader-a".into()))
+                .release_if_changed(1, &checked, Some("main:loader-a".into()))
                 .await
         );
-        assert!(!cards.release_if_changed(1, &filled, None).await);
-        assert!(cards.held(1, &open).await.is_some());
+        assert!(!cards.release_if_changed(1, &checked, None).await);
+        assert!(cards.holds(1).await);
         // A new document releases it.
         assert!(
             cards
-                .release_if_changed(1, &filled, Some("main:loader-b".into()))
+                .release_if_changed(1, &checked, Some("main:loader-b".into()))
                 .await
         );
-        assert_eq!(cards.held(1, &open).await, None);
+        assert!(!cards.holds(1).await);
 
         // An unreadable fill document holds until the page closes.
         cards.hold(2, None).await;
-        let filled = cards
+        let checked = cards
             .held(2, &open)
             .await
             .ok_or_else(|| anyhow::anyhow!("page 2 not held"))?;
         assert!(
             !cards
-                .release_if_changed(2, &filled, Some("main:loader-c".into()))
+                .release_if_changed(2, &checked, Some("main:loader-c".into()))
                 .await
         );
         assert_eq!(cards.held(2, &[page(1)]).await, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_newer_fill_keeps_its_hold_through_a_stale_check() -> anyhow::Result<()> {
+        let cards = CardDocuments::default();
+        let open = [page(1)];
+        cards.hold(1, Some("main:loader-a".into())).await;
+        let stale = cards
+            .held(1, &open)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("page 1 not held"))?;
+        // The page reloads and a second card fills the new document, while a
+        // capture still compares against the first hold.
+        cards.hold(1, Some("main:loader-b".into())).await;
+        for current in ["main:loader-a", "main:loader-b", "main:loader-c"] {
+            assert!(
+                !cards
+                    .release_if_changed(1, &stale, Some(current.into()))
+                    .await
+            );
+        }
+        assert!(cards.holds(1).await);
         Ok(())
     }
 }

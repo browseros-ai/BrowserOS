@@ -1364,6 +1364,15 @@ impl BrowserView {
         }
         self.scoped_root_cdp(method, params).await
     }
+    /// The page whose attached CDP session is `session`, if the registry knows it.
+    pub async fn page_for_session(&self, session: &SessionId) -> Option<PageId> {
+        self.session
+            .pages
+            .page_for_session(session)
+            .await
+            .map(|page| page.page_id)
+    }
+
     pub async fn cdp_json_for_page(
         &self,
         page: PageId,

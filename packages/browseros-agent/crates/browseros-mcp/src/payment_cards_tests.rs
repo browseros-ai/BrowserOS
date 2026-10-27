@@ -141,3 +141,54 @@ async fn run_marks_card_inputs_before_authorization_can_reject_them() -> anyhow:
     }
     Ok(())
 }
+
+struct HoldProbe(Arc<std::sync::Mutex<Vec<u32>>>);
+impl InnerCallHook for HoldProbe {
+    fn hold_card_data<'a>(&'a self, page: u32) -> BoxFuture<'a, ()> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(page);
+        Box::pin(async {})
+    }
+    fn authorize<'a>(&'a self, _page: Option<u32>) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn record<'a>(&'a self, _record: InnerCallRecord<'a>) -> BoxFuture<'a, ()> {
+        Box::pin(async {})
+    }
+    fn on_page_created<'a>(&'a self, _page: u32) -> BoxFuture<'a, ()> {
+        Box::pin(async {})
+    }
+}
+
+#[tokio::test]
+async fn run_holds_card_pages_before_dispatching_raw_fills() -> anyhow::Result<()> {
+    let (mut ctx, _connection, page) = super::harness_ctx().await;
+    let held = Arc::new(std::sync::Mutex::new(Vec::new()));
+    ctx.inner_call_hook = Some(Arc::new(HoldProbe(held.clone())));
+    let run = catalog()
+        .into_iter()
+        .find(|tool| tool.name == "run")
+        .ok_or_else(|| anyhow::anyhow!("missing run"))?;
+    // Each fill fails after dispatch (this browser has no Payments domain);
+    // the hold must already be in place. A read on the same session holds nothing.
+    let code = format!(
+        "const params = {{documentId: 'd', card: {{number: '{SYNTHETIC_NUMBER}'}}}};
+         for (const call of [
+           () => browser.cdp('Payments.fillCard', params, 'session-1'),
+           () => browser.page({page}).cdp('Autofill.trigger', JSON.stringify(params)),
+           () => browser.cdp('Payments.listCards', {{}}, 'session-1'),
+         ]) {{ try {{ await call(); }} catch (error) {{}} }}
+         return true;"
+    );
+    let result = execute_tool(&run, json!({"code": code}), &ctx).await?;
+    assert!(!result.is_error, "{:?}", result.content);
+    assert_eq!(
+        *held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        vec![page, page]
+    );
+    Ok(())
+}

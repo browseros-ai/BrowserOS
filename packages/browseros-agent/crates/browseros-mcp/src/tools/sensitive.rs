@@ -48,18 +48,20 @@ pub fn card_fill_page(tool: &str, args: &Value) -> Option<u32> {
     args.get("page")?.as_u64()?.try_into().ok()
 }
 
+/// CDP methods that write a card into a page.
+#[must_use]
+pub fn fills_card(method: &str) -> bool {
+    matches!(method, "Payments.fillCard" | "Autofill.trigger")
+}
+
 /// The page a script bridge primitive fills a card into: the `payment_cards`
-/// tool, raw `Payments.fillCard`, or upstream `Autofill.trigger`.
+/// tool, or raw `Payments.fillCard` / `Autofill.trigger` on a page. Raw CDP
+/// addressed by session id names no page here; the bridge resolves it.
 #[must_use]
 pub fn primitive_card_fill_page(method: &str, args: &[Value]) -> Option<u32> {
     match method {
         "tool:payment_cards" => card_fill_page("payment_cards", args.first()?),
-        "cdpJsonForPage"
-            if matches!(
-                args.get(1).and_then(Value::as_str),
-                Some("Payments.fillCard" | "Autofill.trigger")
-            ) =>
-        {
+        "cdpJsonForPage" if args.get(1).and_then(Value::as_str).is_some_and(fills_card) => {
             args.first()?.as_u64()?.try_into().ok()
         }
         _ => None,

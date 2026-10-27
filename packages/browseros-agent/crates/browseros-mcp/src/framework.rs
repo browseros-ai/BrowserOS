@@ -164,6 +164,13 @@ pub trait InnerCallHook: Send + Sync {
     /// cancellation.
     fn mark_sensitive_input(&self) {}
 
+    /// Holds `page` out of host screenshots before a primitive fills a card
+    /// into it. Called before dispatch, so a capture during the fill or a
+    /// cancelled run never leaves the filled number unguarded.
+    fn hold_card_data<'a>(&'a self, _page: u32) -> BoxFuture<'a, ()> {
+        Box::pin(async {})
+    }
+
     /// Authorize a primitive about to run against the caller's ownership.
     /// `page` is the primitive's target page id, when it addresses one.
     /// `Err(reason)` rejects the primitive and the reason is surfaced to the

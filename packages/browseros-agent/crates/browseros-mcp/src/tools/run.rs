@@ -843,6 +843,23 @@ fn install_globals<'js>(
 }
 
 impl BrowserBridge {
+    /// The page a primitive fills a card into, including raw
+    /// `browser.cdp(method, params, sessionId)` sent to a page's session.
+    async fn card_fill_page(&self, method: &str, args: &[Value]) -> Option<u32> {
+        if let Some(page) = crate::tools::sensitive::primitive_card_fill_page(method, args) {
+            return Some(page);
+        }
+        if method != "cdp" || !crate::tools::sensitive::fills_card(args.first()?.as_str()?) {
+            return None;
+        }
+        let session = SessionId::from(args.get(2)?.as_str()?.to_owned());
+        self.ctx
+            .browser
+            .page_for_session(&session)
+            .await
+            .map(|page| page.0)
+    }
+
     async fn call(
         &self,
         method: &str,
@@ -862,6 +879,9 @@ impl BrowserBridge {
         let recorded_args = Value::Array(args.clone());
         if let Some(hook) = &self.ctx.inner_call_hook {
             hook.authorize(page).await?;
+            if let Some(card_page) = self.card_fill_page(method, &args).await {
+                hook.hold_card_data(card_page).await;
+            }
         }
         let started = Instant::now();
         let outcome = self.dispatch(method, args).await;
