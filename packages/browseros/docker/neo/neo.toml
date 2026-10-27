@@ -17,9 +17,10 @@
 #               titles, collapses and closes. The desktop app's behaviour.
 # grouping = "explicit"
 
-[scripts]
+# [scripts]
 # Whether BrowserOS's own page scripts that only touch the DOM (settle probes,
 # the agent pointer, element geometry, screenshot overlays) run in an isolated
 # JavaScript world the page cannot see. false runs them in the page's own
-# world. Set explicitly while isolated worlds roll out; true is also the default.
-isolated_world = true
+# world. Keep the table commented unless the image's claw-server knows it:
+# servers that predate it reject the table and do not start.
+# isolated_world = true

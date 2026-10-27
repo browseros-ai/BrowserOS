@@ -200,11 +200,11 @@ GitHub documents package Actions access in
   argument. The entrypoint also turns human help off through `/api/v1/settings/agent` on
   every start, before the container reports healthy, for claw-servers that predate the mode.
 - **Server behaviour comes from `/etc/neo/neo.toml`** (`BROWSERCLAW_CONFIG_FILE`). The
-  shipped file documents the defaults, commented out, except `[scripts] isolated_world = true`,
-  which is set explicitly while isolated worlds roll out; deployments mount or `COPY` their
-  own. Hosted mode defaults `[tabs] grouping` to `"explicit"`, so the server never groups an
-  agent's pages on its own. `isolated_world = false` runs BrowserOS's DOM-only page scripts in
-  the page's own JavaScript world instead of an isolated one. A key or value claw-server does not know stops it at
+  shipped file only documents the defaults, all commented out; deployments mount or `COPY`
+  their own. Hosted mode defaults `[tabs] grouping` to `"explicit"`, so the server never
+  groups an agent's pages on its own. `[scripts] isolated_world` defaults to `true`; `false`
+  runs BrowserOS's DOM-only page scripts in the page's own JavaScript world instead of an
+  isolated one, and a claw-server older than that key refuses the table. A key or value claw-server does not know stops it at
   startup.
 - **The server updater is disabled by the entrypoint.** It cannot replace the
   packaged/overlaid server that passed the release checks, even when `NEO_ARGS` is
