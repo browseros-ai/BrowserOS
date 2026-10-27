@@ -7,8 +7,9 @@ outside the container can reach Neo's MCP server (which proves the
 allow_remote_in_mcp setting works through Docker's port forwarding), agents get
 the hosted tool set (BROWSERCLAW_HOSTED_MODE=1), an agent-opened tab loads
 and, in hosted mode, stays out of any tab group (the shipped neo.toml keeps the
-explicit grouping default), and a new tab page is blank (the entrypoint's
---disable-browseros-features list reached the browser).
+explicit grouping default), a new tab page is blank (the entrypoint's
+--disable-browseros-features list reached the browser), and WebGL draws on the
+container's software GPU (the entrypoint's --ignore-gpu-blocklist reached it).
 
   python3 smoke.py [--vnc-port 6080] [--mcp-port 9010]
 
@@ -178,24 +179,64 @@ def main() -> None:
     check("agent opened a tab", "opened page" in opened, opened.splitlines()[0] if opened else "")
     if hosted:
         check_ungrouped(client, int(re.search(r"opened page (\d+)", opened).group(1)))
-    check_new_tab_blank(client)
+    page = check_new_tab_blank(client)
+    check_webgl(client, page)
 
 
-def check_new_tab_blank(client: McpClient) -> None:
+def evaluate(client: McpClient, page: int, code: str) -> str:
+    """Runs `code` in the page and returns its one-line string result.
+
+    The value is the one line between the reply's [UNTRUSTED...] markers and its tip.
+    """
+    reply = client.tool("evaluate", {"page": page, "code": code})
+    return next((line for line in reply.splitlines() if line and not line.startswith(("[", "Tip:"))), "")
+
+
+def check_new_tab_blank(client: McpClient) -> int:
     """The entrypoint's hidden-feature list reached the browser.
 
     Most of the names in that list only change the browser's frame, which no tool can
     see. NewTabPage is the exception: it sends every new tab page to about:blank, where
     Chromium or the bundled extension would otherwise draw one. A browser older than
     0.51.2.5 ignores the switch, so it fails here instead of shipping the full frame.
+    Returns the page, for later checks that need a blank one.
     """
     opened = client.tool("tabs", {"action": "new", "url": "chrome://newtab/"})
     page = int(re.search(r"opened page (\d+)", opened).group(1))
     # The tab keeps chrome://newtab/ as its address, so ask the page where it really is.
-    # The value is the one line between the reply's [UNTRUSTED...] markers and its tip.
-    reply = client.tool("evaluate", {"page": page, "code": "return location.href"})
-    href = next((line for line in reply.splitlines() if line and not line.startswith(("[", "Tip:"))), "")
+    href = evaluate(client, page, "return location.href")
     check("new tab page is blank", href == "about:blank", href)
+    return page
+
+
+# Clears a WebGL1 and a WebGL2 canvas to green and reads one pixel of each back.
+WEBGL_DRAW = """
+const results = [];
+for (const kind of ["webgl", "webgl2"]) {
+  const gl = document.createElement("canvas").getContext(kind);
+  if (!gl) {
+    results.push(kind + "=none");
+    continue;
+  }
+  gl.clearColor(0, 1, 0, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  const pixel = new Uint8Array(4);
+  gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+  results.push(kind + "=" + pixel.join(","));
+}
+return results.join(" ");
+"""
+
+
+def check_webgl(client: McpClient, page: int) -> None:
+    """WebGL draws on the container's software GPU.
+
+    Without a GPU, Chromium draws with Mesa's llvmpipe and refuses every WebGL context
+    on it unless the entrypoint's --ignore-gpu-blocklist reached the browser. A context
+    alone proves little, so the page also draws and reads the pixel back.
+    """
+    drawn = evaluate(client, page, WEBGL_DRAW)
+    check("WebGL1 and WebGL2 draw", drawn == "webgl=0,255,0,255 webgl2=0,255,0,255", drawn)
 
 
 def check_ungrouped(client: McpClient, page: int) -> None:
