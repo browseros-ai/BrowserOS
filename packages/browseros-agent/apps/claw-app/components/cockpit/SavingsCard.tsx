@@ -7,7 +7,6 @@
 import type { CockpitStats } from '@browseros/claw-api'
 import { ArrowRight } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
-import { AnimatedNumber } from '@/components/motion/animated-number'
 import { Button } from '@/components/motion/button/base'
 import {
   CenterMorphModal,
@@ -35,26 +34,18 @@ export function SavingsCard({
   stats: CockpitStats
   className?: string
 }) {
-  const saved = roundTimeSaved(stats.allTime.humanTimeSavedMs)
+  const { humanTimeSavedMs } = stats.allTime
   const usage = usageComparison(stats, stats.allTime)
 
   return (
     <section
       aria-label="Savings"
-      className={cn('flex flex-col gap-3.5', className)}
+      className={cn('@container flex flex-col gap-3.5', className)}
     >
       <div className="flex items-center justify-between gap-4">
         <div className="flex min-w-0 flex-wrap items-center gap-x-[22px] gap-y-1">
-          {saved ? (
-            <Stat
-              value={
-                <>
-                  <AnimatedNumber value={saved.amount} />{' '}
-                  {saved.amount === 1 ? saved.unit : `${saved.unit}s`}
-                </>
-              }
-              label="saved"
-            />
+          {roundTimeSaved(humanTimeSavedMs) ? (
+            <Stat value={timeSavedAmount(humanTimeSavedMs)} label="saved" />
           ) : (
             <p className="text-[14px] text-ink-2">
               Your time saved starts here
@@ -62,9 +53,10 @@ export function SavingsCard({
           )}
           {usage ? (
             <>
+              {/* Narrower, the figures can wrap and the rule would dangle at a line end. */}
               <span
                 aria-hidden
-                className="h-[18px] w-px shrink-0 bg-border-2"
+                className="@2xl:block hidden h-[18px] w-px shrink-0 bg-border-2"
               />
               <Stat
                 value={formatTokens(usage.saved)}
@@ -103,7 +95,7 @@ export function SavingsCard({
   )
 }
 
-function Stat({ value, label }: { value: ReactNode; label: ReactNode }) {
+function Stat({ value, label }: { value: string; label: ReactNode }) {
   return (
     <p className="flex items-baseline gap-1.5">
       <span className="font-extrabold text-[20px] text-cyanotype-ink leading-6 tracking-[-0.015em]">
@@ -127,7 +119,7 @@ function SavingsDialog({ stats }: { stats: CockpitStats }) {
         <Button
           variant="ghost"
           size="sm"
-          className="-mr-2 h-[34px] shrink-0 font-semibold text-[13.5px] text-ink-2"
+          className="-my-[5px] -mr-2 h-[34px] shrink-0 font-semibold text-[13.5px] text-ink-2"
         >
           Details
           <ArrowRight aria-hidden className="size-[15px]" />

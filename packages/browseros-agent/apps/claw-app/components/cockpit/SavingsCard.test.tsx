@@ -40,7 +40,7 @@ function strip(cockpitStats: CockpitStats): string {
 describe('SavingsCard', () => {
   it('shows hours and tokens saved on one line, with saved filling the bar from the left', () => {
     const text = strip(stats(window(314_600_000, 573_900_000, 1_054 * HOUR_MS)))
-    expect(text).toContain('hours saved')
+    expect(text).toContain('1,054 hours saved')
     expect(text).toContain('259.3M AI tokens saved · 45% fewer')
     expect(text).toContain('Details')
     expect(text.indexOf('saved 259.3M')).toBeGreaterThan(-1)

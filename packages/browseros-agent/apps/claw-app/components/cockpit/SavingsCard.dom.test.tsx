@@ -20,7 +20,6 @@ const globalNames = [
   'requestAnimationFrame',
   'cancelAnimationFrame',
   'ResizeObserver',
-  'IntersectionObserver',
   'getComputedStyle',
 ] as const
 const globalDescriptors = new Map(
@@ -83,14 +82,6 @@ beforeEach(async () => {
     'ResizeObserver',
     class {
       observe() {}
-      disconnect() {}
-    },
-  )
-  define(
-    'IntersectionObserver',
-    class {
-      observe() {}
-      unobserve() {}
       disconnect() {}
     },
   )
