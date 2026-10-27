@@ -1113,3 +1113,122 @@ async fn tests_that_a_failed_switch_to_default_keeps_the_mode() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn tests_that_sizes_are_css_pixels_for_fixed_modes_only() -> TestResult {
+    let size = |width, height| Size { width, height };
+    for mode in [ViewportMode::Mobile, ViewportMode::Desktop] {
+        for ok in [size(100, 100), size(390, 844), size(4096, 4096)] {
+            assert_eq!(
+                ViewportRequest::new(mode, None)?.with_size(ok)?.size(),
+                Some(ok)
+            );
+        }
+        for bad in [
+            size(99, 500),
+            size(500, 99),
+            size(4097, 500),
+            size(500, 4097),
+        ] {
+            assert!(
+                ViewportRequest::new(mode, None)?.with_size(bad).is_err(),
+                "{bad:?}"
+            );
+        }
+    }
+    assert!(
+        ViewportRequest::new(ViewportMode::Default, None)?
+            .with_size(size(390, 844))
+            .is_err()
+    );
+    assert_eq!(
+        ViewportRequest::new(ViewportMode::Mobile, None)?.size(),
+        None
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_custom_size_replaces_the_device_size() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    let phone = Size {
+        width: 390,
+        height: 844,
+    };
+    let request = ViewportRequest::new(ViewportMode::Mobile, Some(150.0))?.with_size(phone)?;
+    let report = fixture.view.set_viewport(page.clone(), request).await?;
+
+    assert_eq!(report.size, Some(phone));
+    assert_eq!(
+        (
+            report.viewport.width,
+            report.viewport.height,
+            report.viewport.device_scale_factor
+        ),
+        (390.0, 844.0, 2.0)
+    );
+    let metrics = fixture
+        .native
+        .only("Emulation.setDeviceMetricsOverride")?
+        .params;
+    assert_eq!(
+        (
+            &metrics["width"],
+            &metrics["screenHeight"],
+            &metrics["scale"]
+        ),
+        (&json!(390), &json!(844), &json!(1.5))
+    );
+    let window = report.window.ok_or("missing window fit")?;
+    assert_eq!(
+        window.contents,
+        Size {
+            width: 585,
+            height: 1266
+        }
+    );
+
+    let desktop = ViewportRequest::new(ViewportMode::Desktop, None)?.with_size(Size {
+        width: 1440,
+        height: 900,
+    })?;
+    let report = fixture.view.set_viewport(page, desktop).await?;
+    assert_eq!(
+        (
+            report.viewport.width,
+            report.viewport.height,
+            report.viewport.device_scale_factor
+        ),
+        (1440.0, 900.0, 1.0)
+    );
+    let window = report.window.ok_or("missing window fit")?;
+    assert_eq!((window.bounds.width, window.bounds.height), (1440, 1021));
+    assert!(window.exact);
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_call_without_size_returns_to_the_mode_size() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let page = fixture.page(1).await?;
+    let phone = ViewportRequest::new(ViewportMode::Mobile, None)?.with_size(Size {
+        width: 390,
+        height: 844,
+    })?;
+    fixture.view.set_viewport(page.clone(), phone).await?;
+    let report = fixture.set(&page, ViewportMode::Mobile, None).await?;
+
+    assert_eq!(
+        report.size,
+        Some(Size {
+            width: 400,
+            height: 906
+        })
+    );
+    assert_eq!(
+        (report.viewport.width, report.viewport.height),
+        (400.0, 906.0)
+    );
+    Ok(())
+}

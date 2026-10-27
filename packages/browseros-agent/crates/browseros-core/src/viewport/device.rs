@@ -1,4 +1,4 @@
-//! The two fixed devices, the CDP that puts a tab in one, and how the page proves it took.
+//! The fixed devices, the CDP that puts a tab in one, and how the page proves it took.
 use super::{DEFAULT_ZOOM, PageMetrics, Size, ViewportMode};
 use crate::{BrowserView, CoreError, PageId, SessionId};
 use serde_json::{Value, json};
@@ -13,77 +13,75 @@ const METRICS_EXPRESSION: &str = "(() => ({ width: innerWidth, height: innerHeig
     touchPoints: navigator.maxTouchPoints, \
     mobile: navigator.userAgentData ? navigator.userAgentData.mobile : null }))()";
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum Fixed {
-    Mobile { zoom: f64 },
-    Desktop,
-}
-
-struct Device {
-    width: i64,
-    height: i64,
-    scale_factor: f64,
-    mobile: bool,
-}
-
-const MOBILE: Device = Device {
+/// The sizes each fixed mode uses unless a request names its own.
+pub(super) const MOBILE_SIZE: Size = Size {
     width: 400,
     height: 906,
-    scale_factor: 2.0,
-    mobile: true,
 };
-const DESKTOP: Device = Device {
+pub(super) const DESKTOP_SIZE: Size = Size {
     width: 1920,
     height: 1080,
-    scale_factor: 1.0,
-    mobile: false,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum Fixed {
+    Mobile { zoom: f64, size: Size },
+    Desktop { size: Size },
+}
+
 impl Fixed {
-    fn device(self) -> &'static Device {
+    /// The device viewport in CSS px.
+    pub(super) fn size(self) -> Size {
         match self {
-            Self::Mobile { .. } => &MOBILE,
-            Self::Desktop => &DESKTOP,
+            Self::Mobile { size, .. } | Self::Desktop { size } => size,
         }
+    }
+
+    fn mobile(self) -> bool {
+        matches!(self, Self::Mobile { .. })
+    }
+
+    fn scale_factor(self) -> f64 {
+        if self.mobile() { 2.0 } else { 1.0 }
     }
 
     pub(super) fn mode(self) -> ViewportMode {
         match self {
             Self::Mobile { .. } => ViewportMode::Mobile,
-            Self::Desktop => ViewportMode::Desktop,
+            Self::Desktop { .. } => ViewportMode::Desktop,
         }
     }
 
     /// The emulation scale: the preview zoom as a factor.
     pub(super) fn scale(self) -> f64 {
         match self {
-            Self::Mobile { zoom } => zoom / DEFAULT_ZOOM,
-            Self::Desktop => 1.0,
+            Self::Mobile { zoom, .. } => zoom / DEFAULT_ZOOM,
+            Self::Desktop { .. } => 1.0,
         }
     }
 
     /// The on-screen size of the rendered preview, which the window is fitted around.
     pub(super) fn preview(self) -> Size {
-        let device = self.device();
+        let size = self.size();
         Size {
-            width: (device.width as f64 * self.scale()).round() as i64,
-            height: (device.height as f64 * self.scale()).round() as i64,
+            width: (size.width as f64 * self.scale()).round() as i64,
+            height: (size.height as f64 * self.scale()).round() as i64,
         }
     }
 
     /// Commands that put the tab in this mode. Desktop restores the browser's own identity.
     pub(super) fn commands(self, chrome_version: &str) -> Vec<(&'static str, Value)> {
-        let device = self.device();
+        let size = self.size();
         let mut metrics = json!({
-            "width": device.width,
-            "height": device.height,
-            "deviceScaleFactor": device.scale_factor,
-            "mobile": device.mobile,
+            "width": size.width,
+            "height": size.height,
+            "deviceScaleFactor": self.scale_factor(),
+            "mobile": self.mobile(),
             "scale": self.scale(),
-            "screenWidth": device.width,
-            "screenHeight": device.height,
+            "screenWidth": size.width,
+            "screenHeight": size.height,
         });
-        if device.mobile {
+        if self.mobile() {
             metrics["screenOrientation"] = json!({"type": "portraitPrimary", "angle": 0});
         }
         let (touch, identity) = match self {
@@ -91,7 +89,7 @@ impl Fixed {
                 json!({"enabled": true, "maxTouchPoints": 5}),
                 mobile_identity(chrome_version),
             ),
-            Self::Desktop => (json!({"enabled": false}), json!({"userAgent": ""})),
+            Self::Desktop { .. } => (json!({"enabled": false}), json!({"userAgent": ""})),
         };
         vec![
             ("Emulation.setDeviceMetricsOverride", metrics),
@@ -101,15 +99,15 @@ impl Fixed {
     }
 
     fn reported_by(self, metrics: &PageMetrics) -> bool {
-        let device = self.device();
-        let screen = metrics.screen_width == device.width as f64
-            && metrics.screen_height == device.height as f64
-            && metrics.device_scale_factor == device.scale_factor;
+        let size = self.size();
+        let screen = metrics.screen_width == size.width as f64
+            && metrics.screen_height == size.height as f64
+            && metrics.device_scale_factor == self.scale_factor();
         match self {
             Self::Mobile { .. } => {
                 screen && metrics.touch_points > 0 && metrics.mobile != Some(false)
             }
-            Self::Desktop => screen,
+            Self::Desktop { .. } => screen,
         }
     }
 }

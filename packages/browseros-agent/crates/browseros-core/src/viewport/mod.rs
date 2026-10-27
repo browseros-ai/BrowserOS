@@ -22,6 +22,9 @@ use tokio::sync::{OnceCell, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock}
 pub const MIN_ZOOM: f64 = 25.0;
 pub const MAX_ZOOM: f64 = 400.0;
 pub const DEFAULT_ZOOM: f64 = 100.0;
+/// Bounds for a requested device width or height, in CSS px.
+pub const MIN_SIZE: i64 = 100;
+pub const MAX_SIZE: i64 = 4096;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -33,11 +36,13 @@ pub enum ViewportMode {
 }
 
 /// A validated request. Zoom is a percentage of the mobile preview and exists only for mobile;
-/// leaving it out means 100, never the tab's previous zoom.
+/// a size replaces a fixed mode's device size. Leaving either out means the mode's own value,
+/// never the tab's previous one.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewportRequest {
     mode: ViewportMode,
     zoom: Option<f64>,
+    size: Option<Size>,
 }
 
 impl ViewportRequest {
@@ -46,6 +51,7 @@ impl ViewportRequest {
             (ViewportMode::Mobile, None) => Ok(Self {
                 mode,
                 zoom: Some(DEFAULT_ZOOM),
+                size: None,
             }),
             (ViewportMode::Mobile, Some(zoom))
                 if zoom.is_finite() && (MIN_ZOOM..=MAX_ZOOM).contains(&zoom) =>
@@ -53,13 +59,18 @@ impl ViewportRequest {
                 Ok(Self {
                     mode,
                     zoom: Some(zoom),
+                    size: None,
                 })
             }
             (ViewportMode::Mobile, Some(_)) => Err(format!(
                 "zoom must be a percentage from {MIN_ZOOM} to {MAX_ZOOM}"
             )),
             (_, Some(_)) => Err("zoom applies only to mobile".to_string()),
-            (_, None) => Ok(Self { mode, zoom: None }),
+            (_, None) => Ok(Self {
+                mode,
+                zoom: None,
+                size: None,
+            }),
         }
     }
 
@@ -74,13 +85,41 @@ impl ViewportRequest {
         self.zoom
     }
 
+    /// The device viewport in CSS px, for mobile or desktop.
+    pub fn with_size(self, size: Size) -> Result<Self, String> {
+        if self.mode == ViewportMode::Default {
+            return Err("width and height apply only to mobile and desktop".to_string());
+        }
+        if ![size.width, size.height]
+            .iter()
+            .all(|side| (MIN_SIZE..=MAX_SIZE).contains(side))
+        {
+            return Err(format!(
+                "width and height must be from {MIN_SIZE} to {MAX_SIZE} CSS px"
+            ));
+        }
+        Ok(Self {
+            size: Some(size),
+            ..self
+        })
+    }
+
+    /// The requested device size; `None` means the mode's own.
+    #[must_use]
+    pub fn size(&self) -> Option<Size> {
+        self.size
+    }
+
     fn fixed(self) -> Option<Fixed> {
-        match (self.mode, self.zoom) {
-            (ViewportMode::Mobile, zoom) => Some(Fixed::Mobile {
-                zoom: zoom.unwrap_or(DEFAULT_ZOOM),
+        match self.mode {
+            ViewportMode::Mobile => Some(Fixed::Mobile {
+                zoom: self.zoom.unwrap_or(DEFAULT_ZOOM),
+                size: self.size.unwrap_or(device::MOBILE_SIZE),
             }),
-            (ViewportMode::Desktop, _) => Some(Fixed::Desktop),
-            (ViewportMode::Default, _) => None,
+            ViewportMode::Desktop => Some(Fixed::Desktop {
+                size: self.size.unwrap_or(device::DESKTOP_SIZE),
+            }),
+            ViewportMode::Default => None,
         }
     }
 }
@@ -94,6 +133,8 @@ pub struct ViewportReport {
     pub mode: ViewportMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zoom: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<Size>,
     pub viewport: PageMetrics,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowFit>,
@@ -416,6 +457,7 @@ fn report(
         page: page.0,
         mode: request.mode(),
         zoom: request.zoom(),
+        size: request.fixed().map(Fixed::size),
         viewport,
         window,
     }

@@ -5,7 +5,9 @@ use crate::framework::{
 };
 use browseros_core::{
     PageId,
-    viewport::{Dimension, LimitedBy, ViewportMode, ViewportReport, ViewportRequest, WindowFit},
+    viewport::{
+        Dimension, LimitedBy, Size, ViewportMode, ViewportReport, ViewportRequest, WindowFit,
+    },
 };
 use futures_util::future::BoxFuture;
 use rmcp::model::ToolAnnotations;
@@ -15,7 +17,7 @@ use serde_json::Value;
 
 pub const NAME: &str = "setViewport";
 
-const DESCRIPTION: &str = "Set how one tab renders. mobile: a 400x906 CSS px phone at device scale 2 with touch and a mobile user agent and client hints. desktop: 1920x1080 at device scale 1 with the browser's own identity. default: the tab's natural size; removes only what setViewport set. Tabs start in default. The mode stays with the tab through reloads and navigation, and every later call on the tab first restores it and refits the tab's window, including after a person resized it. zoom (mobile only, percent 25-400, default 100) scales the on-screen preview, not the page's CSS size. The page is not reloaded: servers that vary by user agent see the new identity from the next navigation. The result reports what the page and window actually show, including window sizes the screen or browser would not allow.";
+const DESCRIPTION: &str = "Set how one tab renders. mobile: a 400x906 CSS px phone at device scale 2 with touch and a mobile user agent and client hints. desktop: 1920x1080 at device scale 1 with the browser's own identity. width and height (together, CSS px) give mobile or desktop another device size. default: the tab's natural size; removes only what setViewport set. Tabs start in default. The mode stays with the tab through reloads and navigation, and every later call on the tab first restores it and refits the tab's window, including after a person resized it. zoom (mobile only, percent 25-400, default 100) scales the on-screen preview, not the page's CSS size. The page is not reloaded: servers that vary by user agent see the new identity from the next navigation. The result reports what the page and window actually show, including window sizes the screen or browser would not allow.";
 
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -43,6 +45,14 @@ struct SetViewportArgs {
     /// Mobile preview zoom in percent, 25-400. Defaults to 100 on every call; desktop and
     /// default take none.
     zoom: Option<f64>,
+    /// Device viewport width in CSS px, 100-4096, with height. Mobile and desktop only;
+    /// defaults to 400 for mobile and 1920 for desktop on every call.
+    #[schemars(range(min = 100, max = 4096))]
+    width: Option<i64>,
+    /// Device viewport height in CSS px, 100-4096, with width. Defaults to 906 for mobile and
+    /// 1080 for desktop on every call.
+    #[schemars(range(min = 100, max = 4096))]
+    height: Option<i64>,
 }
 
 #[must_use]
@@ -77,12 +87,19 @@ fn handler<'a>(
 
 fn parse(raw: Value) -> ToolExecResult<(PageId, ViewportRequest)> {
     let args: SetViewportArgs = parse_args(raw)?;
-    let request = ViewportRequest::new(args.mode.into(), args.zoom).map_err(|message| {
-        ToolError::InvalidArguments(vec![ArgIssue {
-            path: "zoom".to_string(),
-            message,
-        }])
-    })?;
+    let issue = |path: &str| {
+        let path = path.to_string();
+        move |message| ToolError::InvalidArguments(vec![ArgIssue { path, message }])
+    };
+    let request = ViewportRequest::new(args.mode.into(), args.zoom).map_err(issue("zoom"))?;
+    let request = match (args.width, args.height) {
+        (Some(width), Some(height)) => request
+            .with_size(Size { width, height })
+            .map_err(issue("width"))?,
+        (None, None) => request,
+        (Some(_), None) => return Err(issue("height")("give height with width".to_string())),
+        (None, Some(_)) => return Err(issue("width")("give width with height".to_string())),
+    };
     Ok((PageId(args.page), request))
 }
 
@@ -108,10 +125,25 @@ pub(crate) fn report_json(report: &ViewportReport) -> Value {
 fn summary(report: &ViewportReport) -> String {
     let page = report.page;
     let metrics = &report.viewport;
-    let size = format!(
-        "{}x{} CSS px at device scale {}",
-        metrics.width, metrics.height, metrics.device_scale_factor
-    );
+    let mut size = match report.size {
+        Some(device) => format!(
+            "{}x{} CSS px at device scale {}",
+            device.width, device.height, metrics.device_scale_factor
+        ),
+        None => format!(
+            "{}x{} CSS px at device scale {}",
+            metrics.width, metrics.height, metrics.device_scale_factor
+        ),
+    };
+    // Wide pages lay out wider than a mobile device, as Chromium does on phones.
+    if let Some(device) = report.size
+        && (metrics.width, metrics.height) != (device.width as f64, device.height as f64)
+    {
+        size.push_str(&format!(
+            " (this page lays out at {}x{})",
+            metrics.width, metrics.height
+        ));
+    }
     let mut lines = vec![match (report.mode, report.zoom) {
         (ViewportMode::Mobile, zoom) => format!(
             "Page {page} is mobile: {size}{}, preview zoom {}%.",
@@ -124,7 +156,7 @@ fn summary(report: &ViewportReport) -> String {
         ),
         (ViewportMode::Desktop, _) => format!("Page {page} is desktop: {size}."),
         (ViewportMode::Default, _) => format!(
-            "Page {page} is default: its natural size, now {size}. Only setViewport's overrides were removed; the window was left as it is."
+            "Page {page} is default: its natural size, now {size}. setViewport's overrides, if any, are removed; the window is left as it is."
         ),
     }];
     if let Some(window) = &report.window {

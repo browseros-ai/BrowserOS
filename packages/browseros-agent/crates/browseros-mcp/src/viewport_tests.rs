@@ -288,6 +288,9 @@ async fn tests_that_set_viewport_rejects_invalid_arguments() -> TestResult {
         json!({"page": 1, "mode": "desktop", "zoom": 100}),
         json!({"page": 1, "mode": "tablet"}),
         json!({"mode": "mobile"}),
+        json!({"page": 1, "mode": "mobile", "width": 390}),
+        json!({"page": 1, "mode": "mobile", "width": 50, "height": 844}),
+        json!({"page": 1, "mode": "default", "width": 390, "height": 844}),
     ] {
         let result = set_viewport(&ctx, args.clone()).await;
         assert!(result.is_error, "{args}");
@@ -457,5 +460,32 @@ async fn tests_that_run_tool_primitives_on_fixed_tabs_do_not_wait_on_themselves(
     )?;
     assert_eq!(value, 1);
     assert_eq!(native.window(), (1920, 1080 + CHROME_HEIGHT));
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_set_viewport_takes_an_optional_device_size() -> TestResult {
+    let native = Native::new();
+    let ctx = ctx(&native, true);
+    let result = set_viewport(
+        &ctx,
+        json!({"page": 1, "mode": "mobile", "width": 390, "height": 844}),
+    )
+    .await;
+    assert!(!result.is_error, "{}", text(&result));
+    let report = result.structured_content.clone().ok_or("no report")?;
+    assert_eq!(report["size"], json!({"width": 390, "height": 844}));
+    assert_eq!(report["viewport"]["width"], 390.0);
+    assert!(text(&result).contains("390x844"), "{}", text(&result));
+
+    let scripted = run_value(
+        &run(
+            &ctx,
+            "return await browser.page(1).setViewport({ mode: 'desktop', width: 1440, height: 900 })",
+        )
+        .await,
+    )?;
+    assert_eq!(scripted["size"], json!({"width": 1440, "height": 900}));
+    assert_eq!(scripted["viewport"]["deviceScaleFactor"], 1.0);
     Ok(())
 }
