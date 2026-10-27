@@ -39,7 +39,7 @@ const UNFOLD_SPRING = {
 } as const;
 // Exits are faster than entrances: the panel folds back on a short ease.
 const UNFOLD_EXIT = { duration: 0.2, ease: EASE_OUT } as const;
-const RADIUS = 12;
+const RADIUS = 8;
 // How far the open panel sits from the trigger once it has pulled away.
 const GAP = 8;
 // The surface starts as a thin lip flush against the trigger's edge.
@@ -511,7 +511,7 @@ export function SelectItem({
         data-listbox-id={value}
         onClick={() => ctx.select(value)}
         className={cn(
-          "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm outline-none transition-colors",
+          "flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-1.5 text-left text-sm outline-none transition-colors",
           selected
             ? "bg-muted text-foreground"
             : "text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:bg-muted",

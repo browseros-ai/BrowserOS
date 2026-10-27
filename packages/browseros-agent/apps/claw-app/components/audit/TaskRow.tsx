@@ -46,7 +46,7 @@ export function TaskRow({ task, now, timeOnly = false }: TaskRowProps) {
     >
       <span
         className={cn(
-          'relative grid aspect-[16/10] place-items-center overflow-hidden rounded-[10px] border border-border-2',
+          'relative grid aspect-[16/10] place-items-center overflow-hidden rounded-md border border-border-2',
           shot || !task.site ? 'bg-bg-sunken' : 'bg-accent-tint',
         )}
       >

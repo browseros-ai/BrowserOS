@@ -65,7 +65,7 @@ export function AgentRunningCard({
       <AspectRatio
         ratio={16 / 9}
         animated={false}
-        className="rounded-[10px] bg-bg-sunken shadow-shot"
+        className="rounded-md bg-bg-sunken shadow-shot"
       >
         <MiniScreencast
           site={site}

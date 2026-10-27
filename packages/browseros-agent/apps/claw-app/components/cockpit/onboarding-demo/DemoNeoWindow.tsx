@@ -22,7 +22,7 @@ function AgentTag({
   return (
     <span
       className={cn(
-        'flex h-[19px] flex-none items-center gap-[5px] rounded-[10px] bg-[#EAF1FF] px-2 font-medium font-mono text-[#0254EC] text-[11px] leading-3 transition-opacity duration-300',
+        'flex h-[19px] flex-none items-center gap-[5px] rounded-md bg-[#EAF1FF] px-2 font-medium font-mono text-[#0254EC] text-[11px] leading-3 transition-opacity duration-300',
         state === 'off' && 'opacity-0',
       )}
     >
@@ -55,7 +55,7 @@ function SearchField({
   return (
     <div
       className={cn(
-        'flex flex-1 flex-col gap-0.5 rounded-[10px] border px-3 py-1.5 transition-[border-color,box-shadow,background-color] duration-300',
+        'flex flex-1 flex-col gap-0.5 rounded-lg border px-3 py-1.5 transition-[border-color,box-shadow,background-color] duration-300',
         lit
           ? 'border-[#0254EC] bg-[#F4F8FF] shadow-[0_0_0_3px_rgb(2_84_236/0.14)]'
           : set
@@ -94,13 +94,15 @@ export function DemoNeoWindow({
   agent: string
 }) {
   const typed = frame.url.length > 0
+  // macOS draws this window frame, not neo, so it keeps the OS's 12px
+  // corners instead of following the app's radius scale.
   return (
-    <div className="flex size-full flex-col overflow-hidden rounded-xl bg-white text-[#01123F] shadow-[0_0_0_1px_rgb(1_18_63/0.1),0_40px_70px_-30px_rgb(1_18_63/0.45),0_10px_24px_-12px_rgb(1_18_63/0.2)]">
+    <div className="flex size-full flex-col overflow-hidden rounded-[12px] bg-white text-[#01123F] shadow-[0_0_0_1px_rgb(1_18_63/0.1),0_40px_70px_-30px_rgb(1_18_63/0.45),0_10px_24px_-12px_rgb(1_18_63/0.2)]">
       <div className="flex h-[38px] flex-none items-end gap-1.5 bg-[#EAF1FF] pr-3 pl-3.5">
         <span className="self-center pr-2.5">
           <TrafficLights size={11} />
         </span>
-        <div className="flex h-[31px] w-60 flex-none items-center gap-[9px] rounded-t-[9px] bg-white pr-[9px] pl-3">
+        <div className="flex h-[31px] w-60 flex-none items-center gap-[9px] rounded-t-md bg-white pr-[9px] pl-3">
           <i
             className={cn(
               'size-[13px] flex-none rounded-[3px] transition-colors duration-300',
@@ -230,7 +232,7 @@ export function DemoNeoWindow({
               <b className="font-bold text-[17px] leading-[22px]">
                 To New York · Fri
               </b>
-              <span className="mr-[18px] flex h-6 items-center rounded-xl bg-[#EAF1FF] px-2.5 font-medium font-mono text-[#0254EC] text-[11.5px] leading-[14px]">
+              <span className="mr-[18px] flex h-6 items-center rounded-md bg-[#EAF1FF] px-2.5 font-medium font-mono text-[#0254EC] text-[11.5px] leading-[14px]">
                 Checked {frame.checked}/5
               </span>
             </div>
@@ -246,7 +248,7 @@ export function DemoNeoWindow({
                 aria-hidden
                 style={{ top: (frame.ring ?? 0) * ROW_HEIGHT }}
                 className={cn(
-                  'pointer-events-none absolute inset-x-0 h-9 rounded-[10px] transition-[top,opacity,background-color,box-shadow] duration-500 ease-out',
+                  'pointer-events-none absolute inset-x-0 h-9 rounded-md transition-[top,opacity,background-color,box-shadow] duration-500 ease-out',
                   frame.ring === null ? 'opacity-0' : 'opacity-100',
                   frame.ringSettled
                     ? 'bg-[#F4F8FF] shadow-[0_0_0_1.5px_#9DBBF5]'
@@ -278,7 +280,7 @@ export function DemoNeoWindow({
                       {index === DEMO_CHEAPEST_ROW && (
                         <span
                           className={cn(
-                            'flex h-6 items-center rounded-xl bg-[#0254EC] px-[11px] font-mono font-semibold text-[11.5px] text-white leading-[14px] transition-[opacity,transform] duration-400 ease-out',
+                            'flex h-6 items-center rounded-md bg-[#0254EC] px-[11px] font-mono font-semibold text-[11.5px] text-white leading-[14px] transition-[opacity,transform] duration-400 ease-out',
                             frame.tagged ? 'opacity-100' : 'scale-85 opacity-0',
                           )}
                         >
