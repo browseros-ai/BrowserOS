@@ -110,7 +110,8 @@ function SaveTip() {
  * sit above that link only because they are positioned and come later in the
  * row; a z-index there would trap the edit dialog, which renders in place,
  * under the rows below it. The menu stays hidden until the row is hovered or
- * focused, except on touch screens, which have no hover to reveal it.
+ * focused, except on touch screens, which have no hover to reveal it. On
+ * phones, Copy steps aside while the menu is open so the name keeps its room.
  */
 function SkillRow({ skill }: { skill: Skill }) {
   return (
@@ -137,14 +138,14 @@ function SkillRow({ skill }: { skill: Skill }) {
         </span>
         <RunCount
           runCount={skill.runCount}
-          className="text-left leading-[18px] sm:hidden"
+          className="truncate text-left leading-[18px] sm:hidden"
         />
       </span>
       <RunCount
         runCount={skill.runCount}
         className="hidden w-24 shrink-0 text-right leading-4 sm:block"
       />
-      <span className="relative flex w-[76px] shrink-0 justify-end">
+      <span className="relative flex w-[76px] shrink-0 justify-end max-sm:group-has-[[aria-expanded=true]]:hidden">
         <RunSkillButton
           name={skill.name}
           variant="ghost"
