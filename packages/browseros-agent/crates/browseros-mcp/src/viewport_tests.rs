@@ -164,6 +164,9 @@ impl Native {
                 json!({"layoutViewport": viewport, "cssLayoutViewport": viewport})
             }
             "Page.captureScreenshot" => json!({"data": "aGk="}),
+            // The viewport check reads the page in BrowserOS's isolated world.
+            "Page.getFrameTree" => json!({"frameTree": {"frame": {"id": "target-1"}}}),
+            "Page.createIsolatedWorld" => json!({"executionContextId": 1}),
             _ => json!({}),
         }
     }
