@@ -153,6 +153,10 @@ impl Native {
         }
     }
 
+    fn close_tab(&self, tab: i64) {
+        self.lock().tabs.retain(|entry| entry["tabId"] != tab);
+    }
+
     fn set_window_state(&self, id: i64, state: &str) {
         if let Some(window) = self.lock().windows.get_mut(&id) {
             window.window_state = state.to_string();
@@ -398,6 +402,7 @@ impl CdpConnection for Native {
 struct Fixture {
     native: Arc<Native>,
     session: Arc<BrowserSession>,
+    viewports: Arc<Viewports>,
     view: BrowserView,
 }
 
@@ -406,11 +411,12 @@ impl Fixture {
     fn new(tabs: &[(i64, i64)]) -> Self {
         let native = Native::new(tabs);
         let session = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
-        let view = BrowserView::unbound(session.clone(), None)
-            .with_viewports(Arc::new(Viewports::default()));
+        let viewports = Arc::new(Viewports::default());
+        let view = BrowserView::unbound(session.clone(), None).with_viewports(viewports.clone());
         Self {
             native,
             session,
+            viewports,
             view,
         }
     }
@@ -1388,5 +1394,24 @@ async fn tests_that_a_dialog_blocked_page_never_waits_for_its_window() -> TestRe
     .ok_or("a mode change on a dialog-blocked page must be refused")?;
     assert!(refused.to_string().contains("dialog"), "{refused}");
     drop(held);
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_closed_tabs_and_their_windows_are_forgotten() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10), (2, 20), (3, 30)]);
+    for tab in [1, 2] {
+        let page = fixture.page(tab).await?;
+        fixture.set(&page, ViewportMode::Mobile, None).await?;
+    }
+    assert_eq!(fixture.viewports.tracked(), (2, 2));
+    fixture.native.close_tab(1);
+    fixture.native.close_tab(2);
+    fixture.view.list_pages().await?;
+
+    // Whatever is added next first drops what closed, so a long-lived server stays bounded.
+    let page = fixture.page(3).await?;
+    fixture.set(&page, ViewportMode::Desktop, None).await?;
+    assert_eq!(fixture.viewports.tracked(), (1, 1));
     Ok(())
 }

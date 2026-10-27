@@ -263,8 +263,9 @@ impl Viewports {
         if view.signals().pending_dialog(&page).is_some() {
             return Err(dialog_open());
         }
+        self.forget_closed(view).await;
         let info = view.page(page.clone()).await?;
-        let mut slot = self.lock_window(info.window_id).await;
+        let mut slot = self.lock_window(view, info.window_id).await;
         if view.signals().pending_dialog(&page).is_some() {
             return Err(dialog_open());
         }
@@ -316,7 +317,7 @@ impl Viewports {
             return Ok(self.hold(view, page).await);
         }
         let info = view.page(page.clone()).await?;
-        let mut slot = self.lock_window(info.window_id).await;
+        let mut slot = self.lock_window(view, info.window_id).await;
         // Re-read under the lock: a setViewport may have changed the tab while we waited.
         let Some(tab) = self.tab(&page) else {
             return Ok(ViewportLease {
@@ -368,9 +369,25 @@ impl Viewports {
             .await
             .and_then(|info| info.window_id);
         ViewportLease {
-            _shared: self.share_window(window).await,
+            _shared: self.share_window(view, window).await,
             _exclusive: None,
         }
+    }
+
+    /// Tab records and window slots held, for tests of bounded state.
+    #[cfg(test)]
+    pub(crate) fn tracked(&self) -> (usize, usize) {
+        let tabs = self
+            .tabs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
+        let windows = self
+            .windows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
+        (tabs, windows)
     }
 
     fn tab(&self, page: &PageId) -> Option<Tab> {
@@ -395,7 +412,35 @@ impl Viewports {
             .remove(page);
     }
 
-    fn slot(&self, window: WindowId) -> Arc<RwLock<WindowSlot>> {
+    /// Drops tab records and idle window slots the registry no longer knows, so a long-lived
+    /// server keeps state only for open tabs and windows. Runs only where state grows.
+    async fn forget_closed(&self, view: &BrowserView) {
+        let open = view.known_page_ids().await;
+        let mut windows = std::collections::BTreeSet::new();
+        for page in &open {
+            if let Some(window) = view.cached_page(page).await.and_then(|info| info.window_id) {
+                windows.insert(window);
+            }
+        }
+        self.tabs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|page, _| open.contains(page));
+        self.windows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|window, slot| windows.contains(window) || Arc::strong_count(slot) > 1);
+    }
+
+    async fn slot(&self, view: &BrowserView, window: WindowId) -> Arc<RwLock<WindowSlot>> {
+        let known = self
+            .windows
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(&window);
+        if !known {
+            self.forget_closed(view).await;
+        }
         self.windows
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -406,16 +451,18 @@ impl Viewports {
 
     async fn lock_window(
         &self,
+        view: &BrowserView,
         window: Option<WindowId>,
     ) -> Option<OwnedRwLockWriteGuard<WindowSlot>> {
-        Some(self.slot(window?).write_owned().await)
+        Some(self.slot(view, window?).await.write_owned().await)
     }
 
     async fn share_window(
         &self,
+        view: &BrowserView,
         window: Option<WindowId>,
     ) -> Option<OwnedRwLockReadGuard<WindowSlot>> {
-        Some(self.slot(window?).read_owned().await)
+        Some(self.slot(view, window?).await.read_owned().await)
     }
 
     async fn chrome_version(&self, view: &BrowserView) -> Result<String, CoreError> {
