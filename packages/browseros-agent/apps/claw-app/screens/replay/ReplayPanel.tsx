@@ -132,7 +132,7 @@ export function ReplayPanel({
               speed={playback.speed}
             />
           ) : (
-            <div className="flex flex-1 items-center justify-center rounded-2xl border border-border-2 bg-card text-ink-3 text-sm shadow-sm">
+            <div className="flex flex-1 items-center justify-center rounded-md border border-border-2 bg-card text-ink-3 text-sm shadow-sm">
               No visual recording for this tab
             </div>
           )}

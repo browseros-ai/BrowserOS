@@ -57,7 +57,7 @@ export function ReplayViewport({
   speed,
 }: ReplayViewportProps) {
   return (
-    <div className="relative flex flex-1 flex-col overflow-hidden rounded-2xl border border-border-2 bg-card shadow-sm">
+    <div className="relative flex flex-1 flex-col overflow-hidden rounded-md border border-border-2 bg-card shadow-sm">
       <Chrome url={url ?? site} />
       <div className="relative flex flex-1 items-stretch justify-center overflow-hidden bg-bg-sunken">
         <PlayerCanvas
@@ -81,7 +81,7 @@ export function ReplayPoster({ url, src }: { url: string; src?: string }) {
   return (
     <div
       data-replay-poster
-      className="relative flex flex-1 flex-col overflow-hidden rounded-2xl border border-border-2 bg-card shadow-sm"
+      className="relative flex flex-1 flex-col overflow-hidden rounded-md border border-border-2 bg-card shadow-sm"
     >
       <Chrome url={url} />
       <div className="relative flex flex-1 overflow-hidden bg-bg-sunken">
