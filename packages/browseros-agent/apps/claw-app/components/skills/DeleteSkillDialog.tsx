@@ -24,7 +24,7 @@ interface DeleteSkillDialogProps {
   onDeleted?: () => void
 }
 
-/** Asks once before a saved task, its phrase and its runs go away. */
+/** Asks once before a skill, its phrase and its runs go away. */
 export function DeleteSkillDialog({
   name,
   description,
@@ -36,24 +36,24 @@ export function DeleteSkillDialog({
   const remove = useDeleteSkill({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: useSkills.getKey() })
-      toastSuccess('Deleted the saved task')
+      toastSuccess('Deleted the skill')
       onOpenChange(false)
       onDeleted?.()
     },
-    onError: (error) => toastApiError('Couldn’t delete the saved task', error),
+    onError: (error) => toastApiError('Couldn’t delete the skill', error),
   })
 
   return (
     <CenterMorphModal open={open} onOpenChange={onOpenChange}>
       <CenterMorphModalContent
-        ariaLabel="Delete this saved task?"
+        ariaLabel="Delete this skill?"
         showCloseButton={false}
         className="max-w-[440px] rounded-[22px] border-border-2 bg-card"
       >
         <div className="flex flex-col gap-5 p-6">
           <div className="flex flex-col gap-2">
             <h2 className="font-bold text-[20px] text-cyanotype-ink tracking-[-0.015em]">
-              Delete this saved task?
+              Delete this skill?
             </h2>
             <p className="text-[14.5px] text-ink-2">
               “{description}” and its phrase{' '}

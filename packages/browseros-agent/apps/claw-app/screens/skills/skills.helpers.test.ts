@@ -70,7 +70,7 @@ describe('parseSkillBody', () => {
 describe('usedLabel', () => {
   const now = new Date(2026, 9, 23, 9).getTime()
 
-  it('says when a saved task has never run', () => {
+  it('says when a skill has never run', () => {
     expect(usedLabel(0, undefined, now)).toBe('Not used yet')
   })
 

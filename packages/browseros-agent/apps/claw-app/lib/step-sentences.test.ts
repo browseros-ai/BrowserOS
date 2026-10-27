@@ -144,7 +144,7 @@ describe('describeStep', () => {
 
   it('describes the human-help and saved-task tools', () => {
     expect(describeStep(call('request_human_help'))).toBe('Asked you for help')
-    expect(describeStep(call('save_skill'))).toBe('Saved this as a saved task')
+    expect(describeStep(call('save_skill'))).toBe('Saved this as a skill')
   })
 
   it('shortens very long page titles', () => {

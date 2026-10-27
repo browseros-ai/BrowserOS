@@ -1,5 +1,6 @@
 import { Eye, Hand, Square } from 'lucide-react'
 import { AgentProgress } from '@/components/agents/loading-states/agent-progress'
+import { SiteChip } from '@/components/favicon/SiteChip'
 import { AgentMark } from '@/components/harness/AgentMark'
 import { AnimatedBadge } from '@/components/motion/animated-badge'
 import { AspectRatio } from '@/components/motion/aspect-ratio'
@@ -44,6 +45,7 @@ export function AgentRunningCard({
     : tab
       ? siteOf(tab.url)
       : 'No page yet'
+  const pageUrl = help?.url ?? tab?.url
   const pages = session.browserTabs.length
   const startedSeconds = Math.max(0, (Date.now() - session.startedAt) / 1000)
 
@@ -82,6 +84,13 @@ export function AgentRunningCard({
               ? 'Waiting for you'
               : 'Working'}
         </AnimatedBadge>
+        {pageUrl ? (
+          <SiteChip
+            site={pageUrl}
+            size="md"
+            className="absolute bottom-2 left-2"
+          />
+        ) : null}
       </AspectRatio>
       <div className="flex flex-1 flex-col gap-1 px-1 pt-3 pb-0.5">
         <h3 className="font-bold text-[15.5px] text-cyanotype-ink leading-[1.3] tracking-[-0.01em]">

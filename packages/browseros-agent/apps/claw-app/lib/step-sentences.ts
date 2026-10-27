@@ -365,7 +365,7 @@ export function describeStep(dispatch: ToolDispatchRow): string {
     case 'await_human_help':
       return 'Waited for you'
     case 'save_skill':
-      return 'Saved this as a saved task'
+      return 'Saved this as a skill'
     case 'credentials':
       return `Used a saved sign-in on ${onPage}`
     default:

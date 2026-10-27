@@ -28,10 +28,7 @@ import {
   usageComparison,
 } from './savings.helpers'
 
-/**
- * Time saved in words, with AI token usage with and without neo drawn underneath.
- * Token counts stay in Details, so the picture carries the point on its own.
- */
+/** Time saved in words, with the AI tokens neo saved drawn and counted underneath. */
 export function SavingsCard({ stats }: { stats: CockpitStats }) {
   const { sessionCount, humanTimeSavedMs } = stats.allTime
   const saved = roundTimeSaved(humanTimeSavedMs)
@@ -130,12 +127,13 @@ function SavingsDialog({ stats }: { stats: CockpitStats }) {
               label="steps taken"
             />
           </dl>
-          {usage ? <UsageBars usage={usage} withNumbers /> : null}
+          {usage ? <UsageBars usage={usage} large /> : null}
           <p className="text-[13.5px] text-ink-3">
-            Tokens are the small pieces of text an AI reads and writes. neo
-            hands your AI agents short descriptions of each page instead of
-            screenshots, so they use far fewer. “Without neo” is our estimate
-            for the same tasks done from screenshots.
+            AI tokens are the small pieces of text an AI reads and writes, and
+            what AI use is measured and paid in. neo hands your AI agents short
+            descriptions of each page instead of screenshots, so they use far
+            fewer. “Without neo” is our estimate for the same tasks done from
+            screenshots.
           </p>
         </div>
       </CenterMorphModalContent>
@@ -154,64 +152,70 @@ function Figure({ value, label }: { value: string; label: string }) {
   )
 }
 
+// "Without neo" is amber, the cost, rather than a gray that reads as switched off.
+const WITHOUT_NEO_BAR =
+  'bg-[color-mix(in_srgb,var(--color-amber)_62%,var(--color-card))]'
+
 function UsageBars({
   usage,
-  withNumbers = false,
+  large = false,
   className,
 }: {
   usage: UsageComparison
-  withNumbers?: boolean
+  large?: boolean
   className?: string
 }) {
-  const rows = [
-    { label: 'With neo', value: usage.withNeo, bar: 'bg-green' },
-    {
-      label: 'Without neo',
-      value: usage.withoutNeo,
-      bar: 'bg-ink-3/30',
-    },
-  ]
+  const lane = cn('flex min-w-0 gap-[3px]', large ? 'h-6' : 'h-5')
+  const row = cn(
+    'grid items-center gap-3 text-[13.5px] text-ink-2',
+    large
+      ? 'grid-cols-[100px_minmax(0,1fr)_52px]'
+      : 'grid-cols-[84px_minmax(0,1fr)_44px] md:grid-cols-[92px_minmax(0,1fr)_48px]',
+  )
   return (
     <div
       role="img"
-      aria-label={`AI token usage: ${usage.percentLess}% less with neo than without`}
-      className={cn('grid gap-2', withNumbers && 'gap-3', className)}
+      aria-label={`${formatTokens(usage.saved)} AI tokens saved, ${usage.percentLess}% less with neo than without. With neo: ${formatTokens(usage.withNeo)} tokens. Without neo: ${formatTokens(usage.withoutNeo)} tokens.`}
+      className={cn('grid gap-2.5', className)}
     >
-      <div className="flex items-baseline justify-between font-semibold text-[13px] text-ink-3">
-        <span>AI token usage</span>
-        <span className="font-bold text-green-ink">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <span className="text-[14px] text-ink-2">
+          <strong className="font-bold text-[16px] text-cyanotype-ink tracking-[-0.01em]">
+            {formatTokens(usage.saved)}
+          </strong>{' '}
+          AI tokens saved
+        </span>
+        <span className="rounded-full bg-green-tint px-2.5 py-0.5 font-semibold text-[12.5px] text-green-ink">
           {usage.percentLess}% less
         </span>
       </div>
-      {rows.map((row) => (
-        <div
-          key={row.label}
-          className={cn(
-            'grid items-center gap-3 text-[13.5px] text-ink-2',
-            withNumbers
-              ? 'grid-cols-[100px_minmax(0,1fr)_52px]'
-              : 'grid-cols-[84px_minmax(0,1fr)] md:grid-cols-[92px_minmax(0,1fr)]',
-          )}
-        >
-          <span>{row.label}</span>
+      <div className={row}>
+        <span>With neo</span>
+        <span className={lane}>
           <span
-            className={cn(
-              'overflow-hidden rounded-full bg-border-2/60',
-              withNumbers ? 'h-3.5' : 'h-2.5',
-            )}
+            className="shrink rounded-full bg-green"
+            style={{ flexBasis: barWidth(usage.withNeo, usage.withoutNeo) }}
+          />
+          <span
+            className="grid shrink place-items-center overflow-hidden rounded-full border-[1.5px] border-green/70 border-dashed bg-green/10 font-semibold text-[11.5px] text-green-ink"
+            style={{ flexBasis: barWidth(usage.saved, usage.withoutNeo) }}
           >
-            <span
-              className={cn('block h-full rounded-full', row.bar)}
-              style={{ width: barWidth(row.value, usage.withoutNeo) }}
-            />
+            <span className="truncate px-1.5">saved</span>
           </span>
-          {withNumbers ? (
-            <span className="text-right font-mono text-[13px]">
-              {formatTokens(row.value)}
-            </span>
-          ) : null}
-        </div>
-      ))}
+        </span>
+        <span className="text-right font-semibold text-[13px] text-ink">
+          {formatTokens(usage.withNeo)}
+        </span>
+      </div>
+      <div className={row}>
+        <span>Without neo</span>
+        <span className={lane}>
+          <span className={cn('w-full rounded-full', WITHOUT_NEO_BAR)} />
+        </span>
+        <span className="text-right font-semibold text-[13px] text-ink">
+          {formatTokens(usage.withoutNeo)}
+        </span>
+      </div>
     </div>
   )
 }

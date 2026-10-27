@@ -1,8 +1,15 @@
 import { Globe } from 'lucide-react'
+import { Favicon } from '@/components/favicon/Favicon'
 import { cn } from '@/lib/utils'
 
-/** The square that stands for the website a saved task works on. */
-export function SiteBadge({ className }: { className?: string }) {
+/** The square that stands for the website a skill works on: its icon, or a globe. */
+export function SiteBadge({
+  site,
+  className,
+}: {
+  site?: string
+  className?: string
+}) {
   return (
     <span
       aria-hidden
@@ -11,7 +18,7 @@ export function SiteBadge({ className }: { className?: string }) {
         className,
       )}
     >
-      <Globe className="size-[18px]" />
+      {site ? <Favicon site={site} /> : <Globe className="size-[18px]" />}
     </span>
   )
 }

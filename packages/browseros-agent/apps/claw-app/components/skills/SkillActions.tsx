@@ -14,7 +14,7 @@ import { SkillFormDialog } from './SkillFormDialog'
 
 interface SkillActionsProps {
   skill: Pick<Skill, 'name' | 'description' | 'site'>
-  /** The saved task's file, when the page already has it. */
+  /** The skill's file, when the page already has it. */
   body?: string
   onDeleted?: () => void
 }

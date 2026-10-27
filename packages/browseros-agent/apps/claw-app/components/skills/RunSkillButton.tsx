@@ -14,7 +14,7 @@ interface RunSkillButtonProps {
   className?: string
 }
 
-/** Copies the phrase a person pastes into one of their AI agents to run a saved task. */
+/** Copies the phrase a person pastes into one of their AI agents to run a skill. */
 export function RunSkillButton({ name, className }: RunSkillButtonProps) {
   const phrase = skillCommand(name)
   return (
