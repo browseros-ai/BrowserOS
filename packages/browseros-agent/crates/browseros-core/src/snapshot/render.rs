@@ -7,7 +7,7 @@ use crate::{
     },
 };
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const IFRAME_ROLES: &[&str] = &["Iframe", "iframe"];
 
@@ -52,13 +52,14 @@ pub fn render_snapshot<'a>(nodes: &'a [AxNode], opts: &mut RenderOptions<'a>) ->
         .collect::<HashMap<_, _>>();
     let mut ctx = RenderContext {
         by_id,
+        card_forms: card_form_scopes(nodes),
         lines: Vec::new(),
         iframes: Vec::new(),
         opts,
     };
 
     for root_id in entry_node_ids(nodes) {
-        ctx.visit(&root_id, 0);
+        ctx.visit(&root_id, 0, false);
     }
 
     RenderResult {
@@ -82,16 +83,19 @@ pub fn apply_snapshot_options(text: &str, options: SnapshotOptions) -> String {
 
 struct RenderContext<'a, 'b> {
     by_id: HashMap<String, &'a AxNode>,
+    /// See [`card_form_scopes`].
+    card_forms: HashSet<String>,
     lines: Vec<String>,
     iframes: Vec<IframeStitch>,
     opts: &'b mut RenderOptions<'a>,
 }
 
 impl RenderContext<'_, '_> {
-    fn visit(&mut self, node_id: &str, depth: usize) {
+    fn visit(&mut self, node_id: &str, depth: usize, in_card_form: bool) {
         let Some(node) = self.by_id.get(node_id).copied() else {
             return;
         };
+        let in_card_form = in_card_form || self.card_forms.contains(node_id);
 
         let role = if node.ignored.unwrap_or(false) {
             None
@@ -111,7 +115,7 @@ impl RenderContext<'_, '_> {
 
         if is_dropped(role.as_deref(), &name, is_cursor_hit) {
             for child_id in node.child_ids.as_deref().unwrap_or(&[]) {
-                self.visit(child_id, depth);
+                self.visit(child_id, depth, in_card_form);
             }
             return;
         }
@@ -137,10 +141,10 @@ impl RenderContext<'_, '_> {
             return;
         }
 
-        let line = format_line(node, &role, &name, absolute_depth, self.opts);
+        let line = format_line(node, &role, &name, absolute_depth, in_card_form, self.opts);
         self.lines.push(line);
         for child_id in node.child_ids.as_deref().unwrap_or(&[]) {
-            self.visit(child_id, depth + 1);
+            self.visit(child_id, depth + 1, in_card_form);
         }
     }
 }
@@ -251,6 +255,7 @@ fn format_line(
     role: &str,
     name: &str,
     depth: usize,
+    in_card_form: bool,
     opts: &mut RenderOptions<'_>,
 ) -> String {
     let mut line = format!("{}- {role}", "  ".repeat(depth));
@@ -307,7 +312,7 @@ fn format_line(
         && !value.is_empty()
     {
         line.push_str(": ");
-        line.push_str(&json_quote(&visible_value(name, &value)));
+        line.push_str(&json_quote(&visible_value(name, &value, in_card_form)));
     }
 
     line
@@ -315,17 +320,14 @@ fn format_line(
 
 /// Card numbers and security codes stay out of snapshots. After a payment card
 /// fill they sit in plain text fields, unlike passwords, which the browser
-/// already masks. A checksum-valid 13-19 digit value keeps its last four
-/// digits; a 3-4 digit value in a field named like a security code is hidden.
-fn visible_value<'a>(name: &str, value: &'a str) -> std::borrow::Cow<'a, str> {
-    if !value
-        .chars()
-        .all(|c| c.is_ascii_digit() || c == ' ' || c == '-')
-    {
+/// already masks. A card number keeps its last four digits. A 3-4 digit value
+/// is hidden inside a card form, whatever its field is called, and elsewhere
+/// in a field named like a security code.
+fn visible_value<'a>(name: &str, value: &'a str, in_card_form: bool) -> std::borrow::Cow<'a, str> {
+    let Some(digits) = digit_run(value) else {
         return value.into();
-    }
-    let digits: Vec<u32> = value.chars().filter_map(|c| c.to_digit(10)).collect();
-    if (13..=19).contains(&digits.len()) && passes_luhn(&digits) {
+    };
+    if is_card_number(&digits) {
         let last_four: String = digits[digits.len() - 4..]
             .iter()
             .map(|digit| char::from_digit(*digit, 10).unwrap_or('0'))
@@ -334,20 +336,76 @@ fn visible_value<'a>(name: &str, value: &'a str) -> std::borrow::Cow<'a, str> {
     }
     let name = name.to_ascii_lowercase();
     if (3..=4).contains(&digits.len())
-        && [
-            "cvc",
-            "cvv",
-            "csc",
-            "security code",
-            "card code",
-            "verification",
-        ]
-        .iter()
-        .any(|label| name.contains(label))
+        && (in_card_form
+            || [
+                "cvc",
+                "cvv",
+                "csc",
+                "security code",
+                "card code",
+                "verification",
+            ]
+            .iter()
+            .any(|label| name.contains(label)))
     {
         return "•••".into();
     }
     value.into()
+}
+
+/// The digits of a value made only of digits, spaces and dashes.
+fn digit_run(value: &str) -> Option<Vec<u32>> {
+    value
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == ' ' || c == '-')
+        .then(|| value.chars().filter_map(|c| c.to_digit(10)).collect())
+}
+
+fn is_card_number(digits: &[u32]) -> bool {
+    (13..=19).contains(&digits.len()) && passes_luhn(digits)
+}
+
+/// The nodes whose subtrees are card forms: for each value holding a card
+/// number, its nearest `form` ancestor, or its root when it has none.
+fn card_form_scopes(nodes: &[AxNode]) -> HashSet<String> {
+    let parents: HashMap<&str, &str> = nodes
+        .iter()
+        .flat_map(|node| {
+            node.child_ids
+                .iter()
+                .flatten()
+                .map(move |child| (child.as_str(), node.node_id.as_str()))
+        })
+        .collect();
+    let roles: HashMap<&str, Option<String>> = nodes
+        .iter()
+        .map(|node| (node.node_id.as_str(), str_val(node.role.as_ref())))
+        .collect();
+    let mut scopes = HashSet::new();
+    for node in nodes {
+        let holds_card = str_val(node.value.as_ref())
+            .and_then(|value| digit_run(&value))
+            .is_some_and(|digits| is_card_number(&digits));
+        if !holds_card {
+            continue;
+        }
+        let mut scope = node.node_id.as_str();
+        // Bounded by the node count, so a malformed cyclic tree can't spin.
+        for _ in 0..nodes.len() {
+            let Some(parent) = parents.get(scope) else {
+                break;
+            };
+            scope = parent;
+            if roles
+                .get(scope)
+                .is_some_and(|role| role.as_deref() == Some("form"))
+            {
+                break;
+            }
+        }
+        scopes.insert(scope.to_owned());
+    }
+    scopes
 }
 
 fn passes_luhn(digits: &[u32]) -> bool {
@@ -927,8 +985,11 @@ mod tests {
         let mut refs = RefMap::default();
         let text = render(
             &[
-                ax("1", "RootWebArea", &["2", "3", "4", "5"]),
+                ax("1", "RootWebArea", &["6", "7"]),
+                ax("6", "form", &["2"]),
                 field("2", "Card number", "4111 1111 1111 1111"),
+                // Outside the card form, only a security-code name hides a value.
+                ax("7", "form", &["3", "4", "5"]),
                 field("3", "CVC", "123"),
                 field("4", "Quantity", "123"),
                 field("5", "Order number", "4111111111111112"),
@@ -941,5 +1002,35 @@ mod tests {
         assert!(text.contains("\"Quantity\": \"123\""), "{text}");
         // Not checksum-valid, so not a card number.
         assert!(text.contains("4111111111111112"), "{text}");
+    }
+
+    #[test]
+    fn card_forms_hide_short_numbers_whatever_the_field_is_called() {
+        let field = |id: &str, label: &str, value: &str| {
+            let mut node = ax(id, "textbox", &[]);
+            node.name = Some(name(label));
+            node.value = Some(AxValue {
+                value_type: "string".to_string(),
+                value: Some(json!(value)),
+            });
+            node
+        };
+        let mut refs = RefMap::default();
+        let text = render(
+            &[
+                ax("1", "RootWebArea", &["2", "6"]),
+                ax("2", "form", &["3", "4", "5"]),
+                field("3", "Numéro de carte", "4111 1111 1111 1111"),
+                field("4", "Code", "123"),
+                field("5", "Mois", "12"),
+                ax("6", "form", &["7"]),
+                field("7", "Quantity", "123"),
+            ],
+            &mut refs,
+        );
+        assert!(text.contains("\"Code\": \"•••\""), "{text}");
+        assert!(text.contains("\"Mois\": \"12\""), "{text}");
+        // Another form on the page keeps its numbers.
+        assert!(text.contains("\"Quantity\": \"123\""), "{text}");
     }
 }
