@@ -1,6 +1,7 @@
-import { ExternalLink, Globe } from 'lucide-react'
+import { ExternalLink } from 'lucide-react'
 import { ButtonLink } from '@/components/motion/button/base'
 import { Card } from '@/components/motion/card'
+import { SiteBadge } from '@/components/skills/SiteBadge'
 import type { VisitedPage } from './task-detail.helpers'
 
 /** The web pages a task went to, each with a way to open it again. */
@@ -23,12 +24,7 @@ export function PagesVisited({ pages }: { pages: VisitedPage[] }) {
             key={page.url}
             className="flex items-center gap-3.5 px-4 py-3 sm:px-[18px]"
           >
-            <span
-              aria-hidden
-              className="grid size-8 shrink-0 place-items-center rounded-lg bg-bg-sunken text-ink-3"
-            >
-              <Globe className="size-4" />
-            </span>
+            <SiteBadge site={page.url} className="size-8 rounded-lg" />
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="truncate font-semibold text-[15px] text-cyanotype-ink">
                 {page.title}
