@@ -36,7 +36,7 @@ var (
 const (
 	watchRunLockMode           = "watch"
 	defaultClawWatchServerPort = 9200
-	defaultClawWatchStateDir   = ".browserclaw-dev"
+	clawWatchStateDirName      = "browserclaw"
 	rustClawWatchPollInterval  = time.Second
 )
 
@@ -164,6 +164,9 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	if watchClaw {
+		proc.LogMsgf(proc.TagInfo, "Claw state: %s", envValue(env, "BROWSERCLAW_DIR"))
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -239,7 +242,7 @@ func buildWatchEnv(p proc.Ports, userDataDir string, claw bool) ([]string, error
 
 func buildWatchEnvWithBinaryResolution(p proc.Ports, userDataDir string, claw bool, binaryResolution browser.BinaryResolution) ([]string, error) {
 	env := proc.BuildEnv(p, "development")
-	stateKey, stateDir, err := resolveWatchProductStateDir(claw)
+	stateKey, stateDir, err := resolveWatchProductStateDir(claw, userDataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -261,12 +264,15 @@ func buildWatchEnvWithBinaryResolution(p proc.Ports, userDataDir string, claw bo
 	return env, nil
 }
 
-func resolveWatchProductStateDir(claw bool) (string, string, error) {
+// resolveWatchProductStateDir picks the product state root, honoring an env override.
+// BrowserOS neo state defaults to a directory inside the browser profile: it describes that
+// profile's tabs, sessions and target bindings, so it is per checkout for watch, fresh for
+// --new, guarded by the same run lock, and removed with the profile by dev:cleanup. A shared
+// root would let two dev servers open one database and close each other's live sessions.
+func resolveWatchProductStateDir(claw bool, userDataDir string) (string, string, error) {
 	key := "BROWSEROS_DIR"
-	dirName := devDirName
 	if claw {
 		key = "BROWSERCLAW_DIR"
-		dirName = defaultClawWatchStateDir
 	}
 	if override := strings.TrimSpace(os.Getenv(key)); override != "" {
 		absolute, err := filepath.Abs(expandTilde(override))
@@ -275,11 +281,14 @@ func resolveWatchProductStateDir(claw bool) (string, string, error) {
 		}
 		return key, absolute, nil
 	}
+	if claw {
+		return key, filepath.Join(userDataDir, clawWatchStateDirName), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", "", fmt.Errorf("resolve %s default: %w", key, err)
 	}
-	return key, filepath.Join(home, dirName), nil
+	return key, filepath.Join(home, devDirName), nil
 }
 
 // envValue returns the last value assigned to key in an environ-style slice.
@@ -456,7 +465,13 @@ func clawServerProcConfig(root string, env []string, p proc.Ports, userDataDir s
 		Restart: true,
 		Cmd:     []string{"cargo", "run", "-p", "claw-server", "--", "--config", sidecarPath},
 		BeforeStart: func() error {
-			if err := writeServerSidecarConfig(sidecarPath, filepath.Join(root, "apps/claw-server/resources"), userDataDir, p, envValue(env, "BROWSEROS_BINARY")); err != nil {
+			if err := proc.WriteSidecarConfig(sidecarPath, proc.SidecarConfigOptions{
+				Ports:         p,
+				ResourcesDir:  filepath.Join(root, "apps/claw-server/resources"),
+				ExecutionDir:  userDataDir,
+				BrowserBinary: envValue(env, "BROWSEROS_BINARY"),
+				DevMode:       true,
+			}); err != nil {
 				return err
 			}
 			return killPort(p.Server, 3*time.Second)
