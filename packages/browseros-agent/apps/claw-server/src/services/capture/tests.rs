@@ -759,25 +759,3 @@ async fn a_watcher_ends_at_shutdown() {
 
     assert!(next_watched(&mut watcher).await.is_none());
 }
-
-#[tokio::test(start_paused = true)]
-async fn a_watcher_shows_at_most_its_limit_of_watches() {
-    let h = harness();
-    let sessions = (1..=33).map(|n| format!("s{n}")).collect::<Vec<_>>();
-    for (n, session) in (1..).zip(&sessions) {
-        h.tabs.set(session, live(&[n]));
-    }
-    let mut watcher = h.hub.watcher(Quality::Low);
-
-    watcher.set(sessions.iter().map(|session| watch(session, None)));
-    h.browser.wait_for("Page.startScreencast", 32).await;
-    tokio::time::sleep(Duration::from_secs(5)).await;
-
-    let attached = h.browser.sent("Target.attachToTarget");
-    assert_eq!(attached.len(), 32);
-    assert!(
-        attached
-            .iter()
-            .all(|attach| attach.params["targetId"] != "target-33")
-    );
-}

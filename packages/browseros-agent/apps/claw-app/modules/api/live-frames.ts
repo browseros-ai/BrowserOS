@@ -1,3 +1,7 @@
+import type {
+  ScreencastFrameHeader,
+  ScreencastWatch,
+} from '@browseros/claw-api'
 import { useEffect, useState } from 'react'
 import { useApiBaseUrl } from './audit.hooks'
 
@@ -16,18 +20,12 @@ import { useApiBaseUrl } from './audit.hooks'
  * so a hidden cockpit lets the server stop capturing.
  */
 
-interface LiveWatch {
-  sessionId: string
-  /** Omitted follows the session's current tab. */
-  browserTabId?: number
-}
-
 type FrameListener = (jpeg: Blob) => void
 
 const RECONNECT_MIN_MS = 1000
 const RECONNECT_MAX_MS = 15_000
 
-function watchKey(watch: LiveWatch): string {
+function watchKey(watch: ScreencastWatch): string {
   return JSON.stringify([watch.sessionId, watch.browserTabId ?? null])
 }
 
@@ -38,7 +36,7 @@ function socketUrl(baseUrl: string): string {
 class LiveFrameFeed {
   private readonly watches = new Map<
     string,
-    { watch: LiveWatch; listeners: Set<FrameListener> }
+    { watch: ScreencastWatch; listeners: Set<FrameListener> }
   >()
   private socket: WebSocket | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -50,7 +48,7 @@ class LiveFrameFeed {
 
   constructor(private readonly url: string) {}
 
-  subscribe(watch: LiveWatch, listener: FrameListener): () => void {
+  subscribe(watch: ScreencastWatch, listener: FrameListener): () => void {
     const key = watchKey(watch)
     let entry = this.watches.get(key)
     if (!entry) {
@@ -148,12 +146,12 @@ class LiveFrameFeed {
     socket.send(message)
   }
 
-  /** Frame layout: u32 big-endian header length, JSON header, JPEG bytes. */
+  /** Frame layout: u32 big-endian header length, `ScreencastFrameHeader` JSON, JPEG bytes. */
   private deliver(data: unknown): void {
     if (!(data instanceof ArrayBuffer) || data.byteLength < 4) return
     const headerLength = new DataView(data).getUint32(0)
     if (4 + headerLength > data.byteLength) return
-    let header: LiveWatch
+    let header: ScreencastFrameHeader
     try {
       header = JSON.parse(
         new TextDecoder().decode(new Uint8Array(data, 4, headerLength)),

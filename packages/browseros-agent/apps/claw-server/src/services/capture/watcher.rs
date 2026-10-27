@@ -12,9 +12,6 @@ use tokio::{sync::Notify, task::JoinHandle};
 
 /// How long a watch that has nothing to show waits before trying again.
 const WATCH_RETRY: Duration = Duration::from_secs(1);
-/// Watches one viewer may hold. The set comes from the client, and each watch is a task that
-/// re-reads its session every second and may start a capture in the browser.
-const MAX_WATCHES: usize = 32;
 
 /// What a live view shows: a session's current tab, or one tab of it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -44,16 +41,13 @@ impl Watcher {
         }
     }
 
-    /// Replaces what this viewer watches with the first [`MAX_WATCHES`] of `watches`. A watch
-    /// left out releases its capture; a new one starts. A watch with nothing to show yet (an
+    /// Replaces what this viewer watches. A watch left out releases its capture; a new one
+    /// starts. A watch with nothing to show yet (an
     /// unknown session, no open tab, a closed pinned tab, a browser error) or whose stream ended
     /// is tried again every [`WATCH_RETRY`] for as long as it stays in the set, so errors never
     /// surface: such a watch simply has no frames.
     pub fn set(&mut self, watches: impl IntoIterator<Item = Watch>) {
-        let wanted = watches
-            .into_iter()
-            .take(MAX_WATCHES)
-            .collect::<HashSet<_>>();
+        let wanted = watches.into_iter().collect::<HashSet<_>>();
         // Aborting a task drops its stream, which is how its capture learns this viewer left.
         self.tasks.retain(|watch, task| {
             let keep = wanted.contains(watch);

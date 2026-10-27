@@ -174,3 +174,29 @@ async fn the_cockpit_receives_low_quality_frames_for_the_sessions_it_watches() -
     assert_eq!(jpeg, b"jpeg-s2");
     Ok(())
 }
+
+#[tokio::test]
+async fn closing_the_socket_releases_its_captures() -> anyhow::Result<()> {
+    let server = server().await?;
+    server.tabs.set("s1", live(&[5]));
+    let mut socket = connect(&server, EXTENSION_ORIGIN).await?;
+    socket
+        .send(Message::text(
+            json!({ "watch": [{ "sessionId": "s1" }] }).to_string(),
+        ))
+        .await?;
+    server.browser.wait_for("Page.startScreencast", 1).await;
+
+    socket.close(None).await?;
+
+    // The capture outlives its last viewer by a 5 s grace period, then stops.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while server.browser.sent("Page.stopScreencast").is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the capture kept running after the socket closed"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Ok(())
+}
