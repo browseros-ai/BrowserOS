@@ -3932,28 +3932,6 @@ class DockerImageWorkflowTest(unittest.TestCase):
             for step in job["steps"]:
                 self.assertNotIn("${{ inputs.", step.get("run", ""))
 
-    def test_keyless_images_carry_no_keys_and_publish_only_the_commit_tag(self):
-        triggers = self.workflow.get("on", self.workflow.get(True))
-        self.assertIs(triggers["workflow_dispatch"]["inputs"]["keys"]["default"], True)
-        refuse = self.jobs["server"]["steps"][0]
-        self.assertEqual(refuse["if"], "${{ !inputs.keys && inputs.latest }}")
-        self.assertIn("exit 1", refuse["run"])
-
-        prepare = next(step for step in self.jobs["verify"]["steps"] if step.get("id") == "keys")
-        self.assertEqual(prepare["env"]["KEYS"], "${{ inputs.keys }}")
-        keyless, keyed = prepare["run"].split("umask 077", 1)
-        self.assertIn('if [ "$KEYS" != true ]', keyless)
-        self.assertIn('echo "keyed=0" >> "$GITHUB_OUTPUT"', keyless)
-        self.assertIn("exit 0", keyless)
-        self.assertNotIn("KEY_FILE", keyless)
-        self.assertIn("KEY_FILE", keyed)
-
-        publish = {step.get("name"): step for step in self.jobs["publish"]["steps"]}
-        self.assertEqual(publish["Prepare build secrets"]["if"], "inputs.keys")
-        push = publish["Push amd64 and arm64"]
-        self.assertEqual(push["env"]["KEYS"], "${{ inputs.keys }}")
-        self.assertIn('if [ "$KEYS" != true ]; then args+=(--no-version-tag); fi', push["run"])
-
 
 if __name__ == "__main__":
     unittest.main()

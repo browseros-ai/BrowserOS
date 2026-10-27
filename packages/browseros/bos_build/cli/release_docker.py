@@ -29,10 +29,6 @@ def docker_command(
     latest: bool = typer.Option(
         False, "--latest", help="Also tag :latest; only for a promoted version"
     ),
-    version_tag: bool = typer.Option(
-        True, "--version-tag/--no-version-tag",
-        help="Also move :<version> to this image; off publishes only :<version>-<commit>",
-    ),
     platform: Optional[List[str]] = typer.Option(
         None, "--platform", help="Platform override, e.g. linux/amd64 (repeatable)"
     ),
@@ -64,7 +60,6 @@ def docker_command(
         repository=repository,
         push=push,
         latest=latest,
-        version_tag=version_tag,
         platforms=tuple(platform or ()),
         deb=deb.resolve() if deb else None,
         server_dir=server_dir.resolve() if server_dir else None,
