@@ -118,6 +118,8 @@ pub struct BrowserView {
     // call (Promise.all in a run) would open its own window. Shared by clones; the async lock
     // makes creation single-flight.
     default_window: Arc<tokio::sync::Mutex<Option<WindowId>>>,
+    /// Hosted viewport modes; `None` keeps every page's geometry as it is.
+    viewports: Option<Arc<crate::viewport::Viewports>>,
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -340,6 +342,7 @@ impl BrowserView {
             expected_creation_epoch: None,
             creation_receipts: Arc::new(std::sync::RwLock::new(HashMap::new())),
             default_window: Arc::new(tokio::sync::Mutex::new(None)),
+            viewports: None,
             signals: session.page_signals.clone(),
             signal_windows: Arc::new(std::sync::RwLock::new(BTreeSet::new())),
             session,
@@ -355,6 +358,40 @@ impl BrowserView {
     pub fn with_pointer(mut self, pointer: Pointer) -> Self {
         self.pointer = Some(pointer);
         self
+    }
+    /// Enables viewport modes for this view's calls. Without it, `set_viewport` is refused and
+    /// `prepare_viewport` does nothing.
+    #[must_use]
+    pub fn with_viewports(mut self, viewports: Arc<crate::viewport::Viewports>) -> Self {
+        self.viewports = Some(viewports);
+        self
+    }
+    #[must_use]
+    pub fn offers_viewport(&self) -> bool {
+        self.viewports.is_some()
+    }
+    pub async fn set_viewport(
+        &self,
+        page: PageId,
+        request: crate::viewport::ViewportRequest,
+    ) -> Result<crate::viewport::ViewportReport, CoreError> {
+        match &self.viewports {
+            Some(viewports) => viewports.set(self, page, request).await,
+            None => Err(CoreError::Message(
+                "setViewport is only available on a hosted BrowserOS neo server".to_string(),
+            )),
+        }
+    }
+    /// Restores the page's fixed viewport and window before a page operation. Hold the lease
+    /// until the operation, including its readback, is done.
+    pub async fn prepare_viewport(
+        &self,
+        page: PageId,
+    ) -> Result<crate::viewport::ViewportLease, CoreError> {
+        match &self.viewports {
+            Some(viewports) => viewports.prepare(self, page).await,
+            None => Ok(crate::viewport::ViewportLease::default()),
+        }
     }
     pub fn binding(&self) -> Option<&TargetBinding> {
         self.binding.as_ref()
@@ -481,7 +518,12 @@ impl BrowserView {
 
     /// Policy-free native discovery/cleanup still uses the capture's atomic transport guard.
     /// Callers own routing admission; using this helper does not authorize a new root method.
-    async fn send_at_capture(
+    /// The registry's last known incarnation of `page`, without a browser round trip or
+    /// admission. Only for decisions that touch nothing, such as which lock to wait on.
+    pub(crate) async fn cached_page(&self, page: &PageId) -> Option<PageInfo> {
+        self.session.pages.get_info(page.clone()).await
+    }
+    pub(crate) async fn send_at_capture(
         &self,
         method: &str,
         params: Value,
@@ -1047,6 +1089,10 @@ impl BrowserView {
     pub async fn input(&self, page: PageId) -> Result<Input, CoreError> {
         let access = self.page_access(page.clone()).await?;
         let observer = self.session.observe(page.clone()).await;
+        let scale = self
+            .viewports
+            .as_ref()
+            .map_or(1.0, |viewports| viewports.pointer_scale(&page));
         let input = match access {
             Some(access) => Input::new(
                 Arc::new(observer.with_access(access.clone())),
@@ -1056,7 +1102,7 @@ impl BrowserView {
             .with_access(access),
             None => Input::new(observer, self.session.pages.clone(), page),
         };
-        Ok(input.with_pointer(self.pointer))
+        Ok(input.with_pointer(self.pointer).with_pointer_scale(scale))
     }
     pub async fn nav(&self, page: PageId) -> Result<Navigation, CoreError> {
         let access = self.page_access(page.clone()).await?;

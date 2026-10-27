@@ -64,6 +64,9 @@ pub struct Input {
     page_id: PageId,
     access: Option<Arc<PageAccess>>,
     pointer: Option<Pointer>,
+    /// A zoomed mobile preview (see `crate::viewport`) takes main-frame pointer coordinates in
+    /// its scaled on-screen space; everything else here is in CSS pixels.
+    pointer_scale: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -105,6 +108,7 @@ impl Input {
             page_id,
             access: None,
             pointer: None,
+            pointer_scale: 1.0,
         }
     }
 
@@ -116,6 +120,42 @@ impl Input {
     pub(crate) fn with_pointer(mut self, pointer: Option<Pointer>) -> Self {
         self.pointer = pointer;
         self
+    }
+
+    pub(crate) fn with_pointer_scale(mut self, scale: f64) -> Self {
+        self.pointer_scale = scale;
+        self
+    }
+
+    /// Maps a CSS point to where the pointer event must land. Child-frame (OOPIF) sessions
+    /// take their own coordinates unscaled; only the page's main session sees the preview
+    /// scale.
+    async fn dispatch_point(&self, session: &ProtocolSession, point: Point) -> Point {
+        if self.pointer_scale == 1.0 {
+            return point;
+        }
+        match self.page_session().await {
+            Ok(root) if root.same_session(session) => Point {
+                x: point.x * self.pointer_scale,
+                y: point.y * self.pointer_scale,
+            },
+            _ => point,
+        }
+    }
+
+    async fn dispatch_options(
+        &self,
+        session: &ProtocolSession,
+        opts: ClickOptions,
+    ) -> ClickOptions {
+        let humanlike_from = match opts.humanlike_from {
+            Some(from) => Some(self.dispatch_point(session, from).await),
+            None => None,
+        };
+        ClickOptions {
+            humanlike_from,
+            ..opts
+        }
     }
 
     pub async fn click(
@@ -162,7 +202,9 @@ impl Input {
                 {
                     pointer.click_effect(&session, Point { x, y }).await;
                 }
-                dispatch_click_with_options(&session, x, y, opts, 0).await
+                let at = self.dispatch_point(&session, Point { x, y }).await;
+                let opts = self.dispatch_options(&session, opts).await;
+                dispatch_click_with_options(&session, at.x, at.y, opts, 0).await
             }
         })
         .await
@@ -175,7 +217,8 @@ impl Input {
                     .move_to(&session, PointerAction::Hover, Point { x, y })
                     .await;
             }
-            dispatch_hover(&session, x, y).await
+            let at = self.dispatch_point(&session, Point { x, y }).await;
+            dispatch_hover(&session, at.x, at.y).await
         })
         .await
     }
@@ -184,7 +227,8 @@ impl Input {
         self.with_page_session_retry(|session| {
             let text = text.to_string();
             async move {
-                dispatch_click(&session, x, y, MouseButton::Left, 1, 0).await?;
+                let at = self.dispatch_point(&session, Point { x, y }).await;
+                dispatch_click(&session, at.x, at.y, MouseButton::Left, 1, 0).await?;
                 if clear {
                     clear_field(&session).await?;
                 }
@@ -195,9 +239,11 @@ impl Input {
     }
 
     pub async fn drag_at(&self, from: Point, to: Point) -> Result<(), CoreError> {
-        self.with_page_session_retry(
-            |session| async move { dispatch_drag(&session, from, to).await },
-        )
+        self.with_page_session_retry(|session| async move {
+            let from = self.dispatch_point(&session, from).await;
+            let to = self.dispatch_point(&session, to).await;
+            dispatch_drag(&session, from, to).await
+        })
         .await
     }
 
@@ -224,7 +270,9 @@ impl Input {
                     self.check_click_point(session, &target, point).await?;
                     pointer.click_effect(session, point).await;
                 }
-                dispatch_click_with_options(session, point.x, point.y, opts, 0).await?;
+                let at = self.dispatch_point(session, point).await;
+                let opts = self.dispatch_options(session, opts).await;
+                dispatch_click_with_options(session, at.x, at.y, opts, 0).await?;
                 Ok(Some(point))
             }
             Err(_err) => {
@@ -265,7 +313,8 @@ impl Input {
             point = get_element_center(session, target.backend_node_id).await?;
             self.check_click_point(session, &target, point).await?;
         }
-        dispatch_hover(session, point.x, point.y).await?;
+        let at = self.dispatch_point(session, point).await;
+        dispatch_hover(session, at.x, at.y).await?;
         Ok(point)
     }
 
@@ -430,7 +479,12 @@ impl Input {
         scroll_into_view(&target.session, target.backend_node_id).await;
         let from = get_element_center(&source.session, source.backend_node_id).await?;
         let to = get_element_center(&target.session, target.backend_node_id).await?;
-        dispatch_drag(&source.session, from, to).await?;
+        dispatch_drag(
+            &source.session,
+            self.dispatch_point(&source.session, from).await,
+            self.dispatch_point(&source.session, to).await,
+        )
+        .await?;
         Ok(DragResult { from, to })
     }
 
@@ -453,10 +507,11 @@ impl Input {
         if let Some(ref_id) = ref_id {
             let resolved = self.observer.resolve_ref(ref_id).await?;
             let point = get_element_center(&resolved.session, resolved.backend_node_id).await?;
+            let at = self.dispatch_point(&resolved.session, point).await;
             dispatch_scroll(
                 &resolved.session,
-                point.x,
-                point.y,
+                at.x,
+                at.y,
                 delta_x as f64,
                 delta_y as f64,
             )
