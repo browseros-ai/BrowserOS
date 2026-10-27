@@ -1,6 +1,7 @@
 //! Hosted viewport modes for one tab. Mobile and desktop emulate a fixed device inside whatever
 //! window the tab has; default leaves the tab natural. The browser window is never read or
-//! changed: a caller that wants a window size or fullscreen sets it itself.
+//! changed: a caller that wants a window size or fullscreen sets it first, because Chromium sizes
+//! the tab's view to its window again whenever the window resizes.
 //!
 //! Hosts enable the feature by attaching one [`Viewports`] to their views; every entry point is
 //! on [`BrowserView`], so admission and scope stay where they are.

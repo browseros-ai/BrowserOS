@@ -587,7 +587,8 @@ async fn tests_that_zoom_scales_the_preview_and_never_the_page() -> TestResult {
             .params["scale"],
         1.5
     );
-    // The view holds the whole zoomed preview, even where the window is smaller.
+    // Until the window next resizes, the view holds the whole zoomed preview, even where the
+    // window is smaller.
     assert_eq!(
         fixture.native.only("Emulation.setVisibleSize")?.params,
         json!({"width": 600, "height": 1359})
