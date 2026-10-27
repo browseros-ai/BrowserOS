@@ -50,7 +50,7 @@ export function TabCountChip({
         align="start"
         alignOffset={-2}
         sideOffset={8}
-        className="ph-no-capture max-h-(--available-height) w-[270px] gap-px overflow-y-auto rounded-lg border border-border-2 bg-card p-[5px] shadow-pop ring-0"
+        className="ph-no-capture max-h-(--available-height) w-[270px] gap-px overflow-y-auto rounded-xl border border-border-2 bg-card p-[5px] shadow-pop ring-0"
       >
         <ul className="flex flex-col gap-px">
           {browserTabs.map((tab) => {
@@ -67,7 +67,7 @@ export function TabCountChip({
                     onGoToTab(tab.browserTabId)
                     setOpen(false)
                   }}
-                  className="group/row flex w-full cursor-pointer items-center gap-[9px] rounded-[6px] px-2 py-[7px] text-left outline-none hover:bg-card-tint focus-visible:bg-card-tint"
+                  className="group/row flex w-full cursor-pointer items-center gap-[9px] rounded-md px-2 py-[7px] text-left outline-none hover:bg-card-tint focus-visible:bg-card-tint"
                 >
                   <Favicon site={tab.url} className="size-4 rounded-[4px]" />
                   <span className="min-w-0 flex-1 truncate text-[13.5px] text-cyanotype-ink leading-[17px]">

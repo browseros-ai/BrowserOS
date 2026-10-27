@@ -88,7 +88,7 @@ export function DemoClaudeWindow({
           </svg>
         </div>
         {/* Chat | Code: the white segment moves to Code on the Switch beat. */}
-        <div className="mb-1.5 flex gap-0.5 rounded-lg bg-(--claude-toggle) p-0.5">
+        <div className="mb-1.5 flex gap-0.5 rounded-[8px] bg-(--claude-toggle) p-0.5">
           <ToggleSegment on={!code} label="Chat">
             <path
               d="M3 3.5h10v7H7l-3 2.5v-2.5H3z"
@@ -265,7 +265,7 @@ function ToggleSegment({
   return (
     <span
       className={cn(
-        'flex h-6 flex-1 items-center justify-center gap-[5px] rounded-md text-[12px] leading-4 transition-[background-color,color,box-shadow] duration-300',
+        'flex h-6 flex-1 items-center justify-center gap-[5px] rounded-[6px] text-[12px] leading-4 transition-[background-color,color,box-shadow] duration-300',
         on
           ? 'bg-white font-semibold text-(--claude-strong) shadow-[0_0_0_1px_rgb(0_0_0/0.06),0_1px_2px_rgb(0_0_0/0.1)]'
           : 'font-medium text-[#898881]',

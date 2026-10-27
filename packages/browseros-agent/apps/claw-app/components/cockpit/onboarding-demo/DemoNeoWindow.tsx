@@ -148,7 +148,7 @@ export function DemoNeoWindow({
         </svg>
         <div
           className={cn(
-            'relative flex h-8 min-w-0 flex-1 items-center gap-2 rounded-2xl border bg-[#F6F8FC] pr-10 pl-3.5 transition-[border-color,box-shadow] duration-300',
+            'relative flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border bg-[#F6F8FC] pr-10 pl-3.5 transition-[border-color,box-shadow] duration-300',
             frame.urlLit
               ? 'border-[#9DBBF5] shadow-[0_0_0_3px_rgb(2_84_236/0.12)]'
               : 'border-[#CBD5E1]/60',

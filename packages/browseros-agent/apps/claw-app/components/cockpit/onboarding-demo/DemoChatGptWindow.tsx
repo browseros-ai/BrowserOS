@@ -19,7 +19,7 @@ import { DEMO_PROMPT, type DemoFrame } from './timeline'
 const RECENTS = ['Weekend trip ideas', 'Thank-you note draft'] as const
 
 const ROW =
-  'flex h-[30px] flex-none items-center rounded-lg px-1.5 text-[13px] leading-[18px]'
+  'flex h-[30px] flex-none items-center rounded-[8px] px-1.5 text-[13px] leading-[18px]'
 
 /**
  * The ChatGPT desktop app in its dark theme, drawn from the owner's

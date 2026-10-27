@@ -287,7 +287,7 @@ function SwitchCallout({ app, text }: { app: DemoApp; text: string | null }) {
           <path d="M6 0L0 6l6 6z" fill={CALLOUT_FILL} />
         </svg>
       )}
-      <span className="flex h-7 items-center whitespace-nowrap rounded-lg bg-[rgb(27_34_54/0.95)] px-[11px] font-semibold text-[13px] text-white leading-4 shadow-[0_0_0_1px_rgb(255_255_255/0.15),0_6px_16px_rgb(1_18_63/0.25)]">
+      <span className="flex h-7 items-center whitespace-nowrap rounded-md bg-[rgb(27_34_54/0.95)] px-[11px] font-semibold text-[13px] text-white leading-4 shadow-[0_0_0_1px_rgb(255_255_255/0.15),0_6px_16px_rgb(1_18_63/0.25)]">
         {text ?? ''}
       </span>
     </span>
