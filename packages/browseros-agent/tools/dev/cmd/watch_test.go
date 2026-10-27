@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -294,6 +295,32 @@ func TestClawRustServerProcConfigPassesSidecarAndDevEnv(t *testing.T) {
 	}
 	if sidecar.Directories.Resources != filepath.Join(root, "apps/claw-server/resources") || sidecar.Directories.Execution != userDataDir {
 		t.Fatalf("unexpected sidecar directories: %+v", sidecar.Directories)
+	}
+}
+
+func TestClawRustServerBuildsInItsOwnCargoDir(t *testing.T) {
+	root := t.TempDir()
+	ownDir := filepath.Join(root, "target", "dev-watch")
+	for _, tc := range []struct {
+		env        []string
+		wantTarget string
+		wantBuild  string
+	}{
+		{[]string{"PATH=/bin"}, ownDir, ownDir},
+		{[]string{"CARGO_TARGET_DIR=/ssd/target"}, "/ssd/target", "/ssd/target"},
+		{[]string{"CARGO_BUILD_BUILD_DIR=/ssd/build"}, ownDir, "/ssd/build"},
+	} {
+		shared := slices.Clone(tc.env)
+		cfg := clawServerProcConfig(root, tc.env, proc.Ports{}, t.TempDir(), "sidecar.json", nil)
+		if got := envValue(cfg.Env, "CARGO_TARGET_DIR"); got != tc.wantTarget {
+			t.Errorf("env %v: expected CARGO_TARGET_DIR %q, got %q", tc.env, tc.wantTarget, got)
+		}
+		if got := envValue(cfg.Env, "CARGO_BUILD_BUILD_DIR"); got != tc.wantBuild {
+			t.Errorf("env %v: expected CARGO_BUILD_BUILD_DIR %q, got %q", tc.env, tc.wantBuild, got)
+		}
+		if !reflect.DeepEqual(tc.env, shared) {
+			t.Errorf("expected the env shared with the other watch processes to stay %v, got %v", shared, tc.env)
+		}
 	}
 }
 
