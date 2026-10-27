@@ -111,21 +111,36 @@ async fn run_tool(
     if plan.remember_page
         && let Some(new_page) = render::page_from(&output)
     {
-        let url = output
-            .structured
-            .as_ref()
-            .and_then(|value| value.get("url"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string);
+        let url = render::url_from(&output);
         session.persist(|state| {
             state.page = Some(new_page);
             state.page_url = url.clone();
         })?;
     }
 
+    // `goto` and the other navigations keep the recorded url in step, so a
+    // recycled page id can still be spotted.
+    if !plan.remember_page
+        && plan.needs_page
+        && plan.tool == "navigate"
+        && let Some(url) = render::url_from(&output)
+    {
+        session.persist(|state| state.page_url = Some(url.clone()))?;
+    }
+
     let mut files = Vec::new();
     if let Some(target) = plan.save_image.clone() {
         files = write_images(&output, target.as_deref())?;
+    }
+
+    if plan.wrap_page
+        && page.is_none()
+        && output.is_error
+        && output.text.contains("page is not defined")
+    {
+        io::note(
+            "[there is no current page, so `page` was not defined for this script.\n Open one with: browseros open <url>, or use browser.open(url) inside the script]",
+        );
     }
 
     if script::hit_the_cap(&output) {
@@ -539,17 +554,11 @@ async fn explain_stale_page(session: &mut Session, page: Option<u32>) {
     else {
         return;
     };
-    let open = listed
-        .structured
-        .as_ref()
-        .and_then(|value| value.get("pages"))
-        .and_then(Value::as_array)
-        .is_some_and(|pages| {
-            pages
-                .iter()
-                .any(|entry| entry.get("page").and_then(Value::as_u64) == Some(u64::from(page)))
-        });
-    if open {
+    let listed_pages = render::listed_pages(&listed);
+    // An unreadable or empty listing must not be read as "the tab is gone":
+    // clearing the remembered page on every tool failure is worse than never
+    // clearing it, because the next command then fails for a different reason.
+    if listed_pages.is_empty() || listed_pages.contains(&page) {
         return;
     }
     io::note(&format!(

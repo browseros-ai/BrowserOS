@@ -17,14 +17,22 @@ use crate::client::result::ToolOutput;
 
 /// Wraps a script so `page` is already bound to the current page.
 ///
-/// A parameter rather than a `const` is the point. A script written for MCP
-/// may open with its own `const page = browser.page(2)`; inside an arrow that
-/// shadows the parameter legally instead of throwing a redeclaration error, so
-/// the wrapper can never break a script that was written against the tool.
-/// Top-level `await` and top-level `return` both still work inside it.
+/// The caller's code goes in a nested block, not straight into the arrow body.
+/// That matters: a script written for MCP opens with its own
+/// `const page = browser.page(2)`, and for a simple parameter list the body's
+/// top level shares the parameter's scope, so a `const` of the same name there
+/// is an "invalid redefinition of parameter name" syntax error. A nested block
+/// is its own lexical scope, where shadowing a parameter is legal, so the
+/// wrapper cannot break a script that was written against the tool.
+///
+/// Verified against the live engine both ways: with and without the caller
+/// declaring `page` itself. An earlier version of this used the arrow body
+/// directly and rejected every MCP-shaped script.
+///
+/// Top-level `await` and top-level `return` both still work inside the block.
 #[must_use]
 pub fn with_page(code: &str, page: u32) -> String {
-    format!("return await (async (page) => {{\n{code}\n}})(browser.page({page}));")
+    format!("return await (async (page) => {{\n{{\n{code}\n}}\n}})(browser.page({page}));")
 }
 
 /// Whether a run or evaluate result is the server's wall-clock kill.
