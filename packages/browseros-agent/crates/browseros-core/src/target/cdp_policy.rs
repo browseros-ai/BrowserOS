@@ -272,6 +272,15 @@ fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
         "Accessibility.enable" => Some(&[]),
         "Accessibility.disable" => Some(&[]),
         "Accessibility.getFullAXTree" => Some(&["depth", "frameId"]),
+        // Read-only inspector capture; a snapshot finds clickable elements with it instead of
+        // running a script in the page.
+        "DOMSnapshot.captureSnapshot" => Some(&[
+            "computedStyles",
+            "includePaintOrder",
+            "includeDOMRects",
+            "includeBlendedBackgroundColors",
+            "includeTextColorOpacities",
+        ]),
         "Accessibility.getPartialAXTree" => {
             Some(&["nodeId", "backendNodeId", "objectId", "fetchRelatives"])
         }

@@ -24,7 +24,7 @@ use tracing::warn;
 
 const CANCELLATION_REASON: &str = "Operation cancelled by the User";
 const CLIENT_CANCELLATION_ERROR: &str = "Request cancelled by client";
-pub(crate) const ARBITRARY_SCRIPT_TOOLS: &[&str] = &["run", "evaluate"];
+pub(crate) const ARBITRARY_SCRIPT_TOOLS: &[&str] = &["run", "evaluate_in_page"];
 const DISPATCH_ERROR_TEXT_MAX: usize = 200;
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]

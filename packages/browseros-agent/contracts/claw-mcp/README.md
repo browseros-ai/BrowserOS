@@ -8,7 +8,7 @@ catch mismatches between CDP payloads and the accessibility/ref pipeline.
 ## Coverage
 
 The suite covers every MCP tool and major failure path: `tabs`, `tab_groups`,
-`windows`, `navigate`, `snapshot`, `diff`, `act`, `grep`, `read`, `evaluate`,
+`windows`, `navigate`, `snapshot`, `diff`, `act`, `grep`, `read`, `evaluate_in_page`,
 `run`, `screenshot`, `pdf`, `wait`, `upload`, `download`, and `name_session`.
 It also checks ownership isolation, untrusted-content fencing, auto-context,
 audit records, cancellation, browser-down guidance, and transport hygiene.

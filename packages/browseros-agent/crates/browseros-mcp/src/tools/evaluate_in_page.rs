@@ -1,3 +1,8 @@
+//! `evaluate_in_page`: the agent's one way to run its own JavaScript on a page. It runs in the
+//! page's main world, where page code can hook the built-ins it calls and see its globals, so it
+//! is a separate, explicitly named tool for when the user asks to run code in the page; reading,
+//! snapshotting and acting never run page script (see `browseros_core::page_js`).
+
 use crate::{
     constants::INLINE_PAGE_CONTENT_MAX_CHARS,
     framework::{
@@ -14,6 +19,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::time::Duration;
 
+const TOOL: &str = "evaluate_in_page";
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const MAX_TIMEOUT_MS: u64 = 30_000;
 
@@ -24,9 +30,10 @@ const MAX_TIMEOUT_MS: u64 = 30_000;
 const MAX_INLINE_OVERRIDE_CHARS: usize = 200_000;
 
 const DESCRIPTION: &str = "\
-Evaluate JavaScript in a page context through CDP Runtime.evaluate. \
-Prefer `run` for multi-step work; reach for evaluate only as a fallback for a one-off page-context read or script. \
-Use this for page-state reads or small DOM scripts that are awkward with read/grep. \
+Evaluate JavaScript in the page's own main world, where the page's scripts run and can watch it: hooks \
+the page installed on built-ins see every call, and the page can read globals the script sets. Use this \
+only when the user explicitly asks to run code in the page, or when the task needs something read, grep \
+and snapshot cannot give you, such as the page's own JavaScript state. Prefer `run` for multi-step work; \
 Provide `code` (an async body; use `return` to read a value) or `func` (a function \
 expression like `() => {...}` that gets invoked). Return a value to read it back. \
 A script that mutated the page is settled before the result comes back, and the result \
@@ -70,7 +77,7 @@ struct EvaluateArgs {
 
 pub fn definition() -> crate::framework::ToolDef {
     super::def::<EvaluateArgs>(
-        "evaluate",
+        TOOL,
         DESCRIPTION,
         Some(super::open_world_annotations()),
         handler,
@@ -82,81 +89,81 @@ fn handler<'a>(
     ctx: &'a ToolCtx,
     _response: &'a mut crate::response::ToolResponse,
 ) -> BoxFuture<'a, ToolExecResult<Option<ToolResult>>> {
-    Box::pin(async move {
-        let args: EvaluateArgs = parse_args(raw)?;
-        let Some(expression) = resolve_expression(args.code.as_deref(), args.func.as_deref())
-        else {
-            return Ok(Some(error_result(
-                "evaluate: provide `code` (an async body) or `func` (a function to invoke)"
-                    .to_string(),
-            )));
-        };
-        if let Some(result) = pending_dialog_result(ctx, PageId(args.page)) {
-            return Ok(Some(result));
-        }
-        let page = ctx.browser.page_session(PageId(args.page)).await?;
-        let timeout = clamp_timeout(args.timeout, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
-        // Read the page's mutation counter either side of the evaluation, so a
-        // script that changed the page is settled before its result is handed
-        // back. Without this an evaluate-driven click returns a bare value with
-        // no readiness signal of any kind, which is what left callers pausing
-        // afterwards and guessing how long. Two cheap CDP reads on a script that
-        // changes nothing.
-        let before = settle::read_readiness(&page.session).await.ok();
-        // Agent code reads site globals and app state, so it runs where the page's own
-        // JavaScript does.
-        let result = match PageJs::page_world(&page.session)
-            .user_gesture()
-            .timeout(Duration::from_millis(timeout))
-            .eval_value(&expression)
-            .await
-        {
-            Ok(result) => result,
-            Err(CoreError::PageScript(message)) => {
-                return Ok(Some(error_result(format!("evaluate: {message}"))));
-            }
-            Err(error) => return Err(error.into()),
-        };
-        let moved = page_moved(
-            before.as_ref(),
-            settle::read_readiness(&page.session).await.ok().as_ref(),
-        );
-        let settled = if moved || args.settle.unwrap_or(false) {
-            matches!(
-                settle::wait_for_representation_stable(
-                    &page.session,
-                    timeouts::ACTION_SETTLE_DEFAULT_TIMEOUT,
-                )
-                .await,
-                settle::Readiness::Stable
-            )
-        } else {
-            false
-        };
+    Box::pin(evaluate_in_page(raw, ctx))
+}
 
-        let value = result.value;
-        let text = match &value {
-            Some(value) => safe_stringify(value),
-            None => result
-                .description
-                .unwrap_or_else(|| "undefined".to_string()),
-        };
-        let origin = ctx
-            .browser
-            .refresh_page(PageId(args.page))
-            .await?
-            .map(|info| info.url)
-            .unwrap_or_else(|| "unknown".to_string());
-        let inline_limit = resolve_inline_limit(args.max_chars);
-        if text.len() > inline_limit {
-            let excerpt = safe_prefix(&text, inline_limit);
-            let wrapped_text = wrap_untrusted(&text, &origin);
-            let content_length = wrapped_text.len();
-            match write_temp_tool_output_file(&ctx.output_files, "evaluate", "txt", &wrapped_text)
-                .await
-            {
-                Ok(path) => {
-                    return Ok(Some(text_result(
+/// Settles a script that moved the page, spills a large result to a file, and fences the value
+/// as untrusted page content.
+async fn evaluate_in_page(raw: Value, ctx: &ToolCtx) -> ToolExecResult<Option<ToolResult>> {
+    let tool = TOOL;
+    let args: EvaluateArgs = parse_args(raw)?;
+    let Some(expression) = resolve_expression(args.code.as_deref(), args.func.as_deref()) else {
+        return Ok(Some(error_result(format!(
+            "{tool}: provide `code` (an async body) or `func` (a function to invoke)"
+        ))));
+    };
+    if let Some(result) = pending_dialog_result(ctx, PageId(args.page)) {
+        return Ok(Some(result));
+    }
+    let page = ctx.browser.page_session(PageId(args.page)).await?;
+    let timeout = clamp_timeout(args.timeout, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
+    // Read the page's mutation counter either side of the evaluation, so a
+    // script that changed the page is settled before its result is handed
+    // back. Without this an evaluate-driven click returns a bare value with
+    // no readiness signal of any kind, which is what left callers pausing
+    // afterwards and guessing how long. Two cheap CDP reads on a script that
+    // changes nothing.
+    let before = settle::read_readiness(&page.session).await.ok();
+    let result = match PageJs::page_world(&page.session)
+        .user_gesture()
+        .timeout(Duration::from_millis(timeout))
+        .eval_value(&expression)
+        .await
+    {
+        Ok(result) => result,
+        Err(CoreError::PageScript(message)) => {
+            return Ok(Some(error_result(format!("{tool}: {message}"))));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let moved = page_moved(
+        before.as_ref(),
+        settle::read_readiness(&page.session).await.ok().as_ref(),
+    );
+    let settled = if moved || args.settle.unwrap_or(false) {
+        matches!(
+            settle::wait_for_representation_stable(
+                &page.session,
+                timeouts::ACTION_SETTLE_DEFAULT_TIMEOUT,
+            )
+            .await,
+            settle::Readiness::Stable
+        )
+    } else {
+        false
+    };
+
+    let value = result.value;
+    let text = match &value {
+        Some(value) => safe_stringify(value),
+        None => result
+            .description
+            .unwrap_or_else(|| "undefined".to_string()),
+    };
+    let origin = ctx
+        .browser
+        .refresh_page(PageId(args.page))
+        .await?
+        .map(|info| info.url)
+        .unwrap_or_else(|| "unknown".to_string());
+    let inline_limit = resolve_inline_limit(args.max_chars);
+    if text.len() > inline_limit {
+        let excerpt = safe_prefix(&text, inline_limit);
+        let wrapped_text = wrap_untrusted(&text, &origin);
+        let content_length = wrapped_text.len();
+        match write_temp_tool_output_file(&ctx.output_files, tool, "txt", &wrapped_text).await {
+            Ok(path) => {
+                return Ok(Some(text_result(
                         [
                             wrap_untrusted(&excerpt, &origin),
                             format!(
@@ -178,10 +185,10 @@ fn handler<'a>(
                             "path": path.to_string_lossy()
                         })),
                     )));
-                }
-                Err(err) => {
-                    let save_error = err.to_string();
-                    return Ok(Some(text_result(
+            }
+            Err(err) => {
+                let save_error = err.to_string();
+                return Ok(Some(text_result(
                         [
                             wrap_untrusted(&excerpt, &origin),
                             format!(
@@ -203,20 +210,19 @@ fn handler<'a>(
                             "error": save_error
                         })),
                     )));
-                }
             }
         }
-        let mut structured = json!({ "page": args.page, "changed": moved, "settled": settled });
-        if let (Value::Object(object), Some(value)) = (&mut structured, value) {
-            object.insert("value".to_string(), value);
-        }
-        let mut body = wrap_untrusted(&text, &origin);
-        if let Some(note) = readiness_note(moved, settled) {
-            body.push_str("\n\n");
-            body.push_str(note);
-        }
-        Ok(Some(text_result(body, Some(structured))))
-    })
+    }
+    let mut structured = json!({ "page": args.page, "changed": moved, "settled": settled });
+    if let (Value::Object(object), Some(value)) = (&mut structured, value) {
+        object.insert("value".to_string(), value);
+    }
+    let mut body = wrap_untrusted(&text, &origin);
+    if let Some(note) = readiness_note(moved, settled) {
+        body.push_str("\n\n");
+        body.push_str(note);
+    }
+    Ok(Some(text_result(body, Some(structured))))
 }
 
 /// The line appended to a result whose script moved the page.

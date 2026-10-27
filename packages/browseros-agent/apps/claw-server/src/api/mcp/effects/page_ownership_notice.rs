@@ -203,7 +203,7 @@ mod tests {
     #[tokio::test]
     async fn an_own_earlier_session_is_named_as_reclaimable() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call(
-            "evaluate",
+            "evaluate_in_page",
             serde_json::json!({ "page": 7, "code": "return 1" }),
         )
         .await?;
@@ -223,7 +223,7 @@ mod tests {
     async fn an_own_earlier_session_names_no_group_under_explicit_grouping() -> anyhow::Result<()> {
         use crate::config::{Behavior, ServerMode};
         let call = crate::api::mcp::test_support::tool_call_with_behavior(
-            "evaluate",
+            "evaluate_in_page",
             serde_json::json!({ "page": 7, "code": "return 1" }),
             ServerMode::Hosted,
             Behavior::defaults(ServerMode::Hosted),
@@ -277,7 +277,7 @@ mod tests {
     #[tokio::test]
     async fn an_own_retired_session_is_still_named_as_reclaimable() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call(
-            "evaluate",
+            "evaluate_in_page",
             serde_json::json!({ "page": 7, "code": "return 1" }),
         )
         .await?;

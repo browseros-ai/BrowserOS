@@ -50,10 +50,11 @@ async function assertPage(
   page: number,
   expression: string,
 ): Promise<void> {
-  // A failed assertion throws inside the page, which evaluate exposes as an MCP
+  // A failed assertion throws inside the page, which evaluate_in_page exposes as an MCP
   // error. This avoids substring checks that accidentally accept appended text.
+  // The page's own world, because postconditions read the fixture's `fillEvents`.
   expectOk(
-    await ctx.mcp.callTool('evaluate', {
+    await ctx.mcp.callTool('evaluate_in_page', {
       page,
       code: `if (!(${expression})) throw new Error("Fill postcondition failed"); return true`,
     }),
@@ -210,7 +211,7 @@ export const fillCases: ContractCase[] = [
       async run(ctx: CaseContext) {
         const page = await ctx.openPage(ctx.fixture('/form.html'))
         expectOk(
-          await ctx.mcp.callTool('evaluate', {
+          await ctx.mcp.callTool('evaluate_in_page', {
             page,
             code: `const frame=document.createElement("iframe"); frame.src=${JSON.stringify(ctx.fixture2('/fill.html').replace('127.0.0.1', 'localhost'))}; document.body.prepend(frame); return new Promise(resolve => frame.onload=()=>resolve(true))`,
           }),

@@ -15,7 +15,7 @@ const EXPECTED_TOOLS = [
   'await_human_help',
   'diff',
   'download',
-  'evaluate',
+  'evaluate_in_page',
   'grep',
   'history',
   'mark_skill_run',

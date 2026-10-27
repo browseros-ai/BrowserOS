@@ -27,7 +27,7 @@ pub(crate) const LEGACY_SKILL_DIRECTORY_NAME: &str = "browserclaw";
 /// fifty line operating guide drifts from the first within a release, and the
 /// one property worth keeping is that an install without the decision loop
 /// reads the same guide it has always read.
-const SKILL_RUN_FIRST: &str = "Reach for `run` first; the granular tools are the fallback. One `run` script composes the whole snapshot -> act -> verify loop, bulk extraction, and helper reuse in a single call, and it is the only place saved helpers work. Compose anything multi-step inside one `run` script rather than chaining granular calls. Use a single granular tool (`act`, `snapshot`, `navigate`, `evaluate`, `read`) directly only for a one-off step, step-by-step debugging, or something a `run` script cannot express.";
+const SKILL_RUN_FIRST: &str = "Reach for `run` first; the granular tools are the fallback. One `run` script composes the whole snapshot -> act -> verify loop, bulk extraction, and helper reuse in a single call, and it is the only place saved helpers work. Compose anything multi-step inside one `run` script rather than chaining granular calls. Use a single granular tool (`act`, `snapshot`, `navigate`, `read`) directly only for a one-off step, step-by-step debugging, or something a `run` script cannot express.";
 
 /// What it becomes while the decision loop is offered.
 const SKILL_PURSUE_FIRST: &str = r#"Reach for `pursue` first. `run` is the fallback, and the granular tools are the fallback to that.
@@ -38,7 +38,7 @@ Read the reply in this order. `status` is the verdict: `satisfied`, or one of se
 
 Fall back to `run` once two `pursue` calls have come back with a status other than `satisfied`. The first one usually means the goal needs a word changed and `tryNext` names that word, so try once more with it; write the work as a `run` script only if that second try also comes back unsatisfied.
 
-Go straight to `run` for work that is a script rather than an outcome: pagination over many pages, bulk extraction, repeated loops over a list you already hold, or anything needing a saved helper. One `run` script composes the whole snapshot -> act -> verify loop in a single call, and it is the only place saved helpers work. Use a single granular tool (`act`, `snapshot`, `navigate`, `evaluate`, `read`) directly only for a one-off step or step-by-step debugging."#;
+Go straight to `run` for work that is a script rather than an outcome: pagination over many pages, bulk extraction, repeated loops over a list you already hold, or anything needing a saved helper. One `run` script composes the whole snapshot -> act -> verify loop in a single call, and it is the only place saved helpers work. Use a single granular tool (`act`, `snapshot`, `navigate`, `read`) directly only for a one-off step or step-by-step debugging."#;
 
 /// The guide's promises of server-made tab groups, and what explicit grouping says instead.
 ///

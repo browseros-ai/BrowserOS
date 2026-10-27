@@ -16,6 +16,7 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::sync::Mutex;
 
 mod acquisition;
+mod clickable;
 use acquisition::{AcquiredFrame, CaptureTrace, SnapshotBudget, SnapshotStage, trace_stage};
 
 const MAX_FRAME_DEPTH: usize = 5;
@@ -60,6 +61,8 @@ struct CaptureResult {
 struct CaptureContext {
     root_session: ProtocolSession,
     frame_documents: HashMap<Option<FrameId>, DocumentId>,
+    /// One DOM capture per session for this attempt, shared by its same-process frames.
+    dom_snapshots: clickable::DomSnapshots,
     budget: SnapshotBudget,
     trace: CaptureTrace,
 }
@@ -240,6 +243,7 @@ impl Observer {
             let context = CaptureContext {
                 root_session: page_session.session.clone(),
                 frame_documents: before.frame_documents.clone(),
+                dom_snapshots: clickable::DomSnapshots::default(),
                 budget: budget.clone(),
                 trace: trace.clone(),
             };

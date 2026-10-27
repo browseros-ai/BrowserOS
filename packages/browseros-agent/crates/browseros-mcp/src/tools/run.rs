@@ -35,9 +35,9 @@ const MAX_RETURN_VALUE_BYTES: usize = 2_000_000;
 
 const DESCRIPTION: &str = r#"The primary way to drive the browser - prefer run for any task; the granular tools are the fallback. Do multi-step flows, pagination, bulk extraction, and repeated act/read loops - in ONE call: async JavaScript against the `browser` SDK in the server runtime. console.log is captured; return a value to read it back; exceptions come back as a result, not thrown. Every call is `await`-able. Each run is bounded to 30000 ms of wall time and cannot exceed it (larger `timeout` values are clamped): keep a single call under 30s. For longer or open-ended page-driven loops, do one bounded chunk per call, or start the work on the page and poll its result with short follow-up calls.
 
-Runtime: a bare engine, not Node and not a page. You get `browser`, `console`, `setTimeout`/`clearTimeout`, and nothing else. (`sleep(ms)` exists for a deliberate pause and is almost never the right tool: opening, navigating and page-changing evaluates all return settled, so pausing after them only adds the time you picked.) There is no fetch, require, process, window, document or localStorage. To touch the DOM or call a site's API, go through page.evaluate, which runs inside the page.
+Runtime: a bare engine, not Node and not a page. You get `browser`, `console`, `setTimeout`/`clearTimeout`, and nothing else. (`sleep(ms)` exists for a deliberate pause and is almost never the right tool: opening, navigating and page-changing evaluates all return settled, so pausing after them only adds the time you picked.) There is no fetch, require, process, window, document or localStorage. Read pages with page.snapshot/read/grep, which run no script in the page. page.evaluateInPage runs your own script inside the page, where the page can watch it: only when the user asks to run code in the page or those cannot answer.
 
-Readiness is handled for you, so do not pause to let a page catch up. `browser.open`, `page.goto`/`back`/`forward`/`reload` return once the page has stopped changing, not merely once it has loaded. `page.evaluate` detects a script that changed the page and settles before returning, reporting `changed`. If you find yourself writing `await sleep(...)` after any of these, the wait has already happened. `page.click`/`fill`/`hover`/`selectOption` go straight to the input bridge and return once the input is delivered, so after one of those, wait on the thing you expect with `page.waitForSelector`/`waitForText`, never a fixed pause.
+Readiness is handled for you, so do not pause to let a page catch up. `browser.open`, `page.goto`/`back`/`forward`/`reload` return once the page has stopped changing, not merely once it has loaded. `page.evaluateInPage` detects a script that changed the page and settles before returning, reporting `changed`. If you find yourself writing `await sleep(...)` after any of these, the wait has already happened. `page.click`/`fill`/`hover`/`selectOption` go straight to the input bridge and return once the input is delivered, so after one of those, wait on the thing you expect with `page.waitForSelector`/`waitForText`, never a fixed pause.
 
 One rule: anything that needs a page hangs off a page handle, anything that does not hangs off `browser`. Get a handle with `browser.open(url)`, or `browser.page(id)` for an id you already have. Page actions address a snapshot ref like "e12", never a CSS selector.
 
@@ -63,7 +63,7 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.scroll(dir,amount,ref?) / clickAt(x,y) / typeAt(x,y,text) / hoverAt(x,y) / dragAt(x1,y1,x2,y2)
   page.dialogAccept() / dialogDismiss() - accept or dismiss an open JavaScript dialog (confirm/prompt/beforeunload). An action that opens one gets back { dialogOpen: true, kind, message } instead of its usual result, and the page stays blocked until you accept or dismiss, so do that before anything else on the page.
   page.waitForSelector(sel) / waitForText(text) / waitForTime(ms) - resolve when ready. For content that loads in, wait on the thing itself with waitForSelector (or waitForText); it resolves the moment it appears, polling up to 10s by default (pass { timeout } to change it, max 30s) and returning { matched }. On timeout matched is false and it does NOT throw, so check matched instead of assuming the wait succeeded. waitForTime is a plain fixed pause and a last resort: wait on the thing itself instead. Never poll in a loop (re-checking a count with a fixed wait between tries) - wait on the selector once instead.
-  page.evaluate(fn, arg?, opts?)     - runs INSIDE the page. Returns { changed } alongside the value: a script that mutated the page is settled before you get it back, so never pause afterwards. For an effect that is entirely asynchronous (a click whose result arrives over the network) pass { settle: true } to wait for quiet regardless. Pass a real function; a second argument is JSON-serialized and handed to it, e.g. page.evaluate((sel) => document.querySelectorAll(sel).length, '.row'). It does not close over script variables. A code string with a `return` also works: page.evaluate("return document.title").
+  page.evaluateInPage(fn, arg?, opts?) - runs your script inside the page's own main world, where page scripts can watch it; only when the user explicitly asks to run code in the page, or snapshot/read/grep cannot answer. Returns { changed } alongside the value: a script that mutated the page is settled before you get it back, so never pause afterwards. For an effect that is entirely asynchronous (a click whose result arrives over the network) pass { settle: true } to wait for quiet regardless. Pass a real function; a second argument is JSON-serialized and handed to it, e.g. page.evaluateInPage((sel) => document.querySelectorAll(sel).length, '.row'). It does not close over script variables. A code string with a `return` also works: page.evaluateInPage("return document.title").
   page.screenshot(opts?) / pdf(opts?)
     screenshot has no default cap; size caps CSS pixels, with omitted axes unconstrained
   page.download(ref) / upload(ref, files)
@@ -152,7 +152,7 @@ const BOOTSTRAP_JS: &str = r#"
   }
 
   // A helper is stored as source text. Accept a real function too, for symmetry
-  // with page.evaluate, and serialize it here rather than letting the JSON
+  // with page.evaluateInPage, and serialize it here rather than letting the JSON
   // boundary drop it and the bridge complain about a missing string.
   function helperSource(source) {
     const text = typeof source === 'function' ? String(source) : source;
@@ -183,23 +183,24 @@ const BOOTSTRAP_JS: &str = r#"
     getByTestId: 'There are no locators. Call await page.snapshot() and use the [ref=eN] handles.',
     getByPlaceholder: 'There are no locators. Call await page.snapshot() and use the [ref=eN] handles.',
     frameLocator: 'There are no frame locators. Use page.cdp(method, paramsJson) for cross-frame work.',
-    expect: 'There are no assertions. Use page.waitForSelector/waitForText, or assert inside page.evaluate.',
-    route: 'There is no network interception. Call the site API from inside page.evaluate.',
-    unroute: 'There is no network interception. Call the site API from inside page.evaluate.',
-    waitForRequest: 'There is no network interception. Call the site API from inside page.evaluate.',
-    waitForResponse: 'There is no network interception. Call the site API from inside page.evaluate.',
+    evaluate: 'page.evaluate is gone: page.evaluateInPage runs a script inside the page, where the page can watch it. Use it only when the user asks to run code in the page; read pages with page.snapshot/read/grep.',
+    expect: 'There are no assertions. Use page.waitForSelector/waitForText.',
+    route: 'There is no network interception. Call the site API from inside page.evaluateInPage.',
+    unroute: 'There is no network interception. Call the site API from inside page.evaluateInPage.',
+    waitForRequest: 'There is no network interception. Call the site API from inside page.evaluateInPage.',
+    waitForResponse: 'There is no network interception. Call the site API from inside page.evaluateInPage.',
     waitForEvent: 'There is no event subscription in this runtime. Wait on the page instead: page.waitForSelector(sel).',
     on: 'There is no event subscription in this runtime. Wait on the page instead: page.waitForSelector(sel).',
     frames: 'Frames are not addressable. Use page.cdp(method, paramsJson).',
     mainFrame: 'Frames are not addressable. Use page.cdp(method, paramsJson).',
-    setContent: 'Set content from inside page.evaluate instead.',
+    setContent: 'Set content from inside page.evaluateInPage instead.',
     setViewportSize: __browserosFeatures.viewport
       ? 'Use page.setViewport({ mode: "mobile" | "desktop" | "default", zoom?, width?, height? }).'
       : 'The viewport is the user\'s. Pass { size } to page.screenshot to cap a capture.',
-    addInitScript: 'There is no init-script hook. Run the script with page.evaluate after page.goto.',
-    exposeFunction: 'There is no binding hook. Return a value from page.evaluate instead.',
+    addInitScript: 'There is no init-script hook. Run the script with page.evaluateInPage after page.goto.',
+    exposeFunction: 'There is no binding hook. Return a value from page.evaluateInPage instead.',
     ariaSnapshot: 'Use page.snapshot(), which returns { text, refs, url } rather than YAML.',
-    content: 'Use page.read() for markdown, or page.evaluate("return document.documentElement.outerHTML") for raw HTML.',
+    content: 'Use page.read() for markdown, or page.evaluateInPage("return document.documentElement.outerHTML") for raw HTML.',
     waitForTimeout: 'Use page.waitForTime(ms).',
     waitForURL: 'Not available. Poll with page.info() or wait on something the new page renders.',
     waitForLoadState: 'Not available. Wait on the thing itself: page.waitForSelector(sel).',
@@ -326,16 +327,16 @@ const BOOTSTRAP_JS: &str = r#"
       // A real function is serialized here, before the JSON boundary drops it.
       // For a function, the second argument is its input; for a code string,
       // which cannot take one, the second argument is the options object.
-      evaluate: (code, argOrOpts, opts) => {
+      evaluateInPage: (code, argOrOpts, opts) => {
         if (typeof code === 'function') {
           const source = String(code);
           const func = argOrOpts === undefined
             ? source
             : `() => (${source})(${JSON.stringify(argOrOpts)})`;
-          return tool('evaluate', { ...opts, func });
+          return tool('evaluate_in_page', { ...opts, func });
         }
-        if (typeof code === 'string') return tool('evaluate', { ...argOrOpts, code });
-        return tool('evaluate', code);
+        if (typeof code === 'string') return tool('evaluate_in_page', { ...argOrOpts, code });
+        return tool('evaluate_in_page', code);
       },
 
       cdp: (method, paramsJson) => call('cdpJsonForPage', [pageId, method, paramsJson]),
@@ -408,7 +409,7 @@ const BOOTSTRAP_JS: &str = r#"
     grep: (pageId, opts) => call('tool:grep', [pageId, opts]),
     wait: (pageId, opts) => call('tool:wait', [pageId, opts]),
     screenshot: (pageId, opts) => call('tool:screenshot', [pageId, opts]),
-    evaluate: (pageId, opts) => call('tool:evaluate', [pageId, opts]),
+    evaluateInPage: (pageId, opts) => call('tool:evaluate_in_page', [pageId, opts]),
     download: (pageId, opts) => call('tool:download', [pageId, opts]),
     pdf: (pageId, opts) => call('tool:pdf', [pageId, opts]),
     upload: (pageId, opts) => call('tool:upload', [pageId, opts]),
@@ -1355,7 +1356,7 @@ fn tool_def(name: &str) -> Option<ToolDef> {
         "grep" => tools::grep::definition(),
         "wait" => tools::wait::definition(),
         "screenshot" => tools::screenshot::definition(),
-        "evaluate" => tools::evaluate::definition(),
+        "evaluate_in_page" => tools::evaluate_in_page::definition(),
         "download" => tools::download::definition(),
         "pdf" => tools::pdf::definition(),
         "upload" => tools::upload::definition(),
@@ -3215,7 +3216,7 @@ return seen;
     }
 
     #[tokio::test]
-    async fn evaluate_takes_a_real_function_and_an_argument() -> anyhow::Result<()> {
+    async fn evaluate_in_page_takes_a_real_function_and_an_argument() -> anyhow::Result<()> {
         // Args are JSON-serialized on the way out, so a function value used to
         // be dropped silently, and `provide code or func` was its own error
         // class. The shim serializes it before that boundary and folds the
@@ -3223,7 +3224,7 @@ return seen;
         let log = Arc::new(Mutex::new(HookLog::default()));
         let ctx = ctx_with_hook(log.clone());
         let result = run_tool_with_ctx(
-            "try { await browser.page(1).evaluate((sel) => sel.length, '.row'); } catch (e) {}
+            "try { await browser.page(1).evaluateInPage((sel) => sel.length, '.row'); } catch (e) {}
              return 'ok';",
             None,
             &ctx,
@@ -3233,7 +3234,7 @@ return seen;
         let log = log
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        assert_eq!(log.recorded[0].0, "tool:evaluate");
+        assert_eq!(log.recorded[0].0, "tool:evaluate_in_page");
         Ok(())
     }
 
@@ -3297,7 +3298,7 @@ return seen;
     async fn a_helper_can_be_saved_from_a_real_function() -> anyhow::Result<()> {
         // The source is stored as text, so a function used to be dropped at the
         // JSON boundary and the bridge complained about a missing string. Both
-        // save paths serialize it first, matching page.evaluate.
+        // save paths serialize it first, matching page.evaluateInPage.
         let log = Arc::new(Mutex::new(HookLog::default()));
         let ctx = ctx_with_hook(log.clone());
         let result = run_tool_with_ctx(
