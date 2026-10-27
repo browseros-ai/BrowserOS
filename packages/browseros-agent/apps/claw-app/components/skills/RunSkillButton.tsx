@@ -11,8 +11,8 @@ import { skillCommand } from '@/screens/skills/skills.helpers'
 
 interface RunSkillButtonProps {
   name: string
-  /** Outlined on a skill's page; ghost in the Skills list rows. */
-  variant?: 'secondary' | 'ghost'
+  /** Outlined on a skill's page; tinted on the Skills cards. */
+  variant?: 'secondary' | 'tinted'
   className?: string
 }
 
@@ -27,7 +27,7 @@ export function RunSkillButton({
     <CopyButton
       text={phrase}
       what={phrase}
-      variant={variant}
+      variant={variant === 'tinted' ? 'ghost' : 'secondary'}
       size="sm"
       onCopied={() =>
         toastSuccess(
@@ -35,7 +35,12 @@ export function RunSkillButton({
           'Paste it into one of your AI agents to run it.',
         )
       }
-      className={cn('h-[34px] font-semibold text-[13.5px]', className)}
+      className={cn(
+        'h-[34px] font-semibold text-[13.5px]',
+        variant === 'tinted' &&
+          'bg-accent-tint text-accent-ink hover:bg-accent-tint-2 hover:text-accent-ink',
+        className,
+      )}
     />
   )
 }

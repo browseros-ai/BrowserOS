@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'bun:test'
+import type { Skill } from '@browseros/claw-api'
 import {
+  linkedAgentsOf,
   neoName,
   parseSkillBody,
-  runsLabel,
   skillCommand,
+  skillSites,
   stuckWhile,
   usedLabel,
 } from './skills.helpers'
@@ -82,20 +84,58 @@ describe('usedLabel', () => {
     expect(usedLabel(4, new Date(2026, 9, 22, 23).getTime(), now)).toBe(
       'Used 4 times · last used yesterday',
     )
-    expect(usedLabel(4, new Date(2026, 9, 2).getTime(), now)).toMatch(
-      /^Used 4 times · last used on /,
-    )
+  })
+
+  it('names an older day by its date alone, as in "last used Oct 2"', () => {
+    const label = usedLabel(4, new Date(2026, 9, 2).getTime(), now)
+    expect(label).toMatch(/^Used 4 times · last used \S/)
+    expect(label).not.toContain('last used on ')
   })
 })
 
-describe('runsLabel', () => {
-  it('says when a skill has never run', () => {
-    expect(runsLabel(0)).toBe('Not used yet')
+describe('skillSites', () => {
+  it('has no sites when the skill names none', () => {
+    expect(skillSites(undefined)).toEqual([])
+    expect(skillSites('  ')).toEqual([])
   })
 
-  it('counts runs in a short label', () => {
-    expect(runsLabel(1)).toBe('1 run')
-    expect(runsLabel(14)).toBe('14 runs')
+  it('keeps a single site as it was saved', () => {
+    expect(skillSites('x.com')).toEqual(['x.com'])
+  })
+
+  it('names each site by its host, as a person would read it', () => {
+    expect(
+      skillSites('https://www.microsoftazuresponsorships.com/usage'),
+    ).toEqual(['microsoftazuresponsorships.com'])
+    expect(skillSites('https://trmnl.com')).toEqual(['trmnl.com'])
+  })
+
+  it('splits a comma list and drops empty entries', () => {
+    expect(skillSites('x.com, linkedin.com,reddit.com, ')).toEqual([
+      'x.com',
+      'linkedin.com',
+      'reddit.com',
+    ])
+  })
+})
+
+describe('linkedAgentsOf', () => {
+  const linked = (...agents: Skill['linkedAgents']) => ({
+    linkedAgents: agents,
+  })
+
+  it('lists every agent any skill is linked into, once, in the usual order', () => {
+    expect(
+      linkedAgentsOf([
+        linked('Cursor', 'Claude Code'),
+        linked('Codex', 'Claude Code'),
+      ]),
+    ).toEqual(['Claude Code', 'Codex', 'Cursor'])
+  })
+
+  it('is empty when no skill is linked into an agent', () => {
+    expect(linkedAgentsOf([linked(), linked()])).toEqual([])
+    expect(linkedAgentsOf([])).toEqual([])
   })
 })
 
