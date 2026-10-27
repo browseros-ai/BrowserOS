@@ -195,13 +195,16 @@
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
-  /* The crisp radius scale: no surface rounds past 8px. Cards, dialogs and
-     popovers are 8; tiles, thumbnails, preview frames, text badges and nav
-     or row highlights are 6 (rounded-md). xl through 3xl collapse to 8 so
-     the Card, dialogs and vendored components written against the older,
-     curvier ramp follow without a per-file sweep. rounded-full stays for
-     circles (avatars, dots, round icon buttons) and, until the owner decides
-     otherwise, the pill buttons and inputs. */
+  /* The crisp radius scale: no surface rounds past 8px. Cards, dialogs,
+     popovers, inputs, selects and tab lists are 8; text buttons, selected
+     tabs, tiles, thumbnails, preview frames, text badges and nav or row
+     highlights are 6 (rounded-md). xl through 3xl collapse to 8 so the
+     Card, dialogs and vendored components written against the older,
+     curvier ramp follow without a per-file sweep. rounded-full is only for
+     circles: avatars, dots, switches and round icon buttons. Motion layout
+     animations need their corner inline (action-swap buttons, tab
+     indicators, the select), so those literals move with this scale by
+     hand. */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
