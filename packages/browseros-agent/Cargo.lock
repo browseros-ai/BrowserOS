@@ -512,6 +512,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "claw-cli"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "reqwest 0.12.28",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "claw-server"
 version = "0.0.84"
 dependencies = [

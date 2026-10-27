@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*", "apps/claw-server"]
+members = ["crates/*", "apps/claw-server", "apps/claw-cli"]
 resolver = "3"
 
 [workspace.package]
