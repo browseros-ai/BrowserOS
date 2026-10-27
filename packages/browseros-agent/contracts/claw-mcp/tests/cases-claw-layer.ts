@@ -456,7 +456,8 @@ export const clawLayerCases: ContractCase[] = [
         }),
         'payment card fill',
       )
-      if (await snapshotScreenshotted(4_000)) {
+      // As long as the positive checks wait, so a slow capture can't pass vacuously.
+      if (await snapshotScreenshotted(15_000)) {
         throw new Error(
           'a screenshot was stored while the page showed a filled card',
         )
