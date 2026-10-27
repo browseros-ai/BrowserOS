@@ -17,6 +17,7 @@ pub mod io;
 pub mod plan;
 pub mod refs;
 pub mod render;
+pub mod script;
 pub mod state;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

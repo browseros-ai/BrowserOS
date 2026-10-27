@@ -36,6 +36,9 @@ pub struct ToolPlan {
     pub remember_page: bool,
     /// Where an inline image should be written. A terminal cannot render one.
     pub save_image: Option<Option<String>>,
+    /// Bind `page` in a `run` script, so it loses the preamble that exists
+    /// only because MCP has no current page.
+    pub wrap_page: bool,
     /// Lines for stderr, decided here so they can be asserted in a test.
     pub notices: Vec<String>,
 }
@@ -633,10 +636,12 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
         Command::Run {
             code,
             script_timeout,
+            no_page,
             ..
         } => {
             let body = script_body(external, code.as_deref(), "run")?;
             let mut plan = ToolPlan::new("run").arg("code", json!(body));
+            plan.wrap_page = !no_page;
             if let Some(requested) = script_timeout {
                 let clamped = requested.min(30_000.0);
                 if *requested > 30_000.0 {

@@ -10,7 +10,7 @@ use crate::cli::{Cli, Command, Globals};
 use crate::client::{self, Session, result::ToolOutput};
 use crate::exit::{Code, Failure};
 use crate::plan::{self, External, Local, Plan, ToolPlan};
-use crate::{io, render, state};
+use crate::{io, render, script, state};
 
 /// Parses, plans and runs one invocation.
 ///
@@ -67,6 +67,16 @@ async fn run_tool(
         globals.page
     };
 
+    // `run` has no page argument: the page is bound inside the script
+    // instead, which is the whole preamble a CLI can write for the caller.
+    if plan.wrap_page
+        && let Some(page) = globals.page.or(session.state().page)
+        && let Some(Value::String(code)) = plan.args.get("code")
+    {
+        let wrapped = script::with_page(code, page);
+        plan.args.insert("code".to_string(), Value::String(wrapped));
+    }
+
     if plan.with_group
         && let Some(group) = session.state().group_id.clone()
     {
@@ -100,6 +110,20 @@ async fn run_tool(
     let mut files = Vec::new();
     if let Some(target) = plan.save_image.clone() {
         files = write_images(&output, target.as_deref())?;
+    }
+
+    if script::hit_the_cap(&output) {
+        // The logs are the body rather than a footnote: they survive the kill
+        // and are the only evidence of how far the script got.
+        if globals.json {
+            io::out(&render::envelope(
+                label, plan.tool, page, &output, elapsed, &files,
+            ));
+        } else if let Some(logs) = script::surviving_logs(&output) {
+            io::out(&logs);
+        }
+        io::note(script::CAP_ADVICE);
+        return Ok(Code::Timeout);
     }
 
     report(&output, label, plan.tool, page, elapsed, &files, globals);
