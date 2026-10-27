@@ -44,6 +44,8 @@ struct Fake {
     attached: u64,
     emulation: HashMap<String, Emulated>,
     ignore_metrics: bool,
+    /// Where `Browser.getWindowForTarget` says a tab is, when a person moved it mid-call.
+    moved_to: Option<i64>,
 }
 
 struct Native {
@@ -85,6 +87,7 @@ impl Native {
                 attached: 0,
                 emulation: HashMap::new(),
                 ignore_metrics: false,
+                moved_to: None,
             }),
             events,
         })
@@ -221,7 +224,10 @@ impl Native {
             }
             "Browser.getWindowForTarget" => {
                 let target = params["targetId"].as_str().unwrap_or_default();
-                let id = Self::window_of(&fake, target)?;
+                let id = match fake.moved_to {
+                    Some(moved) => moved,
+                    None => Self::window_of(&fake, target)?,
+                };
                 json!({"windowId": id, "bounds": fake.windows.get(&id)})
             }
             "Browser.getWindowBounds" => {
@@ -967,5 +973,23 @@ async fn tests_that_desktop_and_default_pointer_input_is_not_scaled() -> TestRes
             .await?;
         assert_eq!(pressed_at(&fixture.native)?, (json!(100.0), json!(200.0)));
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_tab_moved_to_another_window_mid_call_is_not_fitted() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10), (2, 20)]);
+    let page = fixture.page(1).await?;
+    fixture.native.lock().moved_to = Some(20);
+    let before = fixture.native.window(20)?;
+
+    let error = fixture
+        .set(&page, ViewportMode::Desktop, None)
+        .await
+        .err()
+        .ok_or("a window the call did not lock must not be resized")?;
+    assert!(error.to_string().contains("page_target_changed"), "{error}");
+    assert_eq!(fixture.native.window(20)?, before);
+    assert!(window_methods(&fixture.native.methods()).is_empty());
     Ok(())
 }

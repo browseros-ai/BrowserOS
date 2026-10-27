@@ -3170,3 +3170,32 @@ async fn credential_cancellation_reaches_original_session_after_tab_leaves_its_p
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn viewport_changes_never_reach_pages_outside_the_scope() -> TestResult {
+    use crate::viewport::{ViewportMode, ViewportRequest, Viewports};
+    let native = Native::new();
+    let scoped = view(native.clone(), None)
+        .await
+        .with_viewports(Arc::new(Viewports::default()));
+    // Tab 3 is the eng profile's popup, tab 4 belongs to the sales profile.
+    for tab in [3, 4] {
+        let page = page_id(&scoped, tab).await?;
+        let refused = scoped
+            .set_viewport(page, ViewportRequest::new(ViewportMode::Mobile, None)?)
+            .await
+            .err()
+            .ok_or("an out-of-scope page must be refused")?;
+        code(refused, "page_out_of_scope");
+    }
+    for method in [
+        "Emulation.setDeviceMetricsOverride",
+        "Emulation.setUserAgentOverride",
+        "Browser.getWindowForTarget",
+        "Browser.setContentsSize",
+        "Browser.setWindowBounds",
+    ] {
+        assert!(native.calls(method).is_empty(), "{method} was sent");
+    }
+    Ok(())
+}
