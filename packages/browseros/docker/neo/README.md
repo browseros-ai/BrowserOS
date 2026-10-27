@@ -231,6 +231,12 @@ default `docker run` example already provide one at `/data`; neither changes.
   in the folder stay yours. Docker Desktop on a Mac handles this for you.
 - **A desktop profile can't be copied in with its logins.** Desktop Neo on a Mac encrypts
   cookies with the macOS Keychain, which Linux can't read.
+- **Guard the folder like the logins in it.** A container has no keyring, so Neo encrypts saved
+  passwords and cookies with Chromium's built-in key (`--password-store=basic`). Anyone who can
+  read the folder can read them.
+- **Cards stay out of the profile.** A managed policy turns payment autofill off, so Neo never
+  offers to save a card. Agents fill cards from your own secure storage through the
+  `payment_cards` tool, which fills a supplied card without saving it.
 
 ## Security
 
