@@ -286,7 +286,7 @@ function Caption({ action }: { action: ReplayFrame }) {
   return (
     <div
       data-replay-caption
-      className="absolute bottom-5 left-1/2 z-10 flex max-w-[82%] -translate-x-1/2 items-center gap-2.5 rounded-full bg-ink-deep/90 px-4 py-2 shadow-xl backdrop-blur"
+      className="absolute bottom-5 left-1/2 z-10 flex max-w-[82%] -translate-x-1/2 items-center gap-2.5 rounded-md bg-ink-deep/90 px-4 py-2 shadow-xl backdrop-blur"
     >
       <span
         className={cn(

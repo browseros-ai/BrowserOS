@@ -42,10 +42,12 @@ export function DemoClaudeWindow({
   const typing = frame.composer.length > 0
   const code = frame.switched
   const blank = code ? 'New session' : 'New chat'
+  // The frame keeps macOS's 12px corners and the chat keeps Claude's own
+  // radii, so the drawn app reads as itself rather than as neo.
   return (
     <div
       style={CLAUDE_LIGHT}
-      className="flex size-full overflow-hidden rounded-xl bg-(--claude-main) font-[system-ui,sans-serif] shadow-[0_0_0_1px_rgb(0_0_0/0.1),0_34px_60px_-28px_rgb(0_0_0/0.38),0_10px_24px_-12px_rgb(0_0_0/0.18)]"
+      className="flex size-full overflow-hidden rounded-[12px] bg-(--claude-main) font-[system-ui,sans-serif] shadow-[0_0_0_1px_rgb(0_0_0/0.1),0_34px_60px_-28px_rgb(0_0_0/0.38),0_10px_24px_-12px_rgb(0_0_0/0.18)]"
     >
       <div className="flex w-[146px] flex-none flex-col gap-1 border-(--claude-border) border-r bg-(--claude-sidebar) px-2.5 pb-3">
         <div className="flex h-9 flex-none items-center gap-1.5 pl-0.5">
@@ -190,7 +192,7 @@ export function DemoClaudeWindow({
           <div className="flex flex-none flex-col gap-[7px]">
             <div
               className={cn(
-                'flex flex-col gap-1 rounded-xl border bg-white pt-2 pr-[9px] pb-1.5 pl-3 text-[13px] leading-[19px] transition-[border-color,box-shadow] duration-200',
+                'flex flex-col gap-1 rounded-[12px] border bg-white pt-2 pr-[9px] pb-1.5 pl-3 text-[13px] leading-[19px] transition-[border-color,box-shadow] duration-200',
                 typing
                   ? 'border-[#BEBDB9] shadow-[0_0_0_3px_rgb(0_0_0/0.035),0_1px_3px_rgb(0_0_0/0.06)]'
                   : 'border-(--claude-composer-border) shadow-[0_1px_3px_rgb(0_0_0/0.05)]',

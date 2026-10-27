@@ -67,20 +67,20 @@ export function TaskPlayer({
           onToggleFullScreen={onFullScreen}
         />
       ) : pictureSrc ? (
-        <div className="relative min-h-0 flex-1 overflow-hidden rounded-[10px] bg-bg-sunken shadow-shot">
+        <div className="relative min-h-0 flex-1 overflow-hidden rounded-md bg-bg-sunken shadow-shot">
           <img
             src={pictureSrc}
             alt={step ? `What the page looked like: ${step.sentence}` : ''}
             className="h-full w-full object-cover object-top-left"
           />
           {step ? (
-            <span className="absolute bottom-3.5 left-1/2 max-w-[calc(100%-32px)] -translate-x-1/2 truncate rounded-full bg-ink-deep/90 px-3.5 py-2 font-semibold text-[13.5px] text-white">
+            <span className="absolute bottom-3.5 left-1/2 max-w-[calc(100%-32px)] -translate-x-1/2 truncate rounded-md bg-ink-deep/90 px-3.5 py-2 font-semibold text-[13.5px] text-white">
               {step.sentence}
             </span>
           ) : null}
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 place-items-center rounded-[10px] bg-bg-sunken p-6 text-center">
+        <div className="grid min-h-0 flex-1 place-items-center rounded-md bg-bg-sunken p-6 text-center">
           <div className="flex max-w-[40ch] flex-col items-center gap-2.5">
             <span className="grid size-11 place-items-center rounded-full bg-accent-tint text-primary">
               <VideoOff aria-hidden className="size-[18px]" />

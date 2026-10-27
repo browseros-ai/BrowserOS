@@ -195,20 +195,19 @@
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
-  /* Explicit radius ramp from stylecn/wiz (PR #16). --radius-4xl is a
-     full pill so primary CTAs render as the Wiz signature pill button. */
+  /* The crisp radius scale: no surface rounds past 8px. Cards, dialogs,
+     popovers and inputs are 8; tiles, thumbnails, preview frames, text
+     badges and nav or row highlights are 6 (rounded-md). xl through 3xl
+     collapse to 8 so the Card, dialogs and vendored components written
+     against the older, curvier ramp follow without a per-file sweep. Circles
+     (avatars, dots, round icon buttons) stay rounded-full. */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
-  --radius-xl: 12px;
-  --radius-2xl: 16px;
-  --radius-3xl: 20px;
+  --radius-xl: 8px;
+  --radius-2xl: 8px;
+  --radius-3xl: 8px;
   --radius-4xl: 9999px;
-  /* The corner radius the material-design pass standardises on. Sits
-     between --radius-lg and --radius-xl rather than replacing either, so
-     screens can adopt it one at a time instead of the ramp shifting under
-     every existing component at once. */
-  --radius-9: 9px;
 }
 
 /* Keyframes lifted from the design prototype's \3c style> block */
@@ -394,8 +393,8 @@ body {
   --sidebar-border: #cbd5e1;
   --sidebar-ring: #0254ec;
 
-  /* Radius ramp explicit values from PR #16. --radius-4xl is a full pill
-     for buttons, which is the Wiz signature CTA shape. */
+  /* shadcn's base radius, read only by vendored calc() offsets. Every
+     rounded-* class comes from the explicit ramp in @theme instead. */
   --radius: 0.75rem;
 
   /* Shadow colours for the indirection set up in @theme inline. These four

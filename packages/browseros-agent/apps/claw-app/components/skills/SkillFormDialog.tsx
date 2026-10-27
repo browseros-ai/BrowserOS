@@ -90,7 +90,7 @@ export function SkillFormDialog(props: SkillFormDialogProps) {
       viewId={props.open ? props.mode : null}
       onClose={close}
       placement="center"
-      className="max-h-[calc(100dvh-32px)] max-w-lg overflow-y-auto rounded-[22px] border-border-2 bg-card"
+      className="max-h-[calc(100dvh-32px)] max-w-lg overflow-y-auto border-border-2 bg-card"
     >
       {props.mode === 'create' ? (
         <CreateForm onClose={close} />

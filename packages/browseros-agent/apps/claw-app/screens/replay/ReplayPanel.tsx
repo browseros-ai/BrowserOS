@@ -84,7 +84,7 @@ export function ReplayPanel({
               type="button"
               data-resume-follow
               onClick={resumeFollow}
-              className="ml-auto shrink-0 rounded-full bg-accent-tint px-2.5 py-1 font-semibold text-accent-ink text-xs"
+              className="ml-auto shrink-0 rounded-md bg-accent-tint px-2.5 py-1 font-semibold text-accent-ink text-xs"
             >
               Resume follow
             </button>
@@ -147,7 +147,7 @@ export function ReplayPanel({
               tabIndex={-1}
               aria-label="Full screen"
               onClick={onToggleFullScreen}
-              className="pointer-events-none absolute top-12 right-3 z-10 flex items-center gap-1.5 rounded-lg bg-ink-deep/90 py-1.5 pr-2.5 pl-2 font-semibold text-[12.5px] text-white leading-4 opacity-0 transition-opacity duration-200 group-hover/viewport:pointer-events-auto group-hover/viewport:opacity-100"
+              className="pointer-events-none absolute top-12 right-3 z-10 flex items-center gap-1.5 rounded-md bg-ink-deep/90 py-1.5 pr-2.5 pl-2 font-semibold text-[12.5px] text-white leading-4 opacity-0 transition-opacity duration-200 group-hover/viewport:pointer-events-auto group-hover/viewport:opacity-100"
             >
               <Maximize2 aria-hidden className="size-[15px]" />
               Full screen
