@@ -11,12 +11,14 @@ import { cn } from '@/lib/utils'
 import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
 import { helpRequestSite, siteOf } from '@/screens/cockpit/cockpit.helpers'
 import { MiniScreencast } from './MiniScreencast'
+import { TabCountChip } from './TabCountChip'
 
 interface AgentRunningCardProps {
   session: LiveSessionCardRecord
   /** True while the person is in control of this session's page. */
   inControl?: boolean
-  onWatch?: () => void
+  /** Brings one of the session's browser tabs to the front. */
+  onGoToTab: (browserTabId: number) => void
   onTakeOver?: () => void
   onStop: () => void
   isFocusPending?: boolean
@@ -25,12 +27,12 @@ interface AgentRunningCardProps {
 
 /**
  * One task an agent is doing right now: a framed live picture of the page,
- * what it is doing in a sentence, which agent, and how many pages it has open.
+ * what it is doing in a sentence, which agent, and the tabs it is working in.
  */
 export function AgentRunningCard({
   session,
   inControl,
-  onWatch,
+  onGoToTab,
   onTakeOver,
   onStop,
   isFocusPending,
@@ -46,7 +48,6 @@ export function AgentRunningCard({
       ? siteOf(tab.url)
       : 'No page yet'
   const pageUrl = help?.url ?? tab?.url
-  const pages = session.browserTabs.length
   const startedSeconds = Math.max(0, (Date.now() - session.startedAt) / 1000)
 
   return (
@@ -112,10 +113,18 @@ export function AgentRunningCard({
             label={session.label}
             color={session.color}
           />
-          <span aria-hidden>·</span>
-          <span>
-            {pages} {pages === 1 ? 'page' : 'pages'}
-          </span>
+          {session.browserTabs.length > 1 ? (
+            <>
+              <span aria-hidden className="text-ink-4">
+                ·
+              </span>
+              <TabCountChip
+                browserTabs={session.browserTabs}
+                onScreenBrowserTabId={tab?.browserTabId}
+                onGoToTab={onGoToTab}
+              />
+            </>
+          ) : null}
         </p>
         <div className="mt-auto flex gap-2 pt-2.5">
           {waiting && !inControl && onTakeOver ? (
@@ -129,12 +138,12 @@ export function AgentRunningCard({
               <Hand aria-hidden className="size-[15px]" />
               Help now
             </Button>
-          ) : tab && onWatch ? (
+          ) : tab ? (
             <Button
               size="sm"
               variant="secondary"
               data-watch-browser-tab={tab.browserTabId}
-              onClick={onWatch}
+              onClick={() => onGoToTab(tab.browserTabId)}
               disabled={isFocusPending}
               className="h-[34px] px-3.5 font-semibold text-[13.5px]"
             >
