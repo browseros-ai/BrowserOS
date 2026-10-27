@@ -11,7 +11,7 @@ import {
   Type,
 } from 'lucide-react'
 import { useReducedMotion } from 'motion/react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useId, useRef } from 'react'
 import { Button } from '@/components/motion/button/base'
 import { Card } from '@/components/motion/card'
 import type { DescribedStep } from '@/lib/step-sentences'
@@ -28,6 +28,8 @@ interface TaskStepsProps {
   showHidden: boolean
   onShowHiddenChange: (show: boolean) => void
   onSelect: (step: DescribedStep) => void
+  /** "rail" drops the card chrome to fill a side panel, as in full screen. */
+  layout?: 'card' | 'rail'
 }
 
 const VERB_ICON: Record<ReplayVerb, LucideIcon> = {
@@ -52,9 +54,12 @@ export function TaskSteps({
   showHidden,
   onShowHiddenChange,
   onSelect,
+  layout = 'card',
 }: TaskStepsProps) {
   const reduce = useReducedMotion() ?? false
   const scrollRef = useRef<HTMLDivElement>(null)
+  // The page and its full-screen player each render a list.
+  const titleId = useId()
 
   // Scroll position is DOM state: keep the current step centred in the list's
   // own scroll area, so following playback never scrolls the page.
@@ -75,19 +80,10 @@ export function TaskSteps({
       ? `Step ${activeIndex + 1} of ${steps.length}`
       : `${steps.length} ${steps.length === 1 ? 'step' : 'steps'}`
 
-  return (
-    // contain: size lets the player set the row's height; the list then
-    // scrolls inside it instead of stretching the row.
-    <Card
-      aria-labelledby="steps-title"
-      size="compact"
-      className="h-[460px] min-h-0 gap-1.5 overflow-hidden border-border-2 bg-card px-[18px] pt-[18px] pb-0 shadow-card lg:h-auto lg:min-h-[380px] lg:[contain:size]"
-    >
+  const body = (
+    <>
       <div className="flex items-baseline justify-between gap-3">
-        <h2
-          id="steps-title"
-          className="font-bold text-[15.5px] text-cyanotype-ink"
-        >
+        <h2 id={titleId} className="font-bold text-[15.5px] text-cyanotype-ink">
           What happened
         </h2>
         <span className="text-[13px] text-ink-3 tabular-nums">{progress}</span>
@@ -133,6 +129,25 @@ export function TaskSteps({
           </Button>
         </div>
       ) : null}
+    </>
+  )
+
+  return layout === 'rail' ? (
+    <section
+      aria-labelledby={titleId}
+      className="flex min-h-0 flex-1 flex-col gap-1.5"
+    >
+      {body}
+    </section>
+  ) : (
+    // contain: size lets the player set the row's height; the list then
+    // scrolls inside it instead of stretching the row.
+    <Card
+      aria-labelledby={titleId}
+      size="compact"
+      className="h-[460px] min-h-0 gap-1.5 overflow-hidden border-border-2 bg-card px-[18px] pt-[18px] pb-0 shadow-card lg:h-auto lg:min-h-[380px] lg:[contain:size]"
+    >
+      {body}
     </Card>
   )
 }

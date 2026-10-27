@@ -64,11 +64,15 @@ mock.module('./PlaybackTransport', () => ({
     totalSeconds,
     onSeek,
     disabled = false,
+    onToggleFullScreen,
+    fullScreen = false,
   }: {
     playback: Playback
     totalSeconds: number
     onSeek: (seconds: number) => void
     disabled?: boolean
+    onToggleFullScreen?: () => void
+    fullScreen?: boolean
   }) => {
     const finished = playback.time >= totalSeconds
     return (
@@ -113,6 +117,15 @@ mock.module('./PlaybackTransport', () => ({
             Seek {seconds}
           </button>
         ))}
+        {onToggleFullScreen ? (
+          <button
+            type="button"
+            data-playback-full-screen={fullScreen}
+            onClick={onToggleFullScreen}
+          >
+            Full screen
+          </button>
+        ) : null}
       </div>
     )
   },
@@ -347,12 +360,12 @@ afterEach(async () => {
   Reflect.deleteProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT')
 })
 
-async function renderReplay() {
+async function renderReplay(props: ReplayHarnessProps = {}) {
   await act(async () => {
     root.render(
       <StrictMode>
         <MemoryRouter initialEntries={['/audit/session-1']}>
-          <ReplayHarness />
+          <ReplayHarness {...props} />
         </MemoryRouter>
       </StrictMode>,
     )
@@ -989,23 +1002,133 @@ describe('Replay Trendshift regression', () => {
   })
 })
 
+describe('Replay full screen', () => {
+  const twoTabs = () =>
+    replayData(
+      [...visualEvents(1, 1_000), ...visualEvents(2, 10_000)],
+      [1, 2],
+      [toolFrame(1, 3), toolFrame(2, 12)],
+    )
+  const inPanel = (panel: string, selector: string) =>
+    `[data-panel="${panel}"] ${selector}`
+
+  it('offers full screen on the inline viewport and transport only', async () => {
+    replayResult.replay = twoTabs()
+    let toggles = 0
+    await renderReplay({
+      onToggleFullScreen: () => toggles++,
+      withFullScreen: true,
+    })
+
+    const chips = [
+      ...container.querySelectorAll('button[aria-label="Full screen"]'),
+    ]
+    expect(chips).toHaveLength(1)
+    expect(chips[0]?.closest('[data-panel]')?.getAttribute('data-panel')).toBe(
+      'inline',
+    )
+    await clickAct('button[aria-label="Full screen"]')
+    expect(toggles).toBe(1)
+
+    expect(
+      attr(
+        inPanel('inline', '[data-playback-full-screen]'),
+        'data-playback-full-screen',
+      ),
+    ).toBe('false')
+    expect(
+      attr(
+        inPanel('full-screen', '[data-playback-full-screen]'),
+        'data-playback-full-screen',
+      ),
+    ).toBe('true')
+  })
+
+  it('has no full-screen controls when the page offers none', async () => {
+    replayResult.replay = twoTabs()
+    await renderReplay()
+
+    expect(container.querySelector('button[aria-label="Full screen"]')).toBe(
+      null,
+    )
+    expect(container.querySelector('[data-playback-full-screen]')).toBe(null)
+  })
+
+  it('drives one clock from the inline and full-screen players', async () => {
+    replayResult.replay = twoTabs()
+    await renderReplay({ onToggleFullScreen: () => {}, withFullScreen: true })
+    const playing = (panel: string) =>
+      attr(inPanel(panel, '[data-playback-playing]'), 'data-playback-playing')
+    const time = (panel: string) =>
+      attr(inPanel(panel, '[data-playback-time]'), 'data-playback-time')
+    const speed = (panel: string) =>
+      attr(inPanel(panel, '[data-playback-speed]'), 'data-playback-speed')
+
+    await clickAct(inPanel('full-screen', '[data-playback-toggle]'))
+    expect(playing('inline')).toBe('true')
+
+    await clickAct(inPanel('full-screen', '[data-playback-seek="9"]'))
+    expect(time('inline')).toBe('9')
+    expect(playing('inline')).toBe('true')
+
+    await clickAct(inPanel('inline', '[data-playback-speed-option="2"]'))
+    expect(speed('full-screen')).toBe('2')
+
+    await clickAct(inPanel('inline', '[data-playback-toggle]'))
+    expect(playing('full-screen')).toBe('false')
+    expect(time('full-screen')).toBe('9')
+    expect(
+      attr(
+        inPanel('full-screen', '[data-viewport-tab]'),
+        'data-viewport-track-time',
+      ),
+    ).toBe(
+      attr(
+        inPanel('inline', '[data-viewport-tab]'),
+        'data-viewport-track-time',
+      ),
+    )
+  })
+})
+
 const { ReplayPanel } = await import('./ReplayPanel')
 const { useReplaySession } = await import('./use-replay-session')
 
+interface ReplayHarnessProps {
+  onToggleFullScreen?: () => void
+  /** Also mount the full-screen player on the same session, as the theater does. */
+  withFullScreen?: boolean
+}
+
 /** The panel plus a plain action list wired the way a step list drives it. */
-function ReplayHarness() {
+function ReplayHarness({
+  onToggleFullScreen,
+  withFullScreen = false,
+}: ReplayHarnessProps) {
   const session = useReplaySession('session-1')
   if (session.isLoading || !session.replay) return null
   return (
     <>
-      <ReplayPanel
-        session={session}
-        loading={
-          session.plan.durationSeconds === 0 &&
-          session.recordingState === 'loading'
-        }
-        posterSrc="poster.png"
-      />
+      <div data-panel="inline">
+        <ReplayPanel
+          session={session}
+          loading={
+            session.plan.durationSeconds === 0 &&
+            session.recordingState === 'loading'
+          }
+          posterSrc="poster.png"
+          onToggleFullScreen={onToggleFullScreen}
+        />
+      </div>
+      {withFullScreen ? (
+        <div data-panel="full-screen">
+          <ReplayPanel
+            session={session}
+            fullScreen
+            onToggleFullScreen={onToggleFullScreen}
+          />
+        </div>
+      ) : null}
       <div data-event-timeline data-current-index={session.state.currentIndex}>
         {session.plan.actions.map((action: ReplayAction, index: number) => (
           <button

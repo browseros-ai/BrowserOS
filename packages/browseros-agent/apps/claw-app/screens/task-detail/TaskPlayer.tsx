@@ -17,6 +17,8 @@ interface TaskPlayerProps {
   step?: DescribedStep
   /** Its picture, when there is no recording to play. */
   snapshotId: number | null
+  /** Opens the full-screen player. */
+  onFullScreen: () => void
 }
 
 /**
@@ -30,6 +32,7 @@ export function TaskPlayer({
   replay,
   step,
   snapshotId,
+  onFullScreen,
 }: TaskPlayerProps) {
   const baseUrl = useTaskScreenshotBaseUrl()
   const hasRecording = replay.plan.durationSeconds > 0
@@ -47,9 +50,14 @@ export function TaskPlayer({
       className="h-[min(64vh,540px)] min-h-[340px] scroll-mt-6 gap-0 overflow-hidden border-border-2 bg-card p-3 shadow-card"
     >
       {hasRecording ? (
-        <ReplayPanel session={replay} />
+        <ReplayPanel session={replay} onToggleFullScreen={onFullScreen} />
       ) : replay.recordingState === 'loading' ? (
-        <ReplayPanel session={replay} loading posterSrc={pictureSrc} />
+        <ReplayPanel
+          session={replay}
+          loading
+          posterSrc={pictureSrc}
+          onToggleFullScreen={onFullScreen}
+        />
       ) : pictureSrc ? (
         <div className="relative min-h-0 flex-1 overflow-hidden rounded-[10px] bg-bg-sunken shadow-shot">
           <img

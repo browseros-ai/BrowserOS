@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { Lightbulb } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { type ComponentProps, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 import { StepLogDialog } from '@/components/audit/StepLogDialog'
 import { EmptyState } from '@/components/cockpit/EmptyState'
@@ -21,6 +21,7 @@ import {
 } from '@/modules/api/agent-settings.hooks'
 import { toastApiError } from '@/modules/toast/toast'
 import { PagesVisited } from './PagesVisited'
+import { ReplayTheater } from './ReplayTheater'
 import { SnapshotGallery } from './SnapshotGallery'
 import { TaskPageHeader } from './TaskPageHeader'
 import { TaskPlayer } from './TaskPlayer'
@@ -47,6 +48,7 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
   const [showHidden, setShowHidden] = useState(false)
   // Without a recording, the step the person picked; null shows the last one.
   const [chosenDispatchId, setChosenDispatchId] = useState<number | null>(null)
+  const [fullScreen, setFullScreen] = useState(false)
 
   if (data.isPending) {
     return (
@@ -103,6 +105,17 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
   // Before the first step, a loading recording shows the first step's picture.
   const pictureStep = shownStep ?? steps[0]
 
+  // One step list, fed once: the page's rail and the full-screen one stay in step.
+  const stepList: ComponentProps<typeof TaskSteps> = {
+    steps,
+    activeIndex,
+    startedAt: session.startedAt,
+    hiddenCount: data.hiddenCount,
+    showHidden,
+    onShowHiddenChange: setShowHidden,
+    onSelect: selectStep,
+  }
+
   return (
     <Page>
       <TaskPageHeader session={session} lastPageUrl={data.lastPageUrl} />
@@ -124,17 +137,19 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
               ? snapshotForStep(pictureStep, dispatches, data.screenshots)
               : null
           }
+          onFullScreen={() => setFullScreen(true)}
         />
-        <TaskSteps
-          steps={steps}
-          activeIndex={activeIndex}
-          startedAt={session.startedAt}
-          hiddenCount={data.hiddenCount}
-          showHidden={showHidden}
-          onShowHiddenChange={setShowHidden}
-          onSelect={selectStep}
-        />
+        <TaskSteps {...stepList} />
       </div>
+      {hasRecording ? (
+        <ReplayTheater
+          open={fullScreen}
+          onOpenChange={setFullScreen}
+          session={session}
+          replay={replay}
+          steps={<TaskSteps {...stepList} layout="rail" />}
+        />
+      ) : null}
       <PagesVisited pages={data.pages} />
       <SnapshotGallery
         sessionId={sessionId}
