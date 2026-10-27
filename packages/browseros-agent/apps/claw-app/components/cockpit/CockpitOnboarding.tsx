@@ -78,7 +78,7 @@ export function CockpitOnboarding({
                     link: 'get-claude',
                   })
                 }
-                className="inline-flex h-[34px] shrink-0 items-center gap-[7px] rounded-full bg-accent px-[15px] font-semibold text-[14px] text-accent-foreground leading-5 transition-colors hover:bg-accent-2 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-accent/25"
+                className="inline-flex h-[34px] shrink-0 items-center gap-[7px] rounded-md bg-accent px-[15px] font-semibold text-[14px] text-accent-foreground leading-5 transition-colors hover:bg-accent-2 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-accent/25"
               >
                 {FIRST_RUN_COPY.getClaude}
                 <ArrowUpRight
