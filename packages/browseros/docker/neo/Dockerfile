@@ -97,6 +97,7 @@ ENV NEO_SCREEN=1600x1000 \
     BROWSERCLAW_HOSTED_MODE=1 \
     BROWSERCLAW_CONFIG_FILE=/etc/neo/neo.toml \
     NEO_SANDBOX=false \
+    NEO_SOFTWARE_GRAPHICS=true \
     BROWSEROS_CAPSOLVER_API_KEY_FILE=/home/neo/.config/browseros/captcha/capsolver-api-key \
     BROWSEROS_2CAPTCHA_API_KEY_FILE=/home/neo/.config/browseros/captcha/2captcha-api-key \
     NEO_DISABLE_BROWSEROS_EXTENSIONS=true \

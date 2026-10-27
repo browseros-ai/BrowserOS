@@ -28,6 +28,7 @@ readonly CDP_PORT=9110
 readonly SERVER_PORT=9210
 
 : "${NEO_SCREEN:=1600x1000}" "${NEO_SANDBOX:=false}" "${NEO_ARGS:=}"
+: "${NEO_SOFTWARE_GRAPHICS:=true}"
 # Agents drive Neo over MCP, which needs none of the bundled BrowserOS
 # extensions, so they are off unless a deployment wants their UI or rrweb page
 # recordings back (README).
@@ -161,14 +162,15 @@ if is_true "$NEO_DISABLE_BROWSEROS_EXTENSIONS"; then
   browseros_extension_flags=(--disable-browseros-extensions)
 fi
 
-# Containers and microVMs rarely have a GPU, so Chromium draws with Mesa's
-# llvmpipe, which runs on the CPU. Chromium's software-rendering list turns
-# every GPU feature off for llvmpipe, which leaves pages with no WebGL at all.
-# --ignore-gpu-blocklist skips that list so WebGL runs on llvmpipe. Skipping it
-# would also move compositing, painting and video onto llvmpipe;
-# --disable-gpu-compositing keeps those on Chromium's software path, as before.
-# WebGPU stays off: Chromium offers pages no WebGPU adapter without a GPU.
-gpu_flags=(--ignore-gpu-blocklist --disable-gpu-compositing)
+# CPU-only containers use Mesa for WebGL and the bundled SwiftShader for WebGPU.
+# The blocklist override admits WebGL; unsafe WebGPU admits its software fallback
+# and intentionally retains native GPU reporting. Keep compositing on Chromium's
+# own software path so enabling these APIs does not move ordinary page painting
+# onto llvmpipe. Deployments can opt out without replacing their other NEO_ARGS.
+gpu_flags=()
+if is_true "$NEO_SOFTWARE_GRAPHICS"; then
+  gpu_flags=(--ignore-gpu-blocklist --disable-gpu-compositing --enable-unsafe-webgpu)
+fi
 
 # The viewer is for watching agents and for a person taking over a login, code
 # or payment, so Neo hides the browser controls neither needs (README lists the

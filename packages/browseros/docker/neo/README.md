@@ -57,6 +57,7 @@ NEO_VNC_PORT=7080 NEO_MCP_PORT=7010 NEO_DATA=/mnt/neo docker compose up -d --wai
 | Hosted mode (see below) | `-e BROWSERCLAW_HOSTED_MODE=0` | `BROWSERCLAW_HOSTED_MODE` | `1` |
 | Server behaviour (see [Behaviour file](#behaviour-file)) | `-v ./neo.toml:/etc/neo/neo.toml:ro` | the `neo.toml` volume in `compose.yaml` | the image's `/etc/neo/neo.toml` |
 | Chromium sandbox (see [Security](#security)) | `-e NEO_SANDBOX=true` | `NEO_SANDBOX` | `false` |
+| Software graphics (see [Graphics](#graphics)) | `-e NEO_SOFTWARE_GRAPHICS=false` | `NEO_SOFTWARE_GRAPHICS` | `true` |
 | Bundled BrowserOS extensions off (see [Bundled extensions](#bundled-extensions)) | `-e NEO_DISABLE_BROWSEROS_EXTENSIONS=false` | `NEO_DISABLE_BROWSEROS_EXTENSIONS` | `true` |
 | Extra Neo command-line flags (see [Browser frame](#browser-frame)) | `-e NEO_ARGS="--lang=de"` | `NEO_ARGS` | empty |
 
@@ -167,12 +168,32 @@ install them again when re-enabled.
 
 ### Graphics
 
-Containers and microVMs rarely have a GPU, so Neo draws with Mesa's llvmpipe, which runs on the
-CPU. Chromium turns WebGL off on llvmpipe by default, so the entrypoint starts Neo with
-`--ignore-gpu-blocklist`: pages get WebGL1 and WebGL2, drawn by the CPU, so 3D-heavy pages cost
-more CPU than on a desktop. It also passes `--disable-gpu-compositing`, which keeps compositing,
-page painting and video on Chromium's own software path, as in earlier images. WebGPU stays
-unavailable: Chromium offers pages no WebGPU adapter without a GPU.
+The image enables WebGL1/2 rendering and WebGPU compute on machines without a GPU.
+`NEO_SOFTWARE_GRAPHICS=true` adds `--ignore-gpu-blocklist --disable-gpu-compositing
+--enable-unsafe-webgpu`: Mesa llvmpipe renders WebGL, and Chromium can use its
+bundled SwiftShader WebGPU fallback. These run on the CPU; 3D-heavy pages cost
+more CPU than on a desktop with a GPU. The compositing flag keeps compositing,
+page painting and video on Chromium's own software path, as in earlier images.
+
+The WebGPU flag opts into backends and features outside Chromium's normal safety
+policy. BrowserOS keeps native GPU reporting for this configuration, including in
+hosted mode; it does not report a hosted NVIDIA identity. For a deployment with a
+supported GPU, or to keep Chromium's default graphics restrictions, set
+`NEO_SOFTWARE_GRAPHICS=false`. Custom flags in `NEO_ARGS` remain additive; changing
+them does not remove the software-graphics flags, so use the setting to opt out.
+This policy only affects the container launcher, independently of
+`BROWSERCLAW_HOSTED_MODE`; installed desktop browsers are unchanged.
+
+The smoke check renders and reads back a triangle with both WebGL versions and
+runs a WebGPU compute shader. Its `--url` must use HTTPS or a loopback origin so
+WebGPU has a secure context. An exposed API or a renderer name is not enough to
+pass the check.
+
+From Neo 0.51.2.6, hosted mode also suppresses Runtime console and asynchronous
+exception notifications to prevent inspector error formatting from invoking page
+callbacks. Native MCP console reads therefore omit those messages. Execution
+contexts, evaluation, synchronous evaluation errors, and bindings remain available;
+`BROWSERCLAW_HOSTED_MODE=0` restores normal inspector notifications.
 
 ## Read what your agent did
 
@@ -270,7 +291,7 @@ AppArmor, so they may also need `--security-opt apparmor=unconfined`. In compose
 
 [`smoke.py`](smoke.py) checks a running container from your machine: the viewer, MCP from
 outside the container, the human-help setting, an agent opening a tab, the blank new tab page,
-and WebGL drawing (see [Graphics](#graphics)).
+and WebGL1/2 rendering and WebGPU compute (see [Graphics](#graphics)).
 
 ```sh
 python3 smoke.py                          # default ports
