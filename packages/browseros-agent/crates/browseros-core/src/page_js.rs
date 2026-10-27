@@ -41,6 +41,10 @@ use std::{
 /// An empty name would create a fresh world on every call.
 const WORLD_NAME: &str = "browseros";
 
+fn no_isolated_world() -> CoreError {
+    CoreError::Message("the page has no isolated world for BrowserOS's check".to_string())
+}
+
 /// Returned by a guarded isolated call whose node is not in the document of the world it was
 /// resolved into. The call is then repeated in the page world. See [`guard_document`].
 const OTHER_DOCUMENT: &str = "__browserosOtherDocument";
@@ -100,6 +104,8 @@ pub struct PageJs<'a> {
     session: &'a ProtocolSession,
     frame: Option<&'a FrameId>,
     isolated: bool,
+    /// Never falls back to the page world: see [`PageJs::isolated_only`].
+    strict: bool,
     user_gesture: bool,
     timeout: Option<Duration>,
 }
@@ -110,6 +116,17 @@ impl<'a> PageJs<'a> {
     #[must_use]
     pub fn isolated(session: &'a ProtocolSession) -> Self {
         Self::new(session, isolated_world_enabled())
+    }
+
+    /// Scripts whose answer the page must not be able to forge, such as BrowserOS's own check of
+    /// what the page reports. Always the isolated world, whatever the rollout switch; a frame that
+    /// cannot get one is an error, never the page world.
+    #[must_use]
+    pub fn isolated_only(session: &'a ProtocolSession) -> Self {
+        Self {
+            strict: true,
+            ..Self::new(session, true)
+        }
     }
 
     /// Scripts that need the page's own JavaScript. Always the page's main world.
@@ -123,6 +140,7 @@ impl<'a> PageJs<'a> {
             session,
             frame: None,
             isolated,
+            strict: false,
             user_gesture: false,
             timeout: None,
         }
@@ -194,6 +212,7 @@ impl<'a> PageJs<'a> {
                     return decode(remote.value);
                 }
                 Some(Err(error)) => return Err(error),
+                Some(Ok(_)) | None if self.strict => return Err(no_isolated_world()),
                 Some(Ok(_)) | None => {}
             }
         }
@@ -215,6 +234,9 @@ impl<'a> PageJs<'a> {
                 .await
         {
             return result;
+        }
+        if self.strict {
+            return Err(no_isolated_world());
         }
         match self.frame {
             Some(frame) if self.top_frame().await? != *frame => {

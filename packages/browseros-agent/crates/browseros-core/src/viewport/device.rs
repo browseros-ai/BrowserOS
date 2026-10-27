@@ -1,6 +1,6 @@
 //! The fixed devices, the CDP that puts a tab in one, and how the page proves it took.
 use super::{DEFAULT_ZOOM, PageMetrics, Size, ViewportMode};
-use crate::{BrowserView, CoreError, PageId, SessionId};
+use crate::{CoreError, PageId, PageJs, ProtocolSession};
 use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::time::{Instant, sleep};
@@ -233,46 +233,23 @@ pub(super) fn chrome_version(reply: &Value) -> Option<String> {
 
 /// Reads the metrics in an isolated world: page scripts may redefine `screen` or
 /// `devicePixelRatio` in their own world, which must neither fake nor fail this check.
-pub(super) async fn measure(
-    view: &BrowserView,
-    session: &SessionId,
-) -> Result<PageMetrics, CoreError> {
-    let tree = view
-        .send_at_capture("Page.getFrameTree", json!({}), Some(session))
-        .await?;
-    let world = view
-        .send_at_capture(
-            "Page.createIsolatedWorld",
-            json!({"frameId": tree["frameTree"]["frame"]["id"], "worldName": "browseros-viewport"}),
-            Some(session),
-        )
-        .await?;
-    let reply = view
-        .send_at_capture(
-            "Runtime.evaluate",
-            json!({
-                "expression": METRICS_EXPRESSION,
-                "contextId": world["executionContextId"],
-                "returnByValue": true
-            }),
-            Some(session),
-        )
-        .await?;
-    serde_json::from_value(reply["result"]["value"].clone())
+pub(super) async fn measure(session: &ProtocolSession) -> Result<PageMetrics, CoreError> {
+    PageJs::isolated_only(session)
+        .eval(METRICS_EXPRESSION)
+        .await
         .map_err(|err| CoreError::Message(format!("page metrics were unreadable: {err}")))
 }
 
 /// Waits until the page reports `fixed`'s device. Emulation reaches the renderer
 /// asynchronously, and a page that never reports it did not take it.
 pub(super) async fn settle(
-    view: &BrowserView,
-    session: &SessionId,
+    session: &ProtocolSession,
     page: &PageId,
     fixed: Fixed,
 ) -> Result<PageMetrics, CoreError> {
     let deadline = Instant::now() + SETTLE_LIMIT;
     loop {
-        let metrics = measure(view, session).await;
+        let metrics = measure(session).await;
         if let Ok(metrics) = &metrics
             && fixed.reported_by(metrics)
         {

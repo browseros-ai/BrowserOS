@@ -316,7 +316,8 @@ impl Viewports {
         if view.signals().pending_dialog(&page).is_some() {
             return Err(dialog_open());
         }
-        let session = view.page_session(page.clone()).await?.session_id;
+        let admitted = view.page_session(page.clone()).await?;
+        let session = admitted.session_id.clone();
         let Some(fixed) = request.fixed() else {
             // Any record may have overrides on this session, including a change that failed or
             // was interrupted after sending them. Forgotten only once cleared: a failed clear
@@ -330,7 +331,7 @@ impl Viewports {
                 }
             }
             self.forget(&page);
-            let metrics = device::measure(view, &session).await?;
+            let metrics = device::measure(&admitted.session).await?;
             view.page(page.clone()).await?;
             return Ok(report(&page, request, metrics, None));
         };
@@ -341,7 +342,7 @@ impl Viewports {
         for (method, params) in fixed.commands(&chrome_version) {
             view.send_at_capture(method, params, Some(&session)).await?;
         }
-        let metrics = device::settle(view, &session, &page, fixed).await?;
+        let metrics = device::settle(&admitted.session, &page, fixed).await?;
         let placement = window::locate(view, &page, &info.target_id, info.window_id).await?;
         let fit = window::fit(view, &session, placement, fixed.preview(), true).await?;
         if let Some(slot) = slot.as_mut() {
@@ -386,7 +387,8 @@ impl Viewports {
                 _exclusive: slot,
             });
         }
-        let session = view.page_session(page.clone()).await?.session_id;
+        let admitted = view.page_session(page.clone()).await?;
+        let session = admitted.session_id.clone();
         let reapply = tab.applied.as_ref() != Some(&session);
         let placement = window::locate(view, &page, &info.target_id, info.window_id).await?;
         let contents = tab.fixed.preview();
@@ -405,7 +407,7 @@ impl Viewports {
                 for (method, params) in tab.fixed.commands(&chrome_version) {
                     view.send_at_capture(method, params, Some(&session)).await?;
                 }
-                device::settle(view, &session, &page, tab.fixed).await?;
+                device::settle(&admitted.session, &page, tab.fixed).await?;
             }
             if refit {
                 let fit = window::fit(view, &session, placement, contents, false).await?;

@@ -143,6 +143,26 @@ async fn tests_that_isolated_eval_falls_back_to_the_page_world_when_chromium_ref
 }
 
 #[tokio::test]
+async fn tests_that_an_isolated_only_eval_never_falls_back_to_the_page_world()
+-> Result<(), Box<dyn std::error::Error>> {
+    let connection = TestConnection::new([
+        ("Page.getFrameTree", top_frame("main")),
+        (
+            "Page.createIsolatedWorld",
+            cdp_error("No frame for given id found"),
+        ),
+        ("Runtime.evaluate", json!({ "result": { "value": 3 } })),
+    ]);
+    let session = session(&connection, "isolated-only-refused");
+
+    let refused = PageJs::isolated_only(&session).eval::<i64>("count()").await;
+
+    assert!(refused.is_err(), "{refused:?}");
+    assert!(!methods(&connection.calls()?).contains(&"Runtime.evaluate"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn tests_that_isolated_eval_retries_once_in_a_fresh_world_when_the_context_went_stale()
 -> Result<(), Box<dyn std::error::Error>> {
     let connection = TestConnection::new([
