@@ -155,7 +155,19 @@ impl Store {
         let dir = state_dir().ok_or_else(|| {
             crate::exit::Failure::usage("cannot locate a home directory for the session file")
         })?;
-        std::fs::create_dir_all(&dir)?;
+        Self::open_in(&dir, scope)
+    }
+
+    /// The same store rooted somewhere explicit.
+    ///
+    /// Exists so a test can point it at a temporary directory. Setting an
+    /// environment variable instead would be `unsafe` under the 2024 edition,
+    /// which the workspace denies, and would leak between parallel tests.
+    ///
+    /// # Errors
+    /// Fails only when the directory cannot be created.
+    pub fn open_in(dir: &Path, scope: &Scope) -> anyhow::Result<Self> {
+        std::fs::create_dir_all(dir)?;
         let key = scope_key(scope);
         Ok(Self {
             file: dir.join(format!("{key}.json")),
@@ -279,10 +291,14 @@ impl Store {
 /// Every scope file on this machine, for `session list`.
 #[must_use]
 pub fn all_scopes() -> BTreeMap<String, State> {
+    state_dir().map(|dir| scopes_in(&dir)).unwrap_or_default()
+}
+
+/// Every scope file under one directory.
+#[must_use]
+pub fn scopes_in(dir: &Path) -> BTreeMap<String, State> {
     let mut found = BTreeMap::new();
-    let Some(dir) = state_dir() else {
-        return found;
-    };
+    let dir = dir.to_path_buf();
     let Ok(entries) = std::fs::read_dir(dir) else {
         return found;
     };

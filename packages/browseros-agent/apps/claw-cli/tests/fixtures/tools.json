@@ -1,0 +1,45 @@
+{
+  "note": "The desktop tool surface, from browseros_mcp::catalog() plus the tools ClawMcpService adds. A tool added to the server must be wrapped by a command or recorded as a deliberate skip here, or coverage.rs fails.",
+  "source": "crates/browseros-mcp/src/tools/mod.rs and apps/claw-server/src/api/mcp/service.rs",
+  "catalog": [
+    "browser_profiles",
+    "browser_target",
+    "tabs",
+    "tab_groups",
+    "history",
+    "credentials",
+    "payment_cards",
+    "navigate",
+    "snapshot",
+    "diff",
+    "act",
+    "download",
+    "upload",
+    "read",
+    "grep",
+    "screenshot",
+    "pdf",
+    "wait",
+    "windows",
+    "evaluate",
+    "run"
+  ],
+  "server": [
+    "name_session",
+    "save_skill",
+    "mark_skill_run",
+    "pursue",
+    "request_human_help",
+    "await_human_help"
+  ],
+  "hostedOnly": [
+    "setViewport",
+    "solve_captcha"
+  ],
+  "skipped": {
+    "credentials": "A saved-credential picker belongs in the browser, where a human confirms it. Exposing it as a flag would make a CLI argument the natural way to pass one, which is exactly what the secret rules forbid.",
+    "payment_cards": "A saved-card picker belongs in the browser, where a human confirms the card. The CLI must never make a card number look like an ordinary argument.",
+    "setViewport": "Hosted only, where the windows are infrastructure. A desktop CLI would offer a command this server always refuses.",
+    "solve_captcha": "Offered only where the server has a captcha provider, and a captcha is a human handoff from a CLI: use `browseros help request --kind captcha`."
+  }
+}

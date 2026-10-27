@@ -53,9 +53,14 @@ pub struct Globals {
     #[arg(long, short, global = true)]
     pub quiet: bool,
     /// Client read timeout in ms. The default is 180000, which must exceed the
-    /// server's longest blocking tool.
+    /// server's longest deliberately blocking tool: await_human_help holds a
+    /// call for 75s and `wait --time` is honored to 90s.
+    ///
+    /// Named apart from `wait --timeout` on purpose. A global `--timeout`
+    /// would shadow the subcommand flag that shares its name, and a caller
+    /// typing it after `wait` means the wait's own budget.
     #[arg(long, global = true, value_name = "MS")]
-    pub timeout: Option<u64>,
+    pub client_timeout: Option<u64>,
     /// Fail instead of pairing a session automatically.
     #[arg(long, global = true)]
     pub no_auto_session: bool,

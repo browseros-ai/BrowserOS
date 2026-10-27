@@ -33,7 +33,7 @@ pub async fn run(cli: Cli) -> Result<Code> {
         return Ok(code);
     }
 
-    let timeout = cli.globals.timeout.map_or(
+    let timeout = cli.globals.client_timeout.map_or(
         client::transport::DEFAULT_READ_TIMEOUT,
         Duration::from_millis,
     );

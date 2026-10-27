@@ -26,7 +26,7 @@ remembered page for one command. `browseros use <id>` changes it.
 --agent <name>       the product driving this CLI, for tab labelling
 --json               wrap the result in a JSON envelope on stdout
 --quiet, -q          suppress the CLI's own notices on stderr
---timeout <ms>       client read timeout, default 180000
+--client-timeout <ms>  client read timeout, default 180000
 --no-auto-session    fail instead of pairing a session automatically
 ```
 
