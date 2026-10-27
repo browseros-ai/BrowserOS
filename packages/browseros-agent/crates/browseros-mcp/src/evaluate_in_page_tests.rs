@@ -1,6 +1,6 @@
-//! Which JavaScript world `evaluate`, `evaluate_in_page` and their `run` SDK twins send the
-//! agent's script to, against a one-tab fake browser. World selection itself is covered in
-//! `browseros_core::page_js`.
+//! Where `evaluate_in_page` and its `run` SDK routes send the agent's script, against a one-tab
+//! fake browser, and what an old helper calling the removed `page.evaluate` gets back. World
+//! selection itself is covered in `browseros_core::page_js`.
 use crate::{
     framework::{BrowserToolDefaults, BrowserToolOptions, ToolCtx, ToolResult, execute_tool},
     output_file::create_browser_output_file_access,
@@ -22,19 +22,16 @@ type TestResult = Result<(), Box<dyn Error>>;
 /// Appears only in the agent's script, so the evaluation carrying it is easy to find among the
 /// readiness probes the tools also send.
 const SCRIPT: &str = "40 + 2";
-const ISOLATED_CONTEXT: i64 = 77;
 
 struct Native {
-    refuse_world: bool,
     evaluations: Mutex<Vec<Value>>,
     events: broadcast::Sender<CdpEvent>,
 }
 
 impl Native {
-    fn new(refuse_world: bool) -> Arc<Self> {
+    fn new() -> Arc<Self> {
         let (events, _) = broadcast::channel(8);
         Arc::new(Self {
-            refuse_world,
             evaluations: Mutex::new(Vec::new()),
             events,
         })
@@ -68,13 +65,8 @@ impl Native {
             "Target.attachToTarget" => json!({"sessionId": "session-1"}),
             "Browser.getVersion" => json!({"product": "Chrome/155.0.8315.26"}),
             "Page.getFrameTree" => json!({"frameTree": {"frame": {"id": "target-1"}}}),
-            "Page.createIsolatedWorld" if self.refuse_world => {
-                return Err(CdpError::Protocol {
-                    code: -32000,
-                    message: "Could not create isolated world".to_string(),
-                });
-            }
-            "Page.createIsolatedWorld" => json!({"executionContextId": ISOLATED_CONTEXT}),
+            // Readiness probes run in BrowserOS's isolated world.
+            "Page.createIsolatedWorld" => json!({"executionContextId": 77}),
             "Runtime.evaluate" => {
                 if let Ok(mut evaluations) = self.evaluations.lock() {
                     evaluations.push(params.clone());
@@ -164,37 +156,8 @@ fn script_args() -> Value {
 }
 
 #[tokio::test]
-async fn tests_that_evaluate_runs_the_script_in_the_isolated_world() -> TestResult {
-    let native = Native::new(false);
-    let result = call(&ctx(&native), tools::evaluate::definition(), script_args()).await;
-
-    assert!(!result.is_error, "{}", text(&result));
-    assert!(text(&result).contains("42"), "{}", text(&result));
-    let scripts = native.scripts();
-    assert_eq!(scripts.len(), 1, "{scripts:?}");
-    assert_eq!(scripts[0]["contextId"], json!(ISOLATED_CONTEXT));
-    assert_eq!(scripts[0]["userGesture"], json!(true));
-    Ok(())
-}
-
-#[tokio::test]
-async fn tests_that_evaluate_never_falls_back_to_the_page_world() -> TestResult {
-    let native = Native::new(true);
-    let result = call(&ctx(&native), tools::evaluate::definition(), script_args()).await;
-
-    assert!(result.is_error, "{}", text(&result));
-    assert!(
-        text(&result).contains("evaluate_in_page"),
-        "{}",
-        text(&result)
-    );
-    assert!(native.scripts().is_empty(), "{:?}", native.scripts());
-    Ok(())
-}
-
-#[tokio::test]
 async fn tests_that_evaluate_in_page_runs_the_script_in_the_main_world() -> TestResult {
-    let native = Native::new(false);
+    let native = Native::new();
     let result = call(
         &ctx(&native),
         tools::evaluate_in_page::definition(),
@@ -212,14 +175,12 @@ async fn tests_that_evaluate_in_page_runs_the_script_in_the_main_world() -> Test
 }
 
 #[tokio::test]
-async fn tests_that_run_sends_each_sdk_script_to_its_world() -> TestResult {
-    let native = Native::new(false);
+async fn tests_that_run_sends_both_sdk_routes_to_the_main_world() -> TestResult {
+    let native = Native::new();
     let code = format!(
-        "const page = browser.page(1);
-         const isolated = await page.evaluate(() => {SCRIPT});
-         const inPage = await page.evaluateInPage(() => {SCRIPT});
-         const direct = await browser.evaluateInPage(1, {{ code: 'return {SCRIPT};' }});
-         return [isolated.value, inPage.value, direct.value];"
+        "const viaPage = await browser.page(1).evaluateInPage(() => {SCRIPT});
+         const viaBrowser = await browser.evaluateInPage(1, {{ code: 'return {SCRIPT};' }});
+         return [viaPage.value, viaBrowser.value];"
     );
     let result = call(
         &ctx(&native),
@@ -229,11 +190,34 @@ async fn tests_that_run_sends_each_sdk_script_to_its_world() -> TestResult {
     .await;
 
     assert!(!result.is_error, "{}", text(&result));
-    let contexts = native
-        .scripts()
-        .iter()
-        .map(|params| params.get("contextId").cloned())
-        .collect::<Vec<_>>();
-    assert_eq!(contexts, vec![Some(json!(ISOLATED_CONTEXT)), None, None]);
+    let scripts = native.scripts();
+    assert_eq!(scripts.len(), 2, "{scripts:?}");
+    assert!(
+        scripts
+            .iter()
+            .all(|params| params.get("contextId").is_none()),
+        "{scripts:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_an_old_page_evaluate_call_is_pointed_at_evaluate_in_page() -> TestResult {
+    let native = Native::new();
+    let code = format!("return await browser.page(1).evaluate(() => {SCRIPT});");
+    let result = call(
+        &ctx(&native),
+        tools::run::definition(),
+        json!({"code": code, "timeout": 5000}),
+    )
+    .await;
+
+    assert!(result.is_error, "{}", text(&result));
+    assert!(
+        text(&result).contains("evaluateInPage"),
+        "{}",
+        text(&result)
+    );
+    assert!(native.scripts().is_empty(), "{:?}", native.scripts());
     Ok(())
 }

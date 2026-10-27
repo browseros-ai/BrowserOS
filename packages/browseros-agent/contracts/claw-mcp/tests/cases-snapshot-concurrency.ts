@@ -101,18 +101,6 @@ async function evaluateText(
   code: string,
 ): Promise<string> {
   return expectOk(
-    await ctx.mcp.callTool('evaluate', { page, code }),
-    `evaluate ${code}`,
-  )
-}
-
-/** Calls a fixture's own probe, which lives in the page's JavaScript world. */
-async function fixtureText(
-  ctx: CaseContext,
-  page: number,
-  code: string,
-): Promise<string> {
-  return expectOk(
     await ctx.mcp.callTool('evaluate_in_page', { page, code }),
     `evaluate_in_page ${code}`,
   )
@@ -138,7 +126,7 @@ async function cursorProbeState(
   ctx: CaseContext,
   page: number,
 ): Promise<CursorProbeState> {
-  const text = await fixtureText(
+  const text = await evaluateText(
     ctx,
     page,
     'return JSON.stringify(window.snapshotCursorFixture.state())',
@@ -170,7 +158,7 @@ async function frameProbeState(
   ctx: CaseContext,
   page: number,
 ): Promise<FrameProbeState> {
-  const text = await fixtureText(
+  const text = await evaluateText(
     ctx,
     page,
     'return JSON.stringify(window.snapshotFrameFixture.state())',
@@ -242,7 +230,7 @@ async function waitForCursorFixture(
 }
 
 async function resetCursorProbe(ctx: CaseContext, page: number): Promise<void> {
-  await fixtureText(
+  await evaluateText(
     ctx,
     page,
     'window.snapshotCursorFixture.resetProbe(); return "reset"',

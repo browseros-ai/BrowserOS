@@ -7,7 +7,8 @@
 //!   shares the page's DOM but not its JavaScript, so the page cannot see their globals or patch
 //!   the built-ins they call.
 //! - [`PageJs::page_world`] is for scripts that need the page's own JavaScript: the agent's
-//!   `evaluate`, site globals, handlers the page assigned. They always run in the page's main world.
+//!   `evaluate_in_page`, site globals, handlers the page assigned. They always run in the page's
+//!   main world.
 //!
 //! An isolated script must behave the same in either world. With the rollout switch
 //! ([`set_isolated_world_enabled`]) off every script runs in the page world, and with it on a

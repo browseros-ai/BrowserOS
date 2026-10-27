@@ -295,7 +295,7 @@ export const captureIoCases: ContractCase[] = [
       await waitUntil(
         async () =>
           textOf(
-            await ctx.mcp.callTool('evaluate', {
+            await ctx.mcp.callTool('evaluate_in_page', {
               page,
               code: 'return document.getElementById("single-names").textContent',
             }),
@@ -326,7 +326,7 @@ export const captureIoCases: ContractCase[] = [
       )
       await waitUntil(async () => {
         const names = textOf(
-          await ctx.mcp.callTool('evaluate', {
+          await ctx.mcp.callTool('evaluate_in_page', {
             page,
             code: 'return document.getElementById("multi-names").textContent',
           }),

@@ -1,12 +1,12 @@
 /**
- * What a page can see of BrowserOS's own scripts. The fixture hooks the built-ins a page-world
- * scan would call and records every DOM mutation, the way an anti-bot script would. `snapshot`,
- * `grep` and `evaluate` must leave that record empty; only `evaluate_in_page`, the explicit
- * main-world tool, runs where the page can watch.
+ * What a page can see of BrowserOS. The fixture hooks the built-ins a page-world scan would call
+ * and records every DOM mutation, the way an anti-bot script would. Reading the page (`snapshot`,
+ * `grep`) must leave that record empty; only `evaluate_in_page`, the explicit tool for running the
+ * agent's own script, runs where the page can watch.
  */
 
 import type { CaseContext, ContractCase } from './cases'
-import { expectOk } from './helpers'
+import { expectError, expectOk } from './helpers'
 
 const UNTRUSTED = /\[(END_)?UNTRUSTED_PAGE_CONTENT[^\]]*\]/g
 const NUDGE = /Tip: this session is[\s\S]*$/
@@ -29,40 +29,25 @@ function scriptValue(text: string): string {
   return lines[lines.length - 1]?.trim() ?? ''
 }
 
-async function script(
+async function inPage(
   ctx: CaseContext,
-  tool: 'evaluate' | 'evaluate_in_page',
   page: number,
   code: string,
 ): Promise<string> {
   return scriptValue(
-    expectOk(await ctx.mcp.callTool(tool, { page, code }), `${tool} ${code}`),
+    expectOk(
+      await ctx.mcp.callTool('evaluate_in_page', { page, code }),
+      `evaluate_in_page ${code}`,
+    ),
   )
-}
-
-async function resetProbe(ctx: CaseContext, page: number): Promise<void> {
-  await script(ctx, 'evaluate_in_page', page, 'return isolationProbe.reset()')
 }
 
 async function probeReport(
   ctx: CaseContext,
   page: number,
 ): Promise<ProbeReport> {
-  const text = await script(
-    ctx,
-    'evaluate_in_page',
-    page,
-    'return isolationProbe.report()',
-  )
+  const text = await inPage(ctx, page, 'return isolationProbe.report()')
   return JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1))
-}
-
-function requireUnseen(report: ProbeReport, context: string): void {
-  if (report.calls.length > 0 || report.mutations.length > 0) {
-    throw new Error(
-      `${context} was visible to the page: ${JSON.stringify(report)}`,
-    )
-  }
 }
 
 function requireRef(snapshot: string, label: string): void {
@@ -79,7 +64,7 @@ export const isolationCases: ContractCase[] = [
     name: 'isolation: snapshot and grep run no page script and write nothing',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/script-isolation.html'))
-      await resetProbe(ctx, page)
+      await inPage(ctx, page, 'return isolationProbe.reset()')
 
       const snapshot = expectOk(
         await ctx.mcp.callTool('snapshot', { page }),
@@ -90,79 +75,60 @@ export const isolationCases: ContractCase[] = [
         'isolation grep',
       )
 
-      requireUnseen(await probeReport(ctx, page), 'snapshot and grep')
+      const unseen = await probeReport(ctx, page)
+      if (unseen.calls.length > 0 || unseen.mutations.length > 0) {
+        throw new Error(
+          `snapshot and grep were visible to the page: ${JSON.stringify(unseen)}`,
+        )
+      }
       // Found without reading the page's JavaScript: a script-assigned onclick, a listener,
       // and an element inside a closed shadow root.
       requireRef(snapshot, 'Assigned onclick control')
       requireRef(snapshot, 'Listener control')
       requireRef(snapshot, 'Shadow control')
-    },
-  },
-  {
-    name: 'isolation: evaluate sees the DOM, not the page, and the page cannot see it',
-    async run(ctx) {
-      const page = await ctx.openPage(ctx.fixture('/script-isolation.html'))
-      await resetProbe(ctx, page)
 
-      const seen = await script(
+      // The same probe does catch a script run in the page, so its silence above means something.
+      const secret = await inPage(
         ctx,
-        'evaluate',
         page,
-        'return JSON.stringify([typeof window.pageSecret, document.querySelectorAll("div").length, document.getElementById("result").textContent])',
+        'return document.querySelectorAll("div").length + ":" + window.pageSecret',
       )
-      if (!seen.includes('["undefined",2,"untouched"]')) {
-        throw new Error(`evaluate saw the wrong world: ${seen}`)
+      if (secret !== '2:main-world-only') {
+        throw new Error(`evaluate_in_page did not run in the page: ${secret}`)
       }
-      const first = await script(
-        ctx,
-        'evaluate',
-        page,
-        'window.agentLedger = (window.agentLedger || 0) + 1; return window.agentLedger',
-      )
-      const second = await script(
-        ctx,
-        'evaluate',
-        page,
-        'window.agentLedger = (window.agentLedger || 0) + 1; return window.agentLedger',
-      )
-      if (first !== '1' || second !== '2') {
-        throw new Error(`evaluate globals did not persist: ${first}, ${second}`)
-      }
-      requireUnseen(await probeReport(ctx, page), 'evaluate')
-
-      // The same probe does catch a main-world script, so its silence above is meaningful.
-      const inPage = await script(
-        ctx,
-        'evaluate_in_page',
-        page,
-        'return JSON.stringify([window.pageSecret, typeof window.agentLedger, document.querySelectorAll("div").length])',
-      )
-      if (!inPage.includes('["main-world-only","undefined",2]')) {
-        throw new Error(`evaluate_in_page saw the wrong world: ${inPage}`)
-      }
-      const report = await probeReport(ctx, page)
-      if (!report.calls.includes('querySelectorAll')) {
+      const seen = await probeReport(ctx, page)
+      if (!seen.calls.includes('querySelectorAll')) {
         throw new Error(
-          `the page did not see evaluate_in_page: ${JSON.stringify(report)}`,
+          `the page did not see evaluate_in_page: ${JSON.stringify(seen)}`,
         )
       }
     },
   },
   {
-    name: 'isolation: run sends page.evaluate and page.evaluateInPage to their worlds',
+    name: 'isolation: run scripts the page only through page.evaluateInPage',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/script-isolation.html'))
       const result = expectOk(
         await ctx.mcp.callTool('run', {
-          code: `const page = browser.page(${page});
-            const isolated = await page.evaluate(() => typeof window.pageSecret);
-            const inPage = await page.evaluateInPage(() => window.pageSecret);
-            return 'isolated=' + isolated.value + ';page=' + inPage.value;`,
+          code: `const seen = await browser.page(${page}).evaluateInPage(() => window.pageSecret);
+            return 'page=' + seen.value;`,
         }),
-        'run worlds',
+        'run evaluateInPage',
       )
-      if (!result.includes('isolated=undefined;page=main-world-only')) {
-        throw new Error(`run routed a script to the wrong world: ${result}`)
+      if (!result.includes('page=main-world-only')) {
+        throw new Error(`run did not reach the page world: ${result}`)
+      }
+
+      const removed = expectError(
+        await ctx.mcp.callTool('run', {
+          code: `return await browser.page(${page}).evaluate(() => 1);`,
+        }),
+        'run page.evaluate',
+      )
+      if (!removed.includes('evaluateInPage')) {
+        throw new Error(
+          `page.evaluate did not point at evaluateInPage: ${removed}`,
+        )
       }
     },
   },

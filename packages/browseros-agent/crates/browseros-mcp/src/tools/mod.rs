@@ -8,7 +8,6 @@ pub mod browser_target;
 pub mod credentials;
 pub mod diff;
 pub mod download;
-pub mod evaluate;
 pub mod evaluate_in_page;
 pub mod grep;
 pub mod history;
@@ -51,7 +50,6 @@ pub fn catalog() -> Vec<ToolDef> {
         pdf::definition(),
         wait::definition(),
         windows::definition(),
-        evaluate::definition(),
         evaluate_in_page::definition(),
         run::definition(),
     ]
@@ -143,7 +141,6 @@ fn metadata_for_tool(name: &str) -> ToolMetadata {
                 | "screenshot"
                 | "pdf"
                 | "wait"
-                | "evaluate"
                 | "evaluate_in_page"
                 | "setViewport"
         ),

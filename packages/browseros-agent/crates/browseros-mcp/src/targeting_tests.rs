@@ -804,7 +804,7 @@ async fn granular_and_script_paths_project_normal_windows_after_global_reconcili
     {
         let rejected = call(
             &ctx,
-            "evaluate",
+            "evaluate_in_page",
             json!({ "page": tab.page_id.0, "code": "return 1" }),
         )
         .await?;

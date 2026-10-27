@@ -45,7 +45,6 @@ const SDK_SURFACE: &[&str] = &[
     "grep",
     "wait",
     "screenshot",
-    "evaluate",
     "evaluateInPage",
     "download",
     "pdf",

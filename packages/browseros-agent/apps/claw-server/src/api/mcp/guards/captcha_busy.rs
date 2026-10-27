@@ -52,7 +52,6 @@ pub(crate) mod tests {
         for (tool, refused) in [
             ("act", true),
             ("navigate", true),
-            ("evaluate", true),
             ("evaluate_in_page", true),
             ("tabs", true),
             ("snapshot", false),

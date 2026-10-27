@@ -1,5 +1,5 @@
 /**
- * grep (6), read (5), evaluate (5) and run (4) cases. The grep=ax
+ * grep (6), read (5), evaluate_in_page (5) and run (4) cases. The grep=ax
  * REGRESSION CASE (#2 in the briefing) lives here: over=ax output must
  * still carry `[ref=eN]` handles after the serde fix. Spill behavior is
  * asserted through the `saved to: <path>` marker both formatters emit.
@@ -29,7 +29,7 @@ async function evalIn(
 ): Promise<string> {
   const args: Record<string, unknown> = { page, code }
   if (timeout !== undefined) args.timeout = timeout
-  return payload(textOf(await ctx.mcp.callTool('evaluate', args)))
+  return payload(textOf(await ctx.mcp.callTool('evaluate_in_page', args)))
 }
 
 async function loadBigSection(ctx: CaseContext, page: number): Promise<void> {
@@ -268,20 +268,22 @@ export const readEvalCases: ContractCase[] = [
     },
   },
 
-  // evaluate ---------------------------------------------------------------
+  // evaluate_in_page -------------------------------------------------------
   {
-    name: 'evaluate: returns a value round-trip',
+    name: 'evaluate_in_page: returns a value round-trip',
     smoke: true,
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const text = await evalIn(ctx, page, 'return 6 * 7')
       if (!text.includes('42')) {
-        throw new Error(`evaluate did not round-trip the value: ${text}`)
+        throw new Error(
+          `evaluate_in_page did not round-trip the value: ${text}`,
+        )
       }
     },
   },
   {
-    name: 'evaluate: awaits a returned promise',
+    name: 'evaluate_in_page: awaits a returned promise',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const text = await evalIn(
@@ -290,15 +292,15 @@ export const readEvalCases: ContractCase[] = [
         'return await Promise.resolve("awaited-value")',
       )
       if (!text.includes('awaited-value')) {
-        throw new Error(`evaluate did not await the promise: ${text}`)
+        throw new Error(`evaluate_in_page did not await the promise: ${text}`)
       }
     },
   },
   {
-    name: 'evaluate: a thrown error surfaces in the result',
+    name: 'evaluate_in_page: a thrown error surfaces in the result',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
-      const result = await ctx.mcp.callTool('evaluate', {
+      const result = await ctx.mcp.callTool('evaluate_in_page', {
         page,
         code: 'throw new Error("evaluate-boom")',
       })
@@ -311,37 +313,41 @@ export const readEvalCases: ContractCase[] = [
     },
   },
   {
-    name: 'evaluate: accepts a timeout parameter',
+    name: 'evaluate_in_page: accepts a timeout parameter',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       // A fast evaluation under the accepted timeout returns normally.
       const fast = await evalIn(ctx, page, 'return 1 + 1', 5_000)
       if (!fast.includes('2')) {
-        throw new Error(`evaluate with a timeout did not return: ${fast}`)
+        throw new Error(
+          `evaluate_in_page with a timeout did not return: ${fast}`,
+        )
       }
       // Renderer evaluation is not preempted by this request timeout today.
-      const slow = await ctx.mcp.callTool('evaluate', {
+      const slow = await ctx.mcp.callTool('evaluate_in_page', {
         page,
         code: 'await new Promise(r => setTimeout(r, 8000)); return "slow"',
         timeout: 1_500,
       })
-      expectOk(slow, 'evaluate page-context wait')
+      expectOk(slow, 'evaluate_in_page page-context wait')
     },
   },
   {
-    name: 'evaluate: large return spills to a file',
+    name: 'evaluate_in_page: large return spills to a file',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const text = expectOk(
-        await ctx.mcp.callTool('evaluate', {
+        await ctx.mcp.callTool('evaluate_in_page', {
           page,
           code: 'return "z".repeat(20000)',
         }),
-        'evaluate spill',
+        'evaluate_in_page spill',
       )
       const path = spillPath(text)
       if (!path || !(await Bun.file(path).exists())) {
-        throw new Error(`evaluate did not spill a large return: ${path}`)
+        throw new Error(
+          `evaluate_in_page did not spill a large return: ${path}`,
+        )
       }
     },
   },

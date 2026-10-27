@@ -45,7 +45,7 @@ Reading and output:
 - read extracts the page as markdown; grep searches it without a full dump (over="ax" keeps refs on matches).
 - screenshot is for visual checks only; pdf saves the page as a document; download clicks a ref and saves to the browser's download folder, returning the file's path on this machine; upload sets local file paths on a file input.
 
-Reach for run first; the granular tools are the fallback. run (browser SDK script) composes the whole snapshot -> act -> verify loop, bulk extraction, and helper reuse in one call. Use a single granular tool (act, snapshot, navigate, evaluate) directly only for a one-off step or when a run script cannot express it.
+Reach for run first; the granular tools are the fallback. run (browser SDK script) composes the whole snapshot -> act -> verify loop, bulk extraction, and helper reuse in one call. Use a single granular tool (act, snapshot, navigate, read) directly only for a one-off step or when a run script cannot express it. evaluate_in_page runs a script inside the page, where the page can watch it: only when the user asks to run code in the page or the other tools cannot answer.
 
 Parallelize when it helps: give independent subtasks their own tabs - at most 5 at a time unless the user explicitly asks for more. windows can create a separate window when a task needs isolation."#;
 

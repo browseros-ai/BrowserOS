@@ -17,7 +17,7 @@ Reach for run first; the granular tools are the fallback. run is an async
 JavaScript script against the `browser` SDK: it composes the whole loop below
 (observe, act, navigate, read, wait, bulk extraction, and reusable helpers) in one
 call, and it is the only place saved helpers work. Use a single granular tool
-(tabs, navigate, snapshot, act, evaluate, read, grep) directly only for a one-off
+(tabs, navigate, snapshot, act, read, grep) directly only for a one-off
 step, step-by-step debugging, or when a run script genuinely cannot express it."#;
 
 /// Taught only when the native browser implements profile targeting; older natives hide
@@ -88,8 +88,8 @@ Core loop: snapshot -> act -> verify.
 - Still loading? wait for="text"/"selector" on something you expect, not a
   bare time wait.
 - Readiness is handled for you: tabs action="new", navigate and a page-changing
-  evaluate all return once the page has stopped changing, not merely once it
-  has loaded. Never pause afterwards to let a page catch up.
+  evaluate_in_page all return once the page has stopped changing, not merely
+  once it has loaded. Never pause afterwards to let a page catch up.
 
 Reading and output:
 - read extracts the page as markdown; grep searches it without a full dump.
@@ -103,12 +103,11 @@ run first, granular tools as the fallback. Compose anything multi-step inside on
 run script rather than chaining granular calls. Inside run, everything that needs
 a page hangs off a page handle: const page = await browser.open(url), or
 browser.page(id) for an id you already have. Page actions address a snapshot ref
-like "e12", never a CSS selector. evaluate is a one-off escape hatch; prefer
-page.read() and page.snapshot() inside run over evaluate. evaluate runs in
-BrowserOS's isolated world: the page's DOM, storage and same-origin fetch, not its
-JavaScript variables, and the page cannot see it. evaluate_in_page runs in the
-page's own world, where page scripts can watch it: only when the user explicitly
-asks to run code in the page or the task needs the page's JavaScript state.
+like "e12", never a CSS selector. Read pages with page.read(), page.snapshot()
+and page.grep(), which run no script in the page. evaluate_in_page
+(page.evaluateInPage inside run) runs your own script inside the page, where page
+scripts can watch it: only when the user explicitly asks to run code in the page
+or the other tools cannot answer.
 
 Parallelize when it helps: independent subtasks get their own tabs — at most
 5 at a time unless the user asks for more.
