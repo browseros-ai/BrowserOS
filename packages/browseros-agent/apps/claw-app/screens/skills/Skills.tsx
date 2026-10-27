@@ -135,15 +135,15 @@ function SkillRow({ skill }: { skill: Skill }) {
         <span className="truncate text-[13.5px] text-ink-3 leading-[18px]">
           {skill.description}
         </span>
+        <RunCount
+          runCount={skill.runCount}
+          className="text-left leading-[18px] sm:hidden"
+        />
       </span>
-      <span
-        className={cn(
-          'hidden w-24 shrink-0 text-right text-[13px] leading-4 sm:block',
-          skill.runCount > 0 ? 'text-ink-2' : 'text-ink-4',
-        )}
-      >
-        {runsLabel(skill.runCount)}
-      </span>
+      <RunCount
+        runCount={skill.runCount}
+        className="hidden w-24 shrink-0 text-right leading-4 sm:block"
+      />
       <span className="relative flex w-[76px] shrink-0 justify-end">
         <RunSkillButton
           name={skill.name}
@@ -153,9 +153,30 @@ function SkillRow({ skill }: { skill: Skill }) {
       </span>
       <SkillActions
         skill={skill}
-        menuClassName="relative opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 has-[[aria-expanded=true]]:opacity-100 pointer-coarse:opacity-100"
+        menuClassName="relative opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 has-[[aria-expanded=true]]:opacity-100 pointer-coarse:opacity-100"
       />
     </li>
+  )
+}
+
+/** Its own column on wider screens; under the description on phones. */
+function RunCount({
+  runCount,
+  className,
+}: {
+  runCount: number
+  className?: string
+}) {
+  return (
+    <span
+      className={cn(
+        'text-[13px]',
+        runCount > 0 ? 'text-ink-2' : 'text-ink-4',
+        className,
+      )}
+    >
+      {runsLabel(runCount)}
+    </span>
   )
 }
 
