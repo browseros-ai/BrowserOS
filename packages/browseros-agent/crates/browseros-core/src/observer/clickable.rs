@@ -143,8 +143,10 @@ pub(super) async fn find_clickables(
 /// - has `cursor: pointer`, `isClickable`, or a `tabindex` other than `-1`.
 ///
 /// Two prunes keep a single click target to a single hit:
-/// - same target: without its own `tabindex` or inline `onclick`, an element whose nearest
-///   rendered ancestor has `cursor: pointer` is part of that ancestor's target;
+/// - same target: an element whose nearest rendered ancestor has `cursor: pointer` is part of
+///   that ancestor's target, unless it is a target of its own: a `tabindex`, an inline `onclick`,
+///   or a listener on an element that names itself (`aria-label`, `aria-labelledby`). Script
+///   listeners alone do not count, since sites attach tracking listeners all over a card;
 /// - delegation container: an element whose only signal is a listener and that contains a
 ///   control or another hit is a container handling its children's clicks, not a control.
 fn clickables(document: &Document, strings: &[String]) -> HashMap<i64, Vec<String>> {
@@ -201,7 +203,11 @@ fn clickables(document: &Document, strings: &[String]) -> HashMap<i64, Vec<Strin
         if !signals.pointer && !signals.listener && !signals.tabindex {
             continue;
         }
-        let own_target = signals.tabindex || signals.inline_onclick;
+        let named = ["aria-label", "aria-labelledby"].iter().any(|name| {
+            view.attribute(i, name)
+                .is_some_and(|value| !value.trim().is_empty())
+        });
+        let own_target = signals.tabindex || signals.inline_onclick || (signals.listener && named);
         let inside_pointer = rendered_ancestor[i]
             .and_then(|ancestor| view.layout(ancestor))
             .is_some_and(|layout| view.cursor(layout) == Some("pointer"));

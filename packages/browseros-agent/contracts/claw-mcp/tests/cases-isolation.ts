@@ -86,6 +86,8 @@ export const isolationCases: ContractCase[] = [
       requireRef(snapshot, 'Assigned onclick control')
       requireRef(snapshot, 'Listener control')
       requireRef(snapshot, 'Shadow control')
+      // A labelled child with its own handler inside a pointer-cursor card keeps its own ref.
+      requireRef(snapshot, 'Card delete control')
 
       // The same probe does catch a script run in the page, so its silence above means something.
       const secret = await inPage(
@@ -93,13 +95,46 @@ export const isolationCases: ContractCase[] = [
         page,
         'return document.querySelectorAll("div").length + ":" + window.pageSecret',
       )
-      if (secret !== '2:main-world-only') {
+      if (secret !== '4:main-world-only') {
         throw new Error(`evaluate_in_page did not run in the page: ${secret}`)
       }
       const seen = await probeReport(ctx, page)
       if (!seen.calls.includes('querySelectorAll')) {
         throw new Error(
           `the page did not see evaluate_in_page: ${JSON.stringify(seen)}`,
+        )
+      }
+    },
+  },
+  {
+    name: 'isolation: a named control inside a clickable card is its own target',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/script-isolation.html'))
+      const snapshot = expectOk(
+        await ctx.mcp.callTool('snapshot', { page }),
+        'card snapshot',
+      )
+      const line = snapshot
+        .split('\n')
+        .find((entry) => entry.includes('Card delete control'))
+      const ref = line?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!ref) {
+        throw new Error(
+          `the card's own control got no ref: ${line ?? snapshot}`,
+        )
+      }
+      expectOk(
+        await ctx.mcp.callTool('act', { page, kind: 'click', ref }),
+        'click the card control',
+      )
+      const result = await inPage(
+        ctx,
+        page,
+        'return document.getElementById("result").textContent',
+      )
+      if (result !== 'card delete clicked') {
+        throw new Error(
+          `clicking the control reached the wrong handler: ${result}`,
         )
       }
     },

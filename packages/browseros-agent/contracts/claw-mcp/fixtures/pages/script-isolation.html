@@ -13,6 +13,12 @@
       Listener control
     </div>
     <my-widget id="host"></my-widget>
+    <div id="card" role="group" aria-label="Pointer card" style="cursor: pointer">
+      Pointer card
+      <div id="card-delete" role="group" aria-label="Card delete control">
+        Card delete control
+      </div>
+    </div>
     <output id="result">untouched</output>
     <script>
       // The page an anti-bot script would be: it hooks the built-ins a page-world scan calls
@@ -66,6 +72,15 @@
       document.getElementById('listener').addEventListener('click', () => {
         document.getElementById('result').textContent = 'listener clicked'
       })
+      // A control inside a clickable card, wired the old way: its own script-set onclick that
+      // keeps the click from reaching the card.
+      document.getElementById('card').addEventListener('click', () => {
+        document.getElementById('result').textContent = 'card clicked'
+      })
+      document.getElementById('card-delete').onclick = (event) => {
+        event.stopPropagation()
+        document.getElementById('result').textContent = 'card delete clicked'
+      }
       const shadow = document
         .getElementById('host')
         .attachShadow({ mode: 'closed' })

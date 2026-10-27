@@ -209,6 +209,13 @@ fn a_child_inside_a_pointer_target_is_that_target_unless_it_is_its_own() {
     // `display: contents` has no box, so the nearest rendered ancestor is the card.
     let contents = page.node(Some(card), ELEMENT_NODE, "DIV", &[]);
     let nested = page.element(contents, "SPAN", &[], "pointer");
+    // A child that names itself and handles clicks is its own control, as a script-set onclick
+    // on it would be; a name alone, with no handler, is still part of the card.
+    let labelled = page.element(card, "DIV", &[("aria-label", "Delete")], "pointer");
+    page.listener(labelled);
+    let named_only = page.element(card, "DIV", &[("aria-label", "Caption")], "pointer");
+    let blank_label = page.element(card, "DIV", &[("aria-label", " ")], "pointer");
+    page.listener(blank_label);
 
     let hits = page.hits();
 
@@ -216,6 +223,12 @@ fn a_child_inside_a_pointer_target_is_that_target_unless_it_is_its_own() {
     assert!(!hits.contains_key(&backend(title)));
     assert!(!hits.contains_key(&backend(tracked)));
     assert!(!hits.contains_key(&backend(nested)));
+    assert_eq!(
+        hits.get(&backend(labelled)),
+        Some(&reasons(&["cursor:pointer", "clickable"]))
+    );
+    assert!(!hits.contains_key(&backend(named_only)));
+    assert!(!hits.contains_key(&backend(blank_label)));
     assert_eq!(
         hits.get(&backend(focusable)),
         Some(&reasons(&["cursor:pointer", "tabindex"]))
