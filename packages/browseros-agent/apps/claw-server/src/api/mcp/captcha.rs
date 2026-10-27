@@ -97,7 +97,7 @@ pub(super) async fn call_solve_captcha(
 
 /// The solver reads, captures and clicks the page like any other page operation, so it first
 /// waits for the page's viewport. A page another solve owns is refused at once rather than
-/// queued behind that solve's window, and a cancelled call stops waiting.
+/// queued behind that solve, and a cancelled call stops waiting.
 async fn prepare_page(
     reservations: &TabReservations,
     page: u32,

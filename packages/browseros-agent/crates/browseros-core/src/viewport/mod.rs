@@ -1,5 +1,7 @@
-//! Hosted viewport modes for one tab. Mobile and desktop emulate a fixed device and fit the
-//! tab's window around it before each page operation; default leaves the tab natural.
+//! Hosted viewport modes for one tab. Mobile and desktop emulate a fixed device inside whatever
+//! window the tab has; default leaves the tab natural. The browser window is never read or
+//! changed: a caller that wants a window size or fullscreen sets it first, because Chromium sizes
+//! the tab's view to its window again whenever the window resizes.
 //!
 //! Hosts enable the feature by attaching one [`Viewports`] to their views; every entry point is
 //! on [`BrowserView`], so admission and scope stay where they are.
@@ -7,9 +9,8 @@
 mod device;
 #[cfg(test)]
 mod tests;
-mod window;
 
-use crate::{BrowserView, CoreError, PageId, SessionId, WindowId};
+use crate::{BrowserView, CoreError, PageId, SessionId};
 use device::Fixed;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -128,8 +129,8 @@ impl ViewportRequest {
     }
 }
 
-/// What the page and its window actually report after a change. Nothing here is copied from
-/// the request: a value that did not take effect is reported as the page shows it.
+/// What the page actually reports after a change. Nothing here is copied from the request: a
+/// value that did not take effect is reported as the page shows it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewportReport {
@@ -140,8 +141,6 @@ pub struct ViewportReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<Size>,
     pub viewport: PageMetrics,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub window: Option<WindowFit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -164,64 +163,15 @@ pub struct Size {
     pub height: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WindowBounds {
-    pub left: i64,
-    pub top: i64,
-    pub width: i64,
-    pub height: i64,
-    pub window_state: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Dimension {
-    Width,
-    Height,
-}
-
-/// Why a window dimension could not match the preview: the screen's work area or the
-/// browser's minimum window size. `Unknown` when the screen could not be read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum LimitedBy {
-    Screen,
-    Minimum,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WindowLimit {
-    pub dimension: Dimension,
-    pub by: LimitedBy,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WindowFit {
-    pub window_id: i64,
-    /// The preview size the window was fitted around, in DIP.
-    pub contents: Size,
-    /// The window's outer bounds after fitting, as the browser reports them.
-    pub bounds: WindowBounds,
-    /// Whether the contents area matches `contents` exactly in both dimensions.
-    pub exact: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub limited: Vec<WindowLimit>,
-    /// The window state it was restored from before fitting, when it was not normal.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub restored_from: Option<String>,
-}
-
 /// Per-process viewport state. A host creates one and attaches it to every view whose
 /// calls may use the feature. PageIds are never reused within a process, so a closed tab's
 /// entry can only go stale, never apply to another tab.
 #[derive(Default)]
 pub struct Viewports {
     tabs: Mutex<HashMap<PageId, Tab>>,
-    windows: Mutex<HashMap<WindowId, Arc<RwLock<WindowSlot>>>>,
+    /// One lock per tab: its mode changes and its fixed operations hold it alone, captures and
+    /// default operations share it.
+    pages: Mutex<HashMap<PageId, Arc<RwLock<()>>>>,
     chrome_version: OnceCell<String>,
     generations: AtomicU64,
 }
@@ -239,19 +189,13 @@ struct Tab {
     generation: u64,
 }
 
-#[derive(Default)]
-struct WindowSlot {
-    /// Bounds this window had after its last fit, and the contents it was fitted for.
-    fitted: Option<(Size, WindowBounds)>,
-}
-
-/// Holds the page's window for one operation, so no other tab's fit can change the window
-/// while the operation reads, captures or acts. Dropping it releases the window.
-/// A fixed tab's operation owns its window; default tabs beside it only exclude fits.
+/// Holds the page for one operation, so its mode cannot change while the operation reads,
+/// captures or acts. Dropping it releases the page. A fixed tab's operation holds its page
+/// alone; other holders share it.
 #[derive(Default)]
 pub struct ViewportLease {
-    _shared: Option<OwnedRwLockReadGuard<WindowSlot>>,
-    _exclusive: Option<OwnedRwLockWriteGuard<WindowSlot>>,
+    _shared: Option<OwnedRwLockReadGuard<()>>,
+    _exclusive: Option<OwnedRwLockWriteGuard<()>>,
 }
 
 /// Held across a caller's raw call that replaces what a fixed mode set on the page session.
@@ -302,13 +246,13 @@ impl Viewports {
             return Err(dialog_open());
         }
         self.forget_closed(view).await;
-        let info = view.page(page.clone()).await?;
-        // A change cancelled while it waits for the window gives up without touching the page;
-        // one that holds the window no longer looks at the token.
-        let mut slot = tokio::select! {
+        view.page(page.clone()).await?;
+        // A change cancelled while it waits for the tab gives up without touching the page; one
+        // that holds the tab no longer looks at the token.
+        let _held = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(cancelled()),
-            slot = self.lock_window(view, info.window_id) => slot,
+            held = self.lock_page(view, &page) => held,
         };
         if cancel.is_cancelled() {
             return Err(cancelled());
@@ -333,7 +277,7 @@ impl Viewports {
             self.forget(&page);
             let metrics = device::measure(&admitted.session).await?;
             view.page(page.clone()).await?;
-            return Ok(report(&page, request, metrics, None));
+            return Ok(report(&page, request, metrics));
         };
         // Recorded as pending before anything is sent, and applied only once the view is
         // pinned: a step that fails or is cut short leaves the next operation to redo it.
@@ -343,16 +287,11 @@ impl Viewports {
             view.send_at_capture(method, params, Some(&session)).await?;
         }
         let metrics = device::settle(&admitted.session, &page, fixed).await?;
-        let placement = window::locate(view, &page, &info.target_id, info.window_id).await?;
-        let fit = window::fit(view, &session, placement, fixed.preview(), true).await?;
-        if let Some(slot) = slot.as_mut() {
-            slot.fitted = Some((fit.contents, fit.bounds.clone()));
-        }
         let (method, params) = fixed.pin();
         view.send_at_capture(method, params, Some(&session)).await?;
         self.applied(&page, &session, generation);
         view.page(page.clone()).await?;
-        Ok(report(&page, request, metrics, Some(fit)))
+        Ok(report(&page, request, metrics))
     }
 
     pub(crate) async fn prepare(
@@ -361,91 +300,62 @@ impl Viewports {
         page: PageId,
     ) -> Result<ViewportLease, CoreError> {
         // An open dialog blocks the renderer; only the dialog actions can run, and they need
-        // no geometry. They must not wait for the window either: work stalled by the same
-        // dialog may hold it. The next operation after the dialog restores the tab.
+        // no emulation. They must not wait for the tab either: work stalled by the same dialog
+        // may hold it. The next operation after the dialog restores the tab.
         if view.signals().pending_dialog(&page).is_some() {
             return Ok(ViewportLease::default());
         }
         if self.tab(&page).is_none() {
-            // A default tab changes nothing, but must not act while a fixed tab's operation
-            // owns the window it shares.
+            // A default tab changes nothing, but must not act while its mode changes.
             let lease = self.hold(view, page.clone()).await;
             // A setViewport queued ahead of this operation may have made the tab fixed; the
-            // shared lease is released here and the fixed path below restores it.
+            // shared lease is released here and the fixed path below holds the tab alone.
             if self.tab(&page).is_none() {
                 return Ok(lease);
             }
         }
-        let info = view.page(page.clone()).await?;
-        let mut slot = self.lock_window(view, info.window_id).await;
-        // Re-read under the lock: a setViewport may have changed the tab while we waited.
-        let Some(tab) = self.tab(&page) else {
-            return Ok(ViewportLease {
-                _shared: None,
-                _exclusive: slot,
-            });
+        let lease = ViewportLease {
+            _shared: None,
+            _exclusive: Some(self.lock_page(view, &page).await),
         };
-        // The dialog may have opened while this operation waited for the window.
-        if view.signals().pending_dialog(&page).is_some() {
-            return Ok(ViewportLease {
-                _shared: None,
-                _exclusive: slot,
-            });
+        // The dialog may have opened while this operation waited for the tab.
+        if self.tab(&page).is_none() || view.signals().pending_dialog(&page).is_some() {
+            return Ok(lease);
         }
         let admitted = view.page_session(page.clone()).await?;
         let session = admitted.session_id.clone();
-        let reapply = tab.applied.as_ref() != Some(&session);
-        let placement = window::locate(view, &page, &info.target_id, info.window_id).await?;
-        let contents = tab.fixed.preview();
-        let last = slot
-            .as_ref()
-            .and_then(|slot| slot.fitted.as_ref())
-            .filter(|(fitted, _)| *fitted == contents)
-            .map(|(_, bounds)| bounds);
-        let refit = !window::unchanged(&placement, last);
-        if reapply || refit {
-            // Pending until pinned again: a step that fails or is cut short leaves the next
-            // operation to redo it, pin included. A raw override that landed since the tab was
-            // read means the emulation goes back on too.
-            let (generation, touched) = self.restart(&page, tab.generation);
-            if reapply || touched {
-                let chrome_version = self.chrome_version(view).await?;
-                for (method, params) in tab.fixed.commands(&chrome_version) {
-                    view.send_at_capture(method, params, Some(&session)).await?;
-                }
-                device::settle(&admitted.session, &page, tab.fixed).await?;
-            }
-            if refit {
-                let fit = window::fit(view, &session, placement, contents, false).await?;
-                if let Some(slot) = slot.as_mut() {
-                    slot.fitted = Some((contents, fit.bounds));
-                }
-            }
-            let (method, params) = tab.fixed.pin();
-            view.send_at_capture(method, params, Some(&session)).await?;
-            self.applied(&page, &session, generation);
+        // Read after the session: a caller's raw override may have landed meanwhile.
+        let Some(tab) = self.tab(&page) else {
+            return Ok(lease);
+        };
+        if tab.applied.as_ref() == Some(&session) {
+            return Ok(lease);
         }
-        Ok(ViewportLease {
-            _shared: None,
-            _exclusive: slot,
-        })
+        // Lost with its session or replaced by a caller's raw override. Pending until pinned
+        // again: a step that fails or is cut short leaves the next operation to redo it.
+        let generation = self.invalidate(&page);
+        let chrome_version = self.chrome_version(view).await?;
+        for (method, params) in tab.fixed.commands(&chrome_version) {
+            view.send_at_capture(method, params, Some(&session)).await?;
+        }
+        device::settle(&admitted.session, &page, tab.fixed).await?;
+        let (method, params) = tab.fixed.pin();
+        view.send_at_capture(method, params, Some(&session)).await?;
+        self.applied(&page, &session, generation);
+        Ok(lease)
     }
 
-    /// Shares the page's window: fits and fixed tabs' operations wait for every holder, other
+    /// Shares the page: its mode changes and its fixed operations wait for every holder, other
     /// holders do not. Taken whatever the tab's mode, because a mode change can start while
     /// the holder still works (a capture restores the emulation it saw when it began).
     pub(crate) async fn hold(&self, view: &BrowserView, page: PageId) -> ViewportLease {
-        let window = view
-            .cached_page(&page)
-            .await
-            .and_then(|info| info.window_id);
         ViewportLease {
-            _shared: self.share_window(view, window).await,
+            _shared: Some(self.share_page(view, &page).await),
             _exclusive: None,
         }
     }
 
-    /// Tab records and window slots held, for tests of bounded state.
+    /// Tab records and page locks held, for tests of bounded state.
     #[cfg(test)]
     pub(crate) fn tracked(&self) -> (usize, usize) {
         let tabs = self
@@ -453,12 +363,12 @@ impl Viewports {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len();
-        let windows = self
-            .windows
+        let pages = self
+            .pages
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len();
-        (tabs, windows)
+        (tabs, pages)
     }
 
     fn tab(&self, page: &PageId) -> Option<Tab> {
@@ -517,23 +427,6 @@ impl Viewports {
         generation
     }
 
-    /// Starts a change on the tab, pending until it is pinned again. Returns the change's
-    /// generation and whether the tab's emulation was touched since the caller read it at `seen`.
-    fn restart(&self, page: &PageId, seen: u64) -> (u64, bool) {
-        let generation = self.next_generation();
-        let mut tabs = self
-            .tabs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(tab) = tabs.get_mut(page) else {
-            return (generation, false);
-        };
-        let touched = tab.generation != seen;
-        tab.applied = None;
-        tab.generation = generation;
-        (generation, touched)
-    }
-
     fn next_generation(&self) -> u64 {
         self.generations.fetch_add(1, Ordering::Relaxed) + 1
     }
@@ -545,57 +438,43 @@ impl Viewports {
             .remove(page);
     }
 
-    /// Drops tab records and idle window slots the registry no longer knows, so a long-lived
-    /// server keeps state only for open tabs and windows. Runs only where state grows.
+    /// Drops tab records and idle page locks the registry no longer knows, so a long-lived
+    /// server keeps state only for open tabs. Runs only where state grows.
     async fn forget_closed(&self, view: &BrowserView) {
         let open = view.known_page_ids().await;
-        let mut windows = std::collections::BTreeSet::new();
-        for page in &open {
-            if let Some(window) = view.cached_page(page).await.and_then(|info| info.window_id) {
-                windows.insert(window);
-            }
-        }
         self.tabs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|page, _| open.contains(page));
-        self.windows
+        self.pages
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|window, slot| windows.contains(window) || Arc::strong_count(slot) > 1);
+            .retain(|page, lock| open.contains(page) || Arc::strong_count(lock) > 1);
     }
 
-    async fn slot(&self, view: &BrowserView, window: WindowId) -> Arc<RwLock<WindowSlot>> {
+    async fn page_lock(&self, view: &BrowserView, page: &PageId) -> Arc<RwLock<()>> {
         let known = self
-            .windows
+            .pages
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains_key(&window);
+            .contains_key(page);
         if !known {
             self.forget_closed(view).await;
         }
-        self.windows
+        self.pages
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .entry(window)
+            .entry(page.clone())
             .or_default()
             .clone()
     }
 
-    async fn lock_window(
-        &self,
-        view: &BrowserView,
-        window: Option<WindowId>,
-    ) -> Option<OwnedRwLockWriteGuard<WindowSlot>> {
-        Some(self.slot(view, window?).await.write_owned().await)
+    async fn lock_page(&self, view: &BrowserView, page: &PageId) -> OwnedRwLockWriteGuard<()> {
+        self.page_lock(view, page).await.write_owned().await
     }
 
-    async fn share_window(
-        &self,
-        view: &BrowserView,
-        window: Option<WindowId>,
-    ) -> Option<OwnedRwLockReadGuard<WindowSlot>> {
-        Some(self.slot(view, window?).await.read_owned().await)
+    async fn share_page(&self, view: &BrowserView, page: &PageId) -> OwnedRwLockReadGuard<()> {
+        self.page_lock(view, page).await.read_owned().await
     }
 
     async fn chrome_version(&self, view: &BrowserView) -> Result<String, CoreError> {
@@ -613,18 +492,12 @@ impl Viewports {
     }
 }
 
-fn report(
-    page: &PageId,
-    request: ViewportRequest,
-    viewport: PageMetrics,
-    window: Option<WindowFit>,
-) -> ViewportReport {
+fn report(page: &PageId, request: ViewportRequest, viewport: PageMetrics) -> ViewportReport {
     ViewportReport {
         page: page.0,
         mode: request.mode(),
         zoom: request.zoom(),
         size: request.fixed().map(Fixed::size),
         viewport,
-        window,
     }
 }

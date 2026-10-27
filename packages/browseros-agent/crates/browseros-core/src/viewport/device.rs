@@ -60,7 +60,7 @@ impl Fixed {
         }
     }
 
-    /// The on-screen size of the rendered preview, which the window is fitted around.
+    /// The on-screen size of the rendered preview, which the tab's view is pinned to.
     pub(super) fn preview(self) -> Size {
         let size = self.size();
         Size {

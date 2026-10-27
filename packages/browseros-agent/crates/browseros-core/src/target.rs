@@ -383,8 +383,8 @@ impl BrowserView {
             )),
         }
     }
-    /// Holds the page's window without changing anything, for work outside a page operation
-    /// that must not overlap viewport changes, such as a background screenshot: a capture
+    /// Holds the page without changing anything, for work outside a page operation that must
+    /// not overlap viewport changes, such as a background screenshot: a capture
     /// rewrites the page's emulation until it finishes.
     pub async fn hold_viewport(&self, page: PageId) -> crate::viewport::ViewportLease {
         match &self.viewports {
@@ -411,8 +411,8 @@ impl BrowserView {
         };
         Some(viewports.reapply(page))
     }
-    /// Restores the page's fixed viewport and window before a page operation. Hold the lease
-    /// until the operation, including its readback, is done.
+    /// Puts back a fixed viewport the page lost before a page operation; never touches the
+    /// window. Hold the lease until the operation, including its readback, is done.
     pub async fn prepare_viewport(
         &self,
         page: PageId,
@@ -545,17 +545,12 @@ impl BrowserView {
             }))
     }
 
-    /// Policy-free native discovery/cleanup still uses the capture's atomic transport guard.
-    /// Callers own routing admission; using this helper does not authorize a new root method.
-    /// The registry's last known incarnation of `page`, without a browser round trip or
-    /// admission. Only for decisions that touch nothing, such as which lock to wait on.
-    pub(crate) async fn cached_page(&self, page: &PageId) -> Option<PageInfo> {
-        self.session.pages.get_info(page.clone()).await
-    }
     /// Every page the registry knows, as of its last reconciliation.
     pub(crate) async fn known_page_ids(&self) -> BTreeSet<PageId> {
         self.session.pages.known_page_ids().await
     }
+    /// Policy-free native discovery/cleanup still uses the capture's atomic transport guard.
+    /// Callers own routing admission; using this helper does not authorize a new root method.
     pub(crate) async fn send_at_capture(
         &self,
         method: &str,
