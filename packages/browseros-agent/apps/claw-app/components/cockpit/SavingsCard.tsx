@@ -175,7 +175,7 @@ function UsageBars({
   return (
     <div
       role="img"
-      aria-label={`${formatTokens(usage.saved)} AI tokens saved, ${usage.percentLess}% less with neo than without`}
+      aria-label={`${formatTokens(usage.saved)} AI tokens saved, ${usage.percentLess}% less with neo than without. With neo: ${formatTokens(usage.withNeo)} tokens. Without neo: ${formatTokens(usage.withoutNeo)} tokens.`}
       className={cn('grid gap-2.5', className)}
     >
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
