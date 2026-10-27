@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'bun:test'
 import type { Skill } from '@browseros/claw-api'
 import {
-  linkedAgentsOf,
   neoName,
   parseSkillBody,
   skillCommand,
   skillSites,
   stuckWhile,
   usedLabel,
+  worksInAgents,
 } from './skills.helpers'
 
 describe('skillCommand', () => {
@@ -119,23 +119,31 @@ describe('skillSites', () => {
   })
 })
 
-describe('linkedAgentsOf', () => {
+describe('worksInAgents', () => {
   const linked = (...agents: Skill['linkedAgents']) => ({
     linkedAgents: agents,
   })
+  const everyone = ['Claude Code', 'Codex', 'Cursor'] as const
 
-  it('lists every agent any skill is linked into, once, in the usual order', () => {
+  it('lists every connected agent any skill is linked into, once, in the usual order', () => {
     expect(
-      linkedAgentsOf([
-        linked('Cursor', 'Claude Code'),
-        linked('Codex', 'Claude Code'),
-      ]),
+      worksInAgents(
+        [linked('Cursor', 'Claude Code'), linked('Codex', 'Claude Code')],
+        everyone,
+      ),
     ).toEqual(['Claude Code', 'Codex', 'Cursor'])
   })
 
+  it('leaves out an agent that was disconnected after the skill was saved', () => {
+    expect(
+      worksInAgents([linked('Claude Code', 'Codex')], ['Claude Code']),
+    ).toEqual(['Claude Code'])
+    expect(worksInAgents([linked('Codex')], [])).toEqual([])
+  })
+
   it('is empty when no skill is linked into an agent', () => {
-    expect(linkedAgentsOf([linked(), linked()])).toEqual([])
-    expect(linkedAgentsOf([])).toEqual([])
+    expect(worksInAgents([linked(), linked()], everyone)).toEqual([])
+    expect(worksInAgents([], everyone)).toEqual([])
   })
 })
 

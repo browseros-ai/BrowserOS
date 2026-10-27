@@ -23,12 +23,7 @@ import { SkillFormDialog } from '@/components/skills/SkillFormDialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { useSkillsScreenData } from './skills.data'
-import {
-  linkedAgentsOf,
-  SAVE_PHRASE,
-  skillSites,
-  usedLabel,
-} from './skills.helpers'
+import { SAVE_PHRASE, skillSites, usedLabel } from './skills.helpers'
 
 /** Two columns at the page's full width, one on narrow screens. */
 const GRID_CLASS =
@@ -36,9 +31,8 @@ const GRID_CLASS =
 
 /** Things you ask for often, as cards that each copy the phrase that runs it again. */
 export function Skills() {
-  const { skills, isLoading, isError } = useSkillsScreenData()
+  const { skills, agents, isLoading, isError } = useSkillsScreenData()
   const [creating, setCreating] = useState(false)
-  const agents = linkedAgentsOf(skills)
   const now = Date.now()
 
   return (

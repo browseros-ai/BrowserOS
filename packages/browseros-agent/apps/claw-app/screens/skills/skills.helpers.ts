@@ -123,15 +123,18 @@ export function skillSites(site: string | undefined): string[] {
 }
 
 /**
- * Every agent any skill is linked into, once, in the usual harness order.
- * Each skill records its links when it is saved, so a skill saved before an
- * agent was connected can lack it; the union is what the page can show once.
+ * The connected agents any skill is linked into, once, in the usual harness
+ * order. A skill records its links when it is saved and keeps them after an
+ * agent is disconnected, so the saved links alone can name agents that are gone.
  */
-export function linkedAgentsOf(
+export function worksInAgents(
   skills: Pick<Skill, 'linkedAgents'>[],
+  connected: readonly Harness[],
 ): Harness[] {
-  return HARNESSES.filter((harness) =>
-    skills.some((skill) => skill.linkedAgents.includes(harness)),
+  return HARNESSES.filter(
+    (harness) =>
+      connected.includes(harness) &&
+      skills.some((skill) => skill.linkedAgents.includes(harness)),
   )
 }
 
