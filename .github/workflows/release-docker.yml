@@ -4,6 +4,8 @@ name: "Release: Neo Docker image"
 # server, and optional provider key files. Keys are intentionally embedded and
 # extractable by anyone who can pull the image. Both native smoke jobs must pass
 # before publication; use latest only for a promoted browser version.
+# keys=false builds a keyless image (no solve_captcha) and publishes only its
+# <version>-<commit> tag, so <version> and latest keep pointing at keyed images.
 #
 # The image is tagged <version>-<commit> (one per source commit) and <version>
 # (moves to the newest run). Rerun on a newer commit with the same version to ship server or packaging
@@ -19,6 +21,10 @@ on:
         description: "Also tag :latest (only for a promoted version)"
         type: boolean
         default: false
+      keys:
+        description: "Embed the provider keys (extractable from the image). Off: keyless, only <version>-<commit> is published"
+        type: boolean
+        default: true
       verify_paid:
         description: "Require a paid Google reCAPTCHA demo PASS"
         type: boolean
@@ -50,6 +56,11 @@ jobs:
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target/neo-docker
     steps:
+      - name: Refuse latest for a keyless image
+        if: ${{ !inputs.keys && inputs.latest }}
+        run: |
+          echo 'A keyless image is published only as <version>-<commit>; it never takes :latest' >&2
+          exit 1
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
@@ -125,8 +136,17 @@ jobs:
           CAPSOLVER_API_KEY: ${{ secrets.CAPSOLVER_API_KEY }}
           TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
           VERIFY_PAID: ${{ inputs.verify_paid }}
+          KEYS: ${{ inputs.keys }}
         run: |
           set -euo pipefail
+          if [ "$KEYS" != true ]; then
+            if [ "$VERIFY_PAID" = true ]; then
+              echo 'Paid verification requires a provider key' >&2
+              exit 1
+            fi
+            echo "keyed=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           umask 077
           export BROWSEROS_CAPSOLVER_API_KEY_FILE="$RUNNER_TEMP/neo-capsolver-key"
           export BROWSEROS_2CAPTCHA_API_KEY_FILE="$RUNNER_TEMP/neo-2captcha-key"
@@ -257,6 +277,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Prepare build secrets
+        if: inputs.keys
         env:
           CAPSOLVER_API_KEY: ${{ secrets.CAPSOLVER_API_KEY }}
           TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
@@ -271,10 +292,12 @@ jobs:
       - name: Push amd64 and arm64
         env:
           LATEST: ${{ inputs.latest }}
+          KEYS: ${{ inputs.keys }}
         run: |
           set -euo pipefail
           args=(--version "$VERSION" --push --server-dir "$RUNNER_TEMP/neo-servers" --revision "$GITHUB_SHA")
           if [ "$LATEST" = true ]; then args+=(--latest); fi
+          if [ "$KEYS" != true ]; then args+=(--no-version-tag); fi
           uv run --directory packages/browseros browseros release docker "${args[@]}"
       - name: Remove secret files
         if: always()

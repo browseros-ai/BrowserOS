@@ -122,6 +122,21 @@ class PushTest(unittest.TestCase):
             self._push(ops)
         self.assertEqual(ops.builds, [])
 
+    def test_without_the_version_tag_only_the_commit_tag_is_pushed(self):
+        ops = FakeOperations(release=_release("x64_deb", "arm64_deb"))
+
+        result = self._push(ops, version_tag=False)
+
+        self.assertEqual(result.tags, ("ghcr.io/browseros-ai/neo:0.52.0.1-169e41f",))
+        self.assertNotIn("ghcr.io/browseros-ai/neo:0.52.0.1", ops.builds[0])
+
+    def test_latest_needs_the_version_tag(self):
+        ops = FakeOperations(release=_release("x64_deb", "arm64_deb"))
+
+        with self.assertRaisesRegex(ImageError, "--latest also needs the version tag"):
+            self._push(ops, version_tag=False, latest=True)
+        self.assertEqual(ops.builds, [])
+
     def test_latest_adds_the_latest_tag(self):
         ops = FakeOperations(release=_release("x64_deb", "arm64_deb"))
 
@@ -188,6 +203,13 @@ class LoadTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ImageError, "one platform"):
             build_image(request, ops, CONTEXT)
+
+    def test_an_image_without_the_version_tag_needs_its_commit_tag(self):
+        ops = FakeOperations(release=_release("x64_deb", "arm64_deb"))
+
+        with self.assertRaisesRegex(ImageError, "needs --revision"):
+            build_image(ImageRequest(version="0.52.0.1", version_tag=False), ops, CONTEXT)
+        self.assertEqual(ops.builds, [])
 
     def test_latest_is_only_for_published_images(self):
         ops = FakeOperations(release=_release("arm64_deb"))
