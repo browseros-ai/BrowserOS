@@ -19,12 +19,8 @@ mock.module('./client', () => ({
     }),
 }))
 
-const {
-  sessionPreviewUrl,
-  taskScreenshotUrl,
-  useLiveSessions,
-  useSessionScreenshots,
-} = await import('./audit.hooks')
+const { taskScreenshotUrl, useLiveSessions, useSessionScreenshots } =
+  await import('./audit.hooks')
 
 afterAll(() => mock.restore())
 
@@ -34,12 +30,7 @@ beforeEach(() => {
 })
 
 describe('session visual resources', () => {
-  it('builds live and historical URLs from session-owned identities', () => {
-    expect(
-      sessionPreviewUrl('session / one', 456, 'http://127.0.0.1:9200'),
-    ).toBe(
-      'http://127.0.0.1:9200/api/v1/sessions/session%20%2F%20one/preview?refresh=456',
-    )
+  it('builds screenshot URLs from session-owned identities', () => {
     expect(
       taskScreenshotUrl('session / one', 17, 'http://127.0.0.1:9200'),
     ).toBe(

@@ -222,7 +222,7 @@ components:
       name: quality
       in: query
       description: >-
-        `low` is 480×300 at up to 4 frames per second (10 for `/video`); `high` is 1280×800 at
+        `low` is 640×400 at up to 4 frames per second (10 for `/video`); `high` is 1280×800 at
         up to 10 frames per second (15 for `/video`). Frames keep the tab's aspect ratio.
       schema:
         type: string
