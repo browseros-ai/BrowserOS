@@ -142,6 +142,8 @@ function WorksIn({ agents }: { agents: Harness[] }) {
 function SkillCard({ skill, now }: { skill: Skill; now: number }) {
   const sites = skillSites(skill.site)
   const favicon = sites.length === 1 ? sites[0] : undefined
+  // A hand-edited SKILL.md can carry a blank description; the name keeps the card titled.
+  const title = skill.description.trim() || skill.name
   return (
     <Card
       size="compact"
@@ -162,13 +164,13 @@ function SkillCard({ skill, now }: { skill: Skill; now: number }) {
       </span>
       <NavLink
         to={`/skills/${encodeURIComponent(skill.name)}`}
-        title={skill.description}
+        title={title}
         className={cn(
           CARD_TARGET_CLASS,
           'col-span-full row-start-2 truncate font-semibold text-[15.5px] text-cyanotype-ink leading-[21px] outline-none',
         )}
       >
-        {skill.description}
+        {title}
       </NavLink>
       <div className="col-span-full row-start-3 flex items-center justify-between gap-3">
         <span className="truncate text-[13px] text-ink-3 leading-4">
