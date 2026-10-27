@@ -124,6 +124,12 @@ components:
       $ref: ./schemas/system.yaml#/SystemCapabilities
     SchemaStatus:
       $ref: ./schemas/system.yaml#/SchemaStatus
+    ScreencastWatch:
+      $ref: ./schemas/screencasts.yaml#/ScreencastWatch
+    ScreencastWatchMessage:
+      $ref: ./schemas/screencasts.yaml#/ScreencastWatchMessage
+    ScreencastFrameHeader:
+      $ref: ./schemas/screencasts.yaml#/ScreencastFrameHeader
     CockpitStats:
       $ref: ./schemas/cockpit.yaml#/CockpitStats
     CockpitStatsWindow:

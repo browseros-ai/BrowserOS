@@ -14,6 +14,8 @@ pub mod feedback;
 pub use self::feedback::*;
 pub mod recordings;
 pub use self::recordings::*;
+pub mod screencasts;
+pub use self::screencasts::*;
 pub mod sessions;
 pub use self::sessions::*;
 pub mod settings;

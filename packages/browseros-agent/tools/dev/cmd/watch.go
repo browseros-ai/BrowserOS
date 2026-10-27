@@ -451,7 +451,9 @@ func startClawWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []
 	sidecarPath := watchSidecarConfigPath(userDataDir, "claw-server")
 	reservations.ReleaseServer()
 	reservations.ReleaseExtension()
-	serverProc := proc.StartManaged(ctx, wg, clawServerProcConfig(root, env, p, userDataDir, sidecarPath, proc.KillPortAndWait))
+	serverCfg := clawServerProcConfig(root, env, p, userDataDir, sidecarPath, proc.KillPortAndWait)
+	proc.LogMsgf(proc.TagBuild, "Cargo build dir: %s", envValue(serverCfg.Env, "CARGO_BUILD_BUILD_DIR"))
+	serverProc := proc.StartManaged(ctx, wg, serverCfg)
 	procs = append(procs, serverProc)
 	startRustClawSourceWatcher(ctx, wg, root, serverProc)
 	return procs
@@ -461,7 +463,7 @@ func clawServerProcConfig(root string, env []string, p proc.Ports, userDataDir s
 	return proc.ProcConfig{
 		Tag:     proc.TagServer,
 		Dir:     root,
-		Env:     env,
+		Env:     clawServerCargoEnv(root, env),
 		Restart: true,
 		Cmd:     []string{"cargo", "run", "-p", "claw-server", "--", "--config", sidecarPath},
 		BeforeStart: func() error {
@@ -477,6 +479,26 @@ func clawServerProcConfig(root string, env []string, p proc.Ports, userDataDir s
 			return killPort(p.Server, 3*time.Second)
 		},
 	}
+}
+
+// clawServerCargoEnv gives the watch's cargo a build directory no other cargo
+// command uses. The repo's .cargo/config.toml points build-dir at one directory
+// shared by every checkout on the machine, and Cargo locks it for a whole build,
+// so an editor's check on save or a test in another worktree left the server
+// (and each rebuild after a save) at "Blocking waiting for file lock on build
+// directory". Building into target/dev-watch, with build-dir following
+// target-dir as it does without that config, costs one cold dependency build
+// per checkout. A CARGO_TARGET_DIR or CARGO_BUILD_BUILD_DIR the caller set wins.
+func clawServerCargoEnv(root string, env []string) []string {
+	targetDir := envValue(env, "CARGO_TARGET_DIR")
+	if targetDir == "" {
+		targetDir = filepath.Join(root, "target", "dev-watch")
+		env = replaceEnvValue(env, "CARGO_TARGET_DIR", targetDir)
+	}
+	if envValue(env, "CARGO_BUILD_BUILD_DIR") == "" {
+		env = replaceEnvValue(env, "CARGO_BUILD_BUILD_DIR", targetDir)
+	}
+	return env
 }
 
 func startRustClawSourceWatcher(ctx context.Context, wg *sync.WaitGroup, root string, serverProc *proc.ManagedProc) {

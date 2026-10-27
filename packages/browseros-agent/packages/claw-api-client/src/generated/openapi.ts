@@ -658,6 +658,40 @@ export interface components {
       /** @description Names of the applied migrations this build does not know. Empty unless databaseAhead is true. */
       unknownMigrations: string[]
     }
+    /** @description One live view a cockpit card asks for on the `/api/v1/screencasts` WebSocket: a session's current tab, or one tab of it. */
+    ScreencastWatch: {
+      sessionId: string
+      /**
+       * Format: int64
+       * @description Show this tab of the session; omitted follows the session's current tab.
+       */
+      browserTabId?: number
+    }
+    /** @description Client-to-server text message on the `/api/v1/screencasts` WebSocket. It names every watch the page wants and replaces the previous set; the server sends frames only for watches in the latest set. */
+    ScreencastWatchMessage: {
+      watch: components['schemas']['ScreencastWatch'][]
+    }
+    /** @description The JSON header of one server-to-client binary message on the `/api/v1/screencasts` WebSocket. A message is a big-endian u32 header length, this header, then the JPEG. */
+    ScreencastFrameHeader: {
+      /** @description The watched session, as the watch named it. */
+      sessionId: string
+      /**
+       * Format: int64
+       * @description The watched tab, as the watch named it; omitted when the watch follows the session.
+       */
+      browserTabId?: number
+      /**
+       * Format: int64
+       * @description The browser tab the frame shows.
+       */
+      tabId: number
+      url: string
+      /**
+       * Format: int64
+       * @description When the browser captured the frame, Unix epoch ms.
+       */
+      capturedAt: number
+    }
     CockpitStats: {
       hasMeasuredStats: boolean
       allTime: components['schemas']['CockpitStatsWindow']

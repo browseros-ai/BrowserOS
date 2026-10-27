@@ -10,7 +10,7 @@
  * useSessionDetail   one session's summary + full dispatch list;
  *                    polls only while the session is live
  *
- * The URL helpers let <img src> render binary JPEG routes without
+ * The URL helper lets <img src> render stored screenshot JPEGs without
  * routing those payloads through the JSON client.
  */
 
@@ -26,10 +26,7 @@ import {
   type SessionSummary,
   type SetAuditRetentionRequest,
 } from '@browseros/claw-api'
-import {
-  buildSessionPreviewUrl,
-  buildSessionScreenshotUrl,
-} from '@browseros/claw-api-client'
+import { buildSessionScreenshotUrl } from '@browseros/claw-api-client'
 import { useEffect, useState } from 'react'
 import {
   createInfiniteQuery,
@@ -115,16 +112,6 @@ export function taskScreenshotUrl(
   baseUrl = apiBaseUrl(),
 ): string {
   return buildSessionScreenshotUrl(baseUrl, { sessionId, screenshotId })
-}
-
-/** Absolute URL for a fresh live-session JPEG; `refresh` only busts browser caches. */
-export function sessionPreviewUrl(
-  sessionId: string,
-  refresh: number,
-  baseUrl = apiBaseUrl(),
-  browserTabId?: number,
-): string {
-  return buildSessionPreviewUrl(baseUrl, { sessionId, refresh, browserTabId })
 }
 
 /**
