@@ -180,10 +180,15 @@ export function Tabs({
   );
 }
 
+// The segment track's corner is its 6px selected segment plus the 4px inset,
+// so the two curves stay concentric. Change the radius, inset and indicator
+// corner together.
+const SEGMENT_TRACK_RADIUS = "rounded-[10px]";
+
 const listClasses: Record<Variant, string> = {
   pill: "inline-flex items-center gap-1 rounded-lg bg-card p-1",
   underline: "inline-flex items-center gap-1 border-b border-border",
-  segment: "inline-flex items-center gap-0 rounded-lg bg-card p-0.5",
+  segment: `inline-flex items-center gap-0.5 bg-card p-1 ${SEGMENT_TRACK_RADIUS}`,
 };
 
 export function TabsList({
@@ -404,7 +409,7 @@ export function TabsList({
     if (viewport) viewport.scrollBy({ left: direction * viewport.clientWidth * 0.8, behavior: reduce ? "instant" : "smooth" });
   };
   const controlClass = "absolute inset-y-0 z-20 inline-flex w-9 items-center justify-center text-foreground transition-opacity hover:opacity-70 focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-0";
-  const surfaceClass = variant === "pill" || variant === "segment" ? "rounded-lg bg-card" : "";
+  const surfaceClass = variant === "pill" ? "rounded-lg bg-card" : variant === "segment" ? `${SEGMENT_TRACK_RADIUS} bg-card` : "";
 
   return (
     <div ref={rootRef} className={cn("relative isolate flex w-full max-w-full min-w-0 items-center", edges.overflow && surfaceClass, wrapperClassName)}>
@@ -608,8 +613,8 @@ export function TabsTrigger({
           if (!event.defaultPrevented) setValue(value);
         }}
         className={cn(
-          "relative z-10 inline-flex items-center justify-center whitespace-nowrap rounded-md bg-transparent px-3.5 py-1.5 text-sm font-medium outline-none",
-          "text-muted-foreground hover:text-foreground",
+          "relative z-10 inline-flex items-center justify-center whitespace-nowrap rounded-md bg-transparent text-sm font-medium outline-none hover:text-foreground",
+          variant === "segment" ? "h-[30px] px-3 text-ink-2" : "px-3.5 py-1.5 text-muted-foreground",
           className,
         )}
       >

@@ -249,7 +249,7 @@ function Appearance() {
                   key={value}
                   value={value}
                   icon={<Icon className="size-4" />}
-                  className="px-3 font-semibold text-[13.5px]"
+                  className="font-semibold text-[13.5px]"
                 >
                   {label}
                 </TabsTrigger>
