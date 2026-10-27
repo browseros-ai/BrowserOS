@@ -1,7 +1,6 @@
 import { Globe } from 'lucide-react'
-import { useState } from 'react'
+import { Favicon } from '@/components/favicon/Favicon'
 import { cn } from '@/lib/utils'
-import { faviconUrl } from './site-badge.helpers'
 
 /** The square that stands for the website a skill works on: its icon, or a globe. */
 export function SiteBadge({
@@ -11,7 +10,6 @@ export function SiteBadge({
   site?: string
   className?: string
 }) {
-  const src = site ? faviconUrl(site) : null
   return (
     <span
       aria-hidden
@@ -20,24 +18,7 @@ export function SiteBadge({
         className,
       )}
     >
-      {src ? (
-        <SiteIcon key={src} src={src} />
-      ) : (
-        <Globe className="size-[18px]" />
-      )}
+      {site ? <Favicon site={site} /> : <Globe className="size-[18px]" />}
     </span>
-  )
-}
-
-function SiteIcon({ src }: { src: string }) {
-  const [failed, setFailed] = useState(false)
-  if (failed) return <Globe className="size-[18px]" />
-  return (
-    <img
-      src={src}
-      alt=""
-      className="size-[18px] rounded-[4px]"
-      onError={() => setFailed(true)}
-    />
   )
 }
