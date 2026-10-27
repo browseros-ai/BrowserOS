@@ -9,7 +9,6 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { createServer } from 'node:net'
-import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 const SERVER_ROOT = resolve(import.meta.dir, '../..')
@@ -240,7 +239,9 @@ export async function withE2e<T>(
   binaryPath = process.env.BROWSEROS_BINARY,
 ): Promise<T> {
   const binary = await requireBrowserBinary(binaryPath)
-  const root = await mkdtemp(join(tmpdir(), 'browseros-owned-e2e-'))
+  // Chromium appends its own Unix socket path; nested CI TMPDIRs exceed sun_path.
+  // A private mkdtemp directory under /tmp keeps it short without sharing state.
+  const root = await mkdtemp('/tmp/bos-e2e-')
   const processes: OwnedProcess[] = []
   let reservation: Awaited<ReturnType<typeof reservePort>> | undefined
   let result: T | undefined

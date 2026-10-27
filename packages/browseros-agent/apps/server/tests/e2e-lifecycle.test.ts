@@ -254,14 +254,26 @@ describe('owned E2E lifecycle (no browser required)', () => {
       )
       await chmod(executable, 0o700)
       let called = false
-      await expect(
-        withE2e(async () => {
-          called = true
-        }, executable),
-      ).rejects.toThrow('partial-start-marker')
+      const previousTmp = process.env.TMPDIR
+      process.env.TMPDIR = join(root, 'nested-ci-temp-'.repeat(12))
+      try {
+        await expect(
+          withE2e(async () => {
+            called = true
+          }, executable),
+        ).rejects.toThrow('partial-start-marker')
+      } finally {
+        if (previousTmp === undefined) delete process.env.TMPDIR
+        else process.env.TMPDIR = previousTmp
+      }
       expect(called).toBe(false)
       const profile = await readFile(record, 'utf8')
-      expect(profile).toContain('browseros-owned-e2e-')
+      expect(profile).toStartWith('/tmp/bos-e2e-')
+      const socket = profile.replace(
+        /profile$/,
+        'tmp/org.chromium.Chromium.XXXXXX/SingletonSocket',
+      )
+      expect(Buffer.byteLength(socket)).toBeLessThan(104)
       await expect(access(profile)).rejects.toThrow()
     })
   })
