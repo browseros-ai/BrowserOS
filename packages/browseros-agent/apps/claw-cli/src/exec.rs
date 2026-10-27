@@ -10,7 +10,7 @@ use crate::cli::{Cli, Command, Globals};
 use crate::client::{self, Session, result::ToolOutput};
 use crate::exit::{Code, Failure};
 use crate::plan::{self, External, Local, Plan, ToolPlan};
-use crate::{capability, io, render, script, state};
+use crate::{capability, guides, io, render, script, state};
 
 /// Parses, plans and runs one invocation.
 ///
@@ -24,6 +24,14 @@ pub async fn run(cli: Cli) -> Result<Code> {
     };
     let built = plan::build(&cli.command, external.as_deref())?;
     let label = command_label(&cli.command);
+
+    // Reading a guide or listing scope files must work with no server and no
+    // browser: an agent learning the API should not have to start one first.
+    if let Plan::Local(local) = &built
+        && let Some(code) = run_offline(local)?
+    {
+        return Ok(code);
+    }
 
     let timeout = cli.globals.timeout.map_or(
         client::transport::DEFAULT_READ_TIMEOUT,
@@ -144,6 +152,32 @@ async fn run_tool(
     Ok(output.exit_code())
 }
 
+/// The locals that need neither the network nor a session.
+fn run_offline(local: &Local) -> Result<Option<Code>> {
+    match local {
+        Local::SkillsList => {
+            io::out(&guides::list());
+            Ok(Some(Code::Ok))
+        }
+        Local::SkillsGet { name, full } => match guides::get(name, *full) {
+            Some(body) => {
+                io::out(body);
+                Ok(Some(Code::Ok))
+            }
+            None => Err(Failure::usage(format!(
+                "no guide named {name}. Available:\n{}",
+                guides::list()
+            ))
+            .into()),
+        },
+        Local::SessionList => {
+            session_list();
+            Ok(Some(Code::Ok))
+        }
+        _ => Ok(None),
+    }
+}
+
 async fn run_local(session: &mut Session, globals: &Globals, local: Local) -> Result<Code> {
     match local {
         Local::Status => status(session, globals).await,
@@ -160,15 +194,9 @@ async fn run_local(session: &mut Session, globals: &Globals, local: Local) -> Re
             category,
             summary,
         } => session_start(session, globals, task, category, summary).await,
-        Local::SessionList => {
-            session_list();
-            Ok(Code::Ok)
-        }
         Local::SessionEnd { close_tabs, all } => session_end(session, close_tabs, all).await,
-        Local::SkillsList | Local::SkillsGet { .. } => {
-            io::out("skills: the embedded guides land in a later change.");
-            Ok(Code::Ok)
-        }
+        // Already answered by run_offline before the server was contacted.
+        Local::SkillsList | Local::SkillsGet { .. } | Local::SessionList => Ok(Code::Ok),
     }
 }
 
