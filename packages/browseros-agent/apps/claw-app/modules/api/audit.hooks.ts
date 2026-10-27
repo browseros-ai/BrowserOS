@@ -7,6 +7,7 @@
  *
  * useSessions        paginated session history (homepage + audit screen)
  * useLiveSessions    complete connected-session snapshot for Running now
+ * useLiveSessionState one live session's activity, read from that snapshot
  * useSessionDetail   one session's summary + full dispatch list;
  *                    polls only while the session is live
  *
@@ -19,6 +20,7 @@ import {
   type AuditRetention,
   type AuditStorageState,
   type Dispatch,
+  type LiveSessionActivityState,
   type SessionDetail,
   type SessionList,
   type SessionScreenshotList,
@@ -80,6 +82,25 @@ export const useLiveSessions = createQuery<SessionList>({
   fetcher: async () =>
     (await apiClient()).listSessions({ status: SessionStatus.Live }),
 })
+
+/** How often a live task's badge refreshes its activity when the cockpit is not polling. */
+const LIVE_STATE_POLL_MS = 5000
+
+/**
+ * Whether a live task is active or idle. Only the live-session snapshot carries activity; the
+ * history and detail responses do not, so task rows and pages read it here by session id. On
+ * Home this shares the cockpit's faster-polled query; `undefined` turns the lookup off.
+ */
+export function useLiveSessionState(
+  sessionId: string | undefined,
+): LiveSessionActivityState | undefined {
+  const live = useLiveSessions({
+    enabled: sessionId !== undefined,
+    refetchInterval: LIVE_STATE_POLL_MS,
+  })
+  return live.data?.items.find((session) => session.sessionId === sessionId)
+    ?.live?.state
+}
 
 export const useSessionDetail = createQuery<
   SessionDetail,

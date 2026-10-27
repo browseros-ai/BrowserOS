@@ -455,6 +455,18 @@ export function describeSteps(
 }
 
 /** What an agent is doing right now on a live tab, in the present tense. */
+/**
+ * The line for a live task whose agent has gone quiet: where it last worked, without claiming it
+ * is still busy. The agent may be thinking, waiting on its user, or finished; the session ends
+ * when its connection closes.
+ */
+export function describeIdleStep(
+  tab: Pick<SessionBrowserTab, 'title' | 'url'> | undefined,
+): string {
+  if (!tab) return 'No recent activity'
+  return `Last active on ${pageLabel(tab.title, tab.url) ?? 'a page'}`
+}
+
 export function describeLiveStep(
   tab: Pick<SessionBrowserTab, 'title' | 'url' | 'lastToolName'> | undefined,
 ): string {

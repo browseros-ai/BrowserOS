@@ -101,6 +101,7 @@ export function ReplayTheater({
                       <div className="flex min-w-0 items-center gap-3">
                         <SessionStatusBadge
                           status={session.status}
+                          sessionId={session.sessionId}
                           className="shrink-0"
                         />
                         <h2

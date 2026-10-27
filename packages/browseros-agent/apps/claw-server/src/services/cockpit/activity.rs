@@ -11,7 +11,10 @@ use std::{
 };
 use tokio::sync::Mutex;
 
-const ACTIVE_WINDOW: Duration = Duration::from_secs(30);
+/// A tab stays "active" this long after its last tool call. The cockpit reads a live session
+/// with no active tab as idle, so this must cover an agent's ordinary pause to think between
+/// calls; a shorter window flips a busy agent's card between Working and Idle.
+const ACTIVE_WINDOW: Duration = Duration::from_secs(60);
 const RECENT_TOOLS_CAP: usize = 8;
 const USE_SYSTEM_TIME: i64 = i64::MIN;
 
@@ -273,7 +276,7 @@ impl TabActivityService {
                             tool_count: candidate.tool_count,
                             recent_tools: candidate.recent_tools.into_iter().collect(),
                             status: if now.saturating_sub(candidate.last_tool_at)
-                                < i64::try_from(ACTIVE_WINDOW.as_millis()).unwrap_or(30_000)
+                                < i64::try_from(ACTIVE_WINDOW.as_millis()).unwrap_or(60_000)
                             {
                                 "active"
                             } else {
@@ -610,6 +613,32 @@ mod tests {
         assert_eq!(records[0].recent_tools[0].name, "snapshot");
         assert_eq!(records[0].url, "https://example.com/current");
         assert_eq!(records[0].title, "Current");
+    }
+
+    #[tokio::test]
+    async fn a_pause_between_tool_calls_still_reads_as_active() {
+        let service = TabActivityService::default();
+        service.set_now_for_testing(1_000);
+        record(&service, "target-1", 1, "session-1", "navigate").await;
+
+        for (now, expected) in [
+            (1_000 + 45_000, "active"),
+            (1_000 + 59_999, "active"),
+            (1_000 + 60_000, "idle"),
+        ] {
+            service.set_now_for_testing(now);
+            let records = service
+                .snapshot_with(|_| async {
+                    live("target-1", 101, "https://example.com/current", "Current")
+                })
+                .await;
+            assert_eq!(
+                records[0].status,
+                expected,
+                "{}s after the last tool call",
+                (now - 1_000) / 1_000
+            );
+        }
     }
 
     #[tokio::test]

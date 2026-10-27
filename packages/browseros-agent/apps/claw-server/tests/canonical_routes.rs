@@ -1424,7 +1424,7 @@ async fn live_projection_hides_handshakes_and_keeps_dispatch_backed_zero_tab_ses
             .all(|item| item["sessionId"] != fixture.zero_tab.id().as_str())
     );
 
-    app.state.tab_activity.set_now_for_testing(30_101);
+    app.state.tab_activity.set_now_for_testing(60_101);
     let (_, _, bytes) = request(
         &app.router,
         "GET",

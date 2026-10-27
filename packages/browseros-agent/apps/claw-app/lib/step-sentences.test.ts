@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import type { ToolDispatchRow } from '@/modules/api/audit.hooks'
 import {
+  describeIdleStep,
   describeLiveStep,
   describeStep,
   describeSteps,
@@ -339,6 +340,21 @@ describe('describeLiveStep', () => {
 
   it('has a sensible line before any tab exists', () => {
     expect(describeLiveStep(undefined)).toBe('Getting started')
+  })
+})
+
+describe('describeIdleStep', () => {
+  it('names the page the agent last touched without saying it is busy', () => {
+    expect(
+      describeIdleStep({
+        title: '',
+        url: 'https://www.linkedin.com/login',
+      }),
+    ).toBe('Last active on linkedin.com')
+  })
+
+  it('has a sensible line when the agent never reached a page', () => {
+    expect(describeIdleStep(undefined)).toBe('No recent activity')
   })
 })
 

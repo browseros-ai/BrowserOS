@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import type { SessionSummary } from '@browseros/claw-api'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { parseHTML } from 'linkedom'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
@@ -64,9 +65,12 @@ let root: Root
 let container: HTMLElement
 let changes: boolean[]
 
+// The theater's status badge reads live activity from the query cache, as in the app.
+const queryClient = new QueryClient()
+
 function Harness({ open }: { open: boolean }) {
   return (
-    <>
+    <QueryClientProvider client={queryClient}>
       <input data-text-field />
       <div role="dialog" data-other-dialog>
         <button type="button">Inside another dialog</button>
@@ -78,7 +82,7 @@ function Harness({ open }: { open: boolean }) {
         replay={replay}
         steps={<ol data-steps-rail />}
       />
-    </>
+    </QueryClientProvider>
   )
 }
 
