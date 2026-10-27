@@ -168,26 +168,30 @@ install them again when re-enabled.
 
 ### Graphics
 
-The image enables WebGL1/2 rendering and WebGPU compute on machines without a GPU.
-`NEO_SOFTWARE_GRAPHICS=true` adds `--ignore-gpu-blocklist --disable-gpu-compositing
---enable-unsafe-webgpu`: Mesa llvmpipe renders WebGL, and Chromium can use its
-bundled SwiftShader WebGPU fallback. These run on the CPU; 3D-heavy pages cost
-more CPU than on a desktop with a GPU. The compositing flag keeps compositing,
-page painting and video on Chromium's own software path, as in earlier images.
+Containers and microVMs rarely have a GPU, so Neo draws with Mesa's llvmpipe, which runs on the
+CPU. One setting decides what pages can use:
 
-The WebGPU flag opts into backends and features outside Chromium's normal safety
-policy. BrowserOS keeps native GPU reporting for this configuration, including in
-hosted mode; it does not report a hosted NVIDIA identity. For a deployment with a
-supported GPU, or to keep Chromium's default graphics restrictions, set
-`NEO_SOFTWARE_GRAPHICS=false`. Custom flags in `NEO_ARGS` remain additive; changing
-them does not remove the software-graphics flags, so use the setting to opt out.
-This policy only affects the container launcher, independently of
-`BROWSERCLAW_HOSTED_MODE`; installed desktop browsers are unchanged.
+- `NEO_SOFTWARE_GRAPHICS=true` (the default) adds `--ignore-gpu-blocklist
+  --disable-gpu-compositing`. Pages get WebGL1 and WebGL2, drawn by the CPU, so 3D-heavy pages
+  cost much more CPU than on a desktop with a GPU. Compositing, page painting and video stay on
+  Chromium's own software path, as in earlier images. In hosted mode, WebGL reports a desktop
+  GPU rather than llvmpipe.
+- `NEO_SOFTWARE_GRAPHICS=false` adds neither, so Chromium keeps its defaults: no WebGL on
+  llvmpipe. Use it on a host with a supported GPU, or when CPU matters more than WebGL.
 
-The smoke check renders and reads back a triangle with both WebGL versions and
-runs a WebGPU compute shader. Its `--url` must use HTTPS or a loopback origin so
-WebGPU has a secure context. An exposed API or a renderer name is not enough to
-pass the check.
+Like the other true/false settings, it accepts `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`.
+Flags in `NEO_ARGS` add to these and cannot remove them, so use the setting to opt out. Installed
+desktop browsers are unchanged.
+
+WebGPU stays unavailable: Chromium offers pages no WebGPU adapter without a GPU. To test WebGPU
+anyway, add `--enable-unsafe-webgpu` to `NEO_ARGS`. Pages then get Chromium's SwiftShader
+fallback, but the flag relaxes Chromium's WebGPU safety rules for every site, BrowserOS reports
+the real software GPU (llvmpipe and SwiftShader) instead of the hosted GPU identity, and with
+`NEO_SANDBOX=true` the viewer shows Chromium's unsupported-flag warning. Don't use it for normal
+browsing.
+
+The smoke check renders a triangle with both WebGL versions and reads it back. In hosted mode it
+also checks that WebGL reports the hosted GPU identity rather than a software renderer.
 
 From Neo 0.51.2.6, hosted mode also suppresses Runtime console and asynchronous
 exception notifications to prevent inspector error formatting from invoking page
@@ -291,7 +295,7 @@ AppArmor, so they may also need `--security-opt apparmor=unconfined`. In compose
 
 [`smoke.py`](smoke.py) checks a running container from your machine: the viewer, MCP from
 outside the container, the human-help setting, an agent opening a tab, the blank new tab page,
-and WebGL1/2 rendering and WebGPU compute (see [Graphics](#graphics)).
+and WebGL1/2 rendering with the hosted GPU identity (see [Graphics](#graphics)).
 
 ```sh
 python3 smoke.py                          # default ports

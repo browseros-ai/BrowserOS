@@ -162,14 +162,17 @@ if is_true "$NEO_DISABLE_BROWSEROS_EXTENSIONS"; then
   browseros_extension_flags=(--disable-browseros-extensions)
 fi
 
-# CPU-only containers use Mesa for WebGL and the bundled SwiftShader for WebGPU.
-# The blocklist override admits WebGL; unsafe WebGPU admits its software fallback
-# and intentionally retains native GPU reporting. Keep compositing on Chromium's
-# own software path so enabling these APIs does not move ordinary page painting
-# onto llvmpipe. Deployments can opt out without replacing their other NEO_ARGS.
+# Containers and microVMs rarely have a GPU, so Chromium draws with Mesa's
+# llvmpipe on the CPU, and its software-rendering list turns WebGL off there.
+# --ignore-gpu-blocklist lets WebGL1/2 run on llvmpipe; --disable-gpu-compositing
+# keeps compositing, painting and video on Chromium's software path, which
+# skipping the blocklist would otherwise move onto llvmpipe too. No WebGPU:
+# --enable-unsafe-webgpu relaxes WebGPU's safety rules for every site, and
+# BrowserOS drops its hosted GPU identity under it, so pages would see llvmpipe
+# and SwiftShader. Testers can add it through NEO_ARGS (README "Graphics").
 gpu_flags=()
 if is_true "$NEO_SOFTWARE_GRAPHICS"; then
-  gpu_flags=(--ignore-gpu-blocklist --disable-gpu-compositing --enable-unsafe-webgpu)
+  gpu_flags=(--ignore-gpu-blocklist --disable-gpu-compositing)
 fi
 
 # The viewer is for watching agents and for a person taking over a login, code
