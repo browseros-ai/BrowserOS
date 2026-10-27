@@ -69,7 +69,7 @@ export function FilterBar({
         className="min-w-[240px] flex-1"
         classNames={{
           field:
-            'h-11 border-border-strong bg-card focus-within:border-primary',
+            'h-11 rounded-full border-border-strong bg-card focus-within:border-primary',
           input: 'text-[15px]',
         }}
       />

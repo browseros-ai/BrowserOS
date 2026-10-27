@@ -55,12 +55,12 @@ export const TAKEOVER_BAR_CSS = `
 .nt-note { flex: 1 1 200px; min-width: 150px; height: 36px; border: 1px solid rgba(2,84,236,0.18); border-radius: 8px;
   padding: 0 10px; font: inherit; font-size: 13px; color: #0b1b33; background: #fff; }
 .nt-note::placeholder { color: #6b7b85; }
-.nt-handback { height: 36px; padding: 0 16px; border: 0; border-radius: 6px; background: #0254ec; color: #fff;
+.nt-handback { height: 36px; padding: 0 16px; border: 0; border-radius: 8px; background: #0254ec; color: #fff;
   font: inherit; font-weight: 600; font-size: 13px; cursor: pointer; }
 .nt-handback:hover { background: #0246c6; }
 .nt-handback:disabled { opacity: 0.6; cursor: default; }
 .nt-pill-btn { display: inline-flex; align-items: center; gap: 9px; background: #0254ec; color: #fff; border: 0;
-  border-radius: 6px; padding: 7px 13px 7px 7px; box-shadow: 0 8px 22px rgba(2,22,51,0.4); font: inherit;
+  border-radius: 999px; padding: 7px 13px 7px 7px; box-shadow: 0 8px 22px rgba(2,22,51,0.4); font: inherit;
   font-size: 13px; font-weight: 600; cursor: pointer; float: right; }
 .nt-chip { width: 24px; height: 24px; border-radius: 4px; background: #fff; display: flex; align-items: center; justify-content: center; }
 .nt-chip svg { width: 18px; height: 18px; border-radius: 4px; display: block; }

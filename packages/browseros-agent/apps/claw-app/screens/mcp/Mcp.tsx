@@ -146,7 +146,7 @@ function RowsSkeleton() {
         <Skeleton className="h-4 w-32" />
         <Skeleton className="h-3.5 w-24" />
       </div>
-      <Skeleton className="h-8 w-24 rounded-md" />
+      <Skeleton className="h-8 w-24 rounded-full" />
     </li>
   ))
 }

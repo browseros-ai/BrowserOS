@@ -156,9 +156,9 @@ const VARIANT_CLASS: Record<ActionSwapButtonVariant, string> = {
 };
 
 const SIZE_CLASS: Record<ActionSwapButtonSize, string> = {
-  sm: "h-8 gap-1.5 rounded-md px-3 text-xs",
-  md: "h-10 gap-2 rounded-md px-4 text-sm",
-  lg: "h-12 gap-2.5 rounded-md px-5 text-base",
+  sm: "h-8 gap-1.5 rounded-full px-3 text-xs",
+  md: "h-10 gap-2 rounded-full px-4 text-sm",
+  lg: "h-12 gap-2.5 rounded-full px-5 text-base",
   icon: "h-10 w-10 rounded-full",
 };
 
@@ -327,7 +327,7 @@ export function ActionSwapButton({
       whileTap={reduce || disabled ? undefined : { scale: 0.97 }}
       transition={{ ...SPRING_PRESS, layout: layoutTransition }}
       // Layout animations only correct a radius set inline.
-      style={{ borderRadius: size === "icon" ? 9999 : 6, ...style }}
+      style={{ borderRadius: 9999, ...style }}
       className={cn(
         "inline-flex items-center justify-center overflow-hidden font-medium transition-colors",
         "disabled:pointer-events-none disabled:opacity-50",
