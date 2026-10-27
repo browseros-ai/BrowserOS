@@ -9,7 +9,9 @@ the hosted tool set (BROWSERCLAW_HOSTED_MODE=1), an agent-opened tab loads
 and, in hosted mode, stays out of any tab group (the shipped neo.toml keeps the
 explicit grouping default), a new tab page is blank (the entrypoint's
 --disable-browseros-features list reached the browser). WebGL1/2 must render a
-triangle and WebGPU must execute a compute shader; API presence alone is not a pass.
+triangle on the container's software GPU (NEO_SOFTWARE_GRAPHICS reached the
+browser), and in hosted mode pages must see the hosted GPU identity, not that
+software renderer.
 
   python3 smoke.py [--vnc-port 6080] [--mcp-port 9010]
 
@@ -177,7 +179,7 @@ def main() -> None:
         new_tab["taskName"] = "docker smoke"
     opened = client.tool("tabs", new_tab)
     check("agent opened a tab", "opened page" in opened, opened.splitlines()[0] if opened else "")
-    check_graphics(client, int(re.search(r"opened page (\d+)", opened).group(1)))
+    check_graphics(client, int(re.search(r"opened page (\d+)", opened).group(1)), hosted)
     if hosted:
         check_ungrouped(client, int(re.search(r"opened page (\d+)", opened).group(1)))
     check_new_tab_blank(client)
@@ -209,20 +211,28 @@ def check_new_tab_blank(client: McpClient) -> int:
     return page
 
 
-def check_graphics(client: McpClient, page: int) -> None:
-    """Exercise GPU work through the same native evaluation path agents use.
+# Renderer names for CPU-only drawing: Mesa's llvmpipe and softpipe, Chromium's SwiftShader.
+SOFTWARE_RENDERER = re.compile(r"llvmpipe|softpipe|swiftshader", re.IGNORECASE)
 
-    The shipped image targets machines without a GPU. A renderer name or an
-    exposed navigator.gpu does not prove that its software backends can run work.
-    Keep the workloads tiny so the release smoke check remains cheap on ARM VMs.
+
+def check_graphics(client: McpClient, page: int, hosted: bool) -> None:
+    """WebGL draws on the container's software GPU, behind the hosted GPU identity.
+
+    Without a GPU, Chromium draws with Mesa's llvmpipe and refuses every WebGL context
+    on it unless NEO_SOFTWARE_GRAPHICS's --ignore-gpu-blocklist reached the browser. A
+    context or a renderer name proves little, so both WebGL versions render a triangle
+    and read it back. Hosted mode reports a desktop GPU in place of llvmpipe, and some
+    Chromium switches turn that identity off (--enable-unsafe-webgpu among them), so a
+    launcher that passes one fails here. Keep the workloads tiny so the release smoke
+    check remains cheap on ARM VMs.
     """
     reply = client.tool("evaluate", {"page": page, "code": r"""
-const result = {secure: isSecureContext, webgl: {}, webgpu: {}};
+const result = {};
 for (const kind of ['webgl', 'webgl2']) {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 4;
   const gl = canvas.getContext(kind);
-  if (!gl) { result.webgl[kind] = {context: false}; continue; }
+  if (!gl) { result[kind] = {context: false}; continue; }
   try {
     const modern = kind === 'webgl2';
     const prefix = modern ? '#version 300 es\n' : '';
@@ -248,47 +258,25 @@ for (const kind of ['webgl', 'webgl2']) {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     const pixels = new Uint8Array(4);
     gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-    result.webgl[kind] = {context: true, pixels: Array.from(pixels), error: gl.getError()};
+    const error = gl.getError();
+    const info = gl.getExtension('WEBGL_debug_renderer_info');
+    const renderer = gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER);
+    result[kind] = {context: true, pixels: Array.from(pixels), error, renderer};
     gl.deleteBuffer(buffer); gl.deleteProgram(program);
-  } catch (error) { result.webgl[kind] = {context: true, error: String(error)}; }
+  } catch (error) { result[kind] = {context: true, error: String(error)}; }
   finally { gl.getExtension('WEBGL_lose_context')?.loseContext(); }
 }
-let device;
-try {
-  const adapter = await navigator.gpu?.requestAdapter();
-  result.webgpu.adapter = !!adapter;
-  if (adapter) {
-    device = await adapter.requestDevice();
-    device.pushErrorScope('validation');
-    const data = device.createBuffer({size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC});
-    const readback = device.createBuffer({size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});
-    const module = device.createShaderModule({code: `
-      @group(0) @binding(0) var<storage, read_write> data: array<u32>;
-      @compute @workgroup_size(4) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-        data[id.x] = id.x * 3u + 7u;
-      }`});
-    const pipeline = device.createComputePipeline({layout: 'auto', compute: {module, entryPoint: 'main'}});
-    const bind = device.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries: [{binding: 0, resource: {buffer: data}}]});
-    const encoder = device.createCommandEncoder(); const pass = encoder.beginComputePass();
-    pass.setPipeline(pipeline); pass.setBindGroup(0, bind); pass.dispatchWorkgroups(1); pass.end();
-    encoder.copyBufferToBuffer(data, 0, readback, 0, 16); device.queue.submit([encoder.finish()]);
-    await readback.mapAsync(GPUMapMode.READ);
-    result.webgpu.values = Array.from(new Uint32Array(readback.getMappedRange())); readback.unmap();
-    result.webgpu.error = (await device.popErrorScope())?.message ?? null;
-  }
-} catch (error) { result.webgpu.error = String(error); }
-finally { device?.destroy(); }
 return result;
 """})
     # MCP wraps the JSON value in its untrusted-content markers and may append a
     # session tip. Decode just the first JSON object, not that presentation text.
     result, _ = json.JSONDecoder().raw_decode(reply[reply.index("{"):])
-    check("graphics origin is secure", result["secure"], "--url must use HTTPS or loopback")
     for kind in ("webgl", "webgl2"):
-        value = result["webgl"][kind]
+        value = result[kind]
         check(f"{kind} renders and reads back", value.get("pixels") == [255, 64, 0, 255] and value.get("error") == 0, json.dumps(value))
-    value = result["webgpu"]
-    check("WebGPU computes and reads back", value.get("values") == [7, 10, 13, 16] and not value.get("error"), json.dumps(value))
+    if hosted:
+        renderer = result["webgl"].get("renderer", "")
+        check("hosted WebGL reports the GPU identity", not SOFTWARE_RENDERER.search(renderer), renderer)
 
 
 def check_ungrouped(client: McpClient, page: int) -> None:
