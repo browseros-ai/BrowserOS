@@ -54,6 +54,22 @@
       "types": "./src/generated/domain-apis/bookmarks.ts",
       "default": "./src/generated/domain-apis/bookmarks.ts"
     },
+    "./domains/passwords": {
+      "types": "./src/generated/domains/passwords.ts",
+      "default": "./src/generated/domains/passwords.ts"
+    },
+    "./domain-apis/passwords": {
+      "types": "./src/generated/domain-apis/passwords.ts",
+      "default": "./src/generated/domain-apis/passwords.ts"
+    },
+    "./domains/payments": {
+      "types": "./src/generated/domains/payments.ts",
+      "default": "./src/generated/domains/payments.ts"
+    },
+    "./domain-apis/payments": {
+      "types": "./src/generated/domain-apis/payments.ts",
+      "default": "./src/generated/domain-apis/payments.ts"
+    },
     "./domains/background-service": {
       "types": "./src/generated/domains/background-service.ts",
       "default": "./src/generated/domains/background-service.ts"

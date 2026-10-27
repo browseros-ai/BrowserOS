@@ -12,8 +12,10 @@ async fn credentials_are_native_gated_and_omit_scope_from_the_contract() -> anyh
         .find(|tool| tool.name == "credentials")
         .ok_or_else(|| anyhow::anyhow!("credentials tool is missing"))?;
     assert!(!definition.available(NativeCapabilities::default()));
-    assert!(!definition.available(NativeCapabilities::from_browseros_version(Some("0.51.2.0"))));
-    assert!(definition.available(NativeCapabilities::from_browseros_version(Some("0.51.2.1"))));
+    // 0.51.2.1-0.51.2.6 served these commands from upstream's Autofill domain;
+    // the tool now speaks only the Passwords domain that 0.51.2.7 introduced.
+    assert!(!definition.available(NativeCapabilities::from_browseros_version(Some("0.51.2.6"))));
+    assert!(definition.available(NativeCapabilities::from_browseros_version(Some("0.51.2.7"))));
     assert!(definition.input_schema["properties"].get("scope").is_none());
     assert!(
         !definition.input_schema["required"]
@@ -48,7 +50,7 @@ async fn run_marks_password_inputs_before_authorization_can_reject_them() -> any
     };
     struct Probe(Arc<AtomicBool>);
     impl InnerCallHook for Probe {
-        fn mark_credential_input(&self) {
+        fn mark_sensitive_input(&self) {
             self.0.store(true, Ordering::Relaxed);
         }
         fn authorize<'a>(&'a self, _page: Option<u32>) -> BoxFuture<'a, Result<(), String>> {
@@ -68,7 +70,7 @@ async fn run_marks_password_inputs_before_authorization_can_reject_them() -> any
         .into_iter()
         .find(|tool| tool.name == "run")
         .ok_or_else(|| anyhow::anyhow!("missing run"))?;
-    let result=execute_tool(&run,json!({"code":"return await browser.cdp('Autofill.addCredential',{password:'synthetic-run-secret'});"}),&ctx).await?;
+    let result=execute_tool(&run,json!({"code":"return await browser.cdp('Passwords.addCredential',{password:'synthetic-run-secret'});"}),&ctx).await?;
     assert!(result.is_error);
     assert!(marked.load(Ordering::Relaxed));
     assert!(!serde_json::to_string(&result.content)?.contains("synthetic-run-secret"));

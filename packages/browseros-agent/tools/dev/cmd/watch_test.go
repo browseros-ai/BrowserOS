@@ -129,7 +129,7 @@ func TestBuildWatchEnvSelectsBrowserClawProduct(t *testing.T) {
 		"BROWSEROS_BINARY=/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo",
 		"BROWSEROS_CLAW_CDP_PORT=9012",
 		"VITE_BROWSEROS_CLAW_API_URL=http://127.0.0.1:9123",
-		"BROWSERCLAW_DIR=" + filepath.Join(home, ".browserclaw-dev"),
+		"BROWSERCLAW_DIR=" + filepath.Join("/tmp/browseros-dev", "browserclaw"),
 	} {
 		if !hasEnvEntry(env, want) {
 			t.Fatalf("expected env to contain %q, got %#v", want, env)
@@ -279,9 +279,15 @@ func TestClawRustServerProcConfigPassesSidecarAndDevEnv(t *testing.T) {
 			Resources string `json:"resources"`
 			Execution string `json:"execution"`
 		} `json:"directories"`
+		Flags struct {
+			DevMode *bool `json:"devMode"`
+		} `json:"flags"`
 	}
 	if err := json.Unmarshal(raw, &sidecar); err != nil {
 		t.Fatalf("parsing sidecar: %v", err)
+	}
+	if sidecar.Flags.DevMode == nil || !*sidecar.Flags.DevMode {
+		t.Fatalf("expected the dev claw sidecar to declare devMode, got %s", raw)
 	}
 	if sidecar.Ports.Server != ports.Server || sidecar.Ports.CDP != ports.CDP || sidecar.Ports.Proxy != ports.Server {
 		t.Fatalf("expected sidecar ports server=%d cdp=%d proxy=%d, got %+v", ports.Server, ports.CDP, ports.Server, sidecar.Ports)

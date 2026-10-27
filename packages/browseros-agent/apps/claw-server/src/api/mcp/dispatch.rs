@@ -85,9 +85,10 @@ pub struct ToolCall {
     /// from its arguments the way it is for a granular tool. The script hook records what
     /// the script actually touched, and `effects::page_ownership_notice` reports it.
     pub foreign_pages: Arc<std::sync::Mutex<std::collections::BTreeMap<u32, String>>>,
-    /// Shared with script hooks, including calls that fail or are cancelled
-    /// before they can return runtime audit hints.
-    pub sensitive_credentials: Arc<std::sync::atomic::AtomicBool>,
+    /// Set when the call may carry passwords or card data. Shared with script
+    /// hooks, including calls that fail or are cancelled before they can return
+    /// runtime audit hints.
+    pub sensitive_input: Arc<std::sync::atomic::AtomicBool>,
     /// Original snapshots and deep dispatch guards, captured before detached grouping.
     /// A reusable PageId must never let a later callback adopt its replacement tab.
     pub(crate) created_page_snapshots:
@@ -139,18 +140,15 @@ impl ToolCall {
             ToolFlags::default()
         };
         Self {
-            // Conservatively classify common credential-bearing source before
-            // target admission or execution. The bridge also marks dynamic calls.
-            sensitive_credentials: Arc::new(std::sync::atomic::AtomicBool::new(
-                tool_name == "credentials"
+            // Conservatively classify secret-bearing source before target admission
+            // or execution. The bridge also marks dynamic calls.
+            sensitive_input: Arc::new(std::sync::atomic::AtomicBool::new(
+                browseros_mcp::tools::sensitive::is_sensitive_tool(tool_name)
                     || tool_name == "run"
                         && raw_args
                             .get("code")
                             .and_then(Value::as_str)
-                            .is_some_and(|source| {
-                                let source = source.to_ascii_lowercase();
-                                source.contains("credential") || source.contains("password")
-                            }),
+                            .is_some_and(browseros_mcp::tools::sensitive::source_may_hold_secrets),
             )),
             foreign_pages: Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
             created_page_snapshots: Arc::default(),
@@ -372,6 +370,13 @@ async fn dispatch_tool_call_with(
             );
         }
 
+        // A filled card number shows in plain text. Hold the page out of every
+        // capture before the fill starts, until the page shows another document.
+        if let Some(page) =
+            browseros_mcp::tools::sensitive::card_fill_page(call.tool().name, &call.raw_args)
+        {
+            call.state.visuals.hold_card_data(page).await;
+        }
         match execute_with_cancellation(&call).await {
             DispatchExecution::ProtocolCancelled => {
                 tracing::info!(

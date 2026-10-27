@@ -165,22 +165,6 @@ impl JsonSchema for Output {
     }
 }
 
-/// Shared by the script bridge and its host audit adapter. Both structured and
-/// raw CDP credential calls must establish sensitivity before any early error.
-pub fn is_credential_primitive(method: &str, args: &[Value]) -> bool {
-    if method == "tool:credentials" {
-        return true;
-    }
-    let index = match method {
-        "cdp" => 0,
-        "cdpJsonForPage" => 1,
-        _ => return false,
-    };
-    args.get(index).and_then(Value::as_str).is_some_and(|name| {
-        name.starts_with("Autofill.") && name.to_ascii_lowercase().contains("credential")
-    })
-}
-
 pub fn definition() -> crate::framework::ToolDef {
     super::def_with_output::<Args, Output>(
         "credentials",

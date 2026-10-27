@@ -13,10 +13,12 @@ pub mod grep;
 pub mod history;
 pub mod navigate;
 mod page_creation;
+pub mod payment_cards;
 pub mod pdf;
 pub mod read;
 pub mod run;
 pub mod screenshot;
+pub mod sensitive;
 pub mod snapshot;
 pub mod tab_groups;
 pub mod tabs;
@@ -34,6 +36,7 @@ pub fn catalog() -> Vec<ToolDef> {
         tab_groups::definition(),
         history::definition(),
         credentials::definition(),
+        payment_cards::definition(),
         navigate::definition(),
         snapshot::definition(),
         diff::definition(),
@@ -117,12 +120,14 @@ fn metadata_for_tool(name: &str) -> ToolMetadata {
         requires: match name {
             "browser_target" | "browser_profiles" => Some(NativeFeature::ProfileTargeting),
             "credentials" => Some(NativeFeature::Credentials),
+            "payment_cards" => Some(NativeFeature::PaymentCards),
             _ => None,
         },
         manages_target: matches!(name, "browser_target" | "browser_profiles"),
         accepts_page_arg: matches!(
             name,
             "credentials"
+                | "payment_cards"
                 | "tabs"
                 | "navigate"
                 | "snapshot"
