@@ -3182,7 +3182,11 @@ async fn viewport_changes_never_reach_pages_outside_the_scope() -> TestResult {
     for tab in [3, 4] {
         let page = page_id(&scoped, tab).await?;
         let refused = scoped
-            .set_viewport(page, ViewportRequest::new(ViewportMode::Mobile, None)?)
+            .set_viewport(
+                page,
+                ViewportRequest::new(ViewportMode::Mobile, None)?,
+                &tokio_util::sync::CancellationToken::new(),
+            )
             .await
             .err()
             .ok_or("an out-of-scope page must be refused")?;

@@ -1,19 +1,23 @@
 //! `setViewport` and viewport restoration through the tool framework and the run SDK, against
 //! a one-tab fake browser. Viewport mechanics are covered in `browseros_core::viewport`.
 use crate::{
-    framework::{BrowserToolDefaults, BrowserToolOptions, ToolCtx, ToolResult, execute_tool},
+    framework::{
+        BrowserToolDefaults, BrowserToolOptions, ToolCtx, ToolError, ToolResult, execute_tool,
+    },
     output_file::create_browser_output_file_access,
     tools,
 };
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::{
-    BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, SessionId, viewport::Viewports,
+    BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId, SessionId,
+    viewport::Viewports,
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::{
     error::Error,
     sync::{Arc, Mutex, MutexGuard},
+    time::Duration,
 };
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -487,5 +491,34 @@ async fn tests_that_set_viewport_takes_an_optional_device_size() -> TestResult {
     )?;
     assert_eq!(scripted["size"], json!({"width": 1440, "height": 900}));
     assert_eq!(scripted["viewport"]["deviceScaleFactor"], 1.0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_cancelled_set_viewport_waiting_for_its_window_changes_nothing() -> TestResult
+{
+    let native = Native::new();
+    let ctx = ctx(&native, true);
+    set_viewport(&ctx, json!({"page": 1, "mode": "mobile"})).await;
+    let fitted = native.window();
+    // Another operation on the tab holds its window.
+    let held = ctx.browser.prepare_viewport(PageId(1)).await?;
+
+    let def = tools::viewport::definition();
+    let mut change = Box::pin(execute_tool(
+        &def,
+        json!({"page": 1, "mode": "desktop"}),
+        &ctx,
+    ));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), change.as_mut())
+            .await
+            .is_err()
+    );
+    ctx.cancel.cancel();
+    let outcome = tokio::time::timeout(Duration::from_secs(2), change).await?;
+    assert!(matches!(outcome, Err(ToolError::Cancelled)), "{outcome:?}");
+    drop(held);
+    assert_eq!(native.window(), fitted);
     Ok(())
 }

@@ -12,6 +12,7 @@ use std::{
     sync::{Arc, MutexGuard},
 };
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -439,7 +440,11 @@ impl Fixture {
     ) -> Result<ViewportReport, Box<dyn Error>> {
         Ok(self
             .view
-            .set_viewport(page.clone(), ViewportRequest::new(mode, zoom)?)
+            .set_viewport(
+                page.clone(),
+                ViewportRequest::new(mode, zoom)?,
+                &CancellationToken::new(),
+            )
             .await?)
     }
 }
@@ -751,7 +756,11 @@ async fn tests_that_a_page_ignoring_emulation_is_reported_as_a_failure() -> Test
     let page = fixture.page(1).await?;
     let error = fixture
         .view
-        .set_viewport(page, ViewportRequest::new(ViewportMode::Mobile, None)?)
+        .set_viewport(
+            page,
+            ViewportRequest::new(ViewportMode::Mobile, None)?,
+            &CancellationToken::new(),
+        )
         .await
         .err()
         .ok_or("a page that keeps its natural size must not report mobile")?;
@@ -796,6 +805,7 @@ async fn tests_that_views_without_viewports_refuse_and_prepare_nothing() -> Test
         .set_viewport(
             page.clone(),
             ViewportRequest::new(ViewportMode::Mobile, None)?,
+            &CancellationToken::new(),
         )
         .await
         .err()
@@ -1171,7 +1181,10 @@ async fn tests_that_a_custom_size_replaces_the_device_size() -> TestResult {
         height: 844,
     };
     let request = ViewportRequest::new(ViewportMode::Mobile, Some(150.0))?.with_size(phone)?;
-    let report = fixture.view.set_viewport(page.clone(), request).await?;
+    let report = fixture
+        .view
+        .set_viewport(page.clone(), request, &CancellationToken::new())
+        .await?;
 
     assert_eq!(report.size, Some(phone));
     assert_eq!(
@@ -1207,7 +1220,10 @@ async fn tests_that_a_custom_size_replaces_the_device_size() -> TestResult {
         width: 1440,
         height: 900,
     })?;
-    let report = fixture.view.set_viewport(page, desktop).await?;
+    let report = fixture
+        .view
+        .set_viewport(page, desktop, &CancellationToken::new())
+        .await?;
     assert_eq!(
         (
             report.viewport.width,
@@ -1230,7 +1246,10 @@ async fn tests_that_a_call_without_size_returns_to_the_mode_size() -> TestResult
         width: 390,
         height: 844,
     })?;
-    fixture.view.set_viewport(page.clone(), phone).await?;
+    fixture
+        .view
+        .set_viewport(page.clone(), phone, &CancellationToken::new())
+        .await?;
     let report = fixture.set(&page, ViewportMode::Mobile, None).await?;
 
     assert_eq!(
@@ -1265,9 +1284,13 @@ async fn tests_that_a_held_page_makes_viewport_changes_wait() -> TestResult {
     let view = fixture.view.clone();
     let page = fixed.clone();
     let mut change = Box::pin(async move {
-        view.set_viewport(page, ViewportRequest::new(ViewportMode::Desktop, None)?)
-            .await
-            .map_err(|error| error.to_string())
+        view.set_viewport(
+            page,
+            ViewportRequest::new(ViewportMode::Desktop, None)?,
+            &CancellationToken::new(),
+        )
+        .await
+        .map_err(|error| error.to_string())
     });
     assert!(still_waiting(&mut change).await);
     let view = fixture.view.clone();
@@ -1289,9 +1312,13 @@ async fn tests_that_a_capture_on_a_default_tab_holds_off_its_first_mode_change()
     let view = fixture.view.clone();
     let target = page.clone();
     let mut change = Box::pin(async move {
-        view.set_viewport(target, ViewportRequest::new(ViewportMode::Mobile, None)?)
-            .await
-            .map_err(|error| error.to_string())
+        view.set_viewport(
+            target,
+            ViewportRequest::new(ViewportMode::Mobile, None)?,
+            &CancellationToken::new(),
+        )
+        .await
+        .map_err(|error| error.to_string())
     });
     assert!(still_waiting(&mut change).await);
     assert!(emulation_methods(&fixture.native.methods()).is_empty());
@@ -1312,14 +1339,57 @@ async fn tests_that_a_capture_after_a_switch_to_default_holds_off_the_next_chang
     let view = fixture.view.clone();
     let target = page.clone();
     let mut change = Box::pin(async move {
-        view.set_viewport(target, ViewportRequest::new(ViewportMode::Desktop, None)?)
-            .await
-            .map_err(|error| error.to_string())
+        view.set_viewport(
+            target,
+            ViewportRequest::new(ViewportMode::Desktop, None)?,
+            &CancellationToken::new(),
+        )
+        .await
+        .map_err(|error| error.to_string())
     });
     assert!(still_waiting(&mut change).await);
     assert!(emulation_methods(&fixture.native.methods()).is_empty());
     drop(capture);
     change.await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_change_cancelled_while_it_waits_for_the_window_changes_nothing() -> TestResult
+{
+    let fixture = Fixture::new(&[(1, 10), (2, 10)]);
+    let busy = fixture.page(1).await?;
+    let page = fixture.page(2).await?;
+    fixture.set(&busy, ViewportMode::Mobile, None).await?;
+    let held = fixture.view.prepare_viewport(busy).await?;
+    fixture.native.clear_calls();
+
+    let cancel = CancellationToken::new();
+    let token = cancel.clone();
+    let view = fixture.view.clone();
+    let target = page.clone();
+    let mut change = Box::pin(async move {
+        view.set_viewport(
+            target,
+            ViewportRequest::new(ViewportMode::Desktop, None)?,
+            &token,
+        )
+        .await
+        .map_err(|error| error.to_string())
+    });
+    assert!(still_waiting(&mut change).await);
+    cancel.cancel();
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), change).await;
+    assert!(
+        matches!(&outcome, Ok(Err(error)) if error.contains("cancelled")),
+        "{outcome:?}"
+    );
+    drop(held);
+
+    let methods = fixture.native.methods();
+    assert!(emulation_methods(&methods).is_empty(), "{methods:?}");
+    assert!(window_methods(&methods).is_empty(), "{methods:?}");
+    assert!(fixture.viewports.pointer_scale(&page) == 1.0);
     Ok(())
 }
 
@@ -1415,9 +1485,11 @@ async fn tests_that_a_dialog_blocked_page_never_waits_for_its_window() -> TestRe
     drop(lease);
     let refused = tokio::time::timeout(
         quick,
-        fixture
-            .view
-            .set_viewport(page, ViewportRequest::new(ViewportMode::Desktop, None)?),
+        fixture.view.set_viewport(
+            page,
+            ViewportRequest::new(ViewportMode::Desktop, None)?,
+            &CancellationToken::new(),
+        ),
     )
     .await?
     .err()

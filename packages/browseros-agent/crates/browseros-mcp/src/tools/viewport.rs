@@ -77,7 +77,7 @@ fn handler<'a>(
 ) -> BoxFuture<'a, ToolExecResult<Option<ToolResult>>> {
     Box::pin(async move {
         let (page, request) = parse(raw)?;
-        let report = ctx.browser.set_viewport(page, request).await?;
+        let report = ctx.browser.set_viewport(page, request, &ctx.cancel).await?;
         Ok(Some(text_result(
             summary(&report),
             Some(report_json(&report)),

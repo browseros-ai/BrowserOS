@@ -18,6 +18,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::sync::{OnceCell, OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
+use tokio_util::sync::CancellationToken;
 
 pub const MIN_ZOOM: f64 = 25.0;
 pub const MAX_ZOOM: f64 = 400.0;
@@ -254,18 +255,30 @@ impl Viewports {
         view: &BrowserView,
         page: PageId,
         request: ViewportRequest,
+        cancel: &CancellationToken,
     ) -> Result<ViewportReport, CoreError> {
         let dialog_open = || {
             CoreError::Message(format!(
                 "a JavaScript dialog is open on page {page}; accept or dismiss it first"
             ))
         };
+        let cancelled =
+            || CoreError::Message("setViewport was cancelled before it changed anything".into());
         if view.signals().pending_dialog(&page).is_some() {
             return Err(dialog_open());
         }
         self.forget_closed(view).await;
         let info = view.page(page.clone()).await?;
-        let mut slot = self.lock_window(view, info.window_id).await;
+        // A change cancelled while it waits for the window gives up without touching the page;
+        // one that holds the window no longer looks at the token.
+        let mut slot = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(cancelled()),
+            slot = self.lock_window(view, info.window_id) => slot,
+        };
+        if cancel.is_cancelled() {
+            return Err(cancelled());
+        }
         if view.signals().pending_dialog(&page).is_some() {
             return Err(dialog_open());
         }

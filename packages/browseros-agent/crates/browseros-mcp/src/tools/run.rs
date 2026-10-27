@@ -1229,7 +1229,11 @@ impl BrowserBridge {
                 let (page_id, request) = super::viewport::parse_for_script(Value::Object(raw))?;
                 let report = self
                     .control
-                    .race(self.ctx.browser.set_viewport(page_id, request))
+                    .race(
+                        self.ctx
+                            .browser
+                            .set_viewport(page_id, request, &self.ctx.cancel),
+                    )
                     .await?;
                 Ok(BrowserCallValue::Json(super::viewport::report_json(
                     &report,

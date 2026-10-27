@@ -374,9 +374,10 @@ impl BrowserView {
         &self,
         page: PageId,
         request: crate::viewport::ViewportRequest,
+        cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<crate::viewport::ViewportReport, CoreError> {
         match &self.viewports {
-            Some(viewports) => viewports.set(self, page, request).await,
+            Some(viewports) => viewports.set(self, page, request, cancel).await,
             None => Err(CoreError::Message(
                 "setViewport is only available on a hosted BrowserOS neo server".to_string(),
             )),
