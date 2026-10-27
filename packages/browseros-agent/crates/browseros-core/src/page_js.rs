@@ -41,10 +41,6 @@ use std::{
 /// An empty name would create a fresh world on every call.
 const WORLD_NAME: &str = "browseros";
 
-fn no_isolated_world() -> CoreError {
-    CoreError::Message("the page has no isolated world for BrowserOS's check".to_string())
-}
-
 /// Returned by a guarded isolated call whose node is not in the document of the world it was
 /// resolved into. The call is then repeated in the page world. See [`guard_document`].
 const OTHER_DOCUMENT: &str = "__browserosOtherDocument";
@@ -166,7 +162,7 @@ impl<'a> PageJs<'a> {
             return result;
         }
         if self.strict {
-            return Err(no_isolated_world());
+            return Err(CoreError::IsolatedWorldUnavailable);
         }
         match self.frame {
             Some(frame) if self.top_frame().await? != *frame => {
@@ -205,7 +201,9 @@ impl<'a> PageJs<'a> {
                     return decode(remote.value);
                 }
                 Some(Err(error)) => return Err(error),
-                Some(Ok(_)) | None if self.strict => return Err(no_isolated_world()),
+                Some(Ok(_)) | None if self.strict => {
+                    return Err(CoreError::IsolatedWorldUnavailable);
+                }
                 Some(Ok(_)) | None => {}
             }
         }

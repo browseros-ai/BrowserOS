@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Script isolation fixture</title>
+  </head>
+  <body>
+    <h1>Script isolation fixture</h1>
+    <div id="assigned" role="group" aria-label="Assigned onclick control">
+      Assigned onclick control
+    </div>
+    <div id="listener" role="group" aria-label="Listener control">
+      Listener control
+    </div>
+    <my-widget id="host"></my-widget>
+    <output id="result">untouched</output>
+    <script>
+      // The page an anti-bot script would be: it hooks the built-ins a page-world scan calls
+      // and watches the DOM, then reports what it saw through `isolationProbe`.
+      window.pageSecret = 'main-world-only'
+      const calls = []
+      const mutations = []
+      const hook = (target, name) => {
+        const original = target[name]
+        target[name] = function (...args) {
+          calls.push(name)
+          return original.apply(this, args)
+        }
+      }
+      hook(Document.prototype, 'querySelectorAll')
+      hook(Element.prototype, 'querySelectorAll')
+      hook(Element.prototype, 'getAttribute')
+      hook(Element.prototype, 'hasAttribute')
+      hook(Element.prototype, 'setAttribute')
+      hook(Element.prototype, 'removeAttribute')
+      hook(Element.prototype, 'getBoundingClientRect')
+      hook(window, 'getComputedStyle')
+      const onclick = Object.getOwnPropertyDescriptor(
+        HTMLElement.prototype,
+        'onclick',
+      )
+      Object.defineProperty(HTMLElement.prototype, 'onclick', {
+        configurable: true,
+        get() {
+          calls.push('onclick')
+          return onclick.get.call(this)
+        },
+        set(value) {
+          onclick.set.call(this, value)
+        },
+      })
+      new MutationObserver((records) => {
+        for (const record of records) {
+          mutations.push(`${record.type}:${record.attributeName ?? ''}`)
+        }
+      }).observe(document.documentElement, {
+        attributes: true,
+        childList: true,
+        characterData: true,
+        subtree: true,
+      })
+
+      document.getElementById('assigned').onclick = () => {
+        document.getElementById('result').textContent = 'assigned clicked'
+      }
+      document.getElementById('listener').addEventListener('click', () => {
+        document.getElementById('result').textContent = 'listener clicked'
+      })
+      const shadow = document
+        .getElementById('host')
+        .attachShadow({ mode: 'closed' })
+      shadow.innerHTML =
+        '<div role="group" aria-label="Shadow control" style="cursor:pointer">Shadow control</div>'
+
+      window.isolationProbe = {
+        reset() {
+          calls.length = 0
+          mutations.length = 0
+          return 'reset'
+        },
+        report() {
+          return JSON.stringify({
+            calls: [...new Set(calls)],
+            mutations: [...mutations],
+          })
+        },
+      }
+    </script>
+  </body>
+</html>

@@ -635,6 +635,7 @@ fn catalog_order_is_stable() {
             "wait",
             "windows",
             "evaluate",
+            "evaluate_in_page",
             "run",
         ]
     );
@@ -669,6 +670,7 @@ fn catalog_page_metadata_matches_host_dispatch_contract() {
             ("wait", true),
             ("windows", false),
             ("evaluate", true),
+            ("evaluate_in_page", true),
             ("run", false),
         ]
     );

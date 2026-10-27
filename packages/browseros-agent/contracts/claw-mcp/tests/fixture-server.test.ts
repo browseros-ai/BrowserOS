@@ -25,6 +25,7 @@ const EXPECTED_PAGES = [
   'links.html',
   'media.html',
   'overlay.html',
+  'script-isolation.html',
   'scroll.html',
   'snapshot-cursor-concurrency.html',
   'snapshot-frame-a.html',
@@ -104,7 +105,11 @@ describe('fixture server', () => {
     expect(cursorConcurrency).toInclude('data-__bcid-page-owned')
     expect(cursorConcurrency).toInclude('Cursor candidate 63')
     expect(cursorConcurrency).toInclude('zero-sized-excluded')
-    expect(cursorConcurrency).toInclude('armVanishingCandidate')
+    expect(cursorConcurrency).toInclude('resetProbe')
+
+    const isolation = await read('script-isolation.html')
+    expect(isolation).toInclude('isolationProbe')
+    expect(isolation).toInclude("mode: 'closed'")
 
     const frameTree = await read('snapshot-frame-tree.html')
     expect(frameTree).toInclude('snapshotFrameFixture')

@@ -53,6 +53,7 @@ pub(crate) mod tests {
             ("act", true),
             ("navigate", true),
             ("evaluate", true),
+            ("evaluate_in_page", true),
             ("tabs", true),
             ("snapshot", false),
             ("diff", false),

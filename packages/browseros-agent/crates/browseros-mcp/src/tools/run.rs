@@ -35,7 +35,7 @@ const MAX_RETURN_VALUE_BYTES: usize = 2_000_000;
 
 const DESCRIPTION: &str = r#"The primary way to drive the browser - prefer run for any task; the granular tools are the fallback. Do multi-step flows, pagination, bulk extraction, and repeated act/read loops - in ONE call: async JavaScript against the `browser` SDK in the server runtime. console.log is captured; return a value to read it back; exceptions come back as a result, not thrown. Every call is `await`-able. Each run is bounded to 30000 ms of wall time and cannot exceed it (larger `timeout` values are clamped): keep a single call under 30s. For longer or open-ended page-driven loops, do one bounded chunk per call, or start the work on the page and poll its result with short follow-up calls.
 
-Runtime: a bare engine, not Node and not a page. You get `browser`, `console`, `setTimeout`/`clearTimeout`, and nothing else. (`sleep(ms)` exists for a deliberate pause and is almost never the right tool: opening, navigating and page-changing evaluates all return settled, so pausing after them only adds the time you picked.) There is no fetch, require, process, window, document or localStorage. To touch the DOM or call a site's API, go through page.evaluate, which runs inside the page.
+Runtime: a bare engine, not Node and not a page. You get `browser`, `console`, `setTimeout`/`clearTimeout`, and nothing else. (`sleep(ms)` exists for a deliberate pause and is almost never the right tool: opening, navigating and page-changing evaluates all return settled, so pausing after them only adds the time you picked.) There is no fetch, require, process, window, document or localStorage. To touch the DOM or call a site's API, go through page.evaluate, which runs against the page in BrowserOS's isolated world.
 
 Readiness is handled for you, so do not pause to let a page catch up. `browser.open`, `page.goto`/`back`/`forward`/`reload` return once the page has stopped changing, not merely once it has loaded. `page.evaluate` detects a script that changed the page and settles before returning, reporting `changed`. If you find yourself writing `await sleep(...)` after any of these, the wait has already happened. `page.click`/`fill`/`hover`/`selectOption` go straight to the input bridge and return once the input is delivered, so after one of those, wait on the thing you expect with `page.waitForSelector`/`waitForText`, never a fixed pause.
 
@@ -63,7 +63,8 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.scroll(dir,amount,ref?) / clickAt(x,y) / typeAt(x,y,text) / hoverAt(x,y) / dragAt(x1,y1,x2,y2)
   page.dialogAccept() / dialogDismiss() - accept or dismiss an open JavaScript dialog (confirm/prompt/beforeunload). An action that opens one gets back { dialogOpen: true, kind, message } instead of its usual result, and the page stays blocked until you accept or dismiss, so do that before anything else on the page.
   page.waitForSelector(sel) / waitForText(text) / waitForTime(ms) - resolve when ready. For content that loads in, wait on the thing itself with waitForSelector (or waitForText); it resolves the moment it appears, polling up to 10s by default (pass { timeout } to change it, max 30s) and returning { matched }. On timeout matched is false and it does NOT throw, so check matched instead of assuming the wait succeeded. waitForTime is a plain fixed pause and a last resort: wait on the thing itself instead. Never poll in a loop (re-checking a count with a fixed wait between tries) - wait on the selector once instead.
-  page.evaluate(fn, arg?, opts?)     - runs INSIDE the page. Returns { changed } alongside the value: a script that mutated the page is settled before you get it back, so never pause afterwards. For an effect that is entirely asynchronous (a click whose result arrives over the network) pass { settle: true } to wait for quiet regardless. Pass a real function; a second argument is JSON-serialized and handed to it, e.g. page.evaluate((sel) => document.querySelectorAll(sel).length, '.row'). It does not close over script variables. A code string with a `return` also works: page.evaluate("return document.title").
+  page.evaluate(fn, arg?, opts?)     - runs against the page in BrowserOS's isolated world: the page's DOM, storage, cookies and same-origin fetch, but none of the page's JavaScript variables, and the page cannot see it. Returns { changed } alongside the value: a script that mutated the page is settled before you get it back, so never pause afterwards. For an effect that is entirely asynchronous (a click whose result arrives over the network) pass { settle: true } to wait for quiet regardless. Pass a real function; a second argument is JSON-serialized and handed to it, e.g. page.evaluate((sel) => document.querySelectorAll(sel).length, '.row'). It does not close over script variables. A code string with a `return` also works: page.evaluate("return document.title").
+  page.evaluateInPage(fn, arg?, opts?) - the same, in the page's own main world where page scripts can watch it. Only when the user explicitly asks to run code in the page, or the task needs the page's own JavaScript state (app globals, framework internals) that evaluate cannot see.
   page.screenshot(opts?) / pdf(opts?)
     screenshot has no default cap; size caps CSS pixels, with omitted axes unconstrained
   page.download(ref) / upload(ref, files)
@@ -259,6 +260,20 @@ const BOOTSTRAP_JS: &str = r#"
     const nav = scoped('nav', pageId);
     const tool = (name, opts) => call(`tool:${name}`, [pageId, opts]);
     const act = (kind, extra) => call('tool:act', [pageId, { kind, ...extra }]);
+    // evaluate and evaluateInPage differ only in the world they run in. A real function is
+    // serialized here, before the JSON boundary drops it. For a function, the second argument
+    // is its input; for a code string, which cannot take one, it is the options object.
+    const script = (name) => (code, argOrOpts, opts) => {
+      if (typeof code === 'function') {
+        const source = String(code);
+        const func = argOrOpts === undefined
+          ? source
+          : `() => (${source})(${JSON.stringify(argOrOpts)})`;
+        return tool(name, { ...opts, func });
+      }
+      if (typeof code === 'string') return tool(name, { ...argOrOpts, code });
+      return tool(name, code);
+    };
 
     return guard({
       id: pageId,
@@ -323,20 +338,8 @@ const BOOTSTRAP_JS: &str = r#"
         : {}),
       screenshot: (opts) => tool('screenshot', opts),
       pdf: (opts) => tool('pdf', opts),
-      // A real function is serialized here, before the JSON boundary drops it.
-      // For a function, the second argument is its input; for a code string,
-      // which cannot take one, the second argument is the options object.
-      evaluate: (code, argOrOpts, opts) => {
-        if (typeof code === 'function') {
-          const source = String(code);
-          const func = argOrOpts === undefined
-            ? source
-            : `() => (${source})(${JSON.stringify(argOrOpts)})`;
-          return tool('evaluate', { ...opts, func });
-        }
-        if (typeof code === 'string') return tool('evaluate', { ...argOrOpts, code });
-        return tool('evaluate', code);
-      },
+      evaluate: script('evaluate'),
+      evaluateInPage: script('evaluate_in_page'),
 
       cdp: (method, paramsJson) => call('cdpJsonForPage', [pageId, method, paramsJson]),
       // Same names as on `browser`, one hop like every other member. The page
@@ -409,6 +412,7 @@ const BOOTSTRAP_JS: &str = r#"
     wait: (pageId, opts) => call('tool:wait', [pageId, opts]),
     screenshot: (pageId, opts) => call('tool:screenshot', [pageId, opts]),
     evaluate: (pageId, opts) => call('tool:evaluate', [pageId, opts]),
+    evaluateInPage: (pageId, opts) => call('tool:evaluate_in_page', [pageId, opts]),
     download: (pageId, opts) => call('tool:download', [pageId, opts]),
     pdf: (pageId, opts) => call('tool:pdf', [pageId, opts]),
     upload: (pageId, opts) => call('tool:upload', [pageId, opts]),
@@ -1356,6 +1360,7 @@ fn tool_def(name: &str) -> Option<ToolDef> {
         "wait" => tools::wait::definition(),
         "screenshot" => tools::screenshot::definition(),
         "evaluate" => tools::evaluate::definition(),
+        "evaluate_in_page" => tools::evaluate_in_page::definition(),
         "download" => tools::download::definition(),
         "pdf" => tools::pdf::definition(),
         "upload" => tools::upload::definition(),

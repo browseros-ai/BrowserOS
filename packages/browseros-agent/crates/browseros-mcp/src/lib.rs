@@ -16,6 +16,8 @@ pub mod tools;
 pub mod trust_boundary;
 
 #[cfg(test)]
+mod evaluate_world_tests;
+#[cfg(test)]
 mod targeting_tests;
 #[cfg(test)]
 mod tests;

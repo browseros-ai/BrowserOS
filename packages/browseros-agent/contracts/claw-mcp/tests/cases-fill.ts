@@ -52,8 +52,9 @@ async function assertPage(
 ): Promise<void> {
   // A failed assertion throws inside the page, which evaluate exposes as an MCP
   // error. This avoids substring checks that accidentally accept appended text.
+  // The page's own world, because postconditions read the fixture's `fillEvents`.
   expectOk(
-    await ctx.mcp.callTool('evaluate', {
+    await ctx.mcp.callTool('evaluate_in_page', {
       page,
       code: `if (!(${expression})) throw new Error("Fill postcondition failed"); return true`,
     }),

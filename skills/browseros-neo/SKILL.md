@@ -48,7 +48,7 @@ Derive the page you work on inside the same script that uses it. When you do car
 
 ## Writing a `run` script
 
-- **The sandbox is neither Node nor the page.** No `fetch`, `require` or `document` in scope; reach into the page through the SDK's evaluate, which runs there.
+- **The sandbox is neither Node nor the page.** No `fetch`, `require` or `document` in scope; reach into the page through `page.evaluate`. It runs in BrowserOS's isolated world: it sees the page's DOM, storage, cookies and same-origin `fetch`, not the page's own JavaScript variables, and the page cannot see it. `page.evaluateInPage` runs in the page's own world, where page scripts can watch it; use it only when the user explicitly asks to run code in the page or the task needs the page's own JavaScript state.
 - **One bounded chunk per call.** A run is hard-capped at 30 seconds and cannot be extended. Batching reads of loaded pages is cheap; batching fresh navigations is not, so keep to about five new pages per call.
 - **Re-derive handles, do not assume them.** A page id from an earlier turn may point at a tab that has closed or changed hands. List your own pages, or open a new one.
 - **Wait on the thing, not the clock.** Wait for the selector or text you need; it returns the moment it appears. Never loop, re-checking with a fixed pause between tries.

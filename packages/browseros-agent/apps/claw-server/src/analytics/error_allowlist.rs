@@ -21,6 +21,7 @@ const SDK_SURFACE: &[&str] = &[
     "wait",
     "screenshot",
     "evaluate",
+    "evaluateInPage",
     "download",
     "pdf",
     "upload",

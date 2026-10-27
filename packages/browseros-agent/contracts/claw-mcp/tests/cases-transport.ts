@@ -16,6 +16,7 @@ const EXPECTED_TOOLS = [
   'diff',
   'download',
   'evaluate',
+  'evaluate_in_page',
   'grep',
   'history',
   'mark_skill_run',
