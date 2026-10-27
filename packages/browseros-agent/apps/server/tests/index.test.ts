@@ -4,104 +4,104 @@
  */
 
 import { describe, it } from 'bun:test'
-import assert from 'node:assert'
-import fs from 'node:fs'
+import assert from 'node:assert/strict'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import { executablePath } from 'puppeteer'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js'
+import { withE2e } from './__helpers__/e2e'
 
-// TODO: Re-enable after Phase 4 (HTTP Server) implementation
-// This test uses old CLI args (--headless, --isolated, --executable-path)
-// which were removed in Phase 1. Need to update for new architecture:
-// - Start browser with CDP on specific port
-// - Start MCP server with sidecar --config
-// - Test via HTTP/SSE transport instead of STDIO
-describe.skip('e2e', () => {
-  async function withClient(cb: (client: Client) => Promise<void>) {
-    const transport = new StdioClientTransport({
-      command: 'node',
-      args: [
-        'build/src/index.js',
-        '--headless',
-        '--isolated',
-        '--executable-path',
-        executablePath(),
-      ],
-    })
-    const client = new Client(
-      {
-        name: 'e2e-test',
-        version: '1.0.0',
-      },
-      {
-        capabilities: {},
-      },
-    )
-
-    try {
-      await client.connect(transport)
-      await cb(client)
-    } finally {
-      await client.close()
-    }
-  }
-  it('calls a tool', async () => {
-    await withClient(async (client) => {
-      const result = await client.callTool({
-        name: 'list_pages',
-        arguments: {},
-      })
-      assert.deepStrictEqual(result, {
-        content: [
-          {
-            type: 'text',
-            text: '# list_pages response\n## Pages\n0: about:blank [selected]',
-          },
-        ],
-      })
-    })
-  })
-
-  it('calls a tool multiple times', async () => {
-    await withClient(async (client) => {
-      let result = await client.callTool({
-        name: 'list_pages',
-        arguments: {},
-      })
-      result = await client.callTool({
-        name: 'list_pages',
-        arguments: {},
-      })
-      assert.deepStrictEqual(result, {
-        content: [
-          {
-            type: 'text',
-            text: '# list_pages response\n## Pages\n0: about:blank [selected]',
-          },
-        ],
-      })
-    })
-  })
-
-  it('has all tools', async () => {
-    await withClient(async (client) => {
-      const { tools } = await client.listTools()
-      const exposedNames = tools.map((t) => t.name).sort()
-      const files = fs.readdirSync('build/src/tools')
-      const definedNames = []
-      for (const file of files) {
-        if (file === 'ToolDefinition.js') {
-          continue
+describe('server end-to-end over HTTP and real BrowserOS CDP', () => {
+  it('starts from sidecar config, exposes the catalog and executes browser tools', async () => {
+    await withE2e(async (baseUrl) => {
+      const status = await (
+        await fetch(`${baseUrl}/status`, { signal: AbortSignal.timeout(5_000) })
+      ).json()
+      assert.equal(status.cdpConnected, true)
+      const client = new Client({ name: 'server-e2e', version: '1.0.0' })
+      const transport = new StreamableHTTPClientTransport(
+        new URL(`${baseUrl}/mcp?structured=1`),
+      )
+      try {
+        await client.connect(transport, { timeout: 5_000 })
+        const { tools } = await client.listTools(undefined, { timeout: 5_000 })
+        assert.deepEqual(tools.map((tool) => tool.name).sort(), [
+          'act',
+          'diff',
+          'download',
+          'evaluate',
+          'grep',
+          'history',
+          'navigate',
+          'pdf',
+          'read',
+          'run',
+          'screenshot',
+          'snapshot',
+          'tab_groups',
+          'tabs',
+          'upload',
+          'wait',
+          'windows',
+        ])
+        for (const tool of tools) assert.equal(tool.inputSchema.type, 'object')
+        let session: string | undefined
+        const tabs = async (args: Record<string, unknown>) => {
+          const result = CallToolResultSchema.parse(
+            await client.callTool(
+              {
+                name: 'tabs',
+                arguments: { ...args, ...(session ? { session } : {}) },
+              },
+              undefined,
+              { timeout: 5_000 },
+            ),
+          )
+          assert.notEqual(result.isError, true, JSON.stringify(result))
+          const handle = result._meta?.['com.browseros/session']
+          assert.equal(typeof handle, 'string')
+          if (session) assert.equal(handle, session)
+          session = handle as string
+          return result
         }
-        const fileTools = await import(`../src/tools/${file}`)
-        for (const maybeTool of Object.values<object>(fileTools)) {
-          if ('name' in maybeTool) {
-            definedNames.push(maybeTool.name)
-          }
+        const listPages = async () => {
+          const result = await tabs({ action: 'list' })
+          assert.notEqual(result.isError, true, JSON.stringify(result))
+          const pages = result.structuredContent?.pages
+          assert.ok(Array.isArray(pages), JSON.stringify(result))
+          return pages as Array<{ page: number; url: string }>
         }
+        assert.ok(
+          (await listPages()).some((page) => page.url === 'about:blank'),
+        )
+        const url = `data:text/html,server-e2e-${crypto.randomUUID()}`
+        const opened = await tabs({ action: 'new', url })
+        assert.notEqual(opened.isError, true, JSON.stringify(opened))
+        const page = opened.structuredContent?.page
+        assert.equal(typeof page, 'number', JSON.stringify(opened))
+        // Repeated calls use the same native HTTP client and actual custom CDP.
+        for (let i = 0; i < 2; i++) {
+          assert.ok(
+            (await listPages()).some(
+              (item) => item.page === page && item.url === url,
+            ),
+          )
+        }
+        const closed = await tabs({ action: 'close', page })
+        assert.notEqual(closed.isError, true, JSON.stringify(closed))
+        assert.ok(!(await listPages()).some((item) => item.page === page))
+        const forbidden = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          signal: AbortSignal.timeout(5_000),
+          headers: {
+            'Sec-Fetch-Site': 'cross-site',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+        })
+        assert.equal(forbidden.status, 403)
+      } finally {
+        await client.close()
       }
-      definedNames.sort()
-      assert.deepStrictEqual(exposedNames, definedNames)
     })
-  })
+  }, 120_000)
 })

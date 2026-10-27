@@ -229,3 +229,9 @@ describe('computeAffectedSuites', () => {
     })
   })
 })
+
+describe('server E2E provisioning', () => {
+  it('provisions the real browser for the active root E2E suite', () => {
+    expect(SUITES['server-root'].needs_browser).toBe(true)
+  })
+})

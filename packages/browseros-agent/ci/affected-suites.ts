@@ -70,7 +70,7 @@ export const SUITES: Record<string, SuiteConfig> = {
     suite: 'server-root',
     command: '(cd apps/server && bun run test:root)',
     junit_path: 'test-results/server-root.xml',
-    needs_browser: false,
+    needs_browser: true,
     needs_rust: false,
   },
   agent: {
