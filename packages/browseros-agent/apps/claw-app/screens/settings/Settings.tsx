@@ -169,7 +169,7 @@ function AgentSwitches() {
           <Switch
             ariaLabel="Tidy up when a task finishes"
             ariaDescribedBy={`${CLEANUP_TIP_ID}-description`}
-            checked={settings.data?.taskCleanupTipEnabled ?? false}
+            checked={settings.data?.taskCleanupTipEnabled ?? true}
             onCheckedChange={handleCleanupTipChange}
             disabled={busy}
           />

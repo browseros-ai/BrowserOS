@@ -1298,6 +1298,15 @@ async fn mcp_session_naming_appends_five_tips_without_elicitation() -> anyhow::R
     let app = mock_native_app(&mock).await?;
     app.state.browser.connect_once_for_testing().await?;
     wait_for_cdp_connected(&app).await?;
+    // The cleanup tip would otherwise be the last block.
+    let (status, _) = request_json(
+        &app.router,
+        "PUT",
+        "/api/v1/settings/agent",
+        Some(json!({ "taskCleanupTipEnabled": false })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
     let initialize = json!({
         "jsonrpc": "2.0",
         "id": 1,
