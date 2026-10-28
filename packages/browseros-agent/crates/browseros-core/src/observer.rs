@@ -29,13 +29,21 @@ pub struct SnapshotResult {
     pub url: String,
 }
 
-/// Each asked-for ref's line in the last capture, as a snapshot rendered it.
-#[derive(Debug, Clone)]
-pub struct RefLines {
-    /// The page the capture was taken of.
-    pub url: Option<String>,
-    /// `None` when the ref was not in the capture: it left the page or was re-rendered.
-    pub lines: Vec<(Ref, Option<String>)>,
+impl SnapshotResult {
+    /// The line this capture shows for `ref_id`, when the ref still names `node`: the element it
+    /// named when the caller took it. Refs restart on a new document, so after a navigation the
+    /// same ref can name another control. Read it from a full capture: card numbers and security
+    /// codes are masked by their form's context, which a single node does not have.
+    #[must_use]
+    pub fn line_for(&self, ref_id: &Ref, node: i64) -> Option<&str> {
+        let same_node = self
+            .refs
+            .get(ref_id)
+            .is_some_and(|entry| entry.backend_node_id == node);
+        same_node
+            .then(|| ref_line(&self.text, ref_id.as_str()))
+            .flatten()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -146,6 +154,12 @@ impl Observer {
     }
 
     pub async fn diff(&self) -> Result<SnapshotDiff, CoreError> {
+        Ok(self.diff_with_capture().await?.0)
+    }
+
+    /// A diff plus the full capture it compared against the baseline, for a caller that reads
+    /// that same capture again rather than whatever a later call commits.
+    pub async fn diff_with_capture(&self) -> Result<(SnapshotDiff, SnapshotResult), CoreError> {
         let (before, before_arrangement) = {
             let state = self.state.lock().await;
             (state.baseline.clone(), state.baseline_arrangement)
@@ -153,11 +167,16 @@ impl Observer {
         let result = self.capture().await?;
         let after_arrangement = result.refs.arrangement();
         self.commit(result.clone()).await;
+        let capture = SnapshotResult {
+            text: result.text,
+            refs: result.refs,
+            url: result.url,
+        };
         let mut diff = diff_snapshot_observations(
             before.as_ref(),
             &SnapshotObservation {
-                text: result.text,
-                url: Some(result.url),
+                text: capture.text.clone(),
+                url: Some(capture.url.clone()),
             },
             DiffOptions::default(),
         );
@@ -166,26 +185,7 @@ impl Observer {
         if diff.arrangement_changed.is_none() {
             diff.arrangement_changed = before_arrangement.map(|before| before != after_arrangement);
         }
-        Ok(diff)
-    }
-
-    /// Reads `refs` from the capture the latest snapshot or diff committed, without a CDP call.
-    /// Lines come from the whole-page render, so they carry its masking: a card number or
-    /// security code is hidden by its form's context, which a single node does not have.
-    pub async fn ref_lines(&self, refs: &[Ref]) -> RefLines {
-        let state = self.state.lock().await;
-        let baseline = state.baseline.as_ref();
-        let text = baseline.map_or("", |baseline| baseline.text.as_str());
-        RefLines {
-            url: baseline.and_then(|baseline| baseline.url.clone()),
-            lines: refs
-                .iter()
-                .map(|ref_id| {
-                    let line = ref_line(text, ref_id.as_str()).map(str::to_string);
-                    (ref_id.clone(), line)
-                })
-                .collect(),
-        }
+        Ok((diff, capture))
     }
 
     pub async fn last_refs(&self) -> RefMap {

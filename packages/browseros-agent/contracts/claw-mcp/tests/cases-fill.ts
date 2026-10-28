@@ -15,7 +15,7 @@ import { expectError, expectOk } from './helpers'
 
 type Surface = 'act' | 'run' | 'run-legacy'
 
-async function fieldRef(
+export async function fieldRef(
   ctx: CaseContext,
   page: number,
   label: string,
@@ -51,7 +51,7 @@ async function fill(
 }
 
 /** The line act's fields readback shows for `ref`. */
-function shownLine(text: string, ref: string): string | undefined {
+export function shownLine(text: string, ref: string): string | undefined {
   const start = text.indexOf(' fields]')
   if (start < 0) throw new Error(`No fields readback in: ${text}`)
   return text
@@ -317,84 +317,6 @@ export const fillCases: ContractCase[] = [
       },
     },
   ]),
-  {
-    name: 'act: a multi-field fill carries on past a field the page reformats',
-    async run(ctx) {
-      const page = await ctx.openPage(ctx.fixture('/fill.html'))
-      const phone = await fieldRef(ctx, page, 'Phone field')
-      const text = await fieldRef(ctx, page, 'Text field')
-      const result = expectOk(
-        await ctx.mcp.callTool('act', {
-          page,
-          kind: 'fill',
-          fields: [
-            { ref: phone, value: '5551234567' },
-            { ref: text, value: 'Ada' },
-          ],
-        }),
-      )
-      if (
-        !shownLine(result, phone)?.endsWith(': "(555) 123-4567"') ||
-        !shownLine(result, text)?.endsWith(': "Ada"')
-      ) {
-        throw new Error(`The readback missed a field: ${result}`)
-      }
-      await assertPage(
-        ctx,
-        page,
-        'document.getElementById("text").value === "Ada"',
-      )
-    },
-  },
-  {
-    name: 'act: the fields readback stays when the diff is off',
-    async run(ctx) {
-      const page = await ctx.openPage(ctx.fixture('/fill.html'))
-      const ref = await fieldRef(ctx, page, 'Verification code')
-      const result = expectOk(
-        await ctx.mcp.callTool('act', {
-          page,
-          kind: 'fill',
-          ref,
-          value: '440212',
-          diff: 'none',
-        }),
-      )
-      if (
-        result.includes(' diff]') ||
-        !shownLine(result, ref)?.endsWith(': "440 212"')
-      ) {
-        throw new Error(`Expected only the fields readback: ${result}`)
-      }
-    },
-  },
-  {
-    name: 'act: a fill that stops partway still shows every field',
-    async run(ctx) {
-      const page = await ctx.openPage(ctx.fixture('/fill.html'))
-      const text = await fieldRef(ctx, page, 'Text field')
-      const readonly = await fieldRef(ctx, page, 'Read only')
-      const other = await fieldRef(ctx, page, 'Other field')
-      const result = expectError(
-        await ctx.mcp.callTool('act', {
-          page,
-          kind: 'fill',
-          fields: [
-            { ref: text, value: 'typed first' },
-            { ref: readonly, value: 'refused' },
-            { ref: other, value: 'never reached' },
-          ],
-        }),
-      )
-      if (
-        !shownLine(result, text)?.endsWith(': "typed first"') ||
-        !shownLine(result, readonly)?.endsWith(': "original"') ||
-        !shownLine(result, other)?.endsWith(': "untouched"')
-      ) {
-        throw new Error(`The error hid what the fields hold: ${result}`)
-      }
-    },
-  },
   {
     name: 'act: fill clear=false appends',
     async run(ctx) {

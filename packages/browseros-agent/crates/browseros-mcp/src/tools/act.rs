@@ -3,9 +3,11 @@ use crate::framework::{
     AuditHints, ToolCtx, ToolExecResult, ToolResult, error_result, parse_args,
     pending_dialog_result, text_result,
 };
+use crate::response::FieldTarget;
 use browseros_core::{
     PageId, Ref,
     input::{ClickOptions, Point, PublicMouseButton as MouseButton, ScrollDirection},
+    snapshot::RefMap,
 };
 use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
@@ -262,7 +264,7 @@ fn handler<'a>(
                 skip_screenshot: true,
             });
         }
-        let filled = filled_refs(&args);
+        let filled = field_targets(ctx, &page_id, filled_refs(&args)).await;
         match outcome {
             Ok(Some(early)) => return Ok(Some(early)),
             Ok(None) => {}
@@ -288,6 +290,24 @@ fn handler<'a>(
             None,
         )))
     })
+}
+
+/// Each filled ref with the DOM node it names now, after the fill resolved it. The readback
+/// shows a ref's line only while it still names that node: refs restart on a new document.
+async fn field_targets(ctx: &ToolCtx, page_id: &PageId, refs: Vec<Ref>) -> Vec<FieldTarget> {
+    if refs.is_empty() {
+        return Vec::new();
+    }
+    let known = match ctx.browser.observe(page_id.clone()).await {
+        Ok(observer) => observer.last_refs().await,
+        Err(_) => RefMap::new(),
+    };
+    refs.into_iter()
+        .map(|ref_id| FieldTarget {
+            node: known.get(&ref_id).map(|entry| entry.backend_node_id),
+            ref_id,
+        })
+        .collect()
 }
 
 /// The fields a fill targets, in order, for the readback after it.

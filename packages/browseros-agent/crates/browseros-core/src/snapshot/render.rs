@@ -105,7 +105,7 @@ impl RenderContext<'_, '_> {
         } else {
             str_val(node.role.as_ref())
         };
-        let mut name = str_val(node.name.as_ref()).unwrap_or_default();
+        let name = str_val(node.name.as_ref()).unwrap_or_default();
         let is_cursor_hit = node.backend_dom_node_id.is_some_and(|id| {
             !self.control_labels.contains(&id)
                 && self
@@ -116,9 +116,9 @@ impl RenderContext<'_, '_> {
         });
         // Chromium leaves a label's own name empty and puts its words in text children, which
         // an interactive snapshot drops. A label that is its own target needs them to be read.
-        if is_cursor_hit && name.is_empty() && role.as_deref() == Some("LabelText") {
-            name = self.text_of(node);
-        }
+        // Only the line shows them: the ref keeps the tree's name, which ref recovery matches.
+        let label_text = (is_cursor_hit && name.is_empty() && role.as_deref() == Some("LabelText"))
+            .then(|| self.text_of(node));
 
         if is_dropped(role.as_deref(), &name, is_cursor_hit) {
             for child_id in node.child_ids.as_deref().unwrap_or(&[]) {
@@ -151,7 +151,10 @@ impl RenderContext<'_, '_> {
         let line = format_line(
             node,
             &role,
-            &name,
+            LineName {
+                tree: &name,
+                shown: label_text.as_deref().unwrap_or(&name),
+            },
             absolute_depth,
             in_card_form,
             is_cursor_hit,
@@ -347,19 +350,26 @@ fn has_ref(line: &str) -> bool {
     line.contains(" [ref=e")
 }
 
+/// A node's name as the tree has it, which refs are minted and recovered by, and as its line
+/// shows it, which differs only for a nameless label read by its text.
+struct LineName<'a> {
+    tree: &'a str,
+    shown: &'a str,
+}
+
 fn format_line(
     node: &AxNode,
     role: &str,
-    name: &str,
+    name: LineName<'_>,
     depth: usize,
     in_card_form: bool,
     cursor_hit: bool,
     opts: &mut RenderOptions<'_>,
 ) -> String {
     let mut line = format!("{}- {role}", "  ".repeat(depth));
-    if !name.is_empty() {
+    if !name.shown.is_empty() {
         line.push(' ');
-        line.push_str(&json_quote(name));
+        line.push_str(&json_quote(name.shown));
     }
 
     for state in format_states(node) {
@@ -375,7 +385,7 @@ fn format_line(
         let ref_id = opts.refs.mint(MintRef {
             backend_node_id,
             role,
-            name,
+            name: name.tree,
             document_id: opts.document_id.as_deref(),
             frame_id: opts.frame_id.as_ref(),
         });
@@ -407,7 +417,7 @@ fn format_line(
         && !value.is_empty()
     {
         line.push_str(": ");
-        line.push_str(&json_quote(&visible_value(name, &value, in_card_form)));
+        line.push_str(&json_quote(&visible_value(name.tree, &value, in_card_form)));
     }
 
     line
@@ -1016,9 +1026,24 @@ mod tests {
         ];
         nodes[1].backend_dom_node_id = Some(9);
         nodes[2].name = Some(name("Remember  me"));
+        let mut refs = RefMap::new();
+        let mut opts = RenderOptions {
+            refs: &mut refs,
+            frame_id: None,
+            document_id: None,
+            cursor_hits: Some(HashMap::from([(9, vec!["clickable".to_string()])])),
+            base_depth: 0,
+        };
         assert_eq!(
-            render_with_hits(&nodes, &[9]),
+            render_snapshot(&nodes, &mut opts).text,
             "- LabelText \"Remember me\" [ref=e1] [cursor=pointer]"
+        );
+        // The shown name is for reading. The ref keeps the tree's own (empty) name, which is what
+        // recovering a ref whose node was replaced matches against.
+        assert_eq!(
+            refs.get(&crate::Ref("e1".to_string()))
+                .map(|entry| entry.name.as_str()),
+            Some("")
         );
     }
 

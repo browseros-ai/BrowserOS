@@ -30,6 +30,7 @@ second</textarea></label>
     <label>Other field <input id="other" value="untouched"></label>
     <label>Verification code <input id="code" inputmode="numeric"></label>
     <label>Phone field <input id="phone" type="tel"></label>
+    <label>Navigating field <input id="navigate"></label>
     <div id="shadow-host"></div>
     <script>
       // Browser editing must fire trusted events, and handlers must run before
@@ -54,6 +55,10 @@ second</textarea></label>
       })
       format('code', d => d.length > 3 ? `${d.slice(0, 3)} ${d.slice(3, 6)}` : d)
       format('phone', d => d.length > 6 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6, 10)}` : d)
+      // Typing here loads this page again: a new document, whose refs restart from e1.
+      document.getElementById('navigate').addEventListener('input', () => {
+        location.assign('/fill.html?navigated')
+      })
       const shadow = document.getElementById('shadow-host').attachShadow({mode: 'open'})
       shadow.innerHTML = '<label>Shadow field <input value="original"></label>'
     </script>

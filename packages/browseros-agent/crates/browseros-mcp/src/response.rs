@@ -11,10 +11,12 @@ use crate::{
     framework::{AuditHints, ToolCtx, ToolError, ToolExecResult, ToolResult, merge_structured},
     trust_boundary::wrap_untrusted,
 };
-use browseros_core::{ConsoleEntry, PageId, Ref, pointer, settle::SettleOutcome};
+use browseros_core::{
+    ConsoleEntry, PageId, Ref, observer::SnapshotResult, pointer, settle::SettleOutcome,
+};
 use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::collections::{HashMap, hash_map::Entry};
 
 #[derive(Debug, Clone)]
 enum PostAction {
@@ -35,8 +37,16 @@ enum PostAction {
     /// made of it: kept, reformatted ("440 212"), or rejected.
     Fields {
         page: u32,
-        refs: Vec<Ref>,
+        fields: Vec<FieldTarget>,
     },
+}
+
+/// A filled field, named by its ref and by the DOM node the ref named when it was filled.
+#[derive(Debug, Clone)]
+pub struct FieldTarget {
+    pub ref_id: Ref,
+    /// `None` when the ref named nothing the page knew at fill time.
+    pub node: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -53,9 +63,10 @@ pub struct ToolResponse {
     post_actions: Vec<PostAction>,
     console_summaries: Vec<ConsoleSummary>,
     audit_hints: Option<AuditHints>,
-    /// Pages a snapshot or diff post-action captured during this build, whose capture a later
-    /// fields post-action reads instead of capturing again.
-    captured_pages: HashSet<u32>,
+    /// The full capture a snapshot or diff post-action took of each page during this build. A
+    /// later fields post-action reads that same capture, never the observer's shared latest one,
+    /// which another call on the page may have replaced since.
+    captures: HashMap<u32, SnapshotResult>,
 }
 
 #[derive(Debug, Clone)]
@@ -122,8 +133,8 @@ impl ToolResponse {
     }
 
     /// Register after any diff of the same page, so the fields read the diff's capture.
-    pub fn include_fields(&mut self, page: u32, refs: Vec<Ref>) {
-        self.post_actions.push(PostAction::Fields { page, refs });
+    pub fn include_fields(&mut self, page: u32, fields: Vec<FieldTarget>) {
+        self.post_actions.push(PostAction::Fields { page, fields });
     }
 
     pub fn include_pages(&mut self) {
@@ -210,9 +221,9 @@ impl ToolResponse {
                 self.throw_if_dialog_open(ctx, page)?;
                 let observer = ctx.browser.observe(browseros_core::PageId(page)).await?;
                 let snapshot = observer.snapshot().await?;
-                self.captured_pages.insert(page);
                 let formatted = format_snapshot_result(&snapshot.text, &snapshot.url, ctx).await;
                 self.text(format!("[Page {page} snapshot]\n{}", formatted.text));
+                self.captures.insert(page, snapshot);
                 Ok(())
             }
             PostAction::Diff {
@@ -221,13 +232,13 @@ impl ToolResponse {
                 detail,
             } => {
                 self.throw_if_dialog_open(ctx, page)?;
-                let diff = ctx
+                let (diff, capture) = ctx
                     .browser
                     .observe(browseros_core::PageId(page))
                     .await?
-                    .diff()
+                    .diff_with_capture()
                     .await?;
-                self.captured_pages.insert(page);
+                self.captures.insert(page, capture);
                 let origin = diff.after_url.as_deref().map(ToString::to_string);
                 let origin = match origin {
                     Some(origin) => origin,
@@ -267,17 +278,29 @@ impl ToolResponse {
                 }
                 Ok(())
             }
-            PostAction::Fields { page, refs } => {
+            PostAction::Fields { page, fields } => {
                 self.throw_if_dialog_open(ctx, page)?;
-                let observer = ctx.browser.observe(browseros_core::PageId(page)).await?;
-                // Without a capture from this build, the last one may predate the fill.
-                if !self.captured_pages.contains(&page) {
-                    observer.snapshot().await?;
-                    self.captured_pages.insert(page);
-                }
-                let captured = observer.ref_lines(&refs).await;
-                let text = captured
-                    .lines
+                // Without a capture from this build, the observer's last one may predate the fill.
+                let capture = match self.captures.entry(page) {
+                    Entry::Occupied(entry) => entry.into_mut(),
+                    Entry::Vacant(entry) => entry.insert(
+                        ctx.browser
+                            .observe(browseros_core::PageId(page))
+                            .await?
+                            .snapshot()
+                            .await?,
+                    ),
+                };
+                let lines = fields
+                    .iter()
+                    .map(|field| {
+                        let line = field
+                            .node
+                            .and_then(|node| capture.line_for(&field.ref_id, node));
+                        (field.ref_id.as_str(), line.map(str::to_string))
+                    })
+                    .collect::<Vec<_>>();
+                let text = lines
                     .iter()
                     .map(|(ref_id, line)| match line {
                         Some(line) => line.clone(),
@@ -285,16 +308,12 @@ impl ToolResponse {
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                let origin = captured.url.as_deref().unwrap_or("unknown");
-                self.text(format!(
-                    "[Page {page} fields]\n{}",
-                    wrap_untrusted(&text, origin)
-                ));
-                let fields = captured
-                    .lines
+                let wrapped = wrap_untrusted(&text, &capture.url);
+                let fields = lines
                     .into_iter()
-                    .map(|(ref_id, line)| json!({ "ref": ref_id.as_str(), "line": line }))
+                    .map(|(ref_id, line)| json!({ "ref": ref_id, "line": line }))
                     .collect::<Vec<_>>();
+                self.text(format!("[Page {page} fields]\n{wrapped}"));
                 self.data(json!({ "fields": fields }));
                 Ok(())
             }

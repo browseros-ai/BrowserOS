@@ -5,7 +5,7 @@ use crate::{
     },
     framework::{BrowserToolDefaults, BrowserToolOptions, ToolCtx, catalog, execute_tool},
     output_file::create_browser_output_file_access,
-    response::ToolResponse,
+    response::{FieldTarget, ToolResponse},
     service::{
         BrowserMcpService, BrowserMcpServiceOptions, BrowserToolExecutionEvent,
         BrowserToolLifecycleEvent, browser_mcp_instructions,
@@ -1358,7 +1358,8 @@ async fn tabs_new_attaches_first_snapshot() {
 async fn fields_readback_shows_each_ref_as_the_snapshot_does() {
     let (ctx, _connection, page) = harness_ctx().await;
     let mut response = ToolResponse::new();
-    response.include_fields(page, vec![Ref("e1".into()), Ref("e9".into())]);
+    // The harness page's Save button is backend node 10, its first ref.
+    response.include_fields(page, vec![field("e1", Some(10)), field("e9", None)]);
     let result = response
         .build_for_session(&ctx, Some(PageId(page)))
         .await
@@ -1383,6 +1384,30 @@ async fn fields_readback_shows_each_ref_as_the_snapshot_does() {
 }
 
 #[tokio::test]
+async fn fields_readback_never_shows_another_node_under_a_reused_ref() {
+    // A fill that navigates: the new document restarts its refs, so e1 now names another node.
+    let (ctx, _connection, page) = harness_ctx().await;
+    let mut response = ToolResponse::new();
+    response.include_fields(page, vec![field("e1", Some(99))]);
+    let result = response
+        .build_for_session(&ctx, Some(PageId(page)))
+        .await
+        .unwrap_or_else(|err| panic!("fields readback should build: {err}"))
+        .into_tool_result();
+
+    let text = result_text(&result);
+    assert!(text.contains("e1: not on the page now"), "{text}");
+    assert!(!text.contains("button \"Save\""), "{text}");
+}
+
+fn field(ref_id: &str, node: Option<i64>) -> FieldTarget {
+    FieldTarget {
+        ref_id: Ref(ref_id.into()),
+        node,
+    }
+}
+
+#[tokio::test]
 async fn fields_readback_reads_the_capture_the_diff_just_took() {
     let (ctx, connection, page) = harness_ctx().await;
     let captures = |connection: &HarnessConnection| {
@@ -1395,7 +1420,7 @@ async fn fields_readback_reads_the_capture_the_diff_just_took() {
     let before = captures(&connection);
     let mut response = ToolResponse::new();
     response.include_diff(page, false, DiffDetail::Full);
-    response.include_fields(page, vec![Ref("e1".into())]);
+    response.include_fields(page, vec![field("e1", Some(10))]);
     let result = response
         .build_for_session(&ctx, Some(PageId(page)))
         .await
