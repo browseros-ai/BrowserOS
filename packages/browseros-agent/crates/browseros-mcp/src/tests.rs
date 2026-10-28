@@ -1368,19 +1368,26 @@ async fn fields_readback_shows_each_ref_as_the_snapshot_does() {
 
     let text = result_text(&result);
     assert!(text.contains("[Page 1 fields]"), "{text}");
-    assert!(text.contains("button \"Save\" [ref=e1]"), "{text}");
+    assert!(text.contains("\nbutton \"Save\" [ref=e1]\n"), "{text}");
     assert!(text.contains("e9: not on the page now"), "{text}");
     assert!(text.contains("UNTRUSTED_PAGE_CONTENT"), "{text}");
-    assert_eq!(
-        result
-            .structured_content
-            .as_ref()
-            .and_then(|value| value.get("fields")),
-        Some(&json!([
-            { "ref": "e1", "line": "button \"Save\" [ref=e1]" },
-            { "ref": "e9", "line": null },
-        ]))
-    );
+}
+
+#[tokio::test]
+async fn fields_readback_follows_a_filled_node_to_its_new_ref() {
+    // The page re-rendered the field after the agent's snapshot: fill recovered the replacement
+    // under the old ref, and the next capture gives that node a ref of its own.
+    let (ctx, _connection, page) = harness_ctx().await;
+    let mut response = ToolResponse::new();
+    response.include_fields(page, vec![field("e5", Some(10))]);
+    let result = response
+        .build_for_session(&ctx, Some(PageId(page)))
+        .await
+        .unwrap_or_else(|err| panic!("fields readback should build: {err}"))
+        .into_tool_result();
+
+    let text = result_text(&result);
+    assert!(text.contains("e5 → button \"Save\" [ref=e1]"), "{text}");
 }
 
 #[tokio::test]
@@ -1404,6 +1411,7 @@ fn field(ref_id: &str, node: Option<i64>) -> FieldTarget {
     FieldTarget {
         ref_id: Ref(ref_id.into()),
         node,
+        frame: None,
     }
 }
 

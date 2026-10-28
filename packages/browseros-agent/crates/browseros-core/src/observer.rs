@@ -30,19 +30,20 @@ pub struct SnapshotResult {
 }
 
 impl SnapshotResult {
-    /// The line this capture shows for `ref_id`, when the ref still names `node`: the element it
-    /// named when the caller took it. Refs restart on a new document, so after a navigation the
-    /// same ref can name another control. Read it from a full capture: card numbers and security
-    /// codes are masked by their form's context, which a single node does not have.
+    /// The ref and line this capture shows for DOM node `node` in `frame`. A filled field is found
+    /// by its node, not by the ref the caller used: refs restart on a new document, where the
+    /// same ref names another control, and a field the page re-rendered before the fill was
+    /// filled under the old ref but carries a new one now. Read it from a full capture: card
+    /// numbers and security codes are masked by their form's context, which one node lacks.
     #[must_use]
-    pub fn line_for(&self, ref_id: &Ref, node: i64) -> Option<&str> {
-        let same_node = self
+    pub fn line_for(&self, node: i64, frame: Option<&FrameId>) -> Option<(&Ref, &str)> {
+        let entry = self
             .refs
-            .get(ref_id)
-            .is_some_and(|entry| entry.backend_node_id == node);
-        same_node
-            .then(|| ref_line(&self.text, ref_id.as_str()))
-            .flatten()
+            .entries_in_order()
+            .into_iter()
+            .find(|entry| entry.backend_node_id == node && entry.frame_id.as_ref() == frame)?;
+        let line = ref_line(&self.text, entry.ref_id.as_str())?;
+        Some((&entry.ref_id, line))
     }
 }
 

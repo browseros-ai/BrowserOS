@@ -12,7 +12,7 @@ use crate::{
     trust_boundary::wrap_untrusted,
 };
 use browseros_core::{
-    ConsoleEntry, PageId, Ref, observer::SnapshotResult, pointer, settle::SettleOutcome,
+    ConsoleEntry, FrameId, PageId, Ref, observer::SnapshotResult, pointer, settle::SettleOutcome,
 };
 use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
@@ -41,12 +41,14 @@ enum PostAction {
     },
 }
 
-/// A filled field, named by its ref and by the DOM node the ref named when it was filled.
+/// A filled field: the ref the caller used, and the DOM node that ref named once the fill
+/// resolved it. The readback finds the field by that node.
 #[derive(Debug, Clone)]
 pub struct FieldTarget {
     pub ref_id: Ref,
     /// `None` when the ref named nothing the page knew at fill time.
     pub node: Option<i64>,
+    pub frame: Option<FrameId>,
 }
 
 #[derive(Debug, Clone)]
@@ -291,30 +293,24 @@ impl ToolResponse {
                             .await?,
                     ),
                 };
-                let lines = fields
+                // A field whose ref changed (the page re-rendered it before the fill) shows the
+                // ref it carries now, after the one the caller used.
+                let text = fields
                     .iter()
                     .map(|field| {
-                        let line = field
+                        let shown = field
                             .node
-                            .and_then(|node| capture.line_for(&field.ref_id, node));
-                        (field.ref_id.as_str(), line.map(str::to_string))
-                    })
-                    .collect::<Vec<_>>();
-                let text = lines
-                    .iter()
-                    .map(|(ref_id, line)| match line {
-                        Some(line) => line.clone(),
-                        None => format!("{ref_id}: not on the page now"),
+                            .and_then(|node| capture.line_for(node, field.frame.as_ref()));
+                        match shown {
+                            Some((now, line)) if *now == field.ref_id => line.to_string(),
+                            Some((_, line)) => format!("{} → {line}", field.ref_id),
+                            None => format!("{}: not on the page now", field.ref_id),
+                        }
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
                 let wrapped = wrap_untrusted(&text, &capture.url);
-                let fields = lines
-                    .into_iter()
-                    .map(|(ref_id, line)| json!({ "ref": ref_id, "line": line }))
-                    .collect::<Vec<_>>();
                 self.text(format!("[Page {page} fields]\n{wrapped}"));
-                self.data(json!({ "fields": fields }));
                 Ok(())
             }
             PostAction::Pages => {

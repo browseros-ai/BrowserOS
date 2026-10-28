@@ -292,8 +292,8 @@ fn handler<'a>(
     })
 }
 
-/// Each filled ref with the DOM node it names now, after the fill resolved it. The readback
-/// shows a ref's line only while it still names that node: refs restart on a new document.
+/// Each filled ref with the DOM node it names now: the fill resolved it, recovering a node the
+/// page replaced since the snapshot. The readback finds each field by that node.
 async fn field_targets(ctx: &ToolCtx, page_id: &PageId, refs: Vec<Ref>) -> Vec<FieldTarget> {
     if refs.is_empty() {
         return Vec::new();
@@ -303,9 +303,13 @@ async fn field_targets(ctx: &ToolCtx, page_id: &PageId, refs: Vec<Ref>) -> Vec<F
         Err(_) => RefMap::new(),
     };
     refs.into_iter()
-        .map(|ref_id| FieldTarget {
-            node: known.get(&ref_id).map(|entry| entry.backend_node_id),
-            ref_id,
+        .map(|ref_id| {
+            let entry = known.get(&ref_id);
+            FieldTarget {
+                node: entry.map(|entry| entry.backend_node_id),
+                frame: entry.and_then(|entry| entry.frame_id.clone()),
+                ref_id,
+            }
         })
         .collect()
 }
