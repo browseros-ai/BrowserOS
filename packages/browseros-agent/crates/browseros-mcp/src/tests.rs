@@ -5,7 +5,7 @@ use crate::{
     },
     framework::{BrowserToolDefaults, BrowserToolOptions, ToolCtx, catalog, execute_tool},
     output_file::create_browser_output_file_access,
-    response::ToolResponse,
+    response::{FieldTarget, ToolResponse},
     service::{
         BrowserMcpService, BrowserMcpServiceOptions, BrowserToolExecutionEvent,
         BrowserToolLifecycleEvent, browser_mcp_instructions,
@@ -15,7 +15,7 @@ use crate::{
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, NativeCapabilities, PageId,
-    SessionId,
+    Ref, SessionId,
     snapshot::{AxNode, AxValue, SnapshotDiff},
 };
 use futures_util::future::BoxFuture;
@@ -1352,6 +1352,94 @@ async fn tabs_new_attaches_first_snapshot() {
             .iter()
             .any(|call| call.method == "Accessibility.getFullAXTree")
     );
+}
+
+#[tokio::test]
+async fn fields_readback_shows_each_ref_as_the_snapshot_does() {
+    let (ctx, _connection, page) = harness_ctx().await;
+    let mut response = ToolResponse::new();
+    // The harness page's Save button is backend node 10, its first ref.
+    response.include_fields(page, vec![field("e1", Some(10)), field("e9", None)]);
+    let result = response
+        .build_for_session(&ctx, Some(PageId(page)))
+        .await
+        .unwrap_or_else(|err| panic!("fields readback should build: {err}"))
+        .into_tool_result();
+
+    let text = result_text(&result);
+    assert!(text.contains("[Page 1 fields]"), "{text}");
+    assert!(text.contains("\nbutton \"Save\" [ref=e1]\n"), "{text}");
+    assert!(text.contains("e9: not on the page now"), "{text}");
+    assert!(text.contains("UNTRUSTED_PAGE_CONTENT"), "{text}");
+}
+
+#[tokio::test]
+async fn fields_readback_follows_a_filled_node_to_its_new_ref() {
+    // The page re-rendered the field after the agent's snapshot: fill recovered the replacement
+    // under the old ref, and the next capture gives that node a ref of its own.
+    let (ctx, _connection, page) = harness_ctx().await;
+    let mut response = ToolResponse::new();
+    response.include_fields(page, vec![field("e5", Some(10))]);
+    let result = response
+        .build_for_session(&ctx, Some(PageId(page)))
+        .await
+        .unwrap_or_else(|err| panic!("fields readback should build: {err}"))
+        .into_tool_result();
+
+    let text = result_text(&result);
+    assert!(text.contains("e5 → button \"Save\" [ref=e1]"), "{text}");
+}
+
+#[tokio::test]
+async fn fields_readback_never_shows_another_node_under_a_reused_ref() {
+    // A fill that navigates: the new document restarts its refs, so e1 now names another node.
+    let (ctx, _connection, page) = harness_ctx().await;
+    let mut response = ToolResponse::new();
+    response.include_fields(page, vec![field("e1", Some(99))]);
+    let result = response
+        .build_for_session(&ctx, Some(PageId(page)))
+        .await
+        .unwrap_or_else(|err| panic!("fields readback should build: {err}"))
+        .into_tool_result();
+
+    let text = result_text(&result);
+    assert!(text.contains("e1: not on the page now"), "{text}");
+    assert!(!text.contains("button \"Save\""), "{text}");
+}
+
+fn field(ref_id: &str, node: Option<i64>) -> FieldTarget {
+    FieldTarget {
+        ref_id: Ref(ref_id.into()),
+        node,
+        frame: None,
+    }
+}
+
+#[tokio::test]
+async fn fields_readback_reads_the_capture_the_diff_just_took() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let captures = |connection: &HarnessConnection| {
+        connection
+            .calls()
+            .iter()
+            .filter(|call| call.method == "Accessibility.getFullAXTree")
+            .count()
+    };
+    let before = captures(&connection);
+    let mut response = ToolResponse::new();
+    response.include_diff(page, false, DiffDetail::Full);
+    response.include_fields(page, vec![field("e1", Some(10))]);
+    let result = response
+        .build_for_session(&ctx, Some(PageId(page)))
+        .await
+        .unwrap_or_else(|err| panic!("diff and fields should build: {err}"))
+        .into_tool_result();
+
+    let text = result_text(&result);
+    let diff = text.find("[Page 1 diff]");
+    let fields = text.find("[Page 1 fields]");
+    assert!(diff.is_some() && fields > diff, "{text}");
+    assert_eq!(captures(&connection) - before, 1);
 }
 
 #[tokio::test]

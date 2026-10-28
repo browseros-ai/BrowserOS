@@ -5,7 +5,7 @@ use crate::{
     snapshot::{
         AxNode, DiffOptions, DocumentId, RefEntry, RefMap, RenderOptions, SnapshotDiff,
         SnapshotObservation, SnapshotOptions, apply_snapshot_options, diff_snapshot_observations,
-        render_snapshot,
+        ref_line, render_snapshot,
     },
     target::page_access::PageAccess,
 };
@@ -27,6 +27,24 @@ pub struct SnapshotResult {
     pub text: String,
     pub refs: RefMap,
     pub url: String,
+}
+
+impl SnapshotResult {
+    /// The ref and line this capture shows for DOM node `node` in `frame`. A filled field is found
+    /// by its node, not by the ref the caller used: refs restart on a new document, where the
+    /// same ref names another control, and a field the page re-rendered before the fill was
+    /// filled under the old ref but carries a new one now. Read it from a full capture: card
+    /// numbers and security codes are masked by their form's context, which one node lacks.
+    #[must_use]
+    pub fn line_for(&self, node: i64, frame: Option<&FrameId>) -> Option<(&Ref, &str)> {
+        let entry = self
+            .refs
+            .entries_in_order()
+            .into_iter()
+            .find(|entry| entry.backend_node_id == node && entry.frame_id.as_ref() == frame)?;
+        let line = ref_line(&self.text, entry.ref_id.as_str())?;
+        Some((&entry.ref_id, line))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -137,6 +155,12 @@ impl Observer {
     }
 
     pub async fn diff(&self) -> Result<SnapshotDiff, CoreError> {
+        Ok(self.diff_with_capture().await?.0)
+    }
+
+    /// A diff plus the full capture it compared against the baseline, for a caller that reads
+    /// that same capture again rather than whatever a later call commits.
+    pub async fn diff_with_capture(&self) -> Result<(SnapshotDiff, SnapshotResult), CoreError> {
         let (before, before_arrangement) = {
             let state = self.state.lock().await;
             (state.baseline.clone(), state.baseline_arrangement)
@@ -144,11 +168,16 @@ impl Observer {
         let result = self.capture().await?;
         let after_arrangement = result.refs.arrangement();
         self.commit(result.clone()).await;
+        let capture = SnapshotResult {
+            text: result.text,
+            refs: result.refs,
+            url: result.url,
+        };
         let mut diff = diff_snapshot_observations(
             before.as_ref(),
             &SnapshotObservation {
-                text: result.text,
-                url: Some(result.url),
+                text: capture.text.clone(),
+                url: Some(capture.url.clone()),
             },
             DiffOptions::default(),
         );
@@ -157,7 +186,7 @@ impl Observer {
         if diff.arrangement_changed.is_none() {
             diff.arrangement_changed = before_arrangement.map(|before| before != after_arrangement);
         }
-        Ok(diff)
+        Ok((diff, capture))
     }
 
     pub async fn last_refs(&self) -> RefMap {

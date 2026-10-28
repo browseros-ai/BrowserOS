@@ -42,7 +42,9 @@ import { actCases } from './cases-act'
 import { captureIoCases } from './cases-capture-io'
 import { clawLayerCases } from './cases-claw-layer'
 import { fillCases } from './cases-fill'
+import { fillReadbackCases } from './cases-fill-readback'
 import { isolationCases } from './cases-isolation'
+import { labelCases } from './cases-labels'
 import { navigateSnapshotCases } from './cases-navigate-snapshot'
 import { readEvalCases } from './cases-read-eval'
 import { snapshotConcurrencyCases } from './cases-snapshot-concurrency'
@@ -55,9 +57,11 @@ export const contractCases: ContractCase[] = [
   ...transportCases,
   ...tabsCases,
   ...navigateSnapshotCases,
+  ...labelCases,
   ...snapshotConcurrencyCases,
   ...actCases,
   ...fillCases,
+  ...fillReadbackCases,
   ...readEvalCases,
   ...isolationCases,
   ...captureIoCases,

@@ -8,8 +8,8 @@
 import type { CaseContext, ContractCase } from './cases'
 import { expectError, expectOk } from './helpers'
 
-const UNTRUSTED = /\[(END_)?UNTRUSTED_PAGE_CONTENT[^\]]*\]/g
-const NUDGE = /Tip: this session is[\s\S]*$/
+const FENCED =
+  /\[UNTRUSTED_PAGE_CONTENT[^\]]*\][^\n]*\n([\s\S]*?)\[END_UNTRUSTED_PAGE_CONTENT[^\]]*\]/
 
 interface ProbeReport {
   calls: string[]
@@ -18,14 +18,12 @@ interface ProbeReport {
 
 /**
  * The value a script returned. Results arrive as a preface line, then the value fenced as
- * untrusted page content, then possibly the session rename nudge.
+ * untrusted page content, then whatever tips the server appends; only the fence is the value.
  */
 function scriptValue(text: string): string {
-  const lines = text
-    .replace(UNTRUSTED, '')
-    .replace(NUDGE, '')
-    .trim()
-    .split('\n')
+  const fenced = text.match(FENCED)?.[1]
+  if (fenced === undefined) throw new Error(`No script value in: ${text}`)
+  const lines = fenced.trim().split('\n')
   return lines[lines.length - 1]?.trim() ?? ''
 }
 
