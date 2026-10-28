@@ -9,7 +9,9 @@ import type { CaseContext, ContractCase } from './cases'
 import { expectError, expectOk } from './helpers'
 
 const UNTRUSTED = /\[(END_)?UNTRUSTED_PAGE_CONTENT[^\]]*\]/g
-const NUDGE = /Tip: this session is[\s\S]*$/
+// The server appends advisory "Tip: ..." lines after a value: the session-rename nudge and the
+// tab-group cleanup tip (default on). Strip the first trailing tip line and everything after it.
+const NUDGE = /\n\s*Tip: [\s\S]*$/
 
 interface ProbeReport {
   calls: string[]
@@ -18,7 +20,7 @@ interface ProbeReport {
 
 /**
  * The value a script returned. Results arrive as a preface line, then the value fenced as
- * untrusted page content, then possibly the session rename nudge.
+ * untrusted page content, then any trailing advisory tips (session rename, tab-group cleanup).
  */
 function scriptValue(text: string): string {
   const lines = text
