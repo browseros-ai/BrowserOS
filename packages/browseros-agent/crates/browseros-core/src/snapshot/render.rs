@@ -11,6 +11,10 @@ use std::collections::{HashMap, HashSet};
 
 const IFRAME_ROLES: &[&str] = &["Iframe", "iframe"];
 
+/// The role an ignored node takes when the clickable scan found it, matching the
+/// nameless generic cursor hits that already render.
+const UNNAMED_CURSOR_HIT_ROLE: &str = "generic";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IframeStitch {
     pub backend_node_id: i64,
@@ -97,11 +101,6 @@ impl RenderContext<'_, '_> {
         };
         let in_card_form = in_card_form || self.card_forms.contains(node_id);
 
-        let role = if node.ignored.unwrap_or(false) {
-            None
-        } else {
-            str_val(node.role.as_ref())
-        };
         let name = str_val(node.name.as_ref()).unwrap_or_default();
         let is_cursor_hit = node
             .backend_dom_node_id
@@ -112,6 +111,14 @@ impl RenderContext<'_, '_> {
                     .map(|hits| hits.contains_key(&id))
             })
             .unwrap_or(false);
+        let role = if node.ignored.unwrap_or(false) {
+            // ignored nodes carry no meaningful accessible role, but a hit the clickable scan
+            // found is still the element the user can click, so it renders like a nameless
+            // generic cursor hit.
+            is_cursor_hit.then(|| UNNAMED_CURSOR_HIT_ROLE.to_string())
+        } else {
+            str_val(node.role.as_ref())
+        };
 
         if is_dropped(role.as_deref(), &name, is_cursor_hit) {
             for child_id in node.child_ids.as_deref().unwrap_or(&[]) {
@@ -277,13 +284,20 @@ fn format_line(
         && (is_interactive_role(role) || cursor_reasons.is_some());
 
     if actionable && let Some(backend_node_id) = node.backend_dom_node_id {
-        let ref_id = opts.refs.mint(MintRef {
+        let mint = MintRef {
             backend_node_id,
             role,
             name,
             document_id: opts.document_id.as_deref(),
             frame_id: opts.frame_id.as_ref(),
-        });
+        };
+        // An ignored node reached here only because the clickable scan hit it, and its role and
+        // name cannot bring it back once it goes stale.
+        let ref_id = if node.ignored.unwrap_or(false) {
+            opts.refs.mint_unresolvable(mint)
+        } else {
+            opts.refs.mint(mint)
+        };
         line.push_str(" [ref=");
         line.push_str(ref_id.as_str());
         line.push(']');
@@ -811,6 +825,120 @@ mod tests {
         assert_eq!(
             render_snapshot(&nodes, &mut opts).text,
             "- generic [ref=e1] [cursor=pointer]"
+        );
+    }
+
+    #[test]
+    fn renders_ignored_text_nodes_the_clickable_scan_hit() {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2"]),
+            ax("2", "generic", &["3"]),
+            ax("3", "StaticText", &[]),
+        ];
+        nodes[1].ignored = Some(true);
+        nodes[1].backend_dom_node_id = Some(42);
+        nodes[2].name = Some(name("Read more"));
+        let mut refs = RefMap::new();
+        let mut opts = RenderOptions {
+            refs: &mut refs,
+            frame_id: None,
+            document_id: None,
+            cursor_hits: Some(HashMap::from([(42, vec!["cursor:pointer".to_string()])])),
+            base_depth: 0,
+        };
+        assert_eq!(
+            render_snapshot(&nodes, &mut opts).text,
+            "- generic [ref=e1] [cursor=pointer]"
+        );
+        let entry = refs.get(&crate::Ref("e1".to_string()));
+        assert_eq!(entry.map(|entry| entry.backend_node_id), Some(42));
+        // Role and name are shared with unrelated nameless generics, so it must not be
+        // re-found by them once the backend node is gone.
+        assert_eq!(entry.map(|entry| entry.re_resolvable), Some(false));
+    }
+
+    #[test]
+    fn renders_ignored_icon_nodes_the_clickable_scan_hit() {
+        let mut nodes = vec![ax("1", "RootWebArea", &["2"]), ax("2", "generic", &[])];
+        nodes[1].ignored = Some(true);
+        nodes[1].backend_dom_node_id = Some(42);
+        let mut refs = RefMap::new();
+        let mut opts = RenderOptions {
+            refs: &mut refs,
+            frame_id: None,
+            document_id: None,
+            cursor_hits: Some(HashMap::from([(42, vec!["cursor:pointer".to_string()])])),
+            base_depth: 0,
+        };
+        assert_eq!(
+            render_snapshot(&nodes, &mut opts).text,
+            "- generic [ref=e1] [cursor=pointer]"
+        );
+    }
+
+    #[test]
+    fn ignored_cursor_hits_keep_the_nth_of_nameless_generics_unchanged() {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2", "3"]),
+            ax("2", "generic", &[]),
+            ax("3", "generic", &[]),
+        ];
+        nodes[1].ignored = Some(true);
+        nodes[1].backend_dom_node_id = Some(42);
+        nodes[2].backend_dom_node_id = Some(9);
+        let mut refs = RefMap::new();
+        let mut opts = RenderOptions {
+            refs: &mut refs,
+            frame_id: None,
+            document_id: None,
+            cursor_hits: Some(HashMap::from([
+                (42, vec!["cursor:pointer".to_string()]),
+                (9, vec!["cursor:pointer".to_string()]),
+            ])),
+            base_depth: 0,
+        };
+        let text = render_snapshot(&nodes, &mut opts).text;
+        assert_eq!(
+            text,
+            [
+                "- generic [ref=e1] [cursor=pointer]",
+                "- generic [ref=e2] [cursor=pointer]"
+            ]
+            .join("\n")
+        );
+        let nth_of = |backend_node_id: i64| {
+            refs.entries_in_order()
+                .into_iter()
+                .find(|entry| entry.backend_node_id == backend_node_id)
+                .map(|entry| entry.nth)
+        };
+        // The ignored hit does not consume an nth, so the ordinary nameless generic keeps 0,
+        // exactly the value it had before ignored hits rendered at all.
+        assert_eq!(nth_of(9), Some(0));
+    }
+
+    #[test]
+    fn drops_ignored_nodes_the_clickable_scan_missed() {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2"]),
+            ax("2", "generic", &["3"]),
+            ax("3", "button", &[]),
+        ];
+        nodes[1].ignored = Some(true);
+        nodes[1].backend_dom_node_id = Some(42);
+        nodes[2].name = Some(name("Open"));
+        nodes[2].backend_dom_node_id = Some(43);
+        let mut refs = RefMap::new();
+        let mut opts = RenderOptions {
+            refs: &mut refs,
+            frame_id: None,
+            document_id: None,
+            cursor_hits: Some(HashMap::from([(99, vec!["cursor:pointer".to_string()])])),
+            base_depth: 0,
+        };
+        assert_eq!(
+            render_snapshot(&nodes, &mut opts).text,
+            "- button \"Open\" [ref=e1]"
         );
     }
 
