@@ -23,6 +23,8 @@ test('tests that the catalog contains every required page with unique ids and ex
     'turnstile-pass',
     'turnstile-block',
     'turnstile-interactive',
+    'turnstile-cf-marker',
+    'cloudflare-wall',
     'no-captcha',
     'hcaptcha-test',
   ])
