@@ -2887,6 +2887,9 @@ mod tests {
 
         // The structured `session` field belongs to the server. A tool whose own output
         // already had one would have it overwritten by the handle.
+        assert!(declares_session(
+            &json!({ "oneOf": [{ "properties": { "session": {} } }] })
+        ));
         let native = service.native();
         let own = service
             .catalog
@@ -2899,16 +2902,24 @@ mod tests {
         for tool in own {
             if let Some(output) = &tool.output_schema {
                 assert!(
-                    output
-                        .get("properties")
-                        .and_then(|properties| properties.get("session"))
-                        .is_none(),
+                    !declares_session(&Value::Object(output.as_ref().clone())),
                     "tool {} already returns a `session` field",
                     tool.name
                 );
             }
         }
         Ok(())
+    }
+
+    /// Whether an object schema's own fields include `session`, at the root or in any of the
+    /// union branches the target schemas declare their fields in.
+    fn declares_session(schema: &Value) -> bool {
+        schema["properties"].get("session").is_some()
+            || ["oneOf", "anyOf", "allOf"].iter().any(|key| {
+                schema[*key]
+                    .as_array()
+                    .is_some_and(|branches| branches.iter().any(declares_session))
+            })
     }
 
     #[tokio::test]
