@@ -355,6 +355,10 @@ folder and pass that folder as the `neo-deb` build context:
 docker build --no-cache-filter neo --build-context neo-deb=/path/to/folder -t neo .
 ```
 
+To run this checkout's claw-server in the image while developing it, use
+[`dev.sh`](dev.sh): `./dev.sh up` builds and starts it with the viewer on 16080 and MCP on
+19010, and its header explains how to test it through Neo's MCP tools.
+
 Maintainers build and publish the image with `browseros release docker`; see
 [`bos_build/docs/docker-image.md`](../../bos_build/docs/docker-image.md).
 
