@@ -79,7 +79,15 @@ Neo also leaves tab layout to your agent: a page joins a tab group only when the
 [behaviour file](#behaviour-file) can turn per-task groups back on. From Neo 0.51.2.5, the
 browser in hosted mode names itself Google Chrome to websites that read its brand (User-Agent
 Client Hints).
-`BROWSERCLAW_HOSTED_MODE=0` restores the desktop tools and hides `solve_captcha`.
+Hosted mode doesn't offer to save or update passwords or addresses, or warn about leaked
+passwords, since nobody is at the viewer to answer the prompts. Managed policies turn off
+Chromium's password saving (`PasswordManagerEnabled`), leak checks
+(`PasswordLeakDetectionEnabled`) and address autofill (`AutofillAddressEnabled`). Agents fill a
+login your backend supplies with `credentials fill` and a username and password, as they fill
+cards with `payment_cards`. `credentials add` fails with `operation_not_allowed`; logins
+already in the profile still fill.
+`BROWSERCLAW_HOSTED_MODE=0` restores the desktop tools and the save prompts, and hides
+`solve_captcha`.
 Only exact `0` and `1` are accepted. After changing the flag, run
 `docker compose up -d --wait` to recreate the container with its new environment.
 With `docker run`, recreate it with the new flag and the existing data volume.
@@ -284,6 +292,9 @@ default `docker run` example already provide one at `/data`; neither changes.
 - **Cards stay out of the profile.** A managed policy turns payment autofill off, so Neo never
   offers to save a card. Agents fill cards from your own secure storage through the
   `payment_cards` tool, which fills a supplied card without saving it.
+- **Hosted mode saves no new logins.** Neo never offers to save a password there and
+  `credentials add` is refused (see [Settings](#settings)). Logins saved before, or with
+  hosted mode off, still fill.
 
 ## Security
 
