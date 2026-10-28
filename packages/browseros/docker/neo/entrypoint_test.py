@@ -64,6 +64,42 @@ class StartNeoTest(unittest.TestCase):
         self.assertEqual(calls, ["forget_zoom_levels", "spawn_as_neo"])
 
 
+class ApplyPoliciesTest(unittest.TestCase):
+    def apply(self, hosted_mode: str, stale_hosted_policy: bool = False) -> dict[str, dict]:
+        """The managed policy files apply_policies leaves, by name, for one mode."""
+        managed = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        if stale_hosted_policy:
+            (managed / "neo-hosted.json").write_text('{"PasswordManagerEnabled": false}')
+        run_bash(
+            "sandbox_flags=(--no-sandbox)\n"
+            f"BROWSERCLAW_HOSTED_MODE={hosted_mode}\n"
+            + shell_function("apply_policies").replace("/etc/chromium/policies/managed", str(managed))
+            + "apply_policies\n"
+        )
+        return {path.name: json.loads(path.read_text()) for path in managed.iterdir()}
+
+    def test_hosted_mode_turns_off_password_and_address_saving(self):
+        policies = self.apply("1")
+
+        self.assertEqual(
+            policies["neo-hosted.json"],
+            {"PasswordManagerEnabled": False, "AutofillAddressEnabled": False},
+        )
+
+    def test_desktop_mode_keeps_saving_prompts(self):
+        # The policy directory outlives `docker restart`, so a file written in hosted mode is
+        # dropped once the container is recreated with hosted mode off.
+        policies = self.apply("0", stale_hosted_policy=True)
+
+        self.assertNotIn("neo-hosted.json", policies)
+
+    def test_card_saving_stays_off_in_both_modes(self):
+        for mode in ("0", "1"):
+            self.assertEqual(
+                self.apply(mode)["neo-payments.json"], {"AutofillCreditCardEnabled": False}
+            )
+
+
 @unittest.skipUnless(shutil.which("jq"), "needs jq, as the image has")
 class ForgetZoomLevelsTest(unittest.TestCase):
     def forget(self, preferences: str | None) -> tuple[subprocess.CompletedProcess, Path]:

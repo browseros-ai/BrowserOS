@@ -207,13 +207,24 @@ readonly HIDDEN_BROWSEROS_FEATURES=VerticalTabs,HomeButton,SplitTabButton,TabSea
 # only with Chromium's fixed --password-store=basic key. Turning payment
 # autofill off stops Chromium offering to save a submitted card; supplied fills
 # still work.
+#
+# In hosted mode nobody sits at the browser to answer "Save password?",
+# "Update password?" or "Save address?", and the bubbles cover the viewer, so
+# Chromium stops offering to save either. Logins then follow the card model:
+# agents fill ones the deployment supplies (credentials fill with a username and
+# password). Chromium gates its prompts and the Passwords DevTools domain's
+# `add` on the same setting, so `credentials add` is refused in this mode too;
+# logins already in the profile still fill.
 apply_policies() {
   local managed=/etc/chromium/policies/managed
   mkdir -p "$managed"
   echo '{"AutofillCreditCardEnabled": false}' > "$managed/neo-payments.json"
-  rm -f "$managed/neo-docker.json"
+  rm -f "$managed/neo-docker.json" "$managed/neo-hosted.json"
   if [ "${#sandbox_flags[@]}" -gt 0 ]; then
     echo '{"CommandLineFlagSecurityWarningsEnabled": false}' > "$managed/neo-docker.json"
+  fi
+  if [ "$BROWSERCLAW_HOSTED_MODE" = 1 ]; then
+    echo '{"PasswordManagerEnabled": false, "AutofillAddressEnabled": false}' > "$managed/neo-hosted.json"
   fi
 }
 
