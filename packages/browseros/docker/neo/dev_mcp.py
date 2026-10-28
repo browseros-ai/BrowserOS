@@ -16,6 +16,7 @@ Standard library only; the transport is smoke.py's client.
 import argparse
 import base64
 import json
+import secrets
 import sys
 import time
 import urllib.error
@@ -35,6 +36,11 @@ class Session:
         self.file = state / "mcp-session"
         self.client = McpClient(url)
         self.client.session_id = self.file.read_text().strip() if self.file.exists() else None
+        # rmcp routes each reply by JSON-RPC id within the session, so two
+        # overlapping invocations both counting from 1 would swap or lose
+        # replies. A random starting id keeps parallel calls apart without a
+        # lock that would queue a quick call behind a long `run`.
+        self.client.next_id = secrets.randbits(48)
 
     def request(self, method: str, params: dict) -> dict:
         if not self.client.session_id:
@@ -93,7 +99,9 @@ def call_tool(session: Session, state: Path, name: str, arguments: dict) -> int:
             shots = state / "shots"
             shots.mkdir(exist_ok=True)
             extension = part.get("mimeType", "image/png").split("/")[-1]
-            path = shots / f"{time.strftime('%Y%m%d-%H%M%S')}-{name}.{extension}"
+            # Unique per image: a printed path must keep showing what that
+            # call captured, even across calls in the same second.
+            path = shots / f"{time.strftime('%Y%m%d-%H%M%S')}-{name}-{secrets.token_hex(3)}.{extension}"
             path.write_bytes(base64.b64decode(part["data"]))
             print(f"[image saved: {path}]")
         else:
