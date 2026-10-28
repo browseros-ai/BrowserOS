@@ -5,7 +5,7 @@ use crate::{
     snapshot::{
         AxNode, DiffOptions, DocumentId, RefEntry, RefMap, RenderOptions, SnapshotDiff,
         SnapshotObservation, SnapshotOptions, apply_snapshot_options, diff_snapshot_observations,
-        render_snapshot,
+        ref_line, render_snapshot,
     },
     target::page_access::PageAccess,
 };
@@ -27,6 +27,15 @@ pub struct SnapshotResult {
     pub text: String,
     pub refs: RefMap,
     pub url: String,
+}
+
+/// Each asked-for ref's line in the last capture, as a snapshot rendered it.
+#[derive(Debug, Clone)]
+pub struct RefLines {
+    /// The page the capture was taken of.
+    pub url: Option<String>,
+    /// `None` when the ref was not in the capture: it left the page or was re-rendered.
+    pub lines: Vec<(Ref, Option<String>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -158,6 +167,25 @@ impl Observer {
             diff.arrangement_changed = before_arrangement.map(|before| before != after_arrangement);
         }
         Ok(diff)
+    }
+
+    /// Reads `refs` from the capture the latest snapshot or diff committed, without a CDP call.
+    /// Lines come from the whole-page render, so they carry its masking: a card number or
+    /// security code is hidden by its form's context, which a single node does not have.
+    pub async fn ref_lines(&self, refs: &[Ref]) -> RefLines {
+        let state = self.state.lock().await;
+        let baseline = state.baseline.as_ref();
+        let text = baseline.map_or("", |baseline| baseline.text.as_str());
+        RefLines {
+            url: baseline.and_then(|baseline| baseline.url.clone()),
+            lines: refs
+                .iter()
+                .map(|ref_id| {
+                    let line = ref_line(text, ref_id.as_str()).map(str::to_string);
+                    (ref_id.clone(), line)
+                })
+                .collect(),
+        }
     }
 
     pub async fn last_refs(&self) -> RefMap {

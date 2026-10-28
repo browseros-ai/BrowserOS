@@ -28,6 +28,8 @@ second</textarea></label>
     <label>Detached field <input id="detach" value="original"></label>
     <label>Focus redirect <input id="redirect" value="original"></label>
     <label>Other field <input id="other" value="untouched"></label>
+    <label>Verification code <input id="code" inputmode="numeric"></label>
+    <label>Phone field <input id="phone" type="tel"></label>
     <div id="shadow-host"></div>
     <script>
       // Browser editing must fire trusted events, and handlers must run before
@@ -46,6 +48,12 @@ second</textarea></label>
       document.getElementById('redirect').addEventListener('focus', () => {
         document.getElementById('other').focus()
       })
+      // Fields that format what is typed: a code grouped in threes and a phone mask.
+      const format = (id, shape) => document.getElementById(id).addEventListener('input', event => {
+        event.target.value = shape(event.target.value.replace(/\D/g, ''))
+      })
+      format('code', d => d.length > 3 ? `${d.slice(0, 3)} ${d.slice(3, 6)}` : d)
+      format('phone', d => d.length > 6 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6, 10)}` : d)
       const shadow = document.getElementById('shadow-host').attachShadow({mode: 'open'})
       shadow.innerHTML = '<label>Shadow field <input value="original"></label>'
     </script>

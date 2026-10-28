@@ -9,10 +9,12 @@ use crate::{
         snapshot::format_snapshot_result,
     },
     framework::{AuditHints, ToolCtx, ToolError, ToolExecResult, ToolResult, merge_structured},
+    trust_boundary::wrap_untrusted,
 };
-use browseros_core::{ConsoleEntry, PageId, pointer, settle::SettleOutcome};
+use browseros_core::{ConsoleEntry, PageId, Ref, pointer, settle::SettleOutcome};
 use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 enum PostAction {
@@ -27,6 +29,13 @@ enum PostAction {
     Pages,
     Screenshot {
         page: u32,
+    },
+    /// The lines a snapshot shows for fields an action just filled. Fill types the value and
+    /// leaves judging the result to the caller, so this is how the caller sees what the page
+    /// made of it: kept, reformatted ("440 212"), or rejected.
+    Fields {
+        page: u32,
+        refs: Vec<Ref>,
     },
 }
 
@@ -44,6 +53,9 @@ pub struct ToolResponse {
     post_actions: Vec<PostAction>,
     console_summaries: Vec<ConsoleSummary>,
     audit_hints: Option<AuditHints>,
+    /// Pages a snapshot or diff post-action captured during this build, whose capture a later
+    /// fields post-action reads instead of capturing again.
+    captured_pages: HashSet<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +119,11 @@ impl ToolResponse {
             include_structured,
             detail,
         });
+    }
+
+    /// Register after any diff of the same page, so the fields read the diff's capture.
+    pub fn include_fields(&mut self, page: u32, refs: Vec<Ref>) {
+        self.post_actions.push(PostAction::Fields { page, refs });
     }
 
     pub fn include_pages(&mut self) {
@@ -193,6 +210,7 @@ impl ToolResponse {
                 self.throw_if_dialog_open(ctx, page)?;
                 let observer = ctx.browser.observe(browseros_core::PageId(page)).await?;
                 let snapshot = observer.snapshot().await?;
+                self.captured_pages.insert(page);
                 let formatted = format_snapshot_result(&snapshot.text, &snapshot.url, ctx).await;
                 self.text(format!("[Page {page} snapshot]\n{}", formatted.text));
                 Ok(())
@@ -209,6 +227,7 @@ impl ToolResponse {
                     .await?
                     .diff()
                     .await?;
+                self.captured_pages.insert(page);
                 let origin = diff.after_url.as_deref().map(ToString::to_string);
                 let origin = match origin {
                     Some(origin) => origin,
@@ -246,6 +265,37 @@ impl ToolResponse {
                     }
                     self.data(structured);
                 }
+                Ok(())
+            }
+            PostAction::Fields { page, refs } => {
+                self.throw_if_dialog_open(ctx, page)?;
+                let observer = ctx.browser.observe(browseros_core::PageId(page)).await?;
+                // Without a capture from this build, the last one may predate the fill.
+                if !self.captured_pages.contains(&page) {
+                    observer.snapshot().await?;
+                    self.captured_pages.insert(page);
+                }
+                let captured = observer.ref_lines(&refs).await;
+                let text = captured
+                    .lines
+                    .iter()
+                    .map(|(ref_id, line)| match line {
+                        Some(line) => line.clone(),
+                        None => format!("{ref_id}: not on the page now"),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let origin = captured.url.as_deref().unwrap_or("unknown");
+                self.text(format!(
+                    "[Page {page} fields]\n{}",
+                    wrap_untrusted(&text, origin)
+                ));
+                let fields = captured
+                    .lines
+                    .into_iter()
+                    .map(|(ref_id, line)| json!({ "ref": ref_id.as_str(), "line": line }))
+                    .collect::<Vec<_>>();
+                self.data(json!({ "fields": fields }));
                 Ok(())
             }
             PostAction::Pages => {
@@ -432,16 +482,19 @@ impl BuiltToolResponse {
 impl PostAction {
     fn settle_page(&self) -> Option<u32> {
         match self {
-            Self::Snapshot { page } | Self::Diff { page, .. } => Some(*page),
+            Self::Snapshot { page } | Self::Diff { page, .. } | Self::Fields { page, .. } => {
+                Some(*page)
+            }
             Self::Pages | Self::Screenshot { .. } => None,
         }
     }
 
     fn page(&self) -> Option<u32> {
         match self {
-            Self::Snapshot { page } | Self::Diff { page, .. } | Self::Screenshot { page } => {
-                Some(*page)
-            }
+            Self::Snapshot { page }
+            | Self::Diff { page, .. }
+            | Self::Screenshot { page }
+            | Self::Fields { page, .. } => Some(*page),
             Self::Pages => None,
         }
     }
@@ -453,6 +506,7 @@ impl PostAction {
             Self::Diff { page, .. } => format!("[page {page} diff unavailable: {reason}]"),
             Self::Pages => format!("[pages unavailable: {reason}]"),
             Self::Screenshot { page } => format!("[page {page} screenshot unavailable: {reason}]"),
+            Self::Fields { page, .. } => format!("[page {page} fields unavailable: {reason}]"),
         }
     }
 }

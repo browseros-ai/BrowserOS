@@ -22,6 +22,7 @@ const EXPECTED_PAGES = [
   'iframe-grandchild.html',
   'iframe.html',
   'injection.html',
+  'labels.html',
   'links.html',
   'media.html',
   'overlay.html',

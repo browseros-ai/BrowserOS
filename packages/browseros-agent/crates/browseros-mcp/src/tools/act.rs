@@ -19,8 +19,11 @@ kinds: click, type (into focused element), fill (ref+value, or many via fields[]
 press (key/combo), hover, focus, check, uncheck, select (option value), scroll, drag. \
 dialog_accept/dialog_dismiss handle pending JavaScript dialogs. \
 ALWAYS fill a whole form in one call via fields[], never field-by-field. \
-Fill replaces text by default (clear=false appends) and verifies the field value; \
-use type/press for keyboard handlers and wait for application-specific readiness. \
+Fill types each value, replacing the field's text by default (clear=false appends), and \
+reads every filled field back as the snapshot shows it, even when diff is \"none\". \
+A page may reformat a value (\"440 212\") or reject it; compare what the field shows \
+with what you meant before submitting. \
+Use type/press for keyboard handlers and wait for application-specific readiness. \
 Reads back a post-settle diff - no follow-up diff/snapshot needed; \
 re-snapshot only for fresh refs. \
 Control that readback with diff: \"full\" (default) whole diff, \"summary\" change counts, \
@@ -259,14 +262,25 @@ fn handler<'a>(
                 skip_screenshot: true,
             });
         }
+        let filled = filled_refs(&args);
         match outcome {
             Ok(Some(early)) => return Ok(Some(early)),
             Ok(None) => {}
-            Err(err) => return Err(err),
+            Err(err) => {
+                // A fill that stopped partway has typed into the fields before it; show them
+                // so the caller knows what the page holds before trying again.
+                if !filled.is_empty() {
+                    response.include_fields(args.page, filled);
+                }
+                return Err(err);
+            }
         }
         response.data(json!({ "kind": args.kind.as_str() }));
         if let Some(detail) = resolve_diff_detail(args.diff) {
             response.include_diff(args.page, true, detail);
+        }
+        if !filled.is_empty() {
+            response.include_fields(args.page, filled);
         }
         response.include_console_summary(args.page, console_start);
         Ok(Some(text_result(
@@ -274,6 +288,21 @@ fn handler<'a>(
             None,
         )))
     })
+}
+
+/// The fields a fill targets, in order, for the readback after it.
+fn filled_refs(args: &ActArgs) -> Vec<Ref> {
+    if !matches!(args.kind, ActKind::Fill) {
+        return Vec::new();
+    }
+    match (&args.fields, &args.r#ref) {
+        (Some(fields), _) => fields
+            .iter()
+            .map(|field| Ref(field.r#ref.clone()))
+            .collect(),
+        (None, Some(ref_id)) => vec![Ref(ref_id.clone())],
+        (None, None) => Vec::new(),
+    }
 }
 
 async fn run_kind(

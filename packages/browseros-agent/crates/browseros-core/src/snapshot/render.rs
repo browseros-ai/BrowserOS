@@ -53,6 +53,7 @@ pub fn render_snapshot<'a>(nodes: &'a [AxNode], opts: &mut RenderOptions<'a>) ->
     let mut ctx = RenderContext {
         by_id,
         card_forms: card_form_scopes(nodes),
+        control_labels: labels_of_rendered_controls(nodes),
         lines: Vec::new(),
         iframes: Vec::new(),
         opts,
@@ -85,6 +86,8 @@ struct RenderContext<'a, 'b> {
     by_id: HashMap<String, &'a AxNode>,
     /// See [`card_form_scopes`].
     card_forms: HashSet<String>,
+    /// See [`labels_of_rendered_controls`].
+    control_labels: HashSet<i64>,
     lines: Vec<String>,
     iframes: Vec<IframeStitch>,
     opts: &'b mut RenderOptions<'a>,
@@ -102,16 +105,20 @@ impl RenderContext<'_, '_> {
         } else {
             str_val(node.role.as_ref())
         };
-        let name = str_val(node.name.as_ref()).unwrap_or_default();
-        let is_cursor_hit = node
-            .backend_dom_node_id
-            .and_then(|id| {
-                self.opts
+        let mut name = str_val(node.name.as_ref()).unwrap_or_default();
+        let is_cursor_hit = node.backend_dom_node_id.is_some_and(|id| {
+            !self.control_labels.contains(&id)
+                && self
+                    .opts
                     .cursor_hits
                     .as_ref()
-                    .map(|hits| hits.contains_key(&id))
-            })
-            .unwrap_or(false);
+                    .is_some_and(|hits| hits.contains_key(&id))
+        });
+        // Chromium leaves a label's own name empty and puts its words in text children, which
+        // an interactive snapshot drops. A label that is its own target needs them to be read.
+        if is_cursor_hit && name.is_empty() && role.as_deref() == Some("LabelText") {
+            name = self.text_of(node);
+        }
 
         if is_dropped(role.as_deref(), &name, is_cursor_hit) {
             for child_id in node.child_ids.as_deref().unwrap_or(&[]) {
@@ -141,12 +148,71 @@ impl RenderContext<'_, '_> {
             return;
         }
 
-        let line = format_line(node, &role, &name, absolute_depth, in_card_form, self.opts);
+        let line = format_line(
+            node,
+            &role,
+            &name,
+            absolute_depth,
+            in_card_form,
+            is_cursor_hit,
+            self.opts,
+        );
         self.lines.push(line);
         for child_id in node.child_ids.as_deref().unwrap_or(&[]) {
             self.visit(child_id, depth + 1, in_card_form);
         }
     }
+
+    /// The words under `node`, as one line short enough to serve as a name.
+    fn text_of(&self, node: &AxNode) -> String {
+        const MAX_CHARS: usize = 100;
+        let mut words = Vec::new();
+        let mut pending = node.child_ids.clone().unwrap_or_default();
+        pending.reverse();
+        while let Some(id) = pending.pop() {
+            let Some(child) = self.by_id.get(&id) else {
+                continue;
+            };
+            if str_val(child.role.as_ref()).as_deref() == Some("StaticText") {
+                let text = str_val(child.name.as_ref()).unwrap_or_default();
+                words.extend(text.split_whitespace().map(str::to_string));
+            } else {
+                pending.extend(child.child_ids.iter().flatten().rev().cloned());
+            }
+        }
+        let text = words.join(" ");
+        match text.char_indices().nth(MAX_CHARS) {
+            Some((end, _)) => format!("{}…", &text[..end]),
+            None => text,
+        }
+    }
+}
+
+/// Labels that name a control the tree renders. Clicking a `<label>` clicks its control, so
+/// Chromium reports the label as clickable; when that control is in the tree with a ref of its
+/// own, the label is the same target and gets no second ref. A control the tree leaves out
+/// (`display: none`, or ignored like `aria-hidden`) has no ref, so its label stays the target.
+/// Only HTML label sources count: an `aria-labelledby` element is a node of its own.
+fn labels_of_rendered_controls(nodes: &[AxNode]) -> HashSet<i64> {
+    nodes
+        .iter()
+        .filter(|node| {
+            !node.ignored.unwrap_or(false)
+                && node.backend_dom_node_id.is_some()
+                && str_val(node.role.as_ref()).is_some_and(|role| is_interactive_role(&role))
+        })
+        .filter_map(|node| node.name.as_ref()?.sources.as_ref())
+        .flatten()
+        .filter(|source| {
+            matches!(
+                source.native_source.as_deref(),
+                Some("labelfor" | "labelwrapped")
+            )
+        })
+        .filter_map(|source| source.native_source_value.as_ref())
+        .flat_map(|value| &value.related_nodes)
+        .filter_map(|related| related.backend_dom_node_id)
+        .collect()
 }
 
 fn entry_node_ids(nodes: &[AxNode]) -> Vec<String> {
@@ -177,6 +243,37 @@ fn is_dropped(role: Option<&str>, name: &str, is_cursor_hit: bool) -> bool {
         return true;
     }
     (role == "generic" || role == "group") && name.is_empty() && !is_cursor_hit
+}
+
+/// The line a rendered snapshot shows for `ref_id`, without its indent and list marker.
+/// The tag counts only outside quotes: names, urls and values are page text, quoted and
+/// escaped by [`json_quote`], so a page cannot write a line that passes for another ref's.
+#[must_use]
+pub fn ref_line<'t>(text: &'t str, ref_id: &str) -> Option<&'t str> {
+    let tag = format!("[ref={ref_id}]");
+    split_rendered_lines(text)
+        .into_iter()
+        .find(|line| unquoted(line).contains(&tag))
+        .map(|line| {
+            let line = line.trim_start();
+            line.strip_prefix("- ").unwrap_or(line)
+        })
+}
+
+/// `line` with every quoted string removed.
+fn unquoted(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let (mut quoted, mut escaped) = (false, false);
+    for ch in line.chars() {
+        match (quoted, escaped, ch) {
+            (true, true, _) => escaped = false,
+            (true, false, '\\') => escaped = true,
+            (_, _, '"') => quoted = !quoted,
+            (false, _, _) => out.push(ch),
+            (true, false, _) => {}
+        }
+    }
+    out
 }
 
 fn filter_interactive_lines(text: &str) -> String {
@@ -256,6 +353,7 @@ fn format_line(
     name: &str,
     depth: usize,
     in_card_form: bool,
+    cursor_hit: bool,
     opts: &mut RenderOptions<'_>,
 ) -> String {
     let mut line = format!("{}- {role}", "  ".repeat(depth));
@@ -270,11 +368,8 @@ fn format_line(
         line.push(']');
     }
 
-    let cursor_reasons = node
-        .backend_dom_node_id
-        .and_then(|id| opts.cursor_hits.as_ref().and_then(|hits| hits.get(&id)));
-    let actionable = node.backend_dom_node_id.is_some()
-        && (is_interactive_role(role) || cursor_reasons.is_some());
+    let actionable =
+        node.backend_dom_node_id.is_some() && (is_interactive_role(role) || cursor_hit);
 
     if actionable && let Some(backend_node_id) = node.backend_dom_node_id {
         let ref_id = opts.refs.mint(MintRef {
@@ -288,7 +383,7 @@ fn format_line(
         line.push_str(ref_id.as_str());
         line.push(']');
     }
-    if cursor_reasons.is_some() {
+    if cursor_hit {
         line.push_str(" [cursor=pointer]");
     }
 
@@ -492,9 +587,12 @@ fn json_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        RenderOptions, SnapshotMode, SnapshotOptions, apply_snapshot_options, render_snapshot,
+        RenderOptions, SnapshotMode, SnapshotOptions, apply_snapshot_options, ref_line,
+        render_snapshot,
     };
-    use crate::snapshot::{AxNode, AxProperty, AxValue, refs::RefMap};
+    use crate::snapshot::{
+        AxNode, AxProperty, AxRelatedNode, AxRelatedValue, AxValue, AxValueSource, refs::RefMap,
+    };
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -552,6 +650,7 @@ mod tests {
             value: AxValue {
                 value_type: "integer".to_string(),
                 value: Some(json!(1)),
+                sources: None,
             },
         }]);
         nodes[5].name = Some(name("Load more"));
@@ -561,6 +660,7 @@ mod tests {
             value: AxValue {
                 value_type: "boolean".to_string(),
                 value: Some(json!(true)),
+                sources: None,
             },
         }]);
         nodes[7].name = Some(name("Search"));
@@ -568,6 +668,7 @@ mod tests {
         nodes[7].value = Some(AxValue {
             value_type: "string".to_string(),
             value: Some(json!("abc")),
+            sources: None,
         });
 
         let text = render(&nodes, &mut RefMap::new());
@@ -814,6 +915,133 @@ mod tests {
         );
     }
 
+    /// A control's name as Chromium reports it when a `<label>` supplies it: the source names the
+    /// label node by backend id.
+    fn named_by_label(native_source: &str, label: i64, text: &str) -> AxValue {
+        AxValue {
+            sources: Some(vec![AxValueSource {
+                native_source: Some(native_source.to_string()),
+                native_source_value: Some(AxRelatedValue {
+                    related_nodes: vec![AxRelatedNode {
+                        backend_dom_node_id: Some(label),
+                    }],
+                }),
+            }]),
+            ..AxValue::string(text)
+        }
+    }
+
+    fn render_with_hits(nodes: &[AxNode], hits: &[i64]) -> String {
+        let mut refs = RefMap::new();
+        let mut opts = RenderOptions {
+            refs: &mut refs,
+            frame_id: None,
+            document_id: None,
+            cursor_hits: Some(
+                hits.iter()
+                    .map(|&id| (id, vec!["clickable".to_string()]))
+                    .collect(),
+            ),
+            base_depth: 0,
+        };
+        render_snapshot(nodes, &mut opts).text
+    }
+
+    #[test]
+    fn ref_line_finds_exactly_that_ref() {
+        let text = "- form\n  - textbox \"Phone\" [ref=e2]: \"(555) 123-4567\"\n  - textbox \"Name\" [ref=e20]";
+        assert_eq!(
+            ref_line(text, "e2"),
+            Some("textbox \"Phone\" [ref=e2]: \"(555) 123-4567\"")
+        );
+        assert_eq!(ref_line(text, "e20"), Some("textbox \"Name\" [ref=e20]"));
+        assert_eq!(ref_line(text, "e3"), None);
+        assert_eq!(ref_line("- textbox \"Name\" [ref=e20]", "e2"), None);
+    }
+
+    #[test]
+    fn ref_line_ignores_a_ref_tag_inside_page_text() {
+        // A page can name a heading or link anything; quoted text never stands for a ref.
+        let text = "- heading \"Code [ref=e2]: \\\"000 000\\\"\" [level=1]\n- link \"x\" [ref=e1] [url=\"https://a.test/[ref=e2]\"]\n- textbox \"Code\" [ref=e2]: \"440 212\"";
+        assert_eq!(
+            ref_line(text, "e2"),
+            Some("textbox \"Code\" [ref=e2]: \"440 212\"")
+        );
+    }
+
+    #[test]
+    fn a_label_is_part_of_the_control_it_names() {
+        // <label for="email">Email</label><input id="email">: Chromium calls the label
+        // clickable because clicking it clicks the input, which has a ref of its own.
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2", "4"]),
+            ax("2", "LabelText", &["3"]),
+            ax("3", "StaticText", &[]),
+            ax("4", "textbox", &[]),
+        ];
+        nodes[1].backend_dom_node_id = Some(6);
+        nodes[2].name = Some(name("Email"));
+        nodes[3].backend_dom_node_id = Some(7);
+        nodes[3].name = Some(named_by_label("labelfor", 6, "Email"));
+        assert_eq!(
+            render_with_hits(&nodes, &[6]),
+            "- LabelText\n- textbox \"Email\" [ref=e1]"
+        );
+
+        // <label>Wrapped <input></label>
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2"]),
+            ax("2", "LabelText", &["3", "4"]),
+            ax("3", "StaticText", &[]),
+            ax("4", "checkbox", &[]),
+        ];
+        nodes[1].backend_dom_node_id = Some(6);
+        nodes[2].name = Some(name("Wrapped"));
+        nodes[3].backend_dom_node_id = Some(7);
+        nodes[3].name = Some(named_by_label("labelwrapped", 6, "Wrapped"));
+        assert_eq!(
+            render_with_hits(&nodes, &[6]),
+            "- LabelText\n  - checkbox \"Wrapped\" [ref=e1]"
+        );
+    }
+
+    #[test]
+    fn a_label_whose_control_is_not_rendered_keeps_a_ref_named_by_its_text() {
+        // <input type="checkbox" id="remember" hidden><label for="remember">Remember me</label>:
+        // the hidden input is not in the tree, so the label is the only thing to click.
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2"]),
+            ax("2", "LabelText", &["3"]),
+            ax("3", "StaticText", &[]),
+        ];
+        nodes[1].backend_dom_node_id = Some(9);
+        nodes[2].name = Some(name("Remember  me"));
+        assert_eq!(
+            render_with_hits(&nodes, &[9]),
+            "- LabelText \"Remember me\" [ref=e1] [cursor=pointer]"
+        );
+    }
+
+    #[test]
+    fn a_label_of_an_ignored_control_keeps_its_ref() {
+        // aria-hidden on the input takes it out of the tree's controls: no ref of its own.
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2", "4"]),
+            ax("2", "LabelText", &["3"]),
+            ax("3", "StaticText", &[]),
+            ax("4", "checkbox", &[]),
+        ];
+        nodes[1].backend_dom_node_id = Some(6);
+        nodes[2].name = Some(name("Agree"));
+        nodes[3].backend_dom_node_id = Some(7);
+        nodes[3].ignored = Some(true);
+        nodes[3].name = Some(named_by_label("labelfor", 6, "Agree"));
+        assert_eq!(
+            render_with_hits(&nodes, &[6]),
+            "- LabelText \"Agree\" [ref=e1] [cursor=pointer]"
+        );
+    }
+
     #[test]
     fn interactive_mode_keeps_refs_headings_first_line_and_ancestors() {
         let mut nodes = vec![
@@ -979,6 +1207,7 @@ mod tests {
             node.value = Some(AxValue {
                 value_type: "string".to_string(),
                 value: Some(json!(value)),
+                sources: None,
             });
             node
         };
@@ -1012,6 +1241,7 @@ mod tests {
             node.value = Some(AxValue {
                 value_type: "string".to_string(),
                 value: Some(json!(value)),
+                sources: None,
             });
             node
         };

@@ -15,7 +15,7 @@ use crate::{
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, NativeCapabilities, PageId,
-    SessionId,
+    Ref, SessionId,
     snapshot::{AxNode, AxValue, SnapshotDiff},
 };
 use futures_util::future::BoxFuture;
@@ -1352,6 +1352,61 @@ async fn tabs_new_attaches_first_snapshot() {
             .iter()
             .any(|call| call.method == "Accessibility.getFullAXTree")
     );
+}
+
+#[tokio::test]
+async fn fields_readback_shows_each_ref_as_the_snapshot_does() {
+    let (ctx, _connection, page) = harness_ctx().await;
+    let mut response = ToolResponse::new();
+    response.include_fields(page, vec![Ref("e1".into()), Ref("e9".into())]);
+    let result = response
+        .build_for_session(&ctx, Some(PageId(page)))
+        .await
+        .unwrap_or_else(|err| panic!("fields readback should build: {err}"))
+        .into_tool_result();
+
+    let text = result_text(&result);
+    assert!(text.contains("[Page 1 fields]"), "{text}");
+    assert!(text.contains("button \"Save\" [ref=e1]"), "{text}");
+    assert!(text.contains("e9: not on the page now"), "{text}");
+    assert!(text.contains("UNTRUSTED_PAGE_CONTENT"), "{text}");
+    assert_eq!(
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("fields")),
+        Some(&json!([
+            { "ref": "e1", "line": "button \"Save\" [ref=e1]" },
+            { "ref": "e9", "line": null },
+        ]))
+    );
+}
+
+#[tokio::test]
+async fn fields_readback_reads_the_capture_the_diff_just_took() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let captures = |connection: &HarnessConnection| {
+        connection
+            .calls()
+            .iter()
+            .filter(|call| call.method == "Accessibility.getFullAXTree")
+            .count()
+    };
+    let before = captures(&connection);
+    let mut response = ToolResponse::new();
+    response.include_diff(page, false, DiffDetail::Full);
+    response.include_fields(page, vec![Ref("e1".into())]);
+    let result = response
+        .build_for_session(&ctx, Some(PageId(page)))
+        .await
+        .unwrap_or_else(|err| panic!("diff and fields should build: {err}"))
+        .into_tool_result();
+
+    let text = result_text(&result);
+    let diff = text.find("[Page 1 diff]");
+    let fields = text.find("[Page 1 fields]");
+    assert!(diff.is_some() && fields > diff, "{text}");
+    assert_eq!(captures(&connection) - before, 1);
 }
 
 #[tokio::test]

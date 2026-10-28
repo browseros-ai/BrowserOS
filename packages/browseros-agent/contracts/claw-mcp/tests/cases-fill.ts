@@ -1,6 +1,11 @@
 /** Fill is tested through every public MCP surface, with page-observed values
  * and events. These contracts intentionally avoid the implementation's CDP calls.
  *
+ * Fill types a value and leaves the outcome to the page, which may keep, reformat or
+ * reject it. act reads each filled field back as the snapshot shows it, so the caller
+ * judges the result; only a fill that could not type (read-only, covered, focus
+ * redirected) is an error.
+ *
  * `run-legacy` drives the pre-handle call shape. Saved helpers on user machines
  * hold that shape as source and are hot-loaded verbatim, so it has to keep
  * behaving identically; these cases are what says so.
@@ -43,6 +48,16 @@ async function fill(
       ? `await browser.input(${page}).fill(${JSON.stringify(ref)}, ${JSON.stringify(value)})`
       : `await browser.page(${page}).fill(${JSON.stringify(ref)}, ${JSON.stringify(value)})`
   return ctx.mcp.callTool('run', { code })
+}
+
+/** The line act's fields readback shows for `ref`. */
+function shownLine(text: string, ref: string): string | undefined {
+  const start = text.indexOf(' fields]')
+  if (start < 0) throw new Error(`No fields readback in: ${text}`)
+  return text
+    .slice(start)
+    .split('\n')
+    .find((line) => line.includes(`[ref=${ref}]`) || line.startsWith(`${ref}:`))
 }
 
 async function assertPage(
@@ -125,11 +140,54 @@ export const fillCases: ContractCase[] = [
       },
     },
     ...[
+      ['Rejecting field', 'reject'],
+      ['Reverting field', 'revert'],
+    ].map(([label, id]) => ({
+      name: `${surface}: fill leaves what a ${label.toLowerCase()} keeps to the page`,
+      async run(ctx: CaseContext) {
+        const page = await ctx.openPage(ctx.fixture('/fill.html'))
+        const ref = await fieldRef(ctx, page, label)
+        const text = expectOk(
+          await fill(ctx, page, surface, ref, 'replacement'),
+        )
+        if (
+          surface === 'act' &&
+          !shownLine(text, ref)?.endsWith(': "original"')
+        ) {
+          throw new Error(`The readback hid what the field kept: ${text}`)
+        }
+        await assertPage(
+          ctx,
+          page,
+          `document.getElementById("${id}").value === "original" && document.getElementById("other").value === "untouched"`,
+        )
+      },
+    })),
+    {
+      name: `${surface}: fill leaves a value the page reformats to the page`,
+      async run(ctx: CaseContext) {
+        const page = await ctx.openPage(ctx.fixture('/fill.html'))
+        const ref = await fieldRef(ctx, page, 'Phone field')
+        const text = expectOk(await fill(ctx, page, surface, ref, '5551234567'))
+        if (
+          surface === 'act' &&
+          !shownLine(text, ref)?.endsWith(': "(555) 123-4567"')
+        ) {
+          throw new Error(
+            `The readback did not show the formatted value: ${text}`,
+          )
+        }
+        await assertPage(
+          ctx,
+          page,
+          'document.getElementById("phone").value === "(555) 123-4567"',
+        )
+      },
+    },
+    ...[
       ['Read only', 'readonly'],
       ['Disabled field', 'disabled'],
       ['Covered field', 'covered'],
-      ['Rejecting field', 'reject'],
-      ['Reverting field', 'revert'],
       ['Focus redirect', 'redirect'],
     ].map(([label, id]) => ({
       name: `${surface}: fill rejects ${label.toLowerCase()} without false success`,
@@ -171,18 +229,17 @@ export const fillCases: ContractCase[] = [
       },
     },
     {
-      name: `${surface}: fill cannot mistake a detached field for empty`,
+      name: `${surface}: fill reports a field the page removed as gone, not empty`,
       async run(ctx: CaseContext) {
         const page = await ctx.openPage(ctx.fixture('/fill.html'))
-        expectError(
-          await fill(
-            ctx,
-            page,
-            surface,
-            await fieldRef(ctx, page, 'Detached field'),
-            '',
-          ),
-        )
+        const ref = await fieldRef(ctx, page, 'Detached field')
+        const text = expectOk(await fill(ctx, page, surface, ref, ''))
+        if (
+          surface === 'act' &&
+          shownLine(text, ref) !== `${ref}: not on the page now`
+        ) {
+          throw new Error(`The readback did not say the field is gone: ${text}`)
+        }
         await assertPage(ctx, page, '!document.getElementById("detach")')
       },
     },
@@ -260,6 +317,84 @@ export const fillCases: ContractCase[] = [
       },
     },
   ]),
+  {
+    name: 'act: a multi-field fill carries on past a field the page reformats',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/fill.html'))
+      const phone = await fieldRef(ctx, page, 'Phone field')
+      const text = await fieldRef(ctx, page, 'Text field')
+      const result = expectOk(
+        await ctx.mcp.callTool('act', {
+          page,
+          kind: 'fill',
+          fields: [
+            { ref: phone, value: '5551234567' },
+            { ref: text, value: 'Ada' },
+          ],
+        }),
+      )
+      if (
+        !shownLine(result, phone)?.endsWith(': "(555) 123-4567"') ||
+        !shownLine(result, text)?.endsWith(': "Ada"')
+      ) {
+        throw new Error(`The readback missed a field: ${result}`)
+      }
+      await assertPage(
+        ctx,
+        page,
+        'document.getElementById("text").value === "Ada"',
+      )
+    },
+  },
+  {
+    name: 'act: the fields readback stays when the diff is off',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/fill.html'))
+      const ref = await fieldRef(ctx, page, 'Verification code')
+      const result = expectOk(
+        await ctx.mcp.callTool('act', {
+          page,
+          kind: 'fill',
+          ref,
+          value: '440212',
+          diff: 'none',
+        }),
+      )
+      if (
+        result.includes(' diff]') ||
+        !shownLine(result, ref)?.endsWith(': "440 212"')
+      ) {
+        throw new Error(`Expected only the fields readback: ${result}`)
+      }
+    },
+  },
+  {
+    name: 'act: a fill that stops partway still shows every field',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/fill.html'))
+      const text = await fieldRef(ctx, page, 'Text field')
+      const readonly = await fieldRef(ctx, page, 'Read only')
+      const other = await fieldRef(ctx, page, 'Other field')
+      const result = expectError(
+        await ctx.mcp.callTool('act', {
+          page,
+          kind: 'fill',
+          fields: [
+            { ref: text, value: 'typed first' },
+            { ref: readonly, value: 'refused' },
+            { ref: other, value: 'never reached' },
+          ],
+        }),
+      )
+      if (
+        !shownLine(result, text)?.endsWith(': "typed first"') ||
+        !shownLine(result, readonly)?.endsWith(': "original"') ||
+        !shownLine(result, other)?.endsWith(': "untouched"')
+      ) {
+        throw new Error(`The error hid what the fields hold: ${result}`)
+      }
+    },
+  },
   {
     name: 'act: fill clear=false appends',
     async run(ctx) {
