@@ -103,6 +103,34 @@ describe('ClawApiClient', () => {
     )
   })
 
+  it('lists every audit agent from the exact route', async () => {
+    const agents = {
+      items: [
+        {
+          slug: 'claude-code',
+          label: 'Claude Code',
+          taskCount: 42,
+          lastStartedAt: 1_767_225_600_000,
+        },
+      ],
+    }
+    const requests: Request[] = []
+    const client = new ClawApiClient(baseUrl, {
+      fetch: async (input, init) => {
+        const request =
+          input instanceof Request ? input : new Request(input, init)
+        requests.push(request)
+        return Response.json(agents)
+      },
+    })
+
+    await expect(client.listAuditAgents()).resolves.toEqual(agents)
+    expect(requests[0]?.method).toBe('GET')
+    expect(new URL(requests[0]?.url ?? '').pathname).toBe(
+      '/api/v1/audit/agents',
+    )
+  })
+
   it('preserves standard API errors for cockpit stats', async () => {
     const client = new ClawApiClient(baseUrl, {
       fetch: async () =>

@@ -1979,6 +1979,33 @@ async fn audit_storage_reports_usage_and_default_retention() -> anyhow::Result<(
 }
 
 #[tokio::test]
+async fn audit_agents_list_every_agent_with_a_task() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    seed_dispatch(&app, "session-1").await?;
+    seed_dispatch(&app, "session-2").await?;
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/audit/agents",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let body = json_body(&bytes)?;
+    let items = body["items"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("agents not array"))?;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["slug"], "codex");
+    assert_eq!(items[0]["label"], "Codex");
+    assert_eq!(items[0]["taskCount"], 2);
+    assert!(items[0]["lastStartedAt"].as_i64().is_some_and(|at| at > 0));
+    Ok(())
+}
+
+#[tokio::test]
 async fn audit_retention_round_trips_and_validates() -> anyhow::Result<()> {
     let app = test_app().await?;
 

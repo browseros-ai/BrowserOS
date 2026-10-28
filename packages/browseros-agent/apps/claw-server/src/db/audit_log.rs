@@ -230,6 +230,14 @@ impl From<agent_session_ends::Model> for SessionEndEvent {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, FromQueryResult)]
+pub struct AuditAgentSummary {
+    pub slug: String,
+    pub label: String,
+    pub task_count: i64,
+    pub last_started_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListTasksResult {
@@ -653,6 +661,30 @@ impl AuditLog {
             None
         };
         Ok(ListTasksResult { tasks, next_cursor })
+    }
+
+    /// Every agent with a listable task, most tasks first. Covers the whole history rather than a
+    /// page, so History can offer all of them as filters.
+    pub async fn list_agents(&self) -> AppResult<Vec<AuditAgentSummary>> {
+        // SQLite fills a bare column in a MAX() aggregate from the row holding the maximum, so
+        // `label` is the one from the agent's most recent task.
+        let statement = Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            r"
+            SELECT slug,
+                   agent_label AS label,
+                   COUNT(*) AS task_count,
+                   MAX(started_at) AS last_started_at
+            FROM tasks
+            WHERE dispatch_count > 0
+            GROUP BY slug
+            ORDER BY task_count DESC, last_started_at DESC
+            ",
+            [],
+        );
+        Ok(AuditAgentSummary::find_by_statement(statement)
+            .all(self.db.connection())
+            .await?)
     }
 
     pub async fn session_lifecycle(&self, session_id: &str) -> AppResult<SessionLifecycle> {
@@ -1870,6 +1902,51 @@ mod tests {
             .await?;
         assert_eq!(failed.tasks.len(), 1);
         assert_eq!(failed.tasks[0].session_id, "b1");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn agents_cover_the_whole_history_with_their_latest_label() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        for (session, slug, label, at) in [
+            ("c1", "claude-code", "Claude", 1_000),
+            ("x1", "codex", "Codex", 2_000),
+            ("c2", "claude-code", "Claude Code", 3_000),
+        ] {
+            audit
+                .record_tool_dispatch(RecordToolDispatchInput {
+                    slug: slug.to_string(),
+                    agent_label: label.to_string(),
+                    created_at: Some(at),
+                    ..dispatch(session, "https://example.com", false)
+                })
+                .await?;
+        }
+        // A session that never dispatched has no task in History, so its agent is left out.
+        audit
+            .record_session_start("z1", "agent-z", "zed", "Zed", "zed", "1.0")
+            .await?;
+
+        let agents = audit.list_agents().await?;
+        let rows = agents
+            .iter()
+            .map(|agent| {
+                (
+                    agent.slug.as_str(),
+                    agent.label.as_str(),
+                    agent.task_count,
+                    agent.last_started_at,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            [
+                ("claude-code", "Claude Code", 2, 3_000),
+                ("codex", "Codex", 1, 2_000),
+            ]
+        );
         Ok(())
     }
 

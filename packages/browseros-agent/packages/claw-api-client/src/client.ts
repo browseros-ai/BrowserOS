@@ -1,6 +1,7 @@
 import type {
   AgentSettings,
   AppendRecordingEventsResponse,
+  AuditAgentList,
   AuditCleanupResult,
   AuditRetention,
   AuditStorageState,
@@ -189,6 +190,10 @@ export class ClawApiClient {
 
   async runAuditCleanup(): Promise<AuditCleanupResult> {
     return this.unwrap(await this.client.POST('/api/v1/audit/cleanup'))
+  }
+
+  async listAuditAgents(): Promise<AuditAgentList> {
+    return this.unwrap(await this.client.GET('/api/v1/audit/agents'))
   }
 
   async updateTelemetry(

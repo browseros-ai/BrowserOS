@@ -57,6 +57,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/v1/audit/storage", get(audit::storage))
         .route("/api/v1/audit/retention", put(audit::set_retention))
         .route("/api/v1/audit/cleanup", post(audit::cleanup))
+        .route("/api/v1/audit/agents", get(audit::agents))
         .route(
             "/api/v1/settings/telemetry",
             get(settings::telemetry).put(settings::update_telemetry),
