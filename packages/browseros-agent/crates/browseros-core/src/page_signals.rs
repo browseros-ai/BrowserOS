@@ -22,10 +22,10 @@ pub struct DocumentMark(u64);
 pub enum DocumentSince {
     /// No cross-document navigation of the main frame started after the mark.
     Unchanged,
-    /// One started and its document has not reached DOMContentLoaded.
+    /// One started and its document has not yet committed and reached DOMContentLoaded.
     Loading,
-    /// The latest one reached DOMContentLoaded, or stopped loading without a document, as a
-    /// download or a 204 does.
+    /// The latest one committed and reached DOMContentLoaded, or stopped loading without a
+    /// document, as a download or a 204 does.
     Arrived,
 }
 
@@ -36,6 +36,8 @@ pub enum DocumentSince {
 #[derive(Debug, Clone, Copy, Default)]
 struct FrameDocument {
     started: Option<u64>,
+    /// `Page.frameNavigated`: a new document replaced the old one, before it starts parsing.
+    committed: Option<u64>,
     stopped: Option<u64>,
 }
 
@@ -336,8 +338,16 @@ impl PageSignals {
         let Some(started) = main.started.filter(|started| *started >= mark.0) else {
             return DocumentSince::Unchanged;
         };
-        let after_start = |sequence: Option<u64>| sequence.is_some_and(|at| at > started);
-        if after_start(page.content_loaded) || after_start(main.stopped) {
+        let after = |sequence: Option<u64>, floor: u64| sequence.is_some_and(|at| at > floor);
+        // The page being left keeps parsing until the new document commits, so a click made
+        // while it is still loading can see the old page's own DOMContentLoaded after the
+        // start. Only one after the commit belongs to the new document. Stopping needs no
+        // commit: the browser counts the pending navigation as loading until it ends.
+        let content_arrived = main
+            .committed
+            .filter(|committed| *committed > started)
+            .is_some_and(|committed| after(page.content_loaded, committed));
+        if content_arrived || after(main.stopped, started) {
             DocumentSince::Arrived
         } else {
             DocumentSince::Loading
@@ -412,6 +422,14 @@ impl PageSignals {
                         frame_document(page, &event).started = Some(sequence);
                     });
                 }
+            }
+            // Fires only for a new document (same-document changes report
+            // `navigatedWithinDocument`), including a back-forward cache restore, which then
+            // arrives through `frameStoppedLoading` since it never fires DOMContentLoaded again.
+            "Page.frameNavigated" => {
+                self.record_document_event(&event, |page, sequence| {
+                    frame_document(page, &event).committed = Some(sequence);
+                });
             }
             "Page.domContentEventFired" => {
                 self.record_document_event(&event, |page, sequence| {
@@ -553,9 +571,11 @@ impl PageSignals {
 /// The named frame's entry, created on its first event. An event without a frame id is
 /// malformed and lands under the empty id, which no target id ever matches.
 fn frame_document<'a>(page: &'a mut PageSignalState, event: &CdpEvent) -> &'a mut FrameDocument {
+    // `Page.frameNavigated` carries the whole frame; the other navigation events, its id.
     let frame = event
         .params
         .get("frameId")
+        .or_else(|| event.params.pointer("/frame/id"))
         .and_then(Value::as_str)
         .unwrap_or_default();
     page.frame_documents.entry(frame.to_string()).or_default()
@@ -836,6 +856,13 @@ mod tests {
         })
     }
 
+    fn committed(frame: &str) -> Value {
+        json!({
+            "frame": { "id": frame, "loaderId": "loader-2", "url": "https://example.test/next" },
+            "type": "Navigation"
+        })
+    }
+
     #[tokio::test]
     async fn a_main_frame_navigation_is_loading_until_its_content_loads() {
         let (signals, connection, page_id) = harness();
@@ -853,9 +880,47 @@ mod tests {
         eventually(|| signals.document_since(&page_id, "main", mark) == DocumentSince::Loading)
             .await;
 
+        connection.emit("Page.frameNavigated", committed("main"), Some("session-7"));
         connection.emit(
             "Page.domContentEventFired",
             json!({ "timestamp": 1.0 }),
+            Some("session-7"),
+        );
+        eventually(|| signals.document_since(&page_id, "main", mark) == DocumentSince::Arrived)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn the_old_pages_late_content_loaded_does_not_count_as_the_new_document() {
+        let (signals, connection, page_id) = harness();
+        let mark = signals.document_mark(&page_id);
+        connection.emit(
+            "Page.frameStartedNavigating",
+            navigation("main", "differentDocument"),
+            Some("session-7"),
+        );
+        // The page being left was still loading and finishes parsing before the new one commits.
+        connection.emit(
+            "Page.domContentEventFired",
+            json!({ "timestamp": 1.0 }),
+            Some("session-7"),
+        );
+        eventually(|| signals.document_mark(&page_id).0 == mark.0 + 2).await;
+        assert_eq!(
+            signals.document_since(&page_id, "main", mark),
+            DocumentSince::Loading
+        );
+
+        connection.emit("Page.frameNavigated", committed("main"), Some("session-7"));
+        eventually(|| signals.document_mark(&page_id).0 == mark.0 + 3).await;
+        assert_eq!(
+            signals.document_since(&page_id, "main", mark),
+            DocumentSince::Loading
+        );
+
+        connection.emit(
+            "Page.domContentEventFired",
+            json!({ "timestamp": 2.0 }),
             Some("session-7"),
         );
         eventually(|| signals.document_since(&page_id, "main", mark) == DocumentSince::Arrived)

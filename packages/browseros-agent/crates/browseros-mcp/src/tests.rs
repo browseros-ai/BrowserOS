@@ -1644,6 +1644,13 @@ fn started_navigating(frame: &str, navigation_type: &str) -> Value {
     })
 }
 
+fn committed(frame: &str) -> Value {
+    json!({
+        "frame": { "id": frame, "loaderId": "loader-2", "url": "https://example.test/next" },
+        "type": "Navigation"
+    })
+}
+
 /// Emits each event on the harness page's session once its offset from now has passed.
 fn emit_later(connection: &Arc<HarnessConnection>, events: Vec<(u64, &'static str, Value)>) {
     let connection = connection.clone();
@@ -1710,10 +1717,14 @@ async fn settle_waits_for_a_new_document_before_reading_quiet() {
                 "Page.frameStartedNavigating",
                 started_navigating("target-1", "differentDocument"),
             ),
+            // The page being left was still loading; its own DOMContentLoaded lands before the
+            // new document commits and must not end the wait.
+            (80, "Page.domContentEventFired", json!({ "timestamp": 1.0 })),
+            (300, "Page.frameNavigated", committed("target-1")),
             (
                 350,
                 "Page.domContentEventFired",
-                json!({ "timestamp": 1.0 }),
+                json!({ "timestamp": 2.0 }),
             ),
         ],
     );
@@ -1724,7 +1735,7 @@ async fn settle_waits_for_a_new_document_before_reading_quiet() {
             navigation_observed: true
         }
     );
-    // DOMContentLoaded at 350ms, then one quiet interval on the new document.
+    // The new document's DOMContentLoaded at 350ms, then one quiet interval on it.
     assert!(elapsed >= Duration::from_millis(400), "took {elapsed:?}");
     assert!(elapsed < Duration::from_millis(1_000), "took {elapsed:?}");
 }
@@ -1861,6 +1872,7 @@ async fn navigate_reload_waits_for_the_new_document() {
                 "Page.frameStartedNavigating",
                 started_navigating("target-1", "reload"),
             ),
+            (350, "Page.frameNavigated", committed("target-1")),
             (
                 400,
                 "Page.domContentEventFired",
