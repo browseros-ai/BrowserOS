@@ -39,6 +39,8 @@ function task(slug: string, label: string): SessionSummary {
   }
 }
 
+let agentsFail = false
+
 // The server filters by slug, so a filtered page only holds that agent's tasks.
 const sessionsBySlug: Record<string, SessionSummary> = {
   'ultrafast-bench': task('ultrafast-bench', 'ultrafast-bench'),
@@ -49,7 +51,10 @@ const sessionsBySlug: Record<string, SessionSummary> = {
 mock.module('@/modules/api/client', () => ({
   ...api,
   apiClient: async () => ({
-    listAuditAgents: async () => agents,
+    listAuditAgents: async () => {
+      if (agentsFail) throw new Error('not found')
+      return agents
+    },
     listSessions: async ({
       slug,
     }: {
@@ -85,6 +90,7 @@ let root: Root
 let container: HTMLElement
 
 beforeEach(async () => {
+  agentsFail = false
   const dom = parseHTML(
     '<!doctype html><html><body><div id="root"></div></body></html>',
   )
@@ -153,6 +159,15 @@ describe('History agent filter', () => {
 
   it('keeps the other agents listed after picking one', async () => {
     expect(await renderHistory('/audit?agent=claude')).toEqual([
+      'ultrafast-bench',
+      'Claude',
+      'clitest',
+    ])
+  })
+
+  it('falls back to the agents on screen when the full list cannot load', async () => {
+    agentsFail = true
+    expect(await renderHistory('/audit')).toEqual([
       'ultrafast-bench',
       'Claude',
       'clitest',

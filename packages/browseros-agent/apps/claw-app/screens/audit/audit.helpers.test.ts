@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import type { TaskStatus, TaskSummary } from '@/modules/api/audit.hooks'
 import {
   agentOptionsFor,
+  agentsInTasks,
   groupByDay,
   taskWhen,
   tookLabel,
@@ -88,6 +89,21 @@ describe('agentOptionsFor', () => {
       'cursor',
     )
     expect(options.map((option) => option.slug)).toEqual(['codex', 'cursor'])
+  })
+})
+
+describe('agentsInTasks', () => {
+  it('counts each agent once, most tasks first, named by its latest task', () => {
+    expect(
+      agentsInTasks([
+        task('done', { slug: 'cursor', label: 'Cursor', startedAt: 5 }),
+        task('done', { slug: 'codex', label: 'codex', startedAt: 1 }),
+        task('done', { slug: 'codex', label: 'Codex', startedAt: 3 }),
+      ]),
+    ).toEqual([
+      { slug: 'codex', label: 'Codex', taskCount: 2, lastStartedAt: 3 },
+      { slug: 'cursor', label: 'Cursor', taskCount: 1, lastStartedAt: 5 },
+    ])
   })
 })
 

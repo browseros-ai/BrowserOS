@@ -20,6 +20,37 @@ export interface AgentOption {
 }
 
 /**
+ * The agents in the loaded tasks, shaped like the server's list: most tasks
+ * first, named by each agent's latest task. The picker falls back to these
+ * when the full list cannot be fetched.
+ */
+export function agentsInTasks(tasks: readonly TaskSummary[]): AuditAgent[] {
+  const seen = new Map<string, AuditAgent>()
+  for (const task of tasks) {
+    const known = seen.get(task.slug)
+    if (!known) {
+      seen.set(task.slug, {
+        slug: task.slug,
+        label: task.label,
+        taskCount: 1,
+        lastStartedAt: task.startedAt,
+      })
+      continue
+    }
+    known.taskCount += 1
+    if (task.startedAt > known.lastStartedAt) {
+      known.lastStartedAt = task.startedAt
+      known.label = task.label
+    }
+  }
+  return [...seen.values()].sort(
+    (left, right) =>
+      right.taskCount - left.taskCount ||
+      right.lastStartedAt - left.lastStartedAt,
+  )
+}
+
+/**
  * Every agent in History, in the server's order (most tasks first), named the
  * way the task rows name them. A selected agent the server does not list is
  * kept so the picker can still show and clear it.
