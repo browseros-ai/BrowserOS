@@ -15,6 +15,7 @@ Standard library only; the transport is smoke.py's client.
 
 import argparse
 import base64
+import fcntl
 import json
 import secrets
 import sys
@@ -34,8 +35,9 @@ class Session:
 
     def __init__(self, url: str, state: Path):
         self.file = state / "mcp-session"
+        self.lock = state / "mcp-session.lock"
         self.client = McpClient(url)
-        self.client.session_id = self.file.read_text().strip() if self.file.exists() else None
+        self.client.session_id = self._stored()
         # rmcp routes each reply by JSON-RPC id within the session, so two
         # overlapping invocations both counting from 1 would swap or lose
         # replies. A random starting id keeps parallel calls apart without a
@@ -44,7 +46,7 @@ class Session:
 
     def request(self, method: str, params: dict) -> dict:
         if not self.client.session_id:
-            self._connect()
+            self._connect(stale=None)
         try:
             return self.client.call(method, params)
         except urllib.error.HTTPError as error:
@@ -52,7 +54,7 @@ class Session:
             # only failure retried, so real request errors still surface.
             if error.code != 404:
                 raise
-            self._connect()
+            self._connect(stale=self.client.session_id)
             return self.client.call(method, params)
 
     def tools(self) -> list[dict]:
@@ -64,14 +66,27 @@ class Session:
                 return found
             params = {"cursor": page["nextCursor"]}
 
-    def _connect(self) -> None:
-        self.client.session_id = None
-        self.client.call(
-            "initialize",
-            {"protocolVersion": PROTOCOL, "capabilities": {}, "clientInfo": {"name": "neo-dev", "version": "1"}},
-        )
-        self.client.notify("notifications/initialized")
-        self.file.write_text(self.client.session_id or "")
+    def _stored(self) -> str | None:
+        return (self.file.read_text().strip() or None) if self.file.exists() else None
+
+    def _connect(self, stale: str | None) -> None:
+        """Adopts or creates the shared session. Parallel first calls would
+        otherwise each create one and split page ownership between them, so
+        creation is serialised and a session another call just stored wins.
+        Only this step is locked; tool calls themselves still run in parallel."""
+        with open(self.lock, "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            stored = self._stored()
+            if stored and stored != stale:
+                self.client.session_id = stored
+                return
+            self.client.session_id = None
+            self.client.call(
+                "initialize",
+                {"protocolVersion": PROTOCOL, "capabilities": {}, "clientInfo": {"name": "neo-dev", "version": "1"}},
+            )
+            self.client.notify("notifications/initialized")
+            self.file.write_text(self.client.session_id or "")
 
 
 def list_tools(session: Session, name: str | None) -> None:

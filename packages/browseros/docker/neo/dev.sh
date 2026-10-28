@@ -20,6 +20,11 @@
 #
 #   Viewer (noVNC): http://localhost:16080      MCP: http://localhost:19010/mcp
 #
+# Setup, once: Docker, plus what the release workflow's server job installs to
+# cross-build claw-server for Linux:
+#   brew install jq zig && cargo install --locked cargo-zigbuild
+#   rustup target add aarch64-unknown-linux-gnu    # x86_64-unknown-linux-gnu on Intel
+#
 # Testing a change (for agents):
 #   1. `./dev.sh up`, then give the owner the viewer URL; they watch the agent there.
 #   2. Drive Neo only through its own MCP tools via `./dev.sh call`, never Playwright,
@@ -65,6 +70,7 @@ export NEO_DATA=$NEO_DEV_HOME/data
 
 compose() { docker compose -p neo-dev -f "$HERE/compose.yaml" "$@"; }
 die() { echo "dev.sh: $*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null || die "needs $1; see Setup in this script's header"; }
 
 # Image tags are <browser>-<commit>; the Dockerfile wants just <browser>.
 browser_version() {
@@ -101,6 +107,7 @@ up() {
   else
     # The daemon's arch, not the host's: it decides which binary the image needs.
     local arch browser
+    need jq; need zig; need cargo-zigbuild
     arch=$(docker version --format '{{.Server.Arch}}')
     browser=$(browser_version "$arch")
     build_server "$arch"
