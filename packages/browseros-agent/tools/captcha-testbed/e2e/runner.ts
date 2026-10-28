@@ -150,7 +150,11 @@ export async function runCaptchaE2E(
       }
       let page: number | undefined
       const evaluate = async (code: string) => {
-        const result = await mcp.callTool('evaluate', { page, code }, timeout)
+        const result = await mcp.callTool(
+          'evaluate_in_page',
+          { page, code },
+          timeout,
+        )
         if (result.isError) throw new Error('page probe failed')
         return payload(textOf(result))
       }

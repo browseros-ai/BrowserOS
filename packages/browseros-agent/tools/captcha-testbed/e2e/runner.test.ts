@@ -372,7 +372,7 @@ for (const failure of ['submit', 'timeout']) {
         if (request.method === 'POST' && failure === 'submit') {
           const rpc = await request.clone().json()
           if (
-            rpc.params?.name === 'evaluate' &&
+            rpc.params?.name === 'evaluate_in_page' &&
             String(rpc.params.arguments?.code).startsWith(probes.submit)
           )
             return Response.json({
@@ -548,7 +548,7 @@ test('tests that submission still runs after a widget timeout and every opened p
     expect(
       stub.calls.some(
         (call) =>
-          call.name === 'evaluate' &&
+          call.name === 'evaluate_in_page' &&
           String(call.args.code).startsWith(probes.submit),
       ),
     ).toBe(true)
