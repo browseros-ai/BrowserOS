@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import type { TaskStatus, TaskSummary } from '@/modules/api/audit.hooks'
 import {
   agentOptionsFor,
+  agentsInTasks,
   groupByDay,
   taskWhen,
   tookLabel,
@@ -64,19 +65,44 @@ describe('groupByDay', () => {
 })
 
 describe('agentOptionsFor', () => {
-  it('lists each agent once, most active first, and keeps a selected one', () => {
+  it('lists every agent in the server order and keeps a selected one it lacks', () => {
     const options = agentOptionsFor(
       [
-        task('done', { slug: 'cursor', label: 'Cursor' }),
-        task('done', { slug: 'codex', label: 'codex' }),
-        task('done', { slug: 'codex', label: 'Codex' }),
+        { slug: 'codex', label: 'Codex', taskCount: 9, lastStartedAt: 2 },
+        { slug: 'cursor', label: 'Cursor', taskCount: 1, lastStartedAt: 1 },
       ],
       'claude-code',
     )
-    expect(options.map((option) => option.slug)).toEqual([
-      'codex',
+    expect(options).toEqual([
+      { slug: 'codex', name: 'Codex' },
+      { slug: 'cursor', name: 'Cursor' },
+      { slug: 'claude-code', name: 'Claude Code' },
+    ])
+  })
+
+  it('keeps every agent listed while one of them is selected', () => {
+    const options = agentOptionsFor(
+      [
+        { slug: 'codex', label: 'Codex', taskCount: 9, lastStartedAt: 2 },
+        { slug: 'cursor', label: 'Cursor', taskCount: 1, lastStartedAt: 1 },
+      ],
       'cursor',
-      'claude-code',
+    )
+    expect(options.map((option) => option.slug)).toEqual(['codex', 'cursor'])
+  })
+})
+
+describe('agentsInTasks', () => {
+  it('counts each agent once, most tasks first, named by its latest task', () => {
+    expect(
+      agentsInTasks([
+        task('done', { slug: 'cursor', label: 'Cursor', startedAt: 5 }),
+        task('done', { slug: 'codex', label: 'codex', startedAt: 1 }),
+        task('done', { slug: 'codex', label: 'Codex', startedAt: 3 }),
+      ]),
+    ).toEqual([
+      { slug: 'codex', label: 'Codex', taskCount: 2, lastStartedAt: 3 },
+      { slug: 'cursor', label: 'Cursor', taskCount: 1, lastStartedAt: 5 },
     ])
   })
 })

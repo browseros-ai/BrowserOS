@@ -6,6 +6,7 @@
  * Session audit surface for the cockpit and audit screens.
  *
  * useSessions        paginated session history (homepage + audit screen)
+ * useAuditAgents     every agent in the history, for the agent filter
  * useLiveSessions    complete connected-session snapshot for Running now
  * useLiveSessionState one live session's activity, read from that snapshot
  * useSessionDetail   one session's summary + full dispatch list;
@@ -16,6 +17,7 @@
  */
 
 import {
+  type AuditAgentList,
   type AuditCleanupResult,
   type AuditRetention,
   type AuditStorageState,
@@ -73,6 +75,12 @@ export const useSessions = createInfiniteQuery<
   // Keep the prior pages visible while a new filter set loads so the
   // adjacent filter controls remain mounted and retain keyboard focus.
   placeholderData: (previous) => previous,
+})
+
+/** Every agent in History, for the agent filter; not limited to a loaded page. */
+export const useAuditAgents = createQuery<AuditAgentList>({
+  queryKey: ['api', 'audit', 'agents'],
+  fetcher: async () => (await apiClient()).listAuditAgents(),
 })
 
 // Polling is opt-in at the call site (see cockpit.data.ts), never a factory

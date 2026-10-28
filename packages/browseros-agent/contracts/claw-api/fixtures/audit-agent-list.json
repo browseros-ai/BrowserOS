@@ -1,0 +1,16 @@
+{
+  "items": [
+    {
+      "slug": "claude-code",
+      "label": "Claude Code",
+      "taskCount": 42,
+      "lastStartedAt": 1767225600000
+    },
+    {
+      "slug": "codex",
+      "label": "Codex",
+      "taskCount": 3,
+      "lastStartedAt": 1767139200000
+    }
+  ]
+}

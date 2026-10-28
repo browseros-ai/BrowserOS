@@ -45,3 +45,17 @@ cleanup:
               $ref: ../schemas/audit.yaml#/AuditCleanupResult
       '500':
         $ref: ../responses.yaml#/InternalError
+agents:
+  get:
+    operationId: listAuditAgents
+    summary: Every agent that has a task in the audit history.
+    description: One entry per agent slug, most tasks first. Covers the whole history, not one page, so a client can offer every agent as a filter.
+    responses:
+      '200':
+        description: The agents that ran at least one task.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/audit.yaml#/AuditAgentList
+      '500':
+        $ref: ../responses.yaml#/InternalError

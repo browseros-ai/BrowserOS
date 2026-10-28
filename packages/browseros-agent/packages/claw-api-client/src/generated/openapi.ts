@@ -489,6 +489,26 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/audit/agents': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * Every agent that has a task in the audit history.
+     * @description One entry per agent slug, most tasks first. Covers the whole history, not one page, so a client can offer every agent as a filter.
+     */
+    get: operations['listAuditAgents']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/skills': {
     parameters: {
       query?: never
@@ -1055,6 +1075,23 @@ export interface components {
        */
       bytesReclaimed: number
       usage: components['schemas']['AuditStorageUsage']
+    }
+    AuditAgent: {
+      /** @description The agent's slug, the value the session list's `slug` filter takes. */
+      slug: string
+      /** @description The display label from the agent's most recent task. */
+      label: string
+      /** Format: int64 */
+      taskCount: number
+      /**
+       * Format: int64
+       * @description Start of the agent's most recent task, in epoch milliseconds.
+       */
+      lastStartedAt: number
+    }
+    AuditAgentList: {
+      /** @description Ordered by task count, then by the most recent task. */
+      items: components['schemas']['AuditAgent'][]
     }
     /**
      * @description How the skill came to exist. `agent` authored via the MCP tool, `manual` created or edited by the user, `directory` installed from the catalog.
@@ -2140,6 +2177,27 @@ export interface operations {
         }
         content: {
           'application/json': components['schemas']['AuditCleanupResult']
+        }
+      }
+      500: components['responses']['InternalError']
+    }
+  }
+  listAuditAgents: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The agents that ran at least one task. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['AuditAgentList']
         }
       }
       500: components['responses']['InternalError']

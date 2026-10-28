@@ -18,8 +18,8 @@ use axum::{
     http::StatusCode,
 };
 use claw_api::models::{
-    AuditCleanupResult, AuditRetention as ApiRetention, AuditRetentionMode, AuditStorageState,
-    AuditStorageUsage, SetAuditRetentionRequest,
+    AuditAgent, AuditAgentList, AuditCleanupResult, AuditRetention as ApiRetention,
+    AuditRetentionMode, AuditStorageState, AuditStorageUsage, SetAuditRetentionRequest,
 };
 use std::{collections::HashSet, path::Path, time::UNIX_EPOCH};
 
@@ -40,6 +40,31 @@ pub(super) async fn storage(
         .map_err(|source| internal(&request_id, source))?;
     let retention = to_api_retention(state.audit_settings.get().await);
     Ok(Json(AuditStorageState::new(usage, retention)))
+}
+
+/// GET /api/v1/audit/agents
+pub(super) async fn agents(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+) -> Result<Json<AuditAgentList>, CanonicalError> {
+    let agents = state
+        .audit_log
+        .list_agents()
+        .await
+        .map_err(|source| internal(&request_id, source))?;
+    Ok(Json(AuditAgentList::new(
+        agents
+            .into_iter()
+            .map(|agent| {
+                AuditAgent::new(
+                    agent.slug,
+                    agent.label,
+                    agent.task_count,
+                    agent.last_started_at,
+                )
+            })
+            .collect(),
+    )))
 }
 
 /// PUT /api/v1/audit/retention

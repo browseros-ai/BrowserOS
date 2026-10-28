@@ -9,6 +9,7 @@ import type { ConnectionState } from '@/modules/api/connections.hooks'
 import { ClaudeDesktopCard } from './ClaudeDesktopCard'
 import { ConnectionRow } from './ConnectionRow'
 import { ManualSetupCard } from './ManualSetupCard'
+import { McpAddressCard } from './McpAddressCard'
 import { type ConnectedAgentsData, useConnectedAgentsData } from './mcp.data'
 
 /** Which AI agents can use neo, and the one step to connect each. */
@@ -21,6 +22,8 @@ export function Mcp() {
         title="Connected agents"
         lede="These AI agents can use neo to browse for you. Connect one, then restart it once so it can see neo."
       />
+
+      <McpAddressCard endpointUrl={data.endpointUrl} />
 
       <RowsCard>
         <ClaudeDesktopCard />

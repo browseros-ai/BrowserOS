@@ -3,7 +3,7 @@
 
 use axum::{http::StatusCode, response::IntoResponse};
 use claw_api::models::{
-    AgentSettings, ApiError, AppendRecordingEventsResponse, CancelSessionResponse,
+    AgentSettings, ApiError, AppendRecordingEventsResponse, AuditAgentList, CancelSessionResponse,
     ClaudeDesktopExtension, ClaudeDesktopInstallResult, Connection, ConnectionList, HealthResponse,
     RecordingMetadata, SessionDetail, SessionList, ShutdownResponse, SystemInfo, TelemetryState,
 };
@@ -28,6 +28,7 @@ fn generated_dtos_deserialize_shared_fixtures() -> anyhow::Result<()> {
     let _: SessionList = fixture("session-list.json")?;
     let _: SessionDetail = fixture("session-detail.json")?;
     let _: CancelSessionResponse = fixture("cancel-session.json")?;
+    let _: AuditAgentList = fixture("audit-agent-list.json")?;
     let _: RecordingMetadata = fixture("recording-metadata.json")?;
     let _: AppendRecordingEventsResponse = fixture("append-recording-events.json")?;
     let _: Connection = fixture("connection.json")?;
