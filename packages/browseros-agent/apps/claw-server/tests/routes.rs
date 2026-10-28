@@ -971,6 +971,66 @@ async fn mcp_declared_product_survives_profile_resolution_and_reuse() -> anyhow:
     Ok(())
 }
 
+/// Claude Code hands the model only `structuredContent` for a tool that declares an
+/// outputSchema, so the handle line in `content` never reached it: an agent opening with
+/// `run` calls sent no `session`, and each call started another empty cockpit session.
+#[tokio::test]
+async fn mcp_stateless_structured_results_carry_the_session_handle() -> anyhow::Result<()> {
+    let mock = MockCdp::start().await?;
+    let app = mock_native_app(&mock).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    wait_for_cdp_connected(&app).await?;
+    let listed =
+        stateless_mcp_request(&app.router, "tools/list", json!({}), Some("claude-code")).await?;
+    let tools = listed["result"]["tools"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing tools: {listed}"))?;
+    let with_output: Vec<&Value> = tools
+        .iter()
+        .filter(|tool| tool["outputSchema"].is_object())
+        .collect();
+    assert!(
+        with_output.iter().any(|tool| tool["name"] == "run"),
+        "{listed}"
+    );
+    for tool in with_output {
+        assert_eq!(
+            tool["outputSchema"]["properties"]["session"]["type"], "string",
+            "{tool}"
+        );
+    }
+
+    let first = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({ "name": "run", "arguments": { "code": "return 1" } }),
+        Some("claude-code"),
+    )
+    .await?;
+    let handle = first["result"]["_meta"]["com.browseros.neo/session"].clone();
+    assert!(handle.is_string(), "{first}");
+    let structured = &first["result"]["structuredContent"];
+    assert_eq!(structured["session"], handle, "{first}");
+    assert_eq!(structured["value"], 1, "{first}");
+
+    // What the model saw is enough to stay in the same session.
+    let second = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({
+            "name": "run",
+            "arguments": { "code": "return 2", "session": structured["session"] }
+        }),
+        Some("claude-code"),
+    )
+    .await?;
+    assert_eq!(
+        second["result"]["_meta"]["com.browseros.neo/session"], handle,
+        "{second}"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn mcp_stateless_tool_schema_has_one_optional_product_fallback() -> anyhow::Result<()> {
     let app = test_app().await?;

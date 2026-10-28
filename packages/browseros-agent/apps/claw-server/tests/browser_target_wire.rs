@@ -279,10 +279,21 @@ fn task_handle(result: &Value) -> anyhow::Result<&str> {
         .ok_or_else(|| anyhow::anyhow!("application handle missing: {result}"))
 }
 
-fn structured(result: &Value) -> anyhow::Result<&Value> {
-    result
+/// The tool's own structured result. The server adds the task handle to it as `session`,
+/// the copy Claude Code shows the model; it has to match `_meta`, and is set aside so the
+/// assertions below stay about the tool's wire contract.
+fn structured(result: &Value) -> anyhow::Result<Value> {
+    let mut data = result
         .get("structuredContent")
-        .ok_or_else(|| anyhow::anyhow!("structured metadata missing on HTTP wire: {result}"))
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("structured metadata missing on HTTP wire: {result}"))?;
+    let session = data.as_object_mut().and_then(|data| data.remove("session"));
+    assert_eq!(
+        session.as_ref().and_then(Value::as_str),
+        Some(task_handle(result)?),
+        "{result}"
+    );
+    Ok(data)
 }
 
 #[tokio::test]
@@ -297,7 +308,7 @@ async fn browser_target_http_roundtrip_preserves_window_revision_and_native_stat
     // focused Engineering window and not browser-wide routing.
     let default_target = json!({"action":"get", "bound":false, "default":{"directory":"Default",
         "status":{"profile":original_profile(), "windows":[21], "placementWindowId":21, "error":null}}});
-    assert_eq!(structured(&unbound)?, &default_target);
+    assert_eq!(structured(&unbound)?, default_target);
     peer.call(
         "browser_target",
         json!({"action":"set", "browserProfileId":"native-eng"}),
@@ -376,7 +387,7 @@ async fn browser_target_http_roundtrip_preserves_window_revision_and_native_stat
     let cleared = peer
         .call("browser_target", json!({"action":"get"}), Some(handle))
         .await?;
-    assert_eq!(structured(&cleared)?, &default_target);
+    assert_eq!(structured(&cleared)?, default_target);
     Ok(())
 }
 
@@ -391,7 +402,7 @@ async fn browser_profiles_http_roundtrip_preserves_descriptors_and_load_outcome(
     let listed = structured(&first)?;
     assert_eq!(
         listed,
-        &json!({"action":"list", "profiles":[loaded_engineering_profile(),
+        json!({"action":"list", "profiles":[loaded_engineering_profile(),
         {"browserProfileId":"native-ops", "name":"Operations", "directory":"Synthetic-Ops", "loaded":false},
         original_profile()]})
     );
@@ -416,7 +427,7 @@ async fn browser_profiles_http_roundtrip_preserves_descriptors_and_load_outcome(
             .await?;
         assert_eq!(
             structured(&loaded)?,
-            &json!({"action":"load", "loaded":initiated,
+            json!({"action":"load", "loaded":initiated,
             "profile":{"browserProfileId":"native-ops", "name":"Operations", "directory":"Synthetic-Ops",
                 "loaded":true, "browserContextId":"ctx-ops"}})
         );

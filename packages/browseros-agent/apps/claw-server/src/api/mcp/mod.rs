@@ -11,6 +11,7 @@ mod prompt;
 pub mod pursue;
 pub mod script_hook;
 mod service;
+mod session_handle;
 mod tab_grouping;
 mod timeouts;
 
@@ -27,7 +28,7 @@ use std::sync::Arc;
 pub use service::ClawMcpService;
 // Re-exported so the route tests assert against the real text instead of keeping a
 // copy of it, which is what let the two drift apart.
-pub use service::SESSION_ARG_DESCRIPTION;
+pub use session_handle::SESSION_ARG_DESCRIPTION;
 
 /// Builds the shared MCP service used by both streamable HTTP and stdio.
 #[must_use]
