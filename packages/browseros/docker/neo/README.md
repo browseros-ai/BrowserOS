@@ -79,9 +79,10 @@ Neo also leaves tab layout to your agent: a page joins a tab group only when the
 [behaviour file](#behaviour-file) can turn per-task groups back on. From Neo 0.51.2.5, the
 browser in hosted mode names itself Google Chrome to websites that read its brand (User-Agent
 Client Hints).
-Hosted mode doesn't offer to save or update passwords or addresses, since nobody is at the
-viewer to answer the prompts. Managed policies turn off Chromium's password saving
-(`PasswordManagerEnabled`) and address autofill (`AutofillAddressEnabled`). Agents fill a
+Hosted mode doesn't offer to save or update passwords or addresses, or warn about leaked
+passwords, since nobody is at the viewer to answer the prompts. Managed policies turn off
+Chromium's password saving (`PasswordManagerEnabled`), leak checks
+(`PasswordLeakDetectionEnabled`) and address autofill (`AutofillAddressEnabled`). Agents fill a
 login your backend supplies with `credentials fill` and a username and password, as they fill
 cards with `payment_cards`. `credentials add` fails with `operation_not_allowed`; logins
 already in the profile still fill.

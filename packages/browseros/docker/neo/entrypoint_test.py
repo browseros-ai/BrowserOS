@@ -78,12 +78,17 @@ class ApplyPoliciesTest(unittest.TestCase):
         )
         return {path.name: json.loads(path.read_text()) for path in managed.iterdir()}
 
-    def test_hosted_mode_turns_off_password_and_address_saving(self):
+    def test_hosted_mode_turns_off_password_and_address_prompts(self):
         policies = self.apply("1")
 
         self.assertEqual(
             policies["neo-hosted.json"],
-            {"PasswordManagerEnabled": False, "AutofillAddressEnabled": False},
+            {
+                "PasswordManagerEnabled": False,
+                # Chromium checks a submitted login for leaks even with saving off.
+                "PasswordLeakDetectionEnabled": False,
+                "AutofillAddressEnabled": False,
+            },
         )
 
     def test_desktop_mode_keeps_saving_prompts(self):
