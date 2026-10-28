@@ -11,7 +11,7 @@ use crate::{
         observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
         prompt::mcp_instructions,
         pursue::PursueOffering,
-        tab_grouping,
+        session_handle, tab_grouping,
     },
     config::{ServerMode, TabGrouping},
     identity::{ClientIdentity, ClientInfo, ProfileView},
@@ -33,8 +33,8 @@ use rmcp::{
     model::{
         CacheScope, CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CallToolResult,
         Implementation, InitializeRequestParams, InitializeResult, JsonObject, ListToolsResult,
-        MetaObject, PaginatedRequestParams, ProtocolVersion, ServerCapabilities,
-        SubscriptionFilter, Tool, ToolAnnotations,
+        PaginatedRequestParams, ProtocolVersion, ServerCapabilities, SubscriptionFilter, Tool,
+        ToolAnnotations,
     },
     service::{NotificationContext, RequestContext},
 };
@@ -60,23 +60,9 @@ const NAME_SESSION_DESCRIPTION: &str = "Name this browser session at the start o
 const NAME_SESSION_CATEGORY_DESCRIPTION: &str = "The kind of task, for anonymous aggregate analytics only; the free-form name is never sent. Pick the closest fit from the list.";
 const NAME_SESSION_SUMMARY_DESCRIPTION: &str = "One or two short lines saying what this task is, phrased so you can find it again by searching later. No names, emails, URLs, file paths, or account numbers.";
 const SUMMARY_MAX_LEN: usize = 200;
-/// `_meta` key the stateless session handle is returned under, per the MCP `_meta`
-/// convention (namespaced by owner). Clients read it from a tool result and echo it
-/// as the `session` argument on subsequent calls.
-const SESSION_META_KEY: &str = "com.browseros.neo/session";
 const AGENT_NAME_ARG: &str = "agentName";
-// Scoped to the path that actually emits it. The handle rides only on connections
-// without a transport session id; the other path withholds it and ignores one that
-// is presented, so promising it to every client pointed those agents at a control
-// they do not have and away from the tab group id, which is the signal that works
-// for them. Naming the alternative here matters because this text is read at the
-// moment an agent is deciding how to keep continuity.
-pub const SESSION_ARG_DESCRIPTION: &str = "Opaque logical task handle, including its browser_target binding. You receive one only if your client connects without its own transport session id: the server returns it in every tool result's `_meta` under `com.browseros.neo/session`, in result text, and as `session` in structured results. Pass it as `session` on later calls; natural successors retain the task's latest target even across server restart. If you never see one, your continuity across a remade connection is your tab group id instead: pass a known groupId on tabs action=\"new\" to recover its task binding before creation. Existing tabs keep their actual ownership. Omit session on the first call or to start a separate task after Stop; a stopped handle stays stopped. Stale browser targets require explicit browser_target reselection or clear.";
-const SESSION_OUTPUT_DESCRIPTION: &str =
-    "This browser session's handle. Pass it as the `session` argument on every following call.";
-/// The sentences of [`SESSION_ARG_DESCRIPTION`] and [`NAME_SESSION_DESCRIPTION`] that promise the
-/// server's own tab group. `tab_grouping` rewrites them under explicit grouping.
-pub(super) const SESSION_GROUP_CONTINUITY: &str = "If you never see one, your continuity across a remade connection is your tab group id instead: pass a known groupId on tabs action=\"new\" to recover its task binding before creation. Existing tabs keep their actual ownership. ";
+/// The sentence of [`NAME_SESSION_DESCRIPTION`] that promises the server's own tab group.
+/// `tab_grouping` rewrites it under explicit grouping.
 pub(super) const NAME_SESSION_GROUPING: &str = "Tabs are grouped as <client>/<name>; the label";
 const AGENT_NAME_ARG_DESCRIPTION: &str = "Optional fallback identifying your client application: claude, codex, cursor, opencode, antigravity, vscode, or zed. For another application, use its short product name. Put your task name in name_session, not here. BrowserOS prefers recognized MCP client metadata for the visible prefix; this fallback is used when that metadata does not identify a known product.";
 /// The sentence of [`AGENT_NAME_ARG_DESCRIPTION`] a hosted server rewrites, since it offers
@@ -296,7 +282,7 @@ impl ClawMcpService {
         let mode = self.mode();
         let tab_grouping = self.tab_grouping();
         let decorate = |tool: Tool| {
-            let mut tool = with_session_arg(with_pursue_fallback_note(tool, pursue));
+            let mut tool = session_handle::offer(with_pursue_fallback_note(tool, pursue));
             if mode.is_hosted() {
                 tool = hosted::with_viewport_sdk_note(hosted::with_task_name_arg(tool));
             }
@@ -1427,26 +1413,26 @@ impl ServerHandler for ClawMcpService {
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
         if name == "solve_captcha" && self.state.captcha.is_some() {
-            return Some(with_session_arg(super::captcha::solve_captcha_tool()));
+            return Some(session_handle::offer(super::captcha::solve_captcha_tool()));
         }
         if name == NAME_SESSION_TOOL_NAME {
-            return Some(with_session_arg(self.name_session_tool.clone()));
+            return Some(session_handle::offer(self.name_session_tool.clone()));
         }
         if name == SAVE_SKILL_TOOL_NAME {
-            return Some(with_session_arg(self.save_skill_tool.clone()));
+            return Some(session_handle::offer(self.save_skill_tool.clone()));
         }
         if name == MARK_SKILL_RUN_TOOL_NAME {
-            return Some(with_session_arg(self.mark_skill_run_tool.clone()));
+            return Some(session_handle::offer(self.mark_skill_run_tool.clone()));
         }
         if name == PURSUE_TOOL_NAME && self.pursue_offering().is_offered() {
-            return Some(with_session_arg(self.pursue_tool.clone()));
+            return Some(session_handle::offer(self.pursue_tool.clone()));
         }
         // Catalog-wide even for hidden tools: rmcp caches these input schemas by name, and a
         // cached caller should reach execute_tool's explanation, not method-not-found.
         let pursue = self.pursue_offering();
         let native = self.native();
         self.find_tool_index(name).map(|index| {
-            with_session_arg(with_pursue_fallback_note(
+            session_handle::offer(with_pursue_fallback_note(
                 self.catalog[index].to_mcp_tool(native),
                 pursue,
             ))
@@ -1487,12 +1473,7 @@ impl ServerHandler for ClawMcpService {
             .arguments
             .map(Value::Object)
             .unwrap_or_else(|| Value::Object(JsonObject::new()));
-        let provided_handle = raw_args
-            .get("session")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(SessionId::new);
+        let provided_handle = session_handle::take(&mut raw_args);
         // Stripped on every path, including legacy, so no tool ever receives it as an
         // argument even if an agent sends it against a schema that never offered it.
         let declared_agent_name = raw_args
@@ -1502,7 +1483,6 @@ impl ServerHandler for ClawMcpService {
             .filter(|value| !value.is_empty())
             .map(str::to_string);
         if let Value::Object(map) = &mut raw_args {
-            map.remove("session");
             map.remove(AGENT_NAME_ARG);
         }
         // Accepted in every mode though only hosted advertises it; see `hosted`.
@@ -1518,7 +1498,7 @@ impl ServerHandler for ClawMcpService {
         let modern = protocol_version_from_extensions(&context.extensions)
             .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
             && session_id_from_extensions(&context.extensions).is_none();
-        let (started, session_handle) = if modern {
+        let (started, modern_handle) = if modern {
             // rmcp extracts wire _meta into RequestContext during decoding;
             // typed request.meta is empty even when the client supplied it.
             let modern_client = context
@@ -1670,7 +1650,7 @@ impl ServerHandler for ClawMcpService {
             result,
         )
         .await;
-        let mut result = attach_session_handle(finished, session_handle, presented_handle)?;
+        let mut result = session_handle::attach(finished, modern_handle, presented_handle)?;
         // The tip asks the agent to close the group the server made for it, so it has no place
         // where the server makes none.
         if self.tab_grouping().is_automatic()
@@ -2397,37 +2377,6 @@ fn with_pursue_fallback_note(mut tool: Tool, pursue: PursueOffering) -> Tool {
     tool
 }
 
-fn with_session_arg(mut tool: Tool) -> Tool {
-    let mut schema = tool.input_schema.as_ref().clone();
-    let properties = schema
-        .entry("properties")
-        .or_insert_with(|| Value::Object(JsonObject::new()));
-    if let Value::Object(properties) = properties {
-        properties.insert(
-            "session".to_string(),
-            json!({ "type": "string", "description": SESSION_ARG_DESCRIPTION }),
-        );
-    }
-    tool.input_schema = Arc::new(schema);
-    // `attach_session_handle` also puts the handle in structured results, so a tool that
-    // declares its output has to admit it there too.
-    if let Some(output) = tool.output_schema.as_ref() {
-        let mut output = output.as_ref().clone();
-        // Root-level even for the `oneOf` target schemas, which apply it to every branch.
-        let properties = output
-            .entry("properties")
-            .or_insert_with(|| Value::Object(JsonObject::new()));
-        if let Value::Object(properties) = properties {
-            properties.insert(
-                "session".to_string(),
-                json!({ "type": "string", "description": SESSION_OUTPUT_DESCRIPTION }),
-            );
-        }
-        tool.output_schema = Some(Arc::new(output));
-    }
-    tool
-}
-
 /// Offers a product-name fallback to modern clients in one consistent schema.
 /// Metadata is optional per request, so tools/list never caches a caller identity
 /// or changes the schema based on whether that request happened to identify it.
@@ -2463,51 +2412,6 @@ fn session_was_stopped() -> McpError {
          not resend this handle.",
         None,
     )
-}
-
-fn attach_session_handle(
-    result: Result<CallToolResult, McpError>,
-    handle: Option<SessionId>,
-    presented: Option<SessionId>,
-) -> Result<CallToolResult, McpError> {
-    let Some(handle) = handle else {
-        return result;
-    };
-    // An agent that presented a handle and got a different one back has changed session
-    // without asking to. Saying so is the difference between an agent that adopts the new
-    // handle and one that keeps resending a dead one, which is what fills the cockpit with
-    // one-call sessions.
-    let replaced = presented.is_some_and(|presented| presented != handle);
-    let handle = handle.to_string();
-    result.map(|mut call_result| {
-        // The stateless handle is transport identity, not tool output, so it rides in
-        // `_meta`. But MCP clients do not surface result `_meta` to the model, and the
-        // agent only echoes a handle it has seen, so it is repeated where the model reads:
-        // a content line, and the structured result. Claude Code shows the model only
-        // `structuredContent` for a tool with an output schema, so without the second an
-        // agent that opens with `run` sends no handle and every call starts another
-        // session. `with_session_arg` declares the field in those output schemas.
-        call_result
-            .meta
-            .get_or_insert_with(MetaObject::new)
-            .insert(SESSION_META_KEY.to_string(), Value::String(handle.clone()));
-        if let Some(Value::Object(structured)) = call_result.structured_content.as_mut() {
-            structured.insert("session".to_string(), Value::String(handle.clone()));
-        }
-        let line = if replaced {
-            format!(
-                "[browseros-neo session: {handle}. The handle you sent is no longer active, so this call continued in a new session. Pass this exact value as the `session` argument from now on, and stop sending the previous one.]"
-            )
-        } else {
-            format!(
-                "[browseros-neo session: {handle}. Pass this exact value as the `session` argument on every following call to keep this browser session and its tab ownership.]"
-            )
-        };
-        call_result
-            .content
-            .push(rmcp::model::ContentBlock::text(line));
-        call_result
-    })
 }
 
 fn session_id_from_extensions(extensions: &rmcp::model::Extensions) -> Option<SessionId> {
@@ -2958,37 +2862,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn with_session_arg_adds_an_optional_session_property_to_every_tool() -> anyhow::Result<()>
-    {
+    async fn every_listed_tool_offers_the_session_handle() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state);
-
-        let injected = with_session_arg(service.name_session_tool.clone());
-        let schema = Value::Object(injected.input_schema.as_ref().clone());
-        assert_eq!(
-            schema["properties"]["session"],
-            json!({ "type": "string", "description": SESSION_ARG_DESCRIPTION })
-        );
-        assert!(
-            !schema["required"]
-                .as_array()
-                .is_some_and(|required| required.contains(&json!("session")))
-        );
-        // The promise has to stay conditional and has to keep naming the fallback:
-        // an unconditional version of this text is what sent a legacy client after
-        // a handle it never receives.
-        assert!(
-            SESSION_ARG_DESCRIPTION.contains("only if your client connects without"),
-            "the handle must not be promised unconditionally"
-        );
-        assert!(
-            SESSION_ARG_DESCRIPTION.contains("your tab group id instead"),
-            "a client that gets no handle must be told what to use"
-        );
-        assert!(
-            !SESSION_ARG_DESCRIPTION.contains("and its tab ownership"),
-            "tab ownership continuity comes from the group id, not this handle"
-        );
 
         for tool in service.listed_tools(false) {
             let schema = Value::Object(tool.input_schema.as_ref().clone());
@@ -3289,36 +3165,6 @@ mod tests {
         Ok(())
     }
 
-    /// The agent has to be able to see that its session changed. `_meta` is not surfaced to
-    /// the model by MCP clients, so the difference has to be in the content.
-    #[test]
-    fn a_replaced_handle_says_so_in_the_content() -> anyhow::Result<()> {
-        let replaced = attach_session_handle(
-            Ok(CallToolResult::success(vec![
-                rmcp::model::ContentBlock::text("ok"),
-            ])),
-            Some(SessionId::new("successor")),
-            Some(SessionId::new("dead-handle")),
-        )
-        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
-        let text = text_of(&replaced);
-        assert!(text.contains("no longer active"), "{text}");
-        assert!(text.contains("stop sending the previous one"), "{text}");
-
-        // An agent that presented the handle it got back is not told anything unusual.
-        let unchanged = attach_session_handle(
-            Ok(CallToolResult::success(vec![
-                rmcp::model::ContentBlock::text("ok"),
-            ])),
-            Some(SessionId::new("same")),
-            Some(SessionId::new("same")),
-        )
-        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
-        let text = text_of(&unchanged);
-        assert!(!text.contains("no longer active"), "{text}");
-        Ok(())
-    }
-
     fn text_of(result: &CallToolResult) -> String {
         result
             .content
@@ -3415,66 +3261,6 @@ mod tests {
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         assert_eq!(anon.session.agent().slug(), "agent");
-        Ok(())
-    }
-
-    #[test]
-    fn attach_session_handle_puts_the_handle_in_meta_content_and_structured_results()
-    -> anyhow::Result<()> {
-        // A result without structured content does not grow one.
-        let modern = attach_session_handle(
-            Ok(CallToolResult::success(vec![
-                rmcp::model::ContentBlock::text("ok"),
-            ])),
-            Some(SessionId::new("handle-xyz")),
-            None,
-        )
-        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
-        assert!(
-            modern.structured_content.is_none(),
-            "handle must not touch structured_content"
-        );
-        let handle = modern
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.get(SESSION_META_KEY))
-            .and_then(Value::as_str);
-        assert_eq!(handle, Some("handle-xyz"));
-        // The handle is also appended to content so the model (which does not see _meta)
-        // reads and echoes it.
-        let content_has_handle = modern.content.iter().any(|block| {
-            block
-                .as_text()
-                .is_some_and(|text| text.text.contains("handle-xyz"))
-        });
-        assert!(content_has_handle, "handle must also appear in content");
-
-        // A structured result keeps its fields and gains the handle, since that is all
-        // Claude Code shows the model for a tool with an output schema.
-        let structured = attach_session_handle(
-            Ok(CallToolResult::structured(
-                json!({ "ok": true, "value": 1 }),
-            )),
-            Some(SessionId::new("handle-xyz")),
-            None,
-        )
-        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
-        assert_eq!(
-            structured.structured_content,
-            Some(json!({ "ok": true, "value": 1, "session": "handle-xyz" }))
-        );
-
-        // Legacy calls (no handle) get neither _meta nor structured_content touched.
-        let legacy = attach_session_handle(
-            Ok(CallToolResult::success(vec![
-                rmcp::model::ContentBlock::text("ok"),
-            ])),
-            None,
-            None,
-        )
-        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
-        assert!(legacy.structured_content.is_none());
-        assert!(legacy.meta.is_none());
         Ok(())
     }
 
@@ -4307,7 +4093,7 @@ mod tests {
                         "maxLength": SUMMARY_MAX_LEN,
                         "description": NAME_SESSION_SUMMARY_DESCRIPTION
                     },
-                    "session": { "type": "string", "description": SESSION_ARG_DESCRIPTION }
+                    "session": { "type": "string", "description": session_handle::SESSION_ARG_DESCRIPTION }
                 },
                 "required": ["name"]
             })
