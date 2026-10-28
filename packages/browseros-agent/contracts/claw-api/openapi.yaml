@@ -64,6 +64,8 @@ paths:
     $ref: ./paths/audit.yaml#/retention
   /api/v1/audit/cleanup:
     $ref: ./paths/audit.yaml#/cleanup
+  /api/v1/audit/agents:
+    $ref: ./paths/audit.yaml#/agents
   /api/v1/skills:
     $ref: ./paths/skills.yaml#/collection
   /api/v1/skills/{name}:
@@ -218,6 +220,10 @@ components:
       $ref: ./schemas/audit.yaml#/SetAuditRetentionRequest
     AuditCleanupResult:
       $ref: ./schemas/audit.yaml#/AuditCleanupResult
+    AuditAgent:
+      $ref: ./schemas/audit.yaml#/AuditAgent
+    AuditAgentList:
+      $ref: ./schemas/audit.yaml#/AuditAgentList
     SkillOrigin:
       $ref: ./schemas/skills.yaml#/SkillOrigin
     Skill:
