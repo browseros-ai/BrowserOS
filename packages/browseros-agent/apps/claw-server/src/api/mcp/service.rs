@@ -71,7 +71,9 @@ const AGENT_NAME_ARG: &str = "agentName";
 // they do not have and away from the tab group id, which is the signal that works
 // for them. Naming the alternative here matters because this text is read at the
 // moment an agent is deciding how to keep continuity.
-pub const SESSION_ARG_DESCRIPTION: &str = "Opaque logical task handle, including its browser_target binding. You receive one only if your client connects without its own transport session id: the server returns it in every tool result's `_meta` under `com.browseros.neo/session` and in result text. Pass it as `session` on later calls; natural successors retain the task's latest target even across server restart. If you never see one, your continuity across a remade connection is your tab group id instead: pass a known groupId on tabs action=\"new\" to recover its task binding before creation. Existing tabs keep their actual ownership. Omit session on the first call or to start a separate task after Stop; a stopped handle stays stopped. Stale browser targets require explicit browser_target reselection or clear.";
+pub const SESSION_ARG_DESCRIPTION: &str = "Opaque logical task handle, including its browser_target binding. You receive one only if your client connects without its own transport session id: the server returns it in every tool result's `_meta` under `com.browseros.neo/session`, in result text, and as `session` in structured results. Pass it as `session` on later calls; natural successors retain the task's latest target even across server restart. If you never see one, your continuity across a remade connection is your tab group id instead: pass a known groupId on tabs action=\"new\" to recover its task binding before creation. Existing tabs keep their actual ownership. Omit session on the first call or to start a separate task after Stop; a stopped handle stays stopped. Stale browser targets require explicit browser_target reselection or clear.";
+const SESSION_OUTPUT_DESCRIPTION: &str =
+    "This browser session's handle. Pass it as the `session` argument on every following call.";
 /// The sentences of [`SESSION_ARG_DESCRIPTION`] and [`NAME_SESSION_DESCRIPTION`] that promise the
 /// server's own tab group. `tab_grouping` rewrites them under explicit grouping.
 pub(super) const SESSION_GROUP_CONTINUITY: &str = "If you never see one, your continuity across a remade connection is your tab group id instead: pass a known groupId on tabs action=\"new\" to recover its task binding before creation. Existing tabs keep their actual ownership. ";
@@ -2407,6 +2409,22 @@ fn with_session_arg(mut tool: Tool) -> Tool {
         );
     }
     tool.input_schema = Arc::new(schema);
+    // `attach_session_handle` also puts the handle in structured results, so a tool that
+    // declares its output has to admit it there too.
+    if let Some(output) = tool.output_schema.as_ref() {
+        let mut output = output.as_ref().clone();
+        // Root-level even for the `oneOf` target schemas, which apply it to every branch.
+        let properties = output
+            .entry("properties")
+            .or_insert_with(|| Value::Object(JsonObject::new()));
+        if let Value::Object(properties) = properties {
+            properties.insert(
+                "session".to_string(),
+                json!({ "type": "string", "description": SESSION_OUTPUT_DESCRIPTION }),
+            );
+        }
+        tool.output_schema = Some(Arc::new(output));
+    }
     tool
 }
 
@@ -2463,14 +2481,19 @@ fn attach_session_handle(
     let handle = handle.to_string();
     result.map(|mut call_result| {
         // The stateless handle is transport identity, not tool output, so it rides in
-        // `_meta` (never colliding with a tool's output_schema). But MCP clients do not
-        // surface result `_meta` to the model, so also append it as a content line the
-        // model always sees, otherwise the agent never learns the handle to echo back
-        // and loses tab ownership across stateless calls.
+        // `_meta`. But MCP clients do not surface result `_meta` to the model, and the
+        // agent only echoes a handle it has seen, so it is repeated where the model reads:
+        // a content line, and the structured result. Claude Code shows the model only
+        // `structuredContent` for a tool with an output schema, so without the second an
+        // agent that opens with `run` sends no handle and every call starts another
+        // session. `with_session_arg` declares the field in those output schemas.
         call_result
             .meta
             .get_or_insert_with(MetaObject::new)
             .insert(SESSION_META_KEY.to_string(), Value::String(handle.clone()));
+        if let Some(Value::Object(structured)) = call_result.structured_content.as_mut() {
+            structured.insert("session".to_string(), Value::String(handle.clone()));
+        }
         let line = if replaced {
             format!(
                 "[browseros-neo session: {handle}. The handle you sent is no longer active, so this call continued in a new session. Pass this exact value as the `session` argument from now on, and stop sending the previous one.]"
@@ -2975,6 +2998,39 @@ mod tests {
                 "tool {} is missing the session property",
                 tool.name
             );
+            if let Some(output) = &tool.output_schema {
+                let output = Value::Object(output.as_ref().clone());
+                assert_eq!(
+                    output["properties"]["session"]["type"],
+                    json!("string"),
+                    "tool {} does not admit the handle in its structured result",
+                    tool.name
+                );
+            }
+        }
+
+        // The structured `session` field belongs to the server. A tool whose own output
+        // already had one would have it overwritten by the handle.
+        let native = service.native();
+        let own = service
+            .catalog
+            .iter()
+            .map(|tool| tool.to_mcp_tool(native))
+            .chain([
+                service.pursue_tool.clone(),
+                super::super::captcha::solve_captcha_tool(),
+            ]);
+        for tool in own {
+            if let Some(output) = &tool.output_schema {
+                assert!(
+                    output
+                        .get("properties")
+                        .and_then(|properties| properties.get("session"))
+                        .is_none(),
+                    "tool {} already returns a `session` field",
+                    tool.name
+                );
+            }
         }
         Ok(())
     }
@@ -3363,10 +3419,9 @@ mod tests {
     }
 
     #[test]
-    fn attach_session_handle_puts_the_handle_in_meta_not_structured_content() -> anyhow::Result<()>
-    {
-        // The handle must ride in `_meta`, never in `structured_content`, so it cannot
-        // collide with a tool's output_schema or overwrite the tool's real result.
+    fn attach_session_handle_puts_the_handle_in_meta_content_and_structured_results()
+    -> anyhow::Result<()> {
+        // A result without structured content does not grow one.
         let modern = attach_session_handle(
             Ok(CallToolResult::success(vec![
                 rmcp::model::ContentBlock::text("ok"),
@@ -3393,6 +3448,21 @@ mod tests {
                 .is_some_and(|text| text.text.contains("handle-xyz"))
         });
         assert!(content_has_handle, "handle must also appear in content");
+
+        // A structured result keeps its fields and gains the handle, since that is all
+        // Claude Code shows the model for a tool with an output schema.
+        let structured = attach_session_handle(
+            Ok(CallToolResult::structured(
+                json!({ "ok": true, "value": 1 }),
+            )),
+            Some(SessionId::new("handle-xyz")),
+            None,
+        )
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(
+            structured.structured_content,
+            Some(json!({ "ok": true, "value": 1, "session": "handle-xyz" }))
+        );
 
         // Legacy calls (no handle) get neither _meta nor structured_content touched.
         let legacy = attach_session_handle(
