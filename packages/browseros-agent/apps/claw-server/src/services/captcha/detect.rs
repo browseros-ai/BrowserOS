@@ -595,8 +595,12 @@ async fn scan(
     let mut widgets =
         fold_vendor_widgets(widgets, &frames, &parents, top, &visibility, &mut complete);
     // Only now are the widgets in frames and closed shadow roots known, so only here can the
-    // marker yield to a CAPTCHA the page actually shows.
-    if widgets.iter().any(|w| !w.marker) {
+    // marker yield to a CAPTCHA the page actually shows. A provider script that is only loaded
+    // (`widget_only`) shows nothing, so the marker's challenge stands beside it.
+    if widgets
+        .iter()
+        .any(|w| !w.marker && w.challenge.state != ChallengeState::WidgetOnly)
+    {
         widgets.retain(|w| !w.marker);
     }
     Ok((widgets, complete))
@@ -1732,6 +1736,29 @@ mod tests {
         let result = scan(&page).await?;
         assert_eq!(result.challenges.len(), 1, "{:?}", result.challenges);
         assert_eq!(result.challenges[0].kind, CaptchaKind::Turnstile);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_loaded_captcha_script_does_not_outrank_cloudflares_marker()
+    -> Result<(), PageError> {
+        // dash.cloudflare.com/login loads the Turnstile SDK for an invisible widget, and a page
+        // may load reCAPTCHA v3: neither shows anything, so the marker's challenge stands.
+        for script in ["turnstile", "recaptcha_v3"] {
+            let result = scan(&FakePage::new(json!([
+                cloudflare_marker(),
+                widget(script, "widget_only")
+            ])))
+            .await?;
+            assert!(
+                result
+                    .challenges
+                    .iter()
+                    .any(|c| c.kind == CaptchaKind::CloudflareChallenge),
+                "{script}: {:?}",
+                result.challenges
+            );
+        }
         Ok(())
     }
 
