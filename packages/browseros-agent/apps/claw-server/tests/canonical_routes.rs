@@ -2097,10 +2097,10 @@ async fn tests_that_agent_settings_offer_human_help_by_default() -> anyhow::Resu
 }
 
 #[tokio::test]
-async fn tests_that_cleanup_tip_is_opt_in_and_saved_independently() -> anyhow::Result<()> {
+async fn tests_that_cleanup_tip_is_on_by_default_and_saved_independently() -> anyhow::Result<()> {
     let app = test_app().await?;
     let (_, bytes) = get_agent_settings(&app).await?;
-    assert_eq!(json_body(&bytes)?["taskCleanupTipEnabled"], false);
+    assert_eq!(json_body(&bytes)?["taskCleanupTipEnabled"], true);
 
     for enabled in [true, false, true] {
         let (status, bytes) = put_agent_settings(

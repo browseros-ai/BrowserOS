@@ -53,7 +53,7 @@ struct TokenFile {
     jev_token: String,
 }
 
-/// The file's shape. A missing key keeps human help on, so `{}` changes nothing.
+/// The file's shape. A missing key keeps human help and the cleanup tip on, so `{}` changes nothing.
 #[derive(Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct SettingsFile {
@@ -65,7 +65,7 @@ impl Default for SettingsFile {
     fn default() -> Self {
         Self {
             human_help_enabled: true,
-            task_cleanup_tip_enabled: false,
+            task_cleanup_tip_enabled: true,
         }
     }
 }
