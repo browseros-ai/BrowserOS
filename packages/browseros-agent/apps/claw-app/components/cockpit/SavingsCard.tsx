@@ -81,14 +81,10 @@ export function SavingsCard({
           className="-mt-0.5 flex flex-col gap-1.5"
         >
           <SplitBar usage={usage} className="h-1.5 gap-0.5" />
-          <div className="flex justify-between gap-3 text-[12.5px] leading-4">
-            <span className="font-semibold text-accent-ink">
-              saved {formatTokens(usage.saved)}
-            </span>
-            <span className="text-ink-3">
-              neo used {formatTokens(usage.withNeo)}
-            </span>
-          </div>
+          <p className="text-right text-[12.5px] text-ink-3 leading-4">
+            claude / codex browser would have used{' '}
+            {formatTokens(usage.withoutNeo)} tokens
+          </p>
         </div>
       ) : null}
     </section>
