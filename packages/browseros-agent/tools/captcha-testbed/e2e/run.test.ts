@@ -21,9 +21,9 @@ test('tests that spotting remains selectable within fixtures and all', () => {
       ),
     ).toBe(true)
   expect(selectPages(all, parseOptions(['--pages', 'fixtures']))).toHaveLength(
-    17,
+    19,
   )
-  expect(selectPages(all, parseOptions(['--pages', 'all']))).toHaveLength(25)
+  expect(selectPages(all, parseOptions(['--pages', 'all']))).toHaveLength(27)
   expect(
     selectPages(
       all,

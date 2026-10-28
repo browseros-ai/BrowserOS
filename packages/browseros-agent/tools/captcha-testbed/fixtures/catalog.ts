@@ -132,6 +132,25 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
     '3x00000000000000000000FF',
   ),
   fixture(
+    'turnstile-cf-marker',
+    'Turnstile beside Cloudflare bot management',
+    'turnstile',
+    '/turnstile-cf-marker.html',
+    '3x00000000000000000000FF',
+  ),
+  {
+    ...fixture(
+      'cloudflare-wall',
+      'Cloudflare challenge page',
+      'turnstile',
+      '/cloudflare-wall.html',
+      '3x00000000000000000000FF',
+      ['unsupported', 'needs_human'],
+    ),
+    notes:
+      'Detected as cloudflare_challenge by its challenge script; its Turnstile is the wall checkbox.',
+  },
+  fixture(
     'no-captcha',
     'Ordinary form',
     'none',
