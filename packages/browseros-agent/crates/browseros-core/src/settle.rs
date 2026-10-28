@@ -1,9 +1,17 @@
-use crate::{CoreError, PageId, PageJs, ProtocolSession, pages::PageManager, timeouts};
+use crate::{
+    CoreError, PageId, PageJs, ProtocolSession,
+    page_signals::{DocumentMark, DocumentSince, PageSignals},
+    pages::{PageManager, PageSession},
+    timeouts,
+};
 use serde::Deserialize;
-use serde_json::Value;
 use std::{future::Future, time::Duration};
-use tokio::time::{Instant, sleep, timeout};
+use tokio::{
+    sync::watch,
+    time::{Instant, sleep, timeout, timeout_at},
+};
 
+/// How [`wait_for_action_settle`] ended. Every outcome lets the caller read the page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettleOutcome {
     Settled { navigation_observed: bool },
@@ -11,41 +19,11 @@ pub enum SettleOutcome {
     Skipped { reason: String },
 }
 
-const INSTALL_OBSERVER_JS: &str = r#"
-(() => {
-  const root = document.body || document.documentElement;
-  const previous = globalThis.__browseros_settle;
-  if (previous && previous.observer) {
-    try { previous.observer.disconnect(); } catch (_) {}
-  }
-  const state = { n: 0, observer: null };
-  if (!root || typeof MutationObserver === 'undefined') {
-    globalThis.__browseros_settle = state;
-    return state.n;
-  }
-  state.observer = new MutationObserver(() => { state.n += 1; });
-  state.observer.observe(root, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    characterData: true
-  });
-  globalThis.__browseros_settle = state;
-  return state.n;
-})()
-"#;
-
-const READ_COUNTER_JS: &str = r#"
-(() => {
-  const state = globalThis.__browseros_settle;
-  return state && typeof state.n === 'number' ? state.n : 0;
-})()
-"#;
-
 /// Whether a page's own content has stopped changing.
 ///
-/// A separate question from `SettleOutcome`, and a separate counter, so the
-/// two mechanisms cannot disturb each other on the same page.
+/// Arrival (goto, tab creation, evaluate) and the post-action settle read the same probe
+/// counter. It only ever counts up and a read never resets it, so readers on one page cannot
+/// disturb each other.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Readiness {
     /// The content was showing and the mutation counter did not move across a
@@ -223,123 +201,116 @@ async fn read_reading(
     })
 }
 
+/// Waits until the effect of something done after `mark` has landed on the page.
+///
+/// What lands is what the accessibility tree shows, which is what callers read next: a
+/// main-frame document that started after the mark reaching DOMContentLoaded, then the DOM
+/// holding still for one quiet interval. Images, iframes and the load event are not waited on.
+///
+/// ```text
+///  mark ─▶ main-frame navigation since the mark?    PageSignals, pushed by CDP
+///           ├─ none ────────────────────────────┐
+///           └─ wait for its DOMContentLoaded ───┴─▶ readiness probe quiet for one interval
+/// ```
+///
+/// `budget` covers an in-page change. A navigation raises it to the arrival ceiling: a new
+/// document takes longer, and a read of half of it misleads. Used after an MCP action (before
+/// its diff) and after a decision-loop move (before its next look); the mark must be taken
+/// before the action, since a link's navigation can be reported before the click's own reply.
+pub async fn wait_for_action_settle(
+    page: &PageSession,
+    signals: &PageSignals,
+    page_id: &PageId,
+    mark: DocumentMark,
+    budget: Duration,
+) -> SettleOutcome {
+    let started = Instant::now();
+    let mut deadline = started + budget;
+    let mut changes = signals.document_changes();
+    let main_frame = page.target_id.as_str();
+    let mut navigation_observed = false;
+    let mut previous: Option<u64> = None;
+    loop {
+        // A dialog freezes the renderer: no document or probe answer comes until it closes.
+        if let Some(line) = signals.pending_dialog_line(page_id) {
+            return SettleOutcome::Skipped { reason: line };
+        }
+        let since = signals.document_since(page_id, main_frame, mark);
+        if since != DocumentSince::Unchanged && !navigation_observed {
+            navigation_observed = true;
+            deadline = deadline.max(started + timeouts::ARRIVAL_READY_BUDGET);
+        }
+        if since == DocumentSince::Loading {
+            // The old document is still showing; reading it now would settle on the page
+            // being left.
+            if let Err(outcome) = wait_for_document_event(&mut changes, deadline).await {
+                return outcome;
+            }
+            previous = None;
+            continue;
+        }
+        match read_with_deadline(&page.session, deadline).await {
+            Ok(Some(reading)) => {
+                if !reading.installed && previous == Some(reading.count) && reading.settled_enough()
+                {
+                    return SettleOutcome::Settled {
+                        navigation_observed,
+                    };
+                }
+                previous = Some(reading.count);
+            }
+            Ok(None) => previous = None,
+            Err(outcome) => return outcome,
+        }
+        if let Err(outcome) = sleep_for_budget(timeouts::ACTION_SETTLE_DOM_QUIET, deadline).await {
+            return outcome;
+        }
+    }
+}
+
+/// Waits for the next document event on any page, for at most one quiet interval, so the
+/// caller re-checks dialogs and its own page often even if an event never comes.
+async fn wait_for_document_event(
+    changes: &mut watch::Receiver<u64>,
+    deadline: Instant,
+) -> Result<(), SettleOutcome> {
+    let until = deadline.min(Instant::now() + timeouts::ACTION_SETTLE_DOM_QUIET);
+    match timeout_at(until, changes.changed()).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_closed)) => Err(SettleOutcome::Skipped {
+            reason: "page signals stopped".to_string(),
+        }),
+        Err(_elapsed) if Instant::now() >= deadline => Err(SettleOutcome::BudgetExpired),
+        Err(_elapsed) => Ok(()),
+    }
+}
+
+/// One readiness reading; `None` when the page could not answer this time, as while a
+/// committing navigation replaces its context. Only a lost target ends the wait early, the way
+/// navigation's own readiness wait treats it.
+async fn read_with_deadline(
+    session: &ProtocolSession,
+    deadline: Instant,
+) -> Result<Option<ReadinessReading>, SettleOutcome> {
+    let call_budget = remaining(deadline)?.min(timeouts::ACTION_SETTLE_CDP_CALL_TIMEOUT);
+    match timeout(call_budget, read_readiness(session)).await {
+        Ok(Ok(reading)) => Ok(Some(reading)),
+        Ok(Err(error @ CoreError::Target(_))) => Err(SettleOutcome::Skipped {
+            reason: error.to_string(),
+        }),
+        Ok(Err(_)) => Ok(None),
+        Err(_elapsed) => {
+            remaining(deadline)?;
+            Ok(None)
+        }
+    }
+}
+
 fn into_readiness(outcome: SettleOutcome) -> Readiness {
     match outcome {
         SettleOutcome::Skipped { reason } => Readiness::Unknown { reason },
         _ => Readiness::StillMoving,
     }
-}
-
-pub async fn wait_for_action_settle(
-    pages: &PageManager,
-    page_id: PageId,
-    budget: Duration,
-) -> SettleOutcome {
-    if budget.is_zero() {
-        return SettleOutcome::BudgetExpired;
-    }
-
-    let deadline = Instant::now() + budget;
-    let navigation_observed = match detect_navigation(pages, page_id.clone(), deadline).await {
-        Ok(observed) => observed,
-        Err(outcome) => return outcome,
-    };
-
-    if navigation_observed
-        && let Err(outcome) = wait_for_tab_load(pages, page_id.clone(), deadline).await
-    {
-        return outcome;
-    }
-
-    match wait_for_dom_quiet(pages, page_id, deadline).await {
-        Ok(()) => SettleOutcome::Settled {
-            navigation_observed,
-        },
-        Err(outcome) => outcome,
-    }
-}
-
-async fn detect_navigation(
-    pages: &PageManager,
-    page_id: PageId,
-    deadline: Instant,
-) -> Result<bool, SettleOutcome> {
-    let detect_until = earliest_deadline(
-        deadline,
-        Instant::now() + timeouts::ACTION_SETTLE_NAVIGATION_DETECT,
-    );
-    loop {
-        let info = refresh_page(pages, page_id.clone(), deadline).await?;
-        if tab_is_loading(&info) {
-            return Ok(true);
-        }
-        if Instant::now() >= detect_until {
-            return Ok(false);
-        }
-        sleep_until_budget(
-            earliest_deadline(
-                detect_until,
-                Instant::now() + timeouts::ACTION_SETTLE_NAVIGATION_POLL,
-            ),
-            deadline,
-        )
-        .await?;
-    }
-}
-
-async fn wait_for_tab_load(
-    pages: &PageManager,
-    page_id: PageId,
-    deadline: Instant,
-) -> Result<(), SettleOutcome> {
-    loop {
-        let info = refresh_page(pages, page_id.clone(), deadline).await?;
-        if !tab_is_loading(&info) {
-            return Ok(());
-        }
-        sleep_for_budget(timeouts::ACTION_SETTLE_NAVIGATION_POLL, deadline).await?;
-    }
-}
-
-async fn wait_for_dom_quiet(
-    pages: &PageManager,
-    page_id: PageId,
-    deadline: Instant,
-) -> Result<(), SettleOutcome> {
-    let page = call_with_deadline(pages.get_session(page_id), deadline).await?;
-    let mut previous = evaluate_counter(&page.session, INSTALL_OBSERVER_JS, deadline).await?;
-
-    loop {
-        sleep_for_budget(timeouts::ACTION_SETTLE_DOM_QUIET, deadline).await?;
-        let current = evaluate_counter(&page.session, READ_COUNTER_JS, deadline).await?;
-        if current == previous {
-            return Ok(());
-        }
-        previous = current;
-    }
-}
-
-async fn refresh_page(
-    pages: &PageManager,
-    page_id: PageId,
-    deadline: Instant,
-) -> Result<crate::pages::PageInfo, SettleOutcome> {
-    match call_with_deadline(pages.refresh(page_id.clone()), deadline).await? {
-        Some(info) => Ok(info),
-        None => Err(SettleOutcome::Skipped {
-            reason: format!("page {page_id} not found"),
-        }),
-    }
-}
-
-async fn evaluate_counter(
-    session: &ProtocolSession,
-    expression: &str,
-    deadline: Instant,
-) -> Result<u64, SettleOutcome> {
-    let value: Value =
-        call_with_deadline(PageJs::isolated(session).eval(expression), deadline).await?;
-    Ok(value.as_u64().unwrap_or(0))
 }
 
 async fn call_with_deadline<T, Fut>(future: Fut, deadline: Instant) -> Result<T, SettleOutcome>
@@ -381,26 +352,8 @@ async fn sleep_for_budget(duration: Duration, deadline: Instant) -> Result<(), S
     Ok(())
 }
 
-async fn sleep_until_budget(until: Instant, deadline: Instant) -> Result<(), SettleOutcome> {
-    let now = Instant::now();
-    if until <= now {
-        return Ok(());
-    }
-    let capped = earliest_deadline(until, deadline);
-    sleep_for_budget(capped.duration_since(now), deadline).await
-}
-
-fn earliest_deadline(a: Instant, b: Instant) -> Instant {
-    if a <= b { a } else { b }
-}
-
-fn tab_is_loading(info: &crate::pages::PageInfo) -> bool {
-    info.is_loading && info.load_progress < 1.0
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{SettleOutcome, wait_for_action_settle};
     use crate::{
         BrowserSession, BrowserSessionHooks, CoreError, SessionId, connection::CdpConnection,
         timeouts,
@@ -415,28 +368,8 @@ mod tests {
     };
     use tokio::{sync::broadcast, time::Instant};
 
-    #[derive(Debug, Clone, Copy)]
-    struct TabLoad {
-        is_loading: bool,
-        load_progress: f64,
-    }
-
-    impl TabLoad {
-        fn ready() -> Self {
-            Self {
-                is_loading: false,
-                load_progress: 1.0,
-            }
-        }
-    }
-
     #[derive(Debug)]
     struct HarnessState {
-        tab_loads: VecDeque<TabLoad>,
-        current_tab: TabLoad,
-        mutation_reads: VecDeque<u64>,
-        current_counter: u64,
-        fail_evaluate: bool,
         /// Successive answers for the readiness probe. The last one repeats
         /// once the queue runs dry, so a test can say "stays blank forever"
         /// with a single entry.
@@ -492,13 +425,8 @@ mod tests {
                     message: "poisoned test state".to_string(),
                 })?;
                 match method {
-                    "Browser.getTabs" => Ok(json!({ "tabs": [tab_json(state.current_tab)] })),
-                    "Browser.getTabInfo" => {
-                        if let Some(next) = state.tab_loads.pop_front() {
-                            state.current_tab = next;
-                        }
-                        Ok(json!({ "tab": tab_json(state.current_tab) }))
-                    }
+                    "Browser.getTabs" => Ok(json!({ "tabs": [tab_json()] })),
+                    "Browser.getTabInfo" => Ok(json!({ "tab": tab_json() })),
                     "Target.attachToTarget" => Ok(json!({ "sessionId": "session-1" })),
                     "Page.enable"
                     | "DOM.enable"
@@ -506,35 +434,17 @@ mod tests {
                     | "Accessibility.enable"
                     | "Runtime.runIfWaitingForDebugger" => Ok(json!({})),
                     "Runtime.evaluate" => {
-                        if state.fail_evaluate {
-                            return Err(CdpError::Protocol {
-                                code: -32000,
-                                message: "evaluate failed".to_string(),
-                            });
-                        }
                         let expression = params
                             .get("expression")
                             .and_then(Value::as_str)
                             .unwrap_or_default();
-                        // Checked first: the readiness probe also installs a
-                        // MutationObserver, so the settle branch below would
-                        // otherwise swallow it and answer with a bare number.
                         if expression.contains("__browseros_ready") {
                             if let Some(next) = state.readiness.pop_front() {
                                 state.readiness_last = next;
                             }
                             return Ok(json!({ "result": { "value": state.readiness_last } }));
                         }
-                        if expression.contains("new MutationObserver") {
-                            state.current_counter = 0;
-                            return Ok(json!({ "result": { "value": 0 } }));
-                        }
-                        if expression.contains("__browseros_settle")
-                            && let Some(next) = state.mutation_reads.pop_front()
-                        {
-                            state.current_counter = next;
-                        }
-                        Ok(json!({ "result": { "value": state.current_counter } }))
+                        Ok(json!({ "result": { "value": 0 } }))
                     }
                     _ => Ok(json!({})),
                 }
@@ -568,24 +478,10 @@ mod tests {
         json!({ "n": n, "installed": installed, "showing": showing, "complete": complete })
     }
 
-    async fn harness(
-        mutation_reads: impl Into<VecDeque<u64>>,
-        tab_loads: impl Into<VecDeque<TabLoad>>,
-    ) -> Result<(Arc<BrowserSession>, crate::PageId), CoreError> {
-        harness_reading(mutation_reads, tab_loads, VecDeque::new()).await
-    }
-
     async fn harness_reading(
-        mutation_reads: impl Into<VecDeque<u64>>,
-        tab_loads: impl Into<VecDeque<TabLoad>>,
         readiness: impl Into<VecDeque<Value>>,
     ) -> Result<(Arc<BrowserSession>, crate::PageId), CoreError> {
         let connection = HarnessConnection::new(HarnessState {
-            tab_loads: tab_loads.into(),
-            current_tab: TabLoad::ready(),
-            mutation_reads: mutation_reads.into(),
-            current_counter: 0,
-            fail_evaluate: false,
             readiness: readiness.into(),
             readiness_last: reading(0, false, true, true),
             stall_readiness: false,
@@ -598,15 +494,15 @@ mod tests {
         Ok((session, page.page_id.clone()))
     }
 
-    fn tab_json(load: TabLoad) -> Value {
+    fn tab_json() -> Value {
         json!({
             "tabId": 101,
             "targetId": "target-1",
             "url": "https://example.test/",
             "title": "Test",
             "isActive": true,
-            "isLoading": load.is_loading,
-            "loadProgress": load.load_progress,
+            "isLoading": false,
+            "loadProgress": 1.0,
             "isPinned": false,
             "isHidden": false,
             "windowId": 1,
@@ -614,91 +510,16 @@ mod tests {
         })
     }
 
-    #[tokio::test]
-    async fn quiet_dom_settles_before_budget() -> Result<(), CoreError> {
-        let (session, page_id) = harness(VecDeque::new(), VecDeque::new()).await?;
-        let start = Instant::now();
-        let outcome =
-            wait_for_action_settle(&session.pages, page_id, Duration::from_millis(900)).await;
-        assert_eq!(
-            outcome,
-            SettleOutcome::Settled {
-                navigation_observed: false
-            }
-        );
-        assert!(start.elapsed() < Duration::from_millis(500));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn mutations_delay_settle_until_one_quiet_interval() -> Result<(), CoreError> {
-        let (session, page_id) = harness(VecDeque::from([1, 2, 2]), VecDeque::new()).await?;
-        let start = Instant::now();
-        let outcome =
-            wait_for_action_settle(&session.pages, page_id, Duration::from_millis(1_000)).await;
-        assert_eq!(
-            outcome,
-            SettleOutcome::Settled {
-                navigation_observed: false
-            }
-        );
-        assert!(start.elapsed() >= Duration::from_millis(400));
-        assert!(start.elapsed() < Duration::from_millis(800));
-        Ok(())
-    }
-
-    /// The default budget has to be able to reach a second counter read.
-    ///
-    /// This replaces a test that asserted the opposite. It pinned a 50ms
-    /// budget against a 100ms quiet interval, which is a budget that cannot
-    /// complete one comparison, so the automatic settle installed an observer
-    /// on every action and never compared it.
+    /// The post-action budget has to reach a second probe read, and a navigation raises it to the
+    /// arrival ceiling, which only helps if that ceiling is the larger of the two.
     #[test]
-    fn the_default_budget_clears_detect_plus_one_quiet_interval() {
-        let floor = timeouts::ACTION_SETTLE_NAVIGATION_DETECT + timeouts::ACTION_SETTLE_DOM_QUIET;
-        assert!(
-            timeouts::ACTION_SETTLE_DEFAULT_TIMEOUT > floor,
-            "default settle budget {:?} cannot reach a comparison past {floor:?}",
-            timeouts::ACTION_SETTLE_DEFAULT_TIMEOUT
-        );
-    }
-
-    #[tokio::test]
-    async fn the_default_budget_settles_a_quiet_page() -> Result<(), CoreError> {
-        let (session, page_id) = harness(VecDeque::new(), VecDeque::new()).await?;
-        let outcome = wait_for_action_settle(
-            &session.pages,
-            page_id,
-            timeouts::ACTION_SETTLE_DEFAULT_TIMEOUT,
-        )
-        .await;
-        assert_eq!(
-            outcome,
-            SettleOutcome::Settled {
-                navigation_observed: false
-            }
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn a_budget_below_one_quiet_interval_expires() -> Result<(), CoreError> {
-        let (session, page_id) = harness(VecDeque::from([1, 2, 3]), VecDeque::new()).await?;
-        let budget = Duration::from_millis(50);
-        let start = Instant::now();
-        let outcome = wait_for_action_settle(&session.pages, page_id, budget).await;
-        assert_eq!(outcome, SettleOutcome::BudgetExpired);
-        assert!(start.elapsed() >= budget);
-        Ok(())
+    fn action_budgets_leave_room_for_a_quiet_interval_and_a_navigation() {
+        assert!(timeouts::ACTION_SETTLE_DEFAULT_TIMEOUT > timeouts::ACTION_SETTLE_DOM_QUIET * 2);
+        assert!(timeouts::ARRIVAL_READY_BUDGET > timeouts::ACTION_SETTLE_DEFAULT_TIMEOUT);
     }
 
     async fn stalled_session() -> Result<(Arc<BrowserSession>, crate::PageId), CoreError> {
         let connection = HarnessConnection::new(HarnessState {
-            tab_loads: VecDeque::new(),
-            current_tab: TabLoad::ready(),
-            mutation_reads: VecDeque::new(),
-            current_counter: 0,
-            fail_evaluate: false,
             readiness: VecDeque::new(),
             readiness_last: reading(0, false, true, true),
             stall_readiness: true,
@@ -736,42 +557,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn evaluate_failure_is_advisory() -> Result<(), CoreError> {
-        let connection = HarnessConnection::new(HarnessState {
-            tab_loads: VecDeque::new(),
-            current_tab: TabLoad::ready(),
-            mutation_reads: VecDeque::new(),
-            current_counter: 0,
-            fail_evaluate: true,
-            readiness: VecDeque::new(),
-            readiness_last: reading(0, false, true, true),
-            stall_readiness: false,
-        });
-        let session = BrowserSession::new(connection, BrowserSessionHooks::default());
-        let pages = session.pages.list().await?;
-        let page_id = pages
-            .first()
-            .ok_or_else(|| CoreError::Message("missing harness page".to_string()))?
-            .page_id
-            .clone();
-        let outcome =
-            wait_for_action_settle(&session.pages, page_id, Duration::from_millis(900)).await;
-        assert!(
-            matches!(outcome, SettleOutcome::Skipped { reason } if reason.contains("evaluate failed"))
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn a_showing_page_is_stable_after_one_quiet_interval() -> Result<(), CoreError> {
-        let (session, page_id) = harness_reading(
-            VecDeque::new(),
-            VecDeque::new(),
-            VecDeque::from([
-                reading(0, true, true, false),
-                reading(0, false, true, false),
-            ]),
-        )
+        let (session, page_id) = harness_reading(VecDeque::from([
+            reading(0, true, true, false),
+            reading(0, false, true, false),
+        ]))
         .await?;
         let start = Instant::now();
         let outcome =
@@ -792,12 +582,8 @@ mod tests {
     /// "stable" for a blank document, and the caller acts on nothing.
     #[tokio::test]
     async fn a_blank_page_is_not_called_ready() -> Result<(), CoreError> {
-        let (session, page_id) = harness_reading(
-            VecDeque::new(),
-            VecDeque::new(),
-            VecDeque::from([reading(0, false, false, false)]),
-        )
-        .await?;
+        let (session, page_id) =
+            harness_reading(VecDeque::from([reading(0, false, false, false)])).await?;
         let budget = Duration::from_millis(400);
         let start = Instant::now();
         let outcome = super::wait_for_page_ready(&session.pages, page_id, budget).await;
@@ -809,12 +595,8 @@ mod tests {
     /// A document that really is empty should not burn the whole ceiling.
     #[tokio::test]
     async fn a_blank_but_complete_document_is_ready() -> Result<(), CoreError> {
-        let (session, page_id) = harness_reading(
-            VecDeque::new(),
-            VecDeque::new(),
-            VecDeque::from([reading(0, false, false, true)]),
-        )
-        .await?;
+        let (session, page_id) =
+            harness_reading(VecDeque::from([reading(0, false, false, true)])).await?;
         let start = Instant::now();
         let outcome =
             super::wait_for_page_ready(&session.pages, page_id, timeouts::ARRIVAL_READY_BUDGET)
@@ -828,15 +610,11 @@ mod tests {
     /// it carries nothing to compare against.
     #[tokio::test]
     async fn a_reinstalled_counter_is_never_compared_across() -> Result<(), CoreError> {
-        let (session, page_id) = harness_reading(
-            VecDeque::new(),
-            VecDeque::new(),
-            VecDeque::from([
-                reading(0, true, true, false),
-                reading(0, true, true, false),
-                reading(0, true, true, false),
-            ]),
-        )
+        let (session, page_id) = harness_reading(VecDeque::from([
+            reading(0, true, true, false),
+            reading(0, true, true, false),
+            reading(0, true, true, false),
+        ]))
         .await?;
         let outcome =
             super::wait_for_page_ready(&session.pages, page_id, Duration::from_millis(400)).await;
@@ -846,16 +624,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_page_still_filling_in_waits_for_it_to_stop() -> Result<(), CoreError> {
-        let (session, page_id) = harness_reading(
-            VecDeque::new(),
-            VecDeque::new(),
-            VecDeque::from([
-                reading(0, true, true, false),
-                reading(4, false, true, false),
-                reading(9, false, true, false),
-                reading(9, false, true, false),
-            ]),
-        )
+        let (session, page_id) = harness_reading(VecDeque::from([
+            reading(0, true, true, false),
+            reading(4, false, true, false),
+            reading(9, false, true, false),
+            reading(9, false, true, false),
+        ]))
         .await?;
         let start = Instant::now();
         let outcome =

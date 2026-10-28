@@ -16,17 +16,17 @@ pub const WAIT_FOR_CONNECTION_POLL: Duration = Duration::from_millis(50);
 /// by `ARRIVAL_READY_BUDGET` against the page's own content.
 pub const NEW_PAGE_ANSWERS_ATTEMPTS: usize = 10;
 pub const NEW_PAGE_READY_POLL: Duration = Duration::from_millis(100);
-/// Total automatic post-action settle budget.
+/// Automatic post-action settle budget when the action did not navigate.
 ///
-/// Has to clear the navigation detect window plus at least one quiet interval,
-/// or `wait_for_dom_quiet` runs out of budget before it can read the mutation
-/// counter a second time and the settle is inert. It was 50ms, below the 100ms
-/// quiet interval on its own, so every automatic settle returned
-/// `BudgetExpired` having installed an observer it never read twice.
+/// Has to clear more than one quiet interval, or the settle runs out before it
+/// can read the readiness counter a second time and is inert. It was once 50ms,
+/// below the 100ms interval on its own, so every settle expired unread. An
+/// action that starts a navigation gets `ARRIVAL_READY_BUDGET` instead.
 pub const ACTION_SETTLE_DEFAULT_TIMEOUT: Duration = Duration::from_millis(600);
-pub const ACTION_SETTLE_NAVIGATION_DETECT: Duration = Duration::from_millis(150);
-pub const ACTION_SETTLE_NAVIGATION_POLL: Duration = Duration::from_millis(50);
 pub const ACTION_SETTLE_DOM_QUIET: Duration = Duration::from_millis(100);
+/// How long a reload or history step may take to report its navigation starting before the
+/// load wait takes it to have stayed in the document (a fragment or pushState entry).
+pub const NAVIGATION_START_GRACE: Duration = Duration::from_millis(150);
 pub const ACTION_SETTLE_CDP_CALL_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Ceiling for deciding a freshly arrived page is ready to be acted on.

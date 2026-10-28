@@ -12,7 +12,8 @@ use crate::{
     trust_boundary::wrap_untrusted,
 };
 use browseros_core::{
-    ConsoleEntry, FrameId, PageId, Ref, observer::SnapshotResult, pointer, settle::SettleOutcome,
+    ConsoleEntry, DocumentMark, FrameId, PageId, Ref, observer::SnapshotResult, pointer,
+    settle::SettleOutcome,
 };
 use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
@@ -27,6 +28,9 @@ enum PostAction {
         page: u32,
         include_structured: bool,
         detail: DiffDetail,
+        /// Taken before the action ran, so the settle can tell a navigation it caused from
+        /// an earlier one.
+        since: DocumentMark,
     },
     Pages,
     Screenshot {
@@ -38,6 +42,7 @@ enum PostAction {
     Fields {
         page: u32,
         fields: Vec<FieldTarget>,
+        since: DocumentMark,
     },
 }
 
@@ -122,21 +127,37 @@ impl ToolResponse {
         }
     }
 
+    /// Appends the page's snapshot without settling first: callers return only after the page
+    /// was already found ready (goto, history and tab creation wait for readiness), and a
+    /// second wait was measured adding 300-600 ms to every `navigate` for nothing.
     pub fn include_snapshot(&mut self, page: u32) {
         self.post_actions.push(PostAction::Snapshot { page });
     }
 
-    pub fn include_diff(&mut self, page: u32, include_structured: bool, detail: DiffDetail) {
+    /// Appends what changed on the page, once the action that started at `since` has landed.
+    pub fn include_diff(
+        &mut self,
+        page: u32,
+        include_structured: bool,
+        detail: DiffDetail,
+        since: DocumentMark,
+    ) {
         self.post_actions.push(PostAction::Diff {
             page,
             include_structured,
             detail,
+            since,
         });
     }
 
-    /// Register after any diff of the same page, so the fields read the diff's capture.
-    pub fn include_fields(&mut self, page: u32, fields: Vec<FieldTarget>) {
-        self.post_actions.push(PostAction::Fields { page, fields });
+    /// Register after any diff of the same page, so the fields read the diff's capture. Without
+    /// one, they settle from `since` first, so a page script's reformatting has landed.
+    pub fn include_fields(&mut self, page: u32, fields: Vec<FieldTarget>, since: DocumentMark) {
+        self.post_actions.push(PostAction::Fields {
+            page,
+            fields,
+            since,
+        });
     }
 
     pub fn include_pages(&mut self) {
@@ -232,6 +253,7 @@ impl ToolResponse {
                 page,
                 include_structured,
                 detail,
+                ..
             } => {
                 self.throw_if_dialog_open(ctx, page)?;
                 let (diff, capture) = ctx
@@ -280,7 +302,7 @@ impl ToolResponse {
                 }
                 Ok(())
             }
-            PostAction::Fields { page, fields } => {
+            PostAction::Fields { page, fields, .. } => {
                 self.throw_if_dialog_open(ctx, page)?;
                 // Without a capture from this build, the observer's last one may predate the fill.
                 let capture = match self.captures.entry(page) {
@@ -371,9 +393,13 @@ impl ToolResponse {
         action: &PostAction,
         ctx: &ToolCtx,
     ) -> ToolExecResult<()> {
-        let Some(page) = action.settle_page() else {
+        let Some((page, since)) = action.settle_target() else {
             return Ok(());
         };
+        // Fields reuse a capture this response already took, and the page settled for that one.
+        if matches!(action, PostAction::Fields { .. }) && self.captures.contains_key(&page) {
+            return Ok(());
+        }
         if ctx
             .browser
             .signals()
@@ -388,7 +414,7 @@ impl ToolResponse {
             outcome = crate::settle::wait_for_action_settle(
                 &ctx.browser,
                 PageId(page),
-                browseros_core::timeouts::ACTION_SETTLE_DEFAULT_TIMEOUT,
+                since,
             ) => outcome,
         };
         match outcome {
@@ -495,12 +521,13 @@ impl BuiltToolResponse {
 }
 
 impl PostAction {
-    fn settle_page(&self) -> Option<u32> {
+    /// The page to settle before this post-action reads it, and the mark its action started at.
+    fn settle_target(&self) -> Option<(u32, DocumentMark)> {
         match self {
-            Self::Snapshot { page } | Self::Diff { page, .. } | Self::Fields { page, .. } => {
-                Some(*page)
+            Self::Diff { page, since, .. } | Self::Fields { page, since, .. } => {
+                Some((*page, *since))
             }
-            Self::Pages | Self::Screenshot { .. } => None,
+            Self::Snapshot { .. } | Self::Pages | Self::Screenshot { .. } => None,
         }
     }
 

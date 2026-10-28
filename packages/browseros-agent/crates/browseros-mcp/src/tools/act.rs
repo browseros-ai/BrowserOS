@@ -212,6 +212,9 @@ fn handler<'a>(
             return Ok(Some(result));
         }
         let console_start = ctx.browser.signals().console_mark(&page_id);
+        // Marked before the input goes out: a link click's navigation event can arrive before
+        // the input's own reply does.
+        let document_start = ctx.browser.signals().document_mark(&page_id);
         let input = ctx.browser.input(page_id.clone()).await?;
         let mut sensitivity = ActSensitivity::default();
         // Honor an explicit sensitive flag before the action runs: a value must
@@ -272,17 +275,17 @@ fn handler<'a>(
                 // A fill that stopped partway has typed into the fields before it; show them
                 // so the caller knows what the page holds before trying again.
                 if !filled.is_empty() {
-                    response.include_fields(args.page, filled);
+                    response.include_fields(args.page, filled, document_start);
                 }
                 return Err(err);
             }
         }
         response.data(json!({ "kind": args.kind.as_str() }));
         if let Some(detail) = resolve_diff_detail(args.diff) {
-            response.include_diff(args.page, true, detail);
+            response.include_diff(args.page, true, detail, document_start);
         }
         if !filled.is_empty() {
-            response.include_fields(args.page, filled);
+            response.include_fields(args.page, filled, document_start);
         }
         response.include_console_summary(args.page, console_start);
         Ok(Some(text_result(

@@ -1,6 +1,6 @@
 use crate::{
-    CoreError, PageId, PageJs, ProtocolSession,
-    page_signals::PageSignals,
+    CoreError, PageId, PageJs,
+    page_signals::{DocumentMark, DocumentSince, PageSignals},
     pages::{PageManager, PageSession},
     target::page_access::PageAccess,
     timeouts,
@@ -46,15 +46,22 @@ impl Navigation {
         }
         self.throw_if_dialog_open()?;
         let page = self.page_session().await?;
+        let mark = self.page_signals.document_mark(&self.page_id);
         let _: Value = page
             .session
             .send("Page.navigate", json!({ "url": url }))
             .await?;
+        // Chromium answers Page.navigate only once the document committed, so a navigation
+        // that has not started by now was a same-document one.
         wait_for_load(
-            &page.session,
+            &page,
             &self.page_signals,
             &self.page_id,
             self.access.as_deref(),
+            Arrival {
+                mark,
+                expects_new_document: false,
+            },
         )
         .await
     }
@@ -65,12 +72,17 @@ impl Navigation {
         }
         self.throw_if_dialog_open()?;
         let page = self.page_session().await?;
+        let mark = self.page_signals.document_mark(&self.page_id);
         let _: Value = page.session.send("Page.reload", json!({})).await?;
         wait_for_load(
-            &page.session,
+            &page,
             &self.page_signals,
             &self.page_id,
             self.access.as_deref(),
+            Arrival {
+                mark,
+                expects_new_document: true,
+            },
         )
         .await
     }
@@ -89,14 +101,19 @@ impl Navigation {
         }
         self.throw_if_dialog_open()?;
         let page = self.page_session().await?;
+        let mark = self.page_signals.document_mark(&self.page_id);
         let _: Value = PageJs::isolated(&page.session)
             .eval(&format!("history.{direction}()"))
             .await?;
         wait_for_load(
-            &page.session,
+            &page,
             &self.page_signals,
             &self.page_id,
             self.access.as_deref(),
+            Arrival {
+                mark,
+                expects_new_document: true,
+            },
         )
         .await
     }
@@ -108,6 +125,58 @@ impl Navigation {
             Ok(())
         }
     }
+}
+
+/// What a navigation command asked for, so the load wait can tell when it arrived.
+struct Arrival {
+    /// Taken before the command, so only a navigation started after it counts.
+    mark: DocumentMark,
+    /// Whether the command is acknowledged before its navigation starts (reload, history),
+    /// so the start gets a grace period. Without one, a navigation not started by the reply
+    /// is taken to have stayed in the document.
+    expects_new_document: bool,
+}
+
+/// Waits until the document `arrival` asked for has reached DOMContentLoaded, or loading
+/// stopped without one, or it never started within the grace. Dialogs and admission are
+/// checked each time round, like the readiness loop after it.
+async fn wait_for_document(
+    page: &PageSession,
+    page_signals: &PageSignals,
+    page_id: &PageId,
+    access: Option<&PageAccess>,
+    arrival: Arrival,
+    deadline: tokio::time::Instant,
+) -> Result<(), CoreError> {
+    let grace_ends = tokio::time::Instant::now() + timeouts::NAVIGATION_START_GRACE;
+    let mut changes = page_signals.document_changes();
+    while tokio::time::Instant::now() < deadline {
+        if let Some(access) = access {
+            access.fresh().await?;
+        }
+        if let Some(message) = page_signals.pending_dialog_line(page_id) {
+            return Err(CoreError::Message(message));
+        }
+        let until =
+            match page_signals.document_since(page_id, page.target_id.as_str(), arrival.mark) {
+                DocumentSince::Arrived => return Ok(()),
+                DocumentSince::Loading => deadline,
+                DocumentSince::Unchanged
+                    if arrival.expects_new_document && tokio::time::Instant::now() < grace_ends =>
+                {
+                    grace_ends
+                }
+                DocumentSince::Unchanged => return Ok(()),
+            };
+        // Re-checked at least every quiet interval, so a dialog opening is never missed.
+        let until = until
+            .min(deadline)
+            .min(tokio::time::Instant::now() + timeouts::ACTION_SETTLE_DOM_QUIET);
+        if let Ok(Err(_closed)) = tokio::time::timeout_at(until, changes.changed()).await {
+            return Ok(());
+        }
+    }
+    Ok(())
 }
 
 /// Waits for a navigation to arrive somewhere worth acting on.
@@ -122,14 +191,20 @@ impl Navigation {
 /// Everything else here is unchanged on purpose: the dialog check still runs
 /// each time round, a target error still propagates rather than being retried,
 /// and `fresh()` still admits before each shared read.
+///
+/// Readiness alone cannot tell the old document from the new one: a reload or a
+/// history step is acknowledged before its document replaces the old one, which
+/// then reads as quiet. So the asked-for document has to arrive first.
 async fn wait_for_load(
-    session: &ProtocolSession,
+    page: &PageSession,
     page_signals: &PageSignals,
     page_id: &PageId,
     access: Option<&PageAccess>,
+    arrival: Arrival,
 ) -> Result<(), CoreError> {
-    sleep(timeouts::WAIT_FOR_CONNECTION_POLL).await;
+    let session = &page.session;
     let deadline = tokio::time::Instant::now() + timeouts::ARRIVAL_READY_BUDGET;
+    wait_for_document(page, page_signals, page_id, access, arrival, deadline).await?;
     let mut previous: Option<u64> = None;
     while tokio::time::Instant::now() < deadline {
         // The sleep is an async handoff. Admit before reading the shared dialog cache, which

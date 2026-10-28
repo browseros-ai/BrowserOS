@@ -28,7 +28,9 @@ pub use capabilities::{BrowserOsVersion, NativeCapabilities, NativeFeature};
 pub use connection::{CdpConnection, ProtocolSession};
 pub use error::{CoreError, CoveredElementTarget, TargetError};
 pub use page_js::PageJs;
-pub use page_signals::{ConsoleEntry, ConsoleLevel, PageDialog, PageSignals};
+pub use page_signals::{
+    ConsoleEntry, ConsoleLevel, DocumentMark, DocumentSince, PageDialog, PageSignals,
+};
 pub use profiles::{
     BrowserProfileInfo, DEFAULT_PROFILE_DIRECTORY, LoadProfileOutcome, ProfileCandidate,
     ProfileMeta, ProfileSelector, default_profile, resolve_profile,
