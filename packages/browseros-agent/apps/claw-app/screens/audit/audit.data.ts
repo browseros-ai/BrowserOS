@@ -1,5 +1,5 @@
 import { useSearchParams } from 'react-router'
-import { useSessions } from '@/modules/api/audit.hooks'
+import { useAuditAgents, useSessions } from '@/modules/api/audit.hooks'
 import {
   type AgentOption,
   agentOptionsFor,
@@ -43,6 +43,7 @@ export function useAuditScreenData(): AuditScreenData {
   const [params, setParams] = useSearchParams()
   const filters = paramsToFilters(params)
 
+  const agents = useAuditAgents()
   const query = useSessions({
     variables: {
       slug: filters.agentSlug ?? undefined,
@@ -60,7 +61,7 @@ export function useAuditScreenData(): AuditScreenData {
   return {
     groups: groupByDay(tasks, Date.now()),
     loadedCount: tasks.length,
-    agentOptions: agentOptionsFor(tasks, filters.agentSlug),
+    agentOptions: agentOptionsFor(agents.data?.items ?? [], filters.agentSlug),
     isLoading: query.isPending,
     isError: query.isError,
     hasNextPage: Boolean(query.hasNextPage),

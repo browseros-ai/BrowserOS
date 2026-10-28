@@ -1,3 +1,4 @@
+import type { AuditAgent } from '@browseros/claw-api'
 import { agentIdentity } from '@/components/harness/harness.types'
 import type { TaskSummary } from '@/modules/api/audit.hooks'
 
@@ -19,32 +20,19 @@ export interface AgentOption {
 }
 
 /**
- * The agents seen in the loaded tasks, most active first, named the way the
- * task rows name them. Grouped by slug, since two sessions can announce the
- * same agent with different labels. A selected agent with no loaded task is
+ * Every agent in History, in the server's order (most tasks first), named the
+ * way the task rows name them. A selected agent the server does not list is
  * kept so the picker can still show and clear it.
  */
 export function agentOptionsFor(
-  tasks: readonly TaskSummary[],
+  agents: readonly AuditAgent[],
   selectedSlug: string | null,
 ): AgentOption[] {
-  const seen = new Map<string, AgentOption & { count: number }>()
-  for (const task of tasks) {
-    const existing = seen.get(task.slug)
-    if (existing) {
-      existing.count += 1
-      continue
-    }
-    seen.set(task.slug, {
-      slug: task.slug,
-      name: agentIdentity(task.harness, task.label || task.slug).name,
-      count: 1,
-    })
-  }
-  const options = [...seen.values()]
-    .sort((left, right) => right.count - left.count)
-    .map(({ slug, name }) => ({ slug, name }))
-  if (selectedSlug && !seen.has(selectedSlug)) {
+  const options = agents.map((agent) => ({
+    slug: agent.slug,
+    name: agentIdentity(undefined, agent.label || agent.slug).name,
+  }))
+  if (selectedSlug && !agents.some((agent) => agent.slug === selectedSlug)) {
     options.push({
       slug: selectedSlug,
       name: agentIdentity(undefined, selectedSlug).name,

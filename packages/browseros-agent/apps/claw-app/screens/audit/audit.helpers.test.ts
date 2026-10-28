@@ -64,20 +64,30 @@ describe('groupByDay', () => {
 })
 
 describe('agentOptionsFor', () => {
-  it('lists each agent once, most active first, and keeps a selected one', () => {
+  it('lists every agent in the server order and keeps a selected one it lacks', () => {
     const options = agentOptionsFor(
       [
-        task('done', { slug: 'cursor', label: 'Cursor' }),
-        task('done', { slug: 'codex', label: 'codex' }),
-        task('done', { slug: 'codex', label: 'Codex' }),
+        { slug: 'codex', label: 'Codex', taskCount: 9, lastStartedAt: 2 },
+        { slug: 'cursor', label: 'Cursor', taskCount: 1, lastStartedAt: 1 },
       ],
       'claude-code',
     )
-    expect(options.map((option) => option.slug)).toEqual([
-      'codex',
-      'cursor',
-      'claude-code',
+    expect(options).toEqual([
+      { slug: 'codex', name: 'Codex' },
+      { slug: 'cursor', name: 'Cursor' },
+      { slug: 'claude-code', name: 'Claude Code' },
     ])
+  })
+
+  it('keeps every agent listed while one of them is selected', () => {
+    const options = agentOptionsFor(
+      [
+        { slug: 'codex', label: 'Codex', taskCount: 9, lastStartedAt: 2 },
+        { slug: 'cursor', label: 'Cursor', taskCount: 1, lastStartedAt: 1 },
+      ],
+      'cursor',
+    )
+    expect(options.map((option) => option.slug)).toEqual(['codex', 'cursor'])
   })
 })
 
