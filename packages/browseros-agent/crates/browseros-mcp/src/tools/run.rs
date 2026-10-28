@@ -58,6 +58,7 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.read(selector?)               -> the page as a markdown STRING (large pages are truncated with a note pointing to a saved file)
   page.grep(pattern, { over, limit }?) -> matching lines as a STRING
   page.click(ref) / fill(ref,value) / hover(ref) / selectOption(ref,value)
+    fill types the value and leaves the result to the page, which may reformat it ("440 212") or reject it; after filling a form, page.snapshot() shows what each field holds
   page.check(ref) / uncheck(ref) / focus(ref) / drag(fromRef,toRef)
   page.type(text) / press(key) / insertText(text)   - these act on whatever has focus, so they take no ref
   page.scroll(dir,amount,ref?) / clickAt(x,y) / typeAt(x,y,text) / hoverAt(x,y) / dragAt(x1,y1,x2,y2)

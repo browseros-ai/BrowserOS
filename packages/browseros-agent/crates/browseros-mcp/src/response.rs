@@ -9,10 +9,15 @@ use crate::{
         snapshot::format_snapshot_result,
     },
     framework::{AuditHints, ToolCtx, ToolError, ToolExecResult, ToolResult, merge_structured},
+    trust_boundary::wrap_untrusted,
 };
-use browseros_core::{ConsoleEntry, DocumentMark, PageId, pointer, settle::SettleOutcome};
+use browseros_core::{
+    ConsoleEntry, DocumentMark, FrameId, PageId, Ref, observer::SnapshotResult, pointer,
+    settle::SettleOutcome,
+};
 use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
+use std::collections::{HashMap, hash_map::Entry};
 
 #[derive(Debug, Clone)]
 enum PostAction {
@@ -31,6 +36,24 @@ enum PostAction {
     Screenshot {
         page: u32,
     },
+    /// The lines a snapshot shows for fields an action just filled. Fill types the value and
+    /// leaves judging the result to the caller, so this is how the caller sees what the page
+    /// made of it: kept, reformatted ("440 212"), or rejected.
+    Fields {
+        page: u32,
+        fields: Vec<FieldTarget>,
+        since: DocumentMark,
+    },
+}
+
+/// A filled field: the ref the caller used, and the DOM node that ref named once the fill
+/// resolved it. The readback finds the field by that node.
+#[derive(Debug, Clone)]
+pub struct FieldTarget {
+    pub ref_id: Ref,
+    /// `None` when the ref named nothing the page knew at fill time.
+    pub node: Option<i64>,
+    pub frame: Option<FrameId>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +70,10 @@ pub struct ToolResponse {
     post_actions: Vec<PostAction>,
     console_summaries: Vec<ConsoleSummary>,
     audit_hints: Option<AuditHints>,
+    /// The full capture a snapshot or diff post-action took of each page during this build. A
+    /// later fields post-action reads that same capture, never the observer's shared latest one,
+    /// which another call on the page may have replaced since.
+    captures: HashMap<u32, SnapshotResult>,
 }
 
 #[derive(Debug, Clone)]
@@ -119,6 +146,16 @@ impl ToolResponse {
             page,
             include_structured,
             detail,
+            since,
+        });
+    }
+
+    /// Register after any diff of the same page, so the fields read the diff's capture. Without
+    /// one, they settle from `since` first, so a page script's reformatting has landed.
+    pub fn include_fields(&mut self, page: u32, fields: Vec<FieldTarget>, since: DocumentMark) {
+        self.post_actions.push(PostAction::Fields {
+            page,
+            fields,
             since,
         });
     }
@@ -209,6 +246,7 @@ impl ToolResponse {
                 let snapshot = observer.snapshot().await?;
                 let formatted = format_snapshot_result(&snapshot.text, &snapshot.url, ctx).await;
                 self.text(format!("[Page {page} snapshot]\n{}", formatted.text));
+                self.captures.insert(page, snapshot);
                 Ok(())
             }
             PostAction::Diff {
@@ -218,12 +256,13 @@ impl ToolResponse {
                 ..
             } => {
                 self.throw_if_dialog_open(ctx, page)?;
-                let diff = ctx
+                let (diff, capture) = ctx
                     .browser
                     .observe(browseros_core::PageId(page))
                     .await?
-                    .diff()
+                    .diff_with_capture()
                     .await?;
+                self.captures.insert(page, capture);
                 let origin = diff.after_url.as_deref().map(ToString::to_string);
                 let origin = match origin {
                     Some(origin) => origin,
@@ -261,6 +300,39 @@ impl ToolResponse {
                     }
                     self.data(structured);
                 }
+                Ok(())
+            }
+            PostAction::Fields { page, fields, .. } => {
+                self.throw_if_dialog_open(ctx, page)?;
+                // Without a capture from this build, the observer's last one may predate the fill.
+                let capture = match self.captures.entry(page) {
+                    Entry::Occupied(entry) => entry.into_mut(),
+                    Entry::Vacant(entry) => entry.insert(
+                        ctx.browser
+                            .observe(browseros_core::PageId(page))
+                            .await?
+                            .snapshot()
+                            .await?,
+                    ),
+                };
+                // A field whose ref changed (the page re-rendered it before the fill) shows the
+                // ref it carries now, after the one the caller used.
+                let text = fields
+                    .iter()
+                    .map(|field| {
+                        let shown = field
+                            .node
+                            .and_then(|node| capture.line_for(node, field.frame.as_ref()));
+                        match shown {
+                            Some((now, line)) if *now == field.ref_id => line.to_string(),
+                            Some((_, line)) => format!("{} → {line}", field.ref_id),
+                            None => format!("{}: not on the page now", field.ref_id),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let wrapped = wrap_untrusted(&text, &capture.url);
+                self.text(format!("[Page {page} fields]\n{wrapped}"));
                 Ok(())
             }
             PostAction::Pages => {
@@ -324,6 +396,10 @@ impl ToolResponse {
         let Some((page, since)) = action.settle_target() else {
             return Ok(());
         };
+        // Fields reuse a capture this response already took, and the page settled for that one.
+        if matches!(action, PostAction::Fields { .. }) && self.captures.contains_key(&page) {
+            return Ok(());
+        }
         if ctx
             .browser
             .signals()
@@ -448,16 +524,19 @@ impl PostAction {
     /// The page to settle before this post-action reads it, and the mark its action started at.
     fn settle_target(&self) -> Option<(u32, DocumentMark)> {
         match self {
-            Self::Diff { page, since, .. } => Some((*page, *since)),
+            Self::Diff { page, since, .. } | Self::Fields { page, since, .. } => {
+                Some((*page, *since))
+            }
             Self::Snapshot { .. } | Self::Pages | Self::Screenshot { .. } => None,
         }
     }
 
     fn page(&self) -> Option<u32> {
         match self {
-            Self::Snapshot { page } | Self::Diff { page, .. } | Self::Screenshot { page } => {
-                Some(*page)
-            }
+            Self::Snapshot { page }
+            | Self::Diff { page, .. }
+            | Self::Screenshot { page }
+            | Self::Fields { page, .. } => Some(*page),
             Self::Pages => None,
         }
     }
@@ -469,6 +548,7 @@ impl PostAction {
             Self::Diff { page, .. } => format!("[page {page} diff unavailable: {reason}]"),
             Self::Pages => format!("[pages unavailable: {reason}]"),
             Self::Screenshot { page } => format!("[page {page} screenshot unavailable: {reason}]"),
+            Self::Fields { page, .. } => format!("[page {page} fields unavailable: {reason}]"),
         }
     }
 }

@@ -728,6 +728,8 @@ mod tests {
         missing_geometry_after_move: bool,
         hit_test_after_move: Option<HitTestResponse>,
         field_value: String,
+        /// What the page's input handler turns typed text into, like a code field grouping digits.
+        reformat: Option<fn(&str) -> String>,
         tab_active: bool,
         tab_info_error: bool,
         tab_list_error: bool,
@@ -939,8 +941,11 @@ mod tests {
                     "Runtime.callFunctionOn" => self.call_function(params),
                     "Input.insertText" => {
                         if let Ok(mut state) = self.state.lock() {
-                            state.field_value =
-                                params["text"].as_str().unwrap_or_default().to_string();
+                            let typed = params["text"].as_str().unwrap_or_default();
+                            state.field_value = match state.reformat {
+                                Some(reformat) => reformat(typed),
+                                None => typed.to_string(),
+                            };
                         }
                         Ok(json!({}))
                     }
@@ -1092,6 +1097,7 @@ mod tests {
                 missing_geometry_after_move: false,
                 hit_test_after_move: None,
                 field_value: String::new(),
+                reformat: None,
                 tab_active: true,
                 tab_info_error: false,
                 tab_list_error: false,
@@ -1387,7 +1393,7 @@ mod tests {
                 14638203640916461425,
                 7395435797475900152,
                 6586471237564934084,
-                5034337445415157506,
+                10296638448501175693,
                 5312967615472211188,
                 4986025384446686415,
             ]
@@ -1945,6 +1951,21 @@ mod tests {
             .collect();
         assert_eq!(inserts.len(), 1);
         assert_eq!(inserts[0].params["text"], "s3cr3t-pa55");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_fill_leaves_a_value_the_page_reformats_for_the_caller_to_read()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // A verification-code field that groups digits as they are typed, like Overleaf's.
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| {
+            state.reformat = Some(|typed| format!("{} {}", &typed[..3], &typed[3..]));
+        })?;
+        input.fill(&ref_id, "440212", true).await?;
+        let mut shown = String::new();
+        connection.configure(|state| shown = state.field_value.clone())?;
+        assert_eq!(shown, "440 212");
         Ok(())
     }
 
