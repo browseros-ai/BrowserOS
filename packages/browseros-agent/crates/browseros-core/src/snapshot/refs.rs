@@ -18,6 +18,11 @@ pub struct RefEntry {
     /// Recomputed per snapshot and used only to recover a ref whose backend node id went stale.
     pub nth: usize,
     pub frame_id: Option<FrameId>,
+    /// Whether a stale ref may be re-found by role, name and [`Self::nth`].
+    ///
+    /// False for refs minted from ignored accessibility nodes: their role and name are shared
+    /// with unrelated elements, so a re-query would resolve the ref to the wrong one.
+    pub re_resolvable: bool,
 }
 
 #[cfg(test)]
@@ -445,13 +450,30 @@ impl RefMap {
     }
 
     pub fn mint(&mut self, node: MintRef<'_>) -> Ref {
-        let nth_key = NthKey {
-            frame_id: node.frame_id.cloned(),
-            role: node.role.to_string(),
-            name: node.name.to_string(),
+        self.mint_with_re_resolve(node, true)
+    }
+
+    /// Mints a ref for an ignored node the clickable scan hit.
+    ///
+    /// Role and name cannot tell it apart from an unrelated element, so it stays out of nth
+    /// counting and a stale one reports stale instead of being re-found by role and name.
+    pub(crate) fn mint_unresolvable(&mut self, node: MintRef<'_>) -> Ref {
+        self.mint_with_re_resolve(node, false)
+    }
+
+    fn mint_with_re_resolve(&mut self, node: MintRef<'_>, re_resolvable: bool) -> Ref {
+        let nth = if re_resolvable {
+            let nth_key = NthKey {
+                frame_id: node.frame_id.cloned(),
+                role: node.role.to_string(),
+                name: node.name.to_string(),
+            };
+            let nth = *self.nth_counter.get(&nth_key).unwrap_or(&0);
+            self.nth_counter.insert(nth_key, nth + 1);
+            nth
+        } else {
+            0
         };
-        let nth = *self.nth_counter.get(&nth_key).unwrap_or(&0);
-        self.nth_counter.insert(nth_key, nth + 1);
 
         let stable_key = node.document_id.map(|document_id| StableNodeKey {
             document_id: document_id.to_string(),
@@ -470,6 +492,7 @@ impl RefMap {
             name: node.name.to_string(),
             nth,
             frame_id: node.frame_id.cloned(),
+            re_resolvable,
         };
         if !self.by_ref.contains_key(&ref_id) {
             self.order.push(ref_id.clone());

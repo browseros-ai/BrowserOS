@@ -543,13 +543,12 @@ pub async fn resolve_ref_entry(
         });
     }
 
+    if !entry.re_resolvable {
+        return Err(stale_ref(entry));
+    }
     let fresh = find_by_role_name_nth(&fetch_ax_tree(session, ax_params).await?, entry);
     let Some(fresh) = fresh else {
-        return Err(CoreError::StaleRef {
-            ref_id: entry.ref_id.clone(),
-            role: entry.role.clone(),
-            name: entry.name.clone(),
-        });
+        return Err(stale_ref(entry));
     };
     entry.backend_node_id = fresh;
     Ok(ResolvedElement {
@@ -557,6 +556,14 @@ pub async fn resolve_ref_entry(
         backend_node_id: fresh,
         entry: entry.clone(),
     })
+}
+
+fn stale_ref(entry: &RefEntry) -> CoreError {
+    CoreError::StaleRef {
+        ref_id: entry.ref_id.clone(),
+        role: entry.role.clone(),
+        name: entry.name.clone(),
+    }
 }
 
 async fn is_live(session: &ProtocolSession, backend_node_id: i64) -> bool {
@@ -950,6 +957,49 @@ mod tests {
         };
         let result = resolve_ref_entry(&session, &mut entry, json!({})).await;
         assert!(matches!(result, Err(CoreError::StaleRef { .. })));
+        Ok(())
+    }
+
+    /// An ignored node's ref renders as a nameless generic. Re-querying that role and name would
+    /// land on a different, unrelated nameless generic instead of admitting the ref is gone.
+    #[tokio::test]
+    async fn ignored_cursor_hit_ref_goes_stale_instead_of_matching_another_generic()
+    -> Result<(), CoreError> {
+        let ax_tree = vec![
+            AxNode {
+                node_id: "root".to_string(),
+                role: Some(AxValue::role("RootWebArea")),
+                child_ids: Some(vec!["a".to_string()]),
+                ..AxNode::default()
+            },
+            AxNode {
+                node_id: "a".to_string(),
+                role: Some(AxValue::role("generic")),
+                backend_dom_node_id: Some(21),
+                ..AxNode::default()
+            },
+        ];
+        let connection = Arc::new(MockConnection {
+            live: HashSet::from([21]),
+            ax_tree,
+            releases: Mutex::new(Vec::new()),
+        });
+        let session = ProtocolSession::root(connection);
+        let mut refs = crate::snapshot::RefMap::new();
+        let ref_id = refs.mint_unresolvable(MintRef {
+            backend_node_id: 10,
+            role: "generic",
+            name: "",
+            document_id: None,
+            frame_id: None,
+        });
+        let mut entry = match refs.get(&ref_id).cloned() {
+            Some(entry) => entry,
+            None => return Err(CoreError::Message("missing ref".to_string())),
+        };
+        let result = resolve_ref_entry(&session, &mut entry, json!({})).await;
+        assert!(matches!(result, Err(CoreError::StaleRef { .. })));
+        assert_eq!(entry.backend_node_id, 10);
         Ok(())
     }
 
