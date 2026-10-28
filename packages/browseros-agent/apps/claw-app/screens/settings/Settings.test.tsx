@@ -15,6 +15,7 @@ import {
 } from 'bun:test'
 import type {
   AgentSettings,
+  AuditCleanupResult,
   AuditStorageState,
   SaveJevTokenRequest,
   UpdateAgentSettingsRequest,
@@ -45,6 +46,7 @@ const server: {
   tokenSaves: SaveJevTokenRequest[]
   tokenRemovals: number
   storage: () => Promise<AuditStorageState>
+  cleanup: () => Promise<AuditCleanupResult>
 } = {
   read: async () => settingsOf(),
   save: async (body) => settingsOf(body),
@@ -55,6 +57,13 @@ const server: {
   tokenSaves: [],
   tokenRemovals: 0,
   storage: () => new Promise(() => {}),
+  cleanup: async () => ({
+    sessionsDeleted: 2,
+    screenshotsDeleted: 0,
+    recordingsDeleted: 0,
+    bytesReclaimed: 0,
+    usage: { recordingBytes: 0, screenshotBytes: 0, totalBytes: 0 },
+  }),
 }
 const captured: { event: string; properties?: Record<string, unknown> }[] = []
 
@@ -75,6 +84,7 @@ mock.module('@/modules/api/client', () => ({
       return server.removeToken()
     },
     getAuditStorage: () => server.storage(),
+    runAuditCleanup: () => server.cleanup(),
   }),
 }))
 
@@ -137,6 +147,7 @@ mock.module('@/components/theme-provider', () => ({
 const CLEANUP_SWITCH = '[aria-label="Tidy up when a task finishes"]'
 
 const { useAgentSettings } = await import('@/modules/api/agent-settings.hooks')
+const { useAuditAgents } = await import('@/modules/api/audit.hooks')
 const { Settings } = await import('./Settings')
 
 afterAll(() => mock.restore())
@@ -307,6 +318,48 @@ describe('Settings screen interactions', () => {
   function saveError(): string | null | undefined {
     return container.querySelector('[role="alert"]')?.textContent
   }
+
+  it('tests that cleaning up history also refreshes History’s agent list', async () => {
+    // The confirm dialog animates; linkedom has no animation frames.
+    Object.assign(globalThis, {
+      requestAnimationFrame: (run: FrameRequestCallback) =>
+        setTimeout(() => run(0), 0),
+      cancelAnimationFrame: (id: number) => clearTimeout(id),
+    })
+    client.setQueryData(useAuditAgents.getKey(), {
+      items: [
+        { slug: 'codex', label: 'Codex', taskCount: 2, lastStartedAt: 1 },
+      ],
+    })
+    await mount()
+
+    // StatefulButton repeats its label in hidden sizing spans.
+    const buttonNamed = (text: string) => {
+      const match = [...document.querySelectorAll('button')].find((el) => {
+        const label = el.textContent ?? ''
+        return label !== '' && label.split(text).join('') === ''
+      })
+      if (!match) throw new Error(`missing button: ${text}`)
+      return match
+    }
+    await act(async () => {
+      buttonNamed('Clean up now').dispatchEvent(
+        new window.Event('click', { bubbles: true }),
+      )
+    })
+    await act(async () => {
+      buttonNamed('Clean up').dispatchEvent(
+        new window.Event('click', { bubbles: true }),
+      )
+    })
+    await settle()
+
+    expect(client.getQueryState(useAuditAgents.getKey())?.isInvalidated).toBe(
+      true,
+    )
+    Reflect.deleteProperty(globalThis, 'requestAnimationFrame')
+    Reflect.deleteProperty(globalThis, 'cancelAnimationFrame')
+  })
 
   it('tests that both cleanup tip states preserve human-help changes made in another settings page', async () => {
     let saved = settingsOf()

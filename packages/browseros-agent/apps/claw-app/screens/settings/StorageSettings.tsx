@@ -17,6 +17,7 @@ import {
 } from '@/components/motion/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
+  useAuditAgents,
   useAuditStorage,
   useRunAuditCleanup,
   useSessions,
@@ -52,9 +53,10 @@ export function StorageSettings() {
   const setRetention = useSetAuditRetention({ onSuccess: invalidateStorage })
   const runCleanup = useRunAuditCleanup({
     onSuccess: () => {
-      // The cleanup pruned History too, so refresh both.
+      // The cleanup pruned History too, so refresh its tasks and agents.
       invalidateStorage()
       void queryClient.invalidateQueries({ queryKey: useSessions.getKey() })
+      void queryClient.invalidateQueries({ queryKey: useAuditAgents.getKey() })
     },
   })
 
