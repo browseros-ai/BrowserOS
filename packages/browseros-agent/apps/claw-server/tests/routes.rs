@@ -689,7 +689,9 @@ async fn tests_that_turning_human_help_off_over_http_reaches_mcp_agents() -> any
         .collect();
     assert!(listed.contains(&"run"), "{listed:?}");
     assert!(!listed.contains(&"request_human_help"), "{listed:?}");
-    assert!(!listed.contains(&"await_human_help"), "{listed:?}");
+    // Still offered while the working overlay is on: a person can take a page over, and the
+    // agent waits for the hand back with it.
+    assert!(listed.contains(&"await_human_help"), "{listed:?}");
 
     let ask = json!({
         "jsonrpc": "2.0",
@@ -2876,7 +2878,7 @@ async fn task_name_on_any_call_names_the_session() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn help_events_announce_each_change_to_the_open_requests() -> anyhow::Result<()> {
-    use claw_server::services::help::HelpOpenParams;
+    use claw_server::services::help::{HelpOpenParams, HelpOrigin};
 
     let app = test_app().await?;
     let request = Request::builder()
@@ -2930,6 +2932,7 @@ async fn help_events_announce_each_change_to_the_open_requests() -> anyhow::Resu
                 browser_tab_id: Some(3),
                 url: None,
                 title: None,
+                origin: HelpOrigin::Agent,
             },
         )
         .await;

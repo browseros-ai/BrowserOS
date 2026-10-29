@@ -7,3 +7,4 @@
 pub mod browser_connected;
 pub mod captcha_busy;
 pub mod navigate_scheme;
+pub mod person_control;

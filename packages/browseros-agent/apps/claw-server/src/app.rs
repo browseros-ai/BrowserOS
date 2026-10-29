@@ -16,6 +16,7 @@ use crate::{
         cockpit::{CockpitQuery, SessionVisualService, TabActivityRecord, TabActivityService},
         harness::HarnessService,
         harness_skills::load_browserclaw_skill,
+        page_hold::PageHoldService,
         profiles::ProfileService,
         recordings::{LiveRecordingBus, RecordingIngestService, RecordingStore},
         replay::ReplayService,
@@ -67,6 +68,8 @@ pub struct AppState {
     pub capture: Arc<CaptureHub>,
     pub cockpit: Arc<CockpitQuery>,
     pub help: Arc<crate::services::help::HelpRegistry>,
+    /// Which tabs show the working overlay, and the person's take over and hand back.
+    pub page_hold: Arc<PageHoldService>,
     pub claude_desktop: Arc<crate::services::claude_desktop::ClaudeDesktop>,
     pub extension_updates: Arc<crate::services::extension_updates::ExtensionUpdates>,
     pub shutdown: ShutdownHandle,
@@ -167,14 +170,6 @@ impl AppState {
             analytics_sink,
         );
         sessions.set_target_bindings(targets.clone());
-        sessions.set_completion_hook(Arc::new({
-            let session_efficiency = session_efficiency.clone();
-            let skill_runs = skill_runs.clone();
-            move |session_id| {
-                skill_runs.spawn_finalize(session_id.clone());
-                let _ = session_efficiency.queue_finalize(session_id);
-            }
-        }));
         let tab_registry = TabRegistry::new(session_tabs.clone());
         let browser = BrowserService::new(
             config.cdp_port,
@@ -235,6 +230,28 @@ impl AppState {
             tab_activity.clone(),
         ));
         let captcha = crate::services::captcha::CaptchaService::from_env(config.mode);
+        let help = Arc::new(crate::services::help::HelpRegistry::new(HELP_MAX_WAIT));
+        let page_hold = PageHoldService::new(
+            config.behavior.working_overlay,
+            agent_settings.clone(),
+            help.clone(),
+            sessions.clone(),
+            browser.clone(),
+            analytics.clone(),
+        );
+        page_hold.spawn(shutdown.child_token());
+        sessions.set_completion_hook(Arc::new({
+            let session_efficiency = session_efficiency.clone();
+            let skill_runs = skill_runs.clone();
+            let page_hold = page_hold.clone();
+            move |session_id| {
+                skill_runs.spawn_finalize(session_id.clone());
+                let page_hold = page_hold.clone();
+                let owner = crate::ids::SessionId::new(session_id.clone());
+                tokio::spawn(async move { page_hold.finish_session(&owner).await });
+                let _ = session_efficiency.queue_finalize(session_id);
+            }
+        }));
         Ok(Self {
             config,
             audit_log,
@@ -266,7 +283,8 @@ impl AppState {
             visuals,
             capture,
             cockpit,
-            help: Arc::new(crate::services::help::HelpRegistry::new(HELP_MAX_WAIT)),
+            help,
+            page_hold,
             claude_desktop,
             extension_updates: Arc::default(),
             shutdown,

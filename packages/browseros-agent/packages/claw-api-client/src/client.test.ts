@@ -159,6 +159,7 @@ describe('ClawApiClient', () => {
         return Response.json({
           humanHelpEnabled: false,
           taskCleanupTipEnabled: false,
+          workingOverlayEnabled: true,
           jevTokenSource: 'none',
         })
       },
@@ -167,6 +168,7 @@ describe('ClawApiClient', () => {
     const settings = {
       humanHelpEnabled: false,
       taskCleanupTipEnabled: false,
+      workingOverlayEnabled: true,
       jevTokenSource: 'none',
     } as const
     await expect(client.getAgentSettings()).resolves.toEqual(settings)
@@ -194,6 +196,7 @@ describe('ClawApiClient', () => {
         return Response.json({
           humanHelpEnabled: true,
           taskCleanupTipEnabled: false,
+          workingOverlayEnabled: true,
           jevTokenSource: request.method === 'PUT' ? 'settings' : 'none',
         })
       },
@@ -204,11 +207,13 @@ describe('ClawApiClient', () => {
     ).resolves.toEqual({
       humanHelpEnabled: true,
       taskCleanupTipEnabled: false,
+      workingOverlayEnabled: true,
       jevTokenSource: 'settings',
     })
     await expect(client.removeJevToken()).resolves.toEqual({
       humanHelpEnabled: true,
       taskCleanupTipEnabled: false,
+      workingOverlayEnabled: true,
       jevTokenSource: 'none',
     })
 

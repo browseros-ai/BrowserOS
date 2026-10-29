@@ -55,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
     let config = Arc::new(claw_server::config::Config::load(config_path)?);
     // Process-wide and fixed from here on; every page script reads it as it runs.
     browseros_core::page_js::set_isolated_world_enabled(config.behavior.isolated_world);
+    browseros_core::overlay::set_enabled(config.behavior.working_overlay);
     let _guard = init_tracing(config.clone())?;
     log_native_identity(&config);
     // A boot that fails before the server binds used to leave no reason in the log: the error went
@@ -133,6 +134,7 @@ fn log_native_identity(config: &claw_server::config::Config) {
     info!(
         tab_grouping = config.behavior.tab_grouping.as_str(),
         isolated_world = config.behavior.isolated_world,
+        working_overlay = config.behavior.working_overlay,
         file_env = claw_server::config::BEHAVIOR_FILE_ENV,
         "server behaviour"
     );

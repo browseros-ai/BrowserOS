@@ -24,6 +24,10 @@ pub struct Behavior {
     /// page cannot see or tamper with (`browseros_core::page_js`). Off runs every script in the
     /// page's own world, as before isolated worlds; it is the rollout's off switch.
     pub isolated_world: bool,
+    /// Whether pages neo acts on show the working overlay and hold the person's input until they
+    /// take over (`browseros_core::overlay`). The person can still turn it off in Settings; this
+    /// is the rollout's off switch.
+    pub working_overlay: bool,
 }
 
 impl Behavior {
@@ -35,6 +39,11 @@ impl Behavior {
                 ServerMode::Hosted => TabGrouping::Explicit,
             },
             isolated_world: true,
+            // A hosted harness drives tabs nobody sits in front of.
+            working_overlay: match mode {
+                ServerMode::Desktop => true,
+                ServerMode::Hosted => false,
+            },
         }
     }
 }
@@ -119,6 +128,14 @@ const KNOBS: &[Knob] = &[
         key: "isolated_world",
         apply: |behavior, value| {
             behavior.isolated_world = value.try_into()?;
+            Ok(())
+        },
+    },
+    Knob {
+        section: "pages",
+        key: "working_overlay",
+        apply: |behavior, value| {
+            behavior.working_overlay = value.try_into()?;
             Ok(())
         },
     },

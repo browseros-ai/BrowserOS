@@ -4,7 +4,7 @@ use crate::{
     config::TokenSource,
     error::CanonicalError,
     error::RequestId,
-    services::agent_settings::{HumanHelp, MAX_JEV_TOKEN},
+    services::agent_settings::{AgentSettingsUpdate, HumanHelp, MAX_JEV_TOKEN},
 };
 use axum::{
     Extension, Json,
@@ -55,17 +55,23 @@ pub(super) async fn update_agent(
             &request_id,
             StatusCode::BAD_REQUEST,
             "invalid_request",
-            "humanHelpEnabled and taskCleanupTipEnabled must be booleans",
+            "humanHelpEnabled, taskCleanupTipEnabled and workingOverlayEnabled must be booleans",
         )
     };
     let Json(payload) = payload.map_err(|_| invalid_settings())?;
-    if payload.human_help_enabled.is_none() && payload.task_cleanup_tip_enabled.is_none() {
+    if payload.human_help_enabled.is_none()
+        && payload.task_cleanup_tip_enabled.is_none()
+        && payload.working_overlay_enabled.is_none()
+    {
         return Err(invalid_settings());
     }
-    let human_help = payload.human_help_enabled.map(HumanHelp::from_enabled);
     state
         .agent_settings
-        .update(human_help, payload.task_cleanup_tip_enabled)
+        .update(AgentSettingsUpdate {
+            human_help: payload.human_help_enabled.map(HumanHelp::from_enabled),
+            task_cleanup_tip_enabled: payload.task_cleanup_tip_enabled,
+            working_overlay_enabled: payload.working_overlay_enabled,
+        })
         .await
         .map_err(|source| internal(&request_id, source))?;
     Ok(Json(settings_of(&state)))
@@ -127,6 +133,7 @@ fn settings_of(state: &AppState) -> AgentSettings {
     AgentSettings::new(
         state.agent_settings.human_help().is_enabled(),
         state.agent_settings.task_cleanup_tip_enabled(),
+        state.agent_settings.working_overlay_enabled(),
         to_contract_source(state.agent_settings.jev_token_source()),
     )
 }

@@ -53,12 +53,14 @@ struct TokenFile {
     jev_token: String,
 }
 
-/// The file's shape. A missing key keeps human help and the cleanup tip on, so `{}` changes nothing.
+/// The file's shape. A missing key keeps human help, the cleanup tip and the working overlay on,
+/// so `{}` changes nothing.
 #[derive(Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct SettingsFile {
     human_help_enabled: bool,
     task_cleanup_tip_enabled: bool,
+    working_overlay_enabled: bool,
 }
 
 impl Default for SettingsFile {
@@ -66,14 +68,24 @@ impl Default for SettingsFile {
         Self {
             human_help_enabled: true,
             task_cleanup_tip_enabled: true,
+            working_overlay_enabled: true,
         }
     }
+}
+
+/// One save of the agent switches; a `None` keeps the saved value.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AgentSettingsUpdate {
+    pub human_help: Option<HumanHelp>,
+    pub task_cleanup_tip_enabled: Option<bool>,
+    pub working_overlay_enabled: Option<bool>,
 }
 
 pub struct AgentSettingsStore {
     files: JsonStore,
     human_help_enabled: AtomicBool,
     task_cleanup_tip_enabled: AtomicBool,
+    working_overlay_enabled: AtomicBool,
     /// Whether a saved token exists, for the synchronous readers that only need
     /// to know whether to offer the tool.
     jev_token_saved: AtomicBool,
@@ -121,6 +133,7 @@ impl AgentSettingsStore {
             files,
             human_help_enabled: AtomicBool::new(settings.human_help_enabled),
             task_cleanup_tip_enabled: AtomicBool::new(settings.task_cleanup_tip_enabled),
+            working_overlay_enabled: AtomicBool::new(settings.working_overlay_enabled),
             jev_token_saved: AtomicBool::new(saved.is_some()),
             jev_token: RwLock::new(saved),
             jev_token_from_environment: from_environment.as_deref().and_then(usable),
@@ -194,28 +207,41 @@ impl AgentSettingsStore {
         self.task_cleanup_tip_enabled.load(Ordering::Acquire)
     }
 
-    /// Saves first and only then updates the live value, so a failed save changes nothing.
-    pub async fn set_human_help(&self, human_help: HumanHelp) -> AppResult<()> {
-        self.update(Some(human_help), None).await
+    /// Whether pages neo acts on show the working overlay. The server's rollout switch gates it
+    /// too; this is the person's own off switch.
+    #[must_use]
+    pub fn working_overlay_enabled(&self) -> bool {
+        self.working_overlay_enabled.load(Ordering::Acquire)
     }
 
-    pub async fn update(
-        &self,
-        human_help: Option<HumanHelp>,
-        task_cleanup_tip_enabled: Option<bool>,
-    ) -> AppResult<()> {
+    /// Saves first and only then updates the live value, so a failed save changes nothing.
+    pub async fn set_human_help(&self, human_help: HumanHelp) -> AppResult<()> {
+        self.update(AgentSettingsUpdate {
+            human_help: Some(human_help),
+            ..AgentSettingsUpdate::default()
+        })
+        .await
+    }
+
+    pub async fn update(&self, update: AgentSettingsUpdate) -> AppResult<()> {
         let _write = self.writes.lock().await;
-        let human_help = human_help.unwrap_or_else(|| self.human_help());
+        let human_help = update.human_help.unwrap_or_else(|| self.human_help());
         let file = SettingsFile {
             human_help_enabled: human_help.is_enabled(),
-            task_cleanup_tip_enabled: task_cleanup_tip_enabled
+            task_cleanup_tip_enabled: update
+                .task_cleanup_tip_enabled
                 .unwrap_or_else(|| self.task_cleanup_tip_enabled()),
+            working_overlay_enabled: update
+                .working_overlay_enabled
+                .unwrap_or_else(|| self.working_overlay_enabled()),
         };
         self.files.write_json(AGENT_SETTINGS_FILE, &file).await?;
         self.human_help_enabled
             .store(human_help.is_enabled(), Ordering::Release);
         self.task_cleanup_tip_enabled
             .store(file.task_cleanup_tip_enabled, Ordering::Release);
+        self.working_overlay_enabled
+            .store(file.working_overlay_enabled, Ordering::Release);
         Ok(())
     }
 }

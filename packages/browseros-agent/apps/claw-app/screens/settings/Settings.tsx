@@ -45,6 +45,7 @@ import { UltrafastKey } from './UltrafastKey'
 
 const HUMAN_HELP_ID = 'human-help'
 const CLEANUP_TIP_ID = 'task-cleanup-tip'
+const WORKING_OVERLAY_ID = 'working-overlay'
 const THEME_ID = 'theme'
 /**
  * The flag that reveals the token field.
@@ -126,6 +127,17 @@ function AgentSwitches() {
     )
   }
 
+  const handleWorkingOverlayChange = (workingOverlayEnabled: boolean) => {
+    updateSettings.mutate(
+      { workingOverlayEnabled },
+      {
+        onSuccess: (saved) => {
+          queryClient.setQueryData(useAgentSettings.getKey(), saved)
+        },
+      },
+    )
+  }
+
   if (settings.isError) {
     return (
       <SettingsSection title="While your AI works">
@@ -171,6 +183,20 @@ function AgentSwitches() {
             ariaDescribedBy={`${CLEANUP_TIP_ID}-description`}
             checked={settings.data?.taskCleanupTipEnabled ?? true}
             onCheckedChange={handleCleanupTipChange}
+            disabled={busy}
+          />
+        }
+      />
+      <SettingRow
+        id={WORKING_OVERLAY_ID}
+        title="Show when neo is working on a page"
+        description="The page neo is using lights up and holds your clicks and typing, so you don’t bump into each other. Take over on the page whenever you need it."
+        control={
+          <Switch
+            ariaLabel="Show when neo is working on a page"
+            ariaDescribedBy={`${WORKING_OVERLAY_ID}-description`}
+            checked={settings.data?.workingOverlayEnabled ?? true}
+            onCheckedChange={handleWorkingOverlayChange}
             disabled={busy}
           />
         }

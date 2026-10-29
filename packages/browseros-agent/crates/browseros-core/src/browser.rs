@@ -2,6 +2,7 @@ use crate::{
     BrowserView, CoreError, NativeCapabilities, PageId, PageJs, ProtocolSession, TabId,
     TargetBinding,
     connection::CdpConnection,
+    overlay,
     pages::PageInfo,
     pointer,
     screenshot::ScreenshotFormat,
@@ -144,11 +145,15 @@ impl Browser {
             params.insert("quality".to_string(), Value::from(quality));
         }
         let hidden = pointer::hide_for_capture(&session).await;
+        let overlay_hidden = overlay::hide_for_capture(&session).await;
         let screenshot = session
             .send::<_, CaptureScreenshotResult>("Page.captureScreenshot", Value::Object(params))
             .await;
         if hidden {
             pointer::restore_after_capture(&session).await;
+        }
+        if overlay_hidden {
+            overlay::restore_after_capture(&session).await;
         }
         let screenshot = screenshot?;
         let dpr_result = PageJs::isolated(&session)

@@ -2087,6 +2087,7 @@ async fn get_agent_settings(app: &TestApp) -> anyhow::Result<(StatusCode, Vec<u8
 fn assert_agent_settings(body: &serde_json::Value, human_help: bool) {
     assert_eq!(body["humanHelpEnabled"], json!(human_help));
     assert!(body["taskCleanupTipEnabled"].is_boolean());
+    assert!(body["workingOverlayEnabled"].is_boolean());
     let source = body["jevTokenSource"].as_str().unwrap_or_default();
     assert!(
         ["settings", "environment", "none"].contains(&source),
@@ -2094,7 +2095,7 @@ fn assert_agent_settings(body: &serde_json::Value, human_help: bool) {
     );
     assert_eq!(
         body.as_object().map(serde_json::Map::len),
-        Some(3),
+        Some(4),
         "the reply must carry nothing else, and above all not the token"
     );
 }
@@ -2152,6 +2153,38 @@ async fn tests_that_cleanup_tip_is_on_by_default_and_saved_independently() -> an
 }
 
 #[tokio::test]
+async fn tests_that_the_working_overlay_is_on_by_default_and_saved_on_its_own() -> anyhow::Result<()>
+{
+    let app = test_app().await?;
+    let (_, bytes) = get_agent_settings(&app).await?;
+    assert_eq!(json_body(&bytes)?["workingOverlayEnabled"], true);
+    assert!(app.state.agent_settings.working_overlay_enabled());
+
+    let (status, bytes) =
+        put_agent_settings(&app, json!({ "taskCleanupTipEnabled": false }).to_string()).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&bytes)?["workingOverlayEnabled"], true);
+
+    let (status, bytes) =
+        put_agent_settings(&app, json!({ "workingOverlayEnabled": false }).to_string()).await?;
+    assert_eq!(status, StatusCode::OK);
+    let body = json_body(&bytes)?;
+    assert_eq!(body["workingOverlayEnabled"], false);
+    assert_eq!(body["taskCleanupTipEnabled"], false);
+    assert!(!app.state.agent_settings.working_overlay_enabled());
+    let saved: serde_json::Value = serde_json::from_slice(
+        &tokio::fs::read(app.state.config.browserclaw_dir.join("agent-settings.json")).await?,
+    )?;
+    assert_eq!(saved["workingOverlayEnabled"], false);
+
+    let (status, bytes) =
+        put_agent_settings(&app, json!({ "workingOverlayEnabled": "off" }).to_string()).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(&bytes)?["code"], "invalid_request");
+    Ok(())
+}
+
+#[tokio::test]
 async fn tests_that_cleanup_only_updates_preserve_the_saved_human_help_choice() -> anyhow::Result<()>
 {
     let app = test_app().await?;
@@ -2200,7 +2233,8 @@ async fn tests_that_a_non_boolean_human_help_setting_is_rejected() -> anyhow::Re
         let error = json_body(&bytes)?;
         assert_eq!(error["code"], "invalid_request", "{body}");
         assert_eq!(
-            error["message"], "humanHelpEnabled and taskCleanupTipEnabled must be booleans",
+            error["message"],
+            "humanHelpEnabled, taskCleanupTipEnabled and workingOverlayEnabled must be booleans",
             "{body}"
         );
     }

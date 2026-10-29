@@ -40,7 +40,7 @@ use std::{
 /// Chromium reuses an isolated world by name, so every script in a document shares this one and
 /// state a script leaves there (the pointer, the settle counters) lasts as long as the document.
 /// An empty name would create a fresh world on every call.
-const WORLD_NAME: &str = "browseros";
+pub(crate) const WORLD_NAME: &str = "browseros";
 
 /// Returned by a guarded isolated call whose node is not in the document of the world it was
 /// resolved into. The call is then repeated in the page world. See [`guard_document`].

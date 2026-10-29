@@ -234,6 +234,22 @@ impl Session {
         completed_before_stop
     }
 
+    /// Cancels one in-flight call without closing admission, so the session keeps working: the
+    /// person took over the page the call was acting on.
+    pub async fn interrupt_dispatch(&self, dispatch_id: &DispatchId) -> bool {
+        let token = self
+            .dispatches
+            .lock()
+            .await
+            .active
+            .get(dispatch_id)
+            .cloned();
+        token.is_some_and(|token| {
+            token.cancel();
+            true
+        })
+    }
+
     pub async fn active_dispatch_count(&self) -> usize {
         self.dispatches.lock().await.active.len()
     }

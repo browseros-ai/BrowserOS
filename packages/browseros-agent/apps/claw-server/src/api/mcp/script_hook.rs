@@ -117,6 +117,46 @@ impl InnerCallHook for ScriptInnerCallHook {
         })
     }
 
+    fn begin_page_work<'a>(
+        &'a self,
+        method: &'a str,
+        page: u32,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            if !changes_page(method) {
+                return Ok(());
+            }
+            let (Some(identity), Some(browser)) = (self.identity(), &self.call.browser_session)
+            else {
+                return Ok(());
+            };
+            self.call
+                .state
+                .page_hold
+                .begin_action(
+                    browser,
+                    PageId(page),
+                    identity.session.id(),
+                    &self.call.dispatch_id,
+                    crate::services::page_hold::labels::for_script(method),
+                    None,
+                )
+                .await
+        })
+    }
+
+    fn end_page_work<'a>(&'a self, page: u32) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            if let Some(browser) = &self.call.browser_session {
+                self.call
+                    .state
+                    .page_hold
+                    .end_action(browser, PageId(page), &self.call.dispatch_id)
+                    .await;
+            }
+        })
+    }
+
     fn record<'a>(&'a self, record: InnerCallRecord<'a>) -> BoxFuture<'a, ()> {
         // Strip the internal `tool:` routing prefix so the audit shows the plain
         // capability (read, wait, screenshot) rather than a routing detail.
@@ -339,6 +379,66 @@ fn child_result_meta(is_error: bool, from_helper: bool) -> String {
         object.insert("fromHelper".to_string(), Value::Bool(true));
     }
     value.to_string()
+}
+
+/// Script primitives that change a page and so hold it under the working overlay. Reads
+/// (`observe.*`, `tool:snapshot`, raw CDP that only reads, ...) never do.
+fn changes_page(method: &str) -> bool {
+    if let Some(cdp) = method.strip_prefix("cdp:") {
+        return !reads_only(cdp);
+    }
+    method.starts_with("input.")
+        || method.starts_with("nav.")
+        || matches!(
+            method,
+            "tool:act"
+                | "tool:navigate"
+                | "tool:upload"
+                | "tool:download"
+                | "tool:evaluate_in_page"
+        )
+}
+
+/// Raw CDP methods that only read the page. Anything else (navigation, input, script,
+/// DOM writes) is treated as changing it.
+fn reads_only(cdp_method: &str) -> bool {
+    let (domain, command) = cdp_method.split_once('.').unwrap_or((cdp_method, ""));
+    matches!(domain, "Accessibility" | "DOMSnapshot")
+        || matches!(domain, "DOM" | "CSS" | "Page" | "Network" | "Target")
+            && ["get", "describe", "query", "capture", "search", "resolve"]
+                .iter()
+                .any(|verb| command.starts_with(verb))
+}
+
+#[cfg(test)]
+mod page_work_tests {
+    use super::changes_page;
+
+    #[test]
+    fn raw_cdp_holds_a_page_unless_it_only_reads() {
+        for method in [
+            "cdp:Page.navigate",
+            "cdp:Input.dispatchMouseEvent",
+            "cdp:Runtime.evaluate",
+            "cdp:DOM.setAttributeValue",
+            "cdp:CSS.setStyleTexts",
+            "input.click",
+            "nav.goto",
+            "tool:act",
+        ] {
+            assert!(changes_page(method), "{method}");
+        }
+        for method in [
+            "cdp:DOM.getDocument",
+            "cdp:Page.captureScreenshot",
+            "cdp:Accessibility.getFullAXTree",
+            "cdp:CSS.getComputedStyleForNode",
+            "observe.snapshot",
+            "tool:snapshot",
+        ] {
+            assert!(!changes_page(method), "{method}");
+        }
+    }
 }
 
 #[cfg(test)]

@@ -74,6 +74,10 @@ pub enum CoreError {
         required: BrowserOsVersion,
         reported: Option<BrowserOsVersion>,
     },
+    #[error(
+        "The person took over this page. Do not act on it: call await_human_help to wait until they hand it back, or work in another tab."
+    )]
+    PersonControl,
     #[error(transparent)]
     Cdp(#[from] CdpError),
     #[error(transparent)]

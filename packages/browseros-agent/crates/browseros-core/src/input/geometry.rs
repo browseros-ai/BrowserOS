@@ -130,6 +130,25 @@ pub async fn get_element_center(
     })
 }
 
+/// The element's content box in `session`'s viewport CSS pixels, from its first content quad.
+pub async fn get_element_rect(
+    session: &ProtocolSession,
+    backend_node_id: i64,
+) -> Result<crate::overlay::Rect, CoreError> {
+    let quads = session
+        .send::<_, QuadsResult>(
+            "DOM.getContentQuads",
+            json!({ "backendNodeId": backend_node_id }),
+        )
+        .await?;
+    let quad = quads
+        .quads
+        .and_then(|quads| quads.into_iter().next())
+        .filter(|quad| quad.len() >= 8)
+        .ok_or_else(|| CoreError::Message("Could not get element bounds.".to_string()))?;
+    Ok(quad_bounds(&quad))
+}
+
 pub async fn scroll_into_view(session: &ProtocolSession, backend_node_id: i64) {
     let _ = session
         .send::<_, Value>(
@@ -238,10 +257,39 @@ function() {
 }
 "#;
 
+fn quad_bounds(quad: &[f64]) -> crate::overlay::Rect {
+    let xs = [quad[0], quad[2], quad[4], quad[6]];
+    let ys = [quad[1], quad[3], quad[5], quad[7]];
+    let left = xs.iter().copied().fold(f64::INFINITY, f64::min);
+    let top = ys.iter().copied().fold(f64::INFINITY, f64::min);
+    let right = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let bottom = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    crate::overlay::Rect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    }
+}
+
 fn quad_center(quad: &[f64]) -> Point {
     Point {
         x: (quad[0] + quad[2] + quad[4] + quad[6]) / 4.0,
         y: (quad[1] + quad[3] + quad[5] + quad[7]) / 4.0,
+    }
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::quad_bounds;
+
+    #[test]
+    fn a_rotated_quad_reads_as_its_bounding_box() {
+        let rect = quad_bounds(&[10.0, 0.0, 20.0, 10.0, 10.0, 20.0, 0.0, 10.0]);
+        assert_eq!(
+            (rect.x, rect.y, rect.width, rect.height),
+            (0.0, 0.0, 20.0, 20.0)
+        );
     }
 }
 

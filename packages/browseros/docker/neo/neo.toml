@@ -25,3 +25,9 @@
 # JavaScript world the page cannot see. false runs them in the page's own
 # world. Needs a claw-server newer than 0.0.84.
 # isolated_world = true
+
+# [pages]
+# Whether a page neo acts on shows that neo is working on it and holds the
+# person's clicks and typing until they take over. Needs a claw-server newer
+# than 0.0.84.
+# working_overlay = false

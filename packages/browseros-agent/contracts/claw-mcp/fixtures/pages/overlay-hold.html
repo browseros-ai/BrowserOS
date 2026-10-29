@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Overlay hold fixture</title>
+    <style>
+      body { margin: 0; font-family: sans-serif; height: 2400px; }
+      #cart { position: absolute; left: 40px; top: 120px; width: 200px; height: 60px; }
+      #search { position: absolute; left: 40px; top: 220px; width: 200px; height: 30px; }
+    </style>
+  </head>
+  <body>
+    <h1>Trail shoes</h1>
+    <button id="cart" type="button">Add to cart</button>
+    <input id="search" aria-label="Search" type="text" />
+    <script>
+      window.clicks = 0
+      window.pageClicks = 0
+      document.getElementById('cart').addEventListener('click', () => {
+        window.clicks += 1
+      })
+      document.addEventListener('click', () => {
+        window.pageClicks += 1
+      })
+    </script>
+  </body>
+</html>

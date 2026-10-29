@@ -177,6 +177,25 @@ pub trait InnerCallHook: Send + Sync {
     /// script as a thrown error.
     fn authorize<'a>(&'a self, page: Option<u32>) -> BoxFuture<'a, Result<(), String>>;
 
+    /// Called just before a primitive that addresses `page` runs, after `authorize`. The host may
+    /// show that the page is being worked on, or refuse with `Err(reason)`, thrown to the script.
+    /// Every `Ok` is followed by [`InnerCallHook::end_page_work`].
+    fn begin_page_work<'a>(
+        &'a self,
+        method: &'a str,
+        page: u32,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        let _ = (method, page);
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Called once a primitive [`InnerCallHook::begin_page_work`] let through has finished,
+    /// whatever its outcome.
+    fn end_page_work<'a>(&'a self, page: u32) -> BoxFuture<'a, ()> {
+        let _ = page;
+        Box::pin(async {})
+    }
+
     /// Record a completed inner primitive as a child audit row.
     fn record<'a>(&'a self, record: InnerCallRecord<'a>) -> BoxFuture<'a, ()>;
 

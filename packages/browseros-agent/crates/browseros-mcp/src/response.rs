@@ -12,7 +12,7 @@ use crate::{
     trust_boundary::wrap_untrusted,
 };
 use browseros_core::{
-    ConsoleEntry, DocumentMark, FrameId, PageId, Ref, observer::SnapshotResult, pointer,
+    ConsoleEntry, DocumentMark, FrameId, PageId, Ref, observer::SnapshotResult, overlay, pointer,
     settle::SettleOutcome,
 };
 use rmcp::model::ContentBlock;
@@ -370,6 +370,7 @@ impl ToolResponse {
                     data: String,
                 }
                 let hidden = pointer::hide_for_capture(&page_session.session).await;
+                let overlay_hidden = overlay::hide_for_capture(&page_session.session).await;
                 let result = page_session
                     .session
                     .send::<_, CaptureScreenshotResult>(
@@ -379,6 +380,9 @@ impl ToolResponse {
                     .await;
                 if hidden {
                     pointer::restore_after_capture(&page_session.session).await;
+                }
+                if overlay_hidden {
+                    overlay::restore_after_capture(&page_session.session).await;
                 }
                 let result = result?;
                 self.text(format!("[Page {page} screenshot]"));
