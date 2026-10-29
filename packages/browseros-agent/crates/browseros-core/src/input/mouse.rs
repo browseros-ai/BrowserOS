@@ -2,9 +2,14 @@ use crate::{
     CoreError, ProtocolSession,
     input::{ClickOptions, Point},
 };
+use browseros_cdp::CdpEvent;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::Duration;
+use tokio::sync::broadcast::{
+    self,
+    error::{RecvError, TryRecvError},
+};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -143,27 +148,35 @@ pub async fn dispatch_drag(
     to: Point,
 ) -> Result<(), CoreError> {
     // Subscribe before enabling interception so an intercepted drag cannot be missed.
-    let mut intercepted = session.events_targeted("Input.dragIntercepted");
+    let mut events = session.events();
+    // Arm cleanup before the enable is sent: a cancellation can land after Chrome applied it.
+    let mut drag = DragGuard::new(session);
     let intercepting = session
         .send::<_, Value>("Input.setInterceptDrags", json!({ "enabled": true }))
         .await
         .is_ok();
-    let result = drag_gesture(session, from, to, intercepting.then_some(&mut intercepted)).await;
-    if intercepting {
-        let _ = session
-            .send::<_, Value>("Input.setInterceptDrags", json!({ "enabled": false }))
-            .await;
-    }
+    drag.intercepting = intercepting;
+    let result = drag_gesture(
+        session,
+        &mut drag,
+        from,
+        to,
+        intercepting.then_some(&mut events),
+    )
+    .await;
+    drag.finish(session).await;
     result
 }
 
 async fn drag_gesture(
     session: &ProtocolSession,
+    drag: &mut DragGuard,
     from: Point,
     to: Point,
-    mut intercepted: Option<&mut tokio::sync::mpsc::UnboundedReceiver<browseros_cdp::CdpEvent>>,
+    mut intercepted: Option<&mut broadcast::Receiver<CdpEvent>>,
 ) -> Result<(), CoreError> {
     dispatch_hover(session, from.x, from.y).await?;
+    drag.gesture = Gesture::Held(from);
     dispatch_held(session, "mousePressed", from).await?;
     let mut drag_data: Option<Value> = None;
     let steps = crate::timeouts::DRAG_STEPS;
@@ -174,9 +187,11 @@ async fn drag_gesture(
             y: from.y + (to.y - from.y) * fraction,
         };
         if let Some(data) = &drag_data {
+            drag.gesture = Gesture::Dragging(point, data.clone());
             dispatch_drag_event(session, "dragOver", point, data).await?;
             continue;
         }
+        drag.gesture = Gesture::Held(point);
         dispatch_held(session, "mouseMoved", point).await?;
         if let Some(events) = intercepted.as_deref_mut() {
             let grace = if step == 1 {
@@ -186,23 +201,96 @@ async fn drag_gesture(
             };
             drag_data = next_intercepted_drag(session, events, grace).await;
             if let Some(data) = &drag_data {
+                drag.gesture = Gesture::Dragging(point, data.clone());
                 dispatch_drag_event(session, "dragEnter", point, data).await?;
             }
         }
     }
     match drag_data {
         // The drop ends the browser's drag; a release on top of it would also click there.
-        Some(data) => dispatch_drag_event(session, "drop", to, &data).await,
-        None => {
-            let _: Value = session
-                .send(
-                    "Input.dispatchMouseEvent",
-                    json!({ "type": "mouseReleased", "x": to.x, "y": to.y, "button": "left", "buttons": 0, "clickCount": 1 }),
-                )
-                .await?;
-            Ok(())
+        Some(data) => dispatch_drag_event(session, "drop", to, &data).await?,
+        None => release_left(session, to).await?,
+    }
+    drag.gesture = Gesture::Ended;
+    Ok(())
+}
+
+/// How far a drag got, so one that stops early is ended the way it was started.
+enum Gesture {
+    NotStarted,
+    /// The left button is down at this point; the page may be running a script-driven drag.
+    Held(Point),
+    /// Chromium intercepted a native drag carrying this data; only a drag event ends it.
+    Dragging(Point, Value),
+    Ended,
+}
+
+/// Ends a drag however its future ends. A run timeout, or a dialog the gesture opens, drops
+/// the future mid-gesture; without this the page keeps the button held, and with interception
+/// still on, Chromium keeps swallowing every later drag in that tab, the user's own included.
+struct DragGuard {
+    /// Reaches the page even after its admission is revoked; used only by the dropped path.
+    endpoint: ProtocolSession,
+    gesture: Gesture,
+    intercepting: bool,
+    finished: bool,
+}
+
+impl DragGuard {
+    fn new(session: &ProtocolSession) -> Self {
+        Self {
+            endpoint: session.cancellation_endpoint(),
+            gesture: Gesture::NotStarted,
+            intercepting: true,
+            finished: false,
         }
     }
+
+    /// Releases whatever the gesture still holds and turns interception off. The gesture's own
+    /// error, if any, is what the caller reports, so a cleanup failure is not.
+    async fn finish(&mut self, session: &ProtocolSession) {
+        self.finished = true;
+        let gesture = std::mem::replace(&mut self.gesture, Gesture::Ended);
+        end_drag(session, gesture, self.intercepting).await;
+    }
+}
+
+impl Drop for DragGuard {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        let gesture = std::mem::replace(&mut self.gesture, Gesture::Ended);
+        let endpoint = self.endpoint.clone();
+        let intercepting = self.intercepting;
+        tokio::spawn(async move { end_drag(&endpoint, gesture, intercepting).await });
+    }
+}
+
+async fn end_drag(session: &ProtocolSession, gesture: Gesture, intercepting: bool) {
+    let released = match gesture {
+        Gesture::Held(at) => release_left(session, at).await,
+        Gesture::Dragging(at, data) => dispatch_drag_event(session, "dragCancel", at, &data).await,
+        Gesture::NotStarted | Gesture::Ended => Ok(()),
+    };
+    if let Err(error) = released {
+        tracing::debug!(%error, "could not end an unfinished drag");
+    }
+    if intercepting {
+        let _ = session
+            .send::<_, Value>("Input.setInterceptDrags", json!({ "enabled": false }))
+            .await;
+    }
+}
+
+async fn release_left(session: &ProtocolSession, at: Point) -> Result<(), CoreError> {
+    let _: Value = session
+        .send(
+            "Input.dispatchMouseEvent",
+            json!({ "type": "mouseReleased", "x": at.x, "y": at.y, "button": "left", "buttons": 0, "clickCount": 1 }),
+        )
+        .await?;
+    Ok(())
 }
 
 /// A mouse event with the left button held, which is what makes a move part of a drag.
@@ -236,23 +324,32 @@ async fn dispatch_drag_event(
 }
 
 /// The drag data of a native drag this session started, waiting up to `grace` for it.
+///
+/// The connection carries every page's events, so a drag on another page is skipped here
+/// rather than taken. Events lost to a lagging receiver read as no drag, which ends the
+/// gesture with a mouse release instead of a drop.
 async fn next_intercepted_drag(
     session: &ProtocolSession,
-    events: &mut tokio::sync::mpsc::UnboundedReceiver<browseros_cdp::CdpEvent>,
+    events: &mut broadcast::Receiver<CdpEvent>,
     grace: Duration,
 ) -> Option<Value> {
     let deadline = tokio::time::Instant::now() + grace;
     loop {
         let event = match events.try_recv() {
             Ok(event) => event,
-            Err(_empty) if tokio::time::Instant::now() < deadline => {
-                tokio::time::timeout_at(deadline, events.recv())
-                    .await
-                    .ok()??
+            Err(TryRecvError::Lagged(_)) => continue,
+            Err(TryRecvError::Empty) if tokio::time::Instant::now() < deadline => {
+                match tokio::time::timeout_at(deadline, events.recv()).await {
+                    Ok(Ok(event)) => event,
+                    Ok(Err(RecvError::Lagged(_))) => continue,
+                    Ok(Err(RecvError::Closed)) | Err(_) => return None,
+                }
             }
-            Err(_empty) => return None,
+            Err(TryRecvError::Empty | TryRecvError::Closed) => return None,
         };
-        if event.session_id.as_ref() == session.session_id() {
+        if event.method == "Input.dragIntercepted"
+            && event.session_id.as_ref() == session.session_id()
+        {
             return event.params.get("data").cloned();
         }
     }

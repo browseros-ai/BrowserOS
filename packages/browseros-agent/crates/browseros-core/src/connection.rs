@@ -219,11 +219,12 @@ impl ProtocolSession {
         self.session_id.as_ref()
     }
 
-    /// Events of one method from this session's connection, delivered outside the broadcast
-    /// ring so a burst of other traffic cannot drop them. They come from every session on the
-    /// connection; callers keep the ones whose session id matches [`Self::session_id`].
-    pub(crate) fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
-        self.connection.events_targeted(method)
+    /// A new subscription to every event on this session's connection, from all of its
+    /// sessions; callers keep the ones whose session id matches [`Self::session_id`]. Each
+    /// call gets its own receiver, so concurrent operations on different pages never compete
+    /// for one channel.
+    pub(crate) fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        self.connection.events()
     }
 
     #[must_use]

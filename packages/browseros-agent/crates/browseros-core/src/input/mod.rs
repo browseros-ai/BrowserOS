@@ -796,7 +796,13 @@ mod tests {
         check_state_after_click: Option<Value>,
         /// Whether a held move starts a native drag that the browser intercepts.
         native_drag: bool,
-        drag_intercepts: Option<tokio::sync::mpsc::UnboundedSender<CdpEvent>>,
+        /// The sessions whose native drag has started, so each reports one interception.
+        drags_started: Vec<Option<String>>,
+        /// Each drag event sent, with the session it went to.
+        drag_events: Vec<(Option<String>, String)>,
+        /// The held move (counting from 1) that never gets an answer, to cancel a drag mid-way.
+        stall_held_move: Option<usize>,
+        held_moves: usize,
         /// The field is a date/time/colour/range input, which fill sets instead of typing.
         value_control: bool,
         /// What the set-value script answers: true, or the reason the value was refused.
@@ -806,11 +812,34 @@ mod tests {
 
     struct HarnessConnection {
         state: Mutex<HarnessState>,
+        events: broadcast::Sender<CdpEvent>,
+        /// Routes like `CdpClient`: one targeted subscriber per method, each new one replacing
+        /// the last, and the broadcast ring when none is live.
+        targeted: Mutex<std::collections::HashMap<String, tokio::sync::mpsc::UnboundedSender<CdpEvent>>>,
         target_role: &'static str,
         target_name: &'static str,
     }
 
     impl HarnessConnection {
+        fn emit(&self, event: CdpEvent) {
+            let Ok(mut targeted) = self.targeted.lock() else {
+                return;
+            };
+            let event = match targeted.get(&event.method) {
+                Some(sender) => match sender.send(event) {
+                    Ok(()) => return,
+                    Err(rejected) => {
+                        let event = rejected.0;
+                        targeted.remove(&event.method);
+                        event
+                    }
+                },
+                None => event,
+            };
+            drop(targeted);
+            let _ = self.events.send(event);
+        }
+
         fn mouse_calls(&self) -> Result<Vec<(Value, Instant)>, CoreError> {
             Ok(self
                 .state
@@ -876,14 +905,20 @@ mod tests {
             &'a self,
             method: &'a str,
             params: Value,
-            _session: Option<&'a crate::SessionId>,
+            session: Option<&'a crate::SessionId>,
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
             Box::pin(async move {
+                let session_name = session.map(|session| session.0.clone());
                 self.configure(|state| {
                     state.calls.push(TestCall {
                         method: method.to_string(),
                         params: params.clone(),
                     });
+                    if method == "Input.dispatchDragEvent"
+                        && let Some(kind) = params["type"].as_str()
+                    {
+                        state.drag_events.push((session_name.clone(), kind.to_string()));
+                    }
                 })
                 .map_err(|err| CdpError::Protocol {
                     code: -1,
@@ -1017,7 +1052,12 @@ mod tests {
                         }
                         Ok(json!({}))
                     }
+                    "Input.setInterceptDrags" => {
+                        tokio::task::yield_now().await;
+                        Ok(json!({}))
+                    }
                     "Input.dispatchMouseEvent" => {
+                        let mut stall = false;
                         if let Ok(mut state) = self.state.lock() {
                             state.mouse_events += 1;
                             if params["type"] == "mousePressed"
@@ -1025,18 +1065,23 @@ mod tests {
                             {
                                 state.check_state = after;
                             }
-                            if params["type"] == "mouseMoved"
-                                && params["buttons"] == 1
-                                && state.native_drag
-                                && let Some(intercepts) = state.drag_intercepts.take()
-                            {
-                                let _ = intercepts.send(CdpEvent {
-                                    method: "Input.dragIntercepted".to_string(),
-                                    params: json!({ "data": { "items": [], "dragOperationsMask": 1 } }),
-                                    session_id: Some(browseros_cdp::SessionId("session-1".to_string())),
-                                });
+                            if params["type"] == "mouseMoved" && params["buttons"] == 1 {
+                                state.held_moves += 1;
+                                stall = state.stall_held_move == Some(state.held_moves);
+                                if state.native_drag && !state.drags_started.contains(&session_name)
+                                {
+                                    state.drags_started.push(session_name.clone());
+                                    self.emit(CdpEvent {
+                                        method: "Input.dragIntercepted".to_string(),
+                                        params: json!({ "data": { "items": [], "dragOperationsMask": 1 } }),
+                                        session_id: session.cloned(),
+                                    });
+                                }
                             }
                             state.mouse_calls.push((params, Instant::now()));
+                        }
+                        if stall {
+                            std::future::pending::<()>().await;
                         }
                         Ok(json!({}))
                     }
@@ -1074,16 +1119,13 @@ mod tests {
         }
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
-            let (_tx, rx) = broadcast::channel(1);
-            rx
+            self.events.subscribe()
         }
 
         fn events_targeted(&self, method: &str) -> tokio::sync::mpsc::UnboundedReceiver<CdpEvent> {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-            if method == "Input.dragIntercepted"
-                && let Ok(mut state) = self.state.lock()
-            {
-                state.drag_intercepts = Some(tx);
+            if let Ok(mut targeted) = self.targeted.lock() {
+                targeted.insert(method.to_string(), tx);
             }
             rx
         }
@@ -1219,11 +1261,16 @@ mod tests {
                 check_state: Value::Null,
                 check_state_after_click: None,
                 native_drag: false,
-                drag_intercepts: None,
+                drags_started: Vec::new(),
+                drag_events: Vec::new(),
+                stall_held_move: None,
+                held_moves: 0,
                 value_control: false,
                 set_value_result: json!(true),
                 set_values: Vec::new(),
             }),
+            events: broadcast::channel(64).0,
+            targeted: Mutex::new(std::collections::HashMap::new()),
             target_role,
             target_name,
         });
@@ -2294,6 +2341,62 @@ mod tests {
         assert!(
             sent(&calls, "Input.dispatchMouseEvent")
                 .all(|params| params["type"] != "mouseReleased")
+        );
+        assert_eq!(
+            sent(&calls, "Input.setInterceptDrags").last(),
+            Some(&json!({ "enabled": false }))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_drags_on_two_pages_at_once_each_drop() -> Result<(), CoreError> {
+        let (connection, _input, _ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| state.native_drag = true)?;
+        let page = |id: &str| {
+            crate::ProtocolSession::for_session(
+                connection.clone(),
+                browseros_cdp::SessionId(id.to_string()),
+            )
+        };
+        let (first, second) = (page("page-a"), page("page-b"));
+        let (from, to) = (Point { x: 10.0, y: 10.0 }, Point { x: 90.0, y: 90.0 });
+        // Both drags subscribe before either moves, the way two runs' drags overlap.
+        let (a, b) = tokio::join!(
+            super::mouse::dispatch_drag(&first, from, to),
+            super::mouse::dispatch_drag(&second, from, to)
+        );
+        a?;
+        b?;
+        let drag_events = connection
+            .state
+            .lock()
+            .map(|state| state.drag_events.clone())
+            .unwrap_or_default();
+        for page in ["page-a", "page-b"] {
+            let drops = drag_events
+                .iter()
+                .filter(|(session, kind)| session.as_deref() == Some(page) && kind == "drop")
+                .count();
+            assert_eq!(drops, 1, "{page} should drop its own drag");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_drag_cancelled_mid_gesture_releases_the_button_and_stops_intercepting()
+    -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| state.stall_held_move = Some(3))?;
+        connection.take_calls()?;
+        let drag = tokio::time::timeout(Duration::from_secs(1), input.drag(&ref_id, &ref_id));
+        assert!(drag.await.is_err(), "the stalled drag should be cancelled");
+        // Cleanup runs on its own task once the drag future is dropped.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let calls = connection.take_calls()?;
+        assert!(
+            sent(&calls, "Input.dispatchMouseEvent")
+                .any(|params| params["type"] == "mouseReleased" && params["buttons"] == 0)
         );
         assert_eq!(
             sent(&calls, "Input.setInterceptDrags").last(),
