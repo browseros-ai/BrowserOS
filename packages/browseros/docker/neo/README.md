@@ -172,6 +172,8 @@ zoom your own browser or device.
   (`Input.synthesizePinchGesture`).
 - `setViewport`'s `zoom` scales its mobile preview through DevTools emulation, not browser zoom,
   and still works, as does F11 fullscreen.
+- In `setViewport`'s mobile mode the mouse acts as a finger, as in DevTools' device mode: a drag
+  scrolls or draws as a touch would, and a double tap does not zoom.
 
 ### Bundled extensions
 
