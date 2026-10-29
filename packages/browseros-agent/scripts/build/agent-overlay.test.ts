@@ -59,8 +59,8 @@ function page(options: { frame?: boolean } = {}) {
     )
   const api = () =>
     world[key] as {
-      yieldInput(): string
-      resumeInput(): boolean
+      yieldInput(expiryMs: number): number | string
+      resumeInput(id: number | string): boolean
       hide(): boolean
       reveal(): boolean
     }
@@ -101,19 +101,35 @@ describe('working overlay script', () => {
     const { run, api } = page()
     expect(run({ op: 'beat', expiryMs: 35_000 }).status).toBe('absent')
     run(show)
-    expect(api().yieldInput()).toBe('yielded')
-    expect(api().resumeInput()).toBe(true)
+    const id = api().yieldInput(30_000)
+    expect(typeof id).toBe('number')
+    expect(api().resumeInput(id)).toBe(true)
     run({ ...show, phase: 'person', label: '' })
-    expect(api().yieldInput()).toBe('person')
+    expect(api().yieldInput(30_000)).toBe('person')
   })
 
   test('tests that concurrent actions each keep the shield down until the last one ends', () => {
     const { run, api } = page()
     run(show)
-    expect(api().yieldInput()).toBe('yielded')
-    expect(api().yieldInput()).toBe('yielded')
-    expect(api().resumeInput()).toBe(false)
-    expect(api().resumeInput()).toBe(true)
+    const first = api().yieldInput(30_000)
+    const second = api().yieldInput(30_000)
+    expect(api().resumeInput(first)).toBe(false)
+    expect(api().resumeInput(second)).toBe(true)
+  })
+
+  test('tests that a cancelled action stops holding the shield down while neo keeps acting', async () => {
+    const { run, api } = page()
+    run(show)
+    // Never resumed: its action was cancelled.
+    api().yieldInput(60)
+    for (let action = 0; action < 4; action += 1) {
+      const id = api().yieldInput(60)
+      await Bun.sleep(30)
+      const shieldUp = api().resumeInput(id)
+      // The cancelled action lapses 60ms after it started; later actions never extend it.
+      if (action === 0) expect(shieldUp).toBe(false)
+      if (action >= 2) expect(shieldUp).toBe(true)
+    }
   })
 
   test('tests that a held phase never overrides the person until the server resumes', () => {

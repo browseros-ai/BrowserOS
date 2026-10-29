@@ -188,8 +188,8 @@ pub async fn install_binding(session: &ProtocolSession) -> Result<(), CoreError>
 pub enum Yield {
     /// No overlay is drawn, or it could not be reached: send input as usual.
     Absent,
-    /// The shield is down until [`resume_input`].
-    Yielded,
+    /// The shield is down until [`resume_input`] with this id, or the page lets it lapse.
+    Yielded(u64),
     /// The person took over on the page: neo must not send input.
     Person,
 }
@@ -213,19 +213,20 @@ async fn call<T: serde::de::DeserializeOwned>(
 /// so neo is never blocked by a shield it cannot lower; the page's own safety timer raises
 /// it again.
 pub async fn yield_input(session: &ProtocolSession) -> Yield {
+    let expiry = timeouts::OVERLAY_YIELD_EXPIRY.as_millis();
     let expression = format!(
-        "(()=>{{try{{const o={API};return o?o.yieldInput():'absent';}}catch(_){{return 'absent';}}}})()"
+        "(()=>{{try{{const o={API};return o?o.yieldInput({expiry}):'absent';}}catch(_){{return 'absent';}}}})()"
     );
-    match call::<String>(session, &expression).await.as_deref() {
-        Some("yielded") => Yield::Yielded,
-        Some("person") => Yield::Person,
+    match call::<Value>(session, &expression).await {
+        Some(Value::Number(id)) => id.as_u64().map_or(Yield::Absent, Yield::Yielded),
+        Some(Value::String(status)) if status == "person" => Yield::Person,
         _ => Yield::Absent,
     }
 }
 
-pub async fn resume_input(session: &ProtocolSession) {
+pub async fn resume_input(session: &ProtocolSession, id: u64) {
     let expression = format!(
-        "(()=>{{try{{const o={API};return !!(o&&o.resumeInput());}}catch(_){{return false;}}}})()"
+        "(()=>{{try{{const o={API};return !!(o&&o.resumeInput({id}));}}catch(_){{return false;}}}})()"
     );
     let _ = call::<bool>(session, &expression).await;
 }
@@ -239,9 +240,9 @@ where
     match yield_input(session).await {
         Yield::Person => Err(CoreError::PersonControl),
         Yield::Absent => action.await,
-        Yield::Yielded => {
+        Yield::Yielded(id) => {
             let result = action.await;
-            resume_input(session).await;
+            resume_input(session, id).await;
             result
         }
     }
@@ -350,7 +351,7 @@ mod tests {
     #[tokio::test]
     async fn input_is_wrapped_in_a_yield_and_a_resume_even_when_it_fails()
     -> Result<(), Box<dyn std::error::Error>> {
-        let connection = TestConnection::new(isolated(&[json!("yielded"), json!(true)]));
+        let connection = TestConnection::new(isolated(&[json!(7), json!(true)]));
         let session = ProtocolSession::root(connection.clone());
         let result: Result<(), CoreError> =
             with_yield(&session, async { Err(CoreError::CrossFrameDrag) }).await;
@@ -362,8 +363,8 @@ mod tests {
             .map(|call| expression(call).to_string())
             .collect();
         assert_eq!(scripts.len(), 2);
-        assert!(scripts[0].contains("yieldInput()"));
-        assert!(scripts[1].contains("resumeInput()"));
+        assert!(scripts[0].contains("yieldInput(30000)"));
+        assert!(scripts[1].contains("resumeInput(7)"));
         Ok(())
     }
 

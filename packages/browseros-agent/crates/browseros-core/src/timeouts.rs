@@ -50,6 +50,9 @@ pub const POINTER_IDLE: Duration = Duration::from_millis(4_000);
 pub const OVERLAY_DEADLINE: Duration = Duration::from_millis(500);
 /// Cap on the no-wait overlay calls: yield, resume and screenshot hide/show.
 pub const OVERLAY_EFFECT_DEADLINE: Duration = Duration::from_millis(250);
+/// A yield whose action never resumed it (the action was cancelled) lapses after this, so the
+/// person's input is held again. Long enough for neo to type a long text into a slow page.
+pub const OVERLAY_YIELD_EXPIRY: Duration = Duration::from_secs(30);
 /// The page removes the overlay and its shield on its own when no beat arrives for this long,
 /// so a server that died can never leave a person's page held.
 pub const OVERLAY_EXPIRY: Duration = Duration::from_secs(35);

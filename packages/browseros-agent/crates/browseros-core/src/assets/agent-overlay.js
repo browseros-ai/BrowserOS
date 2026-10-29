@@ -143,8 +143,16 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
       let state = null;
       let label = '';
       let yielded = false;
-      // Every input action neo has in flight; concurrent actions each hold the shield down.
-      let yieldDepth = 0;
+      // Every input action neo has in flight, each with its own expiry, so concurrent actions
+      // each hold the shield down and one that is never resumed cannot keep it down for others.
+      const yields = new Map();
+      let yieldSeq = 0;
+      const syncYields = () => { yielded = yields.size > 0; sync(); };
+      const clearYields = () => {
+        for (const timer of yields.values()) clearTimeout(timer);
+        yields.clear();
+        yielded = false;
+      };
       let captureDepth = 0;
       let queue = [];
       let lastReachIn = 0;
@@ -196,9 +204,7 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
       const releaseTouch = () => { if (layer) layer.dataset.touch = 'off'; };
       const takeOver = (via) => {
         if (!held() && !(yielded && HELD.has(state))) return;
-        yielded = false;
-        yieldDepth = 0;
-        clear('yield');
+        clearYields();
         enter('person', { label: COPY.paused });
         emit({ type: 'take-over', via });
       };
@@ -330,8 +336,7 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
         host = layer = null;
         el = {};
         state = null;
-        yielded = false;
-        yieldDepth = 0;
+        clearYields();
         captureDepth = 0;
       };
       const arm = (expiryMs) => later('expiry', expiryMs || 35000, dispose);
@@ -355,25 +360,21 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
           arm(expiryMs);
           return { status: state, events: drain() };
         },
-        yieldInput() {
+        yieldInput(expiryMs) {
           if (!layer) return 'absent';
           if (state === 'person' || state === 'handing') return 'person';
-          yielded = true;
-          yieldDepth += 1;
-          // A yield that is never resumed must not leave the page unheld for good. Long enough
-          // for neo to type a long text into a slow page, and restarted by every new action.
-          later('yield', 30000, () => { yielded = false; yieldDepth = 0; sync(); });
-          sync();
-          return 'yielded';
+          const id = ++yieldSeq;
+          // A yield that is never resumed (its action was cancelled) must not leave the page
+          // unheld: it lapses on its own, long enough for neo to type into a slow page.
+          yields.set(id, setTimeout(() => { yields.delete(id); syncYields(); }, expiryMs || 30000));
+          syncYields();
+          return id;
         },
-        resumeInput() {
+        resumeInput(id) {
           if (!layer) return false;
-          yieldDepth = Math.max(0, yieldDepth - 1);
-          if (!yieldDepth) {
-            yielded = false;
-            clear('yield');
-          }
-          sync();
+          clearTimeout(yields.get(id));
+          yields.delete(id);
+          syncYields();
           // True once the shield is back up; false while another action still holds it down.
           return !yielded;
         },
