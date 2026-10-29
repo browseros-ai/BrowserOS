@@ -238,7 +238,7 @@ function fillCases(surface: Surface): ContractCase[] {
         name: `${surface}: fill accepts ${id} ${value}, which the browser stores as ${stored}`,
         async run(ctx) {
           const page = await ctx.openPage(ctx.fixture('/sdk-fill.html'))
-          expectOk(
+          const text = expectOk(
             await inputCall(
               ctx,
               page,
@@ -248,6 +248,7 @@ function fillCases(surface: Surface): ContractCase[] {
               value,
             ),
           )
+          if (surface === 'act') expect(text).toContain(stored)
           expect(
             await evalValue(
               ctx,
@@ -259,15 +260,10 @@ function fillCases(surface: Surface): ContractCase[] {
       }),
     ),
     {
-      name: `${surface}: fill rejects a range value outside its bounds without changing it`,
+      name: `${surface}: fill clamps a range value outside its bounds and reads back the bound`,
       async run(ctx) {
         const page = await ctx.openPage(ctx.fixture('/sdk-fill.html'))
-        const before = await evalValue(
-          ctx,
-          page,
-          'return document.getElementById("range").value',
-        )
-        errorIncludes(
+        const text = expectOk(
           await inputCall(
             ctx,
             page,
@@ -276,15 +272,16 @@ function fillCases(surface: Surface): ContractCase[] {
             await fieldRef(ctx, page, 'Range field'),
             '150',
           ),
-          'a number from',
         )
+        // act reads each filled field back as stored; a run script reads it with page.snapshot().
+        if (surface === 'act') expect(text).toContain('100')
         expect(
           await evalValue(
             ctx,
             page,
             'return document.getElementById("range").value',
           ),
-        ).toBe(before)
+        ).toBe('100')
       },
     },
     {

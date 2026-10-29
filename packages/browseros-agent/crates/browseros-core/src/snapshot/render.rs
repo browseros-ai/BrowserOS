@@ -412,8 +412,13 @@ fn format_line(
         line.push(']');
     }
 
+    // A slider's value arrives as a number, so it is displayed rather than read as a string.
     if is_value_role(role)
-        && let Some(value) = str_val(node.value.as_ref())
+        && let Some(value) = node
+            .value
+            .as_ref()
+            .and_then(|value| value.value.as_ref())
+            .map(value_display)
         && !value.is_empty()
     {
         line.push_str(": ");
@@ -693,6 +698,22 @@ mod tests {
                 "  - textbox \"Search\" [ref=e3]: \"abc\"",
             ]
             .join("\n")
+        );
+    }
+
+    #[test]
+    fn a_slider_shows_its_numeric_value() {
+        let mut nodes = vec![ax("1", "RootWebArea", &["2"]), ax("2", "slider", &[])];
+        nodes[1].name = Some(name("Volume"));
+        nodes[1].backend_dom_node_id = Some(200);
+        nodes[1].value = Some(AxValue {
+            value_type: "number".to_string(),
+            value: Some(json!(75)),
+            sources: None,
+        });
+        assert_eq!(
+            render(&nodes, &mut RefMap::new()),
+            "- slider \"Volume\" [ref=e1]: \"75\""
         );
     }
 

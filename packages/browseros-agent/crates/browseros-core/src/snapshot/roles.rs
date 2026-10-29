@@ -43,6 +43,7 @@ pub const VALUE_ROLES: &[&str] = &[
     "textarea",
     "combobox",
     "spinbutton",
+    "slider",
     "Date",
     "DateTime",
     "InputTime",
