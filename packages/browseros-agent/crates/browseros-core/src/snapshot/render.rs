@@ -697,6 +697,47 @@ mod tests {
     }
 
     #[test]
+    fn date_time_and_color_inputs_get_refs_and_show_their_value() {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2", "3", "4", "5"]),
+            ax("2", "Date", &[]),
+            ax("3", "DateTime", &[]),
+            ax("4", "InputTime", &[]),
+            ax("5", "ColorWell", &[]),
+        ];
+        for (index, (label, value)) in [
+            ("Start", "2026-10-29"),
+            ("Meeting", "2026-10-29T14:30"),
+            ("Alarm", "07:15"),
+            ("Accent", "#ff8800"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let node = &mut nodes[index + 1];
+            node.name = Some(name(label));
+            node.backend_dom_node_id = Some(200 + index as i64);
+            node.value = Some(AxValue {
+                value_type: "string".to_string(),
+                value: Some(json!(value)),
+                sources: None,
+            });
+        }
+
+        let text = render(&nodes, &mut RefMap::new());
+        assert_eq!(
+            text,
+            [
+                "- Date \"Start\" [ref=e1]: \"2026-10-29\"",
+                "- DateTime \"Meeting\" [ref=e2]: \"2026-10-29T14:30\"",
+                "- InputTime \"Alarm\" [ref=e3]: \"07:15\"",
+                "- ColorWell \"Accent\" [ref=e4]: \"#ff8800\"",
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
     fn tests_that_links_keep_urls() -> Result<(), serde_json::Error> {
         let nodes: Vec<AxNode> = serde_json::from_value(json!([
             {
