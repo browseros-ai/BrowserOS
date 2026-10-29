@@ -1250,9 +1250,12 @@ impl BrowserBridge {
                     .control
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
-                match self.race_input(&page_id, input.insert_text(&text)).await? {
+                match self
+                    .race_input(&page_id, true, input.insert_text(&text))
+                    .await?
+                {
                     Some(_) => Ok(BrowserCallValue::Undefined),
-                    None => Ok(self.dialog_open_value(&page_id)),
+                    None => self.interaction_open_value(&page_id).await,
                 }
             }
             "input.press" => {
