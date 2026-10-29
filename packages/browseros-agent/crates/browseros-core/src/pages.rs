@@ -513,9 +513,10 @@ impl PageManager {
         // mutations above see a replacement and fail the creation outright.
         // Its outcome is advisory: a page still moving at the ceiling is
         // handed back anyway, which is what the ceiling is for.
-        let _ = crate::settle::wait_for_page_ready(
+        let _ = crate::settle::wait_for_created_page_ready(
             self,
             creation.original.page_id.clone(),
+            url,
             timeouts::ARRIVAL_READY_BUDGET,
         )
         .await;

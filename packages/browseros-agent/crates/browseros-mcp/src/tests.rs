@@ -182,6 +182,9 @@ struct HarnessConnection {
     /// The page's DOM mutation count, as the readiness probe reports it. A test bumps it to
     /// stand in for the page changing.
     mutations: AtomicU64,
+    /// Probe reads on the created tab that still find the about:blank it opened on, as while a
+    /// slow server has not answered.
+    placeholder_reads: AtomicU64,
 }
 
 impl HarnessConnection {
@@ -193,6 +196,7 @@ impl HarnessConnection {
             created_tab: Mutex::new(None),
             emit_console_on_input: AtomicBool::new(false),
             mutations: AtomicU64::new(0),
+            placeholder_reads: AtomicU64::new(0),
         })
     }
 
@@ -347,6 +351,23 @@ impl CdpConnection for HarnessConnection {
                         .and_then(Value::as_str)
                         .is_some_and(|expression| expression.contains("__browseros_ready")) =>
                 {
+                    let created = session.map(SessionId::as_str) == Some("session-2");
+                    if created
+                        && self
+                            .placeholder_reads
+                            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                                left.checked_sub(1)
+                            })
+                            .is_ok()
+                    {
+                        return Ok(json!({ "result": { "value": {
+                            "n": 0,
+                            "installed": false,
+                            "showing": false,
+                            "complete": true,
+                            "blank": true
+                        } } }));
+                    }
                     Ok(json!({ "result": { "value": {
                         "n": self.mutations.load(Ordering::SeqCst),
                         "installed": false,
@@ -1370,6 +1391,48 @@ async fn tabs_new_attaches_first_snapshot() {
             .calls()
             .iter()
             .any(|call| call.method == "Accessibility.getFullAXTree")
+    );
+}
+
+/// A tab opened on a slow server shows about:blank, quiet and complete, until the page commits.
+/// The snapshot `tabs new` attaches must be read after that, not of the placeholder.
+#[tokio::test]
+async fn tabs_new_snapshots_the_page_not_the_placeholder_it_opens_on() {
+    const PLACEHOLDER_READS: u64 = 3;
+    let (ctx, connection, _page) = harness_ctx().await;
+    connection
+        .placeholder_reads
+        .store(PLACEHOLDER_READS, Ordering::SeqCst);
+    let result = execute_tool(
+        &tool_by_name("tabs"),
+        json!({ "action": "new", "url": "https://slow.example/login" }),
+        &ctx,
+    )
+    .await
+    .unwrap_or_else(|err| panic!("tabs new should return a tool result: {err}"));
+    assert!(!result.is_error, "{}", result_text(&result));
+
+    let created = Some(SessionId::from("session-2"));
+    let calls = connection.calls();
+    let snapshot_at = calls
+        .iter()
+        .position(|call| call.method == "Accessibility.getFullAXTree" && call.session == created)
+        .unwrap_or_else(|| panic!("tabs new should snapshot the new tab"));
+    let probes_before = calls[..snapshot_at]
+        .iter()
+        .filter(|call| {
+            call.session == created
+                && call
+                    .params
+                    .get("expression")
+                    .and_then(Value::as_str)
+                    .is_some_and(|expression| expression.contains("__browseros_ready"))
+        })
+        .count();
+    // Every placeholder read, then two quiet readings of the page itself.
+    assert!(
+        probes_before >= usize::try_from(PLACEHOLDER_READS).unwrap_or(usize::MAX) + 2,
+        "the snapshot was read after {probes_before} probe reads, on the placeholder"
     );
 }
 
