@@ -233,6 +233,9 @@ fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
             "pointerType",
         ]),
         "Input.dispatchTouchEvent" => Some(&["type", "touchPoints", "modifiers", "timestamp"]),
+        // Native HTML drag-and-drop: drag drives these once the browser intercepts a drag.
+        "Input.setInterceptDrags" => Some(&["enabled"]),
+        "Input.dispatchDragEvent" => Some(&["type", "x", "y", "data", "modifiers"]),
         "Input.insertText" => Some(&["text"]),
         "Input.synthesizeScrollGesture" => Some(&[
             "x",

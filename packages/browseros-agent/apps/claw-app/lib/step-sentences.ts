@@ -44,6 +44,7 @@ export const TOOL_TO_VERB: Record<string, ReplayVerb> = {
   'input.scroll': 'click',
   'input.fill': 'type',
   'input.type': 'type',
+  'input.insertText': 'type',
   'input.press': 'type',
 }
 
@@ -100,6 +101,7 @@ const INPUT_KINDS: Record<string, string> = {
   'input.click': 'click',
   'input.fill': 'fill',
   'input.type': 'type',
+  'input.insertText': 'type',
   'input.press': 'press',
   'input.hover': 'hover',
   'input.selectOption': 'select',

@@ -60,7 +60,7 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.click(ref) / fill(ref,value) / hover(ref) / selectOption(ref,value)
     fill types the value and leaves the result to the page, which may reformat it ("440 212") or reject it; after filling a form, page.snapshot() shows what each field holds
   page.check(ref) / uncheck(ref) / focus(ref) / drag(fromRef,toRef)
-  page.type(text) / press(key) / insertText(text)   - these act on whatever has focus, so they take no ref
+  page.type(text) / press(key) / insertText(text)   - these act on whatever has focus, so they take no ref. type sends key presses, so \n presses Enter; insertText inserts the text as-is, newlines included, without key events
   page.scroll(dir,amount,ref?) / clickAt(x,y) / typeAt(x,y,text) / hoverAt(x,y) / dragAt(x1,y1,x2,y2)
   page.dialogAccept() / dialogDismiss() - accept or dismiss an open JavaScript dialog (confirm/prompt/beforeunload). An action that opens one gets back { dialogOpen: true, kind, message } instead of its usual result, and the page stays blocked until you accept or dismiss, so do that before anything else on the page.
   page.waitForSelector(sel) / waitForText(text) / waitForTime(ms) - resolve when ready. For content that loads in, wait on the thing itself with waitForSelector (or waitForText); it resolves the moment it appears, polling up to 10s by default (pass { timeout } to change it, max 30s) and returning { matched }. On timeout matched is false and it does NOT throw, so check matched instead of assuming the wait succeeded. waitForTime is a plain fixed pause and a last resort: wait on the thing itself instead. Never poll in a loop (re-checking a count with a fixed wait between tries) - wait on the selector once instead.
@@ -301,7 +301,7 @@ const BOOTSTRAP_JS: &str = r#"
 
       type: (text) => inp('type', [text]),
       press: (key) => inp('press', [key]),
-      insertText: (text) => inp('type', [text]),
+      insertText: (text) => inp('insertText', [text]),
       scroll: (dir, amount, ref) => inp('scroll', [dir, amount, ref]),
       clickAt: (x, y, opts) => act('click_at', { x, y, ...opts }),
       typeAt: (x, y, text) => act('type_at', { x, y, text }),
@@ -1161,6 +1161,18 @@ impl BrowserBridge {
                     None => self.interaction_open_value(&page_id).await,
                 }
             }
+            "input.insertText" => {
+                let page_id = page_arg(&args, 0)?;
+                let text = string_arg(&args, 1, "text")?;
+                let input = self
+                    .control
+                    .race(self.ctx.browser.input(page_id.clone()))
+                    .await?;
+                match self.race_input(&page_id, input.insert_text(&text)).await? {
+                    Some(_) => Ok(BrowserCallValue::Undefined),
+                    None => Ok(self.dialog_open_value(&page_id)),
+                }
+            }
             "input.press" => {
                 let page_id = page_arg(&args, 0)?;
                 let key = string_arg(&args, 1, "key")?;
@@ -1827,6 +1839,8 @@ mod tests {
         create_tab_params: Vec<Value>,
         add_group_params: Vec<Value>,
         created_tab: Option<Value>,
+        /// Keyboard input the page received, in order: (method, params).
+        keyboard: Vec<(String, Value)>,
     }
 
     impl RunFakeConnection {
@@ -1926,6 +1940,14 @@ mod tests {
                     "Browser.getTabInfo" => Ok(json!({
                         "tab": select_fixture_tab(&self.tabs(), &params)?
                     })),
+                    "Input.insertText" | "Input.dispatchKeyEvent" => {
+                        state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .keyboard
+                            .push((method.to_string(), params));
+                        Ok(json!({}))
+                    }
                     "Target.attachToTarget" => Ok(json!({ "sessionId": "session-target-7" })),
                     "Page.enable"
                     | "DOM.enable"
@@ -3054,6 +3076,32 @@ return seen;
                 "unexpected {namespace} error: {error}"
             );
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_insert_text_keeps_newlines_instead_of_pressing_enter() -> anyhow::Result<()> {
+        let connection = Arc::new(RunFakeConnection::new());
+        let ctx = test_ctx_for(connection.clone(), BrowserToolDefaults::default());
+        let result = run_tool_with_ctx(
+            "await browser.page(1).insertText('first line\\nsecond line'); return 1;",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(!result.is_error, "{}", tool_result_text(&result));
+        let keyboard = connection
+            .state
+            .lock()
+            .map(|state| state.keyboard.clone())
+            .unwrap_or_default();
+        assert_eq!(
+            keyboard,
+            [(
+                "Input.insertText".to_string(),
+                json!({ "text": "first line\nsecond line" })
+            )]
+        );
         Ok(())
     }
 
