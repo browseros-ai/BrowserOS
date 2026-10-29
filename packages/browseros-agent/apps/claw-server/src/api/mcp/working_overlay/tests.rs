@@ -47,8 +47,25 @@ fn page_hold(state: &AppState) -> &Arc<PageHoldService> {
 
 #[tokio::test]
 async fn the_rollout_switch_and_the_setting_both_gate_the_overlay() -> anyhow::Result<()> {
-    let off = tool_call("act", json!({ "page": 1, "kind": "click", "ref": "e1" })).await?;
+    let off = tool_call_with_behavior(
+        "act",
+        json!({ "page": 1, "kind": "click", "ref": "e1" }),
+        ServerMode::Desktop,
+        Behavior {
+            working_overlay: false,
+            ..Behavior::defaults(ServerMode::Desktop)
+        },
+    )
+    .await?;
     assert!(!off.state.page_hold.enabled());
+    let hosted = tool_call_with_behavior(
+        "act",
+        json!({ "page": 1, "kind": "click", "ref": "e1" }),
+        ServerMode::Hosted,
+        Behavior::defaults(ServerMode::Hosted),
+    )
+    .await?;
+    assert!(!hosted.state.page_hold.enabled());
 
     let state = state_with_overlay().await?;
     assert!(page_hold(&state).enabled());

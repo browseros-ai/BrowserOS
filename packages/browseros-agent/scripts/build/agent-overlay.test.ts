@@ -89,9 +89,9 @@ describe('working overlay script', () => {
   test('tests that page scripts cannot take the page over with synthetic keys', () => {
     const { window, run } = page()
     run(show)
-    const escape = new window.Event('keydown', { bubbles: true })
-    Object.defineProperty(escape, 'key', { value: 'Escape' })
-    window.dispatchEvent(escape)
+    const escapeKey = new window.Event('keydown', { bubbles: true })
+    Object.defineProperty(escapeKey, 'key', { value: 'Escape' })
+    window.dispatchEvent(escapeKey)
     const beat = run({ op: 'beat', expiryMs: 35_000 })
     expect(beat.status).toBe('working')
     expect(beat.events).toEqual([])
