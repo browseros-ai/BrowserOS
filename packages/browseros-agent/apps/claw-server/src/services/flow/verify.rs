@@ -150,6 +150,22 @@ pub fn static_check(doc: &FlowDoc, labels: &[String]) -> Result<(), Failure> {
             ),
         );
     }
+    let original = &doc.meta.examples[0].input;
+    let varied = doc.meta.examples[1..]
+        .iter()
+        .filter(|example| example.source != "handover")
+        .filter(|example| differs_everywhere(&example.input, original))
+        .count();
+    if varied < MIN_EXAMPLES - 1 {
+        return fail(
+            None,
+            format!(
+                "at least {} examples must use a different value for every input than this session's ({}), so the flow is checked on other pages, not just the one it was written from",
+                MIN_EXAMPLES - 1,
+                Value::Object(original.clone())
+            ),
+        );
+    }
     for example in &doc.meta.examples {
         if let Err(message) = check_inputs(doc, &Value::Object(example.input.clone())) {
             return fail(
@@ -176,6 +192,20 @@ pub fn static_check(doc: &FlowDoc, labels: &[String]) -> Result<(), Failure> {
         check_step(step.n, &step.src, step.commit)?;
     }
     Ok(())
+}
+
+/// Whether every input of `example` differs from the same input of `original`.
+fn differs_everywhere(example: &Map<String, Value>, original: &Map<String, Value>) -> bool {
+    original.iter().all(|(key, value)| {
+        let normalize = |value: &Value| {
+            value
+                .as_str()
+                .map_or_else(|| value.to_string(), str::to_lowercase)
+        };
+        example
+            .get(key)
+            .is_none_or(|other| normalize(other) != normalize(value))
+    })
 }
 
 fn check_step(n: u32, src: &str, commit: bool) -> Result<(), Failure> {
@@ -529,6 +559,10 @@ mod tests {
         assert!(static_message(&two_commits, 2).contains("exactly one step"));
         let missing = doc(Effects::Read, vec![(OPEN, false)]);
         assert!(static_message(&missing, 2).contains("one step per numbered step"));
+        let mut samey = doc(Effects::Read, vec![(OPEN, false), (READ, false)]);
+        samey.meta.examples[1].input = input("Sensodyne");
+        samey.meta.examples[2].input = input("sensodyne");
+        assert!(static_message(&samey, 2).contains("different value for every input"));
         let mut few = doc(Effects::Read, vec![(OPEN, false), (READ, false)]);
         few.meta.examples.truncate(1);
         assert!(static_message(&few, 2).contains("at least 3 examples"));

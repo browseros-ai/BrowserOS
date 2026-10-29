@@ -5,9 +5,9 @@
 use crate::{
     api::mcp::dispatch::ToolObserverContext,
     clock::now_epoch_ms,
-    services::{
-        flow::compose::is_flow_script,
-        run_journal::{self, JournalEntry, RETENTION},
+    services::flow::{
+        compose::is_flow_script,
+        journal::{self as run_journal, JournalEntry, RETENTION},
     },
 };
 use futures_util::future::BoxFuture;

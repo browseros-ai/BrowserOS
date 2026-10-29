@@ -16,15 +16,15 @@ use crate::{
             self, FlowExec, FlowStatus,
             brief::{self, CallTrace, RunTrace},
             compose::{self, Mode, RUN_TIMEOUT_MS},
+            journal as run_journal,
             lifecycle::{self, Cause, Event},
             outcome::{self, Outcome},
             prose,
             store::{self, Effects, FlowDoc},
             triage, verify,
         },
-        run_journal,
         sessions::ClawTargetStore,
-        skills::{RunItFast, neo_prefixed},
+        skills::{RunItFast, SkillMd, neo_prefixed},
     },
 };
 use browseros_core::target::BrowserView;
@@ -383,14 +383,14 @@ impl ClawMcpService {
                 let repair = (cause == Cause::SiteChanged).then(|| {
                     let after_write = doc.commit_step().is_some_and(|commit| step > commit);
                     let mut note = format!(
-                        "The site changed at step {step}. Tell the user the result first, then call save_skill with name {name} and patch {{ step: {step}, fn }} holding a fixed version of that step (its current source is in stepSource)."
+                        "The site changed at step {step}. Tell the user the result first, then call save_skill with name {name} and patch [{{ step: {step}, fn }}] holding a fixed version of that step. laterSources has the current source of this step and every later one; if the change reaches them too, put each fixed step in the same patch list."
                     );
                     if after_write {
                         note.push_str(" If the page simply had not updated yet, skip the patch.");
                     }
                     note
                 });
-                let packet = outcome::packet(
+                let mut packet = outcome::packet(
                     &handover,
                     &labels,
                     doc.commit_step(),
@@ -398,6 +398,15 @@ impl ClawMcpService {
                     source,
                     repair,
                 );
+                if cause == Cause::SiteChanged {
+                    let later: Map<String, Value> = doc
+                        .steps
+                        .iter()
+                        .filter(|later| later.n >= step)
+                        .map(|later| (later.n.to_string(), json!(later.src)))
+                        .collect();
+                    packet["laterSources"] = Value::Object(later);
+                }
                 handover_result(packet)
             }
             Outcome::RunFailed(message) => ToolResult::error(format!(
@@ -428,6 +437,33 @@ pub(super) fn handover_result(packet: Value) -> ToolResult {
         text.push_str(repair);
     }
     ToolResult::text(text, Some(packet))
+}
+
+/// Reads a patch: one `{ step, fn }` or a list of them, applied together.
+fn parse_patches(patch: &Value) -> Result<Vec<(u32, String)>, String> {
+    let entries = match patch {
+        Value::Array(entries) => entries.clone(),
+        Value::Object(_) => vec![patch.clone()],
+        _ => return Err("patch must be [{ step, fn }, ...]".to_string()),
+    };
+    if entries.is_empty() {
+        return Err("patch must list at least one { step, fn }".to_string());
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            let step = entry
+                .get("step")
+                .and_then(Value::as_u64)
+                .and_then(|step| u32::try_from(step).ok())
+                .ok_or("every patch entry needs a step number")?;
+            let src = entry
+                .get("fn")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("patch for step {step} needs fn"))?;
+            Ok((step, src.to_string()))
+        })
+        .collect()
 }
 
 /// Reads `save_skill`'s second-call arguments into a candidate flow.
@@ -681,7 +717,7 @@ impl ClawMcpService {
         if let Err(error) = self.state.skills.put_flow_row(row).await {
             return ToolResult::error(error.to_string());
         }
-        if let Err(error) = self.state.skills.rerender(&name, None).await {
+        if let Err(error) = self.state.skills.rerender(&name, SkillMd::Plain).await {
             warn!(error = %error, "re-rendering SKILL.md failed");
         }
         ToolResult::text(
@@ -709,16 +745,11 @@ impl ClawMcpService {
             );
         };
         let session_id = started.session.id().as_str().to_string();
+        let is_patch = raw_args.get("patch").is_some();
         let doc = if let Some(patch) = raw_args.get("patch") {
-            let Some(step) = patch
-                .get("step")
-                .and_then(Value::as_u64)
-                .and_then(|step| u32::try_from(step).ok())
-            else {
-                return ToolResult::error("patch needs { step, fn }");
-            };
-            let Some(src) = patch.get("fn").and_then(Value::as_str) else {
-                return ToolResult::error("patch needs { step, fn }");
+            let patches = match parse_patches(patch) {
+                Ok(patches) => patches,
+                Err(message) => return ToolResult::error(message),
             };
             let mut doc = match store::read(&self.state.skills.skill_dir(&name)) {
                 Ok(Some(doc)) => doc,
@@ -731,8 +762,10 @@ impl ClawMcpService {
                     return ToolResult::error(format!("the flow file is unreadable: {error}"));
                 }
             };
-            if let Err(message) = doc.patch_step(step, src) {
-                return ToolResult::error(message);
+            for (step, src) in &patches {
+                if let Err(message) = doc.patch_step(*step, src) {
+                    return ToolResult::error(message);
+                }
             }
             doc
         } else {
@@ -748,7 +781,8 @@ impl ClawMcpService {
             cancel: client_cancel,
         };
         let verdict = verify::verify(&exec, &doc, &labels).await;
-        self.settle(&name, doc, verdict, &session_id).await
+        self.settle(&name, doc, verdict, &session_id, is_patch)
+            .await
     }
 
     /// Records a verification result and answers the agent.
@@ -758,6 +792,7 @@ impl ClawMcpService {
         mut doc: FlowDoc,
         verdict: Result<verify::Pass, verify::Failure>,
         session_id: &str,
+        is_patch: bool,
     ) -> ToolResult {
         let mut row = match self.state.skills.flow_row(name).await {
             Ok(row) => row.unwrap_or_else(|| flow::new_row(name, FlowStatus::Pending)),
@@ -798,7 +833,10 @@ impl ClawMcpService {
                 if let Err(error) = self
                     .state
                     .skills
-                    .rerender(name, Some(&run_it_fast(&doc, FlowStatus::Verified)))
+                    .rerender(
+                        name,
+                        SkillMd::Fast(&run_it_fast(&doc, FlowStatus::Verified)),
+                    )
                     .await
                 {
                     warn!(error = %error, "re-rendering SKILL.md failed");
@@ -852,7 +890,7 @@ impl ClawMcpService {
                 }
                 if next.status == FlowStatus::Broken
                     && before != FlowStatus::Broken
-                    && let Err(error) = self.state.skills.rerender(name, None).await
+                    && let Err(error) = self.state.skills.rerender(name, SkillMd::Repair).await
                 {
                     warn!(error = %error, "re-rendering SKILL.md failed");
                 }
@@ -865,11 +903,25 @@ impl ClawMcpService {
                         "ultrafast: broken after {} failed repairs. /{name} runs the normal way until a flow passes.",
                         lifecycle::BREAK_AFTER
                     ),
+                    _ if is_patch => format!(
+                        "A failed patch is not saved, so send every step you changed together in your next call: patch [{{ step, fn }}, ...]. {left} attempts left."
+                    ),
                     _ => format!("Fix the flow and call save_skill again; {left} attempts left."),
                 };
+                let failing_source = failure
+                    .step
+                    .and_then(|n| doc.step(n))
+                    .map(|step| step.src.clone());
+                let source_note = failing_source
+                    .as_deref()
+                    .map(|src| {
+                        format!("\nThe source of that step, to fix in your next call:\n{src}")
+                    })
+                    .unwrap_or_default();
                 ToolResult::text(
-                    format!("ultrafast: {}\n{tail}", failure.describe()),
+                    format!("ultrafast: {}{source_note}\n{tail}", failure.describe()),
                     Some(json!({
+                        "stepSource": failing_source,
                         "ultrafast": match next.status {
                             FlowStatus::Off => "off",
                             FlowStatus::Broken => "broken",
@@ -918,7 +970,12 @@ impl ClawMcpService {
             let fast = doc
                 .filter(|_| next.status.runs())
                 .map(|doc| run_it_fast(doc, next.status));
-            if let Err(error) = self.state.skills.rerender(name, fast.as_ref()).await {
+            let mode = match (&fast, next.status) {
+                (Some(fast), _) => SkillMd::Fast(fast),
+                (None, FlowStatus::Broken) => SkillMd::Repair,
+                (None, _) => SkillMd::Plain,
+            };
+            if let Err(error) = self.state.skills.rerender(name, mode).await {
                 warn!(error = %error, "re-rendering SKILL.md failed");
             }
         }
@@ -944,7 +1001,8 @@ impl ClawMcpService {
         }
     }
 
-    /// The line `mark_skill_run` adds for a skill that has no working flow.
+    /// What `mark_skill_run` adds for a skill that has no working flow: repairing it is part of
+    /// running it, so the user's saved skill gets fast again without being asked twice.
     pub(super) async fn upgrade_nudge(&self, name: &str) -> Option<String> {
         if !self.ultrafast() {
             return None;
@@ -957,12 +1015,33 @@ impl ClawMcpService {
             .as_ref()
             .and_then(|row| row.status_reason.as_deref())
             .is_some_and(|reason| reason.starts_with("skipped"));
-        (matches!(status, FlowStatus::None | FlowStatus::Off | FlowStatus::Broken) && !skipped)
-            .then(|| {
+        if skipped
+            || !matches!(
+                status,
+                FlowStatus::None | FlowStatus::Off | FlowStatus::Broken
+            )
+        {
+            return None;
+        }
+        let existing = store::read(&self.state.skills.skill_dir(name))
+            .ok()
+            .flatten();
+        Some(match (status, existing) {
+            (FlowStatus::Broken, Some(doc)) => {
+                let sources: Map<String, Value> = doc
+                    .steps
+                    .iter()
+                    .map(|step| (step.n.to_string(), json!(step.src)))
+                    .collect();
                 format!(
-                    "This skill has no working ultrafast flow. When you finish, call save_skill with name {name} and a flow (one step function per numbered step, inputs, output, effects and at least 3 example inputs) to make it ultrafast."
+                    "Its ultrafast flow is paused because the site changed. Repairing it is part of running this skill: do the task by hand first, tell the user the result, then call save_skill with name {name} and patch [{{ step, fn }}, ...] holding every step that needs the change. The current step sources: {}",
+                    Value::Object(sources)
                 )
-            })
+            }
+            _ => format!(
+                "It has no ultrafast flow yet. Making it fast is part of running this skill: do the task by hand first, tell the user the result, then call save_skill with name {name} and a flow (one step function per numbered step, inputs, output, effects and at least 3 example inputs that each change every input)."
+            ),
+        })
     }
 }
 
@@ -1014,10 +1093,13 @@ pub(super) fn ultrafast_save_skill_tool(base: &Tool) -> Tool {
         properties.insert(
             "patch".to_string(),
             json!({
-                "type": "object",
-                "description": "Repair one step of a saved flow after a handover asked for it: { step, fn }. The whole flow is verified again.",
-                "properties": { "step": { "type": "integer", "minimum": 1 }, "fn": { "type": "string" } },
-                "required": ["step", "fn"]
+                "type": "array",
+                "description": "Repair a saved flow after a handover asked for it: the fixed steps, [{ step, fn }, ...], applied together. The whole flow is verified again; a failed patch is not saved.",
+                "items": {
+                    "type": "object",
+                    "properties": { "step": { "type": "integer", "minimum": 1 }, "fn": { "type": "string" } },
+                    "required": ["step", "fn"]
+                }
             }),
         );
     }

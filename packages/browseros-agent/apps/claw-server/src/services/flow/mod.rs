@@ -2,6 +2,7 @@
 
 pub mod brief;
 pub mod compose;
+pub mod journal;
 pub mod lifecycle;
 pub mod outcome;
 pub mod prose;

@@ -153,7 +153,7 @@ impl SkillService {
     /// Re-renders SKILL.md from its current prose: with the "Run it fast" section while the
     /// skill has a flow that runs, without it otherwise. A hand-written body with no numbered
     /// steps is left alone.
-    pub async fn rerender(&self, name: &str, run_it_fast: Option<&RunItFast>) -> AppResult<()> {
+    pub async fn rerender(&self, name: &str, mode: SkillMd<'_>) -> AppResult<()> {
         let _guard = self.mutate.lock().await;
         let model = self.require(name).await?;
         let body = self.read_body(&model.body_path).await;
@@ -162,9 +162,16 @@ impl SkillService {
             return Ok(());
         }
         let notes = crate::services::flow::prose::learned_notes(&body);
-        let content = match run_it_fast {
-            Some(fast) => render_ultrafast_markdown(name, &model.description, &steps, &notes, fast),
-            None => render_skill_markdown(name, &model.description, &steps, &notes),
+        let content = match mode {
+            SkillMd::Fast(fast) => {
+                render_ultrafast_markdown(name, &model.description, &steps, &notes, fast)
+            }
+            SkillMd::Repair => {
+                let mut content = render_skill_markdown(name, &model.description, &steps, &notes);
+                content.push_str(&repair_section(name));
+                content
+            }
+            SkillMd::Plain => render_skill_markdown(name, &model.description, &steps, &notes),
         };
         if content == body {
             return Ok(());
@@ -209,7 +216,7 @@ impl SkillService {
                         .map(|(input, kind)| (input.clone(), kind.clone()))
                         .collect(),
                 };
-                self.rerender(name, Some(&fast)).await
+                self.rerender(name, SkillMd::Fast(&fast)).await
             }
             _ => {
                 row.status = FlowStatus::Off.as_str().to_string();
@@ -218,7 +225,7 @@ impl SkillService {
                 );
                 row.updated_at = now_ms();
                 self.repo.put_flow(row).await?;
-                self.rerender(name, None).await
+                self.rerender(name, SkillMd::Plain).await
             }
         }
     }
@@ -620,6 +627,23 @@ fn normalized_skill_name(raw: &str) -> AppResult<String> {
         return Err(AppError::conflict("skill name is reserved"));
     }
     Ok(name)
+}
+
+/// Which shape SKILL.md takes, from the skill's flow status.
+pub enum SkillMd<'a> {
+    /// The flow runs: "Run it fast" first, the prose as the fallback.
+    Fast(&'a RunItFast),
+    /// The flow is paused after site changes: the prose, plus how to repair it. It lives in
+    /// SKILL.md because an agent rightly acts on the skill the user saved, not on a tool reply.
+    Repair,
+    /// Plain prose, exactly as a skill without a flow.
+    Plain,
+}
+
+fn repair_section(name: &str) -> String {
+    format!(
+        "\n## Make it fast again\nThis skill's ultrafast flow is paused because the site changed. Do the task with the steps above and report the result first. Then repair the flow: the mark_skill_run reply lists its current step sources, so call the save_skill tool with name: {name} and patch [{{ step, fn }}, ...] holding every step that needs the change.\n"
+    )
 }
 
 /// What SKILL.md says about running a skill's flow.

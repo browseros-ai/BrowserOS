@@ -2,7 +2,7 @@
 //! which runs led to the result, where time was lost, and how to write the flow. It does the
 //! mechanical analysis so the agent only makes the judgement calls.
 
-use crate::services::run_journal::JournalEntry;
+use crate::services::flow::journal::JournalEntry;
 use regex::Regex;
 use serde_json::{Value, json};
 use std::sync::LazyLock;
@@ -66,7 +66,7 @@ Each fn is async ({ browser, inputs, state, handBack, firstOf }) => { ... }:\n\
 - The last step's return value is the output.\n\
 Rules: refs come from a snapshot taken inside the flow, never a literal like \"e12\"; check matched on every waitForSelector or waitForText and handBack when it is false; no sleep or waitForTime above 1000 ms; no generated CSS class names; reach pages by URL when the site has one.\n\
 inputs and output map names to \"string\", \"number\" or \"boolean\". effects is \"read\" or \"write\".\n\
-examples: at least 3 input objects. The first is this session's own input; add 2 more realistic ones (other products, other names) so the flow is checked beyond the one page it was written from. Writes are never performed while verifying.";
+examples: at least 3 input objects. The first is this session's own input; add 2 more realistic ones that change every input (another product and its own search text, another name) so the flow is checked on other pages, not just the one it was written from. Writes are never performed while verifying.";
 
 static LITERAL_REF: LazyLock<Option<Regex>> =
     LazyLock::new(|| Regex::new(r#"['"`](e\d+)['"`]"#).ok());
