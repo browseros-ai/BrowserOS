@@ -89,6 +89,21 @@ impl FlowDoc {
         self.steps.iter().find(|step| step.n == n)
     }
 
+    /// Replaces one step's source, keeping its number and whether it is the commit step.
+    pub fn patch_step(&mut self, n: u32, src: &str) -> Result<(), String> {
+        let src = src.trim();
+        if src.is_empty() {
+            return Err(format!("the patch for step {n} is empty"));
+        }
+        let step = self
+            .steps
+            .iter_mut()
+            .find(|step| step.n == n)
+            .ok_or_else(|| format!("the flow has no step {n}"))?;
+        step.src = src.to_string();
+        Ok(())
+    }
+
     /// Adds an example, keeping the original and the newest others within the cap. An input
     /// already listed is not added twice.
     pub fn push_example(&mut self, example: Example) {
@@ -327,6 +342,22 @@ mod tests {
         let before = doc.meta.examples.len();
         doc.push_example(doc.meta.examples[3].clone());
         assert_eq!(doc.meta.examples.len(), before);
+    }
+
+    #[test]
+    fn a_patch_swaps_one_step_and_keeps_the_rest() -> anyhow::Result<()> {
+        let mut doc = sample();
+        doc.patch_step(
+            2,
+            "async ({ state }) => { await state.page.click(state.other) }",
+        )
+        .map_err(anyhow::Error::msg)?;
+        assert!(doc.steps[1].src.contains("state.other"));
+        assert!(doc.steps[1].commit);
+        assert_eq!(doc.steps[0], sample().steps[0]);
+        assert!(doc.patch_step(9, "x").is_err());
+        assert!(doc.patch_step(1, "  ").is_err());
+        Ok(())
     }
 
     #[test]

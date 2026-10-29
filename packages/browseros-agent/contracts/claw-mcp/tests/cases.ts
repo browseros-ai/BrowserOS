@@ -50,6 +50,7 @@ import { readEvalCases } from './cases-read-eval'
 import { snapshotConcurrencyCases } from './cases-snapshot-concurrency'
 import { tabsCases } from './cases-tabs'
 import { transportCases } from './cases-transport'
+import { ultrafastCases } from './cases-ultrafast'
 
 // Order is load-bearing: clawLayerCases ends with the browser-kill case,
 // which must be the final case per server run — it poisons the browser.
@@ -65,5 +66,6 @@ export const contractCases: ContractCase[] = [
   ...readEvalCases,
   ...isolationCases,
   ...captureIoCases,
+  ...ultrafastCases,
   ...clawLayerCases,
 ]

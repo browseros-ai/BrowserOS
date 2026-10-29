@@ -2,9 +2,11 @@
 
 pub mod brief;
 pub mod compose;
+pub mod lifecycle;
 pub mod outcome;
 pub mod prose;
 pub mod store;
+pub mod triage;
 pub mod verify;
 
 use crate::{clock::now_epoch_ms, db::entities::skill_flows};

@@ -16,10 +16,11 @@ use crate::{
             self, FlowExec, FlowStatus,
             brief::{self, CallTrace, RunTrace},
             compose::{self, Mode, RUN_TIMEOUT_MS},
+            lifecycle::{self, Cause, Event},
             outcome::{self, Outcome},
             prose,
             store::{self, Effects, FlowDoc},
-            verify,
+            triage, verify,
         },
         run_journal,
         sessions::ClawTargetStore,
@@ -347,6 +348,7 @@ impl ClawMcpService {
             } => {
                 self.record_mark(&session_id, &name, &RunMode::ultrafast())
                     .await;
+                self.apply_event(&name, Event::RunDone, Some(&doc)).await;
                 let structured = json!({
                     "status": "done",
                     "output": output,
@@ -363,20 +365,39 @@ impl ClawMcpService {
                 )
             }
             Outcome::NeedsAgent(handover) => {
-                let cause = "unknown";
+                let cause = triage::cause(&exec, &doc, &handover).await;
                 let step = handover.step.unwrap_or(1);
                 self.record_mark(
                     &session_id,
                     &name,
-                    &RunMode::handed_back(i64::from(step), cause),
+                    &RunMode::handed_back(i64::from(step), cause.as_str()),
                 )
                 .await;
+                self.remember_input(&name, &doc, &inputs, cause);
+                self.apply_event(&name, Event::Handover(cause), Some(&doc))
+                    .await;
                 let source = handover
                     .step
                     .and_then(|n| doc.step(n))
                     .map(|step| step.src.as_str());
-                let packet =
-                    outcome::packet(&handover, &labels, doc.commit_step(), cause, source, None);
+                let repair = (cause == Cause::SiteChanged).then(|| {
+                    let after_write = doc.commit_step().is_some_and(|commit| step > commit);
+                    let mut note = format!(
+                        "The site changed at step {step}. Tell the user the result first, then call save_skill with name {name} and patch {{ step: {step}, fn }} holding a fixed version of that step (its current source is in stepSource)."
+                    );
+                    if after_write {
+                        note.push_str(" If the page simply had not updated yet, skip the patch.");
+                    }
+                    note
+                });
+                let packet = outcome::packet(
+                    &handover,
+                    &labels,
+                    doc.commit_step(),
+                    cause.as_str(),
+                    source,
+                    repair,
+                );
                 handover_result(packet)
             }
             Outcome::RunFailed(message) => ToolResult::error(format!(
@@ -550,7 +571,7 @@ impl ClawMcpService {
         if raw_args.get("ultrafast").and_then(Value::as_str) == Some("skip") {
             return self.skip_ultrafast(raw_args).await;
         }
-        if raw_args.get("flow").is_some() {
+        if raw_args.get("flow").is_some() || raw_args.get("patch").is_some() {
             return self.compile_flow(started, raw_args, client_cancel).await;
         }
         self.save_prose_and_brief(started, raw_args).await
@@ -688,42 +709,88 @@ impl ClawMcpService {
             );
         };
         let session_id = started.session.id().as_str().to_string();
-        let mut doc = match candidate_flow(raw_args, &name, &session_id) {
-            Ok(doc) => doc,
-            Err(message) => return ToolResult::error(message),
+        let doc = if let Some(patch) = raw_args.get("patch") {
+            let Some(step) = patch
+                .get("step")
+                .and_then(Value::as_u64)
+                .and_then(|step| u32::try_from(step).ok())
+            else {
+                return ToolResult::error("patch needs { step, fn }");
+            };
+            let Some(src) = patch.get("fn").and_then(Value::as_str) else {
+                return ToolResult::error("patch needs { step, fn }");
+            };
+            let mut doc = match store::read(&self.state.skills.skill_dir(&name)) {
+                Ok(Some(doc)) => doc,
+                Ok(None) => {
+                    return ToolResult::error(
+                        "this skill has no flow to patch yet; send the whole flow instead",
+                    );
+                }
+                Err(error) => {
+                    return ToolResult::error(format!("the flow file is unreadable: {error}"));
+                }
+            };
+            if let Err(message) = doc.patch_step(step, src) {
+                return ToolResult::error(message);
+            }
+            doc
+        } else {
+            match candidate_flow(raw_args, &name, &session_id) {
+                Ok(doc) => doc,
+                Err(message) => return ToolResult::error(message),
+            }
         };
         let labels = prose::prose_steps(&detail.body);
-        let mut row = match self.state.skills.flow_row(&name).await {
-            Ok(row) => row.unwrap_or_else(|| flow::new_row(&name, FlowStatus::Pending)),
-            Err(error) => return ToolResult::error(error.to_string()),
-        };
         let exec = SessionFlowExec {
             service: self,
             started,
             cancel: client_cancel,
         };
-        match verify::verify(&exec, &doc, &labels).await {
+        let verdict = verify::verify(&exec, &doc, &labels).await;
+        self.settle(&name, doc, verdict, &session_id).await
+    }
+
+    /// Records a verification result and answers the agent.
+    async fn settle(
+        &self,
+        name: &str,
+        mut doc: FlowDoc,
+        verdict: Result<verify::Pass, verify::Failure>,
+        session_id: &str,
+    ) -> ToolResult {
+        let mut row = match self.state.skills.flow_row(name).await {
+            Ok(row) => row.unwrap_or_else(|| flow::new_row(name, FlowStatus::Pending)),
+            Err(error) => return ToolResult::error(error.to_string()),
+        };
+        let before = FlowStatus::parse(&row.status);
+        let state = lifecycle::State {
+            status: before,
+            attempts: row.attempts,
+            site_failures: row.site_failures,
+        };
+        let now = now_epoch_ms();
+        match verdict {
             Ok(pass) => {
-                let previous = FlowStatus::parse(&row.status);
-                let now = now_epoch_ms();
+                let next = lifecycle::next(state, Event::FlowPassed);
                 doc.meta.flow_version = row.flow_version + 1;
-                if let Err(error) = store::write(&self.state.skills.skill_dir(&name), &doc) {
+                if let Err(error) = store::write(&self.state.skills.skill_dir(name), &doc) {
                     return ToolResult::error(format!("saving the flow failed: {error}"));
                 }
                 let same_effects = row.effects.as_deref() == Some(doc.meta.effects.as_str());
                 row.write_approved = row.write_approved && same_effects;
-                row.status = FlowStatus::Verified.as_str().to_string();
+                row.status = next.status.as_str().to_string();
                 row.status_reason = None;
                 row.flow_version = doc.meta.flow_version;
-                row.attempts = 0;
-                row.site_failures = 0;
+                row.attempts = next.attempts;
+                row.site_failures = next.site_failures;
                 row.effects = Some(doc.meta.effects.as_str().to_string());
                 row.p50_ms = Some(pass.p50_ms);
-                if matches!(previous, FlowStatus::Degraded | FlowStatus::Broken) {
+                if matches!(before, FlowStatus::Degraded | FlowStatus::Broken) {
                     row.repaired_at = Some(now);
                 }
                 row.verified_at = Some(now);
-                row.source_session_id = Some(session_id.clone());
+                row.source_session_id = Some(session_id.to_string());
                 row.updated_at = now;
                 if let Err(error) = self.state.skills.put_flow_row(row.clone()).await {
                     return ToolResult::error(error.to_string());
@@ -731,20 +798,26 @@ impl ClawMcpService {
                 if let Err(error) = self
                     .state
                     .skills
-                    .rerender(&name, Some(&run_it_fast(&doc, FlowStatus::Verified)))
+                    .rerender(name, Some(&run_it_fast(&doc, FlowStatus::Verified)))
                     .await
                 {
                     warn!(error = %error, "re-rendering SKILL.md failed");
                 }
-                run_journal::remove(&self.state.config.browserclaw_dir, &session_id);
+                run_journal::remove(&self.state.config.browserclaw_dir, session_id);
                 let tried: Vec<String> = doc
                     .meta
                     .examples
                     .iter()
                     .map(|example| Value::Object(example.input.clone()).to_string())
                     .collect();
+                let repaired = matches!(before, FlowStatus::Degraded | FlowStatus::Broken);
                 let mut text = format!(
-                    "ultrafast: verified on {} inputs ({}), p50 {} ms. /{name} now runs through run_skill. Writes were not performed while verifying.",
+                    "ultrafast: {} on {} inputs ({}), p50 {} ms. /{name} runs through run_skill. Writes were not performed while verifying.",
+                    if repaired {
+                        "repaired and verified"
+                    } else {
+                        "verified"
+                    },
                     pass.runs,
                     tried.join(", "),
                     pass.p50_ms
@@ -761,50 +834,135 @@ impl ClawMcpService {
                         "flowVersion": doc.meta.flow_version,
                         "p50Ms": pass.p50_ms,
                         "examples": doc.meta.examples.len(),
+                        "repaired": repaired,
                     })),
                 )
             }
             Err(failure) => {
-                row.attempts += 1;
-                let left = verify::MAX_SUBMITS - row.attempts;
-                let status = FlowStatus::parse(&row.status);
-                let switched_off = left <= 0
-                    && matches!(
-                        status,
-                        FlowStatus::Pending | FlowStatus::None | FlowStatus::Off
-                    );
-                if switched_off {
-                    row.status = FlowStatus::Off.as_str().to_string();
+                let next = lifecycle::next(state, Event::FlowFailed);
+                let left = (lifecycle::BREAK_AFTER - next.attempts).max(0);
+                row.status = next.status.as_str().to_string();
+                row.attempts = next.attempts;
+                if next.status != before {
                     row.status_reason = Some(format!("{} failed", failure.gate.label()));
                 }
-                row.updated_at = now_epoch_ms();
+                row.updated_at = now;
                 if let Err(error) = self.state.skills.put_flow_row(row).await {
                     return ToolResult::error(error.to_string());
                 }
-                let tail = if switched_off {
-                    format!(
+                if next.status == FlowStatus::Broken
+                    && before != FlowStatus::Broken
+                    && let Err(error) = self.state.skills.rerender(name, None).await
+                {
+                    warn!(error = %error, "re-rendering SKILL.md failed");
+                }
+                let tail = match next.status {
+                    FlowStatus::Off => format!(
                         "ultrafast: off after {} tries. /{name} still runs the normal way.",
-                        verify::MAX_SUBMITS
-                    )
-                } else {
-                    format!(
-                        "Fix the flow and call save_skill again; {} attempts left.",
-                        left.max(0)
-                    )
+                        lifecycle::BREAK_AFTER
+                    ),
+                    FlowStatus::Broken => format!(
+                        "ultrafast: broken after {} failed repairs. /{name} runs the normal way until a flow passes.",
+                        lifecycle::BREAK_AFTER
+                    ),
+                    _ => format!("Fix the flow and call save_skill again; {left} attempts left."),
                 };
                 ToolResult::text(
                     format!("ultrafast: {}\n{tail}", failure.describe()),
                     Some(json!({
-                        "ultrafast": if switched_off { "off" } else { "failing" },
+                        "ultrafast": match next.status {
+                            FlowStatus::Off => "off",
+                            FlowStatus::Broken => "broken",
+                            _ => "failing",
+                        },
                         "gate": failure.gate.label(),
                         "step": failure.step,
                         "example": failure.example.map(Value::Object),
                         "message": failure.message,
-                        "attemptsLeft": left.max(0),
+                        "attemptsLeft": left,
                     })),
                 )
             }
         }
+    }
+
+    /// Moves the flow's status for a run outcome, and keeps SKILL.md in step with it.
+    async fn apply_event(&self, name: &str, event: Event, doc: Option<&FlowDoc>) {
+        let Ok(Some(mut row)) = self.state.skills.flow_row(name).await else {
+            return;
+        };
+        let before = lifecycle::State {
+            status: FlowStatus::parse(&row.status),
+            attempts: row.attempts,
+            site_failures: row.site_failures,
+        };
+        let next = lifecycle::next(before, event);
+        if next == before {
+            return;
+        }
+        row.status = next.status.as_str().to_string();
+        row.attempts = next.attempts;
+        row.site_failures = next.site_failures;
+        if next.status == FlowStatus::Broken && before.status != FlowStatus::Broken {
+            row.status_reason = Some(format!(
+                "the site changed {} times without a passing repair",
+                lifecycle::BREAK_AFTER
+            ));
+        }
+        row.updated_at = now_epoch_ms();
+        if let Err(error) = self.state.skills.put_flow_row(row).await {
+            warn!(error = %error, "recording the flow status failed");
+            return;
+        }
+        if next.status != before.status {
+            let fast = doc
+                .filter(|_| next.status.runs())
+                .map(|doc| run_it_fast(doc, next.status));
+            if let Err(error) = self.state.skills.rerender(name, fast.as_ref()).await {
+                warn!(error = %error, "re-rendering SKILL.md failed");
+            }
+        }
+    }
+
+    /// Keeps an input that made the flow hand back, so every later repair must handle it.
+    fn remember_input(&self, name: &str, doc: &FlowDoc, inputs: &Map<String, Value>, cause: Cause) {
+        let expect = match cause {
+            Cause::SiteChanged => "done",
+            Cause::InputOnly => "either",
+            Cause::Transient => return,
+        };
+        let mut updated = doc.clone();
+        updated.push_example(store::Example {
+            input: inputs.clone(),
+            source: "handover".to_string(),
+            expect: expect.to_string(),
+        });
+        if updated.meta.examples != doc.meta.examples
+            && let Err(error) = store::write(&self.state.skills.skill_dir(name), &updated)
+        {
+            warn!(error = %error, "saving the handover example failed");
+        }
+    }
+
+    /// The line `mark_skill_run` adds for a skill that has no working flow.
+    pub(super) async fn upgrade_nudge(&self, name: &str) -> Option<String> {
+        if !self.ultrafast() {
+            return None;
+        }
+        let row = self.state.skills.flow_row(name).await.ok().flatten();
+        let status = row
+            .as_ref()
+            .map_or(FlowStatus::None, |row| FlowStatus::parse(&row.status));
+        let skipped = row
+            .as_ref()
+            .and_then(|row| row.status_reason.as_deref())
+            .is_some_and(|reason| reason.starts_with("skipped"));
+        (matches!(status, FlowStatus::None | FlowStatus::Off | FlowStatus::Broken) && !skipped)
+            .then(|| {
+                format!(
+                    "This skill has no working ultrafast flow. When you finish, call save_skill with name {name} and a flow (one step function per numbered step, inputs, output, effects and at least 3 example inputs) to make it ultrafast."
+                )
+            })
     }
 }
 
@@ -853,6 +1011,15 @@ pub(super) fn ultrafast_save_skill_tool(base: &Tool) -> Tool {
             json!({ "type": "string", "enum": ["skip"], "description": "Skip the flow for a task that needs judgement on every run." }),
         );
         properties.insert("reason".to_string(), json!({ "type": "string" }));
+        properties.insert(
+            "patch".to_string(),
+            json!({
+                "type": "object",
+                "description": "Repair one step of a saved flow after a handover asked for it: { step, fn }. The whole flow is verified again.",
+                "properties": { "step": { "type": "integer", "minimum": 1 }, "fn": { "type": "string" } },
+                "required": ["step", "fn"]
+            }),
+        );
     }
     schema.insert("required".to_string(), json!(["name"]));
     tool.input_schema = Arc::new(schema);

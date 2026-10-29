@@ -39,6 +39,7 @@ Useful environment variables:
 | --- | --- |
 | `BROWSEROS_BINARY` | BrowserOS or BrowserOS neo executable to test |
 | `CLAW_MCP_SMOKE=1` | Run only smoke cases; set by `--smoke` |
+| `CLAW_MCP_ONLY=<text>` | Run only cases whose name contains the text, e.g. `ultrafast:` |
 | `BROWSEROS_TEST_HEADLESS=false` | Run headed for debugging |
 | `BROWSEROS_TEST_EXTRA_ARGS` | Add browser process arguments |
 | `BROWSEROS_TEST_DEBUG=true` | Stream browser output |

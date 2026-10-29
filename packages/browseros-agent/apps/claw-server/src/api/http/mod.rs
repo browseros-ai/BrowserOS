@@ -130,6 +130,11 @@ pub fn router(state: AppState) -> Router<AppState> {
             get(skills::get).put(skills::update).delete(skills::delete),
         )
         .route("/api/v1/skills/{name}/runs", get(skills::list_runs))
+        .route("/api/v1/skills/{name}/flow", get(skills::flow))
+        .route(
+            "/api/v1/skills/{name}/ultrafast/approve-write",
+            post(skills::approve_write),
+        )
         .nest_service(
             "/mcp",
             Router::new()

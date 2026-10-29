@@ -21,10 +21,12 @@ import { McpSession, textOf } from './mcp-client'
 import { type ContractServer, startRustServer } from './rust-server'
 
 const gate = isSuiteEnabled() ? describe : describe.skip
-const activeCases =
+const onlyCases = process.env.CLAW_MCP_ONLY?.trim()
+const activeCases = (
   process.env.CLAW_MCP_SMOKE === '1'
     ? contractCases.filter((contractCase) => contractCase.smoke)
     : contractCases
+).filter((contractCase) => !onlyCases || contractCase.name.includes(onlyCases))
 
 interface ServerRun {
   server: ContractServer

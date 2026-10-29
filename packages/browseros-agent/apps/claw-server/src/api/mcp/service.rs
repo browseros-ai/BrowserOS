@@ -810,7 +810,14 @@ impl ClawMcpService {
                 // run is still recorded if the agent drops the prefix.
                 let name = crate::services::skills::neo_prefixed(&name);
                 match self.state.skill_runs.mark(&session_id, &name).await {
-                    Ok(()) => ToolResult::text(format!("recording this run of /{name}"), None),
+                    Ok(()) => {
+                        let mut text = format!("recording this run of /{name}");
+                        if let Some(nudge) = self.upgrade_nudge(&name).await {
+                            text.push_str(". ");
+                            text.push_str(&nudge);
+                        }
+                        ToolResult::text(text, None)
+                    }
                     Err(error) => ToolResult::error(error.to_string()),
                 }
             }

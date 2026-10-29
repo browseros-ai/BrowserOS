@@ -178,6 +178,62 @@ pub(super) async fn list_runs(
     Ok(Json(list))
 }
 
+pub(super) async fn flow(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<models::SkillFlowSource>, CanonicalError> {
+    let path = crate::services::flow::store::flow_path(&state.skills.skill_dir(&name));
+    match tokio::fs::read_to_string(&path).await {
+        Ok(source) => Ok(Json(models::SkillFlowSource::new(source))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(map_error(
+            &request_id,
+            AppError::not_found("this skill has no ultrafast flow"),
+        )),
+        Err(error) => Err(internal(
+            &request_id,
+            AppError::Io {
+                path: Some(path),
+                source: error,
+            },
+        )),
+    }
+}
+
+/// Lets a skill's write flow run without asking again. Only a flow that writes needs it.
+pub(super) async fn approve_write(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Skill>, CanonicalError> {
+    let row = state
+        .skills
+        .flow_row(&name)
+        .await
+        .map_err(|source| map_error(&request_id, source))?;
+    let Some(mut row) = row.filter(|row| row.effects.as_deref() == Some("write")) else {
+        return Err(map_error(
+            &request_id,
+            AppError::conflict("this skill has no write flow to approve"),
+        ));
+    };
+    row.write_approved = true;
+    row.updated_at = crate::clock::now_epoch_ms();
+    state
+        .skills
+        .put_flow_row(row.clone())
+        .await
+        .map_err(|source| map_error(&request_id, source))?;
+    let detail = state
+        .skills
+        .get(&name)
+        .await
+        .map_err(|source| map_error(&request_id, source))?;
+    let mut skill = skill_to_dto(detail.view);
+    skill.ultrafast = Some(Box::new(ultrafast_to_dto(Some(&row))));
+    Ok(Json(skill))
+}
+
 fn map_error(request_id: &RequestId, source: AppError) -> CanonicalError {
     match source.status() {
         StatusCode::NOT_FOUND => error(
