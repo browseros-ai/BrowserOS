@@ -320,10 +320,13 @@ def publish_index(request: ImageRequest, digests: dict[str, str], ops: ImageOper
     """Tags one multi-architecture index over images already pushed by digest.
 
     `digests` maps every published platform to the image its verify job built,
-    tested and pushed, so nothing is rebuilt here. After tagging, the registry's
-    view of the index must hold every architecture and carry this commit's
-    revision label; otherwise the tags point at something else and this raises.
+    tested and pushed, so nothing is rebuilt here. Each source must be that
+    platform's image from this commit before any tag moves, so a stray digest
+    can never take the release tags. After tagging, the registry's view of the
+    index is checked the same way.
     """
+    if request.push_by_digest:
+        raise ImageError("--from-digests tags the images verify pushed; do not combine it with --push-by-digest")
     if not _VERSION.match(request.version):
         raise ImageError(f"Invalid Neo version '{request.version}'; expected e.g. 0.52.0.1")
     if not _REVISION.match(request.revision):
@@ -337,6 +340,11 @@ def publish_index(request: ImageRequest, digests: dict[str, str], ops: ImageOper
     for platform in platforms:
         if not _DIGEST.match(digests[platform]):
             raise ImageError(f"Invalid {platform} digest '{digests[platform]}'")
+    for platform in platforms:
+        source = f"{request.repository}@{digests[platform]}"
+        configs = ops.inspect_image(source).get("configs", {})
+        if set(configs) != {platform} or not _built_from(configs[platform], request.revision):
+            raise ImageError(f"{source} is not a {platform} image from {request.revision}")
     _, tags = _tags(request)
     argv = ["--annotation", f"index:org.opencontainers.image.source={IMAGE_SOURCE}"]
     for tag in tags:
@@ -347,10 +355,15 @@ def publish_index(request: ImageRequest, digests: dict[str, str], ops: ImageOper
     published = ops.inspect_image(tags[0])
     configs = published.get("configs", {})
     for platform in platforms:
-        labels = (configs.get(platform) or {}).get("config", {}).get("Labels") or {}
-        if labels.get(REVISION_LABEL) != request.revision:
+        if not _built_from(configs.get(platform), request.revision):
             raise ImageError(f"{tags[0]} has no {platform} image from {request.revision}")
     return ImageResult(tags, platforms, published.get("digest", ""))
+
+
+def _built_from(config: Optional[dict], revision: str) -> bool:
+    """Whether an image config carries `revision` as its source commit."""
+    labels = ((config or {}).get("config") or {}).get("Labels") or {}
+    return labels.get(REVISION_LABEL) == revision
 
 
 def image_context() -> Path:
@@ -410,8 +423,12 @@ class DockerOperations:
             )
             return json.loads(result.stdout)
 
-        # For an index, .Image maps each platform to its image config.
-        return {"digest": inspect("{{json .Manifest}}")["digest"], "configs": inspect("{{json .Image}}")}
+        # .Image maps each platform to its config, except for an image with one
+        # platform (a verify job's push), where it is that platform's config.
+        images = inspect("{{json .Image}}")
+        if "rootfs" in images:
+            images = {f"{images.get('os')}/{images.get('architecture')}": images}
+        return {"digest": inspect("{{json .Manifest}}")["digest"], "configs": images}
 
     def run_buildx(self, argv: list[str]) -> dict:
         with tempfile.TemporaryDirectory(prefix="neo-buildx-") as directory:

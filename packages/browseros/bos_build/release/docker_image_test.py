@@ -51,6 +51,8 @@ class FakeOperations:
         self.builds: list[list[str]] = []
         self.staged: list[Path] = []
         self.indexes: list[list[str]] = []
+        # What the registry reports per reference; anything else gets `published`.
+        self.images: dict[str, dict] = {}
         # What the registry reports for a tag after an index is created.
         self.published = {
             "digest": "sha256:" + "f" * 64,
@@ -80,6 +82,14 @@ class FakeOperations:
         self.indexes.append(argv)
 
     def inspect_image(self, reference: str) -> dict:
+        if reference in self.images:
+            return self.images[reference]
+        if "@sha256:" in reference:
+            # A pushed architecture is its own one-platform image from this commit.
+            platform = "linux/amd64" if reference.endswith(AMD64) else "linux/arm64"
+            labels = {"org.opencontainers.image.revision": REVISION}
+            return {"digest": reference.split("@")[1],
+                    "configs": {platform: {"config": {"Labels": labels}}}}
         return self.published
 
 
@@ -507,6 +517,35 @@ class PublishIndexTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ImageError, "linux/arm64"):
             self._publish(ops, {"linux/amd64": AMD64, "linux/arm64": ARM64})
+
+    def test_checks_each_source_before_moving_any_tag(self):
+        # A digest from another commit's build must never get this commit's tags.
+        ops = FakeOperations()
+        ops.images[f"ghcr.io/browseros-ai/neo@{ARM64}"] = {
+            "digest": ARM64,
+            "configs": {"linux/arm64": {"config": {"Labels": {
+                "org.opencontainers.image.revision": "0" * 40}}}},
+        }
+
+        with self.assertRaisesRegex(ImageError, "linux/arm64"):
+            self._publish(ops, {"linux/amd64": AMD64, "linux/arm64": ARM64}, latest=True)
+        self.assertEqual(ops.indexes, [])
+
+    def test_checks_each_source_is_its_own_architecture(self):
+        ops = FakeOperations()
+        ops.images[f"ghcr.io/browseros-ai/neo@{AMD64}"] = {
+            "digest": AMD64,
+            "configs": {"linux/arm64": ops.published["configs"]["linux/arm64"]},
+        }
+
+        with self.assertRaisesRegex(ImageError, "linux/amd64"):
+            self._publish(ops, {"linux/amd64": AMD64, "linux/arm64": ARM64})
+        self.assertEqual(ops.indexes, [])
+
+    def test_is_not_combined_with_a_push_by_digest(self):
+        with self.assertRaisesRegex(ImageError, "--push-by-digest"):
+            self._publish(FakeOperations(), {"linux/amd64": AMD64, "linux/arm64": ARM64},
+                          push_by_digest=True)
 
     def test_fails_when_the_published_index_lacks_an_architecture(self):
         ops = FakeOperations()
