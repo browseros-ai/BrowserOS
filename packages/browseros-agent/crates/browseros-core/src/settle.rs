@@ -79,7 +79,8 @@ const READINESS_PROBE_JS: &str = r#"
     n: s.n,
     installed: installed,
     showing: showing,
-    complete: document.readyState === 'complete'
+    complete: document.readyState === 'complete',
+    blank: location.href === 'about:blank'
   };
 })()
 "#;
@@ -97,6 +98,10 @@ pub struct ReadinessReading {
     pub showing: bool,
     /// Whether the document reports itself finished.
     pub complete: bool,
+    /// Whether the document is about:blank, which a new tab shows until the page it was opened
+    /// on commits.
+    #[serde(default)]
+    pub blank: bool,
 }
 
 impl ReadinessReading {
@@ -106,7 +111,9 @@ impl ReadinessReading {
     /// A tab one interval old can be quiet because it has not started, and
     /// calling that ready hands back a blank page. `complete` is the other
     /// sufficient answer, and it is what keeps a genuinely empty document
-    /// (about:blank, a 204) from burning the whole ceiling.
+    /// (about:blank, a 204) from burning the whole ceiling. A new tab's
+    /// placeholder about:blank is complete too; [`wait_for_created_page_ready`]
+    /// is what keeps that one from counting.
     #[must_use]
     pub fn settled_enough(self) -> bool {
         self.showing || self.complete
@@ -169,21 +176,66 @@ pub async fn wait_for_representation_stable(
     }
 }
 
-/// The same wait, for a caller holding a page rather than a session.
-pub async fn wait_for_page_ready(
+/// The same wait for a tab just opened on `url`, which must first show that page.
+///
+/// `Browser.createTab` answers while the tab still shows the about:blank every tab starts on:
+/// `url` replaces it only when its response commits, as late as the server is slow to answer.
+/// That placeholder is quiet and reports itself complete, so the rule that lets a genuinely
+/// empty page through would call it ready, and `tabs new` would hand back an empty snapshot.
+/// So it never counts here. A URL that never replaces it (a download, a 204) waits out the
+/// budget.
+pub async fn wait_for_created_page_ready(
     pages: &PageManager,
     page_id: PageId,
+    url: &str,
     budget: Duration,
 ) -> Readiness {
+    // A tab asked for about:blank shows it from the start, and has no content to wait for.
+    if url.is_empty() || url == "about:blank" {
+        return Readiness::Stable;
+    }
     let deadline = Instant::now() + budget;
-    let page = match call_with_deadline(pages.get_session(page_id), deadline).await {
-        Ok(page) => page,
-        Err(outcome) => return into_readiness(outcome),
+    // Attaching to the new tab waits on `Page.enable`, which answers only once the tab's
+    // renderer is up: measured at 30-680 ms on a busy browser. Bounding the attach by one
+    // probe read's limit ended the wait before its first read. The snapshot that follows needs
+    // the same session, so waiting for it here costs the caller nothing.
+    let page = match timeout_at(deadline, pages.get_session(page_id)).await {
+        Ok(Ok(page)) => page,
+        Ok(Err(error)) => {
+            return Readiness::Unknown {
+                reason: error.to_string(),
+            };
+        }
+        Err(_elapsed) => return Readiness::StillMoving,
     };
-    let Ok(left) = remaining(deadline) else {
-        return Readiness::StillMoving;
-    };
-    wait_for_representation_stable(&page.session, left).await
+    let mut previous: Option<u64> = None;
+    loop {
+        match read_with_deadline(&page.session, deadline).await {
+            Ok(Some(reading)) => {
+                let on_placeholder = reading.blank;
+                if !on_placeholder
+                    && !reading.installed
+                    && previous == Some(reading.count)
+                    && reading.settled_enough()
+                {
+                    return Readiness::Stable;
+                }
+                // A quiet interval counts only between two readings of the page itself.
+                previous = (!on_placeholder).then_some(reading.count);
+            }
+            // A new tab's renderer can be slow to answer its first reads, and the commit that
+            // replaces the placeholder takes the probe's context with it. Either is the page
+            // still arriving, so only a lost target ends the wait early, as in navigation's.
+            Ok(None) => previous = None,
+            Err(outcome) => return into_readiness(outcome),
+        }
+        if sleep_for_budget(timeouts::ACTION_SETTLE_DOM_QUIET, deadline)
+            .await
+            .is_err()
+        {
+            return Readiness::StillMoving;
+        }
+    }
 }
 
 async fn read_reading(
@@ -378,6 +430,8 @@ mod tests {
         /// When set, the readiness probe never answers, standing in for a page
         /// whose main thread is too busy to schedule the evaluation.
         stall_readiness: bool,
+        /// How long `Target.attachToTarget` takes to answer, as on a busy browser.
+        attach_delay: Duration,
     }
 
     struct HarnessConnection {
@@ -419,6 +473,17 @@ mod tests {
                 };
                 if stalls {
                     std::future::pending::<()>().await;
+                }
+                if method == "Target.attachToTarget" {
+                    let delay = self
+                        .state
+                        .lock()
+                        .map_err(|_err| CdpError::Protocol {
+                            code: -1,
+                            message: "poisoned test state".to_string(),
+                        })?
+                        .attach_delay;
+                    tokio::time::sleep(delay).await;
                 }
                 let mut state = self.state.lock().map_err(|_err| CdpError::Protocol {
                     code: -1,
@@ -478,13 +543,31 @@ mod tests {
         json!({ "n": n, "installed": installed, "showing": showing, "complete": complete })
     }
 
+    /// What the probe reads on the about:blank a new tab shows before its page commits: empty,
+    /// quiet and complete.
+    fn placeholder(installed: bool) -> Value {
+        json!({ "n": 0, "installed": installed, "showing": false, "complete": true, "blank": true })
+    }
+
+    /// The URL the harness tab was opened on, for tests about the page rather than the
+    /// placeholder.
+    const OPENED_ON: &str = "https://example.test/";
+
     async fn harness_reading(
+        readiness: impl Into<VecDeque<Value>>,
+    ) -> Result<(Arc<BrowserSession>, crate::PageId), CoreError> {
+        harness_attaching_after(Duration::ZERO, readiness).await
+    }
+
+    async fn harness_attaching_after(
+        attach_delay: Duration,
         readiness: impl Into<VecDeque<Value>>,
     ) -> Result<(Arc<BrowserSession>, crate::PageId), CoreError> {
         let connection = HarnessConnection::new(HarnessState {
             readiness: readiness.into(),
             readiness_last: reading(0, false, true, true),
             stall_readiness: false,
+            attach_delay,
         });
         let session = BrowserSession::new(connection, BrowserSessionHooks::default());
         let pages = session.pages.list().await?;
@@ -523,6 +606,7 @@ mod tests {
             readiness: VecDeque::new(),
             readiness_last: reading(0, false, true, true),
             stall_readiness: true,
+            attach_delay: Duration::ZERO,
         });
         let session = BrowserSession::new(connection, BrowserSessionHooks::default());
         let pages = session.pages.list().await?;
@@ -564,9 +648,13 @@ mod tests {
         ]))
         .await?;
         let start = Instant::now();
-        let outcome =
-            super::wait_for_page_ready(&session.pages, page_id, timeouts::ARRIVAL_READY_BUDGET)
-                .await;
+        let outcome = super::wait_for_created_page_ready(
+            &session.pages,
+            page_id,
+            OPENED_ON,
+            timeouts::ARRIVAL_READY_BUDGET,
+        )
+        .await;
         assert_eq!(outcome, super::Readiness::Stable);
         assert!(
             start.elapsed() < Duration::from_millis(500),
@@ -586,7 +674,8 @@ mod tests {
             harness_reading(VecDeque::from([reading(0, false, false, false)])).await?;
         let budget = Duration::from_millis(400);
         let start = Instant::now();
-        let outcome = super::wait_for_page_ready(&session.pages, page_id, budget).await;
+        let outcome =
+            super::wait_for_created_page_ready(&session.pages, page_id, OPENED_ON, budget).await;
         assert_eq!(outcome, super::Readiness::StillMoving);
         assert!(start.elapsed() >= Duration::from_millis(300));
         Ok(())
@@ -598,11 +687,159 @@ mod tests {
         let (session, page_id) =
             harness_reading(VecDeque::from([reading(0, false, false, true)])).await?;
         let start = Instant::now();
-        let outcome =
-            super::wait_for_page_ready(&session.pages, page_id, timeouts::ARRIVAL_READY_BUDGET)
-                .await;
+        let outcome = super::wait_for_created_page_ready(
+            &session.pages,
+            page_id,
+            OPENED_ON,
+            timeouts::ARRIVAL_READY_BUDGET,
+        )
+        .await;
         assert_eq!(outcome, super::Readiness::Stable);
         assert!(start.elapsed() < Duration::from_millis(500));
+        Ok(())
+    }
+
+    /// A tab asked to open about:blank has nothing to wait for, not even its attach.
+    #[tokio::test]
+    async fn a_tab_opened_on_about_blank_is_ready_at_once() -> Result<(), CoreError> {
+        let (session, page_id) = harness_attaching_after(
+            timeouts::ARRIVAL_READY_BUDGET,
+            VecDeque::from([placeholder(false)]),
+        )
+        .await?;
+        let start = Instant::now();
+        let outcome = super::wait_for_created_page_ready(
+            &session.pages,
+            page_id,
+            "about:blank",
+            timeouts::ARRIVAL_READY_BUDGET,
+        )
+        .await;
+        assert_eq!(outcome, super::Readiness::Stable);
+        assert!(start.elapsed() < timeouts::ACTION_SETTLE_DOM_QUIET);
+        Ok(())
+    }
+
+    /// A tab opened on a slow server shows its placeholder about:blank, quiet and complete,
+    /// until the page commits. Calling that ready handed `tabs new` an empty snapshot.
+    #[tokio::test]
+    async fn a_new_tab_is_not_ready_while_it_still_shows_the_placeholder() -> Result<(), CoreError>
+    {
+        let (session, page_id) = harness_reading(VecDeque::from([
+            placeholder(true),
+            placeholder(false),
+            placeholder(false),
+            placeholder(false),
+            reading(0, true, true, false),
+            reading(3, false, true, false),
+            reading(3, false, true, false),
+        ]))
+        .await?;
+        let start = Instant::now();
+        let outcome = super::wait_for_created_page_ready(
+            &session.pages,
+            page_id,
+            "https://slow.example/login",
+            timeouts::ARRIVAL_READY_BUDGET,
+        )
+        .await;
+        assert_eq!(outcome, super::Readiness::Stable);
+        assert!(
+            start.elapsed() >= Duration::from_millis(600),
+            "the wait should read past the placeholder to the page, took {:?}",
+            start.elapsed()
+        );
+        Ok(())
+    }
+
+    /// The commit replacing the placeholder takes the probe's context with it, so a read that
+    /// fails then is the page arriving, not a page that cannot be read.
+    #[tokio::test]
+    async fn a_failed_read_while_the_placeholder_commits_keeps_waiting() -> Result<(), CoreError> {
+        let (session, page_id) = harness_reading(VecDeque::from([
+            placeholder(true),
+            placeholder(false),
+            Value::Null,
+            reading(0, true, true, false),
+            reading(0, false, true, false),
+        ]))
+        .await?;
+        let outcome = super::wait_for_created_page_ready(
+            &session.pages,
+            page_id,
+            "https://slow.example/login",
+            timeouts::ARRIVAL_READY_BUDGET,
+        )
+        .await;
+        assert_eq!(outcome, super::Readiness::Stable);
+        Ok(())
+    }
+
+    /// The wait attaches to the new tab before its first read. An attach slower than one probe
+    /// read's limit used to end the wait there, and the snapshot then read the placeholder.
+    #[tokio::test]
+    async fn a_slow_attach_to_the_new_tab_still_waits_for_the_page() -> Result<(), CoreError> {
+        let (session, page_id) = harness_attaching_after(
+            timeouts::ACTION_SETTLE_CDP_CALL_TIMEOUT * 2,
+            VecDeque::from([
+                placeholder(true),
+                placeholder(false),
+                reading(0, true, true, false),
+                reading(0, false, true, false),
+            ]),
+        )
+        .await?;
+        let outcome = super::wait_for_created_page_ready(
+            &session.pages,
+            page_id,
+            "https://slow.example/login",
+            timeouts::ARRIVAL_READY_BUDGET,
+        )
+        .await;
+        assert_eq!(outcome, super::Readiness::Stable);
+        Ok(())
+    }
+
+    /// A new tab's renderer can be slow to answer its first read. Giving up on that read handed
+    /// back the placeholder with most of the budget left.
+    #[tokio::test]
+    async fn a_first_read_that_fails_keeps_waiting() -> Result<(), CoreError> {
+        let (session, page_id) = harness_reading(VecDeque::from([
+            Value::Null,
+            placeholder(true),
+            reading(0, true, true, false),
+            reading(0, false, true, false),
+        ]))
+        .await?;
+        let outcome = super::wait_for_created_page_ready(
+            &session.pages,
+            page_id,
+            "https://slow.example/login",
+            timeouts::ARRIVAL_READY_BUDGET,
+        )
+        .await;
+        assert_eq!(outcome, super::Readiness::Stable);
+        Ok(())
+    }
+
+    /// A URL that never replaces the placeholder (a download, a 204) is handed back at the
+    /// ceiling, which is what the ceiling is for.
+    #[tokio::test]
+    async fn a_new_tab_that_never_leaves_the_placeholder_waits_out_the_budget()
+    -> Result<(), CoreError> {
+        let (session, page_id) =
+            harness_reading(VecDeque::from([placeholder(true), placeholder(false)])).await?;
+        let budget = Duration::from_millis(400);
+        let start = Instant::now();
+        let outcome = super::wait_for_created_page_ready(
+            &session.pages,
+            page_id,
+            "https://example.test/report.pdf",
+            budget,
+        )
+        .await;
+        assert_eq!(outcome, super::Readiness::StillMoving);
+        assert!(start.elapsed() >= Duration::from_millis(300));
         Ok(())
     }
 
@@ -616,8 +853,13 @@ mod tests {
             reading(0, true, true, false),
         ]))
         .await?;
-        let outcome =
-            super::wait_for_page_ready(&session.pages, page_id, Duration::from_millis(400)).await;
+        let outcome = super::wait_for_created_page_ready(
+            &session.pages,
+            page_id,
+            OPENED_ON,
+            Duration::from_millis(400),
+        )
+        .await;
         assert_eq!(outcome, super::Readiness::StillMoving);
         Ok(())
     }
@@ -632,9 +874,13 @@ mod tests {
         ]))
         .await?;
         let start = Instant::now();
-        let outcome =
-            super::wait_for_page_ready(&session.pages, page_id, timeouts::ARRIVAL_READY_BUDGET)
-                .await;
+        let outcome = super::wait_for_created_page_ready(
+            &session.pages,
+            page_id,
+            OPENED_ON,
+            timeouts::ARRIVAL_READY_BUDGET,
+        )
+        .await;
         assert_eq!(outcome, super::Readiness::Stable);
         assert!(
             start.elapsed() >= Duration::from_millis(300),

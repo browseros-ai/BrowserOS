@@ -359,6 +359,7 @@ mod tests {
             installed,
             showing: true,
             complete: true,
+            blank: false,
         }
     }
 
