@@ -1,9 +1,11 @@
 //! Ultrafast skills: a saved skill's verified flow, how it runs, and how it hands back.
 
+pub mod brief;
 pub mod compose;
 pub mod outcome;
 pub mod prose;
 pub mod store;
+pub mod verify;
 
 use crate::{clock::now_epoch_ms, db::entities::skill_flows};
 use compose::Mode;

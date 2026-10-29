@@ -306,7 +306,7 @@ impl ClawMcpService {
             .collect::<Vec<_>>();
         let mut local = vec![
             self.name_session_tool.clone(),
-            self.save_skill_tool.clone(),
+            self.save_skill_offer(),
             self.mark_skill_run_tool.clone(),
         ];
         // Offered only when the server has a credential for the decision model.
@@ -734,7 +734,12 @@ impl ClawMcpService {
             .into_call_tool_result()
     }
 
-    async fn call_save_skill(&self, started: &StartedSession, raw_args: &Value) -> CallToolResult {
+    async fn call_save_skill(
+        &self,
+        started: &StartedSession,
+        raw_args: &Value,
+        client_cancel: CancellationToken,
+    ) -> CallToolResult {
         let dispatch_id = DispatchId::new();
         let dispatch_cancel = CancellationToken::new();
         if !started
@@ -748,12 +753,17 @@ impl ClawMcpService {
         }
         let started_at = StdInstant::now();
         let session_id = started.session.id().as_str().to_string();
-        let result = match parse_save_skill(raw_args, session_id) {
-            Ok(input) => match self.state.skills.upsert(input).await {
-                Ok(view) => ToolResult::text(format!("saved skill /{}", view.model.name), None),
-                Err(error) => ToolResult::error(error.to_string()),
-            },
-            Err(message) => ToolResult::error(message),
+        let result = if self.ultrafast() {
+            self.save_skill_ultrafast(started, raw_args, client_cancel)
+                .await
+        } else {
+            match parse_save_skill(raw_args, session_id) {
+                Ok(input) => match self.state.skills.upsert(input).await {
+                    Ok(view) => ToolResult::text(format!("saved skill /{}", view.model.name), None),
+                    Err(error) => ToolResult::error(error.to_string()),
+                },
+                Err(message) => ToolResult::error(message),
+            }
         };
         if let Err(error) = record_local_tool_dispatch(
             &self.state,
@@ -1441,7 +1451,7 @@ impl ServerHandler for ClawMcpService {
             return Some(session_handle::offer(self.name_session_tool.clone()));
         }
         if name == SAVE_SKILL_TOOL_NAME {
-            return Some(session_handle::offer(self.save_skill_tool.clone()));
+            return Some(session_handle::offer(self.save_skill_offer()));
         }
         if name == MARK_SKILL_RUN_TOOL_NAME {
             return Some(session_handle::offer(self.mark_skill_run_tool.clone()));
@@ -1573,7 +1583,9 @@ impl ServerHandler for ClawMcpService {
         let result = if is_name_session {
             Ok(self.call_name_session(&started, &raw_args).await)
         } else if is_save_skill {
-            Ok(self.call_save_skill(&started, &raw_args).await)
+            Ok(self
+                .call_save_skill(&started, &raw_args, context.ct.clone())
+                .await)
         } else if is_mark_skill_run {
             Ok(self.call_mark_skill_run(&started, &raw_args).await)
         } else if is_request_help {
@@ -4367,6 +4379,7 @@ mod tests {
                     "learnedNotes": ["Read the DOM snapshot, not screenshots"],
                     "site": "mail.google.com"
                 }),
+                CancellationToken::new(),
             )
             .await;
 
@@ -4394,6 +4407,7 @@ mod tests {
                     "description": "Check the inbox and reply",
                     "steps": ["Open the inbox", "Draft and send"]
                 }),
+                CancellationToken::new(),
             )
             .await;
         let updated = call.state.skills.get("neo-inbox-sweep").await?;
@@ -4427,6 +4441,7 @@ mod tests {
                     "description": "Check the weather",
                     "steps": ["Open the forecast"]
                 }),
+                CancellationToken::new(),
             )
             .await;
         assert!(call.state.skills.get("neo-weather").await.is_ok());

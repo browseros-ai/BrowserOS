@@ -150,6 +150,39 @@ impl SkillService {
         self.repo.put_flow(row).await
     }
 
+    /// Re-renders SKILL.md from its current prose: with the "Run it fast" section while the
+    /// skill has a flow that runs, without it otherwise. A hand-written body with no numbered
+    /// steps is left alone.
+    pub async fn rerender(&self, name: &str, run_it_fast: Option<&RunItFast>) -> AppResult<()> {
+        let _guard = self.mutate.lock().await;
+        let model = self.require(name).await?;
+        let body = self.read_body(&model.body_path).await;
+        let steps = crate::services::flow::prose::prose_steps(&body);
+        if steps.is_empty() {
+            return Ok(());
+        }
+        let notes = crate::services::flow::prose::learned_notes(&body);
+        let content = match run_it_fast {
+            Some(fast) => render_ultrafast_markdown(name, &model.description, &steps, &notes, fast),
+            None => render_skill_markdown(name, &model.description, &steps, &notes),
+        };
+        if content == body {
+            return Ok(());
+        }
+        self.update_locked(
+            name,
+            UpdateSkill {
+                description: None,
+                site: None,
+                steps: None,
+                learned_notes: None,
+                body: Some(content),
+            },
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// The directory holding the skill's SKILL.md (and flow.md beside it).
     #[must_use]
     pub fn skill_dir(&self, name: &str) -> PathBuf {
@@ -549,6 +582,51 @@ fn normalized_skill_name(raw: &str) -> AppResult<String> {
     Ok(name)
 }
 
+/// What SKILL.md says about running a skill's flow.
+pub struct RunItFast {
+    pub status: &'static str,
+    /// Input name and type, in the order the flow declares them.
+    pub inputs: Vec<(String, String)>,
+}
+
+fn render_ultrafast_markdown(
+    name: &str,
+    description: &str,
+    steps: &[String],
+    learned_notes: &[String],
+    fast: &RunItFast,
+) -> String {
+    let description = serde_json::to_string(description).unwrap_or_else(|_| "\"\"".to_string());
+    let inputs = fast
+        .inputs
+        .iter()
+        .map(|(input, kind)| format!("{input}: {kind}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut out = format!(
+        "---\nname: {name}\ndescription: {description}\ntools: {SKILL_TOOLS}\nultrafast: {}\n---\n\n## Run it fast\n",
+        fast.status
+    );
+    out.push_str(&format!(
+        "Call the run_skill tool with name: {name} and inputs {{ {inputs} }}. It records the run.\n"
+    ));
+    out.push_str("- done: report its output.\n");
+    out.push_str("- needs_agent: continue from the step it names, on the page it gives you, with your normal tools. If effects.committed is true, never redo that write. If it includes a repair note, follow it after you report the result.\n");
+    out.push_str(&format!(
+        "- refused, or run_skill is not available: call the mark_skill_run tool with name: {name}, then follow the steps below.\n\n## Steps\n"
+    ));
+    for (index, step) in steps.iter().enumerate() {
+        out.push_str(&format!("{}. {}\n", index + 1, step));
+    }
+    if !learned_notes.is_empty() {
+        out.push_str("\n## Learned from past runs\n");
+        for note in learned_notes {
+            out.push_str(&format!("- {note}\n"));
+        }
+    }
+    out
+}
+
 fn render_skill_markdown(
     name: &str,
     description: &str,
@@ -630,7 +708,44 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{neo_prefixed, normalized_skill_name};
+    use super::{
+        RunItFast, neo_prefixed, normalized_skill_name, render_skill_markdown,
+        render_ultrafast_markdown,
+    };
+    use crate::services::flow::prose::{learned_notes, prose_steps};
+
+    #[test]
+    fn a_prose_skill_renders_exactly_as_before() {
+        let steps = vec!["Open the search.".to_string(), "Add it.".to_string()];
+        let notes = vec!["The grid fills late.".to_string()];
+        assert_eq!(
+            render_skill_markdown("neo-shop", "Add to cart", &steps, &notes),
+            "---\nname: neo-shop\ndescription: \"Add to cart\"\ntools: browseros-neo\n---\n\n## Steps\n1. Call the mark_skill_run tool with name: neo-shop so this run is recorded.\n2. Open the search.\n3. Add it.\n\n## Learned from past runs\n- The grid fills late.\n"
+        );
+    }
+
+    #[test]
+    fn an_ultrafast_skill_says_how_to_run_fast_and_keeps_its_steps() {
+        let steps = vec!["Open the search.".to_string(), "Add it.".to_string()];
+        let notes = vec!["The grid fills late.".to_string()];
+        let fast = RunItFast {
+            status: "verified",
+            inputs: vec![
+                ("query".to_string(), "string".to_string()),
+                ("match".to_string(), "string".to_string()),
+            ],
+        };
+        let body = render_ultrafast_markdown("neo-shop", "Add to cart", &steps, &notes, &fast);
+        assert!(body.contains("ultrafast: verified\n"));
+        assert!(body.contains(
+            "Call the run_skill tool with name: neo-shop and inputs { query: string, match: string }."
+        ));
+        assert!(body.contains("call the mark_skill_run tool with name: neo-shop, then follow"));
+        assert!(body.contains("## Steps\n1. Open the search.\n2. Add it.\n"));
+        // Steps and notes survive a round trip, so the skill can drop back to plain prose.
+        assert_eq!(prose_steps(&body), steps);
+        assert_eq!(learned_notes(&body), notes);
+    }
 
     #[test]
     fn neo_prefixed_is_idempotent() {

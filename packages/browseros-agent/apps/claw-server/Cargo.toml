@@ -35,6 +35,7 @@ sentry.workspace = true
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
 reqwest.workspace = true
+regex.workspace = true
 rmcp.workspace = true
 rand.workspace = true
 serde.workspace = true

@@ -311,6 +311,11 @@ const EFFECTS: &[NamedToolEffect] = &[
 // auto-distill. Re-add a NamedToolObserver for `distill::distill` to re-enable.
 const OBSERVERS: &[NamedToolObserver] = &[
     NamedToolObserver {
+        // Reads the script before anything is redacted; writes only a local file.
+        name: "journal",
+        run: observers::journal::apply,
+    },
+    NamedToolObserver {
         name: "audit",
         run: observers::audit::apply,
     },
@@ -2339,7 +2344,7 @@ mod tests {
                 .iter()
                 .map(|observer| observer.name)
                 .collect::<Vec<_>>(),
-            ["audit", "run_failure"]
+            ["journal", "audit", "run_failure"]
         );
     }
 

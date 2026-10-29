@@ -17,6 +17,7 @@ pub mod helpers;
 pub mod profiles;
 pub mod recordings;
 pub mod replay;
+pub mod run_journal;
 pub mod runtime_file;
 pub mod screenshots;
 pub mod session_efficiency;
