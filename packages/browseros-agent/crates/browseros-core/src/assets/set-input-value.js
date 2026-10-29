@@ -17,9 +17,18 @@ function browserosSetInputValue(value) {
   const previous = this.value
   this.focus()
   this.value = wanted
-  // The browser drops a value its control cannot hold, which clears the field, and lowercases
-  // a colour. A refused value puts the old one back, so an error leaves the field as it was.
-  if (this.value.toLowerCase() !== wanted.toLowerCase()) {
+  // The browser normalizes a value it accepts (a datetime drops :00 seconds, a colour is
+  // lowercased, a range writes 75.0 as 75), so the string can differ from the one sent. What
+  // it does with a value it cannot hold depends on the control: a date or time field clears,
+  // a colour falls back to #000000 and a range clamps or snaps to its step. A refused value
+  // puts the old one back, so an error leaves the field as it was.
+  const refused =
+    this.type === 'range'
+      ? wanted === '' || this.valueAsNumber !== Number(wanted)
+      : this.type === 'color'
+        ? this.value !== wanted.toLowerCase()
+        : wanted !== '' && this.value === ''
+  if (refused) {
     this.value = previous
     return `"${wanted}" is not a valid ${this.type} value. Use ${formats[this.type]}.`
   }

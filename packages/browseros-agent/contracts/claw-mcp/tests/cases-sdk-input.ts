@@ -222,6 +222,71 @@ function fillCases(surface: Surface): ContractCase[] {
         },
       }),
     ),
+    // The browser rewrites some values it accepts; fill must not mistake that for a refusal.
+    ...(
+      [
+        [
+          'Datetime field',
+          'datetime-local',
+          '2026-10-29T14:30:00',
+          '2026-10-29T14:30',
+        ],
+        ['Range field', 'range', '75.0', '75'],
+      ] as const
+    ).map(
+      ([label, id, value, stored]): ContractCase => ({
+        name: `${surface}: fill accepts ${id} ${value}, which the browser stores as ${stored}`,
+        async run(ctx) {
+          const page = await ctx.openPage(ctx.fixture('/sdk-fill.html'))
+          expectOk(
+            await inputCall(
+              ctx,
+              page,
+              surface,
+              'fill',
+              await fieldRef(ctx, page, label),
+              value,
+            ),
+          )
+          expect(
+            await evalValue(
+              ctx,
+              page,
+              `return document.getElementById(${JSON.stringify(id)}).value`,
+            ),
+          ).toBe(stored)
+        },
+      }),
+    ),
+    {
+      name: `${surface}: fill rejects a range value outside its bounds without changing it`,
+      async run(ctx) {
+        const page = await ctx.openPage(ctx.fixture('/sdk-fill.html'))
+        const before = await evalValue(
+          ctx,
+          page,
+          'return document.getElementById("range").value',
+        )
+        errorIncludes(
+          await inputCall(
+            ctx,
+            page,
+            surface,
+            'fill',
+            await fieldRef(ctx, page, 'Range field'),
+            '150',
+          ),
+          'a number from',
+        )
+        expect(
+          await evalValue(
+            ctx,
+            page,
+            'return document.getElementById("range").value',
+          ),
+        ).toBe(before)
+      },
+    },
     {
       name: `${surface}: fill rejects an invalid date format without changing the field`,
       async run(ctx) {
