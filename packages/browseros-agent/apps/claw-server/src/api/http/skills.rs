@@ -141,6 +141,20 @@ pub(super) async fn update(
         )
         .await
         .map_err(|source| map_error(&request_id, source))?;
+    let detail = if state.agent_settings.ultrafast_enabled() {
+        state
+            .skills
+            .reconcile_flow_after_edit(&name)
+            .await
+            .map_err(|source| map_error(&request_id, source))?;
+        state
+            .skills
+            .get(&name)
+            .await
+            .map_err(|source| map_error(&request_id, source))?
+    } else {
+        detail
+    };
     let token_savings = skill_token_savings(&state, &detail.runs)
         .await
         .map_err(|source| map_error(&request_id, source))?;

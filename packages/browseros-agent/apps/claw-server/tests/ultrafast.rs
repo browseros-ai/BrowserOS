@@ -204,3 +204,75 @@ async fn ultrafast_state_is_reported_only_while_the_flag_is_on() -> anyhow::Resu
     assert!(state.skills.flow_row("neo-shop-add").await?.is_none());
     Ok(())
 }
+
+async fn put(router: &Router, uri: &str, body: Value) -> anyhow::Result<(StatusCode, Value)> {
+    let request = Request::builder()
+        .method("PUT")
+        .uri(uri)
+        .header(header::HOST, "localhost")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))?;
+    let response = router.clone().oneshot(request).await?;
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await?;
+    Ok((status, serde_json::from_slice(&bytes)?))
+}
+
+fn two_step_flow() -> flow::store::FlowDoc {
+    use flow::store::{Effects, FlowDoc, FlowMeta, FlowStep};
+    FlowDoc {
+        meta: FlowMeta {
+            name: "neo-shop-add".to_string(),
+            flow_version: 1,
+            effects: Effects::Read,
+            hosts: vec![],
+            inputs: [("query".to_string(), "string".to_string())].into(),
+            output: Default::default(),
+            examples: vec![],
+            source_session: None,
+        },
+        steps: (1..=2)
+            .map(|n| FlowStep {
+                n,
+                commit: false,
+                src: "async () => {}".to_string(),
+            })
+            .collect(),
+    }
+}
+
+#[tokio::test]
+async fn editing_steps_keeps_run_it_fast_only_while_they_line_up() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let state = &app.state;
+    state.agent_settings.set_jev_token("test-token").await?;
+    create_skill(state, "neo-shop-add").await?;
+    flow::store::write(&state.skills.skill_dir("neo-shop-add"), &two_step_flow())?;
+    state
+        .skills
+        .put_flow_row(flow::new_row("neo-shop-add", FlowStatus::Verified))
+        .await?;
+
+    let (status, detail) = put(
+        &app.router,
+        "/api/v1/skills/neo-shop-add",
+        json!({ "steps": ["Open the search", "Add the first match"], "learnedNotes": [] }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let body = detail["body"].as_str().unwrap_or_default();
+    assert!(body.contains("## Run it fast"), "{body}");
+    assert!(body.contains("1. Open the search"), "{body}");
+
+    let (_, detail) = put(
+        &app.router,
+        "/api/v1/skills/neo-shop-add",
+        json!({ "steps": ["Open", "Look", "Add"], "learnedNotes": [] }),
+    )
+    .await?;
+    assert_eq!(detail["skill"]["ultrafast"]["status"], "off");
+    let body = detail["body"].as_str().unwrap_or_default();
+    assert!(!body.contains("Run it fast"), "{body}");
+    assert!(body.contains("1. Call the mark_skill_run tool"), "{body}");
+    Ok(())
+}

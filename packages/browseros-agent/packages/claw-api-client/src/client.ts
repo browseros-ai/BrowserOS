@@ -25,6 +25,7 @@ import type {
   Skill,
   SkillCreate,
   SkillDetail,
+  SkillFlowSource,
   SkillList,
   SkillRunList,
   SkillUpdate,
@@ -387,6 +388,22 @@ export class ClawApiClient {
     return this.unwrap(
       await this.client.GET('/api/v1/skills/{name}/runs', {
         params: { path: { name }, query },
+      }),
+    )
+  }
+
+  async getSkillFlow(request: SkillNameRequest): Promise<SkillFlowSource> {
+    return this.unwrap(
+      await this.client.GET('/api/v1/skills/{name}/flow', {
+        params: { path: request },
+      }),
+    )
+  }
+
+  async approveSkillWrite(request: SkillNameRequest): Promise<Skill> {
+    return this.unwrap(
+      await this.client.POST('/api/v1/skills/{name}/ultrafast/approve-write', {
+        params: { path: request },
       }),
     )
   }

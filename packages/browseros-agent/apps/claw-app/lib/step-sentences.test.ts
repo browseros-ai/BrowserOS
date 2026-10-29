@@ -146,6 +146,17 @@ describe('describeStep', () => {
   it('describes the human-help and saved-task tools', () => {
     expect(describeStep(call('request_human_help'))).toBe('Asked you for help')
     expect(describeStep(call('save_skill'))).toBe('Saved this as a skill')
+    expect(
+      describeStep(call('save_skill', { args: { name: 'x', flow: [] } })),
+    ).toBe('Made this skill ultrafast')
+    expect(
+      describeStep(
+        call('save_skill', { args: { name: 'x', patch: { step: 2 } } }),
+      ),
+    ).toBe('Repaired a step of this skill')
+    expect(
+      describeStep(call('run_skill', { args: { name: 'neo-shop-add' } })),
+    ).toBe('Ran neo-shop-add the fast way')
   })
 
   it('shortens very long page titles', () => {

@@ -172,6 +172,13 @@ function parseMeta(resultMeta: string | undefined | null): Args {
   return parseArgs(resultMeta)
 }
 
+/** A save_skill call: the first save, the flow that makes it ultrafast, or a repair. */
+function describeSkillSave(args: Args): string {
+  if (args.patch !== undefined) return 'Repaired a step of this skill'
+  if (args.flow !== undefined) return 'Made this skill ultrafast'
+  return 'Saved this as a skill'
+}
+
 function stringArg(args: Args, key: string): string | undefined {
   const value = args[key]
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
@@ -365,7 +372,11 @@ export function describeStep(dispatch: ToolDispatchRow): string {
     case 'await_human_help':
       return 'Waited for you'
     case 'save_skill':
-      return 'Saved this as a skill'
+      return describeSkillSave(args)
+    case 'run_skill': {
+      const name = stringArg(args, 'name')
+      return name ? `Ran ${name} the fast way` : 'Ran a skill the fast way'
+    }
     case 'credentials':
       return `Used a saved sign-in on ${onPage}`
     default:

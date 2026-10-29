@@ -12,6 +12,7 @@ import type {
   Skill,
   SkillCreate,
   SkillDetail,
+  SkillFlowSource,
   SkillList,
   SkillRunList,
 } from '@browseros/claw-api'
@@ -47,4 +48,19 @@ export const useUpdateSkill = createMutation<SkillDetail, UpdateSkillRequest>({
 
 export const useDeleteSkill = createMutation<void, SkillNameRequest>({
   mutationFn: async (request) => (await apiClient()).deleteSkill(request),
+})
+
+/** The skill's ultrafast flow file, for reading on the skill page. */
+export const useSkillFlow = createQuery<
+  SkillFlowSource,
+  { name: string },
+  Error
+>({
+  queryKey: ['api', 'skill-flow'],
+  fetcher: async ({ name }) => (await apiClient()).getSkillFlow({ name }),
+})
+
+/** One-time approval that lets a skill's write flow run without asking. */
+export const useApproveSkillWrite = createMutation<Skill, SkillNameRequest>({
+  mutationFn: async (request) => (await apiClient()).approveSkillWrite(request),
 })

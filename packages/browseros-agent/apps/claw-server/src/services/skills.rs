@@ -183,6 +183,46 @@ impl SkillService {
         .map(|_| ())
     }
 
+    /// After a hand edit, keeps a working flow consistent with the prose it is numbered
+    /// against: "Run it fast" comes back while the steps still line up, and the flow is
+    /// switched off once they no longer do.
+    pub async fn reconcile_flow_after_edit(&self, name: &str) -> AppResult<()> {
+        use crate::services::flow::{FlowStatus, prose::prose_steps, store};
+        let Some(mut row) = self.repo.get_flow(name).await? else {
+            return Ok(());
+        };
+        let status = FlowStatus::parse(&row.status);
+        if !status.runs() {
+            return Ok(());
+        }
+        let model = self.require(name).await?;
+        let steps = prose_steps(&self.read_body(&model.body_path).await);
+        let doc = store::read(&self.skill_dir(name)).ok().flatten();
+        match doc {
+            Some(doc) if doc.steps.len() == steps.len() => {
+                let fast = RunItFast {
+                    status: status.as_str(),
+                    inputs: doc
+                        .meta
+                        .inputs
+                        .iter()
+                        .map(|(input, kind)| (input.clone(), kind.clone()))
+                        .collect(),
+                };
+                self.rerender(name, Some(&fast)).await
+            }
+            _ => {
+                row.status = FlowStatus::Off.as_str().to_string();
+                row.status_reason = Some(
+                    "the steps were edited and no longer match the fast version; save the skill again to make it ultrafast".to_string(),
+                );
+                row.updated_at = now_ms();
+                self.repo.put_flow(row).await?;
+                self.rerender(name, None).await
+            }
+        }
+    }
+
     /// The directory holding the skill's SKILL.md (and flow.md beside it).
     #[must_use]
     pub fn skill_dir(&self, name: &str) -> PathBuf {
