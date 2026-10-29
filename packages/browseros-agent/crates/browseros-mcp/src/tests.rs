@@ -316,6 +316,7 @@ impl CdpConnection for HarnessConnection {
                     Ok(json!({ "sessionId": session }))
                 }
                 "Page.enable"
+                | "Page.setInterceptFileChooserDialog"
                 | "DOM.enable"
                 | "Runtime.enable"
                 | "Accessibility.enable"

@@ -67,7 +67,8 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.evaluateInPage(fn, arg?, opts?) - runs your script inside the page's own main world, where page scripts can watch it; only when the user explicitly asks to run code in the page, or snapshot/read/grep cannot answer. Returns { changed } alongside the value: a script that mutated the page is settled before you get it back, so never pause afterwards. For an effect that is entirely asynchronous (a click whose result arrives over the network) pass { settle: true } to wait for quiet regardless. Pass a real function; a second argument is JSON-serialized and handed to it, e.g. page.evaluateInPage((sel) => document.querySelectorAll(sel).length, '.row'). It does not close over script variables. A code string with a `return` also works: page.evaluateInPage("return document.title").
   page.screenshot(opts?) / pdf(opts?)
     screenshot has no default cap; size caps CSS pixels, with omitted axes unconstrained
-  page.download(ref) / upload(ref, files)
+  An upload picker is intercepted on agent-created tabs: click may return { fileChooserOpen: true, multiple }. Finish with page.upload(null, files); selecting files does not submit the website form.
+  page.download(ref) / upload(ref, files); upload(null, files) or upload(files[]) finishes a pending file chooser
   page.close() / info()
 Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers.<name>(browser, page) where page is the id NUMBER.
   page.saveHelper(name, source) - source is a function, or the same thing as a string: async (browser, page) => { ... }
@@ -291,10 +292,11 @@ const BOOTSTRAP_JS: &str = r#"
       focus: (ref) => act('focus', { ref: asRef(ref, 'focus') }),
       drag: (fromRef, toRef) =>
         act('drag', { ref: asRef(fromRef, 'drag'), targetRef: asRef(toRef, 'drag') }),
-      upload: (ref, files) =>
-        tool('upload', Array.isArray(files)
-          ? { ref: asRef(ref, 'upload'), files }
-          : { ref: asRef(ref, 'upload'), file: files }),
+      upload: (ref, files) => {
+        if (Array.isArray(ref) && files === undefined) return tool('upload', { files: ref });
+        const target = ref == null ? {} : { ref: asRef(ref, 'upload') };
+        return tool('upload', Array.isArray(files) ? { ...target, files } : { ...target, file: files });
+      },
       download: (ref) => tool('download', { ref: asRef(ref, 'download') }),
 
       type: (text) => inp('type', [text]),
@@ -927,6 +929,7 @@ impl BrowserBridge {
                 args: &recorded_args,
                 from_helper,
                 is_error: outcome.is_err(),
+                file_chooser_open: matches!(&outcome, Ok(BrowserCallValue::Json(value)) if value["fileChooserOpen"] == true),
                 duration_ms: started.elapsed().as_millis() as i64,
                 output_token_estimate,
             })
@@ -935,14 +938,9 @@ impl BrowserBridge {
         outcome
     }
 
-    /// Runs a page input action but stops waiting if a blocking JavaScript dialog
-    /// opens on that page (or is already open). A confirm/prompt/beforeunload freezes
-    /// the renderer main thread, so the action's CDP ack never returns and the run
-    /// would otherwise hang to its 30s cap (#2780). The dialog listener records it
-    /// concurrently, so polling pending_dialog lets us hand control back; the pending
-    /// dialog is left set for page.dialogAccept()/dialogDismiss() to resolve. Returns
-    /// Ok(None) when a dialog interrupted the action, so callers surface the dialog
-    /// rather than reporting the action as done.
+    /// Returns control when input opens a JavaScript dialog or intercepted file chooser.
+    /// Dialogs can prevent the input ack altogether; chooser notifications can follow it,
+    /// so both the outstanding action and its completed path observe the shared state.
     async fn race_input<F, T>(&self, page_id: &PageId, future: F) -> Result<Option<T>, String>
     where
         F: Future<Output = Result<T, browseros_core::CoreError>>,
@@ -951,13 +949,29 @@ impl BrowserBridge {
         let page = page_id.clone();
         let dialog = async move {
             while signals.pending_dialog(&page).is_none() {
+                if self
+                    .ctx
+                    .browser
+                    .files()
+                    .pending_chooser(page.clone())
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .is_some()
+                {
+                    break;
+                }
                 sleep(Duration::from_millis(25)).await;
             }
+            Ok::<(), String>(())
         };
         tokio::select! {
             biased;
-            result = self.control.race(future) => result.map(Some),
-            () = dialog => {
+            result = self.control.race(future) => {
+                let value = result?;
+                if self.control.race(self.ctx.browser.files().chooser_after_action(page_id.clone())).await?.is_some() { Ok(None) } else { Ok(Some(value)) }
+            },
+            interrupted = dialog => {
+                interrupted?;
                 // The dialog race cancels the action future before its guarded
                 // handle returns. Re-admit before exposing global page signals.
                 if self.ctx.browser.binding().is_some() {
@@ -968,17 +982,25 @@ impl BrowserBridge {
         }
     }
 
-    /// The value an input action returns when a blocking dialog interrupted it: a
-    /// marker plus the dialog's kind and message, so the script can see that the
-    /// action did not complete and must accept or dismiss the dialog next (#2780).
-    fn dialog_open_value(&self, page_id: &PageId) -> BrowserCallValue {
+    /// Report pending interaction state without exposing its native node/session handle.
+    /// File selection and JavaScript-dialog resolution retain their existing tool seams.
+    async fn interaction_open_value(&self, page_id: &PageId) -> Result<BrowserCallValue, String> {
         match self.ctx.browser.signals().pending_dialog(page_id) {
-            Some(dialog) => BrowserCallValue::Json(json!({
+            Some(dialog) => Ok(BrowserCallValue::Json(json!({
                 "dialogOpen": true,
                 "kind": dialog.kind,
                 "message": dialog.message,
-            })),
-            None => BrowserCallValue::Undefined,
+            }))),
+            None => {
+                let result =
+                    crate::framework::pending_file_chooser_result(&self.ctx, page_id.clone())
+                        .await
+                        .map_err(|error| error.to_string())?;
+                Ok(match result.and_then(|result| result.structured_content) {
+                    Some(value) => BrowserCallValue::Json(value),
+                    None => BrowserCallValue::Undefined,
+                })
+            }
         }
     }
 
@@ -1086,7 +1108,7 @@ impl BrowserBridge {
                     .await?
                 {
                     Some(_) => Ok(BrowserCallValue::Undefined),
-                    None => Ok(self.dialog_open_value(&page_id)),
+                    None => self.interaction_open_value(&page_id).await,
                 }
             }
             "input.fill" => {
@@ -1101,7 +1123,7 @@ impl BrowserBridge {
                     .await?
                 {
                     Some(_) => Ok(BrowserCallValue::Undefined),
-                    None => Ok(self.dialog_open_value(&page_id)),
+                    None => self.interaction_open_value(&page_id).await,
                 }
             }
             "input.type" => {
@@ -1113,7 +1135,7 @@ impl BrowserBridge {
                     .await?;
                 match self.race_input(&page_id, input.type_text(&text)).await? {
                     Some(_) => Ok(BrowserCallValue::Undefined),
-                    None => Ok(self.dialog_open_value(&page_id)),
+                    None => self.interaction_open_value(&page_id).await,
                 }
             }
             "input.press" => {
@@ -1125,7 +1147,7 @@ impl BrowserBridge {
                     .await?;
                 match self.race_input(&page_id, input.press(&key)).await? {
                     Some(_) => Ok(BrowserCallValue::Undefined),
-                    None => Ok(self.dialog_open_value(&page_id)),
+                    None => self.interaction_open_value(&page_id).await,
                 }
             }
             "input.hover" => {
@@ -1136,7 +1158,7 @@ impl BrowserBridge {
                     .await?;
                 match self.race_input(&page_id, input.hover(&Ref(ref_id))).await? {
                     Some(_) => Ok(BrowserCallValue::Undefined),
-                    None => Ok(self.dialog_open_value(&page_id)),
+                    None => self.interaction_open_value(&page_id).await,
                 }
             }
             "input.selectOption" => {
@@ -1151,7 +1173,7 @@ impl BrowserBridge {
                     .await?
                 {
                     Some(selected) => Ok(BrowserCallValue::Json(json!(selected))),
-                    None => Ok(self.dialog_open_value(&page_id)),
+                    None => self.interaction_open_value(&page_id).await,
                 }
             }
             "input.scroll" => {
@@ -1168,7 +1190,7 @@ impl BrowserBridge {
                     .await?
                 {
                     Some(_) => Ok(BrowserCallValue::Undefined),
-                    None => Ok(self.dialog_open_value(&page_id)),
+                    None => self.interaction_open_value(&page_id).await,
                 }
             }
             "nav.goto" => {
@@ -2144,7 +2166,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dialog_open_value_describes_the_pending_dialog() -> anyhow::Result<()> {
+    async fn interaction_open_value_describes_the_pending_dialog() -> anyhow::Result<()> {
         let connection = Arc::new(RunFakeConnection::new());
         let ctx = test_ctx_for(connection.clone(), BrowserToolDefaults::default());
         ctx.browser
@@ -2163,7 +2185,11 @@ mod tests {
         }
 
         let bridge = test_bridge(ctx);
-        match bridge.dialog_open_value(&PageId(1)) {
+        match bridge
+            .interaction_open_value(&PageId(1))
+            .await
+            .map_err(anyhow::Error::msg)?
+        {
             BrowserCallValue::Json(value) => {
                 assert_eq!(value["dialogOpen"], json!(true));
                 assert_eq!(value["kind"], json!("confirm"));

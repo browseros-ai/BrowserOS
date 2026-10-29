@@ -1235,6 +1235,15 @@ pub fn result_meta(
     {
         summary["cancellationKind"] = json!(bounded_json_string(cancellation_kind));
     }
+    // Preserve only the interruption marker, never filesystem paths or chooser node ids.
+    // The extension renders selection as a separate step from opening the chooser.
+    if structured_content
+        .get("fileChooserOpen")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        summary["fileChooserOpen"] = json!(true);
+    }
     let serialized = summary.to_string();
     debug_assert!(serialized.len() <= RESULT_META_MAX);
     serialized

@@ -1,7 +1,7 @@
 use crate::format::diff::DiffDetail;
 use crate::framework::{
     AuditHints, ToolCtx, ToolExecResult, ToolResult, error_result, parse_args,
-    pending_dialog_result, text_result,
+    pending_dialog_result, pending_file_chooser_result, text_result,
 };
 use crate::response::FieldTarget;
 use browseros_core::{
@@ -279,6 +279,9 @@ fn handler<'a>(
                 }
                 return Err(err);
             }
+        }
+        if let Some(chooser) = pending_file_chooser_result(ctx, page_id.clone()).await? {
+            return Ok(Some(chooser));
         }
         response.data(json!({ "kind": args.kind.as_str() }));
         if let Some(detail) = resolve_diff_detail(args.diff) {

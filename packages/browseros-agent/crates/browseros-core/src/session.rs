@@ -30,6 +30,7 @@ pub struct BrowserSession {
     /// reads it through its session, so capture, dispatch and raw CDP share one gate decision;
     /// hosts derive discovery from the same value they pass in here.
     native: NativeCapabilities,
+    pub(crate) file_transfers: Arc<crate::file_transfers::TransferState>,
     pub pages: Arc<PageManager>,
     pub page_signals: Arc<PageSignals>,
     pub windows: Arc<WindowManager>,
@@ -51,6 +52,7 @@ impl BrowserSession {
         hooks: BrowserSessionHooks,
         native: NativeCapabilities,
     ) -> Arc<Self> {
+        let file_transfers = crate::file_transfers::TransferState::new(connection.clone());
         let frames = FrameRegistry::new(connection.clone());
         let page_signals = PageSignals::new(connection.clone());
         let frame_hook = {
@@ -92,11 +94,15 @@ impl BrowserSession {
             on_session_attached: Some(frame_hook),
             on_page_detached: Some(detach_hook),
         };
-        let pages = Arc::new(PageManager::new(connection.clone(), page_hooks));
+        let pages = Arc::new(
+            PageManager::new(connection.clone(), page_hooks)
+                .with_file_transfers(file_transfers.clone()),
+        );
         let windows = Arc::new(WindowManager::new(connection.clone()));
         let session = Arc::new(Self {
             connection: connection.clone(),
             native,
+            file_transfers,
             pages,
             page_signals,
             windows,

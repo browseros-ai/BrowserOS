@@ -143,6 +143,7 @@ fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
         "DOM.setFileInputFiles" => Some(&["files", "nodeId", "backendNodeId", "objectId"]),
         "Page.enable" => Some(&["enableFileChooserOpenedEvent"]),
         "Page.disable" => Some(&[]),
+        "Page.setInterceptFileChooserDialog" => Some(&["enabled", "cancel"]),
         "Page.navigate" => Some(&[
             "url",
             "referrer",

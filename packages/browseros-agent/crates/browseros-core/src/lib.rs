@@ -4,6 +4,7 @@ pub mod connection;
 pub mod content_markdown;
 pub mod credentials;
 pub mod error;
+pub mod file_transfers;
 pub mod frames;
 pub mod input;
 pub mod navigation;

@@ -34,6 +34,7 @@ const EXPECTED_PAGES = [
   'snapshot-frame-deep.html',
   'snapshot-frame-grandchild.html',
   'snapshot-frame-tree.html',
+  'upload-frame.html',
   'upload.html',
 ]
 
