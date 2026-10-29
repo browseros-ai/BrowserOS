@@ -14,10 +14,13 @@ function browserosSetInputValue(value) {
     range: `a number from ${this.min || 0} to ${this.max || 100}`,
   }
   const wanted = value.trim()
+  const previous = this.value
   this.focus()
   this.value = wanted
-  // The browser drops a value its control cannot hold and lowercases a colour.
+  // The browser drops a value its control cannot hold, which clears the field, and lowercases
+  // a colour. A refused value puts the old one back, so an error leaves the field as it was.
   if (this.value.toLowerCase() !== wanted.toLowerCase()) {
+    this.value = previous
     return `"${wanted}" is not a valid ${this.type} value. Use ${formats[this.type]}.`
   }
   this.dispatchEvent(new Event('input', { bubbles: true, composed: true }))
