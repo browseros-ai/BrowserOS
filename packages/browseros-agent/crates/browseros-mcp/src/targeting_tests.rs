@@ -1247,9 +1247,10 @@ async fn bound_viewport_screenshot_measures_and_captures_only_through_guarded_pa
             "{call:?}"
         );
     }
+    // The fixture display is 2x, and the default capture is one image pixel per CSS pixel.
     assert_eq!(
         page_calls[1].params["clip"],
-        json!({ "x": 3.0, "y": 4.0, "width": 1280.0, "height": 800.0, "scale": 1.0 })
+        json!({ "x": 3.0, "y": 4.0, "width": 1280.0, "height": 800.0, "scale": 0.5 })
     );
 
     let before = connection.calls().len();

@@ -1301,18 +1301,26 @@ async fn retired_window_activate_action_is_rejected() {
     assert!(result_text(&result).starts_with("Invalid arguments for windows:"));
 }
 
+/// The harness display is 2x (a 2880 device-pixel layout viewport over 1440 CSS pixels), so
+/// the default CSS scale halves the clip scale: one image pixel per CSS pixel, the point
+/// click_at takes. "device" keeps the display's density.
 #[tokio::test]
 async fn screenshot_caps_only_supplied_css_dimensions_without_resizing_the_page() {
     for (options, scale) in [
-        (json!({}), 1.0),
-        (json!({ "size": {} }), 1.0),
+        (json!({}), 0.5),
+        (json!({ "size": {} }), 0.5),
         (
             json!({ "size": { "width": 1024, "height": 768 } }),
-            768.0 / 1800.0,
+            768.0 / 1800.0 / 2.0,
         ),
-        (json!({ "size": { "width": 1024 } }), 1024.0 / 1440.0),
-        (json!({ "size": { "height": 768 } }), 768.0 / 1800.0),
-        (json!({ "size": { "width": 4096, "height": 4096 } }), 1.0),
+        (json!({ "size": { "width": 1024 } }), 1024.0 / 1440.0 / 2.0),
+        (json!({ "size": { "height": 768 } }), 768.0 / 1800.0 / 2.0),
+        (json!({ "size": { "width": 4096, "height": 4096 } }), 0.5),
+        (json!({ "scale": "device" }), 1.0),
+        (
+            json!({ "scale": "device", "size": { "width": 1024 } }),
+            1024.0 / 1440.0,
+        ),
     ] {
         let (ctx, connection, page) = harness_ctx().await;
         let mut args = options;
