@@ -143,6 +143,8 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
       let state = null;
       let label = '';
       let yielded = false;
+      // Every input action neo has in flight; concurrent actions each hold the shield down.
+      let yieldDepth = 0;
       let captureDepth = 0;
       let queue = [];
       let lastReachIn = 0;
@@ -195,6 +197,7 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
       const takeOver = (via) => {
         if (!held() && !(yielded && HELD.has(state))) return;
         yielded = false;
+        yieldDepth = 0;
         clear('yield');
         enter('person', { label: COPY.paused });
         emit({ type: 'take-over', via });
@@ -328,6 +331,7 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
         el = {};
         state = null;
         yielded = false;
+        yieldDepth = 0;
         captureDepth = 0;
       };
       const arm = (expiryMs) => later('expiry', expiryMs || 35000, dispose);
@@ -355,17 +359,23 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
           if (!layer) return 'absent';
           if (state === 'person' || state === 'handing') return 'person';
           yielded = true;
-          // A yield that is never resumed must not leave the page unheld for good.
-          later('yield', 3000, () => { yielded = false; sync(); });
+          yieldDepth += 1;
+          // A yield that is never resumed must not leave the page unheld for good. Long enough
+          // for neo to type a long text into a slow page, and restarted by every new action.
+          later('yield', 30000, () => { yielded = false; yieldDepth = 0; sync(); });
           sync();
           return 'yielded';
         },
         resumeInput() {
           if (!layer) return false;
-          yielded = false;
-          clear('yield');
+          yieldDepth = Math.max(0, yieldDepth - 1);
+          if (!yieldDepth) {
+            yielded = false;
+            clear('yield');
+          }
           sync();
-          return true;
+          // True once the shield is back up; false while another action still holds it down.
+          return !yielded;
         },
         hide() {
           if (!layer) return false;

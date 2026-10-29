@@ -107,6 +107,15 @@ describe('working overlay script', () => {
     expect(api().yieldInput()).toBe('person')
   })
 
+  test('tests that concurrent actions each keep the shield down until the last one ends', () => {
+    const { run, api } = page()
+    run(show)
+    expect(api().yieldInput()).toBe('yielded')
+    expect(api().yieldInput()).toBe('yielded')
+    expect(api().resumeInput()).toBe(false)
+    expect(api().resumeInput()).toBe(true)
+  })
+
   test('tests that a held phase never overrides the person until the server resumes', () => {
     const { run } = page()
     run({ ...show, phase: 'person', label: '' })
