@@ -22,7 +22,10 @@
     <input id="label-control" type="checkbox" style="display: none" />
     <label for="label-control">Styled checkbox label</label>
     <button id="inert" role="checkbox" aria-checked="false">Inert checkbox</button>
+    <!-- Unchecked beneath an indeterminate look: a click would turn it on, not off. -->
+    <label><input id="mixed" type="checkbox" /> Mixed checkbox</label>
     <script>
+      document.getElementById('mixed').indeterminate = true
       window.submits = 0
       window.enterKeys = 0
       window.switchClicks = 0

@@ -145,6 +145,41 @@ function checkboxCases(surface: Surface): ContractCase[] {
         ).toBe('false')
       },
     },
+    {
+      name: `${surface}: uncheck leaves an unchecked indeterminate checkbox off, then check turns it on`,
+      async run(ctx) {
+        const page = await ctx.openPage(ctx.fixture('/sdk-input.html'))
+        const state =
+          'const box = document.getElementById("mixed"); return { checked: box.checked, indeterminate: box.indeterminate }'
+        expectOk(
+          await inputCall(
+            ctx,
+            page,
+            surface,
+            'uncheck',
+            await fieldRef(ctx, page, 'Mixed checkbox'),
+          ),
+        )
+        // Not clicked: the box keeps its mixed look and stays off.
+        expect(await evalValue(ctx, page, state)).toEqual({
+          checked: false,
+          indeterminate: true,
+        })
+        expectOk(
+          await inputCall(
+            ctx,
+            page,
+            surface,
+            'check',
+            await fieldRef(ctx, page, 'Mixed checkbox'),
+          ),
+        )
+        expect(await evalValue(ctx, page, state)).toEqual({
+          checked: true,
+          indeterminate: false,
+        })
+      },
+    },
   ]
 }
 

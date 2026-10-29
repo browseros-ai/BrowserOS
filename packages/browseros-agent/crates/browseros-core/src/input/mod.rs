@@ -422,7 +422,7 @@ impl Input {
             }
             return Ok(checked);
         };
-        if before.checked == Some(checked) {
+        if before.checked == checked {
             return Ok(checked);
         }
         if before.radio && !checked {
@@ -443,7 +443,7 @@ impl Input {
             let after: Option<CheckState> = js
                 .call(resolved.backend_node_id, CHECK_STATE_FN, &[])
                 .await?;
-            if after.is_some_and(|after| after.checked == Some(checked)) {
+            if after.is_some_and(|after| after.checked == checked) {
                 return Ok(checked);
             }
             if tokio::time::Instant::now() >= deadline {
@@ -702,23 +702,29 @@ const POINT_SENSITIVE_JS: &str = "(()=>{const pred=__PRED__;\
   }\
   return pred(el);})()";
 
-/// What [`CHECK_STATE_FN`] reads: `checked` is `None` for a mixed (indeterminate) control.
+/// What [`CHECK_STATE_FN`] reads.
 #[derive(Debug, Clone, Copy, serde::Deserialize)]
 struct CheckState {
-    checked: Option<bool>,
+    checked: bool,
     radio: bool,
 }
 
 /// Reads a control's checked state, following a label to the control it names. Returns null
 /// when the element has no checked state at all.
+///
+/// A mixed control reads as its underlying state, as Playwright's `getCheckedWithoutMixed`
+/// does: a native box's `checked` sits beneath `indeterminate`, and clicking clears the mixed
+/// look by toggling that, so treating mixed as unknown and clicking would invert a box that
+/// was already where the caller wanted it. An `aria-checked="mixed"` control counts as
+/// unchecked.
 const CHECK_STATE_FN: &str = "function(){\
 const el=this.tagName==='LABEL'&&this.control?this.control:this;\
 if(el.tagName==='INPUT'&&(el.type==='checkbox'||el.type==='radio'))\
-return{checked:el.indeterminate?null:el.checked,radio:el.type==='radio'};\
+return{checked:el.checked,radio:el.type==='radio'};\
 const aria=el.getAttribute&&el.getAttribute('aria-checked');\
 if(aria!=='true'&&aria!=='false'&&aria!=='mixed')return null;\
 const role=(el.getAttribute('role')||'').trim().split(/\\s+/)[0];\
-return{checked:aria==='mixed'?null:aria==='true',radio:role==='radio'||role==='menuitemradio'};\
+return{checked:aria==='true',radio:role==='radio'||role==='menuitemradio'};\
 }";
 
 const SELECT_OPTION_FN: &str = "function(val){\
