@@ -856,6 +856,37 @@ fn install_globals<'js>(
 }
 
 impl BrowserBridge {
+    /// The page a primitive works on and the method a host classifies it by. Raw CDP is named by
+    /// the CDP method it sends (`cdp:Page.navigate`), and a raw call to a page session is
+    /// resolved to that page, so the host sees what it actually does to which page.
+    async fn page_work(
+        &self,
+        method: &str,
+        args: &[Value],
+        page: Option<u32>,
+    ) -> (Option<u32>, String) {
+        match method {
+            "cdp" => {
+                let cdp_method = args.first().and_then(Value::as_str).unwrap_or_default();
+                let page = match args.get(2).and_then(Value::as_str) {
+                    Some(session) => self
+                        .ctx
+                        .browser
+                        .page_for_session(&SessionId::from(session))
+                        .await
+                        .map(|page| page.0),
+                    None => None,
+                };
+                (page, format!("cdp:{cdp_method}"))
+            }
+            "cdpJsonForPage" => {
+                let cdp_method = args.get(1).and_then(Value::as_str).unwrap_or_default();
+                (page, format!("cdp:{cdp_method}"))
+            }
+            _ => (page, method.to_string()),
+        }
+    }
+
     /// Raw `Input.*` from a script lowers the working overlay's shield like neo's own input.
     async fn held<T>(
         &self,
@@ -921,9 +952,10 @@ impl BrowserBridge {
             ),
             _ => None,
         };
-        let working_page = match (page, &self.ctx.inner_call_hook) {
+        let (work_page, work_method) = self.page_work(method, &args, page).await;
+        let working_page = match (work_page, &self.ctx.inner_call_hook) {
             (Some(page), Some(hook)) => {
-                hook.begin_page_work(method, page).await?;
+                hook.begin_page_work(&work_method, page).await?;
                 Some(page)
             }
             _ => None,
