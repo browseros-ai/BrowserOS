@@ -54,12 +54,13 @@ pub(super) async fn begin(call: &ToolCall) -> Result<(), String> {
         .await
 }
 
-/// Moves the page to "between actions" once the call is done, whatever its outcome.
+/// Lets go of every page the call held once it is done, whatever its outcome. For `run` this also
+/// covers a script stopped between a primitive's start and end.
 pub(super) async fn end(call: &ToolCall) {
-    if let (Some(page), Some(browser)) = (held_page(call), &call.browser_session) {
+    if let Some(browser) = &call.browser_session {
         call.state
             .page_hold
-            .end_action(browser, page, &call.dispatch_id)
+            .end_dispatch(browser, &call.dispatch_id)
             .await;
     }
 }

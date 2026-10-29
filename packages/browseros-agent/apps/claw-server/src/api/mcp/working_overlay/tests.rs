@@ -264,3 +264,180 @@ async fn a_finished_session_lets_go_of_only_its_own_pages() -> anyhow::Result<()
     );
     Ok(())
 }
+
+async fn second_session(state: &AppState) -> Arc<crate::services::sessions::Session> {
+    let session = crate::services::sessions::Session::new(
+        SessionId::new("s2"),
+        crate::identity::ClientIdentity::Ephemeral {
+            slug: "claude".to_string(),
+            label: "Claude".to_string(),
+        },
+        crate::identity::ConversationIdentity::new("claude", "brave-bison".to_string()),
+        "Claude".to_string(),
+        tokio::time::Instant::now(),
+    );
+    state.sessions.insert_for_testing(session.clone()).await;
+    session
+}
+
+#[tokio::test]
+async fn taking_over_a_shared_page_stops_and_pauses_every_agent_on_it() -> anyhow::Result<()> {
+    let state = state_with_overlay().await?;
+    let first = state
+        .sessions
+        .lookup(&owner())
+        .await
+        .ok_or_else(|| anyhow::anyhow!("session missing"))?;
+    let second = second_session(&state).await;
+    let (first_call, second_call) = (DispatchId::new(), DispatchId::new());
+    let (first_token, second_token) = (CancellationToken::new(), CancellationToken::new());
+    first
+        .try_register_dispatch(first_call.clone(), first_token.clone())
+        .await;
+    second
+        .try_register_dispatch(second_call.clone(), second_token.clone())
+        .await;
+    let page = PageId(8);
+    page_hold(&state)
+        .seed(
+            page.clone(),
+            &owner(),
+            HoldPhase::Working,
+            std::slice::from_ref(&first_call),
+        )
+        .await;
+    page_hold(&state)
+        .seed_call(&page, &second_call, second.id())
+        .await;
+
+    page_hold(&state)
+        .handle_event(&page, OverlayEvent::TakeOver { via: Via::Button })
+        .await;
+
+    assert!(first_token.is_cancelled());
+    assert!(second_token.is_cancelled());
+    for session in [owner(), second.id().clone()] {
+        let entry = state
+            .help
+            .get(&session)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("{session:?} is not waiting"))?;
+        assert_eq!(entry.origin(), HelpOrigin::Person);
+    }
+
+    page_hold(&state)
+        .handle_event(&page, OverlayEvent::HandBack)
+        .await;
+    for session in [owner(), second.id().clone()] {
+        assert!(
+            state
+                .help
+                .get(&session)
+                .await
+                .is_some_and(|entry| !entry.is_open())
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_session_waits_until_its_last_taken_over_page_is_handed_back() -> anyhow::Result<()> {
+    let state = state_with_overlay().await?;
+    for page in [PageId(9), PageId(10)] {
+        page_hold(&state)
+            .seed(page.clone(), &owner(), HoldPhase::Between, &[])
+            .await;
+        page_hold(&state)
+            .handle_event(&page, OverlayEvent::TakeOver { via: Via::Button })
+            .await;
+    }
+    let entry = state
+        .help
+        .get(&owner())
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no help entry"))?;
+
+    page_hold(&state)
+        .handle_event(&PageId(9), OverlayEvent::HandBack)
+        .await;
+    assert!(entry.is_open(), "page 10 is still the person's");
+    assert!(
+        page_hold(&state)
+            .person_message(&PageId(10))
+            .await
+            .is_some()
+    );
+
+    page_hold(&state)
+        .handle_event(&PageId(10), OverlayEvent::HandBack)
+        .await;
+    assert!(!entry.is_open());
+    Ok(())
+}
+
+#[tokio::test]
+async fn turning_the_overlay_off_ends_a_wait_on_a_take_over() -> anyhow::Result<()> {
+    let state = state_with_overlay().await?;
+    let page = PageId(11);
+    page_hold(&state)
+        .seed(page.clone(), &owner(), HoldPhase::Working, &[])
+        .await;
+    page_hold(&state)
+        .handle_event(&page, OverlayEvent::TakeOver { via: Via::Esc })
+        .await;
+    let entry = state
+        .help
+        .get(&owner())
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no help entry"))?;
+
+    state
+        .agent_settings
+        .update(crate::services::agent_settings::AgentSettingsUpdate {
+            working_overlay_enabled: Some(false),
+            ..Default::default()
+        })
+        .await?;
+    page_hold(&state).tick_for_test().await;
+
+    assert!(!entry.is_open());
+    assert_eq!(page_hold(&state).phase(&page).await, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_finished_call_lets_go_of_every_page_it_held() -> anyhow::Result<()> {
+    let state = state_with_overlay().await?;
+    let script = DispatchId::new();
+    let other = DispatchId::new();
+    page_hold(&state)
+        .seed(
+            PageId(12),
+            &owner(),
+            HoldPhase::Working,
+            std::slice::from_ref(&script),
+        )
+        .await;
+    page_hold(&state)
+        .seed(
+            PageId(13),
+            &owner(),
+            HoldPhase::Working,
+            &[script.clone(), other.clone()],
+        )
+        .await;
+
+    let released = page_hold(&state).release_for_test(&script).await;
+
+    assert_eq!(released, vec![PageId(12)]);
+    assert_eq!(
+        page_hold(&state).phase(&PageId(12)).await,
+        Some(HoldPhase::Between)
+    );
+    assert_eq!(
+        page_hold(&state).phase(&PageId(13)).await,
+        Some(HoldPhase::Working),
+        "another call still acts on it"
+    );
+    Ok(())
+}
