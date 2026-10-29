@@ -316,6 +316,10 @@ impl ClawMcpService {
         }
         if self.human_help() == HumanHelp::On {
             local.push(self.request_help_tool.clone());
+        }
+        // A person can take a page over from the working overlay even with human help off, and
+        // the agent is told to wait for the hand back with this tool.
+        if self.human_help() == HumanHelp::On || self.state.page_hold.enabled() {
             local.push(self.await_help_tool.clone());
         }
         tools.extend(
@@ -4075,6 +4079,21 @@ mod tests {
         expected.push(SAVE_SKILL_TOOL_NAME.to_string());
         expected.push(MARK_SKILL_RUN_TOOL_NAME.to_string());
         expect_pursue_if_credentialled(&service, &mut expected);
+        // A person can still take a page over from the working overlay, and the agent waits
+        // for the hand back with await_human_help.
+        let mut with_overlay = expected.clone();
+        with_overlay.push(AWAIT_HELP_TOOL_NAME.to_string());
+        for declare_agent_name in [false, true] {
+            assert_eq!(tool_names(&service, declare_agent_name), with_overlay);
+        }
+
+        call.state
+            .agent_settings
+            .update(crate::services::agent_settings::AgentSettingsUpdate {
+                working_overlay_enabled: Some(false),
+                ..Default::default()
+            })
+            .await?;
         for declare_agent_name in [false, true] {
             assert_eq!(tool_names(&service, declare_agent_name), expected);
         }

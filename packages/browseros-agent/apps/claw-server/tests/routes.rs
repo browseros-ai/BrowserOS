@@ -689,7 +689,9 @@ async fn tests_that_turning_human_help_off_over_http_reaches_mcp_agents() -> any
         .collect();
     assert!(listed.contains(&"run"), "{listed:?}");
     assert!(!listed.contains(&"request_human_help"), "{listed:?}");
-    assert!(!listed.contains(&"await_human_help"), "{listed:?}");
+    // Still offered while the working overlay is on: a person can take a page over, and the
+    // agent waits for the hand back with it.
+    assert!(listed.contains(&"await_human_help"), "{listed:?}");
 
     let ask = json!({
         "jsonrpc": "2.0",
