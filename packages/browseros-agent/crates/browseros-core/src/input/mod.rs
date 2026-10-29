@@ -37,6 +37,12 @@ pub struct ClickOptions {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct TargetHint {
+    pub name: String,
+    pub rect: Option<overlay::Rect>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct DragResult {
     pub from: Point,
     pub to: Point,
@@ -604,18 +610,21 @@ impl Input {
             .unwrap_or(false)
     }
 
-    /// Where the working overlay's ring goes for a ref: the element after it is scrolled into
-    /// view. Only refs in the top document get one; the ring is drawn there.
-    pub async fn target_rect(&self, ref_id: &Ref) -> Option<overlay::Rect> {
+    /// What the working overlay shows for a ref: the element's accessible name, and where its
+    /// ring goes once the element is scrolled into view. Only refs in the top document get a
+    /// ring; the ring is drawn there.
+    pub async fn target_hint(&self, ref_id: &Ref) -> Option<TargetHint> {
         let resolved = self.observer.resolve_ref(ref_id).await.ok()?;
+        let name = resolved.entry.name.clone();
         let top = self.page_session().await.ok()?;
         if !top.same_session(&resolved.session) {
-            return None;
+            return Some(TargetHint { name, rect: None });
         }
         scroll_into_view(&resolved.session, resolved.backend_node_id).await;
-        geometry::get_element_rect(&resolved.session, resolved.backend_node_id)
+        let rect = geometry::get_element_rect(&resolved.session, resolved.backend_node_id)
             .await
-            .ok()
+            .ok();
+        Some(TargetHint { name, rect })
     }
 
     /// Lowers the working overlay's shield for one input action; see `crate::overlay`.

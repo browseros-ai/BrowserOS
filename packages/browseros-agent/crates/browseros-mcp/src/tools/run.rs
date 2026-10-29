@@ -921,9 +921,19 @@ impl BrowserBridge {
             ),
             _ => None,
         };
+        let working_page = match (page, &self.ctx.inner_call_hook) {
+            (Some(page), Some(hook)) => {
+                hook.begin_page_work(method, page).await?;
+                Some(page)
+            }
+            _ => None,
+        };
         let started = Instant::now();
         let outcome = self.dispatch(method, args).await;
         drop(viewport);
+        if let (Some(page), Some(hook)) = (working_page, &self.ctx.inner_call_hook) {
+            hook.end_page_work(page).await;
+        }
         if let Some(hook) = &self.ctx.inner_call_hook {
             if method == "pages.newPage"
                 && let Ok(BrowserCallValue::Json(Value::Number(number))) = &outcome
