@@ -6,6 +6,7 @@ pub mod mouse;
 use crate::{
     CoreError, CoveredElementTarget, PageId, PageJs, ProtocolSession, Ref,
     observer::Observer,
+    overlay,
     pages::PageManager,
     pointer::{Pointer, PointerAction},
     snapshot::RefEntry,
@@ -162,12 +163,15 @@ impl Input {
         ref_id: &Ref,
         opts: ClickOptions,
     ) -> Result<Option<Point>, CoreError> {
-        let resolved = self.observer.resolve_ref(ref_id).await?;
-        self.click_node(
-            &resolved.session,
-            InputTarget::from_ref_entry(&resolved.entry),
-            opts,
-        )
+        self.held(Box::pin(async {
+            let resolved = self.observer.resolve_ref(ref_id).await?;
+            self.click_node(
+                &resolved.session,
+                InputTarget::from_ref_entry(&resolved.entry),
+                opts,
+            )
+            .await
+        }))
         .await
     }
 
@@ -176,73 +180,88 @@ impl Input {
         backend_node_id: i64,
         opts: ClickOptions,
     ) -> Result<Option<Point>, CoreError> {
-        self.with_page_session_retry(|session| {
-            let opts = opts.clone();
-            async move {
-                self.click_node(
-                    &session,
-                    InputTarget::from_backend_node(backend_node_id),
-                    opts,
-                )
-                .await
-            }
-        })
+        self.held(Box::pin(async {
+            self.with_page_session_retry(|session| {
+                let opts = opts.clone();
+                async move {
+                    self.click_node(
+                        &session,
+                        InputTarget::from_backend_node(backend_node_id),
+                        opts,
+                    )
+                    .await
+                }
+            })
+            .await
+        }))
         .await
     }
 
     pub async fn click_at(&self, x: f64, y: f64, opts: ClickOptions) -> Result<(), CoreError> {
-        self.with_page_session_retry(|session| {
-            let opts = opts.clone();
-            async move {
-                if let Some(pointer) = self.drawing_pointer().await
-                    && pointer
-                        .move_to(&session, PointerAction::Click, Point { x, y })
-                        .await
-                {
-                    pointer.click_effect(&session, Point { x, y }).await;
+        self.held(Box::pin(async {
+            self.with_page_session_retry(|session| {
+                let opts = opts.clone();
+                async move {
+                    if let Some(pointer) = self.drawing_pointer().await
+                        && pointer
+                            .move_to(&session, PointerAction::Click, Point { x, y })
+                            .await
+                    {
+                        pointer.click_effect(&session, Point { x, y }).await;
+                    }
+                    let at = self.dispatch_point(&session, Point { x, y }).await;
+                    let opts = self.dispatch_options(&session, opts).await;
+                    dispatch_click_with_options(&session, at.x, at.y, opts, 0).await
                 }
-                let at = self.dispatch_point(&session, Point { x, y }).await;
-                let opts = self.dispatch_options(&session, opts).await;
-                dispatch_click_with_options(&session, at.x, at.y, opts, 0).await
-            }
-        })
+            })
+            .await
+        }))
         .await
     }
 
     pub async fn hover_at(&self, x: f64, y: f64) -> Result<(), CoreError> {
-        self.with_page_session_retry(|session| async move {
-            if let Some(pointer) = self.drawing_pointer().await {
-                pointer
-                    .move_to(&session, PointerAction::Hover, Point { x, y })
-                    .await;
-            }
-            let at = self.dispatch_point(&session, Point { x, y }).await;
-            dispatch_hover(&session, at.x, at.y).await
-        })
+        self.held(Box::pin(async {
+            self.with_page_session_retry(|session| async move {
+                if let Some(pointer) = self.drawing_pointer().await {
+                    pointer
+                        .move_to(&session, PointerAction::Hover, Point { x, y })
+                        .await;
+                }
+                let at = self.dispatch_point(&session, Point { x, y }).await;
+                dispatch_hover(&session, at.x, at.y).await
+            })
+            .await
+        }))
         .await
     }
 
     pub async fn type_at(&self, x: f64, y: f64, text: &str, clear: bool) -> Result<(), CoreError> {
-        self.with_page_session_retry(|session| {
-            let text = text.to_string();
-            async move {
-                let at = self.dispatch_point(&session, Point { x, y }).await;
-                dispatch_click(&session, at.x, at.y, MouseButton::Left, 1, 0).await?;
-                if clear {
-                    clear_field(&session).await?;
+        self.held(Box::pin(async {
+            self.with_page_session_retry(|session| {
+                let text = text.to_string();
+                async move {
+                    let at = self.dispatch_point(&session, Point { x, y }).await;
+                    dispatch_click(&session, at.x, at.y, MouseButton::Left, 1, 0).await?;
+                    if clear {
+                        clear_field(&session).await?;
+                    }
+                    type_text(&session, &text).await
                 }
-                type_text(&session, &text).await
-            }
-        })
+            })
+            .await
+        }))
         .await
     }
 
     pub async fn drag_at(&self, from: Point, to: Point) -> Result<(), CoreError> {
-        self.with_page_session_retry(|session| async move {
-            let from = self.dispatch_point(&session, from).await;
-            let to = self.dispatch_point(&session, to).await;
-            dispatch_drag(&session, from, to).await
-        })
+        self.held(Box::pin(async {
+            self.with_page_session_retry(|session| async move {
+                let from = self.dispatch_point(&session, from).await;
+                let to = self.dispatch_point(&session, to).await;
+                dispatch_drag(&session, from, to).await
+            })
+            .await
+        }))
         .await
     }
 
@@ -282,19 +301,25 @@ impl Input {
     }
 
     pub async fn hover(&self, ref_id: &Ref) -> Result<Point, CoreError> {
-        let resolved = self.observer.resolve_ref(ref_id).await?;
-        self.hover_node(
-            &resolved.session,
-            InputTarget::from_ref_entry(&resolved.entry),
-        )
+        self.held(Box::pin(async {
+            let resolved = self.observer.resolve_ref(ref_id).await?;
+            self.hover_node(
+                &resolved.session,
+                InputTarget::from_ref_entry(&resolved.entry),
+            )
+            .await
+        }))
         .await
     }
 
     pub async fn hover_backend_node(&self, backend_node_id: i64) -> Result<Point, CoreError> {
-        self.with_page_session_retry(|session| async move {
-            self.hover_node(&session, InputTarget::from_backend_node(backend_node_id))
-                .await
-        })
+        self.held(Box::pin(async {
+            self.with_page_session_retry(|session| async move {
+                self.hover_node(&session, InputTarget::from_backend_node(backend_node_id))
+                    .await
+            })
+            .await
+        }))
         .await
     }
 
@@ -331,18 +356,24 @@ impl Input {
     }
 
     pub async fn type_text(&self, text: &str) -> Result<(), CoreError> {
-        self.with_page_session_retry(|session| {
-            let text = text.to_string();
-            async move { type_text(&session, &text).await }
-        })
+        self.held(Box::pin(async {
+            self.with_page_session_retry(|session| {
+                let text = text.to_string();
+                async move { type_text(&session, &text).await }
+            })
+            .await
+        }))
         .await
     }
 
     pub async fn press(&self, key: &str) -> Result<(), CoreError> {
-        self.with_page_session_retry(|session| {
-            let key = key.to_string();
-            async move { press_combo(&session, &key).await }
-        })
+        self.held(Box::pin(async {
+            self.with_page_session_retry(|session| {
+                let key = key.to_string();
+                async move { press_combo(&session, &key).await }
+            })
+            .await
+        }))
         .await
     }
 
@@ -384,37 +415,43 @@ impl Input {
     }
 
     pub async fn check(&self, ref_id: &Ref) -> Result<bool, CoreError> {
-        let resolved = self.observer.resolve_ref(ref_id).await?;
-        let checked: Option<bool> = PageJs::isolated(&resolved.session)
-            .call(resolved.backend_node_id, CHECKED_FN, &[])
-            .await?;
-        if checked != Some(true) {
-            let _ = self
-                .click_node(
-                    &resolved.session,
-                    InputTarget::from_ref_entry(&resolved.entry),
-                    ClickOptions::default(),
-                )
+        self.held(Box::pin(async {
+            let resolved = self.observer.resolve_ref(ref_id).await?;
+            let checked: Option<bool> = PageJs::isolated(&resolved.session)
+                .call(resolved.backend_node_id, CHECKED_FN, &[])
                 .await?;
-        }
-        Ok(true)
+            if checked != Some(true) {
+                let _ = self
+                    .click_node(
+                        &resolved.session,
+                        InputTarget::from_ref_entry(&resolved.entry),
+                        ClickOptions::default(),
+                    )
+                    .await?;
+            }
+            Ok(true)
+        }))
+        .await
     }
 
     pub async fn uncheck(&self, ref_id: &Ref) -> Result<bool, CoreError> {
-        let resolved = self.observer.resolve_ref(ref_id).await?;
-        let checked: Option<bool> = PageJs::isolated(&resolved.session)
-            .call(resolved.backend_node_id, CHECKED_FN, &[])
-            .await?;
-        if checked == Some(true) {
-            let _ = self
-                .click_node(
-                    &resolved.session,
-                    InputTarget::from_ref_entry(&resolved.entry),
-                    ClickOptions::default(),
-                )
+        self.held(Box::pin(async {
+            let resolved = self.observer.resolve_ref(ref_id).await?;
+            let checked: Option<bool> = PageJs::isolated(&resolved.session)
+                .call(resolved.backend_node_id, CHECKED_FN, &[])
                 .await?;
-        }
-        Ok(false)
+            if checked == Some(true) {
+                let _ = self
+                    .click_node(
+                        &resolved.session,
+                        InputTarget::from_ref_entry(&resolved.entry),
+                        ClickOptions::default(),
+                    )
+                    .await?;
+            }
+            Ok(false)
+        }))
+        .await
     }
 
     pub async fn upload_file_by_ref(
@@ -456,22 +493,25 @@ impl Input {
     }
 
     pub async fn drag(&self, source_ref: &Ref, target_ref: &Ref) -> Result<DragResult, CoreError> {
-        let source = self.observer.resolve_ref(source_ref).await?;
-        let target = self.observer.resolve_ref(target_ref).await?;
-        if !source.session.same_session(&target.session) {
-            return Err(CoreError::CrossFrameDrag);
-        }
-        scroll_into_view(&source.session, source.backend_node_id).await;
-        scroll_into_view(&target.session, target.backend_node_id).await;
-        let from = get_element_center(&source.session, source.backend_node_id).await?;
-        let to = get_element_center(&target.session, target.backend_node_id).await?;
-        dispatch_drag(
-            &source.session,
-            self.dispatch_point(&source.session, from).await,
-            self.dispatch_point(&source.session, to).await,
-        )
-        .await?;
-        Ok(DragResult { from, to })
+        self.held(Box::pin(async {
+            let source = self.observer.resolve_ref(source_ref).await?;
+            let target = self.observer.resolve_ref(target_ref).await?;
+            if !source.session.same_session(&target.session) {
+                return Err(CoreError::CrossFrameDrag);
+            }
+            scroll_into_view(&source.session, source.backend_node_id).await;
+            scroll_into_view(&target.session, target.backend_node_id).await;
+            let from = get_element_center(&source.session, source.backend_node_id).await?;
+            let to = get_element_center(&target.session, target.backend_node_id).await?;
+            dispatch_drag(
+                &source.session,
+                self.dispatch_point(&source.session, from).await,
+                self.dispatch_point(&source.session, to).await,
+            )
+            .await?;
+            Ok(DragResult { from, to })
+        }))
+        .await
     }
 
     pub async fn scroll(
@@ -480,35 +520,38 @@ impl Input {
         amount: i64,
         ref_id: Option<&Ref>,
     ) -> Result<(), CoreError> {
-        let pixels = amount * 120;
-        let (delta_x, delta_y) = match direction {
-            ScrollDirection::Left => (-pixels, 0),
-            ScrollDirection::Right => (pixels, 0),
-            ScrollDirection::Up => (0, -pixels),
-            ScrollDirection::Down => (0, pixels),
-        };
-        if delta_x == 0 && delta_y == 0 {
-            return Ok(());
-        }
-        if let Some(ref_id) = ref_id {
-            let resolved = self.observer.resolve_ref(ref_id).await?;
-            let point = get_element_center(&resolved.session, resolved.backend_node_id).await?;
-            let at = self.dispatch_point(&resolved.session, point).await;
-            dispatch_scroll(
-                &resolved.session,
-                at.x,
-                at.y,
-                delta_x as f64,
-                delta_y as f64,
-            )
-            .await?;
-            return Ok(());
-        }
-        let session = self.page_session().await?;
-        let _: Value = PageJs::isolated(&session)
-            .eval(&format!("window.scrollBy({delta_x}, {delta_y})"))
-            .await?;
-        Ok(())
+        self.held(Box::pin(async {
+            let pixels = amount * 120;
+            let (delta_x, delta_y) = match direction {
+                ScrollDirection::Left => (-pixels, 0),
+                ScrollDirection::Right => (pixels, 0),
+                ScrollDirection::Up => (0, -pixels),
+                ScrollDirection::Down => (0, pixels),
+            };
+            if delta_x == 0 && delta_y == 0 {
+                return Ok(());
+            }
+            if let Some(ref_id) = ref_id {
+                let resolved = self.observer.resolve_ref(ref_id).await?;
+                let point = get_element_center(&resolved.session, resolved.backend_node_id).await?;
+                let at = self.dispatch_point(&resolved.session, point).await;
+                dispatch_scroll(
+                    &resolved.session,
+                    at.x,
+                    at.y,
+                    delta_x as f64,
+                    delta_y as f64,
+                )
+                .await?;
+                return Ok(());
+            }
+            let session = self.page_session().await?;
+            let _: Value = PageJs::isolated(&session)
+                .eval(&format!("window.scrollBy({delta_x}, {delta_y})"))
+                .await?;
+            Ok(())
+        }))
+        .await
     }
 
     /// Best-effort: true when the ref resolves to a password or payment-card field.
@@ -559,6 +602,34 @@ impl Input {
             .ok()
             .flatten()
             .unwrap_or(false)
+    }
+
+    /// Where the working overlay's ring goes for a ref: the element after it is scrolled into
+    /// view. Only refs in the top document get one; the ring is drawn there.
+    pub async fn target_rect(&self, ref_id: &Ref) -> Option<overlay::Rect> {
+        let resolved = self.observer.resolve_ref(ref_id).await.ok()?;
+        let top = self.page_session().await.ok()?;
+        if !top.same_session(&resolved.session) {
+            return None;
+        }
+        scroll_into_view(&resolved.session, resolved.backend_node_id).await;
+        geometry::get_element_rect(&resolved.session, resolved.backend_node_id)
+            .await
+            .ok()
+    }
+
+    /// Lowers the working overlay's shield for one input action; see `crate::overlay`.
+    async fn held<T>(
+        &self,
+        action: impl std::future::Future<Output = Result<T, CoreError>>,
+    ) -> Result<T, CoreError> {
+        if !overlay::enabled() {
+            return action.await;
+        }
+        match self.page_session().await {
+            Ok(session) => overlay::with_yield(&session, action).await,
+            Err(_) => action.await,
+        }
     }
 
     async fn drawing_pointer(&self) -> Option<Pointer> {

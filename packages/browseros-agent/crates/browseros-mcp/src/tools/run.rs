@@ -5,6 +5,7 @@ use crate::framework::{
 use browseros_core::{
     NativeFeature, PageId, Ref, SessionId, WindowId,
     input::ScrollDirection,
+    overlay,
     pages::NewPageOptions,
     snapshot::{SnapshotMode, SnapshotOptions},
 };
@@ -855,6 +856,21 @@ fn install_globals<'js>(
 }
 
 impl BrowserBridge {
+    /// Raw `Input.*` from a script lowers the working overlay's shield like neo's own input.
+    async fn held<T>(
+        &self,
+        page: Option<PageId>,
+        send: impl Future<Output = Result<T, browseros_core::CoreError>>,
+    ) -> Result<T, browseros_core::CoreError> {
+        let Some(page) = page.filter(|_| overlay::enabled()) else {
+            return send.await;
+        };
+        match self.ctx.browser.page_session(page).await {
+            Ok(page) => overlay::with_yield(&page.session, Box::pin(send)).await,
+            Err(_) => send.await,
+        }
+    }
+
     /// The page a primitive fills a card into, including raw
     /// `browser.cdp(method, params, sessionId)` sent to a page's session.
     async fn card_fill_page(&self, method: &str, args: &[Value]) -> Option<u32> {
@@ -1200,24 +1216,26 @@ impl BrowserBridge {
                 let method = string_arg(&args, 0, "method")?;
                 let params = optional_json_arg(&args, 1).unwrap_or_else(|| json!({}));
                 let session_id = optional_string_arg(&args, 2)?.map(SessionId::from);
-                let value = self
-                    .control
-                    .race(self.ctx.browser.cdp(&method, params, session_id.as_ref()))
-                    .await?;
+                let page_id = match &session_id {
+                    Some(session) if is_input_method(&method) => {
+                        self.ctx.browser.page_for_session(session).await
+                    }
+                    _ => None,
+                };
+                let send = self.ctx.browser.cdp(&method, params, session_id.as_ref());
+                let value = self.control.race(self.held(page_id, send)).await?;
                 Ok(BrowserCallValue::Json(value))
             }
             "cdpJsonForPage" => {
                 let page_id = page_arg(&args, 0)?;
                 let method = string_arg(&args, 1, "method")?;
                 let params_json = string_arg(&args, 2, "paramsJson")?;
-                let raw = self
-                    .control
-                    .race(
-                        self.ctx
-                            .browser
-                            .cdp_json_for_page(page_id, &method, &params_json),
-                    )
-                    .await?;
+                let held_page = is_input_method(&method).then(|| page_id.clone());
+                let send = self
+                    .ctx
+                    .browser
+                    .cdp_json_for_page(page_id, &method, &params_json);
+                let raw = self.control.race(self.held(held_page, send)).await?;
                 let value = serde_json::from_str(&raw).map_err(|err| err.to_string())?;
                 Ok(BrowserCallValue::Json(value))
             }
@@ -1744,6 +1762,10 @@ fn push_log(logs: &SharedLogs, line: String) -> Result<(), String> {
 
 fn engine_error(error: rquickjs::Error) -> RunError {
     RunError::Engine(error.to_string())
+}
+
+fn is_input_method(method: &str) -> bool {
+    method.starts_with("Input.")
 }
 
 #[cfg(test)]

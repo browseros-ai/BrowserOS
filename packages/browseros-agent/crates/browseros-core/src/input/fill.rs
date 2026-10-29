@@ -32,15 +32,18 @@ impl Input {
         value: &str,
         clear: bool,
     ) -> Result<Option<Point>, CoreError> {
-        let resolved = self.observer.resolve_ref(ref_id).await?;
-        self.fill_node(
-            &resolved.session,
-            InputTarget::from_ref_entry(&resolved.entry),
-            value,
-            clear,
-        )
+        self.held(Box::pin(async {
+            let resolved = self.observer.resolve_ref(ref_id).await?;
+            self.fill_node(
+                &resolved.session,
+                InputTarget::from_ref_entry(&resolved.entry),
+                value,
+                clear,
+            )
+            .await
+            .map_err(|err| CoreError::Message(format!("Could not fill {ref_id}: {err}")))
+        }))
         .await
-        .map_err(|err| CoreError::Message(format!("Could not fill {ref_id}: {err}")))
     }
 
     async fn fill_node(

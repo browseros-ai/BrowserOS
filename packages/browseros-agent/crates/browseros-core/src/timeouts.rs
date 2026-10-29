@@ -45,3 +45,13 @@ pub const POINTER_MOVE_DEADLINE: Duration = Duration::from_millis(1_000);
 pub const POINTER_EFFECT_DEADLINE: Duration = Duration::from_millis(250);
 /// The page removes its pointer this long after the last agent action.
 pub const POINTER_IDLE: Duration = Duration::from_millis(4_000);
+/// Cap on drawing or updating the working overlay. It never holds up the action it decorates
+/// for longer than this.
+pub const OVERLAY_DEADLINE: Duration = Duration::from_millis(500);
+/// Cap on the no-wait overlay calls: yield, resume and screenshot hide/show.
+pub const OVERLAY_EFFECT_DEADLINE: Duration = Duration::from_millis(250);
+/// The page removes the overlay and its shield on its own when no beat arrives for this long,
+/// so a server that died can never leave a person's page held.
+pub const OVERLAY_EXPIRY: Duration = Duration::from_secs(35);
+/// How long the "Finished" state stays before it fades.
+pub const OVERLAY_FINISHED: Duration = Duration::from_secs(3);

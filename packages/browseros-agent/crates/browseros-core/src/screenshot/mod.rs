@@ -1,5 +1,6 @@
 use crate::{
-    CoreError, FrameId, PageJs, ProtocolSession, observer::Observer, pointer, snapshot::RefEntry,
+    CoreError, FrameId, PageJs, ProtocolSession, observer::Observer, overlay, pointer,
+    snapshot::RefEntry,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -149,6 +150,7 @@ async fn capture_plain_screenshot(
     let format = options.format.unwrap_or(ScreenshotFormat::Png);
     let full_page = options.full_page.unwrap_or(false);
     let hidden = pointer::hide_for_capture(page_session).await;
+    let overlay_hidden = overlay::hide_for_capture(page_session).await;
     let result = page_session
         .send::<_, CaptureScreenshotResult>(
             "Page.captureScreenshot",
@@ -157,6 +159,9 @@ async fn capture_plain_screenshot(
         .await;
     if hidden {
         pointer::restore_after_capture(page_session).await;
+    }
+    if overlay_hidden {
+        overlay::restore_after_capture(page_session).await;
     }
     let result = result?;
     Ok(ScreenshotCaptureResult {
@@ -204,6 +209,7 @@ async fn capture_annotated_screenshot(
             overlay_injected = true;
         }
         let hidden = pointer::hide_for_capture(&page_session).await;
+        let overlay_hidden = overlay::hide_for_capture(&page_session).await;
         let captured = page_session
             .send::<_, CaptureScreenshotResult>(
                 "Page.captureScreenshot",
@@ -212,6 +218,9 @@ async fn capture_annotated_screenshot(
             .await;
         if hidden {
             pointer::restore_after_capture(&page_session).await;
+        }
+        if overlay_hidden {
+            overlay::restore_after_capture(&page_session).await;
         }
         let captured = captured?;
         Ok(ScreenshotCaptureResult {
