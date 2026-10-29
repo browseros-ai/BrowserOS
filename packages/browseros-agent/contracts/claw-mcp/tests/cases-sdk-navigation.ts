@@ -93,7 +93,7 @@ export const sdkNavigationCases: ContractCase[] = (
     },
   },
   ...([200, 404] as const).map((status) => ({
-    name: `${surface}: goto returns HTTP ${status}${surface === 'navigate' && status === 404 ? ' and reports the status in text' : ''}`,
+    name: `${surface}: goto ${surface === 'navigate' ? 'reports' : 'returns'} HTTP ${status}`,
     async run(ctx: CaseContext) {
       const page = await ctx.openPage(ctx.fixture('/links.html'))
       const url = ctx.fixture(
@@ -105,9 +105,11 @@ export const sdkNavigationCases: ContractCase[] = (
           action: 'url',
           url,
         })
+        // The hosted wire drops structured content for tools without an output schema, so
+        // the text is the contract: an error status is named, a 200 adds nothing.
         const text = expectOk(result)
         if (status === 404) expect(text).toContain('(HTTP 404)')
-        expect(result.structuredContent?.status).toBe(status)
+        else expect(text).not.toContain('(HTTP')
       } else {
         expect(await goto(ctx, page, surface, url)).toEqual({ status })
       }
