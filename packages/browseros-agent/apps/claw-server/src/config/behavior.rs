@@ -39,7 +39,11 @@ impl Behavior {
                 ServerMode::Hosted => TabGrouping::Explicit,
             },
             isolated_world: true,
-            working_overlay: false,
+            // A hosted harness drives tabs nobody sits in front of.
+            working_overlay: match mode {
+                ServerMode::Desktop => true,
+                ServerMode::Hosted => false,
+            },
         }
     }
 }

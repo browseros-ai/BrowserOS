@@ -808,11 +808,18 @@ mod tests {
     }
 
     #[test]
-    fn working_overlay_defaults_off_and_the_behavior_file_can_turn_it_on() -> anyhow::Result<()> {
-        assert!(!load_native("{}", &[])?.behavior.working_overlay);
+    fn working_overlay_is_on_for_the_desktop_and_the_behavior_file_decides_otherwise()
+    -> anyhow::Result<()> {
+        assert!(load_native("{}", &[])?.behavior.working_overlay);
+        assert!(
+            !load_native("{}", &[(HOSTED_MODE_ENV, "1")])?
+                .behavior
+                .working_overlay
+        );
         let on = "[pages]\nworking_overlay = true\n";
-        assert!(load_with_behavior_file("0", on)?.behavior.working_overlay);
         assert!(load_with_behavior_file("1", on)?.behavior.working_overlay);
+        let off = "[pages]\nworking_overlay = false\n";
+        assert!(!load_with_behavior_file("0", off)?.behavior.working_overlay);
         Ok(())
     }
 
