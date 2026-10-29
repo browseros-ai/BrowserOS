@@ -1272,9 +1272,10 @@ impl BrowserView {
         // target while it does, so asking any earlier widens the window in
         // which the grouping above sees a replacement and fails the creation.
         let settled = access.fresh().await?;
-        let _ = crate::settle::wait_for_page_ready(
+        let _ = crate::settle::wait_for_created_page_ready(
             self.session.pages.as_ref(),
             settled.page_id.clone(),
+            url,
             crate::timeouts::ARRIVAL_READY_BUDGET,
         )
         .await;
