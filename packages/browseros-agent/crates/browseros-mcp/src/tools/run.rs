@@ -51,7 +51,9 @@ browser (nothing here takes a page):
   A handle stays valid only while that tab is open and still yours. Reuse one across steps and across calls while that holds. If a call fails instantly on a handle from an earlier turn, the tab is gone or was taken over - do not retry it. Re-derive from browser.pages.list() filtered to ownership === "mine", or open a fresh page. Carrying the URL between calls is safer than carrying the id.
 Page handle (refs eN come from a snapshot's text/refs):
   page.id                            -> the page id as a NUMBER, for logs and return values
-  page.goto(url) / back() / forward() / reload()
+  page.goto(url)                     -> { status } (the HTTP status, null when unknown), or { download: true } when the url is a file the browser downloaded instead. A url the browser cannot load (unknown host, refused connection) throws.
+  page.back() / forward()            -> { navigated }, false when there is no history entry that way (the page is unchanged)
+  page.reload()
   page.snapshot({ mode, depth }?)    -> { text, refs, url }. mode "interactive" plus depth keeps a big page small.
   page.diff()                        -> { text, added, removed, changed }
   page.resolveRef(ref)               -> { backendNodeId, sessionId }
@@ -1239,20 +1241,24 @@ impl BrowserBridge {
                 let page_id = page_arg(&args, 0)?;
                 let url = string_arg(&args, 1, "url")?;
                 let nav = self.control.race(self.ctx.browser.nav(page_id)).await?;
-                self.control.race(nav.goto(&url)).await?;
-                Ok(BrowserCallValue::Undefined)
+                let outcome = self.control.race(nav.goto(&url)).await?;
+                Ok(BrowserCallValue::Json(if outcome.download {
+                    json!({ "download": true })
+                } else {
+                    json!({ "status": outcome.status })
+                }))
             }
             "nav.back" => {
                 let page_id = page_arg(&args, 0)?;
                 let nav = self.control.race(self.ctx.browser.nav(page_id)).await?;
-                self.control.race(nav.back()).await?;
-                Ok(BrowserCallValue::Undefined)
+                let navigated = self.control.race(nav.back()).await?;
+                Ok(BrowserCallValue::Json(json!({ "navigated": navigated })))
             }
             "nav.forward" => {
                 let page_id = page_arg(&args, 0)?;
                 let nav = self.control.race(self.ctx.browser.nav(page_id)).await?;
-                self.control.race(nav.forward()).await?;
-                Ok(BrowserCallValue::Undefined)
+                let navigated = self.control.race(nav.forward()).await?;
+                Ok(BrowserCallValue::Json(json!({ "navigated": navigated })))
             }
             "nav.reload" => {
                 let page_id = page_arg(&args, 0)?;
