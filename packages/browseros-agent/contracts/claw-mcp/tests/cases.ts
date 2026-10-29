@@ -46,6 +46,7 @@ import { fillReadbackCases } from './cases-fill-readback'
 import { isolationCases } from './cases-isolation'
 import { labelCases } from './cases-labels'
 import { navigateSnapshotCases } from './cases-navigate-snapshot'
+import { overlayCases } from './cases-overlay'
 import { readEvalCases } from './cases-read-eval'
 import { snapshotConcurrencyCases } from './cases-snapshot-concurrency'
 import { tabsCases } from './cases-tabs'
@@ -64,6 +65,7 @@ export const contractCases: ContractCase[] = [
   ...fillReadbackCases,
   ...readEvalCases,
   ...isolationCases,
+  ...overlayCases,
   ...captureIoCases,
   ...clawLayerCases,
 ]
