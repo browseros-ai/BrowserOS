@@ -797,6 +797,11 @@ mod tests {
         /// Whether a held move starts a native drag that the browser intercepts.
         native_drag: bool,
         drag_intercepts: Option<tokio::sync::mpsc::UnboundedSender<CdpEvent>>,
+        /// The field is a date/time/colour/range input, which fill sets instead of typing.
+        value_control: bool,
+        /// What the set-value script answers: true, or the reason the value was refused.
+        set_value_result: Value,
+        set_values: Vec<Value>,
     }
 
     struct HarnessConnection {
@@ -1128,6 +1133,22 @@ mod tests {
                 })?;
                 return Ok(json!({ "result": { "value": state.check_state } }));
             }
+            if function.contains("browserosSetInputValue") {
+                let mut state = self.state.lock().map_err(|_| CdpError::Protocol {
+                    code: -1,
+                    message: "poisoned test state".into(),
+                })?;
+                state
+                    .set_values
+                    .push(params["arguments"][0]["value"].clone());
+                return Ok(json!({ "result": { "value": state.set_value_result } }));
+            }
+            if function.contains("browserosPrepareFill")
+                && params["arguments"][0]["value"] == "validate"
+                && self.state.lock().is_ok_and(|state| state.value_control)
+            {
+                return Ok(json!({ "result": { "value": "setValue" } }));
+            }
             if function.contains("browserosPrepareFill") || function.contains("this.focus()") {
                 return Ok(json!({ "result": { "value": true } }));
             }
@@ -1199,6 +1220,9 @@ mod tests {
                 check_state_after_click: None,
                 native_drag: false,
                 drag_intercepts: None,
+                value_control: false,
+                set_value_result: json!(true),
+                set_values: Vec::new(),
             }),
             target_role,
             target_name,
@@ -1490,7 +1514,7 @@ mod tests {
                 14638203640916461425,
                 7395435797475900152,
                 6586471237564934084,
-                10296638448501175693,
+                16809638728362511703,
                 5312967615472211188,
                 4986025384446686415,
             ]
@@ -2275,6 +2299,42 @@ mod tests {
             sent(&calls, "Input.setInterceptDrags").last(),
             Some(&json!({ "enabled": false }))
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fill_sets_a_date_input_without_clicking_or_typing() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| state.value_control = true)?;
+        connection.take_calls()?;
+        input.fill(&ref_id, "2026-10-29", true).await?;
+        let calls = connection.take_calls()?;
+        // A click would open the date picker; typing has no editor to land in.
+        assert_eq!(press_count(&calls), 0);
+        assert_eq!(sent(&calls, "Input.insertText").count(), 0);
+        let set: Vec<Value> = connection
+            .state
+            .lock()
+            .map(|state| state.set_values.clone())
+            .unwrap_or_default();
+        assert_eq!(set, [json!("2026-10-29")]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fill_reports_a_value_the_input_cannot_hold() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| {
+            state.value_control = true;
+            state.set_value_result =
+                json!("\"29/10/2026\" is not a valid date value. Use YYYY-MM-DD.");
+        })?;
+        let error = input
+            .fill(&ref_id, "29/10/2026", true)
+            .await
+            .err()
+            .map(|error| error.to_string());
+        assert!(error.is_some_and(|error| error.contains("Use YYYY-MM-DD")));
         Ok(())
     }
 

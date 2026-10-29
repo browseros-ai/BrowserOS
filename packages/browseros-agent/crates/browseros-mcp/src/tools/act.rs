@@ -143,7 +143,8 @@ struct ActArgs {
     r#ref: Option<String>,
     /// Text for kind=type.
     text: Option<String>,
-    /// Value for kind=fill/select.
+    /// Value for kind=fill/select. Date, time, color and range inputs take their own format,
+    /// such as 2026-10-29, 14:30 or #ff8800.
     value: Option<String>,
     /// Multiple fields for kind=fill, filled in order.
     fields: Option<Vec<FillField>>,
