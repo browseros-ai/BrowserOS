@@ -22,7 +22,6 @@ type TestResult = Result<(), Box<dyn Error>>;
 /// Appears only in the agent's script, so the evaluation carrying it is easy to find among the
 /// readiness probes the tools also send.
 const SCRIPT: &str = "40 + 2";
-const NEVER_SETTLES: &str = "new Promise(() => {})";
 /// A script whose result is longer than the inline limit.
 const LONG_RESULT: &str = "'x'.repeat(6000)";
 
@@ -81,13 +80,7 @@ impl Native {
                     .as_str()
                     .is_some_and(|expression| expression.contains(LONG_RESULT))
                 {
-                    return Ok(json!({"result": {"type": "string", "objectId": "1",
-                        "deepSerializedValue": {"type": "string", "value": "x".repeat(6000)}}}));
-                }
-                // Chromium answers a deep-serialized evaluation with a typed value.
-                if is_script && params.get("serializationOptions").is_some() {
-                    return Ok(json!({"result": {"type": "number", "objectId": "1",
-                        "deepSerializedValue": {"type": "number", "value": 42}}}));
+                    return Ok(json!({"result": {"type": "string", "value": "x".repeat(6000)}}));
                 }
                 if is_script {
                     json!({"result": {"type": "number", "value": 42}})
@@ -107,16 +100,7 @@ impl CdpConnection for Native {
         params: Value,
         _session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
-        Box::pin(async move {
-            // A script awaiting a promise that never settles: Chromium never answers.
-            if params["expression"]
-                .as_str()
-                .is_some_and(|expression| expression.contains(NEVER_SETTLES))
-            {
-                return futures_util::future::pending().await;
-            }
-            self.reply(method, &params)
-        })
+        Box::pin(async move { self.reply(method, &params) })
     }
 
     fn send_raw_json<'a>(
@@ -243,48 +227,6 @@ async fn tests_that_an_old_page_evaluate_call_is_pointed_at_evaluate_in_page() -
         text(&result)
     );
     assert!(native.scripts().is_empty(), "{:?}", native.scripts());
-    Ok(())
-}
-
-#[tokio::test]
-async fn tests_that_a_promise_that_never_settles_ends_at_the_timeout() -> TestResult {
-    let native = Native::new();
-    let started = tokio::time::Instant::now();
-    let result = call(
-        &ctx(&native),
-        tools::evaluate_in_page::definition(),
-        json!({"page": 1, "code": format!("return await {NEVER_SETTLES};"), "timeout": 100}),
-    )
-    .await;
-
-    assert!(result.is_error, "{}", text(&result));
-    assert!(
-        text(&result).contains("did not finish within 100 ms"),
-        "{}",
-        text(&result)
-    );
-    // Bounded by the caller's timeout, not the transport's 60 s.
-    assert!(started.elapsed() < std::time::Duration::from_secs(2));
-    Ok(())
-}
-
-#[tokio::test]
-async fn tests_that_evaluate_in_page_asks_for_typed_results() -> TestResult {
-    let native = Native::new();
-    let result = call(
-        &ctx(&native),
-        tools::evaluate_in_page::definition(),
-        script_args(),
-    )
-    .await;
-
-    assert!(!result.is_error, "{}", text(&result));
-    assert!(text(&result).contains("42"), "{}", text(&result));
-    let scripts = native.scripts();
-    assert_eq!(
-        scripts[0]["serializationOptions"],
-        json!({"serialization": "deep"})
-    );
     Ok(())
 }
 

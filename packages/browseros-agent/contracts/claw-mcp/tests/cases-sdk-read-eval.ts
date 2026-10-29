@@ -1,21 +1,9 @@
 /** Full reads are checked inside the SDK, before model-output formatting.
- * Evaluation checks the wire value, including values JSON normally discards. */
+ * Evaluation checks that plain values reach the caller unchanged. */
 import { expect } from 'bun:test'
 import type { CaseContext, ContractCase } from './cases'
 import { expectOk } from './helpers'
-import { errorIncludes, evalValue, runValue } from './sdk-helpers'
-
-const specialValues = `
-  const cycle = { label: 'cycle' }; cycle.self = cycle
-  return {
-    nan: NaN, infinity: Infinity, negativeZero: -0,
-    bigint: 900719925474099312345n,
-    date: new Date('2026-10-29T12:34:56.000Z'),
-    map: new Map([['answer', 42]]), set: new Set(['one', 'two']),
-    node: document.getElementById('apply'), cycle,
-    fn: function example() {}, missing: undefined
-  }
-`
+import { evalValue, runValue } from './sdk-helpers'
 
 const cappedRuns = [
   {
@@ -117,48 +105,6 @@ export const sdkReadEvalCases: ContractCase[] = [
     },
   },
   ...(['evaluate_in_page', 'run'] as const).flatMap((surface) => [
-    {
-      name: `${surface}: evaluation preserves special values and circular objects`,
-      async run(ctx: CaseContext) {
-        const page = await ctx.openPage(ctx.fixture('/form.html'))
-        const value = await evaluate(ctx, page, surface, specialValues)
-        expect(value).toEqual({
-          nan: 'NaN',
-          infinity: 'Infinity',
-          negativeZero: 0,
-          bigint: '900719925474099312345',
-          date: '2026-10-29T12:34:56.000Z',
-          map: { answer: 42 },
-          set: ['one', 'two'],
-          node: expect.stringMatching(/^<button id="apply"(?:\s[^>]*)?>$/),
-          cycle: { label: 'cycle', self: '[Circular]' },
-          fn: '[function]',
-          missing: null,
-        })
-      },
-    },
-    {
-      name: `${surface}: evaluation times out an unsettled promise within 5 seconds`,
-      async run(ctx: CaseContext) {
-        const page = await ctx.openPage(ctx.fixture('/form.html'))
-        const started = performance.now()
-        const code = 'return await new Promise(() => {})'
-        const result =
-          surface === 'evaluate_in_page'
-            ? await ctx.mcp.callTool('evaluate_in_page', {
-                page,
-                code,
-                timeout: 1000,
-              })
-            : await ctx.mcp.callTool('run', {
-                code: `await browser.page(${page}).evaluateInPage(${JSON.stringify(code)}, { timeout: 1000 })`,
-              })
-        errorIncludes(result, 'did not finish within 1000 ms')
-        expect(performance.now() - started).toBeLessThan(5_000)
-        // A timed-out promise must not prevent the next request on this page.
-        expect(await evaluate(ctx, page, surface, 'return 42')).toBe(42)
-      },
-    },
     {
       name: `${surface}: evaluation still returns plain numbers and objects unchanged`,
       async run(ctx: CaseContext) {

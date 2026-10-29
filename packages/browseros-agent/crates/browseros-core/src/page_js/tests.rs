@@ -1,4 +1,4 @@
-use super::{OTHER_DOCUMENT, PageJs, plain_value};
+use super::{OTHER_DOCUMENT, PageJs};
 use crate::{
     CoreError, FrameId, ProtocolSession, SessionId,
     test_support::{TestCall, TestConnection, cdp_error, cdp_pending},
@@ -465,81 +465,4 @@ async fn tests_that_user_gesture_and_timeout_reach_the_evaluate()
     assert_eq!(params["userGesture"], true);
     assert_eq!(params["timeout"], 2_000);
     Ok(())
-}
-
-#[tokio::test]
-async fn tests_that_typed_results_survive_what_json_drops() -> Result<(), Box<dyn std::error::Error>>
-{
-    let deep = json!({ "type": "object", "value": [
-        ["missing", { "type": "number", "value": "NaN" }],
-        ["zero", { "type": "number", "value": "-0" }],
-        ["when", { "type": "date", "value": "2026-10-29T12:00:00.000Z" }],
-        ["big", { "type": "bigint", "value": "9007199254740993" }],
-        ["tags", { "type": "set", "value": [{ "type": "string", "value": "a" }] }],
-        ["byName", { "type": "map", "value": [["k", { "type": "number", "value": 1 }]] }],
-        ["button", { "type": "node", "value": {
-            "nodeType": 1, "localName": "button", "attributes": { "id": "buy", "class": "primary" }
-        } }],
-        ["self", { "type": "object", "weakLocalObjectReference": 1 }],
-        ["handler", { "type": "function" }],
-        ["skipped", { "type": "undefined" }]
-    ] });
-    let connection = TestConnection::new([
-        (
-            "Runtime.evaluate",
-            json!({ "result": { "type": "object", "objectId": "1", "deepSerializedValue": deep } }),
-        ),
-        ("Runtime.releaseObjectGroup", json!({})),
-    ]);
-    let session = session(&connection, "typed-results");
-
-    let result = PageJs::page_world(&session)
-        .typed_results()
-        .eval_value("collect()")
-        .await?;
-
-    assert_eq!(
-        result.value,
-        Some(json!({
-            "missing": "NaN",
-            "zero": 0,
-            "when": "2026-10-29T12:00:00.000Z",
-            "big": "9007199254740993",
-            "tags": ["a"],
-            "byName": { "k": 1 },
-            "button": "<button id=\"buy\" class=\"primary\">",
-            "self": "[Circular]",
-            "handler": "[function]",
-            "skipped": null
-        }))
-    );
-    let calls = connection.calls()?;
-    assert_eq!(
-        calls[0].params["serializationOptions"],
-        json!({ "serialization": "deep" })
-    );
-    assert!(calls[0].params.get("returnByValue").is_none());
-    // The result object deep serialization keeps alive is released straight away.
-    assert_eq!(
-        methods(&calls),
-        ["Runtime.evaluate", "Runtime.releaseObjectGroup"]
-    );
-    assert_eq!(
-        calls[1].params["objectGroup"],
-        calls[0].params["objectGroup"]
-    );
-    Ok(())
-}
-
-#[test]
-fn tests_that_a_top_level_function_falls_back_to_its_description() {
-    assert_eq!(plain_value(&json!({ "type": "function" }), true), None);
-    assert_eq!(plain_value(&json!({ "type": "undefined" }), true), None);
-    assert_eq!(
-        plain_value(
-            &json!({ "type": "map", "value": [[{ "type": "number", "value": 1 }, { "type": "string", "value": "one" }]] }),
-            true
-        ),
-        Some(json!([[1, "one"]]))
-    );
 }

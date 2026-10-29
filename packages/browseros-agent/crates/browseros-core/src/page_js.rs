@@ -70,15 +70,7 @@ pub fn isolated_world_enabled() -> bool {
 pub struct RemoteValue {
     pub value: Option<Value>,
     pub description: Option<String>,
-    /// CDP's typed serialization, present when the call asked for
-    /// [`typed_results`](PageJs::typed_results); [`PageJs::eval_value`] folds it into `value`.
-    #[serde(default)]
-    pub deep_serialized_value: Option<Value>,
 }
-
-/// Object group that holds the remote result a typed evaluation leaves behind, released as
-/// soon as the result is read.
-const TYPED_RESULT_GROUP: &str = "browseros-typed-result";
 
 /// Runs JavaScript in one page session. Cheap to build per call; see the module docs for the
 /// contract each constructor carries.
@@ -91,7 +83,6 @@ pub struct PageJs<'a> {
     strict: bool,
     user_gesture: bool,
     timeout: Option<Duration>,
-    typed: bool,
 }
 
 impl<'a> PageJs<'a> {
@@ -127,7 +118,6 @@ impl<'a> PageJs<'a> {
             strict: false,
             user_gesture: false,
             timeout: None,
-            typed: false,
         }
     }
 
@@ -152,17 +142,6 @@ impl<'a> PageJs<'a> {
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
-        self
-    }
-
-    /// Reports an [`eval_value`](Self::eval_value) result through CDP's typed (deep)
-    /// serialization instead of JSON, so values JSON cannot hold come back readable rather than
-    /// lost: `NaN` and `Infinity` as strings, a `Date` as its ISO string, a `Map` or `Set` as its
-    /// entries, a DOM node as a short tag, a repeated object as `"[Circular]"`. For results shown
-    /// to an agent; the serialization is CDP's own, so no extra script runs in the page.
-    #[must_use]
-    pub fn typed_results(mut self) -> Self {
-        self.typed = true;
         self
     }
 
@@ -268,15 +247,8 @@ impl<'a> PageJs<'a> {
         let mut params = json!({
             "expression": expression,
             "awaitPromise": true,
+            "returnByValue": true,
         });
-        if self.typed {
-            // Deep serialization also keeps the result alive under an object id; the group
-            // lets it go once the value is read.
-            params["serializationOptions"] = json!({ "serialization": "deep" });
-            params["objectGroup"] = json!(TYPED_RESULT_GROUP);
-        } else {
-            params["returnByValue"] = json!(true);
-        }
         if let Some(context) = context {
             params["contextId"] = json!(context);
         }
@@ -286,21 +258,8 @@ impl<'a> PageJs<'a> {
         if let Some(timeout) = self.timeout {
             params["timeout"] = json!(u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX));
         }
-        let reply: Result<Reply, CoreError> = self.session.send("Runtime.evaluate", params).await;
-        if self.typed {
-            let _ = self
-                .session
-                .send::<_, Value>(
-                    "Runtime.releaseObjectGroup",
-                    json!({ "objectGroup": TYPED_RESULT_GROUP }),
-                )
-                .await;
-        }
-        let mut result = reply?.into_result()?;
-        if let Some(deep) = result.deep_serialized_value.take() {
-            result.value = plain_value(&deep, true);
-        }
-        Ok(result)
+        let reply: Reply = self.session.send("Runtime.evaluate", params).await?;
+        reply.into_result()
     }
 
     /// `None` when the node has no wrapper in `context`'s world, which Chromium reports for a node
@@ -599,129 +558,3 @@ struct DescribedDocument {
 
 #[cfg(test)]
 mod tests;
-
-/// Turns CDP's typed (deep) serialization into JSON an agent can read. `None` is `undefined`,
-/// and at the top level also a value only its description can show (a function, an error),
-/// so the caller falls back to that description. Nested, those become `"[function]"` and the
-/// like.
-fn plain_value(deep: &Value, top_level: bool) -> Option<Value> {
-    let kind = deep.get("type").and_then(Value::as_str).unwrap_or_default();
-    let inner = deep.get("value");
-    let entries = |inner: Option<&Value>| -> Vec<(Value, Value)> {
-        inner
-            .and_then(Value::as_array)
-            .map(|pairs| {
-                pairs
-                    .iter()
-                    .filter_map(|pair| {
-                        let key = pair.get(0)?;
-                        // Object keys arrive as plain strings, map keys as typed values.
-                        let key = if key.is_string() {
-                            key.clone()
-                        } else {
-                            plain_value(key, false).unwrap_or(Value::Null)
-                        };
-                        let value = pair
-                            .get(1)
-                            .and_then(|value| plain_value(value, false))
-                            .unwrap_or(Value::Null);
-                        Some((key, value))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    // A value met again (a cycle or a shared reference) is sent once; later sightings carry
-    // only a reference.
-    if inner.is_none() && deep.get("weakLocalObjectReference").is_some() {
-        return Some(json!("[Circular]"));
-    }
-    Some(match kind {
-        "undefined" => return None,
-        "null" => Value::Null,
-        "string" | "boolean" | "date" => inner.cloned().unwrap_or(Value::Null),
-        "number" => match inner {
-            Some(Value::String(special)) if special == "-0" => json!(0),
-            Some(value) => value.clone(),
-            None => Value::Null,
-        },
-        "bigint" => inner.cloned().unwrap_or(Value::Null),
-        "regexp" => json!(format!(
-            "/{}/{}",
-            inner
-                .and_then(|regexp| regexp["pattern"].as_str())
-                .unwrap_or_default(),
-            inner
-                .and_then(|regexp| regexp["flags"].as_str())
-                .unwrap_or_default()
-        )),
-        "array" | "set" => Value::Array(
-            inner
-                .and_then(Value::as_array)
-                .map(|items| {
-                    items
-                        .iter()
-                        .map(|item| plain_value(item, false).unwrap_or(Value::Null))
-                        .collect()
-                })
-                .unwrap_or_default(),
-        ),
-        "object" => Value::Object(
-            entries(inner)
-                .into_iter()
-                .map(|(key, value)| {
-                    (
-                        key.as_str().map_or_else(|| key.to_string(), str::to_string),
-                        value,
-                    )
-                })
-                .collect(),
-        ),
-        "map" => {
-            let pairs = entries(inner);
-            if pairs.iter().all(|(key, _)| key.is_string()) {
-                Value::Object(
-                    pairs
-                        .into_iter()
-                        .filter_map(|(key, value)| Some((key.as_str()?.to_string(), value)))
-                        .collect(),
-                )
-            } else {
-                Value::Array(
-                    pairs
-                        .into_iter()
-                        .map(|(key, value)| json!([key, value]))
-                        .collect(),
-                )
-            }
-        }
-        "node" => json!(describe_node(inner)),
-        "window" => json!("[window]"),
-        _ if top_level => return None,
-        other => json!(format!("[{other}]")),
-    })
-}
-
-/// A DOM node as the tag an agent would recognise, such as `<button id="buy" class="primary">`.
-fn describe_node(node: Option<&Value>) -> String {
-    let Some(node) = node else {
-        return "[node]".to_string();
-    };
-    match node.get("localName").and_then(Value::as_str) {
-        Some(tag) => {
-            let mut description = format!("<{tag}");
-            for name in ["id", "class", "name", "type", "href"] {
-                if let Some(value) = node["attributes"][name].as_str() {
-                    description.push_str(&format!(" {name}=\"{value}\""));
-                }
-            }
-            description.push('>');
-            description
-        }
-        None => match node.get("nodeType").and_then(Value::as_i64) {
-            Some(3) => "#text".to_string(),
-            Some(9) => "#document".to_string(),
-            _ => "[node]".to_string(),
-        },
-    }
-}
