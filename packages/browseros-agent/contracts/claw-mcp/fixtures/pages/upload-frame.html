@@ -1,4 +1,10 @@
 <!doctype html>
-<html><body><h1>Upload frame fixture</h1><iframe title="File selection frame"></iframe><script>
+<html><body><h1>Upload frame fixture</h1><input id="parent-file" type="file" hidden><button id="parent-status" disabled>Parent selection: none</button><iframe title="File selection frame"></iframe><script>
   document.querySelector('iframe').src = new URLSearchParams(location.search).get('src')
+  addEventListener('message', (event) => {
+    if (event.source === document.querySelector('iframe').contentWindow && event.data === 'open-parent-picker') document.getElementById('parent-file').click()
+  })
+  document.getElementById('parent-file').addEventListener('change', (event) => {
+    document.getElementById('parent-status').textContent = 'Parent selection: ' + [...event.target.files].map((file) => file.name).join(',')
+  })
 </script></body></html>

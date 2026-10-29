@@ -238,7 +238,10 @@ impl FileTransfers {
                 return set_files(&resolved.session, resolved.backend_node_id, multiple, files)
                     .await;
             }
-            let session_id = resolved.session.session_id().cloned();
+            // The opener can delegate to an ancestor/sibling frame (for example via
+            // postMessage). Lease the page tree, rather than only the opener's subtree.
+            let interception = self.view.page_session(page.clone()).await?.session;
+            let session_id = interception.session_id().cloned();
             // Arm restoration before setup's first await: cancellation can arrive while
             // Chrome is acknowledging interception, before setup returns an installed flag.
             let mut lease = InterceptionLease {
@@ -246,7 +249,7 @@ impl FileTransfers {
                 operation: Some(_operation),
                 session: session_id.clone().filter(|id| !self.state.intercepts(id)),
             };
-            match self.state.intercept(&resolved.session).await {
+            match self.state.intercept(&interception).await {
                 Ok(installed) => lease.session = installed.then_some(session_id).flatten(),
                 Err(error) => {
                     if let Err(cleanup) = lease.restore().await {

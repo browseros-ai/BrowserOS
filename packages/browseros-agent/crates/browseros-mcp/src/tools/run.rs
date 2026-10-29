@@ -941,7 +941,12 @@ impl BrowserBridge {
     /// Returns control when input opens a JavaScript dialog or intercepted file chooser.
     /// Dialogs can prevent the input ack altogether; chooser notifications can follow it,
     /// so both the outstanding action and its completed path observe the shared state.
-    async fn race_input<F, T>(&self, page_id: &PageId, future: F) -> Result<Option<T>, String>
+    async fn race_input<F, T>(
+        &self,
+        page_id: &PageId,
+        activates: bool,
+        future: F,
+    ) -> Result<Option<T>, String>
     where
         F: Future<Output = Result<T, browseros_core::CoreError>>,
     {
@@ -968,7 +973,15 @@ impl BrowserBridge {
             biased;
             result = self.control.race(future) => {
                 let value = result?;
-                if self.control.race(self.ctx.browser.files().chooser_after_action(page_id.clone())).await?.is_some() { Ok(None) } else { Ok(Some(value)) }
+                let files = self.ctx.browser.files();
+                // Native mouse/key input can post a chooser after its ack. Hover, scroll
+                // and semantic selection only read pending state, without waiting.
+                let chooser = if activates {
+                    self.control.race(files.chooser_after_action(page_id.clone())).await?
+                } else {
+                    self.control.race(files.pending_chooser(page_id.clone())).await?
+                };
+                if chooser.is_some() { Ok(None) } else { Ok(Some(value)) }
             },
             interrupted = dialog => {
                 interrupted?;
@@ -992,10 +1005,13 @@ impl BrowserBridge {
                 "message": dialog.message,
             }))),
             None => {
-                let result =
-                    crate::framework::pending_file_chooser_result(&self.ctx, page_id.clone())
-                        .await
-                        .map_err(|error| error.to_string())?;
+                let result = crate::framework::pending_file_chooser_result(
+                    &self.ctx,
+                    page_id.clone(),
+                    false,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
                 Ok(match result.and_then(|result| result.structured_content) {
                     Some(value) => BrowserCallValue::Json(value),
                     None => BrowserCallValue::Undefined,
@@ -1104,7 +1120,11 @@ impl BrowserBridge {
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
                 match self
-                    .race_input(&page_id, input.click(&Ref(ref_id), Default::default()))
+                    .race_input(
+                        &page_id,
+                        true,
+                        input.click(&Ref(ref_id), Default::default()),
+                    )
                     .await?
                 {
                     Some(_) => Ok(BrowserCallValue::Undefined),
@@ -1119,7 +1139,7 @@ impl BrowserBridge {
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
                 match self
-                    .race_input(&page_id, input.fill(&Ref(ref_id), &value, true))
+                    .race_input(&page_id, true, input.fill(&Ref(ref_id), &value, true))
                     .await?
                 {
                     Some(_) => Ok(BrowserCallValue::Undefined),
@@ -1133,7 +1153,10 @@ impl BrowserBridge {
                     .control
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
-                match self.race_input(&page_id, input.type_text(&text)).await? {
+                match self
+                    .race_input(&page_id, true, input.type_text(&text))
+                    .await?
+                {
                     Some(_) => Ok(BrowserCallValue::Undefined),
                     None => self.interaction_open_value(&page_id).await,
                 }
@@ -1145,7 +1168,7 @@ impl BrowserBridge {
                     .control
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
-                match self.race_input(&page_id, input.press(&key)).await? {
+                match self.race_input(&page_id, true, input.press(&key)).await? {
                     Some(_) => Ok(BrowserCallValue::Undefined),
                     None => self.interaction_open_value(&page_id).await,
                 }
@@ -1156,7 +1179,10 @@ impl BrowserBridge {
                     .control
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
-                match self.race_input(&page_id, input.hover(&Ref(ref_id))).await? {
+                match self
+                    .race_input(&page_id, false, input.hover(&Ref(ref_id)))
+                    .await?
+                {
                     Some(_) => Ok(BrowserCallValue::Undefined),
                     None => self.interaction_open_value(&page_id).await,
                 }
@@ -1169,7 +1195,7 @@ impl BrowserBridge {
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
                 match self
-                    .race_input(&page_id, input.select_option(&Ref(ref_id), &value))
+                    .race_input(&page_id, false, input.select_option(&Ref(ref_id), &value))
                     .await?
                 {
                     Some(selected) => Ok(BrowserCallValue::Json(json!(selected))),
@@ -1186,7 +1212,11 @@ impl BrowserBridge {
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
                 match self
-                    .race_input(&page_id, input.scroll(direction, amount, ref_id.as_ref()))
+                    .race_input(
+                        &page_id,
+                        false,
+                        input.scroll(direction, amount, ref_id.as_ref()),
+                    )
                     .await?
                 {
                     Some(_) => Ok(BrowserCallValue::Undefined),
@@ -2122,7 +2152,7 @@ mod tests {
     async fn race_input_returns_the_value_when_no_dialog_opens() -> anyhow::Result<()> {
         let bridge = test_bridge(test_ctx());
         let outcome = bridge
-            .race_input(&PageId(1), async {
+            .race_input(&PageId(1), false, async {
                 Ok::<_, browseros_core::CoreError>(7u32)
             })
             .await
@@ -2157,6 +2187,7 @@ mod tests {
         let outcome = bridge
             .race_input(
                 &PageId(1),
+                true,
                 futures_util::future::pending::<Result<(), browseros_core::CoreError>>(),
             )
             .await

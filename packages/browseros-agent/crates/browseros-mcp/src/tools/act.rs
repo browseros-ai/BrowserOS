@@ -280,7 +280,22 @@ fn handler<'a>(
                 return Err(err);
             }
         }
-        if let Some(chooser) = pending_file_chooser_result(ctx, page_id.clone()).await? {
+        // Typing emits native keys and fill clicks to focus; both can open a picker just
+        // like an explicit click. Hover/focus/scroll/semantic selection create no activation.
+        let activates = matches!(
+            args.kind,
+            ActKind::Click
+                | ActKind::ClickAt
+                | ActKind::Press
+                | ActKind::Type
+                | ActKind::TypeAt
+                | ActKind::Fill
+                | ActKind::Check
+                | ActKind::Uncheck
+                | ActKind::Drag
+                | ActKind::DragAt
+        );
+        if let Some(chooser) = pending_file_chooser_result(ctx, page_id.clone(), activates).await? {
             return Ok(Some(chooser));
         }
         response.data(json!({ "kind": args.kind.as_str() }));

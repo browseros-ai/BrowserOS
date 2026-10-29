@@ -14,6 +14,11 @@
     <button id="upload-button" onclick="document.getElementById('hidden-file').click()">Attach document</button>
     <output id="hidden-names">none</output>
     <script>
+      if (new URLSearchParams(location.search).has('parentPicker')) {
+        const button = document.getElementById('upload-button')
+        button.textContent = 'Attach to parent'
+        button.onclick = () => parent.postMessage('open-parent-picker', '*')
+      }
       const report = (input, target) => {
         const names = [...input.files].map((file) => file.name).join(',')
         document.getElementById(target).textContent = names || 'none'
