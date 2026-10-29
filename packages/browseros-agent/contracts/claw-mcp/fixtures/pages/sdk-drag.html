@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Held-button and HTML5 drag contracts</title>
+    <style>
+      .row { display: flex; gap: 100px; margin: 20px; }
+      .row > * { box-sizing: border-box; width: 140px; height: 70px; }
+      .target { border: 2px solid black; }
+      #script-source { user-select: none; }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <button id="script-source">Script source</button>
+      <button id="script-target" class="target">Script target</button>
+    </div>
+    <div class="row">
+      <button id="html-source" draggable="true">HTML source</button>
+      <button id="html-target" class="target">HTML target</button>
+    </div>
+    <script>
+      // Script-driven widgets only drag while mousemove carries the held button.
+      window.scriptDrag = { down: false, heldMoves: 0, up: false, drop: null }
+      let dragging = false
+      document.getElementById('script-source').addEventListener('mousedown', event => {
+        dragging = event.button === 0
+        window.scriptDrag.down = dragging
+        event.preventDefault()
+      })
+      document.addEventListener('mousemove', event => {
+        if (dragging && event.buttons === 1) window.scriptDrag.heldMoves++
+      })
+      document.addEventListener('mouseup', event => {
+        if (!dragging) return
+        dragging = false
+        window.scriptDrag.up = true
+        if (window.scriptDrag.heldMoves > 0 && event.target.id === 'script-target') {
+          window.scriptDrag.drop = { x: event.clientX, y: event.clientY }
+        }
+      })
+      // HTML5 drag uses DataTransfer, so mouse events alone cannot fake success.
+      window.htmlDrag = { starts: 0, overs: 0, dropped: null }
+      document.getElementById('html-source').addEventListener('dragstart', event => {
+        window.htmlDrag.starts++
+        event.dataTransfer.setData('text/plain', event.target.id)
+        event.dataTransfer.effectAllowed = 'copy'
+      })
+      document.getElementById('html-target').addEventListener('dragover', event => {
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'copy'
+        window.htmlDrag.overs++
+      })
+      document.getElementById('html-target').addEventListener('drop', event => {
+        event.preventDefault()
+        window.htmlDrag.dropped = event.dataTransfer.getData('text/plain')
+      })
+    </script>
+  </body>
+</html>
