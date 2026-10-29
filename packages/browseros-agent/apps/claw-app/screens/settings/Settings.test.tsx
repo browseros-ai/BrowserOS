@@ -33,6 +33,7 @@ import * as api from '@/modules/api/client'
 const settingsOf = (overrides: Partial<AgentSettings> = {}): AgentSettings => ({
   humanHelpEnabled: true,
   taskCleanupTipEnabled: false,
+  workingOverlayEnabled: true,
   jevTokenSource: JevTokenSource.None,
   ...overrides,
 })
@@ -145,6 +146,7 @@ mock.module('@/components/theme-provider', () => ({
 }))
 
 const CLEANUP_SWITCH = '[aria-label="Tidy up when a task finishes"]'
+const OVERLAY_SWITCH = '[aria-label="Show when neo is working on a page"]'
 
 const { useAgentSettings } = await import('@/modules/api/agent-settings.hooks')
 const { useAuditAgents } = await import('@/modules/api/audit.hooks')
@@ -387,6 +389,38 @@ describe('Settings screen interactions', () => {
         switchIn(container, CLEANUP_SWITCH).getAttribute('aria-checked'),
       ).toBe(String(taskCleanupTipEnabled))
     }
+  })
+
+  it('tests that the working overlay switch is on by default and says what it does', () => {
+    const page = renderPage(settingsOf())
+    const toggle = switchIn(page, OVERLAY_SWITCH)
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+    const description = page.getElementById(
+      toggle.getAttribute('aria-describedby') ?? '',
+    )
+    expect(description?.textContent).toContain('holds your clicks and typing')
+  })
+
+  it('tests that turning the working overlay off saves only that switch', async () => {
+    let saved = settingsOf({ humanHelpEnabled: false })
+    server.read = async () => ({ ...saved })
+    server.save = async (body) => {
+      saved = { ...saved, ...body }
+      return saved
+    }
+    await mount()
+
+    await clickSwitch(OVERLAY_SWITCH)
+
+    expect(server.saves.at(-1)).toEqual({ workingOverlayEnabled: false })
+    expect(saved).toMatchObject({
+      humanHelpEnabled: false,
+      taskCleanupTipEnabled: false,
+      workingOverlayEnabled: false,
+    })
+    expect(
+      switchIn(container, OVERLAY_SWITCH).getAttribute('aria-checked'),
+    ).toBe('false')
   })
 
   it('tests that a saved custom history period shows its own days once it loads', async () => {

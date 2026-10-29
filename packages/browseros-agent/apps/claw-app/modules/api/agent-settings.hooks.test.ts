@@ -7,11 +7,13 @@ import * as api from './client'
 const on: AgentSettings = {
   humanHelpEnabled: true,
   taskCleanupTipEnabled: false,
+  workingOverlayEnabled: true,
   jevTokenSource: JevTokenSource.None,
 }
 const off: AgentSettings = {
   humanHelpEnabled: false,
   taskCleanupTipEnabled: false,
+  workingOverlayEnabled: true,
   jevTokenSource: JevTokenSource.None,
 }
 const read = Promise.withResolvers<AgentSettings>()
