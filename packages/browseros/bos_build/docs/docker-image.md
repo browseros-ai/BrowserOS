@@ -120,9 +120,8 @@ tags (`browseros release docker --push-by-digest`). That push reuses the tested
 build's cache for every layer, and the job checks the pushed layers match the tested
 image's. Publication builds nothing: once both verify jobs pass, `publish` tags one
 multi-architecture index over the two digests (`--push --from-digests <dir>`) and
-checks both architectures carry this commit's revision. Pushing uses `GITHUB_TOKEN`
-in both jobs; verify's `neo-captcha` environment deploys only from protected
-branches, so no other branch can push or publish. Tag `latest` only once the version
+checks both architectures carry this commit's revision. Both jobs push with
+`GITHUB_TOKEN`; only verify holds the provider keys. Tag `latest` only once the version
 has been promoted (`browseros release publish`); a draft should never become `latest`.
 
 ### Tags

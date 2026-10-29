@@ -186,8 +186,6 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     # Reuse the existing protected environment that owns the provider secrets.
-    # It deploys only from protected branches, which also keeps any other
-    # branch from pushing or publishing an image.
     environment: neo-captcha
     permissions:
       contents: read
@@ -371,8 +369,8 @@ jobs:
           rm -f "$RUNNER_TEMP/neo-capsolver-key" "$RUNNER_TEMP/neo-2captcha-key"
 
   publish:
-    # verify already pushed both tested images; this only names them. It needs
-    # no provider keys, and verify's protected environment gates it.
+    # verify already pushed both tested images; this only names them, so it
+    # needs no provider keys. Both verify jobs must pass first.
     needs: verify
     if: inputs.push
     runs-on: ubuntu-latest
