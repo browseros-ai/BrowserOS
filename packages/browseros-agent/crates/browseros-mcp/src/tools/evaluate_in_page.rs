@@ -29,6 +29,10 @@ const MAX_TIMEOUT_MS: u64 = 30_000;
 /// do not flood the model's context.
 const MAX_INLINE_OVERRIDE_CHARS: usize = 200_000;
 
+/// Grace past `timeout` before an unanswered evaluation is abandoned, so a synchronous script
+/// that CDP terminates on time still reports Chromium's own message.
+const UNSETTLED_PROMISE_MARGIN: Duration = Duration::from_millis(250);
+
 const DESCRIPTION: &str = "\
 Evaluate JavaScript in the page's own main world, where the page's scripts run and can watch it: hooks \
 the page installed on built-ins see every call, and the page can read globals the script sets. Use this \
@@ -41,6 +45,7 @@ says so, so never pause afterwards to let the page catch up. For an effect \
 that is entirely asynchronous, such as a click whose result arrives over the network, pass \
 `settle: true` to wait for the page to go quiet regardless. \
 `timeout` is capped at 30000 ms; for page work that needs longer, start it on the page and poll with short follow-up calls rather than one long evaluate. \
+Values JSON cannot hold come back readable: NaN and Infinity as strings, a Date as its ISO string, a Map or Set as its entries, a DOM node as its tag, a repeated object as \"[Circular]\". \
 A result larger than the inline limit is truncated and its full text is written to a local file whose path a remote MCP client cannot read; return only what you need, or raise `maxChars` to receive more of the value inline.";
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -114,17 +119,29 @@ async fn evaluate_in_page(raw: Value, ctx: &ToolCtx) -> ToolExecResult<Option<To
     // afterwards and guessing how long. Two cheap CDP reads on a script that
     // changes nothing.
     let before = settle::read_readiness(&page.session).await.ok();
-    let result = match PageJs::page_world(&page.session)
+    // CDP's own timeout stops only the synchronous part of a script; an awaited promise that
+    // never settles would hold the call until the transport gave up, well past `timeout`.
+    let evaluation = PageJs::page_world(&page.session)
         .user_gesture()
+        .typed_results()
         .timeout(Duration::from_millis(timeout))
-        .eval_value(&expression)
-        .await
+        .eval_value(&expression);
+    let result = match tokio::time::timeout(
+        Duration::from_millis(timeout) + UNSETTLED_PROMISE_MARGIN,
+        evaluation,
+    )
+    .await
     {
-        Ok(result) => result,
-        Err(CoreError::PageScript(message)) => {
+        Ok(Ok(result)) => result,
+        Ok(Err(CoreError::PageScript(message))) => {
             return Ok(Some(error_result(format!("{tool}: {message}"))));
         }
-        Err(error) => return Err(error.into()),
+        Ok(Err(error)) => return Err(error.into()),
+        Err(_elapsed) => {
+            return Ok(Some(error_result(format!(
+                "{tool}: the script did not finish within {timeout} ms. It is probably awaiting a promise that never settles; start long work on the page and poll its result with short follow-up calls."
+            ))));
+        }
     };
     let moved = page_moved(
         before.as_ref(),
