@@ -821,7 +821,8 @@ mod tests {
         events: broadcast::Sender<CdpEvent>,
         /// Routes like `CdpClient`: one targeted subscriber per method, each new one replacing
         /// the last, and the broadcast ring when none is live.
-        targeted: Mutex<std::collections::HashMap<String, tokio::sync::mpsc::UnboundedSender<CdpEvent>>>,
+        targeted:
+            Mutex<std::collections::HashMap<String, tokio::sync::mpsc::UnboundedSender<CdpEvent>>>,
         target_role: &'static str,
         target_name: &'static str,
     }
@@ -923,7 +924,9 @@ mod tests {
                     if method == "Input.dispatchDragEvent"
                         && let Some(kind) = params["type"].as_str()
                     {
-                        state.drag_events.push((session_name.clone(), kind.to_string()));
+                        state
+                            .drag_events
+                            .push((session_name.clone(), kind.to_string()));
                     }
                 })
                 .map_err(|err| CdpError::Protocol {
