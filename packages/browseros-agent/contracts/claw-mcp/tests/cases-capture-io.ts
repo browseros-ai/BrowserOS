@@ -419,6 +419,55 @@ export const captureIoCases: ContractCase[] = [
     },
   },
   {
+    name: 'upload: typing and coordinate typing report picker activation',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/upload.html'))
+      const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+      const ref = snap
+        .split('\n')
+        .find((line) => line.includes('Attach document'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!ref) throw new Error('no keyboard upload target')
+      expectOk(await ctx.mcp.callTool('act', { page, kind: 'focus', ref }))
+      const typed = expectOk(
+        await ctx.mcp.callTool('act', { page, kind: 'type', text: '\n' }),
+      )
+      if (!typed.includes('"fileChooserOpen":true'))
+        throw new Error(`typing Enter omitted the chooser: ${typed}`)
+      expectOk(await ctx.mcp.callTool('upload', { page, files: [] }))
+      const scripted = expectOk(
+        await ctx.mcp.callTool('run', {
+          code: `const p = browser.page(${page}); await p.focus(${JSON.stringify(ref)}); const opened = await p.type('\\n'); if (!opened?.fileChooserOpen) throw new Error('typing Enter omitted the chooser'); await p.upload(null, []); return 'keyboard-picker-complete';`,
+        }),
+      )
+      if (!scripted.includes('keyboard-picker-complete'))
+        throw new Error(scripted)
+      const point = expectOk(
+        await ctx.mcp.callTool('evaluate_in_page', {
+          page,
+          code: 'const r = document.getElementById("upload-button").getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}',
+        }),
+      )
+      const x = point.match(/"x"\s*:\s*([\d.]+)/)?.[1]
+      const y = point.match(/"y"\s*:\s*([\d.]+)/)?.[1]
+      if (!x || !y) throw new Error(`no upload button coordinates: ${point}`)
+      // Empty text isolates type_at's initial native click from its keyboard work.
+      const at = expectOk(
+        await ctx.mcp.callTool('act', {
+          page,
+          kind: 'type_at',
+          x: Number(x),
+          y: Number(y),
+          text: '',
+          clear: false,
+        }),
+      )
+      if (!at.includes('"fileChooserOpen":true'))
+        throw new Error(`coordinate typing omitted the chooser: ${at}`)
+      expectOk(await ctx.mcp.callTool('upload', { page, files: [] }))
+    },
+  },
+  {
     name: 'run: ordinary hovers do not pay a chooser delay',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/upload.html'))

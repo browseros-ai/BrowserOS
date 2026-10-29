@@ -280,11 +280,16 @@ fn handler<'a>(
                 return Err(err);
             }
         }
+        // Typing emits native keys and fill clicks to focus; both can open a picker just
+        // like an explicit click. Hover/focus/scroll/semantic selection create no activation.
         let activates = matches!(
             args.kind,
             ActKind::Click
                 | ActKind::ClickAt
                 | ActKind::Press
+                | ActKind::Type
+                | ActKind::TypeAt
+                | ActKind::Fill
                 | ActKind::Check
                 | ActKind::Uncheck
                 | ActKind::Drag

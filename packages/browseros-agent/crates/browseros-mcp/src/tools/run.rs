@@ -974,8 +974,8 @@ impl BrowserBridge {
             result = self.control.race(future) => {
                 let value = result?;
                 let files = self.ctx.browser.files();
-                // Click/key activation can post a chooser after its ack. Hover, scroll,
-                // fill and other ordinary input only read pending state, without waiting.
+                // Native mouse/key input can post a chooser after its ack. Hover, scroll
+                // and semantic selection only read pending state, without waiting.
                 let chooser = if activates {
                     self.control.race(files.chooser_after_action(page_id.clone())).await?
                 } else {
@@ -1139,7 +1139,7 @@ impl BrowserBridge {
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
                 match self
-                    .race_input(&page_id, false, input.fill(&Ref(ref_id), &value, true))
+                    .race_input(&page_id, true, input.fill(&Ref(ref_id), &value, true))
                     .await?
                 {
                     Some(_) => Ok(BrowserCallValue::Undefined),
@@ -1154,7 +1154,7 @@ impl BrowserBridge {
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
                 match self
-                    .race_input(&page_id, false, input.type_text(&text))
+                    .race_input(&page_id, true, input.type_text(&text))
                     .await?
                 {
                     Some(_) => Ok(BrowserCallValue::Undefined),
