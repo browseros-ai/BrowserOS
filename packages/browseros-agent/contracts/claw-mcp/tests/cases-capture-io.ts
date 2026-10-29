@@ -362,6 +362,86 @@ export const captureIoCases: ContractCase[] = [
     },
   },
   {
+    name: 'upload: a borrowed iframe can open a parent-page picker',
+    async run(ctx) {
+      const child = ctx
+        .fixture2('/upload.html?parentPicker=1')
+        .replace('127.0.0.1', 'localhost')
+      const url = `${ctx.fixture('/upload-frame.html')}?src=${encodeURIComponent(child)}&borrowed=1`
+      // Create through the browser's debugging endpoint, outside MCP ownership. This is a
+      // borrowed user tab: explicit upload must lease the whole page's picker interception.
+      const created = await fetch(
+        `http://127.0.0.1:${ctx.browser.cdpPort}/json/new?${encodeURIComponent(url)}`,
+        { method: 'PUT' },
+      )
+      if (!created.ok)
+        throw new Error(`external tab creation failed: ${created.status}`)
+      const target: { id: string } = await created.json()
+      let page: number | undefined
+      try {
+        await waitUntil(async () => {
+          const tabs = expectOk(
+            await ctx.mcp.callTool('tabs', { action: 'list' }),
+          )
+          const id = tabs
+            .split('\n')
+            .find((line) => line.includes(url))
+            ?.match(/^\[(\d+)\]/)?.[1]
+          page = id ? Number(id) : undefined
+          return page !== undefined
+        }, 'the borrowed tab to appear')
+        let ref: string | undefined
+        await waitUntil(async () => {
+          const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+          ref = snap
+            .split('\n')
+            .find((line) => line.includes('Attach to parent'))
+            ?.match(/\[ref=(e\d+)\]/)?.[1]
+          return Boolean(ref)
+        }, 'the borrowed frame upload button')
+        const file = join(ctx.scratchDir, 'parent-chooser.txt')
+        await writeFile(file, 'selected by the borrowed page parent')
+        expectOk(
+          await ctx.mcp.callTool('upload', { page, ref, file }),
+          'select through the parent picker',
+        )
+        const selected = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+        if (!selected.includes('Parent selection: parent-chooser.txt'))
+          throw new Error(`parent input was not selected: ${selected}`)
+      } finally {
+        if (page !== undefined)
+          await ctx.mcp.callTool('tabs', { action: 'close', page })
+        else
+          await fetch(
+            `http://127.0.0.1:${ctx.browser.cdpPort}/json/close/${target.id}`,
+          )
+      }
+    },
+  },
+  {
+    name: 'run: ordinary hovers do not pay a chooser delay',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/upload.html'))
+      const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+      const ref = snap
+        .split('\n')
+        .find((line) => line.includes('Attach document'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!ref) throw new Error('no hover target')
+      const result = expectOk(
+        await ctx.mcp.callTool('run', {
+          // The old 100ms wait alone costs ten seconds for this batch. Leave several
+          // seconds for real CDP work while staying below that unavoidable old minimum.
+          timeout: 9500,
+          code: `const p = browser.page(${page}); for (let i = 0; i < 100; i++) await p.hover(${JSON.stringify(ref)}); return 'hover-batch-complete';`,
+        }),
+        'ordinary input batch',
+      )
+      if (!result.includes('hover-batch-complete'))
+        throw new Error(`ordinary input batch exceeded its budget: ${result}`)
+    },
+  },
+  {
     name: 'upload: single-file chooser rejects multiple paths and remains retryable',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/upload.html'))

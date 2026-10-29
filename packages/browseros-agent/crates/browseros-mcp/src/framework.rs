@@ -574,13 +574,17 @@ pub fn pending_dialog_result(ctx: &ToolCtx, page: PageId) -> Option<ToolResult> 
 pub async fn pending_file_chooser_result(
     ctx: &ToolCtx,
     page: PageId,
+    wait_for_event: bool,
 ) -> ToolExecResult<Option<ToolResult>> {
-    let Some(chooser) = ctx
-        .browser
-        .files()
-        .chooser_after_action(page.clone())
-        .await?
-    else {
+    let files = ctx.browser.files();
+    // Only native activation actions need the UI-thread handoff window. Ordinary input
+    // still reports an already-pending chooser without adding latency to script loops.
+    let chooser = if wait_for_event {
+        files.chooser_after_action(page.clone()).await?
+    } else {
+        files.pending_chooser(page.clone()).await?
+    };
+    let Some(chooser) = chooser else {
         return Ok(None);
     };
     Ok(Some(text_result(
