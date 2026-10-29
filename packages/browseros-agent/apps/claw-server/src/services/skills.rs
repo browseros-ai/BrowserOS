@@ -1,7 +1,7 @@
 use crate::{
     db::{
         SkillsRepository,
-        entities::{skill_runs, skills},
+        entities::{skill_flows, skill_runs, skills},
     },
     error::{AppError, AppResult, IoPath},
     services::harness::HarnessService,
@@ -135,6 +135,25 @@ impl SkillService {
                 }
             })
             .collect())
+    }
+
+    /// The skill's ultrafast lifecycle row, if it ever entered the ultrafast path.
+    pub async fn flow_row(&self, name: &str) -> AppResult<Option<skill_flows::Model>> {
+        self.repo.get_flow(name).await
+    }
+
+    pub async fn flow_rows(&self) -> AppResult<Vec<skill_flows::Model>> {
+        self.repo.all_flows().await
+    }
+
+    pub async fn put_flow_row(&self, row: skill_flows::Model) -> AppResult<()> {
+        self.repo.put_flow(row).await
+    }
+
+    /// The directory holding the skill's SKILL.md (and flow.md beside it).
+    #[must_use]
+    pub fn skill_dir(&self, name: &str) -> PathBuf {
+        self.skills_dir.join(name)
     }
 
     pub async fn get(&self, name: &str) -> AppResult<SkillDetailView> {

@@ -125,6 +125,8 @@ pub struct Skill {
     pub updated_at: i64,
     #[serde(rename = "tokenSavings", skip_serializing_if = "Option::is_none")]
     pub token_savings: Option<Box<models::SkillTokenSavings>>,
+    #[serde(rename = "ultrafast", skip_serializing_if = "Option::is_none")]
+    pub ultrafast: Option<Box<models::SkillUltrafast>>,
 }
 
 impl Skill {
@@ -155,6 +157,7 @@ impl Skill {
             created_at,
             updated_at,
             token_savings: None,
+            ultrafast: None,
         }
     }
 }
@@ -215,6 +218,19 @@ impl SkillDetail {
             runs,
             token_savings: Box::new(token_savings),
         }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SkillFlowSource {
+    /// The flow.md file as stored beside SKILL.md.
+    #[serde(rename = "source")]
+    pub source: String,
+}
+
+impl SkillFlowSource {
+    pub fn new(source: String) -> SkillFlowSource {
+        SkillFlowSource { source }
     }
 }
 
@@ -282,6 +298,13 @@ pub struct SkillRun {
     /// The tool that failed, when the run is not clean.
     #[serde(rename = "erroredTool", skip_serializing_if = "Option::is_none")]
     pub errored_tool: Option<String>,
+    #[serde(rename = "mode", skip_serializing_if = "Option::is_none")]
+    pub mode: Option<models::SkillRunMode>,
+    /// The step the flow handed back at, for a handed_back run.
+    #[serde(rename = "handoverStep", skip_serializing_if = "Option::is_none")]
+    pub handover_step: Option<i64>,
+    #[serde(rename = "handoverCause", skip_serializing_if = "Option::is_none")]
+    pub handover_cause: Option<SkillRunHandoverCause>,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
 }
@@ -307,9 +330,34 @@ impl SkillRun {
             tool_count: None,
             clean,
             errored_tool: None,
+            mode: None,
+            handover_step: None,
+            handover_cause: None,
             created_at,
         }
     }
+}
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum SkillRunHandoverCause {
+    #[serde(rename = "site_changed")]
+    SiteChanged,
+    #[serde(rename = "input_only")]
+    InputOnly,
+    #[serde(rename = "transient")]
+    Transient,
+    #[serde(rename = "unknown")]
+    Unknown,
+}
+
+impl Default for SkillRunHandoverCause {
+    fn default() -> SkillRunHandoverCause {
+        Self::SiteChanged
+    }
+}
+
+pub mod skill_run {
+    pub use super::SkillRunHandoverCause as HandoverCause;
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
@@ -327,6 +375,34 @@ impl SkillRunList {
             items,
             next_cursor: None,
         }
+    }
+}
+
+/// SkillRunMode : How the run was carried out. `handed_back` means the flow stopped and the agent finished the task.
+/// How the run was carried out. `handed_back` means the flow stopped and the agent finished the task.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum SkillRunMode {
+    #[serde(rename = "ultrafast")]
+    Ultrafast,
+    #[serde(rename = "handed_back")]
+    HandedBack,
+    #[serde(rename = "agent")]
+    Agent,
+}
+
+impl std::fmt::Display for SkillRunMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Ultrafast => write!(f, "ultrafast"),
+            Self::HandedBack => write!(f, "handed_back"),
+            Self::Agent => write!(f, "agent"),
+        }
+    }
+}
+
+impl Default for SkillRunMode {
+    fn default() -> SkillRunMode {
+        Self::Ultrafast
     }
 }
 
@@ -359,6 +435,104 @@ impl SkillTokenSavings {
             used,
             measured_run_count,
         }
+    }
+}
+
+/// SkillUltrafast : The skill's ultrafast flow. Present only while ultrafast skills are enabled.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SkillUltrafast {
+    #[serde(rename = "status")]
+    pub status: models::SkillUltrafastStatus,
+    /// Why the flow is off or broken, in plain words.
+    #[serde(rename = "reason", skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(rename = "flowVersion")]
+    pub flow_version: i64,
+    #[serde(rename = "effects", skip_serializing_if = "Option::is_none")]
+    pub effects: Option<SkillUltrafastEffects>,
+    /// Whether the user approved this write flow to run without asking.
+    #[serde(rename = "writeApproved")]
+    pub write_approved: bool,
+    #[serde(rename = "p50Ms", skip_serializing_if = "Option::is_none")]
+    pub p50_ms: Option<i64>,
+    #[serde(rename = "verifiedAt", skip_serializing_if = "Option::is_none")]
+    pub verified_at: Option<i64>,
+    #[serde(rename = "repairedAt", skip_serializing_if = "Option::is_none")]
+    pub repaired_at: Option<i64>,
+}
+
+impl SkillUltrafast {
+    /// The skill's ultrafast flow. Present only while ultrafast skills are enabled.
+    pub fn new(
+        status: models::SkillUltrafastStatus,
+        flow_version: i64,
+        write_approved: bool,
+    ) -> SkillUltrafast {
+        SkillUltrafast {
+            status,
+            reason: None,
+            flow_version,
+            effects: None,
+            write_approved,
+            p50_ms: None,
+            verified_at: None,
+            repaired_at: None,
+        }
+    }
+}
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum SkillUltrafastEffects {
+    #[serde(rename = "read")]
+    Read,
+    #[serde(rename = "write")]
+    Write,
+}
+
+impl Default for SkillUltrafastEffects {
+    fn default() -> SkillUltrafastEffects {
+        Self::Read
+    }
+}
+
+pub mod skill_ultrafast {
+    pub use super::SkillUltrafastEffects as Effects;
+}
+
+/// SkillUltrafastStatus : Where the skill's ultrafast flow stands. `none` means it has no flow and has not been offered one.
+/// Where the skill's ultrafast flow stands. `none` means it has no flow and has not been offered one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum SkillUltrafastStatus {
+    #[serde(rename = "none")]
+    None,
+    #[serde(rename = "pending")]
+    Pending,
+    #[serde(rename = "verified")]
+    Verified,
+    #[serde(rename = "degraded")]
+    Degraded,
+    #[serde(rename = "broken")]
+    Broken,
+    #[serde(rename = "off")]
+    Off,
+}
+
+impl std::fmt::Display for SkillUltrafastStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::None => write!(f, "none"),
+            Self::Pending => write!(f, "pending"),
+            Self::Verified => write!(f, "verified"),
+            Self::Degraded => write!(f, "degraded"),
+            Self::Broken => write!(f, "broken"),
+            Self::Off => write!(f, "off"),
+        }
+    }
+}
+
+impl Default for SkillUltrafastStatus {
+    fn default() -> SkillUltrafastStatus {
+        Self::None
     }
 }
 

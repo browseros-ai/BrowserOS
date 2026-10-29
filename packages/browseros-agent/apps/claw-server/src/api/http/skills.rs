@@ -1,9 +1,12 @@
 use super::{error, internal};
 use crate::{
     AppState,
-    db::entities::skill_runs,
+    db::entities::{skill_flows, skill_runs},
     error::{AppError, AppResult, CanonicalError, RequestId},
-    services::skills::{CreateSkill, SkillDetailView, SkillOrigin, SkillView, UpdateSkill},
+    services::{
+        flow::FlowStatus,
+        skills::{CreateSkill, SkillDetailView, SkillOrigin, SkillView, UpdateSkill},
+    },
 };
 use axum::{
     Extension, Json,
@@ -42,8 +45,22 @@ pub(super) async fn list(
             .or_default()
             .push(run);
     }
+    let mut flows: HashMap<String, skill_flows::Model> = if state.agent_settings.ultrafast_enabled()
+    {
+        state
+            .skills
+            .flow_rows()
+            .await
+            .map_err(|source| map_error(&request_id, source))?
+            .into_iter()
+            .map(|row| (row.skill_name.clone(), row))
+            .collect()
+    } else {
+        HashMap::new()
+    };
     let mut items = Vec::with_capacity(views.len());
     for view in views {
+        let flow = flows.remove(&view.model.name);
         let runs = runs_by_skill
             .get(&view.model.name)
             .map(Vec::as_slice)
@@ -53,6 +70,9 @@ pub(super) async fn list(
             .map_err(|source| map_error(&request_id, source))?;
         let mut dto = skill_to_dto(view);
         dto.token_savings = Some(Box::new(token_savings));
+        if state.agent_settings.ultrafast_enabled() {
+            dto.ultrafast = Some(Box::new(ultrafast_to_dto(flow.as_ref())));
+        }
         items.push(dto);
     }
     Ok(Json(SkillList::new(items)))
@@ -71,7 +91,9 @@ pub(super) async fn get(
     let token_savings = skill_token_savings(&state, &detail.runs)
         .await
         .map_err(|source| map_error(&request_id, source))?;
-    Ok(Json(detail_to_dto(detail, token_savings)))
+    Ok(Json(
+        with_ultrafast(&state, &request_id, detail_to_dto(detail, token_savings)).await?,
+    ))
 }
 
 pub(super) async fn create(
@@ -92,7 +114,11 @@ pub(super) async fn create(
         })
         .await
         .map_err(|source| map_error(&request_id, source))?;
-    Ok((StatusCode::CREATED, Json(skill_to_dto(view))))
+    let mut skill = skill_to_dto(view);
+    if state.agent_settings.ultrafast_enabled() {
+        skill.ultrafast = Some(Box::new(ultrafast_to_dto(None)));
+    }
+    Ok((StatusCode::CREATED, Json(skill)))
 }
 
 pub(super) async fn update(
@@ -118,7 +144,9 @@ pub(super) async fn update(
     let token_savings = skill_token_savings(&state, &detail.runs)
         .await
         .map_err(|source| map_error(&request_id, source))?;
-    Ok(Json(detail_to_dto(detail, token_savings)))
+    Ok(Json(
+        with_ultrafast(&state, &request_id, detail_to_dto(detail, token_savings)).await?,
+    ))
 }
 
 pub(super) async fn delete(
@@ -199,6 +227,48 @@ fn skill_to_dto(view: SkillView) -> Skill {
     skill
 }
 
+/// Fills the detail's ultrafast state, only while ultrafast skills are enabled.
+async fn with_ultrafast(
+    state: &AppState,
+    request_id: &RequestId,
+    mut detail: SkillDetail,
+) -> Result<SkillDetail, CanonicalError> {
+    if state.agent_settings.ultrafast_enabled() {
+        let flow = state
+            .skills
+            .flow_row(&detail.skill.name)
+            .await
+            .map_err(|source| map_error(request_id, source))?;
+        detail.skill.ultrafast = Some(Box::new(ultrafast_to_dto(flow.as_ref())));
+    }
+    Ok(detail)
+}
+
+pub(super) fn ultrafast_to_dto(flow: Option<&skill_flows::Model>) -> models::SkillUltrafast {
+    let Some(flow) = flow else {
+        return models::SkillUltrafast::new(models::SkillUltrafastStatus::None, 0, false);
+    };
+    let status = match FlowStatus::parse(&flow.status) {
+        FlowStatus::None => models::SkillUltrafastStatus::None,
+        FlowStatus::Pending => models::SkillUltrafastStatus::Pending,
+        FlowStatus::Verified => models::SkillUltrafastStatus::Verified,
+        FlowStatus::Degraded => models::SkillUltrafastStatus::Degraded,
+        FlowStatus::Broken => models::SkillUltrafastStatus::Broken,
+        FlowStatus::Off => models::SkillUltrafastStatus::Off,
+    };
+    let mut dto = models::SkillUltrafast::new(status, flow.flow_version, flow.write_approved);
+    dto.reason = flow.status_reason.clone();
+    dto.effects = match flow.effects.as_deref() {
+        Some("read") => Some(models::SkillUltrafastEffects::Read),
+        Some("write") => Some(models::SkillUltrafastEffects::Write),
+        _ => None,
+    };
+    dto.p50_ms = flow.p50_ms;
+    dto.verified_at = flow.verified_at;
+    dto.repaired_at = flow.repaired_at;
+    dto
+}
+
 fn detail_to_dto(detail: SkillDetailView, token_savings: models::SkillTokenSavings) -> SkillDetail {
     let SkillDetailView { view, body, runs } = detail;
     SkillDetail::new(
@@ -244,6 +314,18 @@ fn run_to_dto(run: skill_runs::Model) -> SkillRun {
     dto.duration_ms = run.duration_ms;
     dto.tool_count = run.tool_count;
     dto.errored_tool = run.errored_tool;
+    dto.mode = Some(match run.mode.as_str() {
+        "ultrafast" => models::SkillRunMode::Ultrafast,
+        "handed_back" => models::SkillRunMode::HandedBack,
+        _ => models::SkillRunMode::Agent,
+    });
+    dto.handover_step = run.handover_step;
+    dto.handover_cause = run.handover_cause.as_deref().map(|cause| match cause {
+        "site_changed" => models::SkillRunHandoverCause::SiteChanged,
+        "input_only" => models::SkillRunHandoverCause::InputOnly,
+        "transient" => models::SkillRunHandoverCause::Transient,
+        _ => models::SkillRunHandoverCause::Unknown,
+    });
     dto
 }
 

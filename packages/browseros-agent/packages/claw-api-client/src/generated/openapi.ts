@@ -561,6 +561,40 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/skills/{name}/flow': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** @description The skill's ultrafast flow file. */
+    get: operations['getSkillFlow']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/skills/{name}/ultrafast/approve-write': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** @description Let the skill's write flow run without asking again. */
+    post: operations['approveSkillWrite']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/directory': {
     parameters: {
       query?: never
@@ -1138,6 +1172,7 @@ export interface components {
       /** Format: int64 */
       updatedAt: number
       tokenSavings?: components['schemas']['SkillTokenSavings']
+      ultrafast?: components['schemas']['SkillUltrafast']
     }
     SkillList: {
       items: components['schemas']['Skill'][]
@@ -1159,6 +1194,14 @@ export interface components {
       clean: boolean
       /** @description The tool that failed, when the run is not clean. */
       erroredTool?: string
+      mode?: components['schemas']['SkillRunMode']
+      /**
+       * Format: int64
+       * @description The step the flow handed back at, for a handed_back run.
+       */
+      handoverStep?: number
+      /** @enum {string} */
+      handoverCause?: 'site_changed' | 'input_only' | 'transient' | 'unknown'
       /** Format: int64 */
       createdAt: number
     }
@@ -1199,6 +1242,44 @@ export interface components {
        */
       measuredRunCount: number
     }
+    /**
+     * @description Where the skill's ultrafast flow stands. `none` means it has no flow and has not been offered one.
+     * @enum {string}
+     */
+    SkillUltrafastStatus:
+      | 'none'
+      | 'pending'
+      | 'verified'
+      | 'degraded'
+      | 'broken'
+      | 'off'
+    /** @description The skill's ultrafast flow. Present only while ultrafast skills are enabled. */
+    SkillUltrafast: {
+      status: components['schemas']['SkillUltrafastStatus']
+      /** @description Why the flow is off or broken, in plain words. */
+      reason?: string
+      /** Format: int64 */
+      flowVersion: number
+      /** @enum {string} */
+      effects?: 'read' | 'write'
+      /** @description Whether the user approved this write flow to run without asking. */
+      writeApproved: boolean
+      /** Format: int64 */
+      p50Ms?: number
+      /** Format: int64 */
+      verifiedAt?: number
+      /** Format: int64 */
+      repairedAt?: number
+    }
+    SkillFlowSource: {
+      /** @description The flow.md file as stored beside SKILL.md. */
+      source: string
+    }
+    /**
+     * @description How the run was carried out. `handed_back` means the flow stopped and the agent finished the task.
+     * @enum {string}
+     */
+    SkillRunMode: 'ultrafast' | 'handed_back' | 'agent'
     SkillCreate: {
       name: string
       description: string
@@ -2351,6 +2432,55 @@ export interface operations {
       }
       400: components['responses']['BadRequest']
       404: components['responses']['NotFound']
+      500: components['responses']['InternalError']
+    }
+  }
+  getSkillFlow: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        name: components['parameters']['SkillName']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The flow source. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['SkillFlowSource']
+        }
+      }
+      404: components['responses']['NotFound']
+      500: components['responses']['InternalError']
+    }
+  }
+  approveSkillWrite: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        name: components['parameters']['SkillName']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The skill with its updated ultrafast state. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['Skill']
+        }
+      }
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
       500: components['responses']['InternalError']
     }
   }

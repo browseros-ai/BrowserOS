@@ -140,6 +140,12 @@ impl AgentSettingsStore {
         }
     }
 
+    /// Ultrafast skills ride on the credential that offers pursue, so one switch turns on both.
+    #[must_use]
+    pub fn ultrafast_enabled(&self) -> bool {
+        self.jev_token_source().is_present()
+    }
+
     /// The credential itself, for the one place that builds a client with it.
     ///
     /// A saved token wins over the environment. Never logged.
