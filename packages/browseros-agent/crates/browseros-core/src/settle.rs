@@ -208,12 +208,11 @@ pub async fn wait_for_created_page_ready(
         }
         Err(_elapsed) => return Readiness::StillMoving,
     };
-    let mut on_placeholder = false;
     let mut previous: Option<u64> = None;
     loop {
         match read_with_deadline(&page.session, deadline).await {
             Ok(Some(reading)) => {
-                on_placeholder = reading.blank;
+                let on_placeholder = reading.blank;
                 if !on_placeholder
                     && !reading.installed
                     && previous == Some(reading.count)
@@ -224,13 +223,10 @@ pub async fn wait_for_created_page_ready(
                 // A quiet interval counts only between two readings of the page itself.
                 previous = (!on_placeholder).then_some(reading.count);
             }
-            // The commit that replaces the placeholder takes the probe's context with it.
-            Ok(None) if on_placeholder => previous = None,
-            Ok(None) => {
-                return Readiness::Unknown {
-                    reason: "the readiness probe did not answer".to_string(),
-                };
-            }
+            // A new tab's renderer can be slow to answer its first reads, and the commit that
+            // replaces the placeholder takes the probe's context with it. Either is the page
+            // still arriving, so only a lost target ends the wait early, as in navigation's.
+            Ok(None) => previous = None,
             Err(outcome) => return into_readiness(outcome),
         }
         if sleep_for_budget(timeouts::ACTION_SETTLE_DOM_QUIET, deadline)
@@ -792,6 +788,28 @@ mod tests {
                 reading(0, false, true, false),
             ]),
         )
+        .await?;
+        let outcome = super::wait_for_created_page_ready(
+            &session.pages,
+            page_id,
+            "https://slow.example/login",
+            timeouts::ARRIVAL_READY_BUDGET,
+        )
+        .await;
+        assert_eq!(outcome, super::Readiness::Stable);
+        Ok(())
+    }
+
+    /// A new tab's renderer can be slow to answer its first read. Giving up on that read handed
+    /// back the placeholder with most of the budget left.
+    #[tokio::test]
+    async fn a_first_read_that_fails_keeps_waiting() -> Result<(), CoreError> {
+        let (session, page_id) = harness_reading(VecDeque::from([
+            Value::Null,
+            placeholder(true),
+            reading(0, true, true, false),
+            reading(0, false, true, false),
+        ]))
         .await?;
         let outcome = super::wait_for_created_page_ready(
             &session.pages,
