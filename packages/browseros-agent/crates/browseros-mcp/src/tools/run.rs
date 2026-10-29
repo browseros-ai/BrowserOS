@@ -988,7 +988,9 @@ impl BrowserBridge {
             _ => None,
         };
         let started = Instant::now();
-        let outcome = self.dispatch(method, args).await;
+        // Boxed: dispatch is one state machine sized by its largest SDK arm, and an unboxed
+        // copy of it on the worker's stack overflows a debug build's 2 MiB worker thread.
+        let outcome = Box::pin(self.dispatch(method, args)).await;
         drop(viewport);
         if let Some(hook) = &self.ctx.inner_call_hook {
             if method == "pages.newPage"
