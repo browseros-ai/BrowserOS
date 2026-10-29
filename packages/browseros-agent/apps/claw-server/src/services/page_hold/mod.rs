@@ -351,8 +351,9 @@ impl PageHoldService {
                 if &hold.owner != owner {
                     return true;
                 }
-                // Another session is still acting on the page: it keeps the hold.
-                if let Some(other) = hold.in_flight.values().next() {
+                // Another session is still acting on the page, or still waiting on the person's
+                // take over of it: it keeps the hold, and with it the hand back.
+                if let Some(other) = hold.in_flight.values().chain(hold.paused.iter()).next() {
                     hold.owner = other.clone();
                     return true;
                 }

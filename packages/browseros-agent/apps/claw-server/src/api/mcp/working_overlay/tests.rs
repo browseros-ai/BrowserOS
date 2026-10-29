@@ -441,3 +441,38 @@ async fn a_finished_call_lets_go_of_every_page_it_held() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_finishing_agent_leaves_a_shared_take_over_for_the_one_still_waiting()
+-> anyhow::Result<()> {
+    let state = state_with_overlay().await?;
+    let second = second_session(&state).await;
+    let page = PageId(14);
+    page_hold(&state)
+        .seed(page.clone(), &owner(), HoldPhase::Working, &[])
+        .await;
+    page_hold(&state)
+        .seed_call(&page, &DispatchId::new(), second.id())
+        .await;
+    page_hold(&state)
+        .handle_event(&page, OverlayEvent::TakeOver { via: Via::Button })
+        .await;
+
+    page_hold(&state).finish_session(&owner()).await;
+
+    assert_eq!(
+        page_hold(&state).phase(&page).await,
+        Some(HoldPhase::Person),
+        "the page is still the person's to hand back"
+    );
+    let waiting = state
+        .help
+        .get(second.id())
+        .await
+        .ok_or_else(|| anyhow::anyhow!("the other agent is not waiting"))?;
+    page_hold(&state)
+        .handle_event(&page, OverlayEvent::HandBack)
+        .await;
+    assert!(!waiting.is_open());
+    Ok(())
+}
