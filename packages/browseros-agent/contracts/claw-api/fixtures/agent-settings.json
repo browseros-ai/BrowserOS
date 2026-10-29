@@ -1,5 +1,6 @@
 {
   "humanHelpEnabled": false,
   "taskCleanupTipEnabled": false,
+  "workingOverlayEnabled": false,
   "jevTokenSource": "environment"
 }

@@ -763,6 +763,8 @@ export interface components {
       humanHelpEnabled: boolean
       /** @description Whether successful MCP tool replies include a tip to close the task's tab group when finished. */
       taskCleanupTipEnabled: boolean
+      /** @description Whether a page neo acts on shows that neo is working on it and holds the person's clicks and typing until they take over. */
+      workingOverlayEnabled: boolean
       jevTokenSource: components['schemas']['JevTokenSource']
     }
     /**
@@ -779,6 +781,8 @@ export interface components {
       humanHelpEnabled?: boolean
       /** @description Omit to preserve the saved cleanup tip preference. */
       taskCleanupTipEnabled?: boolean
+      /** @description Omit to preserve the saved working overlay preference. */
+      workingOverlayEnabled?: boolean
     }
     /** @enum {string} */
     SessionStatus: 'live' | 'done' | 'failed' | 'cancelled'
