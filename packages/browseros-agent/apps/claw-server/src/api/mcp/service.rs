@@ -18,13 +18,12 @@ use crate::{
     ids::{DispatchId, SessionId},
     services::{
         agent_settings::HumanHelp,
-        cockpit::LiveSessionFilters,
         help::{HelpEntry, HelpOpenParams, HelpWaitOutcome},
         sessions::{ClawTargetStore, RetirementCause, Session},
         skills::{CreateSkill, SkillOrigin},
     },
 };
-use browseros_core::target::BrowserView;
+use browseros_core::{PageId, target::BrowserView};
 use browseros_mcp::{OutputFileAccess, TargetStore, ToolDef, ToolResult};
 use claw_api::models::HelpRequestKind;
 use rmcp::{
@@ -75,7 +74,7 @@ pub(super) const MARK_SKILL_RUN_TOOL_NAME: &str = "mark_skill_run";
 const RUN_TOOL_NAME: &str = "run";
 const MARK_SKILL_RUN_DESCRIPTION: &str = "Mark this browser session as a run of a saved skill so BrowserOS neo records the run and its cost once the session ends. Call this once, at the start, when you are running a skill, with the skill's name.";
 pub(super) const REQUEST_HELP_TOOL_NAME: &str = "request_human_help";
-const REQUEST_HELP_DESCRIPTION: &str = "Ask a human to take over this page when you hit something only a person can do: a sign-in, a one-time code, a captcha, an account choice, or an approval you should not make yourself. Give a short `reason` (what you need), optional `details` (what the human should know), an optional `resumeHint` (what you will do after, so the human knows the task continues), and an optional `kind` (login, captcha, approval, other). This blocks for a short while and returns a status. If the status is \"waiting\", call await_human_help to keep waiting; do nothing else on the page until the status is \"resolved\". The cockpit shows your request so a human can take over the tab and hand control back.";
+const REQUEST_HELP_DESCRIPTION: &str = "Ask a human to take over a page when you hit something only a person can do: a sign-in, a one-time code, a captcha, an account choice, or an approval you should not make yourself. Pass `page` (the id of the page that needs the person, the same number you use with snapshot and act) and a short `reason` (what you need); optionally `details` (what the human should know), a `resumeHint` (what you will do after, so the human knows the task continues), and a `kind` (login, captcha, approval, other). This blocks for a short while and returns a status. If the status is \"waiting\", call await_human_help to keep waiting; do nothing else on the page until the status is \"resolved\". The cockpit shows your request so a human can take over that tab and hand control back.";
 pub(super) const AWAIT_HELP_TOOL_NAME: &str = "await_human_help";
 const PURSUE_TOOL_NAME: &str = "pursue";
 /// What the caller is told about `pursue`, and it has to earn every line.
@@ -861,9 +860,26 @@ impl ClawMcpService {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
         };
-        // Pin the tab the agent is on right now, so takeover targets the blocked page even when the
-        // agent has several tabs open and the poll-time attribution later drifts or empties.
-        let (browser_tab_id, url, title) = self.resolve_active_tab(started.session.id()).await;
+        // The page the agent is blocked on. Mandatory: help is always about one page, and the cockpit
+        // brings exactly this tab to the front, so it is the page the agent names, never a guess from
+        // whichever tab was touched most recently.
+        let Some(page) = browseros_mcp::extract_page_id(true, raw_args) else {
+            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                "request_human_help: \"page\" is required (the id of the page that needs a person, the same number you pass to snapshot and act).",
+            )]);
+        };
+        // Resolve the named page now and refuse the request if it cannot be: an unresolved page would
+        // leave the tab, url and title empty, and the cockpit fills empty fields from the session's
+        // most-recently-active tab, which would point the banner and takeover at an unrelated page.
+        let (browser_tab_id, url, title) = match self
+            .resolve_help_page(started.session.id(), PageId(page))
+            .await
+        {
+            Ok((browser_tab_id, url, title)) => (Some(browser_tab_id), Some(url), Some(title)),
+            Err(message) => {
+                return CallToolResult::error(vec![rmcp::model::ContentBlock::text(message)]);
+            }
+        };
         let params = HelpOpenParams {
             request_id: format!("help-{}", Ulid::new()),
             reason: reason.to_string(),
@@ -881,36 +897,36 @@ impl ClawMcpService {
         self.run_help_wait(started, &entry, request_ct).await
     }
 
-    /// The session's most-recently-active owned tab, as the live projection sees it now. Captured at
-    /// request time so a help request pins the exact blocked tab. Returns all-None when the session
-    /// has no attributed tab, in which case the snapshot falls back to the poll-time pick.
-    async fn resolve_active_tab(
+    /// The tab, url and title of the page the agent named for its help request, so takeover brings the
+    /// exact page the agent is blocked on to the front rather than whatever tab was touched most
+    /// recently. Errors when the page cannot be resolved (browser not connected, page already gone):
+    /// the caller refuses the request rather than opening it with empty fields the cockpit would fill
+    /// from an unrelated tab.
+    async fn resolve_help_page(
         &self,
         session_id: &SessionId,
-    ) -> (Option<i64>, Option<String>, Option<String>) {
-        let filters = LiveSessionFilters {
-            profile_id: None,
-            slug: None,
-            site: None,
-            search: None,
-            since: None,
+        page: PageId,
+    ) -> Result<(i64, String, String), String> {
+        let page_id = page.0;
+        let Some(browser) = self.state.browser.session().await else {
+            return Err(format!(
+                "request_human_help: the browser is not connected, so page {page_id} could not be brought to the front. Start BrowserOS neo, then ask again."
+            ));
         };
-        let Ok(sessions) = self.state.cockpit.list(&filters).await else {
-            return (None, None, None);
-        };
-        let tab = sessions
-            .into_iter()
-            .find(|projection| projection.task.session_id == session_id.as_str())
-            .and_then(|projection| {
-                projection
-                    .live
-                    .browser_tabs
-                    .into_iter()
-                    .max_by_key(|tab| tab.last_activity_at.unwrap_or(0))
-            });
-        match tab {
-            Some(tab) => (Some(tab.browser_tab_id), Some(tab.url), Some(tab.title)),
-            None => (None, None, None),
+        let binding = self
+            .state
+            .targets
+            .binding_for_execution(session_id)
+            .await
+            .map_err(|error| {
+                format!("request_human_help: could not resolve page {page_id}: {error}")
+            })?;
+        let view = BrowserView::capture(browser, binding, None).await;
+        match view.page(page).await {
+            Ok(info) => Ok((info.tab_id.0, info.url, info.title)),
+            Err(_) => Err(format!(
+                "request_human_help: page {page_id} is not one of your open pages. Pass the id of a page that is still open, the same number you use with snapshot and act."
+            )),
         }
     }
 
@@ -2115,6 +2131,11 @@ fn request_help_tool() -> Tool {
     let Value::Object(input_schema) = json!({
         "type": "object",
         "properties": {
+            "page": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "The id of the page that needs a person, the same number you pass to snapshot and act. Help is always about one page: pass the one they must act on, so the cockpit brings that exact tab to the front."
+            },
             "reason": {
                 "type": "string",
                 "description": "A short line saying what you need a human to do, e.g. \"Enter the LinkedIn verification code\"."
@@ -2133,7 +2154,7 @@ fn request_help_tool() -> Tool {
                 "description": "The kind of help, used for the cockpit icon."
             }
         },
-        "required": ["reason"]
+        "required": ["page", "reason"]
     }) else {
         unreachable!();
     };
@@ -3793,6 +3814,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn request_human_help_requires_a_page() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+        let started = service
+            .ensure_session_started(SessionId::new("mcp-help-no-page"))
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+
+        let result = service
+            .call_request_human_help(
+                &started,
+                &json!({ "reason": "Enter the code" }),
+                CancellationToken::new(),
+            )
+            .await;
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(text_of(&result).contains("page"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn request_human_help_errors_when_the_page_cannot_be_resolved() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let started = service
+            .ensure_session_started(SessionId::new("mcp-help-bad-page"))
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+
+        // No browser is connected in this harness, so page 1 cannot be resolved. The request must be
+        // refused, not opened: an opened request with no tab is filled by the cockpit from the
+        // most-recently-active tab, which would point the banner and takeover at an unrelated page.
+        let result = service
+            .call_request_human_help(
+                &started,
+                &json!({ "reason": "Enter the code", "page": 1 }),
+                CancellationToken::new(),
+            )
+            .await;
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(text_of(&result).contains("page"));
+        assert!(call.state.help.get(started.session.id()).await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn await_human_help_without_an_open_request_reports_timed_out() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state);
@@ -4012,12 +4081,29 @@ mod tests {
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         let session_id = started.session.id().clone();
+        // Open the request directly: resolving a live page needs a bound browser tab, which this
+        // harness has none of, and the behavior under test is that an already-open request survives
+        // the switch flipping off, not how it was opened.
+        call.state
+            .help
+            .open(
+                &session_id,
+                HelpOpenParams {
+                    request_id: "help-flip".to_string(),
+                    reason: "Enter the code".to_string(),
+                    details: None,
+                    resume_hint: None,
+                    kind: None,
+                    browser_tab_id: Some(7),
+                    url: Some("https://blocked.example".to_string()),
+                    title: Some("Blocked".to_string()),
+                },
+            )
+            .await;
         // An ended call token returns the first wait chunk at once and leaves the request open.
         let call_ended = CancellationToken::new();
         call_ended.cancel();
-        let opened = service
-            .call_request_human_help(&started, &json!({ "reason": "Enter the code" }), call_ended)
-            .await;
+        let opened = service.call_await_human_help(&started, call_ended).await;
         assert_eq!(status_of(&opened), Some("waiting"));
 
         call.state
