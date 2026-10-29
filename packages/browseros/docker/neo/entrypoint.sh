@@ -13,7 +13,8 @@ set -euo pipefail
 : "${NEO_DATA_DIR:=/data}"
 readonly NEO_DATA_DIR
 readonly PROFILE="$NEO_DATA_DIR/profile"
-readonly DOWNLOADS="$NEO_DATA_DIR/downloads"
+# Downloads may be shared with an agent without exposing the private browser profile.
+readonly DOWNLOADS="${NEO_DOWNLOAD_DIR:-$NEO_DATA_DIR/downloads}"
 # claw-server's database, recordings, skills and agent settings. It defaults to
 # ~/.browserclaw, which is not on the volume and would vanish with the container.
 readonly CLAW_DATA="$NEO_DATA_DIR/browserclaw"
@@ -53,6 +54,9 @@ die() { log "$*" >&2; exit 1; }
 # folder rather than the container root or a working-directory-relative path.
 [[ "$NEO_DATA_DIR" = /* ]] || die "NEO_DATA_DIR must be an absolute path"
 [ "$(realpath -m -- "$NEO_DATA_DIR")" != / ] || die "NEO_DATA_DIR must not be the filesystem root"
+
+[[ "$DOWNLOADS" = /* ]] || die "NEO_DOWNLOAD_DIR must be an absolute path"
+[ "$(realpath -m -- "$DOWNLOADS")" != / ] || die "NEO_DOWNLOAD_DIR must not be the filesystem root"
 
 # Validate before starting services so the browser and its server agree.
 case "$BROWSERCLAW_HOSTED_MODE" in
@@ -221,6 +225,12 @@ apply_policies() {
   local managed=/etc/chromium/policies/managed
   mkdir -p "$managed"
   echo '{"AutofillCreditCardEnabled": false}' > "$managed/neo-payments.json"
+  # A reused profile can remember another download folder or Save As prompting. Policy
+  # fixes the deployment's folder for every profile while Chrome still owns naming and
+  # its download history; CDP only observes the final path, never redirects each click.
+  jq -n --arg directory "$DOWNLOADS" \
+    '{DownloadDirectory: $directory, PromptForDownloadLocation: false}' \
+    > "$managed/neo-downloads.json"
   rm -f "$managed/neo-docker.json" "$managed/neo-hosted.json"
   if [ "${#sandbox_flags[@]}" -gt 0 ]; then
     echo '{"CommandLineFlagSecurityWarningsEnabled": false}' > "$managed/neo-docker.json"

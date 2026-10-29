@@ -97,6 +97,7 @@ COPY --chmod=0755 neo-quit.py /usr/local/bin/neo-quit
 # separate install. The browser's native metrics do not read it.
 ENV NEO_SCREEN=1600x1000 \
     NEO_DATA_DIR=/data \
+    NEO_DOWNLOAD_DIR="" \
     BROWSERCLAW_HOSTED_MODE=1 \
     BROWSERCLAW_CONFIG_FILE=/etc/neo/neo.toml \
     CLAW_ANALYTICS_ENABLED=0 \

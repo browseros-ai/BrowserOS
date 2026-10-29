@@ -255,6 +255,8 @@ pub struct InnerCallRecord<'a> {
     pub from_helper: bool,
     /// Whether the primitive failed.
     pub is_error: bool,
+    /// Safe presentation state only; never pass native handles or file paths to the audit.
+    pub file_chooser_open: bool,
     /// Wall-clock duration of the primitive in milliseconds.
     pub duration_ms: i64,
     /// Estimated output tokens of the primitive's result payload (v1 estimator),
@@ -565,6 +567,29 @@ pub fn pending_dialog_result(ctx: &ToolCtx, page: PageId) -> Option<ToolResult> 
         .signals()
         .pending_dialog_line(&page)
         .map(ToolResult::error)
+}
+
+/// A chooser is recoverable selection state shared by granular tools and run. The node and
+/// CDP session stay in core; agents receive only the action needed to finish selecting files.
+pub async fn pending_file_chooser_result(
+    ctx: &ToolCtx,
+    page: PageId,
+) -> ToolExecResult<Option<ToolResult>> {
+    let Some(chooser) = ctx
+        .browser
+        .files()
+        .chooser_after_action(page.clone())
+        .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(text_result(
+        format!(
+            "{{\"fileChooserOpen\":true,\"multiple\":{}}}\nA file chooser is open; call upload with file/files and omit ref to select files, or files=[] to clear it.",
+            chooser.multiple
+        ),
+        Some(serde_json::json!({"page":page.0,"fileChooserOpen":true,"multiple":chooser.multiple})),
+    )))
 }
 
 /// One line a host appends to an outer tool result while a saved profile target is not

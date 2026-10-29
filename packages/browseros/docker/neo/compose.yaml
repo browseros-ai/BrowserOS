@@ -23,6 +23,7 @@ services:
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
+      NEO_DOWNLOAD_DIR: ${NEO_DOWNLOAD_DIR:-}
       NEO_SCREEN: ${NEO_SCREEN:-1600x1000}
       BROWSERCLAW_HOSTED_MODE: ${BROWSERCLAW_HOSTED_MODE:-1}
       NEO_SANDBOX: ${NEO_SANDBOX:-false}

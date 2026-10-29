@@ -92,6 +92,7 @@ struct PageState {
 pub struct PageManager {
     cdp: Arc<dyn CdpConnection>,
     hooks: PageManagerHooks,
+    file_transfers: Option<Arc<crate::file_transfers::TransferState>>,
     state: Mutex<PageState>,
 }
 
@@ -106,7 +107,16 @@ impl PageManager {
             }),
             cdp,
             hooks,
+            file_transfers: None,
         }
+    }
+
+    pub(crate) fn with_file_transfers(
+        mut self,
+        transfers: Arc<crate::file_transfers::TransferState>,
+    ) -> Self {
+        self.file_transfers = Some(transfers);
+        self
     }
 
     pub async fn list(&self) -> Result<Vec<PageInfo>, CoreError> {
@@ -684,7 +694,21 @@ impl PageManager {
         guard: Option<crate::connection::EpochGuard>,
     ) -> Result<SessionId, CoreError> {
         self.ensure_connected_with_epoch(guard.as_ref()).await?;
-        if let Some(cached) = self.state.lock().await.sessions.get(&target_id).cloned() {
+        let (cached, owned) = {
+            let state = self.state.lock().await;
+            (
+                state.sessions.get(&target_id).cloned(),
+                state.agent_created.contains(&page_id),
+            )
+        };
+        if let Some(cached) = cached {
+            // The background tab registry can attach between native creation and our create
+            // receipt. Once the receipt claims this tab, upgrade that cached session too.
+            if owned && let Some(transfers) = &self.file_transfers {
+                let session = ProtocolSession::for_session(self.cdp.clone(), cached.clone())
+                    .with_epoch_guard(guard.clone());
+                transfers.intercept(&session).await?;
+            }
             return Ok(cached);
         }
 
@@ -713,6 +737,11 @@ impl PageManager {
         // speed. Scoped to agent-created tabs so an adopted user tab keeps its
         // real focus state; best-effort, so it never fails attach (#2778).
         let is_agent_created = self.state.lock().await.agent_created.contains(&page_id);
+        // Intercept before the page is exposed to any caller. Adopted user tabs retain their
+        // native picker; explicit upload on one borrows interception for that operation only.
+        if is_agent_created && let Some(transfers) = &self.file_transfers {
+            transfers.intercept(&session).await?;
+        }
         if is_agent_created
             && let Err(err) = session
                 .send::<_, Value>(

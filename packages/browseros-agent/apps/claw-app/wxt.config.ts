@@ -34,6 +34,8 @@ export default defineConfig({
       'browserOS',
       'alarms',
       'webNavigation',
+      // Older packaged servers still query this worker for download metadata. New servers
+      // use CDP and work with the extension disabled; retain permission during that rollout.
       'downloads',
       'notifications',
       'favicon',

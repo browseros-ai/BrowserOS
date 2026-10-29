@@ -259,6 +259,23 @@ Everything Neo keeps lives under `/data` by default:
 /data/downloads    Neo's Downloads folder
 ```
 
+Downloads use `$NEO_DATA_DIR/downloads` by default. `NEO_DOWNLOAD_DIR` can point to a separate absolute directory inside the container, so an agent can share downloaded files without sharing Neo's profile. Startup fixes this directory and disables Save As prompting for every browser profile, including reused ones. Chrome still chooses collision-free filenames; MCP reports the completed file's actual path over CDP without bundled extensions.
+
+For a VM folder mounted at the same path in the agent and Neo:
+
+```sh
+docker run --rm --shm-size=1g \
+  -p 127.0.0.1:6080:6080 -p 127.0.0.1:9010:9010 \
+  -v "$HOME/neo-data:/data" \
+  --mount type=bind,src=/workspace/files,dst=/workspace/files \
+  -e NEO_DOWNLOAD_DIR=/workspace/files/downloads \
+  ghcr.io/browseros-ai/neo:latest
+```
+
+Create `/workspace/files` on the VM first and ensure the configured `PUID`/`PGID` can access it. Neo creates and owns the download directory itself; it does not change a shared parent's ownership. Compose accepts `NEO_DOWNLOAD_DIR` too; an external folder needs a corresponding mount in your Compose override.
+
+To attach a file to a website, pass its container-visible path to `upload` with either a file-input ref or an upload-button ref. An intercepted chooser from another action returns `fileChooserOpen: true`; call `upload` with `file`/`files` and omit `ref` to finish selection. `files: []` clears the selection. The files must already exist in the VM/shared mount. Selecting them does not submit the website form or transfer a laptop attachment into the VM.
+
 `NEO_DATA_DIR` changes the directory **inside the container**. For example, a
 derived image can set `NEO_DATA_DIR=/var/lib/mirror/browseros`; Neo then uses
 `profile`, `browserclaw`, and `downloads` below that directory. Mount that directory

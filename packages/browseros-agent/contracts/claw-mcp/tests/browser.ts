@@ -71,8 +71,8 @@ function launchArgs(cdpPort: number, userDataDir: string): string[] {
     '--no-default-browser-check',
     '--use-mock-keychain',
     '--show-component-extension-options',
-    // The cockpit extension stays enabled: the download tool reads where the
-    // browser saved a file from chrome.downloads, which only it can reach.
+    // The contract must work without bundled extensions, as hosted Neo does.
+    '--disable-browseros-extensions',
     '--browseros-dock-icon=dev',
     '--enable-logging=stderr',
   ]
@@ -104,7 +104,7 @@ function launchArgs(cdpPort: number, userDataDir: string): string[] {
  * real one belonging to whoever is running it, because the browser does not take
  * that folder from HOME. Setting the preference keeps a run hermetic and also
  * exercises a relocated download folder, which the tool handles by asking the
- * browser where it saved rather than guessing.
+ * browser where it saved through CDP rather than guessing.
  */
 async function seedDownloadDirectory(userDataDir: string): Promise<void> {
   const downloadDir = join(userDataDir, 'Downloads')

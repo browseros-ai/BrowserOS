@@ -2,6 +2,7 @@
 
 import json
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -64,8 +65,14 @@ class StartNeoTest(unittest.TestCase):
         self.assertEqual(calls, ["forget_zoom_levels", "spawn_as_neo"])
 
 
+@unittest.skipUnless(shutil.which("jq"), "needs jq, as the image has")
 class ApplyPoliciesTest(unittest.TestCase):
-    def apply(self, hosted_mode: str, stale_hosted_policy: bool = False) -> dict[str, dict]:
+    def apply(
+        self,
+        hosted_mode: str,
+        stale_hosted_policy: bool = False,
+        downloads: str = "/data/downloads",
+    ) -> dict[str, dict]:
         """The managed policy files apply_policies leaves, by name, for one mode."""
         managed = Path(self.enterContext(tempfile.TemporaryDirectory()))
         if stale_hosted_policy:
@@ -73,6 +80,7 @@ class ApplyPoliciesTest(unittest.TestCase):
         run_bash(
             "sandbox_flags=(--no-sandbox)\n"
             f"BROWSERCLAW_HOSTED_MODE={hosted_mode}\n"
+            f"DOWNLOADS={shlex.quote(downloads)}\n"
             + shell_function("apply_policies").replace("/etc/chromium/policies/managed", str(managed))
             + "apply_policies\n"
         )
@@ -102,6 +110,16 @@ class ApplyPoliciesTest(unittest.TestCase):
         for mode in ("0", "1"):
             self.assertEqual(
                 self.apply(mode)["neo-payments.json"], {"AutofillCreditCardEnabled": False}
+            )
+
+    def test_downloads_use_the_shared_folder_without_save_as_prompts(self):
+        for mode in ("0", "1"):
+            directory = '/workspace/shared files/"downloads"'
+            policies = self.apply(mode, downloads=directory)
+
+            self.assertEqual(
+                policies["neo-downloads.json"],
+                {"DownloadDirectory": directory, "PromptForDownloadLocation": False},
             )
 
 

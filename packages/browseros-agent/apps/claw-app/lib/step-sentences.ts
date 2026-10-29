@@ -271,6 +271,12 @@ function describeAct(args: Args, onPage: string): string {
   }
 }
 
+function describeFileSelection(args: Args, onPage: string): string {
+  return Array.isArray(args.files) && args.files.length === 0
+    ? `Cleared file selection on ${onPage}`
+    : `Selected files on ${onPage}`
+}
+
 /** One recorded call as a past-tense sentence. */
 export function describeStep(dispatch: ToolDispatchRow): string {
   const meta = parseMeta(dispatch.resultMeta)
@@ -285,6 +291,9 @@ export function describeStep(dispatch: ToolDispatchRow): string {
 
   const { tool, args } = normalizeCall(dispatch)
   const onPage = page ?? 'the page'
+  // Chooser interception completes the click, but file selection is a later call.
+  // Keep the history from claiming a file was attached before that call succeeds.
+  if (meta.fileChooserOpen === true) return `Opened a file chooser on ${onPage}`
 
   if (
     LISTING_TOOLS.has(tool) &&
@@ -357,7 +366,7 @@ export function describeStep(dispatch: ToolDispatchRow): string {
     case 'act':
       return describeAct(args, onPage)
     case 'upload':
-      return `Uploaded a file to ${onPage}`
+      return describeFileSelection(args, onPage)
     case 'download':
       return 'Downloaded a file'
     case 'request_human_help':

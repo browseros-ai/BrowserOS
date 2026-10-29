@@ -394,6 +394,7 @@ impl ProfileConnection {
                     Ok(json!({"sessionId":format!("S-{}", params["targetId"])}))
                 }
                 "Page.enable"
+                | "Page.setInterceptFileChooserDialog"
                 | "DOM.enable"
                 | "Runtime.enable"
                 | "Accessibility.enable"

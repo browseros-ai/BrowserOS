@@ -1369,6 +1369,14 @@ impl BrowserView {
         // relevant async page admission before readback; it cannot refresh native ownership.
         &self.signals
     }
+    /// One file-transfer implementation for granular tools and embedded scripts, retaining
+    /// this capture's profile, window and connection admission through asynchronous work.
+    pub fn files(&self) -> crate::file_transfers::FileTransfers {
+        crate::file_transfers::FileTransfers {
+            view: self.clone(),
+            state: self.session.file_transfers.clone(),
+        }
+    }
     pub fn cdp_events(&self) -> broadcast::Receiver<CdpEvent> {
         self.scoped_events()
     }
