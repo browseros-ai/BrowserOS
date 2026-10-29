@@ -26,7 +26,8 @@
 * { box-sizing: border-box; }
 .layer { position: fixed; inset: 0; pointer-events: none; font: 400 14px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
   color: #fff; -webkit-font-smoothing: antialiased; --out: cubic-bezier(0.16, 1, 0.3, 1); --spring: cubic-bezier(0.34, 1.56, 0.64, 1); }
-.layer[data-capture="hidden"] { visibility: hidden !important; }
+/* Hidden from a capture by opacity, not visibility: a hidden shield would let input through. */
+.layer[data-capture="hidden"] { opacity: 0 !important; }
 .shield { position: absolute; inset: 0; pointer-events: none; }
 .layer[data-held="on"] .shield { pointer-events: auto; cursor: default; touch-action: none; }
 .layer[data-yield="on"], .layer[data-yield="on"] * { pointer-events: none !important; }
