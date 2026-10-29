@@ -18,7 +18,7 @@ for building and publishing it.
 | `docker/neo/check_zoom.py` | In the container: a pinch and the zoom keys, sent through the VNC server like the viewer's, must not zoom the page |
 | `bos_build/release/docker_image.py` | `build_image`: preflight that each architecture was published, tag and label policy, buildx invocation |
 | `bos_build/cli/release_docker.py` | `browseros release docker`, a thin wrapper |
-| `.github/workflows/release-docker.yml` | Build servers, verify both native images, then push one multi-architecture image |
+| `.github/workflows/release-docker.yml` | Build servers on WarpBuild, verify both native images and push each by digest, then tag one multi-architecture index |
 
 ## Prerequisite: a Linux release with both architectures
 
@@ -102,18 +102,27 @@ gh workflow run release-docker.yml --ref main -f version=0.52.0.1 -f latest=true
 gh workflow run release-docker.yml --ref main -f version=0.52.0.1 -f push=false
 ```
 
-The workflow builds this commit's server for both architectures, then builds and
-tests each image natively: amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`.
-Both run the viewer/MCP smoke check and require correct `solve_captcha` availability
-with hosted mode on and off. Each mode also toggles bundled extensions on/off
-using the same data volume and checks their installed state. Both verification jobs must pass before publication.
-`push=false` stops after verification without publishing an image.
-`verify_paid=true` additionally requires a paid Google reCAPTCHA demo PASS on amd64
-and spends provider credit. Containers and temporary key files are always removed.
+The workflow builds this commit's server for both architectures on WarpBuild's
+32-vCPU x64 runner (zig cross-compiles arm64; see `warpbuild-ci.md`), with a
+WarpBuild-backed Cargo cache of the shared build-dir. It then builds and tests each
+image natively: amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`. Each first
+checks that the image's `browseros-claw-server` is byte-identical to the server job's
+binary, replacing the one the browser package bundles. Both run the viewer/MCP smoke
+check and require correct `solve_captcha` availability with hosted mode on and off.
+Each mode also toggles bundled extensions on/off using the same data volume and
+checks their installed state. `push=false` stops after verification without
+publishing an image. `verify_paid=true` additionally requires a paid Google
+reCAPTCHA demo PASS on amd64 and spends provider credit. Containers and temporary
+key files are always removed.
 
-Publication rebuilds both architectures with the same server artifacts and key
-configuration, then pushes them with `GITHUB_TOKEN`. Tag `latest` only once the version has been
-promoted (`browseros release publish`); a draft should never become `latest`.
+With `push=true`, each verify job then pushes the image it tested by digest, without
+tags (`browseros release docker --push-by-digest`). That push reuses the tested
+build's cache for every layer, and the job checks the pushed layers match the tested
+image's. Publication builds nothing: once both verify jobs pass, `publish` tags one
+multi-architecture index over the two digests (`--push --from-digests <dir>`) and
+checks both architectures carry this commit's revision. Both jobs push with
+`GITHUB_TOKEN`; only verify holds the provider keys. Tag `latest` only once the version
+has been promoted (`browseros release publish`); a draft should never become `latest`.
 
 ### Tags
 

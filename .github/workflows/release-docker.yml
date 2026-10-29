@@ -5,6 +5,14 @@ name: "Release: Neo Docker image"
 # extractable by anyone who can pull the image. Both native smoke jobs must pass
 # before publication; use latest only for a promoted browser version.
 #
+#   server   builds this commit's claw-server for amd64 and arm64 on WarpBuild's
+#            32-vCPU x64 runner (zig cross-compiles arm64), with a Cargo cache.
+#   verify   builds each architecture's image natively, checks it runs that
+#            server, smoke-tests it, and with push=true pushes that same image by
+#            digest, untagged.
+#   publish  tags one multi-architecture index over the two tested digests. It
+#            builds nothing, so what ships is the image verify tested.
+#
 # The image is tagged <version>-<commit> (one per source commit) and <version>
 # (moves to the newest run). Rerun on a newer commit with the same version to ship server or packaging
 # changes without a new browser build.
@@ -34,8 +42,73 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  server:
+  # WarpBuild provisions the server runners on demand; when none arrive the jobs
+  # sit queued until GitHub discards them 24h later, holding the release-docker
+  # concurrency group all day. Fail fast instead, as release-linux does - see
+  # packages/browseros/bos_build/docs/warpbuild-ci.md.
+  queue-watchdog:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: write
+    steps:
+      - name: Fail fast when no runner picks up the server builds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CONCURRENCY_GROUP: release-docker
+          RUNNER_LABEL: warp-custom-browseros-ubuntu-2204-x64-32x
+          JOB_FILTER: >-
+            [.jobs[]
+            | select(any(.labels[]?; . == $runner_label))
+            | {name, status}]
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 20 * 60 ))
+          failures=0
+          while :; do
+            if response="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100")" \
+              && jobs="$(jq -c --arg runner_label "$RUNNER_LABEL" "$JOB_FILTER" <<<"$response")"; then
+              failures=0
+            else
+              failures=$(( failures + 1 ))
+              if [ "$failures" -ge 3 ]; then
+                echo "::error::queue-watchdog could not list this run's jobs (3 consecutive failures); builds are unwatched this run."
+                exit 1
+              fi
+              sleep 60
+              continue
+            fi
+            total="$(jq 'length' <<<"$jobs")"
+            queued="$(jq '[.[] | select(.status == "queued")] | length' <<<"$jobs")"
+            in_progress="$(jq '[.[] | select(.status == "in_progress")] | length' <<<"$jobs")"
+            if [ "$total" -gt 0 ] && [ "$queued" -eq 0 ]; then
+              echo "All $total server jobs picked up by runners."
+              exit 0
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              doc="packages/browseros/bos_build/docs/warpbuild-ci.md"
+              if [ "$total" -eq 0 ]; then
+                echo "::error::queue-watchdog matched no server jobs - did the runner label change? Fix the filter; not cancelling."
+                exit 1
+              fi
+              stuck="$(jq -r '[.[] | select(.status == "queued") | .name] | join(", ")' <<<"$jobs")"
+              # Cancel only when nothing is live: a queued job is then the
+              # only thing keeping the run (and concurrency group) pinned.
+              if [ "$queued" -gt 0 ] && [ "$in_progress" -eq 0 ]; then
+                echo "::error::No server job is running and these never left the queue: $stuck. See $doc. Cancelling the run to free the $CONCURRENCY_GROUP concurrency group."
+                gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/cancel"
+              else
+                echo "::error::Still queued after 20 min: $stuck. In-progress builds keep running - see $doc."
+              fi
+              exit 1
+            fi
+            sleep 60
+          done
+
+  server:
+    # 32 vCPUs instead of a hosted runner's 4. WarpBuild has no arm64 Linux
+    # runner and none is needed: zig cross-compiles the arm64 server.
+    runs-on: warp-custom-browseros-ubuntu-2204-x64-32x
     timeout-minutes: 45
     permissions:
       contents: read
@@ -54,13 +127,29 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+      - name: Set up Rust
+        # Pinned like test.yml, so the compiler and the cache key below stay
+        # stable across runs.
+        uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          targets: ${{ matrix.rust_target }}
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-provider: warpbuild
+          workspaces: packages/browseros-agent
+          # One cache per target: each job only builds its own. The default
+          # environment hash stays in the key and covers Cargo.lock, so a
+          # dependency change misses the exact key, restores this target's
+          # newest cache by prefix, and saves a fresh one. Turning it off would
+          # leave one fixed key that never refreshes.
+          shared-key: neo-docker-${{ matrix.rust_target }}
+          # The compiled dependencies live in the shared Cargo build-dir
+          # (.cargo/config.toml), not in the target dir; ~/.cargo/bin keeps
+          # cargo-zigbuild installed across runs.
+          cache-directories: ~/.cargo/build/browseros
       - name: Set up cross compiler
-        env:
-          RUST_TARGET: ${{ matrix.rust_target }}
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-          rustup target add "$RUST_TARGET"
           python3 -m pip install ziglang==0.15.2
           python3 -c 'import pathlib, ziglang; print(pathlib.Path(ziglang.__file__).parent)' >> "$GITHUB_PATH"
           cargo install --locked cargo-zigbuild --version 0.23.0
@@ -100,6 +189,9 @@ jobs:
     environment: neo-captcha
     permissions:
       contents: read
+      # Pushes the image this job tested, by digest and untagged, for publish
+      # to name.
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -149,6 +241,18 @@ jobs:
           # Derived images must not inherit an implicit anonymous data volume.
           test "$(docker image inspect -f '{{len .Config.Volumes}}' "ghcr.io/browseros-ai/neo:$VERSION")" = 0
           test "$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "ghcr.io/browseros-ai/neo:$VERSION-${GITHUB_SHA::7}")" = "$GITHUB_SHA"
+      - name: Check the image runs this commit's server
+        # The browser package bundles its own claw-server; the image must have
+        # replaced it with the binary the server job built.
+        run: |
+          set -euo pipefail
+          expected="$(sha256sum "$RUNNER_TEMP/neo-servers/$ARCH/browseros-claw-server-rs" | cut -d' ' -f1)"
+          installed="$(docker run --rm --entrypoint sh "ghcr.io/browseros-ai/neo:$VERSION-${GITHUB_SHA::7}" \
+            -c 'sha256sum $(find /usr/lib /opt -type f -name browseros-claw-server)' | cut -d' ' -f1)"
+          if [ "$installed" != "$expected" ]; then
+            echo "::error::The image's browseros-claw-server ($installed) is not this commit's build ($expected)"
+            exit 1
+          fi
       - name: Verify viewer, MCP, and hosted CAPTCHA on and off
         id: smoke
         env:
@@ -218,6 +322,45 @@ jobs:
           if [ -f "$RUNNER_TEMP/captcha-e2e/results.md" ]; then cat "$RUNNER_TEMP/captcha-e2e/results.md"; fi
           [ "$result" -eq 0 ]
           python3 -c 'import json, os; r=json.load(open(os.environ["RUNNER_TEMP"]+"/captcha-e2e/results.json")); assert len(r)==1 and r[0]["outcome"]=="PASS"'
+      - uses: docker/login-action@v4
+        if: inputs.push
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push the tested image by digest
+        id: push
+        if: inputs.push
+        # Same request as the build above with the same keys on the same
+        # builder, so every layer comes from that build's cache.
+        run: |
+          uv run --directory packages/browseros browseros release docker \
+            --version "$VERSION" --platform "linux/$ARCH" --server-dir "$RUNNER_TEMP/neo-servers" \
+            --revision "$GITHUB_SHA" --push-by-digest
+      - name: Check the pushed image is the one tested
+        if: inputs.push
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          tested="$(docker image inspect -f '{{json .RootFS.Layers}}' "ghcr.io/browseros-ai/neo:$VERSION-${GITHUB_SHA::7}" | jq -c .)"
+          # A single-platform push with provenance is an index: .Image is the
+          # platform's config, keyed by platform only when there are several.
+          pushed="$(docker buildx imagetools inspect "ghcr.io/browseros-ai/neo@$DIGEST" --format '{{json .Image}}' \
+            | jq -c --arg platform "linux/$ARCH" 'if has("rootfs") then . else .[$platform] end | .rootfs.diff_ids')"
+          if [ "$pushed" != "$tested" ]; then
+            echo "::error::The pushed image's layers differ from the tested image's"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/neo-digest"
+          printf '%s\n' "$DIGEST" > "$RUNNER_TEMP/neo-digest/$ARCH"
+      - uses: actions/upload-artifact@v7
+        if: inputs.push
+        with:
+          name: neo-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/neo-digest/${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 1
       - name: Remove containers and secret files
         if: always()
         run: |
@@ -226,11 +369,12 @@ jobs:
           rm -f "$RUNNER_TEMP/neo-capsolver-key" "$RUNNER_TEMP/neo-2captcha-key"
 
   publish:
-    needs: [server, verify]
+    # verify already pushed both tested images; this only names them, so it
+    # needs no provider keys. Both verify jobs must pass first.
+    needs: verify
     if: inputs.push
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    environment: neo-captcha
+    timeout-minutes: 15
     permissions:
       contents: read
       # The neo package must also grant this repository Actions Write access.
@@ -244,39 +388,20 @@ jobs:
       - uses: astral-sh/setup-uv@v8.3.2
       - uses: actions/download-artifact@v8
         with:
-          name: neo-server-amd64
-          path: ${{ runner.temp }}/neo-servers/amd64
-      - uses: actions/download-artifact@v8
-        with:
-          name: neo-server-arm64
-          path: ${{ runner.temp }}/neo-servers/arm64
-      - uses: docker/setup-qemu-action@v4
+          pattern: neo-digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/neo-digests
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Prepare build secrets
-        env:
-          CAPSOLVER_API_KEY: ${{ secrets.CAPSOLVER_API_KEY }}
-          TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
-        run: |
-          umask 077
-          export BROWSEROS_CAPSOLVER_API_KEY_FILE="$RUNNER_TEMP/neo-capsolver-key"
-          export BROWSEROS_2CAPTCHA_API_KEY_FILE="$RUNNER_TEMP/neo-2captcha-key"
-          echo "BROWSEROS_CAPSOLVER_API_KEY_FILE=$BROWSEROS_CAPSOLVER_API_KEY_FILE" >> "$GITHUB_ENV"
-          echo "BROWSEROS_2CAPTCHA_API_KEY_FILE=$BROWSEROS_2CAPTCHA_API_KEY_FILE" >> "$GITHUB_ENV"
-          printf '%s' "$CAPSOLVER_API_KEY" > "$BROWSEROS_CAPSOLVER_API_KEY_FILE"
-          printf '%s' "$TWOCAPTCHA_API_KEY" > "$BROWSEROS_2CAPTCHA_API_KEY_FILE"
-      - name: Push amd64 and arm64
+      - name: Tag the tested amd64 and arm64 images
         env:
           LATEST: ${{ inputs.latest }}
         run: |
           set -euo pipefail
-          args=(--version "$VERSION" --push --server-dir "$RUNNER_TEMP/neo-servers" --revision "$GITHUB_SHA")
+          args=(--version "$VERSION" --push --revision "$GITHUB_SHA" --from-digests "$RUNNER_TEMP/neo-digests")
           if [ "$LATEST" = true ]; then args+=(--latest); fi
           uv run --directory packages/browseros browseros release docker "${args[@]}"
-      - name: Remove secret files
-        if: always()
-        run: rm -f "$RUNNER_TEMP/neo-capsolver-key" "$RUNNER_TEMP/neo-2captcha-key"
