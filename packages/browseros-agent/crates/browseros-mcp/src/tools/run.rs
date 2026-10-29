@@ -1,6 +1,10 @@
-use crate::framework::{
-    HelperSource, InnerCallRecord, ToolCtx, ToolDef, ToolError, ToolExecResult, ToolResult,
-    execute_tool, page_json, parse_args, text_result,
+use super::evaluate_in_page::safe_prefix;
+use crate::{
+    framework::{
+        HelperSource, InnerCallRecord, ToolCtx, ToolDef, ToolError, ToolExecResult, ToolResult,
+        execute_tool, page_json, parse_args, text_result,
+    },
+    output_file::write_temp_tool_output_file,
 };
 use browseros_core::{
     NativeFeature, PageId, Ref, SessionId, WindowId,
@@ -32,6 +36,12 @@ const RUN_STACK_SIZE_BYTES: usize = 512 * 1024;
 const MAX_LOG_ENTRIES: usize = 1_000;
 const MAX_LOG_BYTES: usize = 1_000_000;
 const MAX_RETURN_VALUE_BYTES: usize = 2_000_000;
+/// What a run hands back to the model inline: its return value plus its logs, in UTF-8 bytes.
+/// About 6k tokens, enough for a few pages of extracted text. The script itself reads pages
+/// whole, so only its answer has to fit; a larger one comes back as a preview plus a file.
+const DEFAULT_INLINE_RESULT_BYTES: usize = 25_000;
+/// The most `maxChars` can raise the inline result to, matching `evaluate_in_page`.
+const MAX_INLINE_RESULT_BYTES: usize = 200_000;
 
 const DESCRIPTION: &str = r#"The primary way to drive the browser - prefer run for any task; the granular tools are the fallback. Do multi-step flows, pagination, bulk extraction, and repeated act/read loops - in ONE call: async JavaScript against the `browser` SDK in the server runtime. console.log is captured; return a value to read it back; exceptions come back as a result, not thrown. Every call is `await`-able. Each run is bounded to 30000 ms of wall time and cannot exceed it (larger `timeout` values are clamped): keep a single call under 30s. For longer or open-ended page-driven loops, do one bounded chunk per call, or start the work on the page and poll its result with short follow-up calls.
 
@@ -76,6 +86,8 @@ Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers
   page.saveHelper(name, source) - source is a function, or the same thing as a string: async (browser, page) => { ... }
   page.listHelpers() -> { host, helpers: [{ name, ageDays, candidate }] }; page.readHelper(name) -> source string
 Raw CDP: browser.cdp(method, params?, sessionId?) / page.cdp(method, paramsJson). Methods or parameters that need a newer BrowserOS return native_feature_unavailable without being sent.
+
+What a run returns to you, its return value plus its logs, is kept inline up to 25000 bytes (raise it with maxChars, up to 200000). Past that you get a preview and a local file path a remote client cannot open, so return the answer, not the pages you read to find it.
 
 Do the whole task in as few run calls as possible: loop over all the items in one call rather than one run per item. Parallelize independent work with Promise.all so N pages cost one wait cycle, not N. Keep steps on the same page sequential. The 30s cap binds this: batching reads of already-loaded pages is cheap, batching navigations is not, so keep it to about 5 fresh pages per call and split the rest into more calls. Efficient pattern:
   const pages = await Promise.all(urls.map(u => browser.open(u)));
@@ -459,6 +471,11 @@ struct RunArgs {
     /// split it across calls or start it and poll with short follow-up calls.
     #[serde(default = "default_timeout")]
     timeout: f64,
+    /// Max size of the result kept inline (return value plus logs), in UTF-8 bytes: default
+    /// 25000, max 200000. A larger result comes back as a preview, with the full text in a
+    /// local file a remote MCP client cannot open; return only what you need, or raise this.
+    #[serde(default, rename = "maxChars")]
+    max_chars: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, JsonSchema)]
@@ -469,6 +486,14 @@ struct RunOutput {
     logs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    /// True when the result was over the inline limit: `value` and `logs` are then left out
+    /// and the full text is in the file at `path`.
+    #[serde(rename = "writtenToFile", skip_serializing_if = "Option::is_none")]
+    written_to_file: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(rename = "contentLength", skip_serializing_if = "Option::is_none")]
+    content_length: Option<usize>,
 }
 
 pub fn definition() -> crate::framework::ToolDef {
@@ -490,6 +515,13 @@ fn handler<'a>(
 ) -> BoxFuture<'a, ToolExecResult<Option<ToolResult>>> {
     Box::pin(async move {
         let args: RunArgs = parse_args(raw)?;
+        let inline_limit = args
+            .max_chars
+            .map_or(DEFAULT_INLINE_RESULT_BYTES, |max_chars| {
+                usize::try_from(max_chars)
+                    .unwrap_or(usize::MAX)
+                    .min(MAX_INLINE_RESULT_BYTES)
+            });
         let outcome = match execute_run(args, ctx).await {
             Ok(outcome) => outcome,
             Err(RunError::Syntax(message)) => {
@@ -498,7 +530,9 @@ fn handler<'a>(
             Err(RunError::Cancelled) => return Err(ToolError::Cancelled),
             Err(RunError::Engine(message)) => return Err(ToolError::message(message)),
         };
-        Ok(Some(outcome.into_tool_result()))
+        Ok(Some(
+            outcome.into_capped_tool_result(inline_limit, ctx).await,
+        ))
     })
 }
 
@@ -596,6 +630,48 @@ impl RunOutcome {
             logs,
             error: Some(error.into()),
         }
+    }
+
+    /// [`into_tool_result`](Self::into_tool_result), with a result over `inline_limit` bytes
+    /// cut to a preview and saved whole to a file, so one large return cannot flood the model.
+    async fn into_capped_tool_result(self, inline_limit: usize, ctx: &ToolCtx) -> ToolResult {
+        let text = format_outcome(&self);
+        if text.len() <= inline_limit {
+            return self.into_tool_result();
+        }
+        let saved = write_temp_tool_output_file(&ctx.output_files, "run", "txt", &text).await;
+        let advice = format!(
+            "Return only what you need, or raise maxChars (up to {MAX_INLINE_RESULT_BYTES}) to receive more inline."
+        );
+        let note = match &saved {
+            Ok(path) => format!(
+                "Result truncated at {inline_limit} bytes. Full result ({} bytes) saved to: {}. {advice}",
+                text.len(),
+                path.display()
+            ),
+            Err(error) => format!(
+                "Result truncated at {inline_limit} bytes. Full result ({} bytes) could not be saved to a BrowserOS output file: {error}. {advice}",
+                text.len()
+            ),
+        };
+        let mut structured = json!({
+            "ok": self.ok,
+            "logs": [],
+            "writtenToFile": saved.is_ok(),
+            "contentLength": text.len(),
+        });
+        if let Ok(path) = &saved {
+            structured["path"] = json!(path.to_string_lossy());
+        }
+        if let Some(error) = &self.error {
+            structured["error"] = json!(safe_prefix(error, inline_limit));
+        }
+        let mut result = text_result(
+            format!("{}\n\n{note}", safe_prefix(&text, inline_limit)),
+            Some(structured),
+        );
+        result.is_error = !self.ok;
+        result
     }
 
     fn into_tool_result(self) -> ToolResult {
@@ -2804,6 +2880,44 @@ try {
                 )
             }))
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_result_over_the_inline_limit_comes_back_as_a_preview() -> anyhow::Result<()> {
+        let result = run_tool("return 'x'.repeat(30000);", None).await?;
+        assert!(!result.is_error);
+        let text = tool_result_text(&result);
+        assert!(text.contains("Result truncated at 25000 bytes"), "{text}");
+        assert!(text.len() < 26_000, "{}", text.len());
+        let structured = result
+            .structured_content
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing structured content"))?;
+        assert!(structured.get("value").is_none());
+        assert_eq!(structured["ok"], json!(true));
+        assert_eq!(structured["writtenToFile"], json!(true));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_max_chars_raises_the_inline_limit() -> anyhow::Result<()> {
+        let def = definition();
+        let result = execute_tool(
+            &def,
+            json!({ "code": "return 'x'.repeat(30000);", "maxChars": 40000 }),
+            &test_ctx(),
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+        assert!(!result.is_error);
+        let value = result
+            .structured_content
+            .as_ref()
+            .and_then(|structured| structured.get("value"))
+            .and_then(Value::as_str)
+            .map(str::len);
+        assert_eq!(value, Some(30_000));
         Ok(())
     }
 

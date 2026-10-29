@@ -319,7 +319,7 @@ fn safe_stringify(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
-fn safe_prefix(text: &str, max_chars: usize) -> String {
+pub(crate) fn safe_prefix(text: &str, max_chars: usize) -> String {
     if text.len() <= max_chars {
         return text.to_string();
     }
