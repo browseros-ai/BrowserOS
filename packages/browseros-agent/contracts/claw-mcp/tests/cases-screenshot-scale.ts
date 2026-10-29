@@ -107,6 +107,31 @@ export const screenshotScaleCases: ContractCase[] = [
       }
     },
   },
+  {
+    name: 'screenshot: fullPage keeps device density and reaches past the viewport',
+    browserArgs: ['--force-device-scale-factor=2'],
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/sdk-screenshot-tall.html'))
+      const { dpr } = await viewport(ctx, page)
+      const scrolled = await evalValue<{ width: number; height: number }>(
+        ctx,
+        page,
+        'return { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight }',
+      )
+      // scale is documented as ignored for fullPage, which keeps the display's density.
+      const result = await ctx.mcp.callTool('screenshot', {
+        page,
+        fullPage: true,
+      })
+      expectOk(result)
+      const image = imageOf(result)
+      if (!image) throw new Error('screenshot omitted its image')
+      expect(dimensions(image.data)).toEqual({
+        width: scrolled.width * dpr,
+        height: scrolled.height * dpr,
+      })
+    },
+  },
   ...(['screenshot', 'run'] as const).map(
     (surface): ContractCase => ({
       name: `${surface}: default-scale screenshot annotations match CSS element boxes at 2x density`,

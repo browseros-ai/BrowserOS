@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>SPA route contract</title>
+  </head>
+  <body>
+    <!-- Routes on load like an SPA, so going to the routed URL again commits no new
+         document; a goto that waited for one would hang until its timeout. -->
+    <h1>SPA route</h1>
+    <script>
+      history.pushState({}, '', '#/home')
+    </script>
+  </body>
+</html>

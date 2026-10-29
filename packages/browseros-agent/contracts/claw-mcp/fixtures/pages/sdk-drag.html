@@ -19,6 +19,9 @@
       <button id="html-source" draggable="true">HTML source</button>
       <button id="html-target" class="target">HTML target</button>
     </div>
+    <div id="capture-area" style="position: relative; width: 300px; height: 160px; margin: 20px; border: 1px solid black">
+      <div id="capture-handle" style="position: absolute; left: 20px; top: 20px; width: 40px; height: 40px; background: #888"></div>
+    </div>
     <script>
       // Script-driven widgets only drag while mousemove carries the held button.
       window.scriptDrag = { down: false, heldMoves: 0, up: false, drop: null }
@@ -54,6 +57,30 @@
       document.getElementById('html-target').addEventListener('drop', event => {
         event.preventDefault()
         window.htmlDrag.dropped = event.dataTransfer.getData('text/plain')
+      })
+      // Sliders and sortable lists capture the pointer on pointerdown and follow only the
+      // moves delivered under that capture, so a move without the held button never lands.
+      window.pointerDrag = { capturedMoves: 0, released: false, hadCapture: false, moved: null }
+      const area = document.getElementById('capture-area')
+      const handle = document.getElementById('capture-handle')
+      let grab = null
+      handle.addEventListener('pointerdown', event => {
+        area.setPointerCapture(event.pointerId)
+        grab = { x: event.clientX - handle.offsetLeft, y: event.clientY - handle.offsetTop }
+        event.preventDefault()
+      })
+      area.addEventListener('pointermove', event => {
+        if (!grab || !area.hasPointerCapture(event.pointerId)) return
+        window.pointerDrag.capturedMoves++
+        handle.style.left = `${event.clientX - grab.x}px`
+        handle.style.top = `${event.clientY - grab.y}px`
+      })
+      area.addEventListener('pointerup', event => {
+        if (!grab) return
+        window.pointerDrag.released = true
+        window.pointerDrag.hadCapture = area.hasPointerCapture(event.pointerId)
+        window.pointerDrag.moved = { left: handle.offsetLeft, top: handle.offsetTop }
+        grab = null
       })
     </script>
   </body>

@@ -175,4 +175,18 @@ export const sdkNavigationCases: ContractCase[] = (
       ).toEqual({ url, sentinel: 'same-document' })
     },
   },
+  {
+    name: `${surface}: goto the URL an SPA routed to returns without a new document`,
+    async run(ctx: CaseContext) {
+      const page = await ctx.openPage(ctx.fixture('/sdk-spa-route.html'))
+      const routed = ctx.fixture('/sdk-spa-route.html#/home')
+      expect(await evalValue(ctx, page, 'return location.href')).toBe(routed)
+      const started = performance.now()
+      const result = await goto(ctx, page, surface, routed)
+      expect(performance.now() - started).toBeLessThan(5_000)
+      // The status is still the document's own, read from Navigation Timing.
+      if (surface === 'run') expect(result).toEqual({ status: 200 })
+      expect(await evalValue(ctx, page, 'return location.href')).toBe(routed)
+    },
+  },
 ])

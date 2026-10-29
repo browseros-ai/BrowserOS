@@ -406,5 +406,41 @@ export const sdkInputCases: ContractCase[] = [
         await assertDrag(ctx, page, 'script')
       },
     },
+    {
+      name: `${surface}: dragAt moves a pointer-capture handle by the drag distance`,
+      async run(ctx: CaseContext) {
+        const page = await ctx.openPage(ctx.fixture('/sdk-drag.html'))
+        const from = await center(ctx, page, 'capture-handle')
+        const to = { x: from.x + 80, y: from.y + 60 }
+        if (surface === 'act') {
+          expectOk(
+            await ctx.mcp.callTool('act', {
+              page,
+              kind: 'drag_at',
+              startX: from.x,
+              startY: from.y,
+              endX: to.x,
+              endY: to.y,
+            }),
+          )
+        } else {
+          await runValue(
+            ctx,
+            page,
+            `await p.dragAt(${from.x}, ${from.y}, ${to.x}, ${to.y})`,
+          )
+        }
+        const state = await evalValue<{
+          capturedMoves: number
+          released: boolean
+          hadCapture: boolean
+          moved: { left: number; top: number } | null
+        }>(ctx, page, 'return window.pointerDrag')
+        expect(state.capturedMoves).toBeGreaterThan(0)
+        expect(state).toMatchObject({ released: true, hadCapture: true })
+        expect(state.moved?.left).toBeCloseTo(20 + 80, 0)
+        expect(state.moved?.top).toBeCloseTo(20 + 60, 0)
+      },
+    },
   ]),
 ]
