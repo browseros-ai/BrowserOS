@@ -3906,6 +3906,8 @@ class DockerImageWorkflowTest(unittest.TestCase):
         self.assertEqual(cache["with"]["cache-provider"], "warpbuild")
         self.assertIn("~/.cargo/build/browseros", cache["with"]["cache-directories"])
         self.assertEqual(cache["with"]["shared-key"], "neo-docker-${{ matrix.rust_target }}")
+        # Without the environment hash the key ignores Cargo.lock and never refreshes.
+        self.assertNotIn("add-rust-environment-hash-key", cache["with"])
         watchdog = self.jobs["queue-watchdog"]["steps"][0]["env"]
         self.assertEqual(watchdog["RUNNER_LABEL"], server["runs-on"])
         self.assertEqual(watchdog["CONCURRENCY_GROUP"], self.workflow["concurrency"]["group"])

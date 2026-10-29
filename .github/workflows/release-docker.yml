@@ -138,10 +138,12 @@ jobs:
         with:
           cache-provider: warpbuild
           workspaces: packages/browseros-agent
-          # One cache per target: each job only builds its own.
+          # One cache per target: each job only builds its own. The default
+          # environment hash stays in the key and covers Cargo.lock, so a
+          # dependency change misses the exact key, restores this target's
+          # newest cache by prefix, and saves a fresh one. Turning it off would
+          # leave one fixed key that never refreshes.
           shared-key: neo-docker-${{ matrix.rust_target }}
-          # See test.yml: the runner's own Rust would otherwise fragment the key.
-          add-rust-environment-hash-key: false
           # The compiled dependencies live in the shared Cargo build-dir
           # (.cargo/config.toml), not in the target dir; ~/.cargo/bin keeps
           # cargo-zigbuild installed across runs.
