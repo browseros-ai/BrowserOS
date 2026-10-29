@@ -57,7 +57,7 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.snapshot({ mode, depth }?)    -> { text, refs, url }. mode "interactive" plus depth keeps a big page small.
   page.diff()                        -> { text, added, removed, changed }
   page.resolveRef(ref)               -> { backendNodeId, sessionId }
-  page.read(selector?)               -> the page as a markdown STRING (large pages are truncated with a note pointing to a saved file)
+  page.read(selector?)               -> the whole page as a markdown STRING, so the script can search or slice all of it; return only what you need
   page.grep(pattern, { over, limit }?) -> matching lines as a STRING
   page.click(ref) / fill(ref,value) / hover(ref) / selectOption(ref,value)
     fill types the value and leaves the result to the page, which may reformat it ("440 212") or reject it; after filling a form, page.snapshot() shows what each field holds. Date, time, color and range inputs take the value in their own format (2026-10-29, 14:30, #ff8800) and fill throws on one they cannot hold
@@ -633,9 +633,11 @@ async fn execute_run(args: RunArgs, ctx: &ToolCtx) -> Result<RunOutcome, RunErro
         deadline,
         timeout_message: timeout_message.clone(),
     };
+    let mut script_ctx = ctx.clone();
+    script_ctx.within_script = true;
     let run = execute_quickjs(
         args.code,
-        ctx.clone(),
+        script_ctx,
         logs.clone(),
         control.clone(),
         duration,

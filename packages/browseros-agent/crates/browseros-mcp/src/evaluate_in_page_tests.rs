@@ -23,6 +23,8 @@ type TestResult = Result<(), Box<dyn Error>>;
 /// readiness probes the tools also send.
 const SCRIPT: &str = "40 + 2";
 const NEVER_SETTLES: &str = "new Promise(() => {})";
+/// A script whose result is longer than the inline limit.
+const LONG_RESULT: &str = "'x'.repeat(6000)";
 
 struct Native {
     evaluations: Mutex<Vec<Value>>,
@@ -75,6 +77,13 @@ impl Native {
                 let is_script = params["expression"]
                     .as_str()
                     .is_some_and(|expression| expression.contains(SCRIPT));
+                if params["expression"]
+                    .as_str()
+                    .is_some_and(|expression| expression.contains(LONG_RESULT))
+                {
+                    return Ok(json!({"result": {"type": "string", "objectId": "1",
+                        "deepSerializedValue": {"type": "string", "value": "x".repeat(6000)}}}));
+                }
                 // Chromium answers a deep-serialized evaluation with a typed value.
                 if is_script && params.get("serializationOptions").is_some() {
                     return Ok(json!({"result": {"type": "number", "objectId": "1",
@@ -275,6 +284,40 @@ async fn tests_that_evaluate_in_page_asks_for_typed_results() -> TestResult {
     assert_eq!(
         scripts[0]["serializationOptions"],
         json!({"serialization": "deep"})
+    );
+    Ok(())
+}
+
+/// A run script reads the value itself, so it gets all of it rather than an excerpt plus a
+/// file path it has no way to open.
+#[tokio::test]
+async fn tests_that_a_run_script_gets_a_long_result_whole() -> TestResult {
+    let native = Native::new();
+    let direct = call(
+        &ctx(&native),
+        tools::evaluate_in_page::definition(),
+        json!({"page": 1, "code": format!("return {LONG_RESULT};")}),
+    )
+    .await;
+    assert!(text(&direct).contains("truncated"), "{}", text(&direct));
+
+    let code = format!(
+        "const result = await browser.page(1).evaluateInPage(\"return {LONG_RESULT};\");
+         return result.value.length;"
+    );
+    let result = call(
+        &ctx(&native),
+        tools::run::definition(),
+        json!({"code": code, "timeout": 5000}),
+    )
+    .await;
+    assert!(!result.is_error, "{}", text(&result));
+    assert_eq!(
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|data| data.get("value")),
+        Some(&json!(6000))
     );
     Ok(())
 }

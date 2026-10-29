@@ -173,7 +173,11 @@ async fn evaluate_in_page(raw: Value, ctx: &ToolCtx) -> ToolExecResult<Option<To
         .await?
         .map(|info| info.url)
         .unwrap_or_else(|| "unknown".to_string());
-    let inline_limit = resolve_inline_limit(args.max_chars);
+    let inline_limit = if ctx.within_script {
+        usize::MAX
+    } else {
+        resolve_inline_limit(args.max_chars)
+    };
     if text.len() > inline_limit {
         let excerpt = safe_prefix(&text, inline_limit);
         let wrapped_text = wrap_untrusted(&text, &origin);
