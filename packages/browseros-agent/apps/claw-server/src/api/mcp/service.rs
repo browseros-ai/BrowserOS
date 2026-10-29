@@ -68,6 +68,9 @@ const AGENT_NAME_ARG_DESCRIPTION: &str = "Optional fallback identifying your cli
 /// `taskName` instead of `name_session`.
 const AGENT_NAME_TASK_SENTENCE: &str = "Put your task name in name_session, not here.";
 const HOSTED_AGENT_NAME_TASK_SENTENCE: &str = "Put your task name in taskName, not here.";
+mod ultrafast;
+
+pub(super) use ultrafast::RUN_SKILL_TOOL_NAME;
 pub(super) const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
 const SAVE_SKILL_DESCRIPTION: &str = "When you finish a repeatable browser task the user is likely to run again, save it as a BrowserOS neo skill so it can be re-run by name later; save genuinely repeatable, user-valuable tasks, not one-offs. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). The skill is saved and linked into your agents under a neo- prefix (neo-<name>) so it never clobbers your own skills and you can list them all by typing /neo; a name given without the prefix is namespaced automatically. Call again with the same name to update it in place.";
 pub(super) const MARK_SKILL_RUN_TOOL_NAME: &str = "mark_skill_run";
@@ -310,6 +313,9 @@ impl ClawMcpService {
         // A tool that can only fail is worse than one that is not there.
         if pursue.is_offered() {
             local.push(self.pursue_tool.clone());
+        }
+        if self.ultrafast() {
+            local.push(ultrafast::run_skill_tool());
         }
         if self.state.captcha.is_some() {
             local.push(super::captcha::solve_captcha_tool());
@@ -1443,6 +1449,9 @@ impl ServerHandler for ClawMcpService {
         if name == PURSUE_TOOL_NAME && self.pursue_offering().is_offered() {
             return Some(session_handle::offer(self.pursue_tool.clone()));
         }
+        if name == RUN_SKILL_TOOL_NAME {
+            return self.run_skill_offer();
+        }
         // Catalog-wide even for hidden tools: rmcp caches these input schemas by name, and a
         // cached caller should reach execute_tool's explanation, not method-not-found.
         let pursue = self.pursue_offering();
@@ -1472,6 +1481,7 @@ impl ServerHandler for ClawMcpService {
         let is_request_help = request.name == REQUEST_HELP_TOOL_NAME;
         let is_await_help = request.name == AWAIT_HELP_TOOL_NAME;
         let is_pursue = request.name == PURSUE_TOOL_NAME && self.pursue_offering().is_offered();
+        let is_run_skill = request.name == RUN_SKILL_TOOL_NAME && self.ultrafast();
         let is_solve_captcha = request.name == "solve_captcha" && self.state.captcha.is_some();
         let tool_index = self.find_tool_index(&request.name);
         if !is_name_session
@@ -1480,6 +1490,7 @@ impl ServerHandler for ClawMcpService {
             && !is_request_help
             && !is_await_help
             && !is_pursue
+            && !is_run_skill
             && !is_solve_captcha
             && tool_index.is_none()
         {
@@ -1586,6 +1597,10 @@ impl ServerHandler for ClawMcpService {
         } else if is_pursue {
             Ok(self
                 .call_pursue(&started, &raw_args, context.ct.clone())
+                .await)
+        } else if is_run_skill {
+            Ok(self
+                .call_run_skill(&started, &raw_args, context.ct.clone())
                 .await)
         } else {
             let Some(tool_index) = tool_index else {

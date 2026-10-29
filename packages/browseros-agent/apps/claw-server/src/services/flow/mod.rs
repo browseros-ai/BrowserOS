@@ -1,6 +1,52 @@
 //! Ultrafast skills: a saved skill's verified flow, how it runs, and how it hands back.
 
+pub mod compose;
+pub mod outcome;
+pub mod prose;
+pub mod store;
+
 use crate::{clock::now_epoch_ms, db::entities::skill_flows};
+use compose::Mode;
+use futures_util::future::BoxFuture;
+use outcome::Outcome;
+use serde_json::{Map, Value};
+use store::FlowDoc;
+
+/// Runs a composed flow in the browser. The MCP service implements it with a real `run`
+/// dispatch; tests implement it with canned outcomes.
+pub trait FlowExec: Send + Sync {
+    fn exec<'a>(
+        &'a self,
+        doc: &'a FlowDoc,
+        inputs: &'a Map<String, Value>,
+        mode: Mode,
+        stop_after: Option<u32>,
+    ) -> BoxFuture<'a, Outcome>;
+}
+
+/// Checks the caller's inputs against the flow's declared input types.
+pub fn check_inputs(doc: &FlowDoc, raw: &Value) -> Result<Map<String, Value>, String> {
+    let empty = Map::new();
+    let given = match raw {
+        Value::Object(map) => map,
+        Value::Null => &empty,
+        _ => return Err("inputs must be an object".to_string()),
+    };
+    for (name, kind) in &doc.meta.inputs {
+        let Some(value) = given.get(name) else {
+            return Err(format!("missing input `{name}` ({kind})"));
+        };
+        let ok = match kind.as_str() {
+            "number" => value.is_number(),
+            "boolean" => value.is_boolean(),
+            _ => value.is_string(),
+        };
+        if !ok {
+            return Err(format!("input `{name}` must be a {kind}"));
+        }
+    }
+    Ok(given.clone())
+}
 
 /// Where a skill's flow stands in its lifecycle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

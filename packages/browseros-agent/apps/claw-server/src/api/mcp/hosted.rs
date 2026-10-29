@@ -15,7 +15,7 @@ use super::{
     naming::{SESSION_NAME_INPUT_MAX_LEN, normalize_small_name},
     service::{
         AWAIT_HELP_TOOL_NAME, MARK_SKILL_RUN_TOOL_NAME, NAME_SESSION_TOOL_NAME,
-        REQUEST_HELP_TOOL_NAME, SAVE_SKILL_TOOL_NAME,
+        REQUEST_HELP_TOOL_NAME, RUN_SKILL_TOOL_NAME, SAVE_SKILL_TOOL_NAME,
     },
 };
 use crate::config::ServerMode;
@@ -87,7 +87,9 @@ pub fn refusal(mode: ServerMode, tool: &str) -> Option<&'static str> {
     }
     match tool {
         NAME_SESSION_TOOL_NAME => Some(NAME_SESSION_REFUSAL),
-        SAVE_SKILL_TOOL_NAME | MARK_SKILL_RUN_TOOL_NAME => Some(SKILLS_REFUSAL),
+        SAVE_SKILL_TOOL_NAME | MARK_SKILL_RUN_TOOL_NAME | RUN_SKILL_TOOL_NAME => {
+            Some(SKILLS_REFUSAL)
+        }
         REQUEST_HELP_TOOL_NAME | AWAIT_HELP_TOOL_NAME => Some(HUMAN_HELP_REFUSAL),
         _ => None,
     }
