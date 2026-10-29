@@ -259,6 +259,7 @@ pub struct NamedToolObserver {
 // `effects::page_ownership_notice`. See that module for why.
 const GUARDS: &[ToolGuard] = &[
     guards::captcha_busy::guard,
+    guards::person_control::guard,
     guards::navigate_scheme::guard,
     guards::browser_connected::guard,
 ];
@@ -361,6 +362,8 @@ async fn dispatch_tool_call_with(
 
     let result = if let Some(rejection) = run_guards(&call, guards).await {
         Ok(rejection)
+    } else if let Err(refusal) = super::working_overlay::begin(&call).await {
+        Ok(ToolResult::error(refusal))
     } else {
         if ARBITRARY_SCRIPT_TOOLS.contains(&call.tool().name) {
             warn!(
@@ -420,6 +423,7 @@ async fn dispatch_tool_call_with(
             }
         }
     };
+    super::working_overlay::end(&call).await;
 
     let (teardown_before_finish, operator_stop_requested) = if let Some(identity) = &call.identity {
         (
@@ -574,6 +578,20 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
         None => ToolResult::error(browser_unavailable_message(&call.state).await),
     };
     let duration_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
+    // A take over cancels the call through its dispatch token, which would otherwise read as an
+    // operator Stop and end the task.
+    if call
+        .state
+        .page_hold
+        .take_interrupted(&call.dispatch_id)
+        .await
+    {
+        return DispatchExecution::Completed(ExecutionOutcome {
+            result: ToolResult::error(crate::services::page_hold::INTERRUPTED_MESSAGE),
+            cancelled: false,
+            duration_ms,
+        });
+    }
     if call.dispatch_cancel.is_cancelled() {
         return DispatchExecution::Completed(ExecutionOutcome {
             result: operator_cancellation_result(),
@@ -2328,10 +2346,12 @@ mod tests {
         // Ownership must never gate a dispatch. It is a label telling an agent whose
         // tab it is looking at, and agents are allowed to use the user's tabs and other
         // agents' tabs. This assertion exists so the guard that used to refuse them
-        // cannot be reintroduced without someone deleting this line on purpose.
+        // cannot be reintroduced without someone deleting this line on purpose. The
+        // fourth guard, person_control, refuses only a page the person took over
+        // from the working overlay, whoever owns it.
         assert_eq!(
             GUARDS.len(),
-            3,
+            4,
             "a guard was added. Ownership must not be one of them: it informs, it never blocks"
         );
         assert_eq!(

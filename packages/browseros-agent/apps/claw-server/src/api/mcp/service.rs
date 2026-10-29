@@ -18,7 +18,7 @@ use crate::{
     ids::{DispatchId, SessionId},
     services::{
         agent_settings::HumanHelp,
-        help::{HelpEntry, HelpOpenParams, HelpWaitOutcome},
+        help::{HelpEntry, HelpOpenParams, HelpOrigin, HelpWaitOutcome},
         sessions::{ClawTargetStore, RetirementCause, Session},
         skills::{CreateSkill, SkillOrigin},
     },
@@ -74,7 +74,7 @@ pub(super) const MARK_SKILL_RUN_TOOL_NAME: &str = "mark_skill_run";
 const RUN_TOOL_NAME: &str = "run";
 const MARK_SKILL_RUN_DESCRIPTION: &str = "Mark this browser session as a run of a saved skill so BrowserOS neo records the run and its cost once the session ends. Call this once, at the start, when you are running a skill, with the skill's name.";
 pub(super) const REQUEST_HELP_TOOL_NAME: &str = "request_human_help";
-const REQUEST_HELP_DESCRIPTION: &str = "Ask a human to take over a page when you hit something only a person can do: a sign-in, a one-time code, a captcha, an account choice, or an approval you should not make yourself. Pass `page` (the id of the page that needs the person, the same number you use with snapshot and act) and a short `reason` (what you need); optionally `details` (what the human should know), a `resumeHint` (what you will do after, so the human knows the task continues), and a `kind` (login, captcha, approval, other). This blocks for a short while and returns a status. If the status is \"waiting\", call await_human_help to keep waiting; do nothing else on the page until the status is \"resolved\". The cockpit shows your request so a human can take over that tab and hand control back.";
+const REQUEST_HELP_DESCRIPTION: &str = "Ask a human to take over a page when you hit something only a person can do: a sign-in, a one-time code, a captcha, an account choice, or an approval you should not make yourself. Pass `page` (the id of the page that needs the person, the same number you use with snapshot and act) and a short `reason` (what you need); optionally `details` (what the human should know), a `resumeHint` (what you will do after, so the human knows the task continues), and a `kind` (login, captcha, approval, other). This blocks for a short while and returns a status. If the status is \"waiting\", call await_human_help to keep waiting; do nothing else on the page until the status is \"resolved\". The cockpit shows your request so a human can take over that tab and hand control back. A person can also take a page over on their own while you work on it; your next action on that page then says so, and await_human_help waits until they hand it back.";
 pub(super) const AWAIT_HELP_TOOL_NAME: &str = "await_human_help";
 const PURSUE_TOOL_NAME: &str = "pursue";
 /// What the caller is told about `pursue`, and it has to earn every line.
@@ -148,7 +148,7 @@ pictures with no text label, which nothing here can read: take a screenshot \
 yourself if the goal depends on them.
 
 Needs JEV_TOKEN in the server's environment, and is not listed without one.";
-const AWAIT_HELP_DESCRIPTION: &str = "Keep waiting on an open human-help request. Call this repeatedly after request_human_help until the status is \"resolved\" (the human handed control back), \"cancelled\" (the run was stopped), or \"timed_out\" (no human responded in time). Do nothing else on the page while waiting.";
+const AWAIT_HELP_DESCRIPTION: &str = "Keep waiting on an open human-help request, or on a person who took over a page you were working on. Call this repeatedly after request_human_help, or after a tool says the person took over a page, until the status is \"resolved\" (the human handed control back), \"cancelled\" (the run was stopped), or \"timed_out\" (no human responded in time). Do nothing else on the page while waiting.";
 /// For an agent whose cached tool list still offers request_human_help after the user turned
 /// human help off.
 const HUMAN_HELP_OFF_MESSAGE: &str = "Human help is turned off in BrowserOS neo settings. Do not wait for a human here: stop and tell the user in your chat what you need.";
@@ -892,8 +892,11 @@ impl ClawMcpService {
             browser_tab_id,
             url,
             title,
+            origin: HelpOrigin::Agent,
         };
         let entry = self.state.help.open(started.session.id(), params).await;
+        // The extension's takeover bar owns the page while the person helps.
+        self.state.page_hold.quiet(&PageId(page)).await;
         self.run_help_wait(started, &entry, request_ct).await
     }
 
@@ -986,7 +989,7 @@ impl ClawMcpService {
                 &request_ct,
             )
             .await;
-        let result = help_wait_result(entry.request_id(), outcome);
+        let result = help_wait_result(entry.request_id(), entry.origin(), outcome);
         finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
             .await
             .into_call_tool_result()
@@ -2201,7 +2204,10 @@ fn help_kind_from_str(value: &str) -> Option<HelpRequestKind> {
     }
 }
 
-fn help_wait_result(request_id: &str, outcome: HelpWaitOutcome) -> ToolResult {
+fn help_wait_result(request_id: &str, origin: HelpOrigin, outcome: HelpWaitOutcome) -> ToolResult {
+    if origin == HelpOrigin::Person {
+        return take_over_wait_result(request_id, outcome);
+    }
     match outcome {
         HelpWaitOutcome::Resolved { note } => {
             let text = match note.as_deref() {
@@ -2237,6 +2243,38 @@ fn help_wait_result(request_id: &str, outcome: HelpWaitOutcome) -> ToolResult {
             "No human responded in time. Decide whether to ask again with request_human_help or stop.",
             Some(json!({ "status": "timed_out", "requestId": request_id })),
         ),
+    }
+}
+
+/// The same statuses as `help_wait_result`, worded for a person who took a page over from the
+/// working overlay rather than one the agent asked for.
+fn take_over_wait_result(request_id: &str, outcome: HelpWaitOutcome) -> ToolResult {
+    match outcome {
+        HelpWaitOutcome::Resolved { note } => {
+            let text = match note.as_deref() {
+                Some(note) if !note.is_empty() => format!(
+                    "The person handed the page back. Note: {note}. It may have changed while they used it: take a fresh snapshot before acting."
+                ),
+                _ => "The person handed the page back. It may have changed while they used it: take a fresh snapshot before acting.".to_string(),
+            };
+            ToolResult::text(
+                text,
+                Some(json!({ "status": "resolved", "requestId": request_id, "note": note })),
+            )
+        }
+        HelpWaitOutcome::Waiting { elapsed_seconds } => ToolResult::text(
+            format!(
+                "The person is still using the page ({elapsed_seconds}s so far). Call await_human_help to keep waiting, or work in another tab; do not act on that page."
+            ),
+            Some(
+                json!({ "status": "waiting", "requestId": request_id, "elapsedSeconds": elapsed_seconds }),
+            ),
+        ),
+        HelpWaitOutcome::Interrupted => ToolResult::text(
+            "The wait call ended before the person handed the page back. Call await_human_help to keep waiting; do not act on that page.",
+            Some(json!({ "status": "waiting", "requestId": request_id })),
+        ),
+        outcome => help_wait_result(request_id, HelpOrigin::Agent, outcome),
     }
 }
 
@@ -3835,6 +3873,38 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn a_take_over_is_waited_on_like_help_but_worded_for_the_person() {
+        let text = |result: ToolResult| match result.content.first() {
+            Some(rmcp::model::ContentBlock::Text(block)) => block.text.clone(),
+            _ => String::new(),
+        };
+        let resolved = help_wait_result(
+            "takeover-1",
+            HelpOrigin::Person,
+            HelpWaitOutcome::Resolved { note: None },
+        );
+        assert_eq!(
+            resolved.structured_content,
+            Some(json!({ "status": "resolved", "requestId": "takeover-1", "note": null }))
+        );
+        assert!(text(resolved).contains("take a fresh snapshot"));
+        let waiting = text(help_wait_result(
+            "takeover-1",
+            HelpOrigin::Person,
+            HelpWaitOutcome::Waiting { elapsed_seconds: 9 },
+        ));
+        assert!(waiting.contains("still using the page (9s so far)"));
+        assert!(
+            text(help_wait_result(
+                "help-1",
+                HelpOrigin::Agent,
+                HelpWaitOutcome::Resolved { note: None },
+            ))
+            .starts_with("A human finished")
+        );
+    }
+
     #[tokio::test]
     async fn request_human_help_errors_when_the_page_cannot_be_resolved() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
@@ -3912,6 +3982,7 @@ mod tests {
                     browser_tab_id: None,
                     url: None,
                     title: None,
+                    origin: HelpOrigin::Agent,
                 },
             )
             .await;
@@ -4097,6 +4168,7 @@ mod tests {
                     browser_tab_id: Some(7),
                     url: Some("https://blocked.example".to_string()),
                     title: Some("Blocked".to_string()),
+                    origin: HelpOrigin::Agent,
                 },
             )
             .await;

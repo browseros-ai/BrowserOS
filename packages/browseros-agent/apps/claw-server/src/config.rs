@@ -808,6 +808,15 @@ mod tests {
     }
 
     #[test]
+    fn working_overlay_defaults_off_and_the_behavior_file_can_turn_it_on() -> anyhow::Result<()> {
+        assert!(!load_native("{}", &[])?.behavior.working_overlay);
+        let on = "[pages]\nworking_overlay = true\n";
+        assert!(load_with_behavior_file("0", on)?.behavior.working_overlay);
+        assert!(load_with_behavior_file("1", on)?.behavior.working_overlay);
+        Ok(())
+    }
+
+    #[test]
     fn isolated_world_defaults_on_in_both_modes_and_the_behavior_file_can_turn_it_off()
     -> anyhow::Result<()> {
         assert!(load_native("{}", &[])?.behavior.isolated_world);

@@ -46,6 +46,7 @@ pub(super) async fn call_solve_captcha(
             Ok(binding) => binding,
             Err(error) => return browseros_mcp::ToolResult::error(format!("solve_captcha: {error}")),
         };
+        let held_browser = browser.clone();
         let view = super::hosted::with_viewports(
             browseros_core::BrowserView::capture(browser, binding, None).await,
             state.viewports.as_ref(),
@@ -59,7 +60,19 @@ pub(super) async fn call_solve_captcha(
             Ok(lease) => lease,
             Err(message) => return browseros_mcp::ToolResult::error(message),
         };
-        match captcha.solve(view, browseros_core::PageId(page), cancel, human_help_on).await {
+        if let Err(refusal) = state.page_hold.begin_action(
+            &held_browser,
+            browseros_core::PageId(page),
+            session.id(),
+            &dispatch_id,
+            crate::services::page_hold::labels::for_tool("solve_captcha", raw_args, None),
+            None,
+        ).await {
+            return browseros_mcp::ToolResult::error(refusal);
+        }
+        let solved = captcha.solve(view, browseros_core::PageId(page), cancel, human_help_on).await;
+        state.page_hold.end_action(&held_browser, browseros_core::PageId(page), &dispatch_id).await;
+        match solved {
             Ok(outcome) => {
                 let value = json!(outcome);
                 browseros_mcp::ToolResult {

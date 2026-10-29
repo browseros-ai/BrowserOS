@@ -2876,7 +2876,7 @@ async fn task_name_on_any_call_names_the_session() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn help_events_announce_each_change_to_the_open_requests() -> anyhow::Result<()> {
-    use claw_server::services::help::HelpOpenParams;
+    use claw_server::services::help::{HelpOpenParams, HelpOrigin};
 
     let app = test_app().await?;
     let request = Request::builder()
@@ -2930,6 +2930,7 @@ async fn help_events_announce_each_change_to_the_open_requests() -> anyhow::Resu
                 browser_tab_id: Some(3),
                 url: None,
                 title: None,
+                origin: HelpOrigin::Agent,
             },
         )
         .await;

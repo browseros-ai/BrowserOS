@@ -14,6 +14,7 @@ mod service;
 mod session_handle;
 mod tab_grouping;
 mod timeouts;
+mod working_overlay;
 
 #[cfg(test)]
 pub mod test_support;
