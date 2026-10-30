@@ -22,12 +22,14 @@ import { CARD_TARGET_CLASS, Card } from '@/components/motion/card'
 import { cn } from '@/lib/utils'
 import { useLiveSessions } from '@/modules/api/audit.hooks'
 import { useConnections } from '@/modules/api/connections.hooks'
+import { usePlan } from '@/modules/api/plan.hooks'
 import { useAttentionTitle } from '@/modules/attention/attention.hooks'
 import {
   isNavItemActive,
   type NavItem,
+  planTagFor,
   primaryNavItems,
-  secondaryNavItems,
+  secondaryNavItemsFor,
 } from './app-sidebar.data'
 
 export function SidebarBrand() {
@@ -89,6 +91,9 @@ function NavMenu({
  * and Settings with the connected agents pinned to the bottom.
  */
 export function AppSidebar() {
+  // Loading or unreachable reads as no billing, so the neo Pro item stays hidden.
+  const plan = usePlan()
+  const tag = planTagFor(plan.data)
   return (
     <AnimatedSidebar
       ariaLabel="Sidebar"
@@ -108,7 +113,24 @@ export function AppSidebar() {
       </AnimatedSidebarContent>
       <AnimatedSidebarFooter className="gap-1 px-3">
         <nav aria-label="Settings">
-          <NavMenu items={secondaryNavItems} />
+          <NavMenu
+            items={secondaryNavItemsFor(plan.data)}
+            badges={
+              tag
+                ? {
+                    '/pro': (
+                      <AnimatedBadge
+                        status={tag.status}
+                        size="sm"
+                        showIcon={false}
+                      >
+                        {tag.label}
+                      </AnimatedBadge>
+                    ),
+                  }
+                : undefined
+            }
+          />
         </nav>
         <ConnectedAgentsCard />
       </AnimatedSidebarFooter>

@@ -8,8 +8,6 @@
  * titles, prompts, tool i/o). `track` only accepts scalar properties.
  * neo Pro events never carry a licence key, an email, an amount or
  * cancellation feedback.
- * Explicit Ultrafast email submissions use a separate request in
- * screens/ultrafast/ultrafast-signup.ts, independent of usage analytics.
  */
 
 import { capture } from './posthog'
@@ -37,7 +35,6 @@ export const AnalyticsEvent = {
   ManualSetupOpened: 'manual_setup_opened',
   ManualSetupCommandCopied: 'manual_setup_command_copied',
   UltrafastBannerClicked: 'ultrafast_banner_clicked',
-  UltrafastWaitlistViewed: 'ultrafast_waitlist_viewed',
   HumanHelpToggled: 'human_help_toggled',
   ProPageViewed: 'pro_page_viewed',
   ProCheckoutStarted: 'pro_checkout_started',

@@ -40,7 +40,7 @@ export function SettingRow({
 }: {
   /** Prefix for the title and description ids the control points at. */
   id: string
-  title: string
+  title: ReactNode
   description: ReactNode
   control?: ReactNode
   /** Anything below the row, such as an error or an extra field. */
