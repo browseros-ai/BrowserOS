@@ -21,7 +21,11 @@
       // The neo blue tokens match claw-app's newtab styles. @property does not register inside a
       // shadow tree, so the travelling band rotates a conic layer instead of animating an angle.
       const CSS = `
-:host { all: initial !important; }
+/* An important :host rule beats every page rule and the host's inline style, so the reset and the
+   stacking must both live here: a reset alone leaves the host static, under any z-indexed page content.
+   At the maximum z-index a tie goes to tree order, and the host goes after <body>. */
+:host { all: initial !important; display: block !important; position: fixed !important; inset: 0 !important;
+  z-index: 2147483647 !important; pointer-events: none !important; contain: strict !important; }
 @media print { :host { display: none !important; } }
 * { box-sizing: border-box; }
 .layer { position: fixed; inset: 0; pointer-events: none; font: 400 14px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -287,7 +291,7 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
         host.setAttribute('data-browseros-agent-overlay', '');
         host.setAttribute('aria-hidden', 'true');
         for (const [name, value] of Object.entries({ all: 'initial', position: 'fixed', inset: '0', 'pointer-events': 'none',
-          'z-index': '2147483646', display: 'block', contain: 'strict' })) {
+          'z-index': '2147483647', display: 'block', contain: 'strict' })) {
           host.style.setProperty(name, value, 'important');
         }
         if (typeof host.attachShadow !== 'function') { host = null; return false; }
@@ -326,7 +330,9 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
           emit({ type: 'let-finish' });
         });
         for (const type of KEYS) window.addEventListener(type, onKey, true);
-        document.documentElement.appendChild(host);
+        // Both sit at the maximum z-index, where tree order decides: neo's pointer stays on top.
+        const pointer = document.querySelector('browseros-agent-pointer');
+        document.documentElement.insertBefore(host, pointer && pointer.parentNode === document.documentElement ? pointer : null);
         return true;
       };
       const dispose = () => {
