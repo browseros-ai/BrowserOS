@@ -52,6 +52,10 @@ export const PRO_FEATURES: readonly ProFeature[] = [
   },
 ]
 
+/** Shown when the plan or its prices can't be read right now. */
+export const PLAN_UNCHECKED =
+  'Couldn’t check your plan. Connect to the internet and neo checks again.'
+
 export type BillingPeriod = 'month' | 'year'
 
 /** The plan on sale, with its one-month and one-year prices when it has them. */

@@ -14,6 +14,7 @@ import {
   apiErrorMessage,
   computerName,
   keyHint,
+  PLAN_UNCHECKED,
 } from '@/screens/pro/pro.helpers'
 import { ComputerRow, RenameComputerRow } from './ComputerRow'
 import { RemoveComputerDialog } from './RemoveComputerDialog'
@@ -88,8 +89,7 @@ export function KeySection({ planKey }: KeySectionProps) {
             </div>
           ) : planKey.isError || !key ? (
             <p role="alert" className="text-[14px] text-ink-2">
-              {apiErrorMessage(planKey.error) ??
-                'Couldn’t check your plan. Connect to the internet and neo checks again.'}
+              {apiErrorMessage(planKey.error) ?? PLAN_UNCHECKED}
             </p>
           ) : (
             <ul className="flex flex-col divide-y divide-border-2">
