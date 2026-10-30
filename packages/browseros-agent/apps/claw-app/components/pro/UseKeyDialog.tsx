@@ -4,10 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { PlanKeyChange } from '@browseros/claw-api'
+import type { PlanComputer, PlanKeyChange } from '@browseros/claw-api'
 import { useQueryClient } from '@tanstack/react-query'
 import { BadgeCheck, CalendarX, X } from 'lucide-react'
-import { type ReactNode, useRef, useState } from 'react'
+import { type ReactNode, type RefObject, useRef, useState } from 'react'
 import { Button } from '@/components/motion/button/base'
 import { StatefulButton } from '@/components/motion/button/stateful'
 import { Input } from '@/components/motion/input'
@@ -60,7 +60,6 @@ export function UseKeyDialog({
   const queryClient = useQueryClient()
   const field = useRef<HTMLInputElement>(null)
   const [tooShort, setTooShort] = useState(false)
-  const [lostOpen, setLostOpen] = useState(false)
   const [attempts, setAttempts] = useState(0)
   const activate = useActivateKey({
     onSuccess: (change) => {
@@ -80,20 +79,7 @@ export function UseKeyDialog({
     onSettled: () => setAttempts((count) => count + 1),
   })
 
-  const code = apiErrorCode(activate.error)
-  const view = activate.data
-    ? activate.data.plan.status === 'none'
-      ? 'ended'
-      : 'done'
-    : code === 'key_full'
-      ? 'full'
-      : 'enter'
-  const fullComputers = keyFullComputers(activate.error)
-  const failure = tooShort
-    ? TOO_SHORT
-    : code
-      ? (FAILURE_LINES[code] ?? apiErrorMessage(activate.error))
-      : undefined
+  const view = dialogView(activate.data, activate.error)
 
   const submit = () => {
     const value = field.current?.value ?? ''
@@ -124,124 +110,189 @@ export function UseKeyDialog({
           }}
         />
       ) : view === 'full' ? (
-        <DialogShell
-          title={`This key is on ${fullComputers.length} computers`}
+        <FullView
+          computers={keyFullComputers(activate.error)}
+          now={activate.submittedAt}
+          busy={activate.isPending}
+          onReplace={(installId) => {
+            const pasted = activate.variables?.key
+            if (pasted) activate.mutate({ key: pasted, replace: installId })
+          }}
           onClose={onClose}
-        >
-          <p className="text-[14.5px] text-ink-2">
-            Remove one to make room for this computer. The one you remove
-            switches to Free the next time it checks in.
-          </p>
-          <ul className="flex flex-col divide-y divide-border-2">
-            {fullComputers.map((computer) => (
-              <ComputerRow
-                key={computer.installId}
-                computer={computer}
-                now={activate.submittedAt}
-                actions={
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled={activate.isPending}
-                    onClick={() => {
-                      const pasted = activate.variables?.key
-                      if (pasted) {
-                        activate.mutate({
-                          key: pasted,
-                          replace: computer.installId,
-                        })
-                      }
-                    }}
-                  >
-                    Remove
-                  </Button>
-                }
-              />
-            ))}
-          </ul>
-          <div className="flex justify-end">
-            <Button variant="ghost" onClick={onClose}>
-              Cancel
-            </Button>
-          </div>
-        </DialogShell>
+        />
       ) : (
-        <DialogShell title="Use a licence key" onClose={onClose}>
-          <p className="text-[14.5px] text-ink-2">
-            Have Pro on another computer, or reinstalled neo? Paste your licence
-            key to turn on Pro here.
-          </p>
-          <form
-            className="flex flex-col gap-1.5"
-            onSubmit={(event) => {
-              event.preventDefault()
-              submit()
-            }}
-          >
-            <label
-              htmlFor={KEY_FIELD_ID}
-              className="font-semibold text-[14px] text-cyanotype-ink"
-            >
-              Licence key
-            </label>
-            <Input
-              key={attempts}
-              ref={field}
-              id={KEY_FIELD_ID}
-              placeholder="NEO-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"
-              autoComplete="off"
-              autoCapitalize="characters"
-              spellCheck={false}
-              autoFocus
-              disabled={activate.isPending}
-              error={failure}
-              classNames={{
-                input: 'font-mono uppercase tracking-[0.02em]',
-                errorMessage: 'text-[13px] text-red-ink',
-              }}
-            />
-            {failure ? null : (
-              <span className="text-[13px] text-ink-3">
-                It’s in the email we sent when you paid.
-              </span>
-            )}
-          </form>
-          {lostOpen ? (
-            <p className="text-[13.5px] text-ink-2">
-              Search your email for “neo Pro licence key”. Still nothing? Open
-              neo Pro on a computer that has Pro and reset the key, or contact
-              BrowserOS support with your Stripe receipt.
-            </p>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setLostOpen(true)}
-              className="w-fit font-semibold text-[13.5px] text-accent-ink hover:underline"
-            >
-              Can’t find your key?
-            </button>
-          )}
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={onClose}>
-              Cancel
-            </Button>
-            <StatefulButton
-              state={activate.isPending ? 'loading' : 'idle'}
-              loadingText="Turn on Pro"
-              disabled={activate.isPending}
-              onClick={submit}
-              className="font-semibold"
-            >
-              Turn on Pro
-            </StatefulButton>
-          </div>
-        </DialogShell>
+        <EnterView
+          field={field}
+          attempts={attempts}
+          busy={activate.isPending}
+          failure={failureLine(tooShort, activate.error)}
+          onSubmit={submit}
+          onClose={onClose}
+        />
       )}
     </MorphingModal>
   )
 }
 
+type DialogView = 'enter' | 'full' | 'done' | 'ended'
+
+function dialogView(
+  change: PlanKeyChange | undefined,
+  error: unknown,
+): DialogView {
+  if (change) return change.plan.status === 'none' ? 'ended' : 'done'
+  return apiErrorCode(error) === 'key_full' ? 'full' : 'enter'
+}
+
+function failureLine(tooShort: boolean, error: unknown): string | undefined {
+  if (tooShort) return TOO_SHORT
+  const code = apiErrorCode(error)
+  if (!code) return undefined
+  return FAILURE_LINES[code] ?? apiErrorMessage(error)
+}
+
 // ---------------------------------------------------------------------------
+
+function EnterView({
+  field,
+  attempts,
+  busy,
+  failure,
+  onSubmit,
+  onClose,
+}: {
+  field: RefObject<HTMLInputElement | null>
+  /** Remounts the field after each attempt, which empties it. */
+  attempts: number
+  busy: boolean
+  failure?: string
+  onSubmit: () => void
+  onClose: () => void
+}) {
+  const [lostOpen, setLostOpen] = useState(false)
+  return (
+    <DialogShell title="Use a licence key" onClose={onClose}>
+      <p className="text-[14.5px] text-ink-2">
+        Have Pro on another computer, or reinstalled neo? Paste your licence key
+        to turn on Pro here.
+      </p>
+      <form
+        className="flex flex-col gap-1.5"
+        onSubmit={(event) => {
+          event.preventDefault()
+          onSubmit()
+        }}
+      >
+        <label
+          htmlFor={KEY_FIELD_ID}
+          className="font-semibold text-[14px] text-cyanotype-ink"
+        >
+          Licence key
+        </label>
+        <Input
+          key={attempts}
+          ref={field}
+          id={KEY_FIELD_ID}
+          placeholder="NEO-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"
+          autoComplete="off"
+          autoCapitalize="characters"
+          spellCheck={false}
+          autoFocus
+          disabled={busy}
+          error={failure}
+          classNames={{
+            input: 'font-mono uppercase tracking-[0.02em]',
+            errorMessage: 'text-[13px] text-red-ink',
+          }}
+        />
+        {failure ? null : (
+          <span className="text-[13px] text-ink-3">
+            It’s in the email we sent when you paid.
+          </span>
+        )}
+      </form>
+      {lostOpen ? (
+        <p className="text-[13.5px] text-ink-2">
+          Search your email for “neo Pro licence key”. Still nothing? Open neo
+          Pro on a computer that has Pro and reset the key, or contact BrowserOS
+          support with your Stripe receipt.
+        </p>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setLostOpen(true)}
+          className="w-fit font-semibold text-[13.5px] text-accent-ink hover:underline"
+        >
+          Can’t find your key?
+        </button>
+      )}
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <StatefulButton
+          state={busy ? 'loading' : 'idle'}
+          loadingText="Turn on Pro"
+          disabled={busy}
+          onClick={onSubmit}
+          className="font-semibold"
+        >
+          Turn on Pro
+        </StatefulButton>
+      </div>
+    </DialogShell>
+  )
+}
+
+function FullView({
+  computers,
+  now,
+  busy,
+  onReplace,
+  onClose,
+}: {
+  computers: PlanComputer[]
+  now: number
+  busy: boolean
+  onReplace: (installId: string) => void
+  onClose: () => void
+}) {
+  return (
+    <DialogShell
+      title={`This key is on ${computers.length} computers`}
+      onClose={onClose}
+    >
+      <p className="text-[14.5px] text-ink-2">
+        Remove one to make room for this computer. The one you remove switches
+        to Free the next time it checks in.
+      </p>
+      <ul className="flex flex-col divide-y divide-border-2">
+        {computers.map((computer) => (
+          <ComputerRow
+            key={computer.installId}
+            computer={computer}
+            now={now}
+            actions={
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy}
+                onClick={() => onReplace(computer.installId)}
+              >
+                Remove
+              </Button>
+            }
+          />
+        ))}
+      </ul>
+      <div className="flex justify-end">
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+      </div>
+    </DialogShell>
+  )
+}
 
 function DialogShell({
   title,

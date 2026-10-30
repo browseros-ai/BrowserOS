@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { Plan } from '@browseros/claw-api'
+import type { Plan, PlanPrice } from '@browseros/claw-api'
 import {
   Check,
   ExternalLink,
@@ -95,9 +95,6 @@ export function PricePanel({
     )
   }
 
-  const saving = monthsFree(prices)
-  const periods = billingPeriods(prices)
-
   return (
     <>
       {checkout.phase === 'abandoned' ? (
@@ -111,62 +108,15 @@ export function PricePanel({
         </PanelNote>
       ) : null}
 
-      {periods.length > 1 ? (
-        <Tabs
-          variant="segment"
-          value={period}
-          onValueChange={(value) => {
-            if (isBillingPeriod(value)) onPeriodChange(value)
-          }}
-          className="self-start"
-        >
-          <TabsList
-            aria-label="Billing period"
-            className="border border-border-2"
-          >
-            <TabsTrigger value="month" className="font-semibold text-[13.5px]">
-              Monthly
-            </TabsTrigger>
-            <TabsTrigger value="year" className="font-semibold text-[13.5px]">
-              Yearly
-              {saving ? (
-                <span className="ml-1.5 rounded-full bg-green-tint px-1.5 font-bold text-[11px] text-green-ink leading-[18px]">
-                  {monthsFreeLabel(saving)}
-                </span>
-              ) : null}
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+      {billingPeriods(prices).length > 1 ? (
+        <PeriodSwitch
+          period={period}
+          saving={monthsFree(prices)}
+          onPeriodChange={onPeriodChange}
+        />
       ) : null}
 
-      <div className="flex flex-col gap-1">
-        <div className="flex items-baseline gap-1.5 text-cyanotype-ink">
-          <strong className="font-extrabold text-[44px] tabular-nums leading-none tracking-[-0.035em]">
-            {amount}
-          </strong>
-          <span className="font-medium text-base text-ink-2">
-            {perPeriod(price.interval === 'year' ? 'year' : 'month')}
-          </span>
-        </div>
-        {price.interval === 'year' ? (
-          <p className="text-[13px] text-ink-3">
-            Works out to {monthlyEquivalent(price)} a month.
-          </p>
-        ) : null}
-      </div>
-
-      <ul className="flex flex-col gap-2.5 text-[14.5px] text-ink">
-        {[
-          'Everything in Pro, starting today',
-          `Renews by itself ${eachPeriod(price.interval === 'year' ? 'year' : 'month')}`,
-          'Cancel right here, any time',
-        ].map((line) => (
-          <li key={line} className="flex items-start gap-2.5">
-            <Check aria-hidden className="mt-1 size-4 shrink-0 text-green" />
-            {line}
-          </li>
-        ))}
-      </ul>
+      <PriceLines price={price} amount={amount} />
 
       <StatefulButton
         state={checkout.isStarting ? 'loading' : 'idle'}
@@ -197,6 +147,76 @@ export function PricePanel({
 }
 
 // ---------------------------------------------------------------------------
+
+function PeriodSwitch({
+  period,
+  saving,
+  onPeriodChange,
+}: {
+  period: BillingPeriod
+  saving: number | null
+  onPeriodChange: (period: BillingPeriod) => void
+}) {
+  return (
+    <Tabs
+      variant="segment"
+      value={period}
+      onValueChange={(value) => {
+        if (isBillingPeriod(value)) onPeriodChange(value)
+      }}
+      className="self-start"
+    >
+      <TabsList aria-label="Billing period" className="border border-border-2">
+        <TabsTrigger value="month" className="font-semibold text-[13.5px]">
+          Monthly
+        </TabsTrigger>
+        <TabsTrigger value="year" className="font-semibold text-[13.5px]">
+          Yearly
+          {saving ? (
+            <span className="ml-1.5 rounded-full bg-green-tint px-1.5 font-bold text-[11px] text-green-ink leading-[18px]">
+              {monthsFreeLabel(saving)}
+            </span>
+          ) : null}
+        </TabsTrigger>
+      </TabsList>
+    </Tabs>
+  )
+}
+
+function PriceLines({ price, amount }: { price: PlanPrice; amount: string }) {
+  const period: BillingPeriod = price.interval === 'year' ? 'year' : 'month'
+  return (
+    <>
+      <div className="flex flex-col gap-1">
+        <div className="flex items-baseline gap-1.5 text-cyanotype-ink">
+          <strong className="font-extrabold text-[44px] tabular-nums leading-none tracking-[-0.035em]">
+            {amount}
+          </strong>
+          <span className="font-medium text-base text-ink-2">
+            {perPeriod(period)}
+          </span>
+        </div>
+        {period === 'year' ? (
+          <p className="text-[13px] text-ink-3">
+            Works out to {monthlyEquivalent(price)} a month.
+          </p>
+        ) : null}
+      </div>
+      <ul className="flex flex-col gap-2.5 text-[14.5px] text-ink">
+        {[
+          'Everything in Pro, starting today',
+          `Renews by itself ${eachPeriod(period)}`,
+          'Cancel right here, any time',
+        ].map((line) => (
+          <li key={line} className="flex items-start gap-2.5">
+            <Check aria-hidden className="mt-1 size-4 shrink-0 text-green" />
+            {line}
+          </li>
+        ))}
+      </ul>
+    </>
+  )
+}
 
 function PanelNote({
   icon,

@@ -101,27 +101,33 @@ export function isBillingPeriod(value: string): value is BillingPeriod {
   return value === 'month' || value === 'year'
 }
 
-function minorDigits(currency: string): number {
-  return (
-    new Intl.NumberFormat(undefined, {
+const priceFormats = new Map<string, Intl.NumberFormat>()
+
+/** One formatter per currency and precision, since prices are formatted on every render. */
+function priceFormat(currency: string, digits?: number): Intl.NumberFormat {
+  const id = `${currency}:${digits ?? 'default'}`
+  let format = priceFormats.get(id)
+  if (!format) {
+    format = new Intl.NumberFormat(undefined, {
       style: 'currency',
       currency,
-    }).resolvedOptions().maximumFractionDigits ?? 2
-  )
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    })
+    priceFormats.set(id, format)
+  }
+  return format
 }
 
 /** "$20" for a whole amount, "$16.67" otherwise, from the currency's smallest unit. */
 export function formatPrice(price: Pick<PlanPrice, 'amount' | 'currency'>) {
   const currency = price.currency.toUpperCase()
-  const digits = minorDigits(currency)
+  const digits =
+    priceFormat(currency).resolvedOptions().maximumFractionDigits ?? 2
   const value = price.amount / 10 ** digits
-  const whole = Number.isInteger(value)
-  return new Intl.NumberFormat(undefined, {
-    style: 'currency',
-    currency,
-    minimumFractionDigits: whole ? 0 : digits,
-    maximumFractionDigits: whole ? 0 : digits,
-  }).format(value)
+  return priceFormat(currency, Number.isInteger(value) ? 0 : digits).format(
+    value,
+  )
 }
 
 /** What a year costs per month, for "Works out to $16.67 a month." */
@@ -160,19 +166,21 @@ export function keyHasEnded(plan: Plan): boolean {
   return plan.onKey && plan.status === 'none'
 }
 
+const DATE_FORMAT = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' })
+// Apart from the date, because a combined format joins them with "at".
+const TIME_FORMAT = new Intl.DateTimeFormat(undefined, { timeStyle: 'short' })
+const RELATIVE_FORMAT = new Intl.RelativeTimeFormat(undefined, {
+  numeric: 'auto',
+})
+
 /** "Nov 27, 2026", in the reader's own locale. */
 export function formatDate(epochMs: number): string {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(
-    epochMs,
-  )
+  return DATE_FORMAT.format(epochMs)
 }
 
 /** "Oct 27, 2026, 9:41 AM": exact, so two computers with one name can be told apart. */
 export function formatAdded(epochMs: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(epochMs)
+  return `${formatDate(epochMs)}, ${TIME_FORMAT.format(epochMs)}`
 }
 
 const DAY_MS = 86_400_000
@@ -189,7 +197,7 @@ export function lastUsedLine(lastSeenAt: number, now: number): string {
     0,
     Math.round((startOfDay(now) - startOfDay(lastSeenAt)) / DAY_MS),
   )
-  const relative = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+  const relative = RELATIVE_FORMAT
   const when =
     days < 7
       ? relative.format(-days, 'day')
