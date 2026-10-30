@@ -9,11 +9,14 @@ use crate::{
     error::AppResult,
 };
 use serde_json::json;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::warn;
 
-pub const EFFICIENCY_ESTIMATOR_VERSION: i64 = 4;
+pub const EFFICIENCY_ESTIMATOR_VERSION: i64 = 5;
 pub const SCREENSHOT_BASELINE_WIDTH: usize = 1920;
 pub const SCREENSHOT_BASELINE_HEIGHT: usize = 1080;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
@@ -230,13 +233,31 @@ fn calculate_session_efficiency(
         return None;
     }
 
+    // A code-mode script's inner steps are audit rows with a parent. Their results stay inside
+    // the script, so only top-level calls reach the model; the steps are what a screenshot-first
+    // agent would take one call and one screenshot each for, and the script wrapping them is not.
+    let script_ids: HashSet<&str> = source
+        .dispatches
+        .iter()
+        .filter_map(|dispatch| dispatch.parent_dispatch_id.as_deref())
+        .collect();
     let mut tool_input_token_estimate = 0_i64;
     let mut tool_output_token_estimate = 0_i64;
+    let mut screenshot_action_count = 0_i64;
     for dispatch in &source.dispatches {
-        tool_input_token_estimate =
-            tool_input_token_estimate.saturating_add(dispatch.tool_input_token_estimate.max(0));
-        tool_output_token_estimate =
-            tool_output_token_estimate.saturating_add(dispatch.tool_output_token_estimate.max(0));
+        if dispatch.parent_dispatch_id.is_none() {
+            tool_input_token_estimate =
+                tool_input_token_estimate.saturating_add(dispatch.tool_input_token_estimate.max(0));
+            tool_output_token_estimate = tool_output_token_estimate
+                .saturating_add(dispatch.tool_output_token_estimate.max(0));
+        }
+        if !dispatch
+            .dispatch_id
+            .as_deref()
+            .is_some_and(|id| script_ids.contains(id))
+        {
+            screenshot_action_count = screenshot_action_count.saturating_add(1);
+        }
     }
 
     let started_at = source
@@ -253,7 +274,7 @@ fn calculate_session_efficiency(
         active_duration_ms,
         tool_input_token_estimate,
         tool_output_token_estimate,
-        screenshot_baseline_token_estimate: dispatch_count
+        screenshot_baseline_token_estimate: screenshot_action_count
             .saturating_mul(screenshot_tokens_per_dispatch()),
         efficiency_estimator_version: EFFICIENCY_ESTIMATOR_VERSION,
         computed_at,
@@ -501,8 +522,36 @@ mod tests {
         assert_eq!(stats.tool_input_token_estimate, 30);
         assert_eq!(stats.tool_output_token_estimate, 300);
         assert_eq!(stats.screenshot_baseline_token_estimate, 6_000);
-        assert_eq!(stats.efficiency_estimator_version, 4);
+        assert_eq!(stats.efficiency_estimator_version, 5);
         assert_eq!(stats.computed_at, 12_000);
+        Ok(())
+    }
+
+    #[test]
+    fn calculator_counts_script_steps_as_screenshots_but_not_model_tokens() -> anyhow::Result<()> {
+        let mut script = dispatch(2, 1_100, Some(300), 400, 50, 1);
+        script.dispatch_id = Some("script".to_owned());
+        let mut steps = [
+            dispatch(3, 1_200, Some(100), 5, 9_000, 1),
+            dispatch(4, 1_300, Some(100), 5, 20, 1),
+        ];
+        for step in &mut steps {
+            step.parent_dispatch_id = Some("script".to_owned());
+        }
+        let [read, click] = steps;
+        let source = source(vec![
+            dispatch(1, 1_000, Some(500), 10, 100, 1),
+            script,
+            read,
+            click,
+        ]);
+
+        let stats = calculate_session_efficiency(&source, 12_000)
+            .ok_or_else(|| anyhow::anyhow!("eligible session was skipped"))?;
+        assert_eq!(stats.dispatch_count, 4);
+        assert_eq!(stats.tool_input_token_estimate, 410);
+        assert_eq!(stats.tool_output_token_estimate, 150);
+        assert_eq!(stats.screenshot_baseline_token_estimate, 9_000);
         Ok(())
     }
 
@@ -770,7 +819,7 @@ mod tests {
                     "screenshot_baseline_token_estimate": 3_000,
                     "screenshot_first_token_estimate": 3_030,
                     "raw_token_savings_estimate": -1_000,
-                    "efficiency_estimator_version": 4,
+                    "efficiency_estimator_version": 5,
                     "screenshot_baseline_width": 1_920,
                     "screenshot_baseline_height": 1_080,
                     "screenshot_tokens_per_dispatch": 3_000,

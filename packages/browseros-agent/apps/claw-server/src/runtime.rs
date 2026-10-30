@@ -666,7 +666,7 @@ mod tests {
                 "screenshot_baseline_token_estimate": 3_000,
                 "screenshot_first_token_estimate": 3_001,
                 "raw_token_savings_estimate": 3_000,
-                "efficiency_estimator_version": 4,
+                "efficiency_estimator_version": 5,
                 "screenshot_baseline_width": 1_920,
                 "screenshot_baseline_height": 1_080,
                 "screenshot_tokens_per_dispatch": 3_000,
