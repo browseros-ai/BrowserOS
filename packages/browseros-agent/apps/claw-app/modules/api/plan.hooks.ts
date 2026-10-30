@@ -65,6 +65,8 @@ export const useActivateKey = createMutation<
   ActivatePlanKeyRequest
 >({
   mutationFn: async (body) => (await apiClient()).activatePlanKey(body),
+  // The variables hold the pasted key, so the finished mutation is dropped at once.
+  gcTime: 0,
 })
 
 export const useRemoveComputer = createMutation<
