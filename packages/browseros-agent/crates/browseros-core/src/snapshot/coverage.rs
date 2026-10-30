@@ -230,3 +230,95 @@ pub(super) fn compared_text(text: &str, frames: &[FrameSpan], uncompared: &[Fram
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{FrameError, FrameOwner, FrameReadReason, FrameReadStage};
+    use crate::{CoreError, FrameId, PageId, TargetError};
+    use browseros_cdp::CdpError;
+    use serde_json::json;
+
+    #[test]
+    fn reasons_name_the_class_of_an_error_never_its_message() {
+        let cases = [
+            (
+                CoreError::Cdp(CdpError::Timeout {
+                    method: "Accessibility.getFullAXTree".to_string(),
+                }),
+                FrameReadReason::Timeout,
+            ),
+            (
+                CoreError::Cdp(CdpError::SessionGone),
+                FrameReadReason::Detached,
+            ),
+            (
+                CoreError::Cdp(CdpError::ConnectionEpochChanged {
+                    expected: 1,
+                    actual: 2,
+                }),
+                FrameReadReason::Detached,
+            ),
+            (
+                TargetError::PageTargetChanged(PageId(3)).into(),
+                FrameReadReason::Refused,
+            ),
+            (
+                CoreError::Cdp(CdpError::Protocol {
+                    code: -32000,
+                    message: "Frame with the given id was not found.".to_string(),
+                }),
+                FrameReadReason::BrowserError,
+            ),
+            (
+                CoreError::Message("https://private.example/?token=1".to_string()),
+                FrameReadReason::BrowserError,
+            ),
+        ];
+        for (error, reason) in cases {
+            assert_eq!(FrameReadReason::of(&error), reason, "{error}");
+        }
+    }
+
+    #[test]
+    fn frame_errors_serialize_with_only_the_identity_they_have() -> Result<(), serde_json::Error> {
+        let nested = FrameError {
+            frame_id: Some(FrameId("child".to_string())),
+            owner: Some(FrameOwner {
+                parent: Some(FrameId("parent".to_string())),
+                backend_node_id: 7,
+            }),
+            stage: FrameReadStage::Session,
+            reason: FrameReadReason::Detached,
+        };
+        let unidentified = FrameError {
+            frame_id: None,
+            owner: Some(FrameOwner {
+                parent: None,
+                backend_node_id: 9,
+            }),
+            stage: FrameReadStage::Identify,
+            reason: FrameReadReason::NotFound,
+        };
+        let main = FrameError {
+            frame_id: None,
+            owner: None,
+            stage: FrameReadStage::CursorScan,
+            reason: FrameReadReason::Refused,
+        };
+
+        assert_eq!(
+            serde_json::to_value([nested, unidentified, main])?,
+            json!([
+                {
+                    "frameId": "child",
+                    "owner": { "frameId": "parent", "backendNodeId": 7 },
+                    "stage": "session",
+                    "reason": "detached"
+                },
+                { "owner": { "backendNodeId": 9 }, "stage": "identify", "reason": "not_found" },
+                { "stage": "cursor_scan", "reason": "refused" }
+            ])
+        );
+        Ok(())
+    }
+}

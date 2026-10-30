@@ -1631,6 +1631,39 @@ async fn fields_readback_never_shows_another_node_under_a_reused_ref() {
     assert!(!text.contains("button \"Save\""), "{text}");
 }
 
+#[tokio::test]
+async fn fields_readback_calls_a_field_in_an_unread_frame_unknown() {
+    let (ctx, connection, page) = harness_ctx().await;
+    connection.serve_frames(true);
+    let in_frame = |ref_id: &str, node: i64, frame: &str| FieldTarget {
+        ref_id: Ref(ref_id.into()),
+        node: Some(node),
+        frame: Some(browseros_core::FrameId(frame.to_string())),
+    };
+    let mut response = ToolResponse::new();
+    response.include_fields(
+        page,
+        vec![
+            in_frame("e7", 201, "frame-b"),
+            in_frame("e8", 999, "frame-a"),
+        ],
+        DocumentMark::default(),
+    );
+    let result = response
+        .build_for_session(&ctx, Some(PageId(page)))
+        .await
+        .unwrap_or_else(|err| panic!("fields readback should build: {err}"))
+        .into_tool_result();
+
+    let text = result_text(&result);
+    assert!(
+        text.contains("e7: unknown, its frame could not be read"),
+        "{text}"
+    );
+    // Frame a was read, so a field missing from it really is gone.
+    assert!(text.contains("e8: not on the page now"), "{text}");
+}
+
 fn field(ref_id: &str, node: Option<i64>) -> FieldTarget {
     FieldTarget {
         ref_id: Ref(ref_id.into()),

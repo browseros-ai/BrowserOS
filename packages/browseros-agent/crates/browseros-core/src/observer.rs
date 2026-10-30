@@ -385,19 +385,23 @@ impl Observer {
         Err(CoreError::DocumentChanged)
     }
 
-    /// The main frame, which a capture needs: its read failing fails the capture.
-    async fn capture_root(
-        &self,
-        refs: &mut RefMap,
+    /// The main frame, which a capture needs: its read failing fails the capture. Boxed so
+    /// acquisition's nested futures do not deepen every caller's future type past the
+    /// compiler's layout limit.
+    fn capture_root<'a>(
+        &'a self,
+        refs: &'a mut RefMap,
         context: CaptureContext,
-    ) -> Result<Assembled, CoreError> {
-        let acquired = self
-            .acquire_frame(None, None, None, false, &context)
-            .await
-            .map_err(|(_stage, error)| error)?;
-        Ok(self
-            .assemble_acquired_frame(acquired, None, refs, 0, Vec::new(), context)
-            .await)
+    ) -> BoxFuture<'a, Result<Assembled, CoreError>> {
+        Box::pin(async move {
+            let acquired = self
+                .acquire_frame(None, None, None, false, &context)
+                .await
+                .map_err(|(_stage, error)| error)?;
+            Ok(self
+                .assemble_acquired_frame(acquired, None, refs, 0, Vec::new(), context)
+                .await)
+        })
     }
 
     fn assemble_acquired_frame<'a>(
@@ -1194,7 +1198,10 @@ mod tests {
         gates: [Arc<Semaphore>; 2],
         completions: Mutex<Vec<usize>>,
         completed: Notify,
-        fail_second_child: bool,
+        /// Upcoming accessibility reads of each child that fail; `usize::MAX` fails every one.
+        failing_reads: [AtomicUsize; 2],
+        /// How `DOM.describeNode` answers for child b's iframe element.
+        describe_b: Mutex<DescribeB>,
         cycle_first_child: AtomicBool,
         root_ax_reads: AtomicUsize,
         main_loader: Mutex<String>,
@@ -1208,7 +1215,11 @@ mod tests {
                 gates: [Arc::new(Semaphore::new(0)), Arc::new(Semaphore::new(0))],
                 completions: Mutex::new(Vec::new()),
                 completed: Notify::new(),
-                fail_second_child,
+                failing_reads: [
+                    AtomicUsize::new(0),
+                    AtomicUsize::new(if fail_second_child { usize::MAX } else { 0 }),
+                ],
+                describe_b: Mutex::new(DescribeB::Frame),
                 cycle_first_child: AtomicBool::new(false),
                 root_ax_reads: AtomicUsize::new(0),
                 main_loader: Mutex::new("main-loader".to_string()),
@@ -1330,7 +1341,7 @@ mod tests {
                             completions.push(index);
                         }
                         self.completed.notify_waiters();
-                        if index == 1 && self.fail_second_child {
+                        if take_failure(&self.failing_reads[index]) {
                             return Err(CdpError::Protocol {
                                 code: -32000,
                                 message: "child capture failed".to_string(),
@@ -1361,9 +1372,20 @@ mod tests {
                     "DOMSnapshot.captureSnapshot" => Ok(dom_capture([1010, 1020])),
                     "DOM.describeNode" => {
                         let backend = params.get("backendNodeId").and_then(Value::as_i64);
-                        let frame_id = match backend {
-                            Some(10) => Some("child-a"),
-                            Some(20) => Some("child-b"),
+                        let describe_b = self
+                            .describe_b
+                            .lock()
+                            .map(|describe| *describe)
+                            .unwrap_or(DescribeB::Frame);
+                        let frame_id = match (backend, describe_b) {
+                            (Some(10), _) => Some("child-a"),
+                            (Some(20), DescribeB::Frame) => Some("child-b"),
+                            (Some(20), DescribeB::Error) => {
+                                return Err(CdpError::Protocol {
+                                    code: -32000,
+                                    message: "No node with given id found".to_string(),
+                                });
+                            }
                             _ => None,
                         };
                         Ok(json!({
@@ -1403,8 +1425,28 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    enum DescribeB {
+        Frame,
+        Error,
+        NoFrame,
+    }
+
+    /// Whether this read is one of the failures `counter` still holds, using it up if so.
+    fn take_failure(counter: &AtomicUsize) -> bool {
+        counter
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| match left {
+                0 => None,
+                usize::MAX => Some(usize::MAX),
+                left => Some(left - 1),
+            })
+            .is_ok()
+    }
+
     struct DepthConnection {
         max_child_requested: AtomicUsize,
+        /// The nesting depth whose frame fails its accessibility read; 0 fails none.
+        fail_depth: AtomicUsize,
     }
 
     impl CdpConnection for DepthConnection {
@@ -1440,6 +1482,11 @@ mod tests {
                             .and_then(|depth| depth.parse::<usize>().ok());
                         if let Some(depth) = depth {
                             self.max_child_requested.fetch_max(depth, Ordering::SeqCst);
+                            if depth == self.fail_depth.load(Ordering::SeqCst) {
+                                return Err(CdpError::Timeout {
+                                    method: method.to_string(),
+                                });
+                            }
                             return Ok(json!({
                                 "nodes": [
                                     root_with(&["nested-frame"]),
@@ -1960,6 +2007,8 @@ mod tests {
             ]
             .join("\n")
         );
+        // Skipping a cycle is by design; nothing went unread.
+        assert!(!snapshot.coverage.is_partial());
         Ok(())
     }
 
@@ -1967,6 +2016,7 @@ mod tests {
     async fn observer_nested_frames_stop_at_five_levels() -> Result<(), CoreError> {
         let connection = Arc::new(DepthConnection {
             max_child_requested: AtomicUsize::new(0),
+            fail_depth: AtomicUsize::new(0),
         });
         let observer = depth_observer(connection.clone()).await?;
 
@@ -1975,6 +2025,262 @@ mod tests {
         assert_eq!(connection.max_child_requested.load(Ordering::SeqCst), 5);
         assert_eq!(snapshot.text.lines().count(), 6);
         assert_eq!(snapshot.text.lines().last(), Some("          - iframe"));
+        // The depth cap is deliberate truncation, not a frame the browser failed to give.
+        assert!(!snapshot.coverage.is_partial());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_reports_a_nested_failure_under_its_readable_parent() -> Result<(), CoreError>
+    {
+        let connection = Arc::new(DepthConnection {
+            max_child_requested: AtomicUsize::new(0),
+            fail_depth: AtomicUsize::new(2),
+        });
+        let observer = depth_observer(connection.clone()).await?;
+
+        let snapshot = observer.snapshot().await?;
+
+        assert_eq!(snapshot.text, ["- iframe", "  - iframe"].join("\n"));
+        assert_eq!(
+            snapshot.coverage.frame_errors,
+            vec![FrameError {
+                frame_id: Some(FrameId("child-2".to_string())),
+                owner: Some(FrameOwner {
+                    parent: Some(FrameId("child-1".to_string())),
+                    backend_node_id: 101,
+                }),
+                stage: FrameReadStage::Ax,
+                reason: FrameReadReason::Timeout,
+            }]
+        );
+        assert!(snapshot.may_lack_frame(Some(&FrameId("child-3".to_string()))));
+        assert!(!snapshot.may_lack_frame(Some(&FrameId("child-1".to_string()))));
+        assert!(!snapshot.may_lack_frame(None));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_names_an_unidentified_frame_by_its_iframe_element() -> Result<(), CoreError> {
+        for (describe, reason) in [
+            (DescribeB::Error, FrameReadReason::BrowserError),
+            (DescribeB::NoFrame, FrameReadReason::NotFound),
+        ] {
+            let connection = Arc::new(SiblingConnection::new(false));
+            if let Ok(mut describe_b) = connection.describe_b.lock() {
+                *describe_b = describe;
+            }
+            let observer = sibling_observer(connection.clone()).await?;
+            connection.gates[0].add_permits(1);
+
+            let snapshot = observer.snapshot().await?;
+
+            assert_eq!(
+                snapshot.text,
+                ["- iframe", "  - button \"A\" [ref=e1]", "- iframe"].join("\n")
+            );
+            assert_eq!(
+                snapshot.coverage.frame_errors,
+                vec![FrameError {
+                    frame_id: None,
+                    owner: Some(FrameOwner {
+                        parent: None,
+                        backend_node_id: 20,
+                    }),
+                    stage: FrameReadStage::Identify,
+                    reason,
+                }]
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_reports_failures_in_document_order_whatever_finishes_first()
+    -> Result<(), CoreError> {
+        let connection = Arc::new(SiblingConnection::new(true));
+        connection.failing_reads[0].store(usize::MAX, Ordering::SeqCst);
+        let observer = sibling_observer(connection.clone()).await?;
+        let task = tokio::spawn(async move { observer.snapshot().await });
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            connection.wait_for_both_children(),
+        )
+        .await
+        .map_err(|error| CoreError::Message(error.to_string()))?;
+        connection.gates[1].add_permits(1);
+        connection.wait_for_completions(1).await;
+        connection.gates[0].add_permits(1);
+        let snapshot = task
+            .await
+            .map_err(|error| CoreError::Message(error.to_string()))??;
+
+        let failed = snapshot
+            .coverage
+            .frame_errors
+            .iter()
+            .map(|error| error.frame_id.as_ref().map(FrameId::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(failed, vec![Some("child-a"), Some("child-b")]);
+        assert_eq!(snapshot.text, ["- iframe", "- iframe"].join("\n"));
+        assert!(snapshot.refs.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_reports_only_the_accepted_attempt() -> Result<(), CoreError> {
+        let connection = Arc::new(SiblingConnection::new(false));
+        // Child b fails only in the first attempt, which a navigation then abandons.
+        connection.failing_reads[1].store(1, Ordering::SeqCst);
+        let observer = sibling_observer(connection.clone()).await?;
+        let task = tokio::spawn(async move { observer.snapshot().await });
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            connection.wait_for_both_children(),
+        )
+        .await
+        .map_err(|error| CoreError::Message(error.to_string()))?;
+        if let Ok(mut loader) = connection.main_loader.lock() {
+            *loader = "main-loader-2".to_string();
+        }
+        connection.gates[0].add_permits(2);
+        connection.gates[1].add_permits(2);
+        let snapshot = task
+            .await
+            .map_err(|error| CoreError::Message(error.to_string()))??;
+
+        assert_eq!(connection.root_ax_reads.load(Ordering::SeqCst), 2);
+        assert!(snapshot.text.contains("button \"B\""));
+        assert!(!snapshot.coverage.is_partial());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_keeps_contents_when_only_the_clickable_scan_fails() -> Result<(), CoreError> {
+        let mut state = harness_state(vec![root_with(&["2", "3"]), ax_button("2", "Outer", 1), {
+            let mut iframe = iframe_node("3", 2);
+            iframe.name = None;
+            iframe
+        }]);
+        state.child_loader_id = Some("child-loader-1".to_string());
+        state.child_nodes = vec![
+            root_with(&["child-button"]),
+            ax_button("child-button", "Inner", 1),
+        ];
+        state.fail_dom_capture = true;
+        let (_connection, observer) = observer_harness(state).await?;
+
+        let snapshot = observer.snapshot().await?;
+
+        assert_eq!(
+            snapshot.text,
+            [
+                "- button \"Outer\" [ref=e1]",
+                "- iframe",
+                "  - button \"Inner\" [ref=e2]"
+            ]
+            .join("\n")
+        );
+        let degraded = FrameError {
+            frame_id: None,
+            owner: None,
+            stage: FrameReadStage::CursorScan,
+            reason: FrameReadReason::Timeout,
+        };
+        assert_eq!(
+            snapshot.coverage.frame_errors,
+            vec![
+                degraded.clone(),
+                FrameError {
+                    frame_id: Some(FrameId("child".to_string())),
+                    owner: Some(FrameOwner {
+                        parent: None,
+                        backend_node_id: 2,
+                    }),
+                    ..degraded
+                },
+            ]
+        );
+        assert!(
+            snapshot
+                .coverage
+                .frame_errors
+                .iter()
+                .all(|error| !error.contents_missing())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_reads_an_empty_frame_as_complete() -> Result<(), CoreError> {
+        let mut state = harness_state(vec![
+            root_with(&["2", "3"]),
+            ax_button("2", "Outer", 1),
+            iframe_node("3", 2),
+        ]);
+        state.child_loader_id = Some("child-loader-1".to_string());
+        let (_connection, observer) = observer_harness(state).await?;
+
+        let snapshot = observer.snapshot().await?;
+
+        assert_eq!(
+            snapshot.text,
+            ["- button \"Outer\" [ref=e1]", "- iframe"].join("\n")
+        );
+        assert!(!snapshot.coverage.is_partial());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_diff_treats_an_unreadable_frame_as_unknown_until_it_reads_again()
+    -> Result<(), CoreError> {
+        let connection = Arc::new(SiblingConnection::new(false));
+        let observer = sibling_observer(connection.clone()).await?;
+        // Five captures, one read of each child apiece.
+        connection.gates[0].add_permits(5);
+        connection.gates[1].add_permits(5);
+        let complete = observer.snapshot().await?;
+        let b_unread = FrameError {
+            frame_id: Some(FrameId("child-b".to_string())),
+            owner: Some(FrameOwner {
+                parent: None,
+                backend_node_id: 20,
+            }),
+            stage: FrameReadStage::Ax,
+            reason: FrameReadReason::BrowserError,
+        };
+
+        connection.failing_reads[1].store(usize::MAX, Ordering::SeqCst);
+        let (failed, capture) = observer.diff_with_capture().await?;
+        assert!(!failed.changed, "{}", failed.text);
+        assert_eq!((failed.added, failed.removed), (0, 0));
+        assert_eq!(failed.coverage.frame_errors, vec![b_unread.clone()]);
+        assert_eq!(failed.uncompared, vec![b_unread.clone()]);
+        assert_eq!(failed.arrangement_changed, None);
+        assert_eq!(capture.coverage, failed.coverage);
+        assert!(
+            observer
+                .last_refs()
+                .await
+                .get(&crate::Ref("e1".to_string()))
+                .is_none()
+        );
+
+        connection.failing_reads[1].store(0, Ordering::SeqCst);
+        let recovered = observer.diff().await?;
+        assert!(!recovered.changed, "{}", recovered.text);
+        assert!(!recovered.coverage.is_partial());
+        assert_eq!(recovered.uncompared, vec![b_unread]);
+        assert_eq!(recovered.arrangement_changed, None);
+
+        let settled = observer.diff().await?;
+        assert!(!settled.changed);
+        assert!(settled.uncompared.is_empty());
+        assert_eq!(settled.arrangement_changed, Some(false));
+        // B reads again under the ref it had before it failed.
+        assert_eq!(observer.snapshot().await?.text, complete.text);
         Ok(())
     }
 

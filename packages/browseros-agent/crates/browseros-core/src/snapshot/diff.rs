@@ -241,6 +241,154 @@ mod tests {
     use super::{
         DiffOptions, SnapshotDiff, SnapshotObservation, diff_snapshot_observations, diff_snapshots,
     };
+    use crate::{
+        FrameId,
+        snapshot::{
+            FrameError, FrameOwner, FrameReadReason, FrameReadStage, FrameSpan, SnapshotCoverage,
+        },
+    };
+
+    fn frame_b_owner() -> FrameOwner {
+        FrameOwner {
+            parent: None,
+            backend_node_id: 20,
+        }
+    }
+
+    fn frame_b_error(stage: FrameReadStage) -> FrameError {
+        FrameError {
+            frame_id: Some(FrameId("b".to_string())),
+            owner: Some(frame_b_owner()),
+            stage,
+            reason: FrameReadReason::Timeout,
+        }
+    }
+
+    /// The main frame's `lines`, then frame b's iframe line followed by its contents when read.
+    fn framed(lines: &[&str], b: Option<&[&str]>, errors: Vec<FrameError>) -> SnapshotObservation {
+        let mut text = lines.iter().map(ToString::to_string).collect::<Vec<_>>();
+        text.push("- iframe".to_string());
+        let mut frames = Vec::new();
+        if let Some(b) = b {
+            let start = text.len();
+            text.extend(b.iter().map(|line| format!("  {line}")));
+            frames.push(FrameSpan {
+                frame_id: Some(FrameId("b".to_string())),
+                owner: frame_b_owner(),
+                lines: start..text.len(),
+            });
+        }
+        SnapshotObservation {
+            text: text.join("\n"),
+            url: Some("https://example.com/".to_string()),
+            coverage: SnapshotCoverage {
+                frame_errors: errors,
+            },
+            frames,
+        }
+    }
+
+    const SAVE: &str = "- button \"Save\" [ref=e1]";
+    const B: &str = "- button \"B\" [ref=e2]";
+
+    #[test]
+    fn an_unreadable_frame_is_unknown_while_the_rest_of_the_page_still_diffs() {
+        let before = framed(&[SAVE], Some(&[B]), Vec::new());
+        let after = framed(
+            &[SAVE, "- button \"New\" [ref=e3]"],
+            None,
+            vec![frame_b_error(FrameReadStage::Ax)],
+        );
+
+        let diff = diff_snapshot_observations(Some(&before), &after, DiffOptions::default());
+
+        assert_eq!((diff.added, diff.removed), (1, 0), "{}", diff.text);
+        assert!(diff.text.contains("+ button \"New\" [ref=e3]"));
+        assert!(!diff.text.contains("button \"B\""));
+        assert_eq!(diff.uncompared, vec![frame_b_error(FrameReadStage::Ax)]);
+        assert_eq!(diff.coverage, after.coverage);
+    }
+
+    #[test]
+    fn a_frame_that_reads_again_is_not_new() {
+        let before = framed(&[SAVE], None, vec![frame_b_error(FrameReadStage::Session)]);
+        let after = framed(&[SAVE], Some(&[B]), Vec::new());
+
+        let diff = diff_snapshot_observations(Some(&before), &after, DiffOptions::default());
+
+        assert!(!diff.changed, "{}", diff.text);
+        assert!(!diff.coverage.is_partial());
+        assert_eq!(
+            diff.uncompared,
+            vec![frame_b_error(FrameReadStage::Session)]
+        );
+    }
+
+    #[test]
+    fn a_frame_without_an_id_is_matched_by_its_iframe_element() {
+        let before = framed(&[SAVE], Some(&[B]), Vec::new());
+        let unidentified = FrameError {
+            frame_id: None,
+            stage: FrameReadStage::Identify,
+            ..frame_b_error(FrameReadStage::Identify)
+        };
+        let after = framed(&[SAVE], None, vec![unidentified.clone()]);
+
+        let diff = diff_snapshot_observations(Some(&before), &after, DiffOptions::default());
+
+        assert!(!diff.changed, "{}", diff.text);
+        assert_eq!(diff.uncompared, vec![unidentified]);
+    }
+
+    #[test]
+    fn a_frame_read_alike_on_both_sides_still_diffs() {
+        let degraded = || vec![frame_b_error(FrameReadStage::CursorScan)];
+        let before = framed(&[SAVE], Some(&[B]), degraded());
+        let after = framed(&[SAVE], Some(&["- button \"B2\" [ref=e2]"]), degraded());
+
+        let diff = diff_snapshot_observations(Some(&before), &after, DiffOptions::default());
+
+        assert_eq!((diff.added, diff.removed), (1, 1), "{}", diff.text);
+        assert!(diff.uncompared.is_empty());
+        assert!(diff.coverage.is_partial());
+    }
+
+    #[test]
+    fn a_frame_unread_before_and_gone_now_is_compared_as_usual() {
+        let before = framed(&[SAVE], None, vec![frame_b_error(FrameReadStage::Ax)]);
+        let after = SnapshotObservation {
+            text: SAVE.to_string(),
+            url: Some("https://example.com/".to_string()),
+            ..SnapshotObservation::default()
+        };
+
+        let diff = diff_snapshot_observations(Some(&before), &after, DiffOptions::default());
+
+        assert_eq!((diff.added, diff.removed), (0, 1), "{}", diff.text);
+        assert!(diff.text.contains("- iframe"));
+        assert!(diff.uncompared.is_empty());
+    }
+
+    #[test]
+    fn an_unevenly_read_main_frame_leaves_nothing_compared() {
+        let before = framed(&[SAVE], Some(&[B]), Vec::new());
+        let main_degraded = FrameError {
+            frame_id: None,
+            owner: None,
+            stage: FrameReadStage::CursorScan,
+            reason: FrameReadReason::BrowserError,
+        };
+        let after = framed(
+            &["- generic \"Was a target\""],
+            Some(&[B]),
+            vec![main_degraded.clone()],
+        );
+
+        let diff = diff_snapshot_observations(Some(&before), &after, DiffOptions::default());
+
+        assert!(!diff.changed, "{}", diff.text);
+        assert_eq!(diff.uncompared, vec![main_degraded]);
+    }
 
     #[test]
     fn identical_snapshots_short_circuit_to_no_change() {
