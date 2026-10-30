@@ -40,8 +40,9 @@ const MAX_RETURN_VALUE_BYTES: usize = 2_000_000;
 /// About 6k tokens, enough for a few pages of extracted text. The script itself reads pages
 /// whole, so only its answer has to fit; a larger one comes back as a preview plus a file.
 const DEFAULT_INLINE_RESULT_BYTES: usize = 25_000;
-/// The most `maxChars` can raise the inline result to, matching `evaluate_in_page`.
-const MAX_INLINE_RESULT_BYTES: usize = 200_000;
+/// The most `maxChars` can raise the inline result to: the largest return value a run
+/// accepts, so a remote client that asks can still receive any result whole.
+const MAX_INLINE_RESULT_BYTES: usize = MAX_RETURN_VALUE_BYTES;
 
 const DESCRIPTION: &str = r#"The primary way to drive the browser - prefer run for any task; the granular tools are the fallback. Do multi-step flows, pagination, bulk extraction, and repeated act/read loops - in ONE call: async JavaScript against the `browser` SDK in the server runtime. console.log is captured; return a value to read it back; exceptions come back as a result, not thrown. Every call is `await`-able. Each run is bounded to 30000 ms of wall time and cannot exceed it (larger `timeout` values are clamped): keep a single call under 30s. For longer or open-ended page-driven loops, do one bounded chunk per call, or start the work on the page and poll its result with short follow-up calls.
 
@@ -87,7 +88,7 @@ Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers
   page.listHelpers() -> { host, helpers: [{ name, ageDays, candidate }] }; page.readHelper(name) -> source string
 Raw CDP: browser.cdp(method, params?, sessionId?) / page.cdp(method, paramsJson). Methods or parameters that need a newer BrowserOS return native_feature_unavailable without being sent.
 
-What a run returns to you, its return value plus its logs, is kept inline up to 25000 bytes (raise it with maxChars, up to 200000). Past that you get a preview and a local file path a remote client cannot open, so return the answer, not the pages you read to find it.
+What a run returns to you, its return value plus its logs, is kept inline up to 25000 bytes (raise it with maxChars, up to 2000000). Past that you get a preview and a local file path a remote client cannot open, so return the answer, not the pages you read to find it.
 
 Do the whole task in as few run calls as possible: loop over all the items in one call rather than one run per item. Parallelize independent work with Promise.all so N pages cost one wait cycle, not N. Keep steps on the same page sequential. The 30s cap binds this: batching reads of already-loaded pages is cheap, batching navigations is not, so keep it to about 5 fresh pages per call and split the rest into more calls. Efficient pattern:
   const pages = await Promise.all(urls.map(u => browser.open(u)));
@@ -472,7 +473,7 @@ struct RunArgs {
     #[serde(default = "default_timeout")]
     timeout: f64,
     /// Max size of the result kept inline (return value plus logs), in UTF-8 bytes: default
-    /// 25000, max 200000. A larger result comes back as a preview, with the full text in a
+    /// 25000, max 2000000. A larger result comes back as a preview, with the full text in a
     /// local file a remote MCP client cannot open; return only what you need, or raise this.
     #[serde(default, rename = "maxChars")]
     max_chars: Option<u64>,
