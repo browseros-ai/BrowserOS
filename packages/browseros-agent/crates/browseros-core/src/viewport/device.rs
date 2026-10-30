@@ -87,16 +87,25 @@ impl Fixed {
         if self.mobile() {
             metrics["screenOrientation"] = json!({"type": "portraitPrimary", "angle": 0});
         }
-        let (touch, identity) = match self {
+        let (touch, finger, identity) = match self {
             Self::Mobile { .. } => (
                 json!({"enabled": true, "maxTouchPoints": 5}),
+                // The mouse acts as a finger, as in DevTools' device mode: a drag scrolls or
+                // draws as a touch would. Desktop gestures, because mobile ones let a double
+                // tap zoom the page.
+                json!({"enabled": true, "configuration": "desktop"}),
                 mobile_identity(chrome_version),
             ),
-            Self::Desktop { .. } => (json!({"enabled": false}), json!({"userAgent": ""})),
+            Self::Desktop { .. } => (
+                json!({"enabled": false}),
+                json!({"enabled": false}),
+                json!({"userAgent": ""}),
+            ),
         };
         vec![
             ("Emulation.setDeviceMetricsOverride", metrics),
             ("Emulation.setTouchEmulationEnabled", touch),
+            ("Emulation.setEmitTouchEventsForMouse", finger),
             ("Emulation.setUserAgentOverride", identity),
         ]
     }
@@ -132,6 +141,7 @@ pub(super) fn overrides(method: &str) -> bool {
         "Emulation.setDeviceMetricsOverride"
             | "Emulation.clearDeviceMetricsOverride"
             | "Emulation.setTouchEmulationEnabled"
+            | "Emulation.setEmitTouchEventsForMouse"
             | "Emulation.setUserAgentOverride"
             | "Emulation.setVisibleSize"
     )
@@ -143,6 +153,10 @@ pub(super) fn clear_commands() -> Vec<(&'static str, Value)> {
         ("Emulation.clearDeviceMetricsOverride", json!({})),
         (
             "Emulation.setTouchEmulationEnabled",
+            json!({"enabled": false}),
+        ),
+        (
+            "Emulation.setEmitTouchEventsForMouse",
             json!({"enabled": false}),
         ),
         ("Emulation.setUserAgentOverride", json!({"userAgent": ""})),
