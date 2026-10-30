@@ -17,6 +17,8 @@ pub mod trust_boundary;
 #[cfg(test)]
 mod evaluate_in_page_tests;
 #[cfg(test)]
+mod frame_admission_tests;
+#[cfg(test)]
 mod targeting_tests;
 #[cfg(test)]
 mod tests;
