@@ -300,7 +300,7 @@ export async function withE2e<T>(
     reservation = undefined
     const server = new OwnedProcess(
       process.execPath,
-      [join(SERVER_ROOT, 'src/index.ts'), '--config', config],
+      ['--no-env-file', join(SERVER_ROOT, 'src/index.ts'), '--config', config],
       env,
     )
     processes.push(server)
