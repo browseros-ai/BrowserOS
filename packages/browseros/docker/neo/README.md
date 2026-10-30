@@ -6,6 +6,13 @@ Run BrowserOS neo in a container and use it from your machine:
 - **Connect any agent** to Neo's MCP server and watch it work live in that tab.
 - **Keep your profile** (logins, history, downloads) in a folder you choose.
 
+The viewer shares text through your normal copy, cut and paste shortcuts (Command
+on Mac, Ctrl elsewhere), including Unicode and multiple lines. Copying requires a
+selection in the remote app; opening the viewer never replaces your clipboard.
+If clipboard access is denied or a copy cannot be confirmed, the Clipboard panel
+opens for manual transfer. Images and files are not transferred through this text
+clipboard.
+
 One image runs natively on Apple silicon Macs, arm64 Linux and x86-64 Linux.
 
 ## Quick start
