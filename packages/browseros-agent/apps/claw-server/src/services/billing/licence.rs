@@ -5,8 +5,7 @@
 
 use super::config::BillingConfig;
 use base64::{
-    Engine as _,
-    alphabet,
+    Engine as _, alphabet,
     engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
 };
 use ed25519_dalek::Signature;
@@ -127,8 +126,7 @@ pub fn verify(
         .ok_or(LicenceError::UnknownKey)?;
     let bytes = decode_base64url(&signed.licence).ok_or(LicenceError::NotBase64)?;
     let signature = decode_base64url(&signed.signature).ok_or(LicenceError::NotBase64)?;
-    let signature =
-        Signature::from_slice(&signature).map_err(|_| LicenceError::BadSignature)?;
+    let signature = Signature::from_slice(&signature).map_err(|_| LicenceError::BadSignature)?;
     key.verify_strict(&bytes, &signature)
         .map_err(|_| LicenceError::BadSignature)?;
 

@@ -24,6 +24,7 @@ mod connections;
 mod feedback;
 mod help_events;
 mod live;
+mod plan;
 mod previews;
 mod recordings;
 mod replay;
@@ -130,6 +131,25 @@ pub fn router(state: AppState) -> Router<AppState> {
             get(skills::get).put(skills::update).delete(skills::delete),
         )
         .route("/api/v1/skills/{name}/runs", get(skills::list_runs))
+        .route("/api/v1/plan", get(plan::plan))
+        .route("/api/v1/plan/pricing", get(plan::pricing))
+        .route("/api/v1/plan/checkout", post(plan::start_checkout))
+        .route("/api/v1/plan/checkout/{checkout_id}", get(plan::checkout))
+        .route("/api/v1/plan/key", get(plan::key))
+        .route("/api/v1/plan/key/activate", post(plan::activate))
+        .route(
+            "/api/v1/plan/key/computers/{install_id}/remove",
+            post(plan::remove_computer),
+        )
+        .route(
+            "/api/v1/plan/key/computers/{install_id}/rename",
+            post(plan::rename_computer),
+        )
+        .route("/api/v1/plan/key/reset", post(plan::reset_key))
+        .route("/api/v1/plan/cancel", post(plan::cancel))
+        .route("/api/v1/plan/resume", post(plan::resume))
+        .route("/api/v1/plan/portal", post(plan::portal))
+        .route("/api/v1/plan/refresh", post(plan::refresh))
         .nest_service(
             "/mcp",
             Router::new()
@@ -204,7 +224,9 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
     let reject_origin = (path == "/api/v1/recordings/events"
         && !trusted_recording_origin(req.headers()))
-        || ((path == "/api/v1/extension/update-ready" || path == "/api/v1/screencasts")
+        || ((path == "/api/v1/extension/update-ready"
+            || path == "/api/v1/screencasts"
+            || is_plan_path(&path))
             && !trusted_extension_origin(req.headers()));
     let span = info_span!("http_request", request_id = %request_id.0, %method, %path);
     async move {
@@ -255,6 +277,12 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
     }
     .instrument(span)
     .await
+}
+
+/// The neo Pro routes can buy, cancel, reset a key and remove computers, and their answers name
+/// the computers on the key, so no web page may reach them.
+fn is_plan_path(path: &str) -> bool {
+    path == "/api/v1/plan" || path.starts_with("/api/v1/plan/")
 }
 
 /// Stable origin derived from claw-app's manifest signing key.

@@ -2,10 +2,7 @@
 //! needs it, and registered again when the gateway no longer knows it.
 
 use super::{
-    Billing, Inner, State,
-    client::BillingError,
-    label::computer_label,
-    licence::APP,
+    Billing, Inner, State, client::BillingError, label::computer_label, licence::APP,
     store::Install,
 };
 use std::future::Future;
@@ -31,7 +28,13 @@ impl Billing {
         let install = if register {
             inner.ensure_install().await?
         } else {
-            inner.state.read().await.install.clone().ok_or_else(missing)?
+            inner
+                .state
+                .read()
+                .await
+                .install
+                .clone()
+                .ok_or_else(missing)?
         };
         match call(install.clone()).await {
             Err(BillingError::Unauthorized) => {
@@ -62,12 +65,7 @@ impl Inner {
         let label = computer_label().await;
         let (id, secret) = self
             .client
-            .register(
-                APP,
-                crate::VERSION,
-                std::env::consts::OS,
-                label.as_deref(),
-            )
+            .register(APP, crate::VERSION, std::env::consts::OS, label.as_deref())
             .await?;
         let install = Install { id, secret };
         // An install whose secret was not saved would be lost on the next start, along with any

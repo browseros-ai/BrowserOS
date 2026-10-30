@@ -50,7 +50,10 @@ mod tests {
     #[test]
     fn waits_four_hours_plus_jitter_then_backs_off_after_failures() {
         assert_eq!(next_wait(0, 0), EVERY);
-        assert_eq!(next_wait(0, 9_999), EVERY + Duration::from_secs(MAX_JITTER_SECS));
+        assert_eq!(
+            next_wait(0, 9_999),
+            EVERY + Duration::from_secs(MAX_JITTER_SECS)
+        );
         assert_eq!(next_wait(1, 0), Duration::from_secs(60));
         assert_eq!(next_wait(2, 0), Duration::from_secs(5 * 60));
         assert_eq!(next_wait(3, 0), Duration::from_secs(15 * 60));

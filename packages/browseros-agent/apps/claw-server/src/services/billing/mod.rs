@@ -16,8 +16,7 @@ pub mod secret;
 pub mod store;
 
 pub use client::{
-    BillingError, CheckoutStarted, Computer, Key, Price, PricedPlan, Pricing, Refusal,
-    RefusalCode,
+    BillingError, CheckoutStarted, Computer, Key, Price, PricedPlan, Pricing, Refusal, RefusalCode,
 };
 pub use config::BillingConfig;
 pub use licence::Status;
@@ -540,11 +539,17 @@ impl Inner {
     /// Verifies and saves a licence from the gateway. One older than the saved licence is
     /// ignored rather than refused: a newer reply already landed. `on_key` is what the reply
     /// said about the key, when it said anything.
-    async fn accept(&self, signed: SignedLicence, on_key: Option<bool>) -> Result<(), BillingError> {
+    async fn accept(
+        &self,
+        signed: SignedLicence,
+        on_key: Option<bool>,
+    ) -> Result<(), BillingError> {
         let now = now_epoch_ms();
         let mut state = self.state.write().await;
         let Some(install_id) = state.install.as_ref().map(|install| install.id.clone()) else {
-            return Err(BillingError::Internal("a licence with no install".to_string()));
+            return Err(BillingError::Internal(
+                "a licence with no install".to_string(),
+            ));
         };
         let stored = state.licence.as_ref().map(|licence| licence.issued_at);
         match licence::verify(&signed, &install_id, &self.config, now, stored) {

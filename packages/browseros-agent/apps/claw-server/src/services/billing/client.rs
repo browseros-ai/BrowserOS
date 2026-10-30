@@ -237,7 +237,10 @@ impl GatewayClient {
             label,
         };
         let registered: Registered = self
-            .send(self.request(Method::POST, "/v1/installs", None)?.json(&body))
+            .send(
+                self.request(Method::POST, "/v1/installs", None)?
+                    .json(&body),
+            )
             .await?;
         Ok((
             registered.install_id,

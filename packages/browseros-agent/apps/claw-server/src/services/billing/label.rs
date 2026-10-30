@@ -105,7 +105,10 @@ mod tests {
 
     #[test]
     fn labels_are_trimmed_and_capped_in_utf16_units() {
-        assert_eq!(clean("  Sam’s MacBook Air \n").as_deref(), Some("Sam’s MacBook Air"));
+        assert_eq!(
+            clean("  Sam’s MacBook Air \n").as_deref(),
+            Some("Sam’s MacBook Air")
+        );
         assert_eq!(clean("   "), None);
         let long = "a".repeat(60);
         assert_eq!(clean(&long).map(|label| label.len()), Some(40));

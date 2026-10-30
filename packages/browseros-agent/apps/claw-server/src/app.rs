@@ -69,6 +69,8 @@ pub struct AppState {
     pub help: Arc<crate::services::help::HelpRegistry>,
     pub claude_desktop: Arc<crate::services::claude_desktop::ClaudeDesktop>,
     pub extension_updates: Arc<crate::services::extension_updates::ExtensionUpdates>,
+    /// neo Pro. Without a billing gateway in this build it reads as no plan and refuses the rest.
+    pub billing: Arc<crate::services::billing::Billing>,
     pub shutdown: ShutdownHandle,
     /// How the data this server opened compares to the schema this build knows, published on
     /// `/system/info` so the app can prompt an update when the database is ahead of the server.
@@ -235,6 +237,18 @@ impl AppState {
             tab_activity.clone(),
         ));
         let captcha = crate::services::captcha::CaptchaService::from_env(config.mode);
+        // A hosted server is infrastructure with no person at it to buy or paste a key.
+        let billing_config = (!config.mode.is_hosted())
+            .then(|| crate::services::billing::BillingConfig::for_build(config.dev_mode))
+            .flatten();
+        let billing = Arc::new(
+            crate::services::billing::Billing::open(
+                billing_config,
+                config.browserclaw_dir.clone(),
+                shutdown.child_token(),
+            )
+            .await,
+        );
         Ok(Self {
             config,
             audit_log,
@@ -269,6 +283,7 @@ impl AppState {
             help: Arc::new(crate::services::help::HelpRegistry::new(HELP_MAX_WAIT)),
             claude_desktop,
             extension_updates: Arc::default(),
+            billing,
             shutdown,
             migration,
         })
