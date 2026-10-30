@@ -2361,3 +2361,59 @@ async fn request_jev_token(
     .await?;
     Ok((status, bytes))
 }
+
+#[tokio::test]
+async fn plan_routes_answer_in_the_contract_without_a_billing_gateway() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, headers, bytes) =
+        request(&app.router, "GET", "/api/v1/plan", None, Body::empty()).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_permissive_cors(&headers);
+    let plan: claw_api::models::Plan = serde_json::from_slice(&bytes)?;
+    assert!(!plan.available);
+    assert_eq!(plan.status, claw_api::models::PlanStatus::None);
+
+    for (method, uri, body) in [
+        ("GET", "/api/v1/plan/pricing", None),
+        ("GET", "/api/v1/plan/key", None),
+        ("POST", "/api/v1/plan/key/reset", None),
+        ("POST", "/api/v1/plan/refresh", None),
+        (
+            "POST",
+            "/api/v1/plan/key/activate",
+            Some(json!({ "key": "NEO-7K2QM" })),
+        ),
+    ] {
+        let (content_type, payload) = match body {
+            Some(body) => (Some("application/json"), Body::from(body.to_string())),
+            None => (None, Body::empty()),
+        };
+        let (status, headers, bytes) =
+            request(&app.router, method, uri, content_type, payload).await?;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+        let error: claw_api::models::ApiError = serde_json::from_slice(&bytes)?;
+        assert_eq!(error.code, "billing_unavailable", "{uri}");
+        assert_eq!(
+            error.request_id.as_deref(),
+            headers
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok()),
+            "{uri}"
+        );
+    }
+
+    let (status, headers, bytes) = request_with_headers(
+        &app.router,
+        "GET",
+        "/api/v1/plan",
+        None,
+        &[("origin", "https://example.com")],
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(!headers.contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
+    let error: claw_api::models::ApiError = serde_json::from_slice(&bytes)?;
+    assert_eq!(error.code, "forbidden");
+    Ok(())
+}
