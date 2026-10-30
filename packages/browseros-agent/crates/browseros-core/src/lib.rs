@@ -4,6 +4,7 @@ pub mod connection;
 pub mod content_markdown;
 pub mod credentials;
 pub mod error;
+pub mod file_transfers;
 pub mod frames;
 pub mod input;
 pub mod navigation;
@@ -37,8 +38,8 @@ pub use profiles::{
 };
 pub use session::{BrowserSession, BrowserSessionHooks};
 pub use target::{
-    BrowserView, CapturedScope, PageAdmission, PageListing, TargetBinding, TargetIntent,
-    TargetSource, TargetStatus, WindowSelection,
+    BrowserView, CapturedScope, OpenedPage, PageAdmission, PageListing, TargetBinding,
+    TargetIntent, TargetSource, TargetStatus, WindowSelection,
 };
 pub use types::{
     BrowserContextId, BrowserProfileId, FrameId, PageId, Ref, SessionId, TabId, TargetId, WindowId,

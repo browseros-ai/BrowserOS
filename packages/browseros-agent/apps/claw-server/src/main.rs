@@ -41,8 +41,22 @@ struct PortConflict {
     port: u16,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+/// Stack for each tokio worker thread. A `run` call nests QuickJS, the SDK bridge and a whole
+/// tool (act, then check, then its click) on one worker. In a debug build that chain needs
+/// close to the default 2 MiB, and on Linux it overflowed, which aborts the whole process.
+/// The size is reserved address space; pages are committed only as the stack grows.
+const WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+/// `#[tokio::main]` with a larger worker stack, which the attribute cannot set.
+fn main() -> anyhow::Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(WORKER_STACK_BYTES)
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> anyhow::Result<()> {
     std::hint::black_box(VERSION_MARKER);
     std::hint::black_box(POSTHOG_KEY_MARKER);
     let (config_path, stdio_mode) = match Cli::parse_action() {

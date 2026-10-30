@@ -4,7 +4,6 @@
 //! [`execute_tool`], as `apps/claw-server/src/api/mcp` does.
 
 pub mod constants;
-pub mod downloads_api;
 pub mod format;
 pub mod framework;
 pub mod output_file;

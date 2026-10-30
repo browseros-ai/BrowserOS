@@ -18,6 +18,7 @@ const EXPECTED_PAGES = [
   'dynamic.html',
   'fill.html',
   'form.html',
+  'frame-lab.html',
   'iframe-child.html',
   'iframe-grandchild.html',
   'iframe.html',
@@ -28,12 +29,20 @@ const EXPECTED_PAGES = [
   'overlay.html',
   'script-isolation.html',
   'scroll.html',
+  'sdk-drag.html',
+  'sdk-fill.html',
+  'sdk-input.html',
+  'sdk-long-read.html',
+  'sdk-screenshot-tall.html',
+  'sdk-screenshot.html',
+  'sdk-spa-route.html',
   'snapshot-cursor-concurrency.html',
   'snapshot-frame-a.html',
   'snapshot-frame-b.html',
   'snapshot-frame-deep.html',
   'snapshot-frame-grandchild.html',
   'snapshot-frame-tree.html',
+  'upload-frame.html',
   'upload.html',
 ]
 
@@ -127,5 +136,10 @@ describe('fixture server', () => {
     expect(await read('snapshot-frame-grandchild.html')).toInclude(
       'Grandchild action ready',
     )
+
+    const frameLab = await read('frame-lab.html')
+    expect(frameLab).toInclude('window.frameLab')
+    expect(frameLab).toInclude("'nested-mixed': ['B', 'A']")
+    expect(frameLab).toInclude('isTrusted')
   })
 })

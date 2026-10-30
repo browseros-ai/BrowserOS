@@ -76,6 +76,30 @@ describe('isBehindTheScenes', () => {
 })
 
 describe('describeStep', () => {
+  it('distinguishes a pending chooser from selecting files', () => {
+    expect(
+      describeStep(
+        call('act', {
+          args: { kind: 'click' },
+          meta: { fileChooserOpen: true },
+          ...FLIGHTS,
+        }),
+      ),
+    ).toBe(
+      'Opened a file chooser on San Francisco to New York | Google Flights',
+    )
+    expect(
+      describeStep(
+        call('upload', { args: { files: ['/vm/report.pdf'] }, ...FLIGHTS }),
+      ),
+    ).toBe('Selected files on San Francisco to New York | Google Flights')
+    expect(
+      describeStep(call('upload', { args: { files: [] }, ...FLIGHTS })),
+    ).toBe(
+      'Cleared file selection on San Francisco to New York | Google Flights',
+    )
+  })
+
   it('names the page a new tab opened, preferring its title', () => {
     expect(
       describeStep(call('tabs', { args: { action: 'new' }, ...FLIGHTS })),

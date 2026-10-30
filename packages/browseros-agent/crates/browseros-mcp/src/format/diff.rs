@@ -1,4 +1,5 @@
 use crate::{
+    format::coverage::{coverage_warning, insert_coverage, with_warning},
     framework::ToolCtx,
     output_file::write_temp_tool_output_file,
     token_estimate::{estimate_text_tokens, slice_text_by_estimated_tokens},
@@ -27,7 +28,23 @@ pub struct FormattedDiff {
     pub structured: Value,
 }
 
+/// The diff as `detail` asks, under a warning whenever the capture was partial or a frame was
+/// left out of the comparison. That warning and the coverage fields survive every detail level,
+/// since a summarized or cut-down diff must not read as a complete one.
 pub async fn format_diff_result(
+    diff: &SnapshotDiff,
+    origin: &str,
+    ctx: &ToolCtx,
+    detail: DiffDetail,
+) -> FormattedDiff {
+    let mut formatted = format_diff_body(diff, origin, ctx, detail).await;
+    let warning = coverage_warning(&diff.coverage, &diff.uncompared);
+    formatted.text = with_warning(warning.as_deref(), formatted.text);
+    insert_coverage(&mut formatted.structured, &diff.coverage, &diff.uncompared);
+    formatted
+}
+
+async fn format_diff_body(
     diff: &SnapshotDiff,
     origin: &str,
     ctx: &ToolCtx,

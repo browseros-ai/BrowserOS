@@ -143,6 +143,7 @@ fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
         "DOM.setFileInputFiles" => Some(&["files", "nodeId", "backendNodeId", "objectId"]),
         "Page.enable" => Some(&["enableFileChooserOpenedEvent"]),
         "Page.disable" => Some(&[]),
+        "Page.setInterceptFileChooserDialog" => Some(&["enabled", "cancel"]),
         "Page.navigate" => Some(&[
             "url",
             "referrer",
@@ -232,6 +233,8 @@ fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
             "pointerType",
         ]),
         "Input.dispatchTouchEvent" => Some(&["type", "touchPoints", "modifiers", "timestamp"]),
+        // Native HTML drag-and-drop: drag drives these once the browser intercepts a drag.
+        "Input.cancelDragging" => Some(&[]),
         "Input.insertText" => Some(&["text"]),
         "Input.synthesizeScrollGesture" => Some(&[
             "x",

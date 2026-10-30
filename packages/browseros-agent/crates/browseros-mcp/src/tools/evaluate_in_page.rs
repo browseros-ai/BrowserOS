@@ -40,7 +40,7 @@ A script that mutated the page is settled before the result comes back, and the 
 says so, so never pause afterwards to let the page catch up. For an effect \
 that is entirely asynchronous, such as a click whose result arrives over the network, pass \
 `settle: true` to wait for the page to go quiet regardless. \
-`timeout` is capped at 30000 ms; for page work that needs longer, start it on the page and poll with short follow-up calls rather than one long evaluate. \
+`timeout` (capped at 30000 ms) limits how long the script runs; time spent awaiting a promise does not count against it. For page work that waits, start it on the page and poll with short follow-up calls rather than one long evaluate. \
 A result larger than the inline limit is truncated and its full text is written to a local file whose path a remote MCP client cannot read; return only what you need, or raise `maxChars` to receive more of the value inline.";
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -156,7 +156,11 @@ async fn evaluate_in_page(raw: Value, ctx: &ToolCtx) -> ToolExecResult<Option<To
         .await?
         .map(|info| info.url)
         .unwrap_or_else(|| "unknown".to_string());
-    let inline_limit = resolve_inline_limit(args.max_chars);
+    let inline_limit = if ctx.within_script {
+        usize::MAX
+    } else {
+        resolve_inline_limit(args.max_chars)
+    };
     if text.len() > inline_limit {
         let excerpt = safe_prefix(&text, inline_limit);
         let wrapped_text = wrap_untrusted(&text, &origin);
@@ -298,7 +302,7 @@ fn safe_stringify(value: &Value) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
-fn safe_prefix(text: &str, max_chars: usize) -> String {
+pub(crate) fn safe_prefix(text: &str, max_chars: usize) -> String {
     if text.len() <= max_chars {
         return text.to_string();
     }
@@ -359,7 +363,6 @@ mod tests {
             installed,
             showing: true,
             complete: true,
-            blank: false,
         }
     }
 

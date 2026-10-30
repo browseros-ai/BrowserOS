@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8" /><title>Full SDK read contract</title></head>
+  <body>
+    <h1>Long deterministic article</h1>
+    <article id="article"></article>
+    <script>
+      // The tail is beyond both the old 5K inline limit and a 20K page read.
+      const article = document.getElementById('article')
+      for (let index = 0; index < 300; index++) {
+        const paragraph = document.createElement('p')
+        paragraph.textContent = `Paragraph ${index}: ` + 'Deterministic browser content for a complete SDK read. '.repeat(2)
+        article.append(paragraph)
+      }
+      const tail = document.createElement('p')
+      tail.textContent = 'SDK_FULL_READ_TAIL_20261029'
+      article.append(tail)
+    </script>
+  </body>
+</html>

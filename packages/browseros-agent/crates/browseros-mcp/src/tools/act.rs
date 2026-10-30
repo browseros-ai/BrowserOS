@@ -1,7 +1,7 @@
 use crate::format::diff::DiffDetail;
 use crate::framework::{
     AuditHints, ToolCtx, ToolExecResult, ToolResult, error_result, parse_args,
-    pending_dialog_result, text_result,
+    pending_dialog_result, pending_file_chooser_result, text_result,
 };
 use crate::response::FieldTarget;
 use browseros_core::{
@@ -143,7 +143,8 @@ struct ActArgs {
     r#ref: Option<String>,
     /// Text for kind=type.
     text: Option<String>,
-    /// Value for kind=fill/select.
+    /// Value for kind=fill/select. Date, time, color and range inputs take their own format,
+    /// such as 2026-10-29, 14:30 or #ff8800.
     value: Option<String>,
     /// Multiple fields for kind=fill, filled in order.
     fields: Option<Vec<FillField>>,
@@ -279,6 +280,24 @@ fn handler<'a>(
                 }
                 return Err(err);
             }
+        }
+        // Typing emits native keys and fill clicks to focus; both can open a picker just
+        // like an explicit click. Hover/focus/scroll/semantic selection create no activation.
+        let activates = matches!(
+            args.kind,
+            ActKind::Click
+                | ActKind::ClickAt
+                | ActKind::Press
+                | ActKind::Type
+                | ActKind::TypeAt
+                | ActKind::Fill
+                | ActKind::Check
+                | ActKind::Uncheck
+                | ActKind::Drag
+                | ActKind::DragAt
+        );
+        if let Some(chooser) = pending_file_chooser_result(ctx, page_id.clone(), activates).await? {
+            return Ok(Some(chooser));
         }
         response.data(json!({ "kind": args.kind.as_str() }));
         if let Some(detail) = resolve_diff_detail(args.diff) {

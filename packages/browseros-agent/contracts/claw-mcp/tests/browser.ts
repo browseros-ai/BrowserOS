@@ -65,14 +65,18 @@ export async function isBrowserRunning(cdpPort: number): Promise<boolean> {
   }
 }
 
-function launchArgs(cdpPort: number, userDataDir: string): string[] {
+function launchArgs(
+  cdpPort: number,
+  userDataDir: string,
+  extraArgs: string[],
+): string[] {
   const args = [
     '--no-first-run',
     '--no-default-browser-check',
     '--use-mock-keychain',
     '--show-component-extension-options',
-    // The cockpit extension stays enabled: the download tool reads where the
-    // browser saved a file from chrome.downloads, which only it can reach.
+    // The contract must work without bundled extensions, as hosted Neo does.
+    '--disable-browseros-extensions',
     '--browseros-dock-icon=dev',
     '--enable-logging=stderr',
   ]
@@ -83,6 +87,7 @@ function launchArgs(cdpPort: number, userDataDir: string): string[] {
   if (extra) {
     args.push(...extra.split(' ').filter(Boolean))
   }
+  args.push(...extraArgs)
   args.push(
     `--user-data-dir=${userDataDir}`,
     `--remote-debugging-port=${cdpPort}`,
@@ -104,7 +109,7 @@ function launchArgs(cdpPort: number, userDataDir: string): string[] {
  * real one belonging to whoever is running it, because the browser does not take
  * that folder from HOME. Setting the preference keeps a run hermetic and also
  * exercises a relocated download folder, which the tool handles by asking the
- * browser where it saved rather than guessing.
+ * browser where it saved through CDP rather than guessing.
  */
 async function seedDownloadDirectory(userDataDir: string): Promise<void> {
   const downloadDir = join(userDataDir, 'Downloads')
@@ -119,7 +124,9 @@ async function seedDownloadDirectory(userDataDir: string): Promise<void> {
   )
 }
 
-export async function launchBrowser(): Promise<BrowserHandle> {
+export async function launchBrowser(
+  extraArgs: string[] = [],
+): Promise<BrowserHandle> {
   const binary = browserBinary()
   const userDataDir = await mkdtemp(
     join(tmpdir(), 'browseros-contract-browser-'),
@@ -127,7 +134,7 @@ export async function launchBrowser(): Promise<BrowserHandle> {
   await seedDownloadDirectory(userDataDir)
   const cdpPort = await findFreePort()
   const child = Bun.spawn({
-    cmd: [binary, ...launchArgs(cdpPort, userDataDir)],
+    cmd: [binary, ...launchArgs(cdpPort, userDataDir, extraArgs)],
     stdout: process.env.BROWSEROS_TEST_DEBUG === 'true' ? 'inherit' : 'ignore',
     stderr: process.env.BROWSEROS_TEST_DEBUG === 'true' ? 'inherit' : 'ignore',
     detached: process.platform !== 'win32',

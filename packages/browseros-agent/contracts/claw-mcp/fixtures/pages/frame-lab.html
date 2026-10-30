@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Frame lab</title>
+    <style>
+      body { margin: 0; font: 15px/1.4 sans-serif; }
+      .stage { padding: 8px; border: 1px solid #889; }
+      iframe { display: block; width: 520px; border: 2px solid #889; }
+      .spacer { height: 900px; }
+      .target { display: flex; gap: 16px; padding: 12px; }
+      .target button, .target input { min-width: 24px; min-height: 24px; }
+    </style>
+  </head>
+  <body>
+    <script>
+      // One document for every level. `?case=` picks a frame chain of sites, where A is
+      // the root's host and B the other loopback name: 127.0.0.1 and localhost are
+      // different sites, so a B frame (and an A frame inside one) is a real OOPIF.
+      // `scroll=1` puts each level's content below its own viewport. Clicks report
+      // `event.isTrusted` up to the root as `window.frameLab`; the root can also send
+      // detach/replace/reload commands down to any level's own child frame.
+      ;(() => {
+        const CASES = {
+          top: [],
+          'single-same': ['A'],
+          'nested-same': ['A', 'A'],
+          'single-cross': ['B'],
+          'nested-cross': ['B', 'B'],
+          'nested-mixed': ['B', 'A'],
+        }
+        const params = new URLSearchParams(location.search)
+        const caseId = params.get('case') in CASES ? params.get('case') : 'top'
+        const sites = CASES[caseId]
+        const level = Number(params.get('level') || 0)
+        const scroll = params.get('scroll') === '1'
+        const rootOrigin = params.get('root') || location.origin
+        const other = new URL(rootOrigin)
+        other.hostname = other.hostname === 'localhost' ? '127.0.0.1' : 'localhost'
+        const originOf = (site) => (site === 'A' ? rootOrigin : other.origin)
+        const parentOrigin = level === 1 ? rootOrigin : originOf(sites[level - 2])
+        const docId = `${level}-${Math.random().toString(36).slice(2)}`
+        const lab = level === 0 ? (window.frameLab = { caseId, ready: false, inView: false, events: [], done: [] }) : null
+
+        const add = (tag, parent, attrs = {}, text) => {
+          const node = document.createElement(tag)
+          for (const [name, value] of Object.entries(attrs)) node.setAttribute(name, value)
+          if (text !== undefined) node.textContent = text
+          parent.append(node)
+          return node
+        }
+        const up = (message) => {
+          if (level === 0) receive(message)
+          else parent.postMessage({ channel: 'frame-lab', ...message }, parentOrigin)
+        }
+        const receive = (message) => {
+          if (message.kind === 'position') {
+            lab.ready = true
+            lab.targetDoc = message.docId
+            const { x, y } = message.position
+            lab.inView = x > 0 && y > 0 && x < innerWidth && y < innerHeight
+          } else if (message.kind === 'event') {
+            lab.events.push(message.event)
+          } else if (message.kind === 'done') {
+            lab.done.push(`${message.level}:${message.action}`)
+          }
+          document.documentElement.dataset.frameReady = String(lab.ready)
+        }
+
+        const stage = add('section', document.body, { class: 'stage' })
+        add('p', stage, {}, `Level ${level} at ${location.origin}`)
+        if (scroll) add('div', stage, { class: 'spacer' })
+        let child = null
+        let lastPosition = null
+        const childUrl = () => {
+          const url = new URL('/frame-lab.html', originOf(sites[level]))
+          url.search = new URLSearchParams({ case: caseId, level: String(level + 1), root: rootOrigin, scroll: scroll ? '1' : '0' })
+          return url.href
+        }
+        const mountChild = () => {
+          const frame = document.createElement('iframe')
+          frame.src = childUrl()
+          frame.title = `${caseId} level ${level + 1}`
+          frame.style.height = `${260 + (sites.length - level - 1) * 140}px`
+          if (child) child.replaceWith(frame)
+          else stage.append(frame)
+          child = frame
+        }
+        const relay = () => {
+          if (!child || !lastPosition) return
+          const bounds = child.getBoundingClientRect()
+          const { x, y } = lastPosition.position
+          up({
+            kind: 'position',
+            docId: lastPosition.docId,
+            position: { x: x + bounds.left + child.clientLeft, y: y + bounds.top + child.clientTop },
+          })
+        }
+        const command = (action) => {
+          if (action === 'detach') { child?.remove(); child = null }
+          else if (action === 'replace') mountChild()
+          else if (action === 'reload' && child) child.src = childUrl()
+          up({ kind: 'done', level, action })
+        }
+
+        if (level < sites.length) {
+          mountChild()
+          window.addEventListener('message', (event) => {
+            const data = event.data
+            if (!child || event.source !== child.contentWindow || data?.channel !== 'frame-lab') return
+            if (event.origin !== new URL(child.src).origin) return
+            if (data.kind === 'position') { lastPosition = data; relay() }
+            else if (data.kind === 'event' || data.kind === 'done') up(data)
+          })
+        } else {
+          const target = add('div', stage, { class: 'target' })
+          const button = add('button', target, { type: 'button', 'aria-label': `Click target ${caseId}` }, 'Click target')
+          const checkbox = add('input', target, { type: 'checkbox', 'aria-label': `Check target ${caseId}` })
+          for (const [control, node] of [['button', button], ['checkbox', checkbox]]) {
+            node.addEventListener('click', (event) => {
+              up({ kind: 'event', event: { control, trusted: event.isTrusted, origin: location.origin, level, docId, checked: checkbox.checked } })
+            })
+          }
+          const position = () => {
+            const rect = button.getBoundingClientRect()
+            up({ kind: 'position', docId, position: { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 } })
+          }
+          window.addEventListener('scroll', position)
+          window.addEventListener('resize', position)
+          // Chromium pauses animation frames in offscreen cross-site frames; report right away.
+          position()
+        }
+        window.addEventListener('scroll', relay)
+        if (level > 0) {
+          window.addEventListener('message', (event) => {
+            const data = event.data
+            if (event.source !== parent || event.origin !== parentOrigin || data?.channel !== 'frame-lab') return
+            if (data.kind !== 'command') return
+            if (data.level === level) command(data.action)
+            else child?.contentWindow.postMessage(data, new URL(child.src).origin)
+          })
+        } else {
+          // Sends `action` to the document at `level`, which applies it to its own child frame.
+          lab.command = (target, action) => {
+            if (target === 0) command(action)
+            else child?.contentWindow.postMessage({ channel: 'frame-lab', kind: 'command', level: target, action }, new URL(child.src).origin)
+            return true
+          }
+          lab.reset = () => { lab.events = []; return true }
+        }
+      })()
+    </script>
+  </body>
+</html>

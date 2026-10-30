@@ -342,6 +342,10 @@ impl CdpClient {
     ) -> Result<Value, CdpError> {
         let (tx, rx) = oneshot::channel();
         self.inner.pending.lock().await.insert(id, tx);
+        let _slot = PendingSlot {
+            inner: Arc::clone(&self.inner),
+            id,
+        };
 
         let send_result = {
             let mut guard = self.inner.sink.lock().await;
@@ -368,20 +372,38 @@ impl CdpClient {
             }
         };
 
-        if let Err(err) = send_result {
-            self.inner.pending.lock().await.remove(&id);
-            return Err(err);
-        }
-
+        send_result?;
         match timeout(self.inner.opts.request_timeout, rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_closed)) => Err(CdpError::ConnectionLost),
-            Err(_elapsed) => {
-                self.inner.pending.lock().await.remove(&id);
-                Err(CdpError::Timeout {
-                    method: method.to_string(),
-                })
-            }
+            Err(_elapsed) => Err(CdpError::Timeout {
+                method: method.to_string(),
+            }),
+        }
+    }
+}
+
+/// Frees a request's reply slot however its send ends: on a failed write, on the client's own
+/// timeout, and when the caller drops the future. Callers drop sends routinely (a run that
+/// times out, an evaluation that gives up on its promise, input raced against a dialog), and a
+/// request the browser never answers would otherwise hold its slot until the connection
+/// closes. After a reply the reader has already taken the slot, so removal is a no-op.
+struct PendingSlot {
+    inner: Arc<Inner>,
+    id: u64,
+}
+
+impl Drop for PendingSlot {
+    fn drop(&mut self) {
+        let id = self.id;
+        if let Ok(mut pending) = self.inner.pending.try_lock() {
+            pending.remove(&id);
+        } else if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            // The reader or another send holds the map; remove once it is free.
+            let inner = Arc::clone(&self.inner);
+            runtime.spawn(async move {
+                inner.pending.lock().await.remove(&id);
+            });
         }
     }
 }

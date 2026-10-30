@@ -4,6 +4,9 @@
 //! holds afterwards is the page's call: input handlers may reformat it (a code field
 //! grouping digits, a phone mask) or reject it. Fill does not judge that; act reports
 //! the field as a snapshot shows it, and the caller decides.
+//!
+//! Date, time, colour and range inputs are the exception: they have no text editor, so fill
+//! sets their value in the isolated world and fires input/change, as Playwright does.
 
 use super::{
     Input, InputTarget, Point,
@@ -15,11 +18,14 @@ use crate::{CoreError, PageJs, ProtocolSession, Ref, pointer::PointerAction};
 use serde_json::{Value, json};
 
 const PREPARE_FILL_JS: &str = include_str!("../assets/prepare-fill.js");
+const SET_INPUT_VALUE_JS: &str = include_str!("../assets/set-input-value.js");
 
 /// Controls without a JS caret API need a native collapse step for append.
 enum PreparedSelection {
     Ready,
     CollapseToEnd,
+    /// A date, time, colour or range input, which takes a value rather than typed text.
+    SetValue,
 }
 
 impl Input {
@@ -52,8 +58,14 @@ impl Input {
     ) -> Result<Option<Point>, CoreError> {
         // Validate before focus/selection so rejecting a field cannot send input
         // to whatever happens to be focused elsewhere on the page.
-        prepare_fill(session, target.backend_node_id, "validate").await?;
+        let kind = prepare_fill(session, target.backend_node_id, "validate").await?;
         scroll_into_view(session, target.backend_node_id).await;
+        if matches!(kind, PreparedSelection::SetValue) {
+            // No click: on a date or colour input it opens the browser's picker.
+            return set_input_value(session, target.backend_node_id, value)
+                .await
+                .map(|()| None);
+        }
         let mut point = get_element_center(session, target.backend_node_id).await?;
         self.check_click_point(session, &target, point).await?;
         if let Some(pointer) = self.drawing_pointer().await
@@ -115,11 +127,33 @@ async fn prepare_fill(
         Ok(PreparedSelection::Ready)
     } else if result.as_str() == Some("collapseToEnd") {
         Ok(PreparedSelection::CollapseToEnd)
+    } else if result.as_str() == Some("setValue") {
+        Ok(PreparedSelection::SetValue)
     } else {
         Err(CoreError::Message(
             result
                 .as_str()
                 .unwrap_or("Could not prepare the field for input.")
+                .to_string(),
+        ))
+    }
+}
+
+async fn set_input_value(
+    session: &ProtocolSession,
+    backend_node_id: i64,
+    value: &str,
+) -> Result<(), CoreError> {
+    let result: Value = PageJs::isolated(session)
+        .call(backend_node_id, SET_INPUT_VALUE_JS, &[json!(value)])
+        .await?;
+    if result == Value::Bool(true) {
+        Ok(())
+    } else {
+        Err(CoreError::Message(
+            result
+                .as_str()
+                .unwrap_or("Could not set the field's value.")
                 .to_string(),
         ))
     }

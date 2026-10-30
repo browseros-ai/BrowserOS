@@ -36,6 +36,8 @@ struct Call {
 struct Emulated {
     metrics: Option<Value>,
     touch: bool,
+    /// The gesture configuration while the mouse acts as a finger; `None` while it is a mouse.
+    finger: Option<String>,
     user_agent: String,
 }
 
@@ -171,6 +173,14 @@ impl Native {
         self.lock().calls.clear();
     }
 
+    /// The gesture configuration `session`'s mouse acts as a finger with, if it does.
+    fn finger(&self, session: &str) -> Option<String> {
+        self.lock()
+            .emulation
+            .get(session)
+            .and_then(|emulated| emulated.finger.clone())
+    }
+
     fn window(&self, id: i64) -> Result<WindowBounds, Box<dyn Error>> {
         Ok(self
             .lock()
@@ -295,6 +305,13 @@ impl Native {
             "Emulation.setTouchEmulationEnabled" => {
                 let session = session_key.ok_or(CdpError::SessionGone)?;
                 fake.emulation.entry(session).or_default().touch = params["enabled"] == true;
+                json!({})
+            }
+            "Emulation.setEmitTouchEventsForMouse" => {
+                let session = session_key.ok_or(CdpError::SessionGone)?;
+                let configuration = params["configuration"].as_str().unwrap_or_default();
+                fake.emulation.entry(session).or_default().finger =
+                    (params["enabled"] == true).then(|| configuration.to_string());
                 json!({})
             }
             "Emulation.setUserAgentOverride" => {
@@ -544,6 +561,16 @@ async fn tests_that_mobile_emulates_the_device_and_leaves_the_window() -> TestRe
             .params["enabled"],
         true
     );
+    // The mouse acts as a finger, so a drag scrolls or draws. Desktop gestures: mobile ones
+    // let a double tap zoom the page.
+    let finger = fixture
+        .native
+        .only("Emulation.setEmitTouchEventsForMouse")?;
+    assert_eq!(
+        finger.params,
+        json!({"enabled": true, "configuration": "desktop"})
+    );
+    assert_eq!(finger.session.as_deref(), Some("session-1"));
     let identity = fixture
         .native
         .only("Emulation.setUserAgentOverride")?
@@ -630,6 +657,13 @@ async fn tests_that_desktop_uses_the_native_identity_without_touch() -> TestResu
     assert_eq!(
         fixture
             .native
+            .only("Emulation.setEmitTouchEventsForMouse")?
+            .params,
+        json!({"enabled": false})
+    );
+    assert_eq!(
+        fixture
+            .native
             .only("Emulation.setUserAgentOverride")?
             .params,
         json!({"userAgent": ""})
@@ -675,11 +709,20 @@ async fn tests_that_default_clears_only_our_overrides_and_leaves_the_window() ->
         vec![
             "Emulation.clearDeviceMetricsOverride",
             "Emulation.setTouchEmulationEnabled",
+            "Emulation.setEmitTouchEventsForMouse",
             "Emulation.setUserAgentOverride"
         ]
     );
     let clears = fixture.native.calls("Emulation.clearDeviceMetricsOverride");
     assert_eq!(clears[0].session.as_deref(), Some("session-1"));
+    assert_eq!(
+        fixture
+            .native
+            .only("Emulation.setEmitTouchEventsForMouse")?
+            .params,
+        json!({"enabled": false})
+    );
+    assert_eq!(fixture.native.finger("session-1"), None);
     // Natural again: the page follows its window.
     assert_eq!(
         (report.viewport.width, report.viewport.height),
@@ -766,35 +809,52 @@ async fn tests_that_a_raw_override_on_a_fixed_tab_is_undone_by_its_next_operatio
     let session = fixture.view.page_session(page.clone()).await?.session_id;
 
     // A caller's raw calls share the page session with the mode: page.cdp, then browser.cdp
-    // addressed to the page's session.
-    for raw in ["page", "session"] {
+    // addressed to the page's session. The last two turn the finger back into a mouse, or
+    // give it mobile gestures, which let a double tap zoom.
+    for (raw, method, params) in [
+        ("page", "Emulation.clearDeviceMetricsOverride", json!({})),
+        (
+            "session",
+            "Emulation.setDeviceMetricsOverride",
+            json!({"width": 777, "height": 555, "deviceScaleFactor": 1, "mobile": false}),
+        ),
+        (
+            "page",
+            "Emulation.setEmitTouchEventsForMouse",
+            json!({"enabled": false}),
+        ),
+        (
+            "session",
+            "Emulation.setEmitTouchEventsForMouse",
+            json!({"enabled": true, "configuration": "mobile"}),
+        ),
+    ] {
         if raw == "page" {
             fixture
                 .view
-                .cdp_json_for_page(page.clone(), "Emulation.clearDeviceMetricsOverride", "{}")
+                .cdp_json_for_page(page.clone(), method, &params.to_string())
                 .await?;
         } else {
-            fixture
-                .view
-                .cdp(
-                    "Emulation.setDeviceMetricsOverride",
-                    json!({"width": 777, "height": 555, "deviceScaleFactor": 1, "mobile": false}),
-                    Some(&session),
-                )
-                .await?;
+            fixture.view.cdp(method, params, Some(&session)).await?;
         }
         fixture.native.clear_calls();
         drop(fixture.view.prepare_viewport(page.clone()).await?);
         let methods = emulation_methods(&fixture.native.methods());
-        for method in [
+        for restored in [
             "Emulation.setDeviceMetricsOverride",
+            "Emulation.setEmitTouchEventsForMouse",
             "Emulation.setVisibleSize",
         ] {
             assert!(
-                methods.iter().any(|sent| sent == method),
-                "{raw}: {methods:?}"
+                methods.iter().any(|sent| sent == restored),
+                "{raw} {method}: {methods:?}"
             );
         }
+        assert_eq!(
+            fixture.native.finger(session.as_str()).as_deref(),
+            Some("desktop"),
+            "{raw} {method}"
+        );
     }
 
     // A raw call that leaves the mode's overrides alone changes nothing.
@@ -972,10 +1032,12 @@ async fn tests_that_default_clears_what_a_failed_change_left_on_the_page() -> Te
     for method in [
         "Emulation.clearDeviceMetricsOverride",
         "Emulation.setTouchEmulationEnabled",
+        "Emulation.setEmitTouchEventsForMouse",
         "Emulation.setUserAgentOverride",
     ] {
         assert!(methods.iter().any(|sent| sent == method), "{methods:?}");
     }
+    assert_eq!(fixture.native.finger("session-1"), None);
     Ok(())
 }
 
@@ -1078,6 +1140,19 @@ async fn tests_that_prepare_reapplies_emulation_on_a_new_session() -> TestResult
     let metrics = fixture.native.only("Emulation.setDeviceMetricsOverride")?;
     assert_eq!(metrics.session.as_deref(), Some("session-2"));
     assert_eq!(metrics.params["scale"], 0.5);
+    // The mouse acted as a finger only on the lost session; the new one gets it back.
+    assert_eq!(
+        fixture
+            .native
+            .only("Emulation.setEmitTouchEventsForMouse")?
+            .session
+            .as_deref(),
+        Some("session-2")
+    );
+    assert_eq!(
+        fixture.native.finger("session-2").as_deref(),
+        Some("desktop")
+    );
     assert!(window_methods(&fixture.native.methods()).is_empty());
     Ok(())
 }

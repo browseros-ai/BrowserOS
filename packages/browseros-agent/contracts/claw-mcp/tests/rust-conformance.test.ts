@@ -29,13 +29,19 @@ const activeCases = (
 ).filter((contractCase) => !onlyCases || contractCase.name.includes(onlyCases))
 
 interface ServerRun {
+  browserArgs: string[]
   server: ContractServer
   browser: BrowserHandle
   mcp: McpSession
+  scoped?: Promise<{ server: ContractServer; mcp: McpSession } | undefined>
   extraSessions: McpSession[]
   openedPages: Array<{ session: McpSession; page: number }>
   scratchDir: string
 }
+
+// The lowest BrowserOS release with profile targeting; asserting it gives the scoped server
+// the same bound views a BrowserOS-launched server uses.
+const PROFILE_TARGETING_VERSION = '0.51.1.3'
 
 let fixtures: FixturePair | undefined
 let run: ServerRun | undefined
@@ -46,11 +52,17 @@ async function ensureFixtures(): Promise<FixturePair> {
   return fixtures
 }
 
-async function ensureRun(): Promise<ServerRun> {
+async function ensureRun(browserArgs: string[] = []): Promise<ServerRun> {
+  // Density-sensitive captures need a real launch flag, not page emulation.
+  // Replace only the suite-owned runtime when a case's launch contract changes;
+  // ordinary cases keep their existing arguments and shared-session ordering.
+  if (run && JSON.stringify(run.browserArgs) !== JSON.stringify(browserArgs)) {
+    await teardownRun()
+  }
   if (run) return run
 
   await ensureFixtures()
-  const browser = await launchBrowser()
+  const browser = await launchBrowser(browserArgs)
   // Everything after the launch is wrapped so a failure (capture-mode,
   // server boot, browser attach, scratch-dir mint) never leaks the
   // browser: nothing is stored in `runs` until the run is fully built,
@@ -69,22 +81,9 @@ async function ensureRun(): Promise<ServerRun> {
       )
     }
     server = await startRustServer(browser.cdpPort)
-    const mcp = await McpSession.connect(server.baseUrl, 'claw-contract')
-    // The rust server attaches to the browser asynchronously after
-    // /system/health turns ok; wait until tool calls stop reporting a
-    // disconnected browser before running cases.
-    await waitUntil(
-      async () => {
-        const result = await mcp.callTool('tabs', { action: 'list' })
-        return !(
-          result.isError &&
-          textOf(result).includes('browser session not connected')
-        )
-      },
-      'Rust server to attach to the browser',
-      { timeoutMs: 30_000, intervalMs: 500 },
-    )
+    const mcp = await connectAttached(server, 'claw-contract')
     run = {
+      browserArgs,
       server,
       browser,
       mcp,
@@ -100,6 +99,58 @@ async function ensureRun(): Promise<ServerRun> {
   }
 }
 
+/** An MCP session once the server has attached to the browser. */
+async function connectAttached(
+  server: ContractServer,
+  clientName: string,
+): Promise<McpSession> {
+  const mcp = await McpSession.connect(server.baseUrl, clientName)
+  // The rust server attaches to the browser asynchronously after
+  // /system/health turns ok; wait until tool calls stop reporting a
+  // disconnected browser before running cases.
+  await waitUntil(
+    async () => {
+      const result = await mcp.callTool('tabs', { action: 'list' })
+      return !(
+        result.isError &&
+        textOf(result).includes('browser session not connected')
+      )
+    },
+    'Rust server to attach to the browser',
+    { timeoutMs: 30_000, intervalMs: 500 },
+  )
+  return mcp
+}
+
+/** The scoped server, or `undefined` when the browser has no native profile targeting. */
+async function startScoped(
+  run: ServerRun,
+): Promise<{ server: ContractServer; mcp: McpSession } | undefined> {
+  const server = await startRustServer(run.browser.cdpPort, {
+    env: { CLAW_NATIVE_BROWSEROS_VERSION: PROFILE_TARGETING_VERSION },
+  })
+  try {
+    const mcp = await connectAttached(server, 'claw-contract-scoped')
+    const probe = await mcp.callTool('tabs', { action: 'list' })
+    if (
+      probe.isError &&
+      textOf(probe).includes('target_scope_unsupported_native')
+    ) {
+      // A BrowserOS without profile targeting runs its server unbound as well.
+      console.warn(
+        'scoped server unavailable: this browser has no native profile targeting; scoped cases use the primary server',
+      )
+      await mcp.close().catch(() => {})
+      await server.stop().catch(() => {})
+      return undefined
+    }
+    return { server, mcp }
+  } catch (error) {
+    await server.stop().catch(() => {})
+    throw error
+  }
+}
+
 function makeContext(run: ServerRun): CaseContext {
   const pair = fixtures
   if (!pair) throw new Error('fixture servers not started')
@@ -107,6 +158,10 @@ function makeContext(run: ServerRun): CaseContext {
     server: run.server,
     browser: run.browser,
     mcp: run.mcp,
+    async scopedMcp() {
+      run.scoped ??= startScoped(run)
+      return (await run.scoped)?.mcp ?? run.mcp
+    },
     scratchDir: run.scratchDir,
     async openSession(clientName = 'claw-contract-extra') {
       const session = await McpSession.connect(run.server.baseUrl, clientName)
@@ -146,6 +201,9 @@ async function teardownRun(): Promise<void> {
   for (const session of [...current.extraSessions, current.mcp]) {
     await session.close().catch(() => {})
   }
+  const scoped = await current.scoped?.catch(() => undefined)
+  await scoped?.mcp.close().catch(() => {})
+  await scoped?.server.stop().catch(() => {})
   await current.server.stop().catch(() => {})
   await current.browser.kill().catch(() => {})
   await rm(current.scratchDir, { recursive: true, force: true })
@@ -160,7 +218,7 @@ gate('Rust /mcp conformance', () => {
     test(
       contractCase.name,
       async () => {
-        const activeRun = await ensureRun()
+        const activeRun = await ensureRun(contractCase.browserArgs)
         try {
           await contractCase.run(makeContext(activeRun))
         } finally {

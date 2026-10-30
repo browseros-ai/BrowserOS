@@ -11,11 +11,13 @@ import typer
 from ..lib.utils import log_error, log_success
 from ..release.docker_image import (
     DEFAULT_REPOSITORY,
+    PLATFORM_PACKAGES,
     DockerOperations,
     ImageError,
     ImageRequest,
     build_image,
     image_context,
+    publish_index,
 )
 
 
@@ -25,6 +27,16 @@ def docker_command(
     ),
     push: bool = typer.Option(
         False, "--push", help="Build amd64 + arm64 and push them under one tag"
+    ),
+    push_by_digest: bool = typer.Option(
+        False, "--push-by-digest",
+        help="Push the one --platform image just built here, untagged, from the build cache; "
+             "prints its digest for --from-digests",
+    ),
+    from_digests: Optional[Path] = typer.Option(
+        None, "--from-digests",
+        help="With --push: tag one index over images already pushed by digest, "
+             "read from <dir>/amd64 and <dir>/arm64, instead of building",
     ),
     latest: bool = typer.Option(
         False, "--latest", help="Also tag :latest; only for a promoted version"
@@ -66,14 +78,28 @@ def docker_command(
         revision=revision,
         capsolver_key_file=capsolver_key_file.resolve() if capsolver_key_file else None,
         twocaptcha_key_file=twocaptcha_key_file.resolve() if twocaptcha_key_file else None,
+        push_by_digest=push_by_digest,
     )
     try:
-        result = build_image(request, DockerOperations(), image_context())
+        if from_digests is not None:
+            if not push:
+                raise ImageError("--from-digests tags a published index; pass --push")
+            digests = {
+                platform: (from_digests / platform.split("/")[1]).read_text(encoding="utf-8").strip()
+                for platform in PLATFORM_PACKAGES
+                if (from_digests / platform.split("/")[1]).is_file()
+            }
+            result = publish_index(request, digests, DockerOperations())
+        else:
+            result = build_image(request, DockerOperations(), image_context())
     except (ImageError, OSError, subprocess.CalledProcessError) as exc:
         log_error(str(exc))
         raise typer.Exit(1)
-    verb = "Pushed" if push else "Loaded into local Docker"
-    log_success(f"{verb}: {', '.join(result.tags)} ({', '.join(result.platforms)})")
+    if push_by_digest:
+        log_success(f"Pushed by digest, untagged ({', '.join(result.platforms)})")
+    else:
+        verb = "Pushed" if push else "Loaded into local Docker"
+        log_success(f"{verb}: {', '.join(result.tags)} ({', '.join(result.platforms)})")
     if result.digest:
         log_success(f"Digest: {result.digest}")
     target = github_output or (Path(os.environ["GITHUB_OUTPUT"]) if os.environ.get("GITHUB_OUTPUT") else None)

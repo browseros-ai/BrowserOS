@@ -1,18 +1,15 @@
 use crate::{
-    constants::DOWNLOAD_TIMEOUT,
-    downloads_api::{newly_added, read_recent_downloads},
     framework::{
         ToolCtx, ToolError, ToolExecResult, ToolResult, parse_args, pending_dialog_result,
         text_result,
     },
     output_file::record_browser_output_file,
 };
-use browseros_core::{PageId, Ref, SessionId};
+use browseros_core::{PageId, Ref};
 use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::path::PathBuf;
 
 const DESCRIPTION: &str = "\
 Click an element (by ref from the last snapshot) to trigger a file download. \
@@ -45,26 +42,14 @@ fn handler<'a>(
         if let Some(result) = pending_dialog_result(ctx, page_id.clone()) {
             return Ok(Some(result));
         }
-        // The download behaviour is deliberately left alone. Overriding it is the
-        // only way to choose the destination, and it is also what skips the
-        // browser's own target determination, which is the part that renames
-        // around a collision rather than replacing. Letting the browser decide is
-        // what keeps an existing file safe and its downloads list correct.
-        let before = read_recent_downloads(&ctx.browser)
-            .await?
-            .into_iter()
-            .map(|record| record.id)
-            .collect::<Vec<_>>();
-        let page_session = ctx.browser.page_session(page_id.clone()).await?;
-        let suggested =
-            capture_download(ctx, page_id, page_session.session_id.clone(), &args.r#ref).await?;
-        let after = read_recent_downloads(&ctx.browser).await?;
-        let record = newly_added(&before, &after, &suggested)?;
-        let path = PathBuf::from(&record.filename);
-        let filename = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| suggested.clone());
+        let transfer = ctx.browser.files();
+        let reference = Ref(args.r#ref.clone());
+        let record = tokio::select! {
+            () = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
+            record = transfer.download(page_id, &reference) => record?,
+        };
+        let path = record.path;
+        let filename = record.filename;
         record_browser_output_file(&ctx.output_files, path.clone()).await;
         Ok(Some(text_result(
             format!(
@@ -75,77 +60,10 @@ fn handler<'a>(
             Some(json!({
                 "page": args.page,
                 "ref": args.r#ref,
-                "path": record.filename,
+                "path": path.to_string_lossy(),
                 "filename": filename,
                 "bytes": record.bytes
             })),
         )))
     })
-}
-
-async fn capture_download(
-    ctx: &ToolCtx,
-    page_id: PageId,
-    session_id: SessionId,
-    ref_id: &str,
-) -> ToolExecResult<String> {
-    // Subscribe before clicking so synchronous download events cannot outrun the receiver.
-    let mut events = ctx.browser.cdp_events();
-    let input = ctx.browser.input(page_id).await?;
-    input
-        .click(&Ref(ref_id.to_string()), Default::default())
-        .await?;
-    let mut tracking = false;
-    let mut guid = String::new();
-    let mut suggested_filename = String::new();
-    let timeout = tokio::time::sleep(DOWNLOAD_TIMEOUT);
-    tokio::pin!(timeout);
-    loop {
-        tokio::select! {
-            () = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
-            () = &mut timeout => {
-                return Err(ToolError::message(format!(
-                    "Download timed out after {}ms. If the browser is set to ask where to save each file, it is waiting on that dialog.",
-                    DOWNLOAD_TIMEOUT.as_millis()
-                )));
-            }
-            event = events.recv() => {
-                let event = event.map_err(|err| ToolError::message(err.to_string()))?;
-                if event.session_id.as_ref() != Some(&session_id) {
-                    continue;
-                }
-                match event.method.as_str() {
-                    // Only the first download of the click: a later one would
-                    // otherwise take over the guid being tracked and the
-                    // completion of this one would never be seen.
-                    "Page.downloadWillBegin" if !tracking => {
-                        tracking = true;
-                        guid = event.params.get("guid").and_then(Value::as_str).unwrap_or_default().to_string();
-                        suggested_filename = event
-                            .params
-                            .get("suggestedFilename")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string();
-                    }
-                    "Page.downloadProgress" => {
-                        if !tracking || event.params.get("guid").and_then(Value::as_str) != Some(guid.as_str()) {
-                            continue;
-                        }
-                        match event.params.get("state").and_then(Value::as_str) {
-                            Some("completed") => {
-                                if suggested_filename.is_empty() {
-                                    return Err(ToolError::message("Download completed without suggested filename"));
-                                }
-                                return Ok(suggested_filename);
-                            }
-                            Some("canceled") => return Err(ToolError::message("Download was canceled")),
-                            _ => {}
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
 }

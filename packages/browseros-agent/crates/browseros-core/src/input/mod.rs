@@ -10,6 +10,7 @@ use crate::{
     pointer::{Pointer, PointerAction},
     snapshot::RefEntry,
     target::page_access::PageAccess,
+    timeouts,
 };
 use geometry::{
     click_blocker_at_point, focus_element_js, get_element_center, js_click, scroll_into_view,
@@ -22,7 +23,8 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 pub use keyboard::{
-    KeyInfo, clear_field, get_key_info, modifier_bitmask, normalize_key, press_combo, type_text,
+    KeyInfo, clear_field, get_key_info, insert_text, modifier_bitmask, normalize_key, press_combo,
+    type_text,
 };
 pub use mouse::MouseButton as PublicMouseButton;
 
@@ -338,6 +340,14 @@ impl Input {
         .await
     }
 
+    pub async fn insert_text(&self, text: &str) -> Result<(), CoreError> {
+        self.with_page_session_retry(|session| {
+            let text = text.to_string();
+            async move { insert_text(&session, &text).await }
+        })
+        .await
+    }
+
     pub async fn press(&self, key: &str) -> Result<(), CoreError> {
         self.with_page_session_retry(|session| {
             let key = key.to_string();
@@ -384,37 +394,73 @@ impl Input {
     }
 
     pub async fn check(&self, ref_id: &Ref) -> Result<bool, CoreError> {
-        let resolved = self.observer.resolve_ref(ref_id).await?;
-        let checked: Option<bool> = PageJs::isolated(&resolved.session)
-            .call(resolved.backend_node_id, CHECKED_FN, &[])
-            .await?;
-        if checked != Some(true) {
-            let _ = self
-                .click_node(
-                    &resolved.session,
-                    InputTarget::from_ref_entry(&resolved.entry),
-                    ClickOptions::default(),
-                )
-                .await?;
-        }
-        Ok(true)
+        self.set_checked(ref_id, true).await
     }
 
     pub async fn uncheck(&self, ref_id: &Ref) -> Result<bool, CoreError> {
+        self.set_checked(ref_id, false).await
+    }
+
+    /// Clicks the control only when it is not already in the wanted state, then confirms the
+    /// click changed it. Native checkboxes and radios report `checked`; custom switches report
+    /// `aria-checked`. A control with neither keeps the old contract: check clicks it once,
+    /// uncheck leaves it, and nothing can be confirmed.
+    async fn set_checked(&self, ref_id: &Ref, checked: bool) -> Result<bool, CoreError> {
         let resolved = self.observer.resolve_ref(ref_id).await?;
-        let checked: Option<bool> = PageJs::isolated(&resolved.session)
-            .call(resolved.backend_node_id, CHECKED_FN, &[])
+        let js = PageJs::isolated(&resolved.session);
+        let before: Option<CheckState> = js
+            .call(resolved.backend_node_id, CHECK_STATE_FN, &[])
             .await?;
-        if checked == Some(true) {
-            let _ = self
-                .click_node(
+        let Some(before) = before else {
+            if checked {
+                self.click_node(
                     &resolved.session,
                     InputTarget::from_ref_entry(&resolved.entry),
                     ClickOptions::default(),
                 )
                 .await?;
+            }
+            return Ok(checked);
+        };
+        if before.checked == checked {
+            return Ok(checked);
         }
-        Ok(false)
+        if before.radio && !checked {
+            return Err(CoreError::Message(format!(
+                "{ref_id} is a radio button, which cannot be unchecked. Check another option in its group instead."
+            )));
+        }
+        self.click_node(
+            &resolved.session,
+            InputTarget::from_ref_entry(&resolved.entry),
+            ClickOptions::default(),
+        )
+        .await?;
+        // A framework can apply the new state a tick after the click event, so poll briefly
+        // instead of reading once.
+        let deadline = tokio::time::Instant::now() + timeouts::CHECK_STATE_SETTLE;
+        loop {
+            // The click has landed. A control the page then replaced, or a page that navigated
+            // away, can no longer report its state; the readback shows the page as it is, and
+            // an error here would only invite a retry that clicks again and flips it back.
+            let Ok(after) = js
+                .call::<Option<CheckState>>(resolved.backend_node_id, CHECK_STATE_FN, &[])
+                .await
+            else {
+                return Ok(checked);
+            };
+            match after {
+                Some(after) if after.detached || after.checked == checked => return Ok(checked),
+                _ => {}
+            }
+            if tokio::time::Instant::now() >= deadline {
+                let wanted = if checked { "checked" } else { "unchecked" };
+                return Err(CoreError::Message(format!(
+                    "Clicking {ref_id} did not make it {wanted}. The page may ignore the click or need another control; take a new snapshot."
+                )));
+            }
+            tokio::time::sleep(timeouts::CHECK_STATE_POLL).await;
+        }
     }
 
     pub async fn upload_file_by_ref(
@@ -663,7 +709,34 @@ const POINT_SENSITIVE_JS: &str = "(()=>{const pred=__PRED__;\
   }\
   return pred(el);})()";
 
-const CHECKED_FN: &str = "function(){return this.checked}";
+/// What [`CHECK_STATE_FN`] reads.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+struct CheckState {
+    checked: bool,
+    radio: bool,
+    /// The control is no longer in the document, typically replaced by a re-render.
+    #[serde(default)]
+    detached: bool,
+}
+
+/// Reads a control's checked state, following a label to the control it names. Returns null
+/// when the element has no checked state at all.
+///
+/// A mixed control reads as its underlying state, as Playwright's `getCheckedWithoutMixed`
+/// does: a native box's `checked` sits beneath `indeterminate`, and clicking clears the mixed
+/// look by toggling that, so treating mixed as unknown and clicking would invert a box that
+/// was already where the caller wanted it. An `aria-checked="mixed"` control counts as
+/// unchecked.
+const CHECK_STATE_FN: &str = "function(){\
+const el=this.tagName==='LABEL'&&this.control?this.control:this;\
+if(!el.isConnected)return{checked:false,radio:false,detached:true};\
+if(el.tagName==='INPUT'&&(el.type==='checkbox'||el.type==='radio'))\
+return{checked:el.checked,radio:el.type==='radio'};\
+const aria=el.getAttribute&&el.getAttribute('aria-checked');\
+if(aria!=='true'&&aria!=='false'&&aria!=='mixed')return null;\
+const role=(el.getAttribute('role')||'').trim().split(/\\s+/)[0];\
+return{checked:aria==='true',radio:role==='radio'||role==='menuitemradio'};\
+}";
 
 const SELECT_OPTION_FN: &str = "function(val){\
   for(var i=0;i<this.options.length;i++){\
@@ -734,6 +807,20 @@ mod tests {
         tab_info_error: bool,
         tab_list_error: bool,
         tab_target: &'static str,
+        /// What the check-state read answers: null when the element has no checked state.
+        check_state: Value,
+        /// The check state a mouse press leaves behind, for controls the click toggles.
+        check_state_after_click: Option<Value>,
+        /// The held move (counting from 1) that never gets an answer, to cancel a drag mid-way.
+        stall_held_move: Option<usize>,
+        /// The held move (counting from 1) that the browser rejects, to fail a drag mid-way.
+        fail_held_move: Option<usize>,
+        held_moves: usize,
+        /// The field is a date/time/colour/range input, which fill sets instead of typing.
+        value_control: bool,
+        /// What the set-value script answers: true, or the reason the value was refused.
+        set_value_result: Value,
+        set_values: Vec<Value>,
     }
 
     struct HarnessConnection {
@@ -950,9 +1037,29 @@ mod tests {
                         Ok(json!({}))
                     }
                     "Input.dispatchMouseEvent" => {
+                        let (mut stall, mut fail) = (false, false);
                         if let Ok(mut state) = self.state.lock() {
                             state.mouse_events += 1;
+                            if params["type"] == "mousePressed"
+                                && let Some(after) = state.check_state_after_click.take()
+                            {
+                                state.check_state = after;
+                            }
+                            if params["type"] == "mouseMoved" && params["buttons"] == 1 {
+                                state.held_moves += 1;
+                                stall = state.stall_held_move == Some(state.held_moves);
+                                fail = state.fail_held_move == Some(state.held_moves);
+                            }
                             state.mouse_calls.push((params, Instant::now()));
+                        }
+                        if stall {
+                            std::future::pending::<()>().await;
+                        }
+                        if fail {
+                            return Err(CdpError::Protocol {
+                                code: -32000,
+                                message: "the held move was rejected".into(),
+                            });
                         }
                         Ok(json!({}))
                     }
@@ -1032,8 +1139,28 @@ mod tests {
                     }),
                 };
             }
-            if function.contains("return this.checked") {
-                return Ok(json!({ "result": { "value": false } }));
+            if function.contains("aria-checked") {
+                let state = self.state.lock().map_err(|_| CdpError::Protocol {
+                    code: -1,
+                    message: "poisoned test state".into(),
+                })?;
+                return Ok(json!({ "result": { "value": state.check_state } }));
+            }
+            if function.contains("browserosSetInputValue") {
+                let mut state = self.state.lock().map_err(|_| CdpError::Protocol {
+                    code: -1,
+                    message: "poisoned test state".into(),
+                })?;
+                state
+                    .set_values
+                    .push(params["arguments"][0]["value"].clone());
+                return Ok(json!({ "result": { "value": state.set_value_result } }));
+            }
+            if function.contains("browserosPrepareFill")
+                && params["arguments"][0]["value"] == "validate"
+                && self.state.lock().is_ok_and(|state| state.value_control)
+            {
+                return Ok(json!({ "result": { "value": "setValue" } }));
             }
             if function.contains("browserosPrepareFill") || function.contains("this.focus()") {
                 return Ok(json!({ "result": { "value": true } }));
@@ -1102,6 +1229,14 @@ mod tests {
                 tab_info_error: false,
                 tab_list_error: false,
                 tab_target: "target-1",
+                check_state: Value::Null,
+                check_state_after_click: None,
+                stall_held_move: None,
+                fail_held_move: None,
+                held_moves: 0,
+                value_control: false,
+                set_value_result: json!(true),
+                set_values: Vec::new(),
             }),
             target_role,
             target_name,
@@ -1393,7 +1528,7 @@ mod tests {
                 14638203640916461425,
                 7395435797475900152,
                 6586471237564934084,
-                10296638448501175693,
+                16809638728362511703,
                 5312967615472211188,
                 4986025384446686415,
             ]
@@ -2044,6 +2179,200 @@ mod tests {
             .await?;
         input.handle_dialog(true, None).await?;
         assert_eq!(pointer_calls(&connection.take_calls()?).count(), 0);
+        Ok(())
+    }
+
+    fn sent<'a>(calls: &'a [TestCall], method: &'a str) -> impl Iterator<Item = &'a Value> + 'a {
+        calls
+            .iter()
+            .filter(move |call| call.method == method)
+            .map(|call| &call.params)
+    }
+
+    #[tokio::test]
+    async fn insert_text_sends_newlines_as_text_not_enter() -> Result<(), CoreError> {
+        let (connection, input, _ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.take_calls()?;
+        input.insert_text("line one\nline two").await?;
+        let calls = connection.take_calls()?;
+        let inserted: Vec<_> = sent(&calls, "Input.insertText").collect();
+        assert_eq!(inserted, [&json!({ "text": "line one\nline two" })]);
+        assert_eq!(sent(&calls, "Input.dispatchKeyEvent").count(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn check_clicks_an_unchecked_control_and_confirms_the_new_state() -> Result<(), CoreError>
+    {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| {
+            state.check_state = json!({ "checked": false, "radio": false });
+            state.check_state_after_click = Some(json!({ "checked": true, "radio": false }));
+        })?;
+        assert!(input.check(&ref_id).await?);
+        assert_eq!(press_count(&connection.take_calls()?), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn check_leaves_a_switch_that_is_already_on() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        // A role=switch reports aria-checked; reading only `checked` used to click it off.
+        connection.configure(|state| {
+            state.check_state = json!({ "checked": true, "radio": false });
+        })?;
+        connection.take_calls()?;
+        assert!(input.check(&ref_id).await?);
+        assert_eq!(press_count(&connection.take_calls()?), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn uncheck_refuses_a_radio_without_clicking() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| {
+            state.check_state = json!({ "checked": true, "radio": true });
+        })?;
+        connection.take_calls()?;
+        let error = input
+            .uncheck(&ref_id)
+            .await
+            .err()
+            .map(|error| error.to_string());
+        assert!(error.is_some_and(|error| error.contains("cannot be unchecked")));
+        assert_eq!(press_count(&connection.take_calls()?), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn check_reports_a_click_that_did_not_change_the_state() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| {
+            state.check_state = json!({ "checked": false, "radio": false });
+        })?;
+        let error = input
+            .check(&ref_id)
+            .await
+            .err()
+            .map(|error| error.to_string());
+        assert!(error.is_some_and(|error| error.contains("did not make it checked")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn check_trusts_a_click_after_which_the_page_replaced_the_control()
+    -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| {
+            state.check_state = json!({ "checked": false, "radio": false });
+            state.check_state_after_click =
+                Some(json!({ "checked": false, "radio": false, "detached": true }));
+        })?;
+        connection.take_calls()?;
+        assert!(input.check(&ref_id).await?);
+        assert_eq!(press_count(&connection.take_calls()?), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drag_holds_the_left_button_through_every_move() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.take_calls()?;
+        input.drag(&ref_id, &ref_id).await?;
+        let calls = connection.take_calls()?;
+        let mouse: Vec<&Value> = sent(&calls, "Input.dispatchMouseEvent").collect();
+        let held_moves = mouse
+            .iter()
+            .filter(|params| params["type"] == "mouseMoved" && params["buttons"] == 1)
+            .count();
+        assert_eq!(held_moves, timeouts::DRAG_STEPS as usize);
+        assert!(mouse.iter().all(|params| params["type"] != "mouseMoved"
+            || params["buttons"] == 1
+            || params["buttons"].is_null()));
+        assert_eq!(
+            mouse.last().map(|params| &params["type"]),
+            Some(&json!("mouseReleased"))
+        );
+        // Chromium's own drag controller runs an HTML5 drag from these events.
+        assert_eq!(sent(&calls, "Input.cancelDragging").count(), 0);
+        Ok(())
+    }
+
+    /// The calls a drag's cleanup task sends, once it has had a moment to run.
+    async fn cleanup_calls(connection: &HarnessConnection) -> Result<Vec<TestCall>, CoreError> {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        connection.take_calls()
+    }
+
+    fn ends_the_drag(calls: &[TestCall]) -> bool {
+        let methods: Vec<&str> = calls
+            .iter()
+            .filter(|call| {
+                call.method == "Input.cancelDragging"
+                    || (call.method == "Input.dispatchMouseEvent"
+                        && call.params["type"] == "mouseReleased"
+                        && call.params["buttons"] == 0)
+            })
+            .map(|call| call.method.as_str())
+            .collect();
+        methods == ["Input.cancelDragging", "Input.dispatchMouseEvent"]
+    }
+
+    #[tokio::test]
+    async fn a_drag_cancelled_mid_gesture_cancels_the_drag_and_releases_the_button()
+    -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| state.stall_held_move = Some(3))?;
+        connection.take_calls()?;
+        let drag = tokio::time::timeout(Duration::from_secs(1), input.drag(&ref_id, &ref_id));
+        assert!(drag.await.is_err(), "the stalled drag should be cancelled");
+        assert!(ends_the_drag(&cleanup_calls(&connection).await?));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_drag_that_fails_part_way_still_cancels_and_releases() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| state.fail_held_move = Some(3))?;
+        connection.take_calls()?;
+        assert!(input.drag(&ref_id, &ref_id).await.is_err());
+        assert!(ends_the_drag(&cleanup_calls(&connection).await?));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fill_sets_a_date_input_without_clicking_or_typing() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| state.value_control = true)?;
+        connection.take_calls()?;
+        input.fill(&ref_id, "2026-10-29", true).await?;
+        let calls = connection.take_calls()?;
+        // A click would open the date picker; typing has no editor to land in.
+        assert_eq!(press_count(&calls), 0);
+        assert_eq!(sent(&calls, "Input.insertText").count(), 0);
+        let set: Vec<Value> = connection
+            .state
+            .lock()
+            .map(|state| state.set_values.clone())
+            .unwrap_or_default();
+        assert_eq!(set, [json!("2026-10-29")]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fill_reports_a_value_the_input_cannot_hold() -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| {
+            state.value_control = true;
+            state.set_value_result =
+                json!("\"29/10/2026\" is not a valid date value. Use YYYY-MM-DD.");
+        })?;
+        let error = input
+            .fill(&ref_id, "29/10/2026", true)
+            .await
+            .err()
+            .map(|error| error.to_string());
+        assert!(error.is_some_and(|error| error.contains("Use YYYY-MM-DD")));
         Ok(())
     }
 

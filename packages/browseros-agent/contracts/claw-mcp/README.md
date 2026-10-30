@@ -45,6 +45,11 @@ Useful environment variables:
 | `BROWSEROS_TEST_DEBUG=true` | Stream browser output |
 | `CLAW_MCP_CAPTURE_DIR=<dir>` | Refresh raw CDP capture fixtures |
 
+The screenshot density cases declare `browserArgs` on their case definition.
+The runner restarts only its isolated browser/server when those arguments change,
+so `--force-device-scale-factor=2` applies to those cases alone. It restores the
+ordinary launch arguments before the remaining cases; browser-kill stays last.
+
 The ungated fixture-server and MCP-client unit tests run under the normal Bun
 test suite.
 
@@ -67,6 +72,15 @@ contracts/claw-mcp/
 Add it to the relevant `cases-<group>.ts`, assert the expected behavior in the
 case, and use `waitUntil` for asynchronous state. Pages opened with
 `ctx.openPage` are cleaned automatically. Keep the browser-kill case last.
+
+The SDK fix contracts live in `cases-sdk-input.ts`, `cases-sdk-navigation.ts`,
+`cases-sdk-read-eval.ts`, and `cases-screenshot-scale.ts`. They share deterministic
+`sdk-*.html` fixtures; existing attachment and missing-path routes supply download
+and HTTP 404 outcomes without adding server behavior. Existing `cases-fill.ts`
+already covers text, email, number, textarea and contenteditable regressions on
+both MCP and SDK paths. `insertText` has no granular MCP kind. SDK screenshots
+return metadata and annotations, so image dimensions are asserted through the
+granular screenshot image block; the SDK path checks its metadata and boxes.
 
 ## Capture mode
 

@@ -97,7 +97,8 @@ Reading and output:
   instead of re-fetching.
 - screenshot is for visual checks only; pdf archives the page; download
   clicks a ref and saves to the browser's download folder, returning the file's
-  path on this machine; upload sets local paths on a file input.
+  path on this machine; upload selects local files using an input/button ref,
+  or finishes a pending chooser when ref is omitted.
 
 run first, granular tools as the fallback. Compose anything multi-step inside one
 run script rather than chaining granular calls. Inside run, everything that needs

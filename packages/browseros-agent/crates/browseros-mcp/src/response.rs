@@ -5,6 +5,7 @@
 use crate::{
     constants::TOOL_POST_ACTION_CAPTURE_TIMEOUT,
     format::{
+        coverage::insert_coverage,
         diff::{DiffDetail, format_diff_result},
         snapshot::format_snapshot_result,
     },
@@ -244,7 +245,9 @@ impl ToolResponse {
                 self.throw_if_dialog_open(ctx, page)?;
                 let observer = ctx.browser.observe(browseros_core::PageId(page)).await?;
                 let snapshot = observer.snapshot().await?;
-                let formatted = format_snapshot_result(&snapshot.text, &snapshot.url, ctx).await;
+                let formatted =
+                    format_snapshot_result(&snapshot.text, &snapshot.coverage, &snapshot.url, ctx)
+                        .await;
                 self.text(format!("[Page {page} snapshot]\n{}", formatted.text));
                 self.captures.insert(page, snapshot);
                 Ok(())
@@ -298,6 +301,9 @@ impl ToolResponse {
                             diff.after_url.map(Value::String).unwrap_or(Value::Null),
                         );
                     }
+                    // The action's own success is the tool result; this says only how much of
+                    // the page its follow-up capture could read.
+                    insert_coverage(&mut structured, &diff.coverage, &diff.uncompared);
                     self.data(structured);
                 }
                 Ok(())
@@ -326,6 +332,9 @@ impl ToolResponse {
                         match shown {
                             Some((now, line)) if *now == field.ref_id => line.to_string(),
                             Some((_, line)) => format!("{} → {line}", field.ref_id),
+                            None if capture.may_lack_frame(field.frame.as_ref()) => {
+                                format!("{}: unknown, its frame could not be read", field.ref_id)
+                            }
                             None => format!("{}: not on the page now", field.ref_id),
                         }
                     })

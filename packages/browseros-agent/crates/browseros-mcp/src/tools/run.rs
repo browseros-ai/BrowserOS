@@ -1,6 +1,11 @@
-use crate::framework::{
-    HelperSource, InnerCallRecord, ToolCtx, ToolDef, ToolError, ToolExecResult, ToolResult,
-    execute_tool, page_json, parse_args, text_result,
+use super::evaluate_in_page::safe_prefix;
+use crate::{
+    format::coverage::insert_coverage,
+    framework::{
+        HelperSource, InnerCallRecord, ToolCtx, ToolDef, ToolError, ToolExecResult, ToolResult,
+        execute_tool, page_json, parse_args, text_result,
+    },
+    output_file::write_temp_tool_output_file,
 };
 use browseros_core::{
     NativeFeature, PageId, Ref, SessionId, WindowId,
@@ -32,6 +37,13 @@ const RUN_STACK_SIZE_BYTES: usize = 512 * 1024;
 const MAX_LOG_ENTRIES: usize = 1_000;
 const MAX_LOG_BYTES: usize = 1_000_000;
 const MAX_RETURN_VALUE_BYTES: usize = 2_000_000;
+/// What a run hands back to the model inline: its return value plus its logs, in UTF-8 bytes.
+/// About 6k tokens, enough for a few pages of extracted text. The script itself reads pages
+/// whole, so only its answer has to fit; a larger one comes back as a preview plus a file.
+const DEFAULT_INLINE_RESULT_BYTES: usize = 25_000;
+/// The most `maxChars` can raise the inline result to: the largest return value a run
+/// accepts, so a remote client that asks can still receive any result whole.
+const MAX_INLINE_RESULT_BYTES: usize = MAX_RETURN_VALUE_BYTES;
 
 const DESCRIPTION: &str = r#"The primary way to drive the browser - prefer run for any task; the granular tools are the fallback. Do multi-step flows, pagination, bulk extraction, and repeated act/read loops - in ONE call: async JavaScript against the `browser` SDK in the server runtime. console.log is captured; return a value to read it back; exceptions come back as a result, not thrown. Every call is `await`-able. Each run is bounded to 30000 ms of wall time and cannot exceed it (larger `timeout` values are clamped): keep a single call under 30s. For longer or open-ended page-driven loops, do one bounded chunk per call, or start the work on the page and poll its result with short follow-up calls.
 
@@ -51,28 +63,33 @@ browser (nothing here takes a page):
   A handle stays valid only while that tab is open and still yours. Reuse one across steps and across calls while that holds. If a call fails instantly on a handle from an earlier turn, the tab is gone or was taken over - do not retry it. Re-derive from browser.pages.list() filtered to ownership === "mine", or open a fresh page. Carrying the URL between calls is safer than carrying the id.
 Page handle (refs eN come from a snapshot's text/refs):
   page.id                            -> the page id as a NUMBER, for logs and return values
-  page.goto(url) / back() / forward() / reload()
-  page.snapshot({ mode, depth }?)    -> { text, refs, url }. mode "interactive" plus depth keeps a big page small.
-  page.diff()                        -> { text, added, removed, changed }
+  page.goto(url)                     -> { status } (the HTTP status, null when unknown), or { download: true } when the url is a file the browser downloaded instead. A url the browser cannot load (unknown host, refused connection) throws.
+  page.back() / forward()            -> { navigated }, false when there is no history entry that way (the page is unchanged)
+  page.reload()
+  page.snapshot({ mode, depth }?)    -> { text, refs, url, partial, frameErrors? }. mode "interactive" plus depth keeps a big page small. partial: some frame was not fully read (frameErrors says which and why), so content it holds is unknown, not absent; every ref returned still works.
+  page.diff()                        -> { text, added, removed, changed, partial, frameErrors?, uncomparedFrames? }. uncomparedFrames: frames the previous capture read differently, left out of the diff rather than counted as added or removed.
   page.resolveRef(ref)               -> { backendNodeId, sessionId }
-  page.read(selector?)               -> the page as a markdown STRING (large pages are truncated with a note pointing to a saved file)
+  page.read(selector?)               -> the whole page as a markdown STRING, so the script can search or slice all of it; return only what you need
   page.grep(pattern, { over, limit }?) -> matching lines as a STRING
   page.click(ref) / fill(ref,value) / hover(ref) / selectOption(ref,value)
-    fill types the value and leaves the result to the page, which may reformat it ("440 212") or reject it; after filling a form, page.snapshot() shows what each field holds
+    fill types the value and leaves the result to the page, which may reformat it ("440 212") or reject it; after filling a form, page.snapshot() shows what each field holds. Date, time, color and range inputs take the value in their own format (2026-10-29, 14:30, #ff8800, 75) and hold it as the browser stores it (a range clamps to its bounds); fill throws only on a date or time the browser cannot parse
   page.check(ref) / uncheck(ref) / focus(ref) / drag(fromRef,toRef)
-  page.type(text) / press(key) / insertText(text)   - these act on whatever has focus, so they take no ref
+  page.type(text) / press(key) / insertText(text)   - these act on whatever has focus, so they take no ref. type sends key presses, so \n presses Enter; insertText inserts the text as-is, newlines included, without key events
   page.scroll(dir,amount,ref?) / clickAt(x,y) / typeAt(x,y,text) / hoverAt(x,y) / dragAt(x1,y1,x2,y2)
   page.dialogAccept() / dialogDismiss() - accept or dismiss an open JavaScript dialog (confirm/prompt/beforeunload). An action that opens one gets back { dialogOpen: true, kind, message } instead of its usual result, and the page stays blocked until you accept or dismiss, so do that before anything else on the page.
   page.waitForSelector(sel) / waitForText(text) / waitForTime(ms) - resolve when ready. For content that loads in, wait on the thing itself with waitForSelector (or waitForText); it resolves the moment it appears, polling up to 10s by default (pass { timeout } to change it, max 30s) and returning { matched }. On timeout matched is false and it does NOT throw, so check matched instead of assuming the wait succeeded. waitForTime is a plain fixed pause and a last resort: wait on the thing itself instead. Never poll in a loop (re-checking a count with a fixed wait between tries) - wait on the selector once instead.
   page.evaluateInPage(fn, arg?, opts?) - runs your script inside the page's own main world, where page scripts can watch it; only when the user explicitly asks to run code in the page, or snapshot/read/grep cannot answer. Returns { changed } alongside the value: a script that mutated the page is settled before you get it back, so never pause afterwards. For an effect that is entirely asynchronous (a click whose result arrives over the network) pass { settle: true } to wait for quiet regardless. Pass a real function; a second argument is JSON-serialized and handed to it, e.g. page.evaluateInPage((sel) => document.querySelectorAll(sel).length, '.row'). It does not close over script variables. A code string with a `return` also works: page.evaluateInPage("return document.title").
   page.screenshot(opts?) / pdf(opts?)
-    screenshot has no default cap; size caps CSS pixels, with omitted axes unconstrained
-  page.download(ref) / upload(ref, files)
+    screenshot has no default cap; size caps CSS pixels, with omitted axes unconstrained. One image pixel is one CSS pixel, the coordinates clickAt takes; { scale: 'device' } keeps the display's density
+  An upload picker is intercepted on agent-created tabs: click may return { fileChooserOpen: true, multiple }. Finish with page.upload(null, files); selecting files does not submit the website form.
+  page.download(ref) / upload(ref, files); upload(null, files) or upload(files[]) finishes a pending file chooser
   page.close() / info()
 Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers.<name>(browser, page) where page is the id NUMBER.
   page.saveHelper(name, source) - source is a function, or the same thing as a string: async (browser, page) => { ... }
   page.listHelpers() -> { host, helpers: [{ name, ageDays, candidate }] }; page.readHelper(name) -> source string
 Raw CDP: browser.cdp(method, params?, sessionId?) / page.cdp(method, paramsJson). Methods or parameters that need a newer BrowserOS return native_feature_unavailable without being sent.
+
+What a run returns to you, its return value plus its logs, is kept inline up to 25000 bytes (raise it with maxChars, up to 2000000). Past that you get a preview and a local file path a remote client cannot open, so return the answer, not the pages you read to find it.
 
 Do the whole task in as few run calls as possible: loop over all the items in one call rather than one run per item. Parallelize independent work with Promise.all so N pages cost one wait cycle, not N. Keep steps on the same page sequential. The 30s cap binds this: batching reads of already-loaded pages is cheap, batching navigations is not, so keep it to about 5 fresh pages per call and split the rest into more calls. Efficient pattern:
   const pages = await Promise.all(urls.map(u => browser.open(u)));
@@ -291,15 +308,16 @@ const BOOTSTRAP_JS: &str = r#"
       focus: (ref) => act('focus', { ref: asRef(ref, 'focus') }),
       drag: (fromRef, toRef) =>
         act('drag', { ref: asRef(fromRef, 'drag'), targetRef: asRef(toRef, 'drag') }),
-      upload: (ref, files) =>
-        tool('upload', Array.isArray(files)
-          ? { ref: asRef(ref, 'upload'), files }
-          : { ref: asRef(ref, 'upload'), file: files }),
+      upload: (ref, files) => {
+        if (Array.isArray(ref) && files === undefined) return tool('upload', { files: ref });
+        const target = ref == null ? {} : { ref: asRef(ref, 'upload') };
+        return tool('upload', Array.isArray(files) ? { ...target, files } : { ...target, file: files });
+      },
       download: (ref) => tool('download', { ref: asRef(ref, 'download') }),
 
       type: (text) => inp('type', [text]),
       press: (key) => inp('press', [key]),
-      insertText: (text) => inp('type', [text]),
+      insertText: (text) => inp('insertText', [text]),
       scroll: (dir, amount, ref) => inp('scroll', [dir, amount, ref]),
       clickAt: (x, y, opts) => act('click_at', { x, y, ...opts }),
       typeAt: (x, y, text) => act('type_at', { x, y, text }),
@@ -455,6 +473,11 @@ struct RunArgs {
     /// split it across calls or start it and poll with short follow-up calls.
     #[serde(default = "default_timeout")]
     timeout: f64,
+    /// Max size of the result kept inline (return value plus logs), in UTF-8 bytes: default
+    /// 25000, max 2000000. A larger result comes back as a preview, with the full text in a
+    /// local file a remote MCP client cannot open; return only what you need, or raise this.
+    #[serde(default, rename = "maxChars")]
+    max_chars: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, JsonSchema)]
@@ -465,6 +488,14 @@ struct RunOutput {
     logs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    /// True when the result was over the inline limit: `value` and `logs` are then left out
+    /// and the full text is in the file at `path`.
+    #[serde(rename = "writtenToFile", skip_serializing_if = "Option::is_none")]
+    written_to_file: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(rename = "contentLength", skip_serializing_if = "Option::is_none")]
+    content_length: Option<usize>,
 }
 
 pub fn definition() -> crate::framework::ToolDef {
@@ -486,6 +517,13 @@ fn handler<'a>(
 ) -> BoxFuture<'a, ToolExecResult<Option<ToolResult>>> {
     Box::pin(async move {
         let args: RunArgs = parse_args(raw)?;
+        let inline_limit = args
+            .max_chars
+            .map_or(DEFAULT_INLINE_RESULT_BYTES, |max_chars| {
+                usize::try_from(max_chars)
+                    .unwrap_or(usize::MAX)
+                    .min(MAX_INLINE_RESULT_BYTES)
+            });
         let outcome = match execute_run(args, ctx).await {
             Ok(outcome) => outcome,
             Err(RunError::Syntax(message)) => {
@@ -494,7 +532,9 @@ fn handler<'a>(
             Err(RunError::Cancelled) => return Err(ToolError::Cancelled),
             Err(RunError::Engine(message)) => return Err(ToolError::message(message)),
         };
-        Ok(Some(outcome.into_tool_result()))
+        Ok(Some(
+            outcome.into_capped_tool_result(inline_limit, ctx).await,
+        ))
     })
 }
 
@@ -594,6 +634,48 @@ impl RunOutcome {
         }
     }
 
+    /// [`into_tool_result`](Self::into_tool_result), with a result over `inline_limit` bytes
+    /// cut to a preview and saved whole to a file, so one large return cannot flood the model.
+    async fn into_capped_tool_result(self, inline_limit: usize, ctx: &ToolCtx) -> ToolResult {
+        let text = format_outcome(&self);
+        if text.len() <= inline_limit {
+            return self.into_tool_result();
+        }
+        let saved = write_temp_tool_output_file(&ctx.output_files, "run", "txt", &text).await;
+        let advice = format!(
+            "Return only what you need, or raise maxChars (up to {MAX_INLINE_RESULT_BYTES}) to receive more inline."
+        );
+        let note = match &saved {
+            Ok(path) => format!(
+                "Result truncated at {inline_limit} bytes. Full result ({} bytes) saved to: {}. {advice}",
+                text.len(),
+                path.display()
+            ),
+            Err(error) => format!(
+                "Result truncated at {inline_limit} bytes. Full result ({} bytes) could not be saved to a BrowserOS output file: {error}. {advice}",
+                text.len()
+            ),
+        };
+        let mut structured = json!({
+            "ok": self.ok,
+            "logs": [],
+            "writtenToFile": saved.is_ok(),
+            "contentLength": text.len(),
+        });
+        if let Ok(path) = &saved {
+            structured["path"] = json!(path.to_string_lossy());
+        }
+        if let Some(error) = &self.error {
+            structured["error"] = json!(safe_prefix(error, inline_limit));
+        }
+        let mut result = text_result(
+            format!("{}\n\n{note}", safe_prefix(&text, inline_limit)),
+            Some(structured),
+        );
+        result.is_error = !self.ok;
+        result
+    }
+
     fn into_tool_result(self) -> ToolResult {
         let text = format_outcome(&self);
         let structured = if self.ok {
@@ -629,9 +711,11 @@ async fn execute_run(args: RunArgs, ctx: &ToolCtx) -> Result<RunOutcome, RunErro
         deadline,
         timeout_message: timeout_message.clone(),
     };
+    let mut script_ctx = ctx.clone();
+    script_ctx.within_script = true;
     let run = execute_quickjs(
         args.code,
-        ctx.clone(),
+        script_ctx,
         logs.clone(),
         control.clone(),
         duration,
@@ -906,7 +990,9 @@ impl BrowserBridge {
             _ => None,
         };
         let started = Instant::now();
-        let outcome = self.dispatch(method, args).await;
+        // Boxed: dispatch is one state machine sized by its largest SDK arm, and an unboxed
+        // copy of it on the worker's stack overflows a debug build's 2 MiB worker thread.
+        let outcome = Box::pin(self.dispatch(method, args)).await;
         drop(viewport);
         if let Some(hook) = &self.ctx.inner_call_hook {
             if method == "pages.newPage"
@@ -927,6 +1013,7 @@ impl BrowserBridge {
                 args: &recorded_args,
                 from_helper,
                 is_error: outcome.is_err(),
+                file_chooser_open: matches!(&outcome, Ok(BrowserCallValue::Json(value)) if value["fileChooserOpen"] == true),
                 duration_ms: started.elapsed().as_millis() as i64,
                 output_token_estimate,
             })
@@ -935,15 +1022,15 @@ impl BrowserBridge {
         outcome
     }
 
-    /// Runs a page input action but stops waiting if a blocking JavaScript dialog
-    /// opens on that page (or is already open). A confirm/prompt/beforeunload freezes
-    /// the renderer main thread, so the action's CDP ack never returns and the run
-    /// would otherwise hang to its 30s cap (#2780). The dialog listener records it
-    /// concurrently, so polling pending_dialog lets us hand control back; the pending
-    /// dialog is left set for page.dialogAccept()/dialogDismiss() to resolve. Returns
-    /// Ok(None) when a dialog interrupted the action, so callers surface the dialog
-    /// rather than reporting the action as done.
-    async fn race_input<F, T>(&self, page_id: &PageId, future: F) -> Result<Option<T>, String>
+    /// Returns control when input opens a JavaScript dialog or intercepted file chooser.
+    /// Dialogs can prevent the input ack altogether; chooser notifications can follow it,
+    /// so both the outstanding action and its completed path observe the shared state.
+    async fn race_input<F, T>(
+        &self,
+        page_id: &PageId,
+        activates: bool,
+        future: F,
+    ) -> Result<Option<T>, String>
     where
         F: Future<Output = Result<T, browseros_core::CoreError>>,
     {
@@ -951,13 +1038,37 @@ impl BrowserBridge {
         let page = page_id.clone();
         let dialog = async move {
             while signals.pending_dialog(&page).is_none() {
+                if self
+                    .ctx
+                    .browser
+                    .files()
+                    .pending_chooser(page.clone())
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .is_some()
+                {
+                    break;
+                }
                 sleep(Duration::from_millis(25)).await;
             }
+            Ok::<(), String>(())
         };
         tokio::select! {
             biased;
-            result = self.control.race(future) => result.map(Some),
-            () = dialog => {
+            result = self.control.race(future) => {
+                let value = result?;
+                let files = self.ctx.browser.files();
+                // Native mouse/key input can post a chooser after its ack. Hover, scroll
+                // and semantic selection only read pending state, without waiting.
+                let chooser = if activates {
+                    self.control.race(files.chooser_after_action(page_id.clone())).await?
+                } else {
+                    self.control.race(files.pending_chooser(page_id.clone())).await?
+                };
+                if chooser.is_some() { Ok(None) } else { Ok(Some(value)) }
+            },
+            interrupted = dialog => {
+                interrupted?;
                 // The dialog race cancels the action future before its guarded
                 // handle returns. Re-admit before exposing global page signals.
                 if self.ctx.browser.binding().is_some() {
@@ -968,17 +1079,28 @@ impl BrowserBridge {
         }
     }
 
-    /// The value an input action returns when a blocking dialog interrupted it: a
-    /// marker plus the dialog's kind and message, so the script can see that the
-    /// action did not complete and must accept or dismiss the dialog next (#2780).
-    fn dialog_open_value(&self, page_id: &PageId) -> BrowserCallValue {
+    /// Report pending interaction state without exposing its native node/session handle.
+    /// File selection and JavaScript-dialog resolution retain their existing tool seams.
+    async fn interaction_open_value(&self, page_id: &PageId) -> Result<BrowserCallValue, String> {
         match self.ctx.browser.signals().pending_dialog(page_id) {
-            Some(dialog) => BrowserCallValue::Json(json!({
+            Some(dialog) => Ok(BrowserCallValue::Json(json!({
                 "dialogOpen": true,
                 "kind": dialog.kind,
                 "message": dialog.message,
-            })),
-            None => BrowserCallValue::Undefined,
+            }))),
+            None => {
+                let result = crate::framework::pending_file_chooser_result(
+                    &self.ctx,
+                    page_id.clone(),
+                    false,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+                Ok(match result.and_then(|result| result.structured_content) {
+                    Some(value) => BrowserCallValue::Json(value),
+                    None => BrowserCallValue::Undefined,
+                })
+            }
         }
     }
 
@@ -1050,11 +1172,13 @@ impl BrowserBridge {
                     .control
                     .race(observer.snapshot_with_options(options))
                     .await?;
-                Ok(BrowserCallValue::Json(json!({
+                let mut value = json!({
                     "text": snapshot.text,
                     "refs": refs_json(&snapshot.refs),
                     "url": snapshot.url,
-                })))
+                });
+                insert_coverage(&mut value, &snapshot.coverage, &[]);
+                Ok(BrowserCallValue::Json(value))
             }
             "observe.diff" => {
                 let page_id = page_arg(&args, 0)?;
@@ -1082,11 +1206,15 @@ impl BrowserBridge {
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
                 match self
-                    .race_input(&page_id, input.click(&Ref(ref_id), Default::default()))
+                    .race_input(
+                        &page_id,
+                        true,
+                        input.click(&Ref(ref_id), Default::default()),
+                    )
                     .await?
                 {
                     Some(_) => Ok(BrowserCallValue::Undefined),
-                    None => Ok(self.dialog_open_value(&page_id)),
+                    None => self.interaction_open_value(&page_id).await,
                 }
             }
             "input.fill" => {
@@ -1097,11 +1225,11 @@ impl BrowserBridge {
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
                 match self
-                    .race_input(&page_id, input.fill(&Ref(ref_id), &value, true))
+                    .race_input(&page_id, true, input.fill(&Ref(ref_id), &value, true))
                     .await?
                 {
                     Some(_) => Ok(BrowserCallValue::Undefined),
-                    None => Ok(self.dialog_open_value(&page_id)),
+                    None => self.interaction_open_value(&page_id).await,
                 }
             }
             "input.type" => {
@@ -1111,9 +1239,27 @@ impl BrowserBridge {
                     .control
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
-                match self.race_input(&page_id, input.type_text(&text)).await? {
+                match self
+                    .race_input(&page_id, true, input.type_text(&text))
+                    .await?
+                {
                     Some(_) => Ok(BrowserCallValue::Undefined),
-                    None => Ok(self.dialog_open_value(&page_id)),
+                    None => self.interaction_open_value(&page_id).await,
+                }
+            }
+            "input.insertText" => {
+                let page_id = page_arg(&args, 0)?;
+                let text = string_arg(&args, 1, "text")?;
+                let input = self
+                    .control
+                    .race(self.ctx.browser.input(page_id.clone()))
+                    .await?;
+                match self
+                    .race_input(&page_id, true, input.insert_text(&text))
+                    .await?
+                {
+                    Some(_) => Ok(BrowserCallValue::Undefined),
+                    None => self.interaction_open_value(&page_id).await,
                 }
             }
             "input.press" => {
@@ -1123,9 +1269,9 @@ impl BrowserBridge {
                     .control
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
-                match self.race_input(&page_id, input.press(&key)).await? {
+                match self.race_input(&page_id, true, input.press(&key)).await? {
                     Some(_) => Ok(BrowserCallValue::Undefined),
-                    None => Ok(self.dialog_open_value(&page_id)),
+                    None => self.interaction_open_value(&page_id).await,
                 }
             }
             "input.hover" => {
@@ -1134,9 +1280,12 @@ impl BrowserBridge {
                     .control
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
-                match self.race_input(&page_id, input.hover(&Ref(ref_id))).await? {
+                match self
+                    .race_input(&page_id, false, input.hover(&Ref(ref_id)))
+                    .await?
+                {
                     Some(_) => Ok(BrowserCallValue::Undefined),
-                    None => Ok(self.dialog_open_value(&page_id)),
+                    None => self.interaction_open_value(&page_id).await,
                 }
             }
             "input.selectOption" => {
@@ -1147,11 +1296,11 @@ impl BrowserBridge {
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
                 match self
-                    .race_input(&page_id, input.select_option(&Ref(ref_id), &value))
+                    .race_input(&page_id, false, input.select_option(&Ref(ref_id), &value))
                     .await?
                 {
                     Some(selected) => Ok(BrowserCallValue::Json(json!(selected))),
-                    None => Ok(self.dialog_open_value(&page_id)),
+                    None => self.interaction_open_value(&page_id).await,
                 }
             }
             "input.scroll" => {
@@ -1164,31 +1313,39 @@ impl BrowserBridge {
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
                 match self
-                    .race_input(&page_id, input.scroll(direction, amount, ref_id.as_ref()))
+                    .race_input(
+                        &page_id,
+                        false,
+                        input.scroll(direction, amount, ref_id.as_ref()),
+                    )
                     .await?
                 {
                     Some(_) => Ok(BrowserCallValue::Undefined),
-                    None => Ok(self.dialog_open_value(&page_id)),
+                    None => self.interaction_open_value(&page_id).await,
                 }
             }
             "nav.goto" => {
                 let page_id = page_arg(&args, 0)?;
                 let url = string_arg(&args, 1, "url")?;
                 let nav = self.control.race(self.ctx.browser.nav(page_id)).await?;
-                self.control.race(nav.goto(&url)).await?;
-                Ok(BrowserCallValue::Undefined)
+                let outcome = self.control.race(nav.goto(&url)).await?;
+                Ok(BrowserCallValue::Json(if outcome.download {
+                    json!({ "download": true })
+                } else {
+                    json!({ "status": outcome.status })
+                }))
             }
             "nav.back" => {
                 let page_id = page_arg(&args, 0)?;
                 let nav = self.control.race(self.ctx.browser.nav(page_id)).await?;
-                self.control.race(nav.back()).await?;
-                Ok(BrowserCallValue::Undefined)
+                let navigated = self.control.race(nav.back()).await?;
+                Ok(BrowserCallValue::Json(json!({ "navigated": navigated })))
             }
             "nav.forward" => {
                 let page_id = page_arg(&args, 0)?;
                 let nav = self.control.race(self.ctx.browser.nav(page_id)).await?;
-                self.control.race(nav.forward()).await?;
-                Ok(BrowserCallValue::Undefined)
+                let navigated = self.control.race(nav.forward()).await?;
+                Ok(BrowserCallValue::Json(json!({ "navigated": navigated })))
             }
             "nav.reload" => {
                 let page_id = page_arg(&args, 0)?;
@@ -1589,6 +1746,7 @@ fn diff_json(diff: &browseros_core::snapshot::SnapshotDiff) -> Value {
             object.insert("afterUrl".to_string(), json!(after_url));
         }
     }
+    insert_coverage(&mut value, &diff.coverage, &diff.uncompared);
     value
 }
 
@@ -1775,6 +1933,8 @@ mod tests {
         create_tab_params: Vec<Value>,
         add_group_params: Vec<Value>,
         created_tab: Option<Value>,
+        /// Keyboard input the page received, in order: (method, params).
+        keyboard: Vec<(String, Value)>,
     }
 
     impl RunFakeConnection {
@@ -1874,6 +2034,14 @@ mod tests {
                     "Browser.getTabInfo" => Ok(json!({
                         "tab": select_fixture_tab(&self.tabs(), &params)?
                     })),
+                    "Input.insertText" | "Input.dispatchKeyEvent" => {
+                        state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .keyboard
+                            .push((method.to_string(), params));
+                        Ok(json!({}))
+                    }
                     "Target.attachToTarget" => Ok(json!({ "sessionId": "session-target-7" })),
                     "Page.enable"
                     | "DOM.enable"
@@ -2100,7 +2268,7 @@ mod tests {
     async fn race_input_returns_the_value_when_no_dialog_opens() -> anyhow::Result<()> {
         let bridge = test_bridge(test_ctx());
         let outcome = bridge
-            .race_input(&PageId(1), async {
+            .race_input(&PageId(1), false, async {
                 Ok::<_, browseros_core::CoreError>(7u32)
             })
             .await
@@ -2135,6 +2303,7 @@ mod tests {
         let outcome = bridge
             .race_input(
                 &PageId(1),
+                true,
                 futures_util::future::pending::<Result<(), browseros_core::CoreError>>(),
             )
             .await
@@ -2144,7 +2313,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dialog_open_value_describes_the_pending_dialog() -> anyhow::Result<()> {
+    async fn interaction_open_value_describes_the_pending_dialog() -> anyhow::Result<()> {
         let connection = Arc::new(RunFakeConnection::new());
         let ctx = test_ctx_for(connection.clone(), BrowserToolDefaults::default());
         ctx.browser
@@ -2163,7 +2332,11 @@ mod tests {
         }
 
         let bridge = test_bridge(ctx);
-        match bridge.dialog_open_value(&PageId(1)) {
+        match bridge
+            .interaction_open_value(&PageId(1))
+            .await
+            .map_err(anyhow::Error::msg)?
+        {
             BrowserCallValue::Json(value) => {
                 assert_eq!(value["dialogOpen"], json!(true));
                 assert_eq!(value["kind"], json!("confirm"));
@@ -2721,6 +2894,44 @@ try {
     }
 
     #[tokio::test]
+    async fn run_result_over_the_inline_limit_comes_back_as_a_preview() -> anyhow::Result<()> {
+        let result = run_tool("return 'x'.repeat(30000);", None).await?;
+        assert!(!result.is_error);
+        let text = tool_result_text(&result);
+        assert!(text.contains("Result truncated at 25000 bytes"), "{text}");
+        assert!(text.len() < 26_000, "{}", text.len());
+        let structured = result
+            .structured_content
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing structured content"))?;
+        assert!(structured.get("value").is_none());
+        assert_eq!(structured["ok"], json!(true));
+        assert_eq!(structured["writtenToFile"], json!(true));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_max_chars_raises_the_inline_limit() -> anyhow::Result<()> {
+        let def = definition();
+        let result = execute_tool(
+            &def,
+            json!({ "code": "return 'x'.repeat(30000);", "maxChars": 40000 }),
+            &test_ctx(),
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+        assert!(!result.is_error);
+        let value = result
+            .structured_content
+            .as_ref()
+            .and_then(|structured| structured.get("value"))
+            .and_then(Value::as_str)
+            .map(str::len);
+        assert_eq!(value, Some(30_000));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn run_rejects_excessive_return_output_as_structured_error() -> anyhow::Result<()> {
         let result = run_tool(
             &format!("return 'x'.repeat({});", MAX_RETURN_VALUE_BYTES + 1),
@@ -2834,9 +3045,10 @@ return { pageId: page.pageId, tabId: page.tabId, url: page.url, title: page.titl
 
         let create_params = connection.create_tab_params();
         assert_eq!(create_params.len(), 1);
+        // The tab opens on about:blank; the requested URL is loaded by navigating it.
         assert_eq!(
             create_params.first().and_then(|params| params.get("url")),
-            Some(&json!("https://new.example"))
+            Some(&json!("about:blank"))
         );
         assert_eq!(
             create_params
@@ -2894,9 +3106,10 @@ return await browser.pages.newPage('https://new.example', {
 
         let create_params = connection.create_tab_params();
         assert_eq!(create_params.len(), 1);
+        // The tab opens on about:blank; the requested URL is loaded by navigating it.
         assert_eq!(
             create_params.first().and_then(|params| params.get("url")),
-            Some(&json!("https://new.example"))
+            Some(&json!("about:blank"))
         );
         // `background: false` is accepted but ignored: agents never get a
         // foreground tab.
@@ -2997,6 +3210,32 @@ return seen;
                 "unexpected {namespace} error: {error}"
             );
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_insert_text_keeps_newlines_instead_of_pressing_enter() -> anyhow::Result<()> {
+        let connection = Arc::new(RunFakeConnection::new());
+        let ctx = test_ctx_for(connection.clone(), BrowserToolDefaults::default());
+        let result = run_tool_with_ctx(
+            "await browser.page(1).insertText('first line\\nsecond line'); return 1;",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(!result.is_error, "{}", tool_result_text(&result));
+        let keyboard = connection
+            .state
+            .lock()
+            .map(|state| state.keyboard.clone())
+            .unwrap_or_default();
+        assert_eq!(
+            keyboard,
+            [(
+                "Input.insertText".to_string(),
+                json!({ "text": "first line\nsecond line" })
+            )]
+        );
         Ok(())
     }
 

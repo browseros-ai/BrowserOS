@@ -4,6 +4,9 @@
 //! concurrently and may complete in any order. `SnapshotBudget` is shared by every acquisition
 //! stage in one capture so concurrency is bounded without scheduling CDP work onto a separate
 //! runtime or throttling unrelated browser commands. Nothing here runs JavaScript in the page.
+//!
+//! A child frame that cannot be read becomes a [`FrameError`] naming the stage it stopped at,
+//! instead of vanishing from an otherwise successful capture.
 
 use super::{
     AxTreeResult, CaptureContext, DescribeNodeResult, GetFrameTreeResult, Observer,
@@ -13,7 +16,9 @@ use super::{
 use crate::{
     CoreError, FrameId, PageId, ProtocolSession,
     frames::FrameTarget,
-    snapshot::{AxNode, DocumentId, IframeStitch},
+    snapshot::{
+        AxNode, DocumentId, FrameError, FrameOwner, FrameReadReason, FrameReadStage, IframeStitch,
+    },
 };
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde::de::DeserializeOwned;
@@ -140,14 +145,20 @@ pub(super) struct AcquiredFrame {
     pub(super) target: FrameTarget,
     pub(super) nodes: Vec<AxNode>,
     pub(super) cursor_hits: HashMap<i64, Vec<String>>,
+    /// Why the clickable scan failed, when it did. The contents were still read.
+    pub(super) cursor_error: Option<FrameReadReason>,
     pub(super) document_id: Option<DocumentId>,
 }
 
 pub(super) struct AcquiredChild {
     pub(super) stitch: IframeStitch,
-    pub(super) result: Result<AcquiredFrame, CoreError>,
+    pub(super) owner: FrameOwner,
+    pub(super) result: Result<AcquiredFrame, FrameError>,
     stitch_index: usize,
 }
+
+/// A frame read that stopped before its contents were read.
+pub(super) type FrameReadFailure = (FrameReadStage, CoreError);
 
 impl Observer {
     pub(super) async fn acquire_frame(
@@ -157,7 +168,8 @@ impl Observer {
         same_process_parent: Option<&ProtocolSession>,
         cross_process: bool,
         context: &CaptureContext,
-    ) -> Result<AcquiredFrame, CoreError> {
+    ) -> Result<AcquiredFrame, FrameReadFailure> {
+        let session_failed = |error| (FrameReadStage::Session, error);
         let mut target = self
             .frames
             .resolve_frame_target_with_epoch(
@@ -168,21 +180,26 @@ impl Observer {
                 self.access
                     .as_ref()
                     .map(|access| access.epoch_guard())
-                    .transpose()?
+                    .transpose()
+                    .map_err(session_failed)?
                     .flatten(),
             )
-            .await?;
+            .await
+            .map_err(session_failed)?;
         if let Some(access) = &self.access {
             target.session = access
                 .frame_session(target.session, frame_id.clone())
-                .await?;
+                .await
+                .map_err(session_failed)?;
         }
         let runtime_document_id = if target.cursor_uses_session_default {
             None
         } else {
             runtime_document_id
         };
-        acquire_frame_data(target, frame_id, runtime_document_id, context).await
+        acquire_frame_data(target, frame_id, runtime_document_id, context)
+            .await
+            .map_err(|error| (FrameReadStage::Ax, error))
     }
 
     pub(super) async fn acquire_child_frames(
@@ -199,33 +216,63 @@ impl Observer {
             let parent_session = parent.session.clone();
             let visited = visited.to_vec();
             let context = context.clone();
+            let owner = FrameOwner {
+                parent: parent_frame_id.cloned(),
+                backend_node_id: stitch.backend_node_id,
+            };
             pending.push(async move {
-                let Some(child_frame) =
-                    resolve_child_frame(&parent_session, stitch.backend_node_id, &context.budget)
-                        .await
-                else {
-                    return (None, false);
+                let child = |result| {
+                    Some(AcquiredChild {
+                        stitch: stitch.clone(),
+                        owner: owner.clone(),
+                        result,
+                        stitch_index,
+                    })
                 };
+                let child_frame = match resolve_child_frame(
+                    &parent_session,
+                    stitch.backend_node_id,
+                    &context.budget,
+                )
+                .await
+                {
+                    Ok(child_frame) => child_frame,
+                    Err((reason, detail)) => {
+                        let error = FrameError {
+                            frame_id: None,
+                            owner: Some(owner.clone()),
+                            stage: FrameReadStage::Identify,
+                            reason,
+                        };
+                        return (
+                            child(Err(log_frame_error(&context.trace, error, &detail))),
+                            false,
+                        );
+                    }
+                };
+                // A frame already on the path is a cycle, skipped by design rather than unread.
                 if visited.contains(&child_frame.frame_id) {
                     return (None, true);
                 }
                 let result = self
                     .acquire_frame(
-                        Some(child_frame.frame_id),
+                        Some(child_frame.frame_id.clone()),
                         child_frame.runtime_document_id,
                         Some(&parent_session),
                         child_frame.cross_process,
                         &context,
                     )
-                    .await;
-                (
-                    Some(AcquiredChild {
-                        stitch,
-                        result,
-                        stitch_index,
-                    }),
-                    false,
-                )
+                    .await
+                    .map_err(|(stage, error)| {
+                        let frame_error = FrameError {
+                            frame_id: Some(child_frame.frame_id),
+                            owner: Some(owner.clone()),
+                            stage,
+                            reason: FrameReadReason::of(&error),
+                        };
+                        log_frame_error(&context.trace, frame_error, &error)
+                    });
+                (child(result), false)
             });
         }
 
@@ -314,10 +361,15 @@ async fn acquire_frame_data(
     let document_started = Instant::now();
     let document_id =
         eager_document_id_for_frame(root_session, frame_id.clone(), frame_documents, budget);
-    // These stages are independent after target resolution. AX failure remains fatal, while
-    // cursor and document identity retain their existing best-effort fallback semantics.
+    // These stages are independent after target resolution. An AX failure leaves nothing to
+    // render; a cursor failure keeps the contents and is reported; document identity falls back
+    // to capture-local refs.
     let (nodes, cursor_hits, document_id) = tokio::join!(ax_tree, cursor_hits, document_id);
     let nodes = nodes?.nodes;
+    let (cursor_hits, cursor_error) = match cursor_hits {
+        Ok(hits) => (hits, None),
+        Err(reason) => (HashMap::new(), Some(reason)),
+    };
     let (document_id, document_outcome) =
         revalidate_document_after_acquisition(root_session, frame_id.as_ref(), document_id, budget)
             .await;
@@ -333,9 +385,29 @@ async fn acquire_frame_data(
         frame_id: acquired_frame_id,
         target,
         nodes,
-        cursor_hits: cursor_hits.unwrap_or_default(),
+        cursor_hits,
+        cursor_error,
         document_id,
     })
+}
+
+/// Logs a frame's full read error, which only the debug log may carry, and returns the report.
+pub(super) fn log_frame_error(
+    trace: &CaptureTrace,
+    error: FrameError,
+    detail: &dyn std::fmt::Display,
+) -> FrameError {
+    tracing::debug!(
+        target: "browseros.snapshot",
+        page_id = %trace.page_id,
+        frame_id = error.frame_id.as_ref().map_or("unknown", FrameId::as_str),
+        attempt = trace.attempt,
+        stage = ?error.stage,
+        reason = ?error.reason,
+        %detail,
+        "frame not fully read"
+    );
+    error
 }
 
 struct ResolvedChildFrame {
@@ -351,7 +423,7 @@ async fn resolve_child_frame(
     session: &ProtocolSession,
     backend_node_id: i64,
     budget: &SnapshotBudget,
-) -> Option<ResolvedChildFrame> {
+) -> Result<ResolvedChildFrame, (FrameReadReason, String)> {
     let described = budget
         .send::<DescribeNodeResult>(
             session,
@@ -359,7 +431,7 @@ async fn resolve_child_frame(
             json!({ "backendNodeId": backend_node_id, "depth": 1 }),
         )
         .await
-        .ok()?;
+        .map_err(|error| (FrameReadReason::of(&error), error.to_string()))?;
     let content_document = described.node.content_document;
     let cross_process = content_document.is_none();
     let runtime_document_id = content_document
@@ -368,8 +440,14 @@ async fn resolve_child_frame(
     let frame_id = content_document
         .and_then(|node| node.frame_id)
         .or(described.node.frame_id)
-        .map(FrameId)?;
-    Some(ResolvedChildFrame {
+        .map(FrameId)
+        .ok_or_else(|| {
+            (
+                FrameReadReason::NotFound,
+                "the iframe element reported no frame".to_string(),
+            )
+        })?;
+    Ok(ResolvedChildFrame {
         frame_id,
         runtime_document_id,
         cross_process,

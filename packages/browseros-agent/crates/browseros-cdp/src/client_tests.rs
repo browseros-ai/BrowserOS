@@ -139,6 +139,8 @@ async fn serve_browser(stream: TcpStream) {
                 "sessionId": request["sessionId"],
                 "frame": text.as_str(),
             }),
+            // Never answered, like an evaluation whose promise never settles.
+            Some("Fixture.never") => continue,
             _ => panic!("unexpected method: {}", request["method"]),
         };
         let response = json!({ "id": request["id"], "result": result });
@@ -384,5 +386,28 @@ async fn bound_raw_send_rejects_invalid_parameters_without_mutation() {
         .await
         .unwrap_or_else(|err| panic!("query browser state: {err}"));
     assert_eq!(state["mutations"], 0);
+    client.disconnect().await;
+}
+
+#[tokio::test]
+async fn a_send_its_caller_abandons_frees_its_reply_slot() {
+    let browser = LoopbackBrowser::start().await;
+    let client = browser.connect().await;
+    // The caller gives up long before the client's own two-second request timeout.
+    let abandoned = tokio::time::timeout(
+        Duration::from_millis(100),
+        client.send("Fixture.never", json!({}), None),
+    )
+    .await;
+    assert!(abandoned.is_err(), "the peer never answers");
+    let mut freed = false;
+    for _ in 0..50 {
+        if client.inner.pending.lock().await.is_empty() {
+            freed = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(freed, "an abandoned request kept its reply slot");
     client.disconnect().await;
 }

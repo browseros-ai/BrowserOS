@@ -129,6 +129,10 @@ pub struct ToolCtx {
     pub inner_call_hook: Option<Arc<dyn InnerCallHook>>,
     /// See [`BrowserToolOptions::preloaded_helpers`].
     pub preloaded_helpers: Vec<HelperSource>,
+    /// Set for calls a `run` script makes. Their results go to the script, not the model, so
+    /// tools hand back the whole value instead of an inline excerpt plus a file the script
+    /// cannot open; what the script returns is capped on its way to the model instead.
+    pub within_script: bool,
 }
 
 impl ToolCtx {
@@ -142,6 +146,7 @@ impl ToolCtx {
             output_files: options.output_files,
             inner_call_hook: options.inner_call_hook,
             preloaded_helpers: options.preloaded_helpers,
+            within_script: false,
         }
     }
 
@@ -255,6 +260,8 @@ pub struct InnerCallRecord<'a> {
     pub from_helper: bool,
     /// Whether the primitive failed.
     pub is_error: bool,
+    /// Safe presentation state only; never pass native handles or file paths to the audit.
+    pub file_chooser_open: bool,
     /// Wall-clock duration of the primitive in milliseconds.
     pub duration_ms: i64,
     /// Estimated output tokens of the primitive's result payload (v1 estimator),
@@ -565,6 +572,33 @@ pub fn pending_dialog_result(ctx: &ToolCtx, page: PageId) -> Option<ToolResult> 
         .signals()
         .pending_dialog_line(&page)
         .map(ToolResult::error)
+}
+
+/// A chooser is recoverable selection state shared by granular tools and run. The node and
+/// CDP session stay in core; agents receive only the action needed to finish selecting files.
+pub async fn pending_file_chooser_result(
+    ctx: &ToolCtx,
+    page: PageId,
+    wait_for_event: bool,
+) -> ToolExecResult<Option<ToolResult>> {
+    let files = ctx.browser.files();
+    // Only native activation actions need the UI-thread handoff window. Ordinary input
+    // still reports an already-pending chooser without adding latency to script loops.
+    let chooser = if wait_for_event {
+        files.chooser_after_action(page.clone()).await?
+    } else {
+        files.pending_chooser(page.clone()).await?
+    };
+    let Some(chooser) = chooser else {
+        return Ok(None);
+    };
+    Ok(Some(text_result(
+        format!(
+            "{{\"fileChooserOpen\":true,\"multiple\":{}}}\nA file chooser is open; call upload with file/files and omit ref to select files, or files=[] to clear it.",
+            chooser.multiple
+        ),
+        Some(serde_json::json!({"page":page.0,"fileChooserOpen":true,"multiple":chooser.multiple})),
+    )))
 }
 
 /// One line a host appends to an outer tool result while a saved profile target is not

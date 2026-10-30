@@ -12,8 +12,21 @@ use serde_json::{Value, json};
 const DEFAULT_SCREENSHOT_QUALITY: i64 = 80;
 const DESCRIPTION: &str = "\
 Capture a screenshot of the page, returned inline. \
-Defaults to JPEG quality 80 at the current CSS viewport, with native device pixel density; \
+Defaults to JPEG quality 80 at the current CSS viewport, one image pixel per CSS pixel, \
+so a point in the image is the point click_at takes; scale \"device\" keeps the display's \
+pixel density (2x on Retina) instead. fullPage keeps device density. \
 prefer snapshot for structure/actions.";
+
+/// Image pixels per CSS pixel for a viewport capture.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum ScreenshotScale {
+    /// One image pixel per CSS pixel, the coordinates click_at and annotations use.
+    #[default]
+    Css,
+    /// The display's own density: sharper, and 4x the pixels on a 2x display.
+    Device,
+}
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -50,6 +63,10 @@ struct ScreenshotArgs {
     full_page: Option<bool>,
     /// Overlay numbered refs from a fresh snapshot. Defaults false.
     annotate: Option<bool>,
+    /// "css" (default) captures one image pixel per CSS pixel; "device" keeps the display's
+    /// pixel density. Ignored for fullPage.
+    #[serde(default)]
+    scale: ScreenshotScale,
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,7 +119,8 @@ fn handler<'a>(
             // A bound view's page session brackets Page.getLayoutMetrics with scope and
             // target-incarnation checks; the raw registry session would bypass the profile.
             let page = ctx.browser.page_session(PageId(args.page)).await?;
-            options.clip = Some(build_screenshot_clip(&page.session, args.size.as_ref()).await?);
+            options.clip =
+                Some(build_screenshot_clip(&page.session, args.size.as_ref(), args.scale).await?);
         }
         let result = ctx.browser.screenshot(PageId(args.page), options).await?;
         let bytes = base64::engine::general_purpose::STANDARD
@@ -157,13 +175,22 @@ fn handler<'a>(
 async fn build_screenshot_clip(
     session: &browseros_core::ProtocolSession,
     target: Option<&ScreenshotSize>,
+    density: ScreenshotScale,
 ) -> ToolExecResult<Viewport> {
     let metrics: LayoutMetrics = session.send("Page.getLayoutMetrics", json!({})).await?;
+    // layoutViewport is in device pixels and cssLayoutViewport in CSS pixels, so their
+    // ratio is the device pixel ratio that clip scale 1 captures at.
+    let device_pixel_ratio = match &metrics.css_layout_viewport {
+        Some(css) if css.client_width > 0.0 && metrics.layout_viewport.client_width > 0.0 => {
+            metrics.layout_viewport.client_width / css.client_width
+        }
+        _ => 1.0,
+    };
     let viewport = metrics
         .css_layout_viewport
         .unwrap_or(metrics.layout_viewport);
-    // The clip covers the user's CSS viewport without resizing the page. There
-    // is no default cap: scale 1 preserves native device density (2x on Retina).
+    // The clip covers the user's CSS viewport without resizing the page. There is no default
+    // cap; a size caps the CSS pixels the image spans.
     let mut scale = 1.0_f64;
     if let Some(target) = target {
         if let Some(width) = target.width
@@ -176,6 +203,9 @@ async fn build_screenshot_clip(
         {
             scale = scale.min(height as f64 / viewport.client_height);
         }
+    }
+    if density == ScreenshotScale::Css {
+        scale /= device_pixel_ratio;
     }
     Ok(Viewport {
         x: viewport.page_x,

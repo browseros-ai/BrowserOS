@@ -8,7 +8,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { CaseContext, ContractCase } from './cases'
-import { expectError, expectOk, waitUntil } from './helpers'
+import { apiGet, expectError, expectOk, waitUntil } from './helpers'
 import { imageOf, textOf } from './mcp-client'
 
 function magicHex(base64: string, bytes: number): string {
@@ -170,6 +170,413 @@ export const captureIoCases: ContractCase[] = [
       if (image.mimeType !== 'image/png') {
         throw new Error(`annotated screenshot had ${image.mimeType}`)
       }
+    },
+  },
+
+  {
+    name: 'upload: visible opener selects a hidden file input without extensions',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/upload.html'))
+      const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+      const ref = snap
+        .split('\n')
+        .find((line) => line.includes('Attach document'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!ref) throw new Error(`no upload button in ${snap}`)
+      const file = join(ctx.scratchDir, 'chooser-fixture.txt')
+      await writeFile(file, 'selected through the intercepted chooser')
+      expectOk(
+        await ctx.mcp.callTool('upload', { page, ref, file }),
+        'upload through opener',
+      )
+      const selected = expectOk(
+        await ctx.mcp.callTool('evaluate_in_page', {
+          page,
+          code: 'return document.getElementById("hidden-names").textContent',
+        }),
+      )
+      if (!selected.includes('chooser-fixture.txt'))
+        throw new Error(`file was not selected: ${selected}`)
+    },
+  },
+
+  {
+    name: 'upload: an unexpected chooser is recoverable without a ref',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/upload.html'))
+      const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+      const ref = snap
+        .split('\n')
+        .find((line) => line.includes('Attach document'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!ref) throw new Error('no upload button')
+      const opened = await ctx.mcp.callTool('act', { page, kind: 'click', ref })
+      expectOk(opened, 'click upload button')
+      if (!textOf(opened).includes('"fileChooserOpen":true'))
+        throw new Error(`no chooser marker: ${textOf(opened)}`)
+      const file = join(ctx.scratchDir, 'pending-chooser.txt')
+      await writeFile(file, 'pending chooser selection')
+      expectOk(
+        await ctx.mcp.callTool('upload', { page, file }),
+        'complete pending chooser',
+      )
+      const selected = expectOk(
+        await ctx.mcp.callTool('evaluate_in_page', {
+          page,
+          code: 'return document.getElementById("hidden-names").textContent',
+        }),
+      )
+      if (!selected.includes('pending-chooser.txt'))
+        throw new Error(`pending selection failed: ${selected}`)
+      expectError(
+        await ctx.mcp.callTool('upload', { page, file }),
+        'already consumed chooser',
+      )
+      const nextSnapshot = expectOk(
+        await ctx.mcp.callTool('snapshot', { page }),
+      )
+      const nextOpener = nextSnapshot
+        .split('\n')
+        .find((line) => line.includes('Attached pending-chooser.txt'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!nextOpener) throw new Error('no opener after selection')
+      expectOk(
+        await ctx.mcp.callTool('act', { page, kind: 'click', ref: nextOpener }),
+      )
+      expectOk(await ctx.mcp.callTool('upload', { page, files: [] }))
+      const cleared = expectOk(
+        await ctx.mcp.callTool('evaluate_in_page', {
+          page,
+          code: 'if (document.getElementById("hidden-file").files.length !== 0) throw new Error("files remain selected"); return "selection-cleared"',
+        }),
+      )
+      if (!cleared.includes('selection-cleared'))
+        throw new Error(`selection not cleared: ${cleared}`)
+    },
+  },
+  {
+    name: 'upload: run reports a chooser and finishes it through the same interface',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/upload.html'))
+      const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+      const ref = snap
+        .split('\n')
+        .find((line) => line.includes('Attach document'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!ref) throw new Error('no upload button')
+      const file = join(ctx.scratchDir, 'script-chooser.txt')
+      await writeFile(file, 'script selection')
+      const result = expectOk(
+        await ctx.mcp.callTool('run', {
+          code: `const p = browser.page(${page}); const opened = await p.click(${JSON.stringify(ref)}); if (!opened?.fileChooserOpen) throw new Error('missing chooser marker'); await p.upload(null, [${JSON.stringify(file)}]); return 'selection complete';`,
+        }),
+        'script upload',
+      )
+      if (!result.includes('selection complete')) throw new Error(result)
+      await waitUntil(async () => {
+        const detail = await apiGet(
+          ctx.server,
+          `/api/v1/sessions/${ctx.mcp.sessionId}`,
+        )
+        if (!detail.ok) return false
+        const body: {
+          dispatches?: Array<{
+            toolName: string
+            pageId?: number
+            resultMeta?: string
+          }>
+        } = await detail.json()
+        return (
+          Array.isArray(body.dispatches) &&
+          body.dispatches.some(
+            (row) =>
+              row.toolName === 'input.click' &&
+              row.pageId === page &&
+              JSON.parse(row.resultMeta ?? '{}').fileChooserOpen === true,
+          )
+        )
+      }, 'the cockpit audit to preserve the script chooser marker')
+    },
+  },
+  {
+    name: 'upload: navigation invalidates a pending chooser',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/upload.html'))
+      const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+      const ref = snap
+        .split('\n')
+        .find((line) => line.includes('Attach document'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!ref) throw new Error('no upload button')
+      const opened = await ctx.mcp.callTool('act', { page, kind: 'click', ref })
+      expectOk(opened)
+      if (!textOf(opened).includes('"fileChooserOpen":true'))
+        throw new Error('chooser was not opened before navigation')
+      expectOk(
+        await ctx.mcp.callTool('navigate', {
+          page,
+          url: ctx.fixture('/upload.html'),
+        }),
+      )
+      const file = join(ctx.scratchDir, 'stale-chooser.txt')
+      await writeFile(file, 'must not reach the replacement document')
+      expectError(
+        await ctx.mcp.callTool('upload', { page, file }),
+        'stale chooser',
+      )
+    },
+  },
+
+  {
+    name: 'upload: a cross-origin frame chooser uses its own document session',
+    async run(ctx) {
+      const child = ctx
+        .fixture2('/upload.html')
+        .replace('127.0.0.1', 'localhost')
+      const page = await ctx.openPage(
+        `${ctx.fixture('/upload-frame.html')}?src=${encodeURIComponent(child)}`,
+      )
+      let ref: string | undefined
+      await waitUntil(async () => {
+        const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+        ref = snap
+          .split('\n')
+          .find((line) => line.includes('Attach document'))
+          ?.match(/\[ref=(e\d+)\]/)?.[1]
+        return Boolean(ref)
+      }, 'cross-origin upload button')
+      const opened = await ctx.mcp.callTool('act', { page, kind: 'click', ref })
+      expectOk(opened, 'open frame chooser')
+      if (!textOf(opened).includes('"fileChooserOpen":true'))
+        throw new Error(`frame chooser missing: ${textOf(opened)}`)
+      const file = join(ctx.scratchDir, 'frame-chooser.txt')
+      await writeFile(file, 'selected in the remote child document')
+      expectOk(
+        await ctx.mcp.callTool('upload', { page, file }),
+        'select file in frame',
+      )
+      await waitUntil(async () => {
+        const selected = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+        return selected.includes('Attached frame-chooser.txt')
+      }, 'the remote document to confirm its selected file')
+    },
+  },
+  {
+    name: 'upload: a borrowed iframe can open a parent-page picker',
+    async run(ctx) {
+      const child = ctx
+        .fixture2('/upload.html?parentPicker=1')
+        .replace('127.0.0.1', 'localhost')
+      const url = `${ctx.fixture('/upload-frame.html')}?src=${encodeURIComponent(child)}&borrowed=1`
+      // Create through the browser's debugging endpoint, outside MCP ownership. This is a
+      // borrowed user tab: explicit upload must lease the whole page's picker interception.
+      const created = await fetch(
+        `http://127.0.0.1:${ctx.browser.cdpPort}/json/new?${encodeURIComponent(url)}`,
+        { method: 'PUT' },
+      )
+      if (!created.ok)
+        throw new Error(`external tab creation failed: ${created.status}`)
+      const target: { id: string } = await created.json()
+      let page: number | undefined
+      try {
+        await waitUntil(async () => {
+          const tabs = expectOk(
+            await ctx.mcp.callTool('tabs', { action: 'list' }),
+          )
+          const id = tabs
+            .split('\n')
+            .find((line) => line.includes(url))
+            ?.match(/^\[(\d+)\]/)?.[1]
+          page = id ? Number(id) : undefined
+          return page !== undefined
+        }, 'the borrowed tab to appear')
+        let ref: string | undefined
+        await waitUntil(async () => {
+          const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+          ref = snap
+            .split('\n')
+            .find((line) => line.includes('Attach to parent'))
+            ?.match(/\[ref=(e\d+)\]/)?.[1]
+          return Boolean(ref)
+        }, 'the borrowed frame upload button')
+        const file = join(ctx.scratchDir, 'parent-chooser.txt')
+        await writeFile(file, 'selected by the borrowed page parent')
+        expectOk(
+          await ctx.mcp.callTool('upload', { page, ref, file }),
+          'select through the parent picker',
+        )
+        const selected = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+        if (!selected.includes('Parent selection: parent-chooser.txt'))
+          throw new Error(`parent input was not selected: ${selected}`)
+      } finally {
+        if (page !== undefined)
+          await ctx.mcp.callTool('tabs', { action: 'close', page })
+        else
+          await fetch(
+            `http://127.0.0.1:${ctx.browser.cdpPort}/json/close/${target.id}`,
+          )
+      }
+    },
+  },
+  {
+    name: 'upload: typing and coordinate typing report picker activation',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/upload.html'))
+      const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+      const ref = snap
+        .split('\n')
+        .find((line) => line.includes('Attach document'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!ref) throw new Error('no keyboard upload target')
+      expectOk(await ctx.mcp.callTool('act', { page, kind: 'focus', ref }))
+      const typed = expectOk(
+        await ctx.mcp.callTool('act', { page, kind: 'type', text: '\n' }),
+      )
+      if (!typed.includes('"fileChooserOpen":true'))
+        throw new Error(`typing Enter omitted the chooser: ${typed}`)
+      expectOk(await ctx.mcp.callTool('upload', { page, files: [] }))
+      const scripted = expectOk(
+        await ctx.mcp.callTool('run', {
+          code: `const p = browser.page(${page}); await p.focus(${JSON.stringify(ref)}); const opened = await p.type('\\n'); if (!opened?.fileChooserOpen) throw new Error('typing Enter omitted the chooser'); await p.upload(null, []); return 'keyboard-picker-complete';`,
+        }),
+      )
+      if (!scripted.includes('keyboard-picker-complete'))
+        throw new Error(scripted)
+      const point = expectOk(
+        await ctx.mcp.callTool('evaluate_in_page', {
+          page,
+          code: 'const r = document.getElementById("upload-button").getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}',
+        }),
+      )
+      const x = point.match(/"x"\s*:\s*([\d.]+)/)?.[1]
+      const y = point.match(/"y"\s*:\s*([\d.]+)/)?.[1]
+      if (!x || !y) throw new Error(`no upload button coordinates: ${point}`)
+      // Empty text isolates type_at's initial native click from its keyboard work.
+      const at = expectOk(
+        await ctx.mcp.callTool('act', {
+          page,
+          kind: 'type_at',
+          x: Number(x),
+          y: Number(y),
+          text: '',
+          clear: false,
+        }),
+      )
+      if (!at.includes('"fileChooserOpen":true'))
+        throw new Error(`coordinate typing omitted the chooser: ${at}`)
+      expectOk(await ctx.mcp.callTool('upload', { page, files: [] }))
+    },
+  },
+  {
+    name: 'run: ordinary hovers do not pay a chooser delay',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/upload.html'))
+      const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+      const ref = snap
+        .split('\n')
+        .find((line) => line.includes('Attach document'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!ref) throw new Error('no hover target')
+      const result = expectOk(
+        await ctx.mcp.callTool('run', {
+          // The old 100ms wait alone costs ten seconds for this batch. Leave several
+          // seconds for real CDP work while staying below that unavoidable old minimum.
+          timeout: 9500,
+          code: `const p = browser.page(${page}); for (let i = 0; i < 100; i++) await p.hover(${JSON.stringify(ref)}); return 'hover-batch-complete';`,
+        }),
+        'ordinary input batch',
+      )
+      if (!result.includes('hover-batch-complete'))
+        throw new Error(`ordinary input batch exceeded its budget: ${result}`)
+    },
+  },
+  {
+    name: 'upload: single-file chooser rejects multiple paths and remains retryable',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/upload.html'))
+      const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+      const ref = snap
+        .split('\n')
+        .find((line) => line.includes('Attach document'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!ref) throw new Error('no upload button')
+      expectOk(await ctx.mcp.callTool('act', { page, kind: 'click', ref }))
+      const first = join(ctx.scratchDir, 'single-first.txt')
+      const second = join(ctx.scratchDir, 'single-second.txt')
+      await writeFile(first, 'first')
+      await writeFile(second, 'second')
+      expectError(
+        await ctx.mcp.callTool('upload', { page, files: [first, second] }),
+        'multiple paths for single-file chooser',
+      )
+      expectOk(
+        await ctx.mcp.callTool('upload', { page, files: [first] }),
+        'retry single file',
+      )
+    },
+  },
+
+  {
+    name: 'upload: a removed chooser input fails and releases the pending request',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/upload.html'))
+      const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+      const ref = snap
+        .split('\n')
+        .find((line) => line.includes('Attach document'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!ref) throw new Error('no upload button')
+      const opened = await ctx.mcp.callTool('act', { page, kind: 'click', ref })
+      if (!expectOk(opened).includes('"fileChooserOpen":true'))
+        throw new Error('no pending chooser')
+      expectOk(
+        await ctx.mcp.callTool('evaluate_in_page', {
+          page,
+          code: 'document.getElementById("hidden-file").remove(); return true',
+        }),
+      )
+      const file = join(ctx.scratchDir, 'replacement-input.txt')
+      await writeFile(file, 'must go only to the replacement input')
+      expectError(
+        await ctx.mcp.callTool('upload', { page, file }),
+        'removed chooser input',
+      )
+      expectOk(
+        await ctx.mcp.callTool('evaluate_in_page', {
+          page,
+          code: 'const input = document.createElement("input"); input.type="file"; input.id="hidden-file"; input.hidden=true; document.body.appendChild(input); return true',
+        }),
+      )
+      const fresh = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+      const opener = fresh
+        .split('\n')
+        .find((line) => line.includes('Attach document'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!opener) throw new Error('no replacement opener')
+      expectOk(
+        await ctx.mcp.callTool('upload', { page, ref: opener, file }),
+        'retry replacement input',
+      )
+    },
+  },
+
+  {
+    name: 'download: the click can create its initiating frame',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/links.html'))
+      const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+      const ref = snap
+        .split('\n')
+        .find((line) => line.includes('Download through new frame'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!ref) throw new Error('no frame download button')
+      const text = expectOk(
+        await ctx.mcp.callTool('download', { page, ref }),
+        'download through new frame',
+      )
+      const path = text.match(/to: (.+)$/m)?.[1]
+      if (!path || !(await Bun.file(path).text()).includes('fixture report'))
+        throw new Error(`frame download missing: ${text}`)
     },
   },
 

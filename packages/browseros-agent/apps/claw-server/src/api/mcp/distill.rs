@@ -361,6 +361,7 @@ fn emit_line(tool: &str, args: &[Value], inputs: &mut usize) -> Option<String> {
         "input.click" => format!("  await p.click({});", arg(1)),
         "input.fill" => format!("  await p.fill({}, {});", arg(1), next_input(inputs)),
         "input.type" => format!("  await p.type({});", next_input(inputs)),
+        "input.insertText" => format!("  await p.insertText({});", next_input(inputs)),
         "input.press" => format!("  await p.press({});", arg(1)),
         "input.hover" => format!("  await p.hover({});", arg(1)),
         "input.selectOption" => {
@@ -605,6 +606,7 @@ mod tests {
             failed_click,
             child("input.fill", json!([3, "e5", "s3cr3t-password"])),
             child("input.type", json!([3, "also-secret"])),
+            child("input.insertText", json!([3, "third-secret"])),
             child("input.click", json!([3, "e6"])),
         ];
         let (source, _) = distill_source(&children)
@@ -617,8 +619,10 @@ mod tests {
             "secret leaked: {source}"
         );
         assert!(!source.contains("also-secret"), "secret leaked: {source}");
+        assert!(!source.contains("third-secret"), "secret leaked: {source}");
         assert!(source.contains("inputs.field0"));
         assert!(source.contains("inputs.field1"));
+        assert!(source.contains("await p.insertText(inputs.field2);"));
         Ok(())
     }
 
