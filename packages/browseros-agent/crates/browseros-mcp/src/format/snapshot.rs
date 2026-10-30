@@ -1,9 +1,11 @@
 use crate::{
+    format::coverage::{coverage_warning, insert_coverage, with_warning},
     framework::ToolCtx,
     output_file::write_temp_tool_output_file,
     token_estimate::{estimate_text_tokens, slice_text_by_estimated_tokens},
     trust_boundary::wrap_untrusted,
 };
+use browseros_core::snapshot::SnapshotCoverage;
 use serde_json::{Value, json};
 
 const LARGE_SNAPSHOT_TOKEN_THRESHOLD: usize = 15_000;
@@ -17,9 +19,18 @@ pub struct FormattedSnapshot {
 
 pub async fn format_snapshot_result(
     snapshot: &str,
+    coverage: &SnapshotCoverage,
     origin: &str,
     ctx: &ToolCtx,
 ) -> FormattedSnapshot {
+    let mut formatted = format_snapshot_text(snapshot, origin, ctx).await;
+    let warning = coverage_warning(coverage, &[]);
+    formatted.text = with_warning(warning.as_deref(), formatted.text);
+    insert_coverage(&mut formatted.structured, coverage, &[]);
+    formatted
+}
+
+async fn format_snapshot_text(snapshot: &str, origin: &str, ctx: &ToolCtx) -> FormattedSnapshot {
     let snapshot_text = if snapshot.is_empty() {
         "(empty page)"
     } else {

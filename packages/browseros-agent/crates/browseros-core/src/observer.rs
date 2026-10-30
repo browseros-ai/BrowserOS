@@ -3,9 +3,10 @@ use crate::{
     frames::FrameRegistry,
     pages::{PageManager, PageSession},
     snapshot::{
-        AxNode, DiffOptions, DocumentId, RefEntry, RefMap, RenderOptions, SnapshotDiff,
-        SnapshotObservation, SnapshotOptions, apply_snapshot_options, diff_snapshot_observations,
-        ref_line, render_snapshot,
+        AxNode, DiffOptions, DocumentId, FrameError, FrameOwner, FrameReadStage, FrameSpan,
+        RefEntry, RefMap, RenderOptions, SnapshotCoverage, SnapshotDiff, SnapshotObservation,
+        SnapshotOptions, apply_snapshot_options, diff_snapshot_observations, ref_line,
+        render_snapshot,
     },
     target::page_access::PageAccess,
 };
@@ -17,7 +18,9 @@ use tokio::sync::Mutex;
 
 mod acquisition;
 mod clickable;
-use acquisition::{AcquiredFrame, CaptureTrace, SnapshotBudget, SnapshotStage, trace_stage};
+use acquisition::{
+    AcquiredFrame, CaptureTrace, SnapshotBudget, SnapshotStage, log_frame_error, trace_stage,
+};
 
 const MAX_FRAME_DEPTH: usize = 5;
 const MAX_STABLE_CAPTURE_ATTEMPTS: usize = 3;
@@ -27,6 +30,11 @@ pub struct SnapshotResult {
     pub text: String,
     pub refs: RefMap,
     pub url: String,
+    /// What this capture read: complete unless some frame failed, whose refs are then absent
+    /// while every other frame's refs stay usable.
+    pub coverage: SnapshotCoverage,
+    /// The child frames whose contents this capture read.
+    read_frames: Vec<FrameId>,
 }
 
 impl SnapshotResult {
@@ -44,6 +52,21 @@ impl SnapshotResult {
             .find(|entry| entry.backend_node_id == node && entry.frame_id.as_ref() == frame)?;
         let line = ref_line(&self.text, entry.ref_id.as_str())?;
         Some((&entry.ref_id, line))
+    }
+
+    /// Whether `frame`'s contents may be missing from this capture: a child frame it did not
+    /// read while some frame's read failed, which it may sit inside. A node of such a frame that
+    /// the capture lacks is unknown, not gone.
+    #[must_use]
+    pub fn may_lack_frame(&self, frame: Option<&FrameId>) -> bool {
+        frame.is_some_and(|frame| {
+            !self.read_frames.contains(frame)
+                && self
+                    .coverage
+                    .frame_errors
+                    .iter()
+                    .any(FrameError::contents_missing)
+        })
     }
 }
 
@@ -73,6 +96,41 @@ struct CaptureResult {
     refs: RefMap,
     url: String,
     scope: Option<RefScope>,
+    coverage: SnapshotCoverage,
+    frames: Vec<FrameSpan>,
+}
+
+impl CaptureResult {
+    fn observation(&self) -> SnapshotObservation {
+        SnapshotObservation {
+            text: self.text.clone(),
+            url: Some(self.url.clone()),
+            coverage: self.coverage.clone(),
+            frames: self.frames.clone(),
+        }
+    }
+
+    fn into_snapshot(self) -> SnapshotResult {
+        SnapshotResult {
+            read_frames: self
+                .frames
+                .iter()
+                .filter_map(|span| span.frame_id.clone())
+                .collect(),
+            text: self.text,
+            refs: self.refs,
+            url: self.url,
+            coverage: self.coverage,
+        }
+    }
+}
+
+/// One frame's rendered lines with each child frame it read stitched in after its `- iframe`
+/// line, where those children's contents sit, and what it and they failed to read.
+struct Assembled {
+    lines: Vec<String>,
+    frames: Vec<FrameSpan>,
+    frame_errors: Vec<FrameError>,
 }
 
 #[derive(Clone)]
@@ -146,11 +204,10 @@ impl Observer {
         // Options filter only the returned presentation; commit keeps the full
         // capture as the next diff baseline.
         let text = apply_snapshot_options(&result.text, options);
-        self.commit(result.clone()).await;
+        self.commit(&result).await;
         Ok(SnapshotResult {
             text,
-            refs: result.refs,
-            url: result.url,
+            ..result.into_snapshot()
         })
     }
 
@@ -167,26 +224,19 @@ impl Observer {
         };
         let result = self.capture().await?;
         let after_arrangement = result.refs.arrangement();
-        self.commit(result.clone()).await;
-        let capture = SnapshotResult {
-            text: result.text,
-            refs: result.refs,
-            url: result.url,
-        };
+        self.commit(&result).await;
         let mut diff = diff_snapshot_observations(
             before.as_ref(),
-            &SnapshotObservation {
-                text: capture.text.clone(),
-                url: Some(capture.url.clone()),
-            },
+            &result.observation(),
             DiffOptions::default(),
         );
         // A url change already decided it, and that rule wins: an SPA can swap
-        // the whole page behind an identical set of controls.
-        if diff.arrangement_changed.is_none() {
+        // the whole page behind an identical set of controls. A frame only one
+        // side read leaves it unknown, since its refs exist on that side alone.
+        if diff.arrangement_changed.is_none() && diff.uncompared.is_empty() {
             diff.arrangement_changed = before_arrangement.map(|before| before != after_arrangement);
         }
-        Ok((diff, capture))
+        Ok((diff, result.into_snapshot()))
     }
 
     pub async fn last_refs(&self) -> RefMap {
@@ -276,9 +326,10 @@ impl Observer {
                 budget: budget.clone(),
                 trace: trace.clone(),
             };
-            let frame_result = self.capture_frame(None, refs, 0, Vec::new(), context).await;
-            let (text, refs) = match frame_result {
-                Ok(result) => result,
+            let mut refs = refs;
+            let frame_result = self.capture_root(&mut refs, context).await;
+            let assembled = match frame_result {
+                Ok(assembled) => assembled,
                 Err(error) => {
                     trace_stage(
                         &trace,
@@ -305,10 +356,14 @@ impl Observer {
                     access.fresh().await?;
                 }
                 return Ok(CaptureResult {
-                    text,
+                    text: assembled.lines.join("\n"),
                     refs,
                     url: after.url.clone(),
                     scope: ref_scope_from(&after),
+                    coverage: SnapshotCoverage {
+                        frame_errors: assembled.frame_errors,
+                    },
+                    frames: assembled.frames,
                 });
             }
             trace_stage(
@@ -330,75 +385,91 @@ impl Observer {
         Err(CoreError::DocumentChanged)
     }
 
-    fn capture_frame(
-        &self,
-        frame_id: Option<FrameId>,
-        refs: RefMap,
-        base_depth: usize,
-        mut visited: Vec<FrameId>,
+    /// The main frame, which a capture needs: its read failing fails the capture. Boxed so
+    /// acquisition's nested futures do not deepen every caller's future type past the
+    /// compiler's layout limit.
+    fn capture_root<'a>(
+        &'a self,
+        refs: &'a mut RefMap,
         context: CaptureContext,
-    ) -> BoxFuture<'_, Result<(String, RefMap), CoreError>> {
+    ) -> BoxFuture<'a, Result<Assembled, CoreError>> {
         Box::pin(async move {
-            if let Some(frame_id) = &frame_id {
-                if visited.contains(frame_id) {
-                    return Ok((String::new(), refs));
-                }
-                visited.push(frame_id.clone());
-            }
-
             let acquired = self
-                .acquire_frame(frame_id, None, None, false, &context)
-                .await?;
-            self.assemble_acquired_frame(acquired, refs, base_depth, visited, context)
+                .acquire_frame(None, None, None, false, &context)
                 .await
+                .map_err(|(_stage, error)| error)?;
+            Ok(self
+                .assemble_acquired_frame(acquired, None, refs, 0, Vec::new(), context)
+                .await)
         })
     }
 
-    fn assemble_acquired_frame(
-        &self,
+    fn assemble_acquired_frame<'a>(
+        &'a self,
         acquired: AcquiredFrame,
-        mut refs: RefMap,
+        owner: Option<FrameOwner>,
+        refs: &'a mut RefMap,
         base_depth: usize,
         visited: Vec<FrameId>,
         context: CaptureContext,
-    ) -> BoxFuture<'_, Result<(String, RefMap), CoreError>> {
+    ) -> BoxFuture<'a, Assembled> {
         Box::pin(async move {
             let assembly_started = Instant::now();
-            let assembly_frame_id = acquired.frame_id.clone();
             let AcquiredFrame {
                 frame_id,
                 target,
                 nodes,
                 cursor_hits,
+                cursor_error,
                 document_id,
             } = acquired;
+            // A frame reports before the frames inside it, so errors read in document order.
+            let mut frame_errors = Vec::new();
+            if let Some(reason) = cursor_error {
+                let error = FrameError {
+                    frame_id: frame_id.clone(),
+                    owner,
+                    stage: FrameReadStage::CursorScan,
+                    reason,
+                };
+                frame_errors.push(log_frame_error(
+                    &context.trace,
+                    error,
+                    &"clickable scan failed",
+                ));
+            }
             let mut render_opts = RenderOptions {
-                refs: &mut refs,
+                refs: &mut *refs,
                 frame_id: frame_id.clone(),
                 document_id,
                 cursor_hits: Some(cursor_hits),
                 base_depth,
             };
             let rendered = render_snapshot(&nodes, &mut render_opts);
-            let mut text = rendered.text;
+            let lines = if rendered.text.is_empty() {
+                Vec::new()
+            } else {
+                rendered
+                    .text
+                    .split('\n')
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            };
             if rendered.iframes.is_empty() || base_depth >= MAX_FRAME_DEPTH {
                 trace_stage(
                     &context.trace,
-                    assembly_frame_id.as_ref(),
+                    frame_id.as_ref(),
                     SnapshotStage::Assembly,
                     assembly_started,
                     "success",
                 );
-                return Ok((text, refs));
+                return Assembled {
+                    lines,
+                    frames: Vec::new(),
+                    frame_errors,
+                };
             }
 
-            let mut lines = if text.is_empty() {
-                Vec::new()
-            } else {
-                text.split('\n')
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            };
             let children = self
                 .acquire_child_frames(
                     &target,
@@ -409,61 +480,83 @@ impl Observer {
                 )
                 .await;
             // `acquire_child_frames` restores original stitch order after unordered completion.
-            // Reverse it here because refs and line insertion have historically followed reverse
-            // iframe order; changing that would renumber stable public refs.
+            // Assemble in reverse because refs have historically been minted in reverse iframe
+            // order; changing that would renumber stable public refs.
+            let mut stitched = Vec::with_capacity(children.len());
             for child in children.into_iter().rev() {
-                let refs_before_child = refs.clone();
-                let Ok(acquired_child) = child.result else {
-                    continue;
-                };
-                let mut child_visited = visited.clone();
-                if let Some(child_frame_id) = &acquired_child.frame_id {
-                    child_visited.push(child_frame_id.clone());
-                }
-                let child_result = self
-                    .assemble_acquired_frame(
-                        acquired_child,
-                        refs.clone(),
-                        child.stitch.depth + 1,
-                        child_visited,
-                        context.clone(),
-                    )
-                    .await;
-                let child_text = match child_result {
-                    Ok((child_text, child_refs)) => {
-                        refs = child_refs;
-                        child_text
+                let assembled = match child.result {
+                    Ok(acquired_child) => {
+                        let child_frame_id = acquired_child.frame_id.clone();
+                        let mut child_visited = visited.clone();
+                        child_visited.extend(child_frame_id.clone());
+                        let assembled = self
+                            .assemble_acquired_frame(
+                                acquired_child,
+                                Some(child.owner.clone()),
+                                refs,
+                                child.stitch.depth + 1,
+                                child_visited,
+                                context.clone(),
+                            )
+                            .await;
+                        Ok((child_frame_id, assembled))
                     }
-                    Err(_err) => {
-                        refs = refs_before_child;
-                        String::new()
-                    }
+                    Err(error) => Err(error),
                 };
-                if !child_text.is_empty() {
-                    lines.insert(child.stitch.line_index + 1, child_text);
+                stitched.push((child.stitch, child.owner, assembled));
+            }
+            stitched.reverse();
+
+            let mut out = Vec::with_capacity(lines.len());
+            let mut frames = Vec::new();
+            let mut parent_lines = lines.into_iter();
+            let mut taken = 0;
+            for (stitch, owner, child) in stitched {
+                // Each child's contents go right after its own `- iframe` line.
+                let through_iframe_line = stitch.line_index + 1;
+                out.extend(
+                    parent_lines
+                        .by_ref()
+                        .take(through_iframe_line.saturating_sub(taken)),
+                );
+                taken = through_iframe_line;
+                match child {
+                    Err(error) => frame_errors.push(error),
+                    Ok((frame_id, assembled)) => {
+                        let start = out.len();
+                        frames.push(FrameSpan {
+                            frame_id,
+                            owner,
+                            lines: start..start + assembled.lines.len(),
+                        });
+                        frames.extend(assembled.frames.into_iter().map(|span| span.shifted(start)));
+                        frame_errors.extend(assembled.frame_errors);
+                        out.extend(assembled.lines);
+                    }
                 }
             }
-            text = lines.join("\n");
+            out.extend(parent_lines);
             trace_stage(
                 &context.trace,
-                assembly_frame_id.as_ref(),
+                frame_id.as_ref(),
                 SnapshotStage::Assembly,
                 assembly_started,
                 "success",
             );
-            Ok((text, refs))
+            Assembled {
+                lines: out,
+                frames,
+                frame_errors,
+            }
         })
     }
 
-    async fn commit(&self, result: CaptureResult) {
+    async fn commit(&self, result: &CaptureResult) {
         let mut state = self.state.lock().await;
-        state.baseline = Some(SnapshotObservation {
-            text: result.text,
-            url: Some(result.url),
-        });
+        state.baseline = Some(result.observation());
         state.baseline_arrangement = Some(result.refs.arrangement());
-        state.refs = result.refs;
-        state.ref_scope = result.scope;
+        state.refs = result.refs.clone();
+        state.ref_scope = result.scope.clone();
     }
 
     async fn refs_for_capture(&self, state: &MainFrameState) -> RefMap {
@@ -781,9 +874,12 @@ fn name_of(node: &AxNode) -> String {
 mod tests {
     use super::resolve_ref_entry;
     use crate::{
-        BrowserSession, BrowserSessionHooks, CoreError, ProtocolSession,
+        BrowserSession, BrowserSessionHooks, CoreError, FrameId, ProtocolSession,
         connection::CdpConnection,
-        snapshot::{AxNode, AxValue, SnapshotMode, SnapshotOptions, refs::MintRef},
+        snapshot::{
+            AxNode, AxValue, FrameError, FrameOwner, FrameReadReason, FrameReadStage, SnapshotMode,
+            SnapshotOptions, refs::MintRef,
+        },
     };
     use browseros_cdp::{CdpError, CdpEvent};
     use futures_util::future::BoxFuture;
@@ -990,6 +1086,7 @@ mod tests {
         child_loader_id: Option<String>,
         child_nodes: Vec<AxNode>,
         fail_ax_tree: bool,
+        fail_dom_capture: bool,
         frame_tree_reads: usize,
         ax_tree_reads: usize,
         change_child_loader_on_second_read: bool,
@@ -1057,9 +1154,16 @@ mod tests {
                         }
                     }
                     "Runtime.evaluate" => Ok(json!({ "result": { "value": [] } })),
-                    "DOM.describeNode" => {
-                        Ok(json!({ "node": { "contentDocument": { "frameId": "child" } } }))
+                    "DOMSnapshot.captureSnapshot" if state.fail_dom_capture => {
+                        Err(CdpError::Timeout {
+                            method: method.to_string(),
+                        })
                     }
+                    "DOMSnapshot.captureSnapshot" => Ok(dom_capture([CHILD_DOCUMENT])),
+                    "DOM.describeNode" => Ok(json!({ "node": { "contentDocument": {
+                        "frameId": "child",
+                        "backendNodeId": CHILD_DOCUMENT
+                    } } })),
                     _ => Ok(json!({})),
                 }
             })
@@ -1094,7 +1198,10 @@ mod tests {
         gates: [Arc<Semaphore>; 2],
         completions: Mutex<Vec<usize>>,
         completed: Notify,
-        fail_second_child: bool,
+        /// Upcoming accessibility reads of each child that fail; `usize::MAX` fails every one.
+        failing_reads: [AtomicUsize; 2],
+        /// How `DOM.describeNode` answers for child b's iframe element.
+        describe_b: Mutex<DescribeB>,
         cycle_first_child: AtomicBool,
         root_ax_reads: AtomicUsize,
         main_loader: Mutex<String>,
@@ -1108,7 +1215,11 @@ mod tests {
                 gates: [Arc::new(Semaphore::new(0)), Arc::new(Semaphore::new(0))],
                 completions: Mutex::new(Vec::new()),
                 completed: Notify::new(),
-                fail_second_child,
+                failing_reads: [
+                    AtomicUsize::new(0),
+                    AtomicUsize::new(if fail_second_child { usize::MAX } else { 0 }),
+                ],
+                describe_b: Mutex::new(DescribeB::Frame),
                 cycle_first_child: AtomicBool::new(false),
                 root_ax_reads: AtomicUsize::new(0),
                 main_loader: Mutex::new("main-loader".to_string()),
@@ -1230,7 +1341,7 @@ mod tests {
                             completions.push(index);
                         }
                         self.completed.notify_waiters();
-                        if index == 1 && self.fail_second_child {
+                        if take_failure(&self.failing_reads[index]) {
                             return Err(CdpError::Protocol {
                                 code: -32000,
                                 message: "child capture failed".to_string(),
@@ -1258,16 +1369,30 @@ mod tests {
                     }
                     "Runtime.evaluate" => Ok(json!({ "result": { "value": [] } })),
                     "Runtime.releaseObjectGroup" => Ok(json!({})),
+                    "DOMSnapshot.captureSnapshot" => Ok(dom_capture([1010, 1020])),
                     "DOM.describeNode" => {
-                        let frame_id = match params.get("backendNodeId").and_then(Value::as_i64) {
-                            Some(10) => Some("child-a"),
-                            Some(20) => Some("child-b"),
+                        let backend = params.get("backendNodeId").and_then(Value::as_i64);
+                        let describe_b = self
+                            .describe_b
+                            .lock()
+                            .map(|describe| *describe)
+                            .unwrap_or(DescribeB::Frame);
+                        let frame_id = match (backend, describe_b) {
+                            (Some(10), _) => Some("child-a"),
+                            (Some(20), DescribeB::Frame) => Some("child-b"),
+                            (Some(20), DescribeB::Error) => {
+                                return Err(CdpError::Protocol {
+                                    code: -32000,
+                                    message: "No node with given id found".to_string(),
+                                });
+                            }
                             _ => None,
                         };
                         Ok(json!({
                             "node": {
                                 "contentDocument": {
-                                    "frameId": frame_id
+                                    "frameId": frame_id,
+                                    "backendNodeId": backend.map(|backend| backend + 1000)
                                 }
                             }
                         }))
@@ -1300,8 +1425,28 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    enum DescribeB {
+        Frame,
+        Error,
+        NoFrame,
+    }
+
+    /// Whether this read is one of the failures `counter` still holds, using it up if so.
+    fn take_failure(counter: &AtomicUsize) -> bool {
+        counter
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| match left {
+                0 => None,
+                usize::MAX => Some(usize::MAX),
+                left => Some(left - 1),
+            })
+            .is_ok()
+    }
+
     struct DepthConnection {
         max_child_requested: AtomicUsize,
+        /// The nesting depth whose frame fails its accessibility read; 0 fails none.
+        fail_depth: AtomicUsize,
     }
 
     impl CdpConnection for DepthConnection {
@@ -1337,6 +1482,11 @@ mod tests {
                             .and_then(|depth| depth.parse::<usize>().ok());
                         if let Some(depth) = depth {
                             self.max_child_requested.fetch_max(depth, Ordering::SeqCst);
+                            if depth == self.fail_depth.load(Ordering::SeqCst) {
+                                return Err(CdpError::Timeout {
+                                    method: method.to_string(),
+                                });
+                            }
                             return Ok(json!({
                                 "nodes": [
                                     root_with(&["nested-frame"]),
@@ -1353,15 +1503,16 @@ mod tests {
                     }
                     "Runtime.evaluate" => Ok(json!({ "result": { "value": [] } })),
                     "Runtime.releaseObjectGroup" => Ok(json!({})),
+                    "DOMSnapshot.captureSnapshot" => Ok(dom_capture(1100..1110)),
                     "DOM.describeNode" => {
-                        let frame_id = params
-                            .get("backendNodeId")
-                            .and_then(Value::as_i64)
-                            .map(|backend_id| format!("child-{}", backend_id - 99));
+                        let backend = params.get("backendNodeId").and_then(Value::as_i64);
+                        let frame_id =
+                            backend.map(|backend_id| format!("child-{}", backend_id - 99));
                         Ok(json!({
                             "node": {
                                 "contentDocument": {
-                                    "frameId": frame_id
+                                    "frameId": frame_id,
+                                    "backendNodeId": backend.map(|backend| backend + 1000)
                                 }
                             }
                         }))
@@ -1429,6 +1580,19 @@ mod tests {
             return Err(CoreError::Message("missing test page".to_string()));
         };
         Ok(session.observe(page.page_id.clone()).await)
+    }
+
+    /// The backend id of the harness child frame's document node.
+    const CHILD_DOCUMENT: i64 = 5000;
+
+    /// A session's DOM capture: the root document, then one document per child document node id,
+    /// none of them holding a clickable element.
+    fn dom_capture(child_documents: impl IntoIterator<Item = i64>) -> Value {
+        let documents = std::iter::once(1)
+            .chain(child_documents)
+            .map(|document| json!({ "nodes": { "backendNodeId": [document] } }))
+            .collect::<Vec<_>>();
+        json!({ "documents": documents, "strings": [] })
     }
 
     fn tab_value(url: &str) -> Value {
@@ -1528,6 +1692,7 @@ mod tests {
             child_loader_id: None,
             child_nodes: Vec::new(),
             fail_ax_tree: false,
+            fail_dom_capture: false,
             frame_tree_reads: 0,
             ax_tree_reads: 0,
             change_child_loader_on_second_read: false,
@@ -1762,6 +1927,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn observer_reports_an_unreadable_frame_and_keeps_its_healthy_sibling()
+    -> Result<(), CoreError> {
+        let connection = Arc::new(SiblingConnection::new(true));
+        let observer = sibling_observer(connection.clone()).await?;
+        // One read for the capture, one for the ref recovery below.
+        connection.gates[0].add_permits(2);
+        connection.gates[1].add_permits(1);
+
+        let snapshot = observer.snapshot().await?;
+
+        assert_eq!(
+            snapshot.text,
+            ["- iframe", "  - button \"A\" [ref=e1]", "- iframe"].join("\n")
+        );
+        assert!(snapshot.coverage.is_partial());
+        assert_eq!(
+            snapshot.coverage.frame_errors,
+            vec![FrameError {
+                frame_id: Some(FrameId("child-b".to_string())),
+                owner: Some(FrameOwner {
+                    parent: None,
+                    backend_node_id: 20,
+                }),
+                stage: FrameReadStage::Ax,
+                reason: FrameReadReason::BrowserError,
+            }]
+        );
+        let resolved = observer.resolve_ref(&crate::Ref("e1".to_string())).await?;
+        assert_eq!(resolved.backend_node_id, 101);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn observer_navigation_during_sibling_acquisition_retries_capture()
     -> Result<(), CoreError> {
         let connection = Arc::new(SiblingConnection::new(false));
@@ -1809,6 +2007,8 @@ mod tests {
             ]
             .join("\n")
         );
+        // Skipping a cycle is by design; nothing went unread.
+        assert!(!snapshot.coverage.is_partial());
         Ok(())
     }
 
@@ -1816,6 +2016,7 @@ mod tests {
     async fn observer_nested_frames_stop_at_five_levels() -> Result<(), CoreError> {
         let connection = Arc::new(DepthConnection {
             max_child_requested: AtomicUsize::new(0),
+            fail_depth: AtomicUsize::new(0),
         });
         let observer = depth_observer(connection.clone()).await?;
 
@@ -1824,6 +2025,262 @@ mod tests {
         assert_eq!(connection.max_child_requested.load(Ordering::SeqCst), 5);
         assert_eq!(snapshot.text.lines().count(), 6);
         assert_eq!(snapshot.text.lines().last(), Some("          - iframe"));
+        // The depth cap is deliberate truncation, not a frame the browser failed to give.
+        assert!(!snapshot.coverage.is_partial());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_reports_a_nested_failure_under_its_readable_parent() -> Result<(), CoreError>
+    {
+        let connection = Arc::new(DepthConnection {
+            max_child_requested: AtomicUsize::new(0),
+            fail_depth: AtomicUsize::new(2),
+        });
+        let observer = depth_observer(connection.clone()).await?;
+
+        let snapshot = observer.snapshot().await?;
+
+        assert_eq!(snapshot.text, ["- iframe", "  - iframe"].join("\n"));
+        assert_eq!(
+            snapshot.coverage.frame_errors,
+            vec![FrameError {
+                frame_id: Some(FrameId("child-2".to_string())),
+                owner: Some(FrameOwner {
+                    parent: Some(FrameId("child-1".to_string())),
+                    backend_node_id: 101,
+                }),
+                stage: FrameReadStage::Ax,
+                reason: FrameReadReason::Timeout,
+            }]
+        );
+        assert!(snapshot.may_lack_frame(Some(&FrameId("child-3".to_string()))));
+        assert!(!snapshot.may_lack_frame(Some(&FrameId("child-1".to_string()))));
+        assert!(!snapshot.may_lack_frame(None));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_names_an_unidentified_frame_by_its_iframe_element() -> Result<(), CoreError> {
+        for (describe, reason) in [
+            (DescribeB::Error, FrameReadReason::BrowserError),
+            (DescribeB::NoFrame, FrameReadReason::NotFound),
+        ] {
+            let connection = Arc::new(SiblingConnection::new(false));
+            if let Ok(mut describe_b) = connection.describe_b.lock() {
+                *describe_b = describe;
+            }
+            let observer = sibling_observer(connection.clone()).await?;
+            connection.gates[0].add_permits(1);
+
+            let snapshot = observer.snapshot().await?;
+
+            assert_eq!(
+                snapshot.text,
+                ["- iframe", "  - button \"A\" [ref=e1]", "- iframe"].join("\n")
+            );
+            assert_eq!(
+                snapshot.coverage.frame_errors,
+                vec![FrameError {
+                    frame_id: None,
+                    owner: Some(FrameOwner {
+                        parent: None,
+                        backend_node_id: 20,
+                    }),
+                    stage: FrameReadStage::Identify,
+                    reason,
+                }]
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_reports_failures_in_document_order_whatever_finishes_first()
+    -> Result<(), CoreError> {
+        let connection = Arc::new(SiblingConnection::new(true));
+        connection.failing_reads[0].store(usize::MAX, Ordering::SeqCst);
+        let observer = sibling_observer(connection.clone()).await?;
+        let task = tokio::spawn(async move { observer.snapshot().await });
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            connection.wait_for_both_children(),
+        )
+        .await
+        .map_err(|error| CoreError::Message(error.to_string()))?;
+        connection.gates[1].add_permits(1);
+        connection.wait_for_completions(1).await;
+        connection.gates[0].add_permits(1);
+        let snapshot = task
+            .await
+            .map_err(|error| CoreError::Message(error.to_string()))??;
+
+        let failed = snapshot
+            .coverage
+            .frame_errors
+            .iter()
+            .map(|error| error.frame_id.as_ref().map(FrameId::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(failed, vec![Some("child-a"), Some("child-b")]);
+        assert_eq!(snapshot.text, ["- iframe", "- iframe"].join("\n"));
+        assert!(snapshot.refs.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_reports_only_the_accepted_attempt() -> Result<(), CoreError> {
+        let connection = Arc::new(SiblingConnection::new(false));
+        // Child b fails only in the first attempt, which a navigation then abandons.
+        connection.failing_reads[1].store(1, Ordering::SeqCst);
+        let observer = sibling_observer(connection.clone()).await?;
+        let task = tokio::spawn(async move { observer.snapshot().await });
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            connection.wait_for_both_children(),
+        )
+        .await
+        .map_err(|error| CoreError::Message(error.to_string()))?;
+        if let Ok(mut loader) = connection.main_loader.lock() {
+            *loader = "main-loader-2".to_string();
+        }
+        connection.gates[0].add_permits(2);
+        connection.gates[1].add_permits(2);
+        let snapshot = task
+            .await
+            .map_err(|error| CoreError::Message(error.to_string()))??;
+
+        assert_eq!(connection.root_ax_reads.load(Ordering::SeqCst), 2);
+        assert!(snapshot.text.contains("button \"B\""));
+        assert!(!snapshot.coverage.is_partial());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_keeps_contents_when_only_the_clickable_scan_fails() -> Result<(), CoreError> {
+        let mut state = harness_state(vec![root_with(&["2", "3"]), ax_button("2", "Outer", 1), {
+            let mut iframe = iframe_node("3", 2);
+            iframe.name = None;
+            iframe
+        }]);
+        state.child_loader_id = Some("child-loader-1".to_string());
+        state.child_nodes = vec![
+            root_with(&["child-button"]),
+            ax_button("child-button", "Inner", 1),
+        ];
+        state.fail_dom_capture = true;
+        let (_connection, observer) = observer_harness(state).await?;
+
+        let snapshot = observer.snapshot().await?;
+
+        assert_eq!(
+            snapshot.text,
+            [
+                "- button \"Outer\" [ref=e1]",
+                "- iframe",
+                "  - button \"Inner\" [ref=e2]"
+            ]
+            .join("\n")
+        );
+        let degraded = FrameError {
+            frame_id: None,
+            owner: None,
+            stage: FrameReadStage::CursorScan,
+            reason: FrameReadReason::Timeout,
+        };
+        assert_eq!(
+            snapshot.coverage.frame_errors,
+            vec![
+                degraded.clone(),
+                FrameError {
+                    frame_id: Some(FrameId("child".to_string())),
+                    owner: Some(FrameOwner {
+                        parent: None,
+                        backend_node_id: 2,
+                    }),
+                    ..degraded
+                },
+            ]
+        );
+        assert!(
+            snapshot
+                .coverage
+                .frame_errors
+                .iter()
+                .all(|error| !error.contents_missing())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_reads_an_empty_frame_as_complete() -> Result<(), CoreError> {
+        let mut state = harness_state(vec![
+            root_with(&["2", "3"]),
+            ax_button("2", "Outer", 1),
+            iframe_node("3", 2),
+        ]);
+        state.child_loader_id = Some("child-loader-1".to_string());
+        let (_connection, observer) = observer_harness(state).await?;
+
+        let snapshot = observer.snapshot().await?;
+
+        assert_eq!(
+            snapshot.text,
+            ["- button \"Outer\" [ref=e1]", "- iframe"].join("\n")
+        );
+        assert!(!snapshot.coverage.is_partial());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_diff_treats_an_unreadable_frame_as_unknown_until_it_reads_again()
+    -> Result<(), CoreError> {
+        let connection = Arc::new(SiblingConnection::new(false));
+        let observer = sibling_observer(connection.clone()).await?;
+        // Five captures, one read of each child apiece.
+        connection.gates[0].add_permits(5);
+        connection.gates[1].add_permits(5);
+        let complete = observer.snapshot().await?;
+        let b_unread = FrameError {
+            frame_id: Some(FrameId("child-b".to_string())),
+            owner: Some(FrameOwner {
+                parent: None,
+                backend_node_id: 20,
+            }),
+            stage: FrameReadStage::Ax,
+            reason: FrameReadReason::BrowserError,
+        };
+
+        connection.failing_reads[1].store(usize::MAX, Ordering::SeqCst);
+        let (failed, capture) = observer.diff_with_capture().await?;
+        assert!(!failed.changed, "{}", failed.text);
+        assert_eq!((failed.added, failed.removed), (0, 0));
+        assert_eq!(failed.coverage.frame_errors, vec![b_unread.clone()]);
+        assert_eq!(failed.uncompared, vec![b_unread.clone()]);
+        assert_eq!(failed.arrangement_changed, None);
+        assert_eq!(capture.coverage, failed.coverage);
+        assert!(
+            observer
+                .last_refs()
+                .await
+                .get(&crate::Ref("e1".to_string()))
+                .is_none()
+        );
+
+        connection.failing_reads[1].store(0, Ordering::SeqCst);
+        let recovered = observer.diff().await?;
+        assert!(!recovered.changed, "{}", recovered.text);
+        assert!(!recovered.coverage.is_partial());
+        assert_eq!(recovered.uncompared, vec![b_unread]);
+        assert_eq!(recovered.arrangement_changed, None);
+
+        let settled = observer.diff().await?;
+        assert!(!settled.changed);
+        assert!(settled.uncompared.is_empty());
+        assert_eq!(settled.arrangement_changed, Some(false));
+        // B reads again under the ref it had before it failed.
+        assert_eq!(observer.snapshot().await?.text, complete.text);
         Ok(())
     }
 

@@ -1,10 +1,14 @@
 pub mod ax_types;
+pub mod coverage;
 pub mod diff;
 pub mod refs;
 pub mod render;
 pub mod roles;
 
 pub use ax_types::{AxNode, AxProperty, AxRelatedNode, AxRelatedValue, AxValue, AxValueSource};
+pub use coverage::{
+    FrameError, FrameOwner, FrameReadReason, FrameReadStage, FrameSpan, SnapshotCoverage,
+};
 pub use diff::{
     DiffOptions, SnapshotDiff, SnapshotObservation, diff_snapshot_observations, diff_snapshots,
 };
