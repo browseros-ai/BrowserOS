@@ -1,4 +1,6 @@
-use crate::{CoreError, FrameId, PageId, ProtocolSession, SessionId, connection::CdpConnection};
+use crate::{
+    CoreError, FrameId, PageId, ProtocolSession, SessionId, TargetError, connection::CdpConnection,
+};
 use browseros_cdp::{CdpEvent, target};
 use serde_json::{Value, json};
 use std::{
@@ -30,8 +32,9 @@ pub struct FrameRegistry {
 
 /// A child frame as its parent resolved it: the parent's endpoint, whose document holds the
 /// frame's owner element, and the endpoint the child was read through. Page.getFrameTree omits
-/// remote frames, so frame admission asks this parent for the owner instead. Only a hint for
-/// where to ask: admission re-verifies the owner on every call.
+/// remote frames, so frame admission asks this parent for the owner instead, re-verifying it on
+/// every call. A ref lookup without a parent needs this record and answers only through its
+/// `endpoint`; a detach drops it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FrameLink {
     pub(crate) parent: SessionId,
@@ -136,19 +139,19 @@ impl FrameRegistry {
                 cursor_uses_session_default: true,
             });
         };
+        let Some(parent) = same_process_parent else {
+            return self.recorded_target(page_id, frame_id, guard).await;
+        };
         // Boxed for the same reason as `PageAccess::frame_session`: many callers embed this.
         let target = Box::pin(self.resolve_child_target(
-            page_session_id,
+            page_id,
             frame_id.clone(),
-            same_process_parent,
+            parent,
             cross_process,
             guard,
         ))
         .await?;
-        if let (Some(parent), Some(endpoint)) = (
-            same_process_parent.and_then(ProtocolSession::session_id),
-            target.session.session_id(),
-        ) {
+        if let (Some(parent), Some(endpoint)) = (parent.session_id(), target.session.session_id()) {
             let link = FrameLink {
                 parent: parent.clone(),
                 endpoint: endpoint.clone(),
@@ -158,11 +161,52 @@ impl FrameRegistry {
         Ok(target)
     }
 
+    /// A lookup without a parent re-reads a frame some capture resolved, for one of its refs.
+    /// It answers only through the endpoint that capture read the frame through, while the frame
+    /// is still mapped there. After a detach, re-attach or reconnect the ref's node ids belong to
+    /// another document or process, and the page's own endpoint, the old default, would resolve
+    /// them against unrelated nodes.
+    async fn recorded_target(
+        &self,
+        page_id: PageId,
+        frame_id: FrameId,
+        guard: Option<crate::connection::EpochGuard>,
+    ) -> Result<FrameTarget, CoreError> {
+        let link = self.frame_links.lock().await.get(&frame_id).cloned();
+        let own = self.oopif_sessions.lock().await.get(&frame_id).cloned();
+        let current = match &own {
+            Some(own) => Some(own.clone()),
+            None => self
+                .same_process_sessions
+                .lock()
+                .await
+                .get(&frame_id)
+                .cloned(),
+        };
+        let Some(link) = link.filter(|link| current.as_ref() == Some(&link.endpoint)) else {
+            return Err(TargetError::FrameNotInPage {
+                page: page_id,
+                frame: frame_id,
+            }
+            .into());
+        };
+        Ok(FrameTarget {
+            session: ProtocolSession::for_session(self.cdp.clone(), link.endpoint)
+                .with_epoch_guard(guard),
+            ax_params: if own.is_some() {
+                json!({})
+            } else {
+                json!({ "frameId": frame_id.0 })
+            },
+            cursor_uses_session_default: own.is_some(),
+        })
+    }
+
     async fn resolve_child_target(
         &self,
-        page_session_id: SessionId,
+        page_id: PageId,
         frame_id: FrameId,
-        same_process_parent: Option<&ProtocolSession>,
+        parent: &ProtocolSession,
         cross_process: bool,
         guard: Option<crate::connection::EpochGuard>,
     ) -> Result<FrameTarget, CoreError> {
@@ -204,23 +248,17 @@ impl FrameRegistry {
         // A non-target frame shares its nearest parent target's CDP session, which may itself be
         // an OOPIF. Cache that inheritance because later ref resolution knows the frame id but no
         // longer has the capture-time parent target.
-        let inherited_session = same_process_parent
-            .and_then(ProtocolSession::session_id)
-            .cloned();
-        let session_id = if let Some(inherited_session) = inherited_session {
-            self.same_process_sessions
-                .lock()
-                .await
-                .insert(frame_id.clone(), inherited_session.clone());
-            inherited_session
-        } else {
-            self.same_process_sessions
-                .lock()
-                .await
-                .get(&frame_id)
-                .cloned()
-                .unwrap_or(page_session_id)
-        };
+        let session_id = parent
+            .session_id()
+            .cloned()
+            .ok_or(TargetError::FrameNotInPage {
+                page: page_id,
+                frame: frame_id.clone(),
+            })?;
+        self.same_process_sessions
+            .lock()
+            .await
+            .insert(frame_id.clone(), session_id.clone());
         Ok(FrameTarget {
             session: ProtocolSession::for_session(self.cdp.clone(), session_id)
                 .with_epoch_guard(guard),
@@ -361,8 +399,11 @@ impl FrameRegistry {
                     return Err(guard.invalidated.clone().into());
                 }
             }
-            sessions.insert(frame_id, session_id.clone());
+            sessions.insert(frame_id.clone(), session_id.clone());
         }
+        // The frame is its own target now. A same-process mapping left from before, as while it
+        // was about:blank, would outlive this endpoint's detach and answer for the frame.
+        self.same_process_sessions.lock().await.remove(&frame_id);
         let session = ProtocolSession::for_session(self.cdp.clone(), session_id)
             .with_epoch_guard(guard.clone());
         if waiting_for_debugger {
@@ -663,11 +704,12 @@ mod tests {
             FrameId("oopif".to_string()),
             SessionId::from("oopif-session".to_string()),
         );
+        let page = ProtocolSession::for_session(cdp.clone(), SessionId::from("page-session"));
         let oopif = registry
             .resolve_frame_target(
                 page_id.clone(),
                 Some(FrameId("oopif".to_string())),
-                None,
+                Some(&page),
                 false,
             )
             .await?;
@@ -741,11 +783,115 @@ mod tests {
             )
             .await?;
 
+        // The new connection has no record of the child, so a ref into it is refused rather
+        // than answered with the old inherited session or the page's own new one.
         let reconnected_child = registry
             .resolve_frame_target(page_id, Some(child_id), None, false)
+            .await;
+        assert!(
+            matches!(
+                reconnected_child,
+                Err(crate::CoreError::Target(
+                    crate::TargetError::FrameNotInPage { .. }
+                ))
+            ),
+            "{reconnected_child:?}"
+        );
+        assert!(second_page_session.session_id().is_some());
+        Ok(())
+    }
+
+    fn refused(result: &Result<super::FrameTarget, crate::CoreError>) -> bool {
+        matches!(
+            result,
+            Err(crate::CoreError::Target(
+                crate::TargetError::FrameNotInPage { .. }
+            ))
+        )
+    }
+
+    #[tokio::test]
+    async fn parentless_lookups_answer_only_the_endpoint_a_capture_recorded()
+    -> Result<(), crate::CoreError> {
+        let cdp = Arc::new(NoopConnection::default());
+        let registry = FrameRegistry::new(cdp.clone());
+        let page_id = PageId(1);
+        registry
+            .page_sessions
+            .lock()
+            .await
+            .insert(page_id.clone(), SessionId::from("page-session"));
+        let page = ProtocolSession::for_session(cdp.clone(), SessionId::from("page-session"));
+        let child = FrameId("child".to_string());
+        registry
+            .resolve_frame_target(page_id.clone(), Some(child.clone()), Some(&page), false)
             .await?;
-        assert!(reconnected_child.session.same_session(&second_page_session));
-        assert!(!reconnected_child.session.same_session(&first_parent));
+
+        // A healthy same-process child answers through the endpoint its capture used.
+        let healthy = registry
+            .resolve_frame_target(page_id.clone(), Some(child.clone()), None, false)
+            .await?;
+        assert!(healthy.session.same_session(&page));
+        assert_eq!(healthy.ax_params, json!({ "frameId": "child" }));
+
+        // No capture recorded this frame: never default to the page's endpoint.
+        let unknown = registry
+            .resolve_frame_target(
+                page_id.clone(),
+                Some(FrameId("unknown".into())),
+                None,
+                false,
+            )
+            .await;
+        assert!(refused(&unknown), "{unknown:?}");
+
+        // The frame now lives on its own endpoint; the capture read it through the page's.
+        registry
+            .register_oopif_session(child.clone(), SessionId::from("child-session"), false)
+            .await;
+        let moved = registry
+            .resolve_frame_target(page_id, Some(child), None, false)
+            .await;
+        assert!(refused(&moved), "{moved:?}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn oopif_registration_drops_the_frames_inherited_session() -> Result<(), crate::CoreError>
+    {
+        let cdp = Arc::new(NoopConnection::default());
+        let registry = FrameRegistry::new(cdp.clone());
+        let page_id = PageId(1);
+        registry
+            .page_sessions
+            .lock()
+            .await
+            .insert(page_id.clone(), SessionId::from("page-session"));
+        let page = ProtocolSession::for_session(cdp.clone(), SessionId::from("page-session"));
+        let child = FrameId("child".to_string());
+        // First seen same-process, as while it is still about:blank.
+        registry
+            .resolve_frame_target(page_id.clone(), Some(child.clone()), Some(&page), false)
+            .await?;
+        registry
+            .register_oopif_session(child.clone(), SessionId::from("child-session"), false)
+            .await;
+        assert!(
+            !registry
+                .same_process_sessions
+                .lock()
+                .await
+                .contains_key(&child)
+        );
+
+        // Once the OOPIF is gone, no stale inheritance answers for it.
+        registry
+            .on_detached(&SessionId::from("child-session"))
+            .await;
+        let gone = registry
+            .resolve_frame_target(page_id, Some(child), None, false)
+            .await;
+        assert!(refused(&gone), "{gone:?}");
         Ok(())
     }
 

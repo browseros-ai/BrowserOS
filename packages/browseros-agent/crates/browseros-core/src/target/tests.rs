@@ -1682,18 +1682,23 @@ async fn reconnect_after_admission_never_dispatches_root_page_raw_or_extension_w
                     scoped.evaluate_extension_workers("1").await.map(|_| ())
                 }
                 "page_attach" | "page_setup" => scoped.page_session(page).await.map(|_| ()),
-                "oopif_attach" | "oopif_setup" => scoped
-                    .session
-                    .frames()
-                    .resolve_frame_target_with_epoch(
-                        page,
-                        Some(crate::FrameId("child-target".into())),
-                        None,
-                        true,
-                        scoped.epoch_guard()?,
-                    )
-                    .await
-                    .map(|_| ()),
+                // Only a capture attaches an OOPIF: it resolves the child through its parent.
+                "oopif_attach" | "oopif_setup" => {
+                    let parent = retained
+                        .ok_or_else(|| CoreError::Message("missing retained session".into()))?;
+                    scoped
+                        .session
+                        .frames()
+                        .resolve_frame_target_with_epoch(
+                            page,
+                            Some(crate::FrameId("child-target".into())),
+                            Some(&parent.session),
+                            true,
+                            scoped.epoch_guard()?,
+                        )
+                        .await
+                        .map(|_| ())
+                }
                 _ => Err(CoreError::Message("unknown regression case".into())),
             }
         });
