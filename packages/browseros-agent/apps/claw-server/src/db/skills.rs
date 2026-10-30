@@ -2,8 +2,8 @@ use crate::{
     db::{
         Database,
         entities::{
-            prelude::{SkillRunMarks, SkillRuns, Skills, ToolDispatches},
-            skill_run_marks, skill_runs, skills, tool_dispatches,
+            prelude::{SkillFlows, SkillRunMarks, SkillRuns, Skills, ToolDispatches},
+            skill_flows, skill_run_marks, skill_runs, skills, tool_dispatches,
         },
     },
     error::AppResult,
@@ -75,6 +75,7 @@ impl SkillsRepository {
             .filter(skill_run_marks::Column::SkillName.eq(name))
             .exec(&txn)
             .await?;
+        SkillFlows::delete_by_id(name.to_owned()).exec(&txn).await?;
         txn.commit().await?;
         Ok(result.rows_affected)
     }
@@ -141,6 +142,9 @@ impl SkillsRepository {
             clean: Set(model.clean),
             errored_tool: Set(model.errored_tool),
             created_at: Set(model.created_at),
+            mode: Set(model.mode),
+            handover_step: Set(model.handover_step),
+            handover_cause: Set(model.handover_cause),
         })
         .on_conflict(
             OnConflict::column(skill_runs::Column::SessionId)
@@ -166,15 +170,45 @@ impl SkillsRepository {
             .map(|row| row.tool_name))
     }
 
+    /// Whether any call in the session was cut off before it returned.
+    pub async fn has_cancelled_dispatch(&self, session_id: &str) -> AppResult<bool> {
+        let rows = ToolDispatches::find()
+            .filter(tool_dispatches::Column::SessionId.eq(session_id))
+            .all(self.db.connection())
+            .await?;
+        Ok(rows
+            .iter()
+            .any(|row| dispatch_was_cancelled(row.result_meta.as_deref())))
+    }
+
     pub async fn upsert_mark(&self, session_id: &str, skill_name: &str, now: i64) -> AppResult<()> {
+        self.upsert_mark_as(session_id, skill_name, now, &RunMode::agent())
+            .await
+    }
+
+    pub async fn upsert_mark_as(
+        &self,
+        session_id: &str,
+        skill_name: &str,
+        now: i64,
+        mode: &RunMode,
+    ) -> AppResult<()> {
         SkillRunMarks::insert(skill_run_marks::ActiveModel {
             session_id: Set(session_id.to_owned()),
             skill_name: Set(skill_name.to_owned()),
             created_at: Set(now),
+            mode: Set(mode.mode.clone()),
+            handover_step: Set(mode.handover_step),
+            handover_cause: Set(mode.handover_cause.clone()),
         })
         .on_conflict(
             OnConflict::column(skill_run_marks::Column::SessionId)
-                .update_column(skill_run_marks::Column::SkillName)
+                .update_columns([
+                    skill_run_marks::Column::SkillName,
+                    skill_run_marks::Column::Mode,
+                    skill_run_marks::Column::HandoverStep,
+                    skill_run_marks::Column::HandoverCause,
+                ])
                 .to_owned(),
         )
         .exec_without_returning(self.db.connection())
@@ -198,6 +232,102 @@ impl SkillsRepository {
             .await?;
         Ok(())
     }
+
+    pub async fn get_flow(&self, name: &str) -> AppResult<Option<skill_flows::Model>> {
+        Ok(SkillFlows::find_by_id(name.to_owned())
+            .one(self.db.connection())
+            .await?)
+    }
+
+    pub async fn all_flows(&self) -> AppResult<Vec<skill_flows::Model>> {
+        Ok(SkillFlows::find().all(self.db.connection()).await?)
+    }
+
+    /// Writes the whole flow row, creating it on first use.
+    pub async fn put_flow(&self, model: skill_flows::Model) -> AppResult<()> {
+        let active = skill_flows::ActiveModel {
+            skill_name: Set(model.skill_name),
+            status: Set(model.status),
+            status_reason: Set(model.status_reason),
+            flow_version: Set(model.flow_version),
+            attempts: Set(model.attempts),
+            site_failures: Set(model.site_failures),
+            effects: Set(model.effects),
+            write_approved: Set(model.write_approved),
+            p50_ms: Set(model.p50_ms),
+            source_session_id: Set(model.source_session_id),
+            verified_at: Set(model.verified_at),
+            repaired_at: Set(model.repaired_at),
+            updated_at: Set(model.updated_at),
+        };
+        SkillFlows::insert(active)
+            .on_conflict(
+                OnConflict::column(skill_flows::Column::SkillName)
+                    .update_columns([
+                        skill_flows::Column::Status,
+                        skill_flows::Column::StatusReason,
+                        skill_flows::Column::FlowVersion,
+                        skill_flows::Column::Attempts,
+                        skill_flows::Column::SiteFailures,
+                        skill_flows::Column::Effects,
+                        skill_flows::Column::WriteApproved,
+                        skill_flows::Column::P50Ms,
+                        skill_flows::Column::SourceSessionId,
+                        skill_flows::Column::VerifiedAt,
+                        skill_flows::Column::RepairedAt,
+                        skill_flows::Column::UpdatedAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec_without_returning(self.db.connection())
+            .await?;
+        Ok(())
+    }
+}
+
+/// How a skill run was carried out, carried from the session mark into the run row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunMode {
+    pub mode: String,
+    pub handover_step: Option<i64>,
+    pub handover_cause: Option<String>,
+}
+
+impl RunMode {
+    #[must_use]
+    pub fn agent() -> Self {
+        Self::plain("agent")
+    }
+
+    #[must_use]
+    pub fn ultrafast() -> Self {
+        Self::plain("ultrafast")
+    }
+
+    #[must_use]
+    pub fn handed_back(step: i64, cause: &str) -> Self {
+        Self {
+            mode: "handed_back".to_owned(),
+            handover_step: Some(step),
+            handover_cause: Some(cause.to_owned()),
+        }
+    }
+
+    fn plain(mode: &str) -> Self {
+        Self {
+            mode: mode.to_owned(),
+            handover_step: None,
+            handover_cause: None,
+        }
+    }
+}
+
+fn dispatch_was_cancelled(result_meta: Option<&str>) -> bool {
+    result_meta
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .is_some_and(|value| {
+            value.get("cancelled").and_then(serde_json::Value::as_bool) == Some(true)
+        })
 }
 
 fn dispatch_is_error(result_meta: Option<&str>) -> bool {

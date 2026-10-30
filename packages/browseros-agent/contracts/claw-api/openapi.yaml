@@ -26,8 +26,6 @@ paths:
     $ref: ./paths/settings.yaml#/telemetry
   /api/v1/settings/agent:
     $ref: ./paths/settings.yaml#/agent
-  /api/v1/settings/agent/jev-token:
-    $ref: ./paths/settings.yaml#/jevToken
   /api/v1/help/events:
     $ref: ./paths/sessions.yaml#/helpEvents
   /api/v1/sessions:
@@ -72,6 +70,10 @@ paths:
     $ref: ./paths/skills.yaml#/item
   /api/v1/skills/{name}/runs:
     $ref: ./paths/skills.yaml#/runs
+  /api/v1/skills/{name}/flow:
+    $ref: ./paths/skills.yaml#/flow
+  /api/v1/skills/{name}/ultrafast/approve-write:
+    $ref: ./paths/skills.yaml#/approveWrite
   /api/v1/directory:
     $ref: ./paths/skills.yaml#/directory
   /api/v1/directory/{name}:
@@ -148,10 +150,6 @@ components:
       $ref: ./schemas/settings.yaml#/UpdateTelemetryRequest
     AgentSettings:
       $ref: ./schemas/settings.yaml#/AgentSettings
-    JevTokenSource:
-      $ref: ./schemas/settings.yaml#/JevTokenSource
-    SaveJevTokenRequest:
-      $ref: ./schemas/settings.yaml#/SaveJevTokenRequest
     UpdateAgentSettingsRequest:
       $ref: ./schemas/settings.yaml#/UpdateAgentSettingsRequest
     SessionStatus:
@@ -238,6 +236,14 @@ components:
       $ref: ./schemas/skills.yaml#/SkillDetail
     SkillTokenSavings:
       $ref: ./schemas/skills.yaml#/SkillTokenSavings
+    SkillUltrafastStatus:
+      $ref: ./schemas/skills.yaml#/SkillUltrafastStatus
+    SkillUltrafast:
+      $ref: ./schemas/skills.yaml#/SkillUltrafast
+    SkillFlowSource:
+      $ref: ./schemas/skills.yaml#/SkillFlowSource
+    SkillRunMode:
+      $ref: ./schemas/skills.yaml#/SkillRunMode
     SkillCreate:
       $ref: ./schemas/skills.yaml#/SkillCreate
     SkillUpdate:

@@ -1,7 +1,7 @@
 use crate::{
     db::{
         SkillsRepository,
-        entities::{skill_runs, skills},
+        entities::{skill_flows, skill_runs, skills},
     },
     error::{AppError, AppResult, IoPath},
     services::harness::HarnessService,
@@ -135,6 +135,105 @@ impl SkillService {
                 }
             })
             .collect())
+    }
+
+    /// The skill's ultrafast lifecycle row, if it ever entered the ultrafast path.
+    pub async fn flow_row(&self, name: &str) -> AppResult<Option<skill_flows::Model>> {
+        self.repo.get_flow(name).await
+    }
+
+    pub async fn flow_rows(&self) -> AppResult<Vec<skill_flows::Model>> {
+        self.repo.all_flows().await
+    }
+
+    pub async fn put_flow_row(&self, row: skill_flows::Model) -> AppResult<()> {
+        self.repo.put_flow(row).await
+    }
+
+    /// Re-renders SKILL.md from its current prose: with the "Run it fast" section while the
+    /// skill has a flow that runs, without it otherwise. A hand-written body with no numbered
+    /// steps is left alone.
+    pub async fn rerender(&self, name: &str, mode: SkillMd<'_>) -> AppResult<()> {
+        let _guard = self.mutate.lock().await;
+        let model = self.require(name).await?;
+        let body = self.read_body(&model.body_path).await;
+        let steps = crate::services::flow::prose::prose_steps(&body);
+        if steps.is_empty() {
+            return Ok(());
+        }
+        let notes = crate::services::flow::prose::learned_notes(&body);
+        let content = match mode {
+            SkillMd::Fast(fast) => {
+                render_ultrafast_markdown(name, &model.description, &steps, &notes, fast)
+            }
+            SkillMd::Repair => {
+                let mut content = render_skill_markdown(name, &model.description, &steps, &notes);
+                content.push_str(&repair_section(name));
+                content
+            }
+            SkillMd::Plain => render_skill_markdown(name, &model.description, &steps, &notes),
+        };
+        if content == body {
+            return Ok(());
+        }
+        self.update_locked(
+            name,
+            UpdateSkill {
+                description: None,
+                site: None,
+                steps: None,
+                learned_notes: None,
+                body: Some(content),
+            },
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// After a hand edit, keeps a working flow consistent with the prose it is numbered
+    /// against: "Run it fast" comes back while the steps still line up, and the flow is
+    /// switched off once they no longer do.
+    pub async fn reconcile_flow_after_edit(&self, name: &str) -> AppResult<()> {
+        use crate::services::flow::{FlowStatus, prose::prose_steps, store};
+        let Some(mut row) = self.repo.get_flow(name).await? else {
+            return Ok(());
+        };
+        let status = FlowStatus::parse(&row.status);
+        if !status.runs() {
+            return Ok(());
+        }
+        let model = self.require(name).await?;
+        let steps = prose_steps(&self.read_body(&model.body_path).await);
+        let doc = store::read(&self.skill_dir(name)).ok().flatten();
+        match doc {
+            Some(doc) if doc.steps.len() == steps.len() => {
+                let fast = RunItFast {
+                    status: status.as_str(),
+                    inputs: doc
+                        .meta
+                        .inputs
+                        .iter()
+                        .map(|(input, kind)| (input.clone(), kind.clone()))
+                        .collect(),
+                };
+                self.rerender(name, SkillMd::Fast(&fast)).await
+            }
+            _ => {
+                row.status = FlowStatus::Off.as_str().to_string();
+                row.status_reason = Some(
+                    "the steps were edited and no longer match the fast version; save the skill again to make it ultrafast".to_string(),
+                );
+                row.updated_at = now_ms();
+                self.repo.put_flow(row).await?;
+                self.rerender(name, SkillMd::Plain).await
+            }
+        }
+    }
+
+    /// The directory holding the skill's SKILL.md (and flow.md beside it).
+    #[must_use]
+    pub fn skill_dir(&self, name: &str) -> PathBuf {
+        self.skills_dir.join(name)
     }
 
     pub async fn get(&self, name: &str) -> AppResult<SkillDetailView> {
@@ -530,6 +629,68 @@ fn normalized_skill_name(raw: &str) -> AppResult<String> {
     Ok(name)
 }
 
+/// Which shape SKILL.md takes, from the skill's flow status.
+pub enum SkillMd<'a> {
+    /// The flow runs: "Run it fast" first, the prose as the fallback.
+    Fast(&'a RunItFast),
+    /// The flow is paused after site changes: the prose, plus how to repair it. It lives in
+    /// SKILL.md because an agent rightly acts on the skill the user saved, not on a tool reply.
+    Repair,
+    /// Plain prose, exactly as a skill without a flow.
+    Plain,
+}
+
+fn repair_section(name: &str) -> String {
+    format!(
+        "\n## Make it fast again\nThis skill's ultrafast flow is paused because the site changed. Do the task with the steps above and report the result first. Then repair the flow: the mark_skill_run reply lists its current step sources, so call the save_skill tool with name: {name} and patch [{{ step, fn }}, ...] holding every step that needs the change.\n"
+    )
+}
+
+/// What SKILL.md says about running a skill's flow.
+pub struct RunItFast {
+    pub status: &'static str,
+    /// Input name and type, in the order the flow declares them.
+    pub inputs: Vec<(String, String)>,
+}
+
+fn render_ultrafast_markdown(
+    name: &str,
+    description: &str,
+    steps: &[String],
+    learned_notes: &[String],
+    fast: &RunItFast,
+) -> String {
+    let description = serde_json::to_string(description).unwrap_or_else(|_| "\"\"".to_string());
+    let inputs = fast
+        .inputs
+        .iter()
+        .map(|(input, kind)| format!("{input}: {kind}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut out = format!(
+        "---\nname: {name}\ndescription: {description}\ntools: {SKILL_TOOLS}\nultrafast: {}\n---\n\n## Run it fast\n",
+        fast.status
+    );
+    out.push_str(&format!(
+        "Call the run_skill tool with name: {name} and inputs {{ {inputs} }}. It records the run.\n"
+    ));
+    out.push_str("- done: report its output.\n");
+    out.push_str("- needs_agent: continue from the step it names, on the page it gives you, with your normal tools. If effects.committed is true, never redo that write. If it includes a repair note, follow it after you report the result.\n");
+    out.push_str(&format!(
+        "- refused, or run_skill is not available: call the mark_skill_run tool with name: {name}, then follow the steps below.\n\n## Steps\n"
+    ));
+    for (index, step) in steps.iter().enumerate() {
+        out.push_str(&format!("{}. {}\n", index + 1, step));
+    }
+    if !learned_notes.is_empty() {
+        out.push_str("\n## Learned from past runs\n");
+        for note in learned_notes {
+            out.push_str(&format!("- {note}\n"));
+        }
+    }
+    out
+}
+
 fn render_skill_markdown(
     name: &str,
     description: &str,
@@ -611,7 +772,44 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{neo_prefixed, normalized_skill_name};
+    use super::{
+        RunItFast, neo_prefixed, normalized_skill_name, render_skill_markdown,
+        render_ultrafast_markdown,
+    };
+    use crate::services::flow::prose::{learned_notes, prose_steps};
+
+    #[test]
+    fn a_prose_skill_renders_exactly_as_before() {
+        let steps = vec!["Open the search.".to_string(), "Add it.".to_string()];
+        let notes = vec!["The grid fills late.".to_string()];
+        assert_eq!(
+            render_skill_markdown("neo-shop", "Add to cart", &steps, &notes),
+            "---\nname: neo-shop\ndescription: \"Add to cart\"\ntools: browseros-neo\n---\n\n## Steps\n1. Call the mark_skill_run tool with name: neo-shop so this run is recorded.\n2. Open the search.\n3. Add it.\n\n## Learned from past runs\n- The grid fills late.\n"
+        );
+    }
+
+    #[test]
+    fn an_ultrafast_skill_says_how_to_run_fast_and_keeps_its_steps() {
+        let steps = vec!["Open the search.".to_string(), "Add it.".to_string()];
+        let notes = vec!["The grid fills late.".to_string()];
+        let fast = RunItFast {
+            status: "verified",
+            inputs: vec![
+                ("query".to_string(), "string".to_string()),
+                ("match".to_string(), "string".to_string()),
+            ],
+        };
+        let body = render_ultrafast_markdown("neo-shop", "Add to cart", &steps, &notes, &fast);
+        assert!(body.contains("ultrafast: verified\n"));
+        assert!(body.contains(
+            "Call the run_skill tool with name: neo-shop and inputs { query: string, match: string }."
+        ));
+        assert!(body.contains("call the mark_skill_run tool with name: neo-shop, then follow"));
+        assert!(body.contains("## Steps\n1. Open the search.\n2. Add it.\n"));
+        // Steps and notes survive a round trip, so the skill can drop back to plain prose.
+        assert_eq!(prose_steps(&body), steps);
+        assert_eq!(learned_notes(&body), notes);
+    }
 
     #[test]
     fn neo_prefixed_is_idempotent() {

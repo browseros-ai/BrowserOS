@@ -20,63 +20,15 @@ pub struct AgentSettings {
     /// Whether successful MCP tool replies include a tip to close the task's tab group when finished.
     #[serde(rename = "taskCleanupTipEnabled")]
     pub task_cleanup_tip_enabled: bool,
-    #[serde(rename = "jevTokenSource")]
-    pub jev_token_source: models::JevTokenSource,
 }
 
 impl AgentSettings {
     /// User settings for the tools BrowserOS neo offers to agents.
-    pub fn new(
-        human_help_enabled: bool,
-        task_cleanup_tip_enabled: bool,
-        jev_token_source: models::JevTokenSource,
-    ) -> AgentSettings {
+    pub fn new(human_help_enabled: bool, task_cleanup_tip_enabled: bool) -> AgentSettings {
         AgentSettings {
             human_help_enabled,
             task_cleanup_tip_enabled,
-            jev_token_source,
         }
-    }
-}
-
-/// JevTokenSource : Where the decision model credential comes from, which decides whether the pursue tool is offered at all. \"settings\" is a token saved through this API, which takes precedence. \"environment\" is JEV_TOKEN in the server's environment. \"none\" means pursue is not offered. The token itself is never returned.
-/// Where the decision model credential comes from, which decides whether the pursue tool is offered at all. \"settings\" is a token saved through this API, which takes precedence. \"environment\" is JEV_TOKEN in the server's environment. \"none\" means pursue is not offered. The token itself is never returned.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub enum JevTokenSource {
-    #[serde(rename = "settings")]
-    Settings,
-    #[serde(rename = "environment")]
-    Environment,
-    #[serde(rename = "none")]
-    None,
-}
-
-impl std::fmt::Display for JevTokenSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Self::Settings => write!(f, "settings"),
-            Self::Environment => write!(f, "environment"),
-            Self::None => write!(f, "none"),
-        }
-    }
-}
-
-impl Default for JevTokenSource {
-    fn default() -> JevTokenSource {
-        Self::Settings
-    }
-}
-
-#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SaveJevTokenRequest {
-    /// The decision model credential. Write only: no endpoint returns it. Saving one takes precedence over JEV_TOKEN in the server's environment.
-    #[serde(rename = "token")]
-    pub token: String,
-}
-
-impl SaveJevTokenRequest {
-    pub fn new(token: String) -> SaveJevTokenRequest {
-        SaveJevTokenRequest { token }
     }
 }
 

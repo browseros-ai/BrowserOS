@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'bun:test'
-import type { Skill } from '@browseros/claw-api'
+import type { Skill, SkillUltrafast } from '@browseros/claw-api'
 import {
+  healthLine,
+  needsWriteApproval,
   neoName,
   parseSkillBody,
+  runModeCounts,
+  runModeLabel,
+  runSpeed,
   skillCommand,
   skillSites,
   stuckWhile,
+  ultrafastBadge,
   usedLabel,
   worksInAgents,
 } from './skills.helpers'
@@ -152,5 +158,77 @@ describe('stuckWhile', () => {
     expect(stuckWhile('navigate')).toBe('Got stuck while opening a page.')
     expect(stuckWhile('act')).toBe('Got stuck while clicking on a page.')
     expect(stuckWhile(undefined)).toBe('Got stuck before it finished.')
+  })
+})
+
+const ultrafast = (patch: Partial<SkillUltrafast>): SkillUltrafast => ({
+  status: 'verified',
+  flowVersion: 1,
+  writeApproved: false,
+  ...patch,
+})
+
+describe('ultrafastBadge', () => {
+  it('names each state and stays quiet for a plain skill', () => {
+    expect(ultrafastBadge(ultrafast({}))?.label).toBe('Ultrafast')
+    expect(ultrafastBadge(ultrafast({ status: 'degraded' }))?.tone).toBe(
+      'warning',
+    )
+    expect(ultrafastBadge(ultrafast({ status: 'broken' }))?.tone).toBe('danger')
+    expect(ultrafastBadge(ultrafast({ status: 'none' }))).toBeNull()
+    expect(ultrafastBadge(undefined)).toBeNull()
+  })
+})
+
+describe('healthLine', () => {
+  it('says when it was checked and repaired, and how fast it runs', () => {
+    const now = new Date(2026, 9, 29, 12).getTime()
+    const yesterday = new Date(2026, 9, 28, 9).getTime()
+    expect(
+      healthLine(
+        ultrafast({ verifiedAt: now, repairedAt: yesterday, p50Ms: 1240 }),
+        now,
+      ),
+    ).toBe('Checked today · repaired yesterday · about 1.2 s a run')
+    expect(runSpeed(40)).toBe('about 0.1 s a run')
+  })
+})
+
+describe('runModeLabel', () => {
+  it('reads a handover in plain words and leaves normal runs unlabelled', () => {
+    expect(runModeLabel({ mode: 'ultrafast' })).toBe('Ultrafast')
+    expect(
+      runModeLabel({
+        mode: 'handed_back',
+        handoverStep: 2,
+        handoverCause: 'site_changed',
+      }),
+    ).toBe('Took over at step 2: the site changed')
+    expect(runModeLabel({ mode: 'agent' })).toBeNull()
+    expect(runModeLabel({})).toBeNull()
+  })
+
+  it('counts runs by how they went', () => {
+    expect(
+      runModeCounts([
+        { mode: 'ultrafast' },
+        { mode: 'ultrafast' },
+        { mode: 'handed_back' },
+        {},
+      ]),
+    ).toEqual({ ultrafast: 2, handedBack: 1, normal: 1 })
+  })
+})
+
+describe('needsWriteApproval', () => {
+  it('asks only for a working write flow not yet approved', () => {
+    expect(needsWriteApproval(ultrafast({ effects: 'write' }))).toBe(true)
+    expect(
+      needsWriteApproval(ultrafast({ effects: 'write', writeApproved: true })),
+    ).toBe(false)
+    expect(needsWriteApproval(ultrafast({ effects: 'read' }))).toBe(false)
+    expect(
+      needsWriteApproval(ultrafast({ effects: 'write', status: 'broken' })),
+    ).toBe(false)
   })
 })

@@ -16,7 +16,6 @@ import type {
   RecordFeedbackInviteRequest,
   RecordingMetadata,
   ResolveHelpResponse,
-  SaveJevTokenRequest,
   SessionDetail,
   SessionList,
   SessionScreenshotList,
@@ -25,6 +24,7 @@ import type {
   Skill,
   SkillCreate,
   SkillDetail,
+  SkillFlowSource,
   SkillList,
   SkillRunList,
   SkillUpdate,
@@ -155,24 +155,6 @@ export class ClawApiClient {
   ): Promise<AgentSettings> {
     return this.unwrap(
       await this.client.PUT('/api/v1/settings/agent', { body }),
-    )
-  }
-
-  /**
-   * Stores the decision model credential, which offers the pursue tool. Its own
-   * call rather than a field on updateAgentSettings, so saving a switch can
-   * never clear a credential. The reply never carries the token.
-   */
-  async saveJevToken(body: SaveJevTokenRequest): Promise<AgentSettings> {
-    return this.unwrap(
-      await this.client.PUT('/api/v1/settings/agent/jev-token', { body }),
-    )
-  }
-
-  /** Forgets the stored credential. JEV_TOKEN, if set, applies again. */
-  async removeJevToken(): Promise<AgentSettings> {
-    return this.unwrap(
-      await this.client.DELETE('/api/v1/settings/agent/jev-token'),
     )
   }
 
@@ -387,6 +369,22 @@ export class ClawApiClient {
     return this.unwrap(
       await this.client.GET('/api/v1/skills/{name}/runs', {
         params: { path: { name }, query },
+      }),
+    )
+  }
+
+  async getSkillFlow(request: SkillNameRequest): Promise<SkillFlowSource> {
+    return this.unwrap(
+      await this.client.GET('/api/v1/skills/{name}/flow', {
+        params: { path: request },
+      }),
+    )
+  }
+
+  async approveSkillWrite(request: SkillNameRequest): Promise<Skill> {
+    return this.unwrap(
+      await this.client.POST('/api/v1/skills/{name}/ultrafast/approve-write', {
+        params: { path: request },
       }),
     )
   }

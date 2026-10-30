@@ -6,7 +6,10 @@ use axum::{
 use claw_server::{
     AppState, build_router,
     config::Config,
-    db::audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
+    db::{
+        audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
+        skills::RunMode,
+    },
     ids::DispatchId,
     services::skills::{CreateSkill, SkillOrigin},
 };
@@ -592,6 +595,76 @@ async fn skill_run_recorded_from_a_marked_session() -> anyhow::Result<()> {
     assert!(!state.skill_runs.finalize("plain-sess").await?);
     assert_eq!(state.skills.get("neo-inbox-sweep").await?.runs.len(), 1);
 
+    Ok(())
+}
+
+async fn stopped_run(
+    state: &AppState,
+    session_id: &str,
+    interrupted: bool,
+    mode: &RunMode,
+) -> anyhow::Result<bool> {
+    state
+        .audit_log
+        .record_session_start(session_id, "convo-run", "codex", "codex/stop", "codex", "1")
+        .await?;
+    state
+        .audit_log
+        .record_tool_dispatch(dispatch(session_id, "read", false))
+        .await?;
+    if interrupted {
+        let mut cut_off = dispatch(session_id, "act", true);
+        cut_off.result_meta = result_meta(true, true, &json!({}), 1);
+        state.audit_log.record_tool_dispatch(cut_off).await?;
+    }
+    state
+        .audit_log
+        .record_session_end(session_id, "cancelled", Some("operator requested stop"))
+        .await?;
+    state
+        .skill_runs
+        .mark_as(session_id, "neo-cart-add", mode)
+        .await?;
+    assert!(state.skill_runs.finalize(session_id).await?);
+    let detail = state.skills.get("neo-cart-add").await?;
+    let run = detail
+        .runs
+        .iter()
+        .find(|run| run.session_id == session_id)
+        .ok_or_else(|| anyhow::anyhow!("run for {session_id} missing"))?;
+    Ok(run.clean)
+}
+
+#[tokio::test]
+async fn a_stop_only_counts_against_a_run_when_it_cut_work_off() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let state = &app.state;
+    state
+        .skills
+        .create(CreateSkill {
+            name: "neo-cart-add".to_string(),
+            description: "Add an item to the cart".to_string(),
+            site: None,
+            steps: vec!["Add it".to_string()],
+            learned_notes: vec![],
+            origin: SkillOrigin::Agent,
+            source_session_id: None,
+        })
+        .await?;
+
+    assert!(stopped_run(state, "idle-stop", false, &RunMode::agent()).await?);
+    assert!(!stopped_run(state, "mid-call-stop", true, &RunMode::agent()).await?);
+    assert!(
+        !stopped_run(
+            state,
+            "handed-back-stop",
+            true,
+            &RunMode::handed_back(5, "site_changed")
+        )
+        .await?
+    );
+    // The flow returned done, so the run finished whatever ended the session afterwards.
+    assert!(stopped_run(state, "ultrafast-stop", true, &RunMode::ultrafast()).await?);
     Ok(())
 }
 

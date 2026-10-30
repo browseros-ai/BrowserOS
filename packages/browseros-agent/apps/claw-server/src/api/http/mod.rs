@@ -66,10 +66,6 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/api/v1/settings/agent",
             get(settings::agent).put(settings::update_agent),
         )
-        .route(
-            "/api/v1/settings/agent/jev-token",
-            put(settings::save_jev_token).delete(settings::remove_jev_token),
-        )
         .route("/api/v1/help/events", get(help_events::events))
         .route("/api/v1/screencasts", get(screencasts::screencasts))
         .route("/api/v1/sessions", get(sessions::list))
@@ -130,6 +126,11 @@ pub fn router(state: AppState) -> Router<AppState> {
             get(skills::get).put(skills::update).delete(skills::delete),
         )
         .route("/api/v1/skills/{name}/runs", get(skills::list_runs))
+        .route("/api/v1/skills/{name}/flow", get(skills::flow))
+        .route(
+            "/api/v1/skills/{name}/ultrafast/approve-write",
+            post(skills::approve_write),
+        )
         .nest_service(
             "/mcp",
             Router::new()

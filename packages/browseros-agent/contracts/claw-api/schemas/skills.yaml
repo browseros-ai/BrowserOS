@@ -72,6 +72,55 @@ Skill:
       format: int64
     tokenSavings:
       $ref: '#/SkillTokenSavings'
+    ultrafast:
+      $ref: '#/SkillUltrafast'
+SkillUltrafastStatus:
+  type: string
+  enum: [none, pending, verified, degraded, broken, 'off']
+  description: Where the skill's ultrafast flow stands. `none` means it has no flow and has not been offered one.
+SkillUltrafast:
+  type: object
+  additionalProperties: false
+  description: The skill's ultrafast flow. Present only while ultrafast skills are enabled.
+  required: [status, flowVersion, writeApproved]
+  properties:
+    status:
+      $ref: '#/SkillUltrafastStatus'
+    reason:
+      type: string
+      description: Why the flow is off or broken, in plain words.
+    flowVersion:
+      type: integer
+      format: int64
+      minimum: 0
+    effects:
+      type: string
+      enum: [read, write]
+    writeApproved:
+      type: boolean
+      description: Whether the user approved this write flow to run without asking.
+    p50Ms:
+      type: integer
+      format: int64
+      minimum: 0
+    verifiedAt:
+      type: integer
+      format: int64
+    repairedAt:
+      type: integer
+      format: int64
+SkillFlowSource:
+  type: object
+  additionalProperties: false
+  required: [source]
+  properties:
+    source:
+      type: string
+      description: The flow.md file as stored beside SKILL.md.
+SkillRunMode:
+  type: string
+  enum: [ultrafast, handed_back, agent]
+  description: How the run was carried out. `handed_back` means the flow stopped and the agent finished the task.
 SkillList:
   type: object
   additionalProperties: false
@@ -124,6 +173,16 @@ SkillRun:
     erroredTool:
       type: string
       description: The tool that failed, when the run is not clean.
+    mode:
+      $ref: '#/SkillRunMode'
+    handoverStep:
+      type: integer
+      format: int64
+      minimum: 1
+      description: The step the flow handed back at, for a handed_back run.
+    handoverCause:
+      type: string
+      enum: [site_changed, input_only, transient, unknown]
     createdAt:
       type: integer
       format: int64

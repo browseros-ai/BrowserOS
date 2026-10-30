@@ -7,6 +7,9 @@ pub struct Model {
     pub session_id: String,
     pub skill_name: String,
     pub created_at: i64,
+    pub mode: String,
+    pub handover_step: Option<i64>,
+    pub handover_cause: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
