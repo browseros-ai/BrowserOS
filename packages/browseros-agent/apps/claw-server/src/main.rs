@@ -146,6 +146,7 @@ fn log_native_identity(config: &claw_server::config::Config) {
     // The effective values, so a deployment can confirm its behaviour file took hold.
     info!(
         tab_grouping = config.behavior.tab_grouping.as_str(),
+        tab_close_after = ?config.behavior.tab_close_after,
         isolated_world = config.behavior.isolated_world,
         file_env = claw_server::config::BEHAVIOR_FILE_ENV,
         "server behaviour"

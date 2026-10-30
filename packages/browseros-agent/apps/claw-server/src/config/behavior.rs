@@ -9,7 +9,7 @@
 
 use super::ServerMode;
 use serde::Deserialize;
-use std::fmt;
+use std::{fmt, num::NonZeroU32, time::Duration};
 
 /// What a deployment can tune about how this server behaves, fixed for the process.
 ///
@@ -20,6 +20,10 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Behavior {
     pub tab_grouping: TabGrouping,
+    /// Grace after a session ends before its tabs and owned groups are cleaned up. Config
+    /// passes this resolved value to both cleanup paths as `session_retention`, which also
+    /// bounds the retained session state used to finish that cleanup.
+    pub tab_close_after: Duration,
     /// Whether BrowserOS's DOM-only page scripts run in its isolated JavaScript world, which the
     /// page cannot see or tamper with (`browseros_core::page_js`). Off runs every script in the
     /// page's own world, as before isolated worlds; it is the rollout's off switch.
@@ -34,6 +38,10 @@ impl Behavior {
                 ServerMode::Desktop => TabGrouping::Automatic,
                 ServerMode::Hosted => TabGrouping::Explicit,
             },
+            tab_close_after: Duration::from_secs(match mode {
+                ServerMode::Desktop => 60 * 60,
+                ServerMode::Hosted => 30 * 60,
+            }),
             isolated_world: true,
         }
     }
@@ -111,6 +119,15 @@ const KNOBS: &[Knob] = &[
         key: "grouping",
         apply: |behavior, value| {
             behavior.tab_grouping = named(value)?;
+            Ok(())
+        },
+    },
+    Knob {
+        section: "tabs",
+        key: "close_after_minutes",
+        apply: |behavior, value| {
+            let minutes: NonZeroU32 = value.try_into()?;
+            behavior.tab_close_after = Duration::from_secs(u64::from(minutes.get()) * 60);
             Ok(())
         },
     },
