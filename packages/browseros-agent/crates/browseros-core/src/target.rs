@@ -134,7 +134,7 @@ mod events;
 pub(crate) mod page_access;
 use page_access::PageAccess;
 
-/// Both event attribution and OOPIF admission inspect the same native frame-tree shape.
+/// Event attribution reads the native frame-tree shape, which lists only local frames.
 fn contains_frame(tree: &Value, id: &str) -> bool {
     tree["frame"]["id"] == id
         || tree["childFrames"]

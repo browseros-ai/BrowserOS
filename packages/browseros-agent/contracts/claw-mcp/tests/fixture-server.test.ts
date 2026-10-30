@@ -18,6 +18,7 @@ const EXPECTED_PAGES = [
   'dynamic.html',
   'fill.html',
   'form.html',
+  'frame-lab.html',
   'iframe-child.html',
   'iframe-grandchild.html',
   'iframe.html',
@@ -135,5 +136,10 @@ describe('fixture server', () => {
     expect(await read('snapshot-frame-grandchild.html')).toInclude(
       'Grandchild action ready',
     )
+
+    const frameLab = await read('frame-lab.html')
+    expect(frameLab).toInclude('window.frameLab')
+    expect(frameLab).toInclude("'nested-mixed': ['B', 'A']")
+    expect(frameLab).toInclude('isTrusted')
   })
 })

@@ -20,6 +20,14 @@ export interface CaseContext {
   browser: BrowserHandle
   /** Primary MCP session, shared across cases within one server run. */
   mcp: McpSession
+  /**
+   * A session on a second server told the browser's BrowserOS version, as BrowserOS launches
+   * it in production. Its views are profile-scoped, so page access runs through the scoped
+   * admission guards; the primary server treats the browser as an unknown native and skips
+   * them. Started on first use and shared by later cases. On a browser without native
+   * profile targeting this is the primary session: such a BrowserOS runs unbound too.
+   */
+  scopedMcp(): Promise<McpSession>
   /** Extra sessions (ownership/naming/audit cases); auto-closed at run end. */
   openSession(clientName?: string): Promise<McpSession>
   /** URL on the primary fixture origin. */
@@ -45,6 +53,7 @@ import { captureIoCases } from './cases-capture-io'
 import { clawLayerCases } from './cases-claw-layer'
 import { fillCases } from './cases-fill'
 import { fillReadbackCases } from './cases-fill-readback'
+import { frameRefCases } from './cases-frame-refs'
 import { isolationCases } from './cases-isolation'
 import { labelCases } from './cases-labels'
 import { navigateSnapshotCases } from './cases-navigate-snapshot'
@@ -65,6 +74,7 @@ export const contractCases: ContractCase[] = [
   ...navigateSnapshotCases,
   ...labelCases,
   ...snapshotConcurrencyCases,
+  ...frameRefCases,
   ...actCases,
   ...fillCases,
   ...fillReadbackCases,
