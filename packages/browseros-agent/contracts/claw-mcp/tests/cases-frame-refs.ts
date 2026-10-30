@@ -3,7 +3,8 @@
  * tools. `frame-lab.html` nests same-site and cross-site (OOPIF) frames; its targets report
  * each click's `event.isTrusted`, so a pass means native input reached the frame, not a
  * scripted `click()`. Every case runs on the scoped server, whose bound views carry the frame
- * admission guards a BrowserOS-launched server uses.
+ * admission guards a BrowserOS-launched server uses, when the browser supports profile
+ * targeting (see `CaseContext.scopedMcp`).
  */
 
 import type { CaseContext, ContractCase } from './cases'

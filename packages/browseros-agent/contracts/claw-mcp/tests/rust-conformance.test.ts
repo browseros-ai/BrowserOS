@@ -31,7 +31,7 @@ interface ServerRun {
   server: ContractServer
   browser: BrowserHandle
   mcp: McpSession
-  scoped?: Promise<{ server: ContractServer; mcp: McpSession }>
+  scoped?: Promise<{ server: ContractServer; mcp: McpSession } | undefined>
   extraSessions: McpSession[]
   openedPages: Array<{ session: McpSession; page: number }>
   scratchDir: string
@@ -120,17 +120,29 @@ async function connectAttached(
   return mcp
 }
 
+/** The scoped server, or `undefined` when the browser has no native profile targeting. */
 async function startScoped(
   run: ServerRun,
-): Promise<{ server: ContractServer; mcp: McpSession }> {
+): Promise<{ server: ContractServer; mcp: McpSession } | undefined> {
   const server = await startRustServer(run.browser.cdpPort, {
     env: { CLAW_NATIVE_BROWSEROS_VERSION: PROFILE_TARGETING_VERSION },
   })
   try {
-    return {
-      server,
-      mcp: await connectAttached(server, 'claw-contract-scoped'),
+    const mcp = await connectAttached(server, 'claw-contract-scoped')
+    const probe = await mcp.callTool('tabs', { action: 'list' })
+    if (
+      probe.isError &&
+      textOf(probe).includes('target_scope_unsupported_native')
+    ) {
+      // A BrowserOS without profile targeting runs its server unbound as well.
+      console.warn(
+        'scoped server unavailable: this browser has no native profile targeting; scoped cases use the primary server',
+      )
+      await mcp.close().catch(() => {})
+      await server.stop().catch(() => {})
+      return undefined
     }
+    return { server, mcp }
   } catch (error) {
     await server.stop().catch(() => {})
     throw error
@@ -146,7 +158,7 @@ function makeContext(run: ServerRun): CaseContext {
     mcp: run.mcp,
     async scopedMcp() {
       run.scoped ??= startScoped(run)
-      return (await run.scoped).mcp
+      return (await run.scoped)?.mcp ?? run.mcp
     },
     scratchDir: run.scratchDir,
     async openSession(clientName = 'claw-contract-extra') {
