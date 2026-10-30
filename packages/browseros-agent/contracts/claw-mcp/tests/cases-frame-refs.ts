@@ -15,6 +15,8 @@ import type { McpSession } from './mcp-client'
 interface Lab {
   ctx: CaseContext
   mcp: McpSession
+  /** False on a browser without profile targeting, where `mcp` is the unbound primary. */
+  scoped: boolean
 }
 
 interface LabCase {
@@ -53,7 +55,20 @@ const LAB_CASES: LabCase[] = [
 ]
 
 async function scoped(ctx: CaseContext): Promise<Lab> {
-  return { ctx, mcp: await ctx.scopedMcp() }
+  const mcp = await ctx.scopedMcp()
+  return { ctx, mcp, scoped: mcp !== ctx.mcp }
+}
+
+/**
+ * Refusing a stale frame ref is the scoped frame guard's job. Unbound views have no frame
+ * admission, and their registry can answer a gone OOPIF with the page's own session, where
+ * the old node id may name an unrelated node; that is not covered here.
+ */
+function requiresFrameAdmission(lab: Lab, name: string): boolean {
+  if (!lab.scoped) {
+    console.warn(`${name}: skipped, the session is unbound`)
+  }
+  return lab.scoped
 }
 
 function labCase(id: string): LabCase {
@@ -310,6 +325,7 @@ export const frameRefCases: ContractCase[] = [
     name: 'frame refs: refs of a detached frame are refused, never re-aimed',
     async run(ctx) {
       const lab = await scoped(ctx)
+      if (!requiresFrameAdmission(lab, 'detached frame refs')) return
       // The top page detaches its OOPIF; then an OOPIF detaches its own same-site child
       // (nested-cross) or cross-site child (nested-mixed). The old ref is used without a new
       // snapshot, so only frame admission can refuse it.
@@ -329,6 +345,7 @@ export const frameRefCases: ContractCase[] = [
     name: 'frame refs: a replaced frame owner refuses old refs; a new snapshot reaches the new frame',
     async run(ctx) {
       const lab = await scoped(ctx)
+      if (!requiresFrameAdmission(lab, 'replaced frame owner')) return
       const target = labCase('nested-mixed')
       const page = await openLab(lab, target.id)
       const label = `Click target ${target.id}`
