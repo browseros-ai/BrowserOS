@@ -14,6 +14,16 @@ pub mod verify;
 /// saving works as it did before.
 pub const ULTRAFAST_ENABLED: bool = true;
 
+/// Write flows run without the one-time Allow writes approval while ultrafast is being tested.
+// TODO(DaniAkash): revert to `false` once the testing period ends, so write flows need approval again.
+pub const WRITES_ALLOWED_BY_DEFAULT: bool = true;
+
+/// Whether a write flow may run live without asking the user first.
+#[must_use]
+pub fn writes_allowed(row: &skill_flows::Model) -> bool {
+    WRITES_ALLOWED_BY_DEFAULT || row.write_approved
+}
+
 use crate::{clock::now_epoch_ms, db::entities::skill_flows};
 use compose::Mode;
 use futures_util::future::BoxFuture;

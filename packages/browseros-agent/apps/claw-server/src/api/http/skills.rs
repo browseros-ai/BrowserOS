@@ -4,7 +4,7 @@ use crate::{
     db::entities::{skill_flows, skill_runs},
     error::{AppError, AppResult, CanonicalError, RequestId},
     services::{
-        flow::{FlowStatus, ULTRAFAST_ENABLED},
+        flow::{self, FlowStatus, ULTRAFAST_ENABLED},
         skills::{CreateSkill, SkillDetailView, SkillOrigin, SkillView, UpdateSkill},
     },
 };
@@ -325,7 +325,8 @@ pub(super) fn ultrafast_to_dto(flow: Option<&skill_flows::Model>) -> models::Ski
         FlowStatus::Broken => models::SkillUltrafastStatus::Broken,
         FlowStatus::Off => models::SkillUltrafastStatus::Off,
     };
-    let mut dto = models::SkillUltrafast::new(status, flow.flow_version, flow.write_approved);
+    let mut dto =
+        models::SkillUltrafast::new(status, flow.flow_version, flow::writes_allowed(flow));
     dto.reason = flow.status_reason.clone();
     dto.effects = match flow.effects.as_deref() {
         Some("read") => Some(models::SkillUltrafastEffects::Read),

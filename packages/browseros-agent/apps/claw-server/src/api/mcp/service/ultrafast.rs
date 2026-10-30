@@ -325,8 +325,7 @@ impl ClawMcpService {
             Ok(inputs) => inputs,
             Err(message) => return refused(Refusal::InputsInvalid, &name, &message),
         };
-        if doc.meta.effects == Effects::Write && !row.as_ref().is_some_and(|row| row.write_approved)
-        {
+        if doc.meta.effects == Effects::Write && !row.as_ref().is_some_and(flow::writes_allowed) {
             return refused(
                 Refusal::WriteNeedsConfirm,
                 &name,
@@ -860,7 +859,7 @@ impl ClawMcpService {
                     tried.join(", "),
                     pass.p50_ms
                 );
-                if doc.meta.effects == Effects::Write && !row.write_approved {
+                if doc.meta.effects == Effects::Write && !flow::writes_allowed(&row) {
                     text.push_str(&format!(
                         " Its first live run needs a one-time approval: BrowserOS, Skills, {name}, Allow writes."
                     ));

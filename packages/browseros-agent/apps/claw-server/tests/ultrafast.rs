@@ -191,7 +191,7 @@ async fn ultrafast_state_is_reported_on_skills() -> anyhow::Result<()> {
     assert_eq!(ultrafast["status"], "verified");
     assert_eq!(ultrafast["flowVersion"], 2);
     assert_eq!(ultrafast["effects"], "write");
-    assert_eq!(ultrafast["writeApproved"], false);
+    assert_eq!(ultrafast["writeApproved"], flow::WRITES_ALLOWED_BY_DEFAULT);
     assert_eq!(ultrafast["p50Ms"], 1_200);
 
     state.skills.delete("neo-shop-add").await?;
