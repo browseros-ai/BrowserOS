@@ -182,9 +182,6 @@ struct HarnessConnection {
     /// The page's DOM mutation count, as the readiness probe reports it. A test bumps it to
     /// stand in for the page changing.
     mutations: AtomicU64,
-    /// Probe reads on the created tab that still find the about:blank it opened on, as while a
-    /// slow server has not answered.
-    placeholder_reads: AtomicU64,
     /// What `Page.navigate` answers, such as an `errorText` for a host that does not resolve.
     navigate_reply: Mutex<Value>,
     /// The tab's session history as `Page.getNavigationHistory` reports it.
@@ -206,7 +203,6 @@ impl HarnessConnection {
             created_tab: Mutex::new(None),
             emit_console_on_input: AtomicBool::new(false),
             mutations: AtomicU64::new(0),
-            placeholder_reads: AtomicU64::new(0),
             navigate_reply: Mutex::new(json!({ "frameId": "main", "loaderId": "loader-2" })),
             history: Mutex::new(json!({
                 "currentIndex": 1,
@@ -449,23 +445,6 @@ impl CdpConnection for HarnessConnection {
                         .and_then(Value::as_str)
                         .is_some_and(|expression| expression.contains("__browseros_ready")) =>
                 {
-                    let created = session.map(SessionId::as_str) == Some("session-2");
-                    if created
-                        && self
-                            .placeholder_reads
-                            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
-                                left.checked_sub(1)
-                            })
-                            .is_ok()
-                    {
-                        return Ok(json!({ "result": { "value": {
-                            "n": 0,
-                            "installed": false,
-                            "showing": false,
-                            "complete": true,
-                            "blank": true
-                        } } }));
-                    }
                     Ok(json!({ "result": { "value": {
                         "n": self.mutations.load(Ordering::SeqCst),
                         "installed": false,
@@ -1532,15 +1511,11 @@ async fn tabs_new_attaches_first_snapshot() {
     );
 }
 
-/// A tab opened on a slow server shows about:blank, quiet and complete, until the page commits.
-/// The snapshot `tabs new` attaches must be read after that, not of the placeholder.
+/// `tabs new` opens the tab on about:blank and navigates it, the way `navigate` does, before
+/// the snapshot it attaches: the snapshot is of the page, never of the blank tab.
 #[tokio::test]
-async fn tabs_new_snapshots_the_page_not_the_placeholder_it_opens_on() {
-    const PLACEHOLDER_READS: u64 = 3;
+async fn tabs_new_opens_on_blank_and_navigates_before_its_snapshot() {
     let (ctx, connection, _page) = harness_ctx().await;
-    connection
-        .placeholder_reads
-        .store(PLACEHOLDER_READS, Ordering::SeqCst);
     let result = execute_tool(
         &tool_by_name("tabs"),
         json!({ "action": "new", "url": "https://slow.example/login" }),
@@ -1552,26 +1527,100 @@ async fn tabs_new_snapshots_the_page_not_the_placeholder_it_opens_on() {
 
     let created = Some(SessionId::from("session-2"));
     let calls = connection.calls();
+    let creation = calls
+        .iter()
+        .find(|call| call.method == "Browser.createTab")
+        .unwrap_or_else(|| panic!("tabs new should create a tab"));
+    assert_eq!(creation.params["url"], "about:blank");
+    let navigated_at = calls
+        .iter()
+        .position(|call| call.method == "Page.navigate" && call.session == created)
+        .unwrap_or_else(|| panic!("tabs new should navigate the new tab"));
+    assert_eq!(
+        calls[navigated_at].params["url"],
+        "https://slow.example/login"
+    );
     let snapshot_at = calls
         .iter()
         .position(|call| call.method == "Accessibility.getFullAXTree" && call.session == created)
         .unwrap_or_else(|| panic!("tabs new should snapshot the new tab"));
-    let probes_before = calls[..snapshot_at]
-        .iter()
-        .filter(|call| {
-            call.session == created
-                && call
-                    .params
-                    .get("expression")
-                    .and_then(Value::as_str)
-                    .is_some_and(|expression| expression.contains("__browseros_ready"))
-        })
-        .count();
-    // Every placeholder read, then two quiet readings of the page itself.
     assert!(
-        probes_before >= usize::try_from(PLACEHOLDER_READS).unwrap_or(usize::MAX) + 2,
-        "the snapshot was read after {probes_before} probe reads, on the placeholder"
+        navigated_at < snapshot_at,
+        "the snapshot was read before the navigation"
     );
+}
+
+async fn tabs_new(ctx: &ToolCtx, url: &str) -> crate::framework::ToolResult {
+    execute_tool(
+        &tool_by_name("tabs"),
+        json!({ "action": "new", "url": url }),
+        ctx,
+    )
+    .await
+    .unwrap_or_else(|err| panic!("tabs new should return a tool result: {err}"))
+}
+
+fn data_field(result: &crate::framework::ToolResult, field: &str) -> Option<Value> {
+    result
+        .structured_content
+        .as_ref()
+        .and_then(|data| data.get(field))
+        .cloned()
+}
+
+/// A URL that cannot load still leaves the tab open; the reply says so, and keeps the page
+/// field the host's ownership and grouping hooks key off.
+#[tokio::test]
+async fn tabs_new_keeps_a_tab_whose_url_cannot_load_and_says_why() {
+    let (ctx, connection, _page) = harness_ctx().await;
+    connection.set(
+        &connection.navigate_reply,
+        json!({ "frameId": "main", "loaderId": "loader-2", "errorText": "net::ERR_NAME_NOT_RESOLVED" }),
+    );
+    let result = tabs_new(&ctx, "https://nowhere.invalid/").await;
+    assert!(!result.is_error, "{}", result_text(&result));
+    let text = result_text(&result);
+    assert!(text.contains("opened page 2"), "{text}");
+    assert!(text.contains("net::ERR_NAME_NOT_RESOLVED"), "{text}");
+    assert!(text.contains("The tab stays open"), "{text}");
+    assert_eq!(data_field(&result, "page"), Some(json!(2)));
+    assert!(
+        data_field(&result, "loadError")
+            .and_then(|error| error.as_str().map(str::to_owned))
+            .is_some_and(|error| error.contains("net::ERR_NAME_NOT_RESOLVED"))
+    );
+}
+
+#[tokio::test]
+async fn tabs_new_reports_a_url_that_is_a_file_download() {
+    let (ctx, connection, _page) = harness_ctx().await;
+    connection.set(
+        &connection.navigate_reply,
+        json!({ "frameId": "main", "errorText": "net::ERR_ABORTED", "isDownload": true }),
+    );
+    let result = tabs_new(&ctx, "https://example.test/report.csv").await;
+    assert!(!result.is_error, "{}", result_text(&result));
+    assert!(
+        result_text(&result).contains("downloaded"),
+        "{}",
+        result_text(&result)
+    );
+    assert_eq!(data_field(&result, "page"), Some(json!(2)));
+    assert_eq!(data_field(&result, "download"), Some(json!(true)));
+}
+
+#[tokio::test]
+async fn tabs_new_reports_an_http_error_status() {
+    let (ctx, connection, _page) = harness_ctx().await;
+    connection.set(&connection.http_status, json!(404));
+    let result = tabs_new(&ctx, "https://example.test/missing").await;
+    assert!(!result.is_error, "{}", result_text(&result));
+    assert!(
+        result_text(&result).contains("opened page 2 (HTTP 404)"),
+        "{}",
+        result_text(&result)
+    );
+    assert_eq!(data_field(&result, "status"), Some(json!(404)));
 }
 
 #[tokio::test]

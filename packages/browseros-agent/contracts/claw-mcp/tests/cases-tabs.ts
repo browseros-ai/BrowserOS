@@ -1,5 +1,5 @@
 /**
- * tabs (6), tab_groups (6) and windows (5) cases. Page/window handles
+ * tabs (11), tab_groups (6) and windows (5) cases. Page/window handles
  * these cases open are cleaned up per case when that is part of the
  * behavior under test; group effects are observed through the tools
  * themselves (`tab_groups list` is the read-back).
@@ -35,6 +35,90 @@ export const tabsCases: ContractCase[] = [
         !text.includes(`[Page ${page} snapshot]`)
       ) {
         throw new Error(`tabs new omitted Rust auto-context: ${text}`)
+      }
+    },
+  },
+  // A new tab opens on about:blank and loads its URL the way navigate does, so the reply
+  // reports how the load went and the attached snapshot is always of the page.
+  {
+    name: 'tabs: new page on a slow server snapshots the page, not the blank tab',
+    async run(ctx) {
+      const result = await ctx.mcp.callTool('tabs', {
+        action: 'new',
+        url: ctx.fixture('/slow/links.html'),
+      })
+      const text = expectOk(result, 'tabs new on a slow server')
+      const page = parsePageId(result)
+      try {
+        if (!text.includes('Form page')) {
+          throw new Error(
+            `tabs new snapshotted before the page arrived: ${text}`,
+          )
+        }
+      } finally {
+        await ctx.mcp.callTool('tabs', { action: 'close', page })
+      }
+    },
+  },
+  ...(
+    [
+      [
+        'whose host does not resolve stays open and names the failure',
+        () => 'https://nowhere.invalid/',
+        ['net::ERR_NAME_NOT_RESOLVED', 'The tab stays open'],
+      ],
+      [
+        'on a file reports the download',
+        (fixture: (path: string) => string) => fixture('/files/report.txt'),
+        ['downloaded', 'stayed on about:blank'],
+      ],
+      [
+        'answering 404 reports the status',
+        (fixture: (path: string) => string) => fixture('/sdk-missing.html'),
+        ['(HTTP 404)'],
+      ],
+    ] as const
+  ).map(
+    ([label, url, expected]): ContractCase => ({
+      name: `tabs: new page ${label}`,
+      async run(ctx) {
+        const result = await ctx.mcp.callTool('tabs', {
+          action: 'new',
+          url: url(ctx.fixture),
+        })
+        const text = expectOk(result, `tabs new ${label}`)
+        const page = parsePageId(result)
+        try {
+          for (const part of expected) {
+            if (!text.includes(part)) {
+              throw new Error(`tabs new did not say "${part}": ${text}`)
+            }
+          }
+          const listed = expectOk(
+            await ctx.mcp.callTool('tabs', { action: 'list' }),
+            'tabs list',
+          )
+          if (!listed.includes(`[${page}]`)) {
+            throw new Error(`page ${page} did not stay open: ${listed}`)
+          }
+        } finally {
+          await ctx.mcp.callTool('tabs', { action: 'close', page })
+        }
+      },
+    }),
+  ),
+  {
+    name: 'run: browser.open returns the page even when its URL cannot load',
+    async run(ctx) {
+      const result = await ctx.mcp.callTool('run', {
+        code: `const page = await browser.open('https://nowhere.invalid/');
+          const id = page.id;
+          await page.close();
+          return typeof id;`,
+      })
+      const text = expectOk(result, 'run open')
+      if (!text.includes('number')) {
+        throw new Error(`browser.open did not return a page: ${text}`)
       }
     },
   },

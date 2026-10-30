@@ -3045,9 +3045,10 @@ return { pageId: page.pageId, tabId: page.tabId, url: page.url, title: page.titl
 
         let create_params = connection.create_tab_params();
         assert_eq!(create_params.len(), 1);
+        // The tab opens on about:blank; the requested URL is loaded by navigating it.
         assert_eq!(
             create_params.first().and_then(|params| params.get("url")),
-            Some(&json!("https://new.example"))
+            Some(&json!("about:blank"))
         );
         assert_eq!(
             create_params
@@ -3105,9 +3106,10 @@ return await browser.pages.newPage('https://new.example', {
 
         let create_params = connection.create_tab_params();
         assert_eq!(create_params.len(), 1);
+        // The tab opens on about:blank; the requested URL is loaded by navigating it.
         assert_eq!(
             create_params.first().and_then(|params| params.get("url")),
-            Some(&json!("https://new.example"))
+            Some(&json!("about:blank"))
         );
         // `background: false` is accepted but ignored: agents never get a
         // foreground tab.

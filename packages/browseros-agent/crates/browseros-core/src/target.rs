@@ -86,6 +86,15 @@ pub struct PageListing {
 pub trait PageAdmission: Send + Sync {
     fn admit(&self, fresh: &PageInfo) -> Result<(), CoreError>;
 }
+/// A tab [`BrowserView::open_page`] opened, and how loading its URL went.
+#[derive(Debug)]
+pub struct OpenedPage {
+    pub page: PageInfo,
+    /// `None` for about:blank, which the tab shows from the start. Otherwise what `goto`
+    /// reported: the status, a download, or why the URL did not load.
+    pub load: Option<Result<crate::navigation::GotoOutcome, CoreError>>,
+}
+
 /// Task execution capability over global infrastructure. Bound views expose guarded handles
 /// and projected inventories; profile management can recover an invalid captured intent.
 #[derive(Clone)]
@@ -1192,11 +1201,26 @@ impl BrowserView {
             .into_iter()
             .find(|page| page.target_id.as_str() == target))
     }
-    pub async fn new_page(
+    /// Opens a tab on `url`. A URL that fails to load still leaves the tab open; use
+    /// [`Self::open_page`] to learn how the load went.
+    pub async fn new_page(&self, url: &str, opts: NewPageOptions) -> Result<PageInfo, CoreError> {
+        Ok(self.open_page(url, opts).await?.page)
+    }
+
+    /// Opens a tab on about:blank, then navigates it to `url` the way `goto` does, as
+    /// Playwright's `newPage` and `goto`.
+    ///
+    /// Creating the tab at `url` hid how the load went: `Browser.createTab` answers before the
+    /// page commits, so a creation had to wait out a placeholder about:blank, and a URL that
+    /// failed showed Chrome's error page as if it had loaded. Navigating the open tab reports
+    /// the failure, a download or the HTTP status in [`OpenedPage::load`]. Creation has
+    /// succeeded once the tab exists, so whatever happens while it loads, the tab being
+    /// replaced or closed included, is reported there rather than as an error.
+    pub async fn open_page(
         &self,
         url: &str,
         mut opts: NewPageOptions,
-    ) -> Result<PageInfo, CoreError> {
+    ) -> Result<OpenedPage, CoreError> {
         // An explicit context asks createTab for profile routing, the same gated behavior the
         // raw guard refuses; older natives would ignore it and open in the last-active window.
         if opts.browser_context_id.is_some() {
@@ -1207,9 +1231,14 @@ impl BrowserView {
                 return Err(cdp_policy::unsupported("Browser.createTab"));
             }
             opts.window_id = opts.window_id.or(self.unbound_default_window);
-            let (creation, fresh) = self.session.pages.new_page_info(url, opts).await?;
+            let (creation, fresh) = self.session.pages.new_page_info(opts).await?;
+            let original = creation.original.clone();
             self.retain_created_page(creation)?;
-            return Ok(fresh);
+            // An unbound view resolves pages by ID, which would follow a reconciliation or a
+            // reconnect onto another target. Load through the creation's own incarnation.
+            let creating_view = self.with_expected_created_page(&original)?;
+            let access = Arc::new(PageAccess::new(creating_view, original));
+            return self.load_opened(fresh, access, url).await;
         };
         scope.context()?;
         if opts
@@ -1238,7 +1267,7 @@ impl BrowserView {
         let created = self
             .cdp(
                 "Browser.createTab",
-                json!({"url":url,"windowId":window.0,"background":true}),
+                json!({"url":crate::pages::BLANK_URL,"windowId":window.0,"background":true}),
                 None,
             )
             .await?;
@@ -1248,7 +1277,7 @@ impl BrowserView {
         let creation = self
             .session
             .pages
-            .adopt_created(created["tab"].clone(), url, guard)
+            .adopt_created(created["tab"].clone(), crate::pages::BLANK_URL, guard)
             .await?;
         self.retain_created_page(creation.clone())?;
         // Seed the capability from the native create reply BEFORE its first refresh. Asking
@@ -1265,21 +1294,37 @@ impl BrowserView {
                 )
                 .await?;
         }
-        // The same question the unbound creation path asks, answered the same
-        // way: the page's content going quiet rather than load_progress
-        // reaching 1.0, and asked last for the same reason. The wait can hold
-        // for a whole ceiling, and this tab can be reconciled onto a new
-        // target while it does, so asking any earlier widens the window in
-        // which the grouping above sees a replacement and fails the creation.
         let settled = access.fresh().await?;
-        let _ = crate::settle::wait_for_created_page_ready(
-            self.session.pages.as_ref(),
-            settled.page_id.clone(),
-            url,
-            crate::timeouts::ARRIVAL_READY_BUDGET,
-        )
-        .await;
-        Ok(settled)
+        self.load_opened(settled, Arc::new(access), url).await
+    }
+
+    /// Loads `url` into a tab just opened on about:blank, reporting how the load went.
+    ///
+    /// `access` is seeded from the creation reply, never resolved anew by page ID: a tab
+    /// reconciled onto a new target meanwhile is neither navigated nor adopted. The load then
+    /// reports `PageTargetChanged`, and the page keeps the identity its creation returned.
+    async fn load_opened(
+        &self,
+        page: PageInfo,
+        access: Arc<PageAccess>,
+        url: &str,
+    ) -> Result<OpenedPage, CoreError> {
+        if url.is_empty() || url == crate::pages::BLANK_URL {
+            return Ok(OpenedPage { page, load: None });
+        }
+        let load = self
+            .session
+            .nav(page.page_id.clone())
+            .with_access(access.clone())
+            .goto(url)
+            .await;
+        // The page as the load left it: the registry still holds the about:blank it was
+        // created on.
+        let page = access.fresh().await.unwrap_or(page);
+        Ok(OpenedPage {
+            page,
+            load: Some(load),
+        })
     }
     /// The default profile has no normal window yet: open one (normal and inactive, in the
     /// captured Default context) instead of failing or using another profile's window. It goes
