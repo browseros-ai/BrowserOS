@@ -219,14 +219,6 @@ impl ProtocolSession {
         self.session_id.as_ref()
     }
 
-    /// A new subscription to every event on this session's connection, from all of its
-    /// sessions; callers keep the ones whose session id matches [`Self::session_id`]. Each
-    /// call gets its own receiver, so concurrent operations on different pages never compete
-    /// for one channel.
-    pub(crate) fn events(&self) -> broadcast::Receiver<CdpEvent> {
-        self.connection.events()
-    }
-
     #[must_use]
     pub fn same_session(&self, other: &Self) -> bool {
         self.session_id == other.session_id

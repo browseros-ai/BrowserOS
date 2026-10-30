@@ -344,6 +344,17 @@ function dragCases(surface: Surface): ContractCase[] {
           )
         }
         await assertDrag(ctx, page, kind)
+        // The drag must be over: the next click lands instead of extending it.
+        expectOk(
+          await inputCall(
+            ctx,
+            page,
+            surface,
+            'click',
+            await fieldRef(ctx, page, 'Follow-up button'),
+          ),
+        )
+        expect(await evalValue(ctx, page, 'return window.followUps')).toBe(1)
       },
     }),
   )

@@ -19,6 +19,8 @@
       <button id="html-source" draggable="true">HTML source</button>
       <button id="html-target" class="target">HTML target</button>
     </div>
+    <!-- A click after a drag shows the tab is out of the drag and takes input again. -->
+    <button id="follow-up" style="margin: 20px">Follow-up button</button>
     <div id="capture-area" style="position: relative; width: 300px; height: 160px; margin: 20px; border: 1px solid black">
       <div id="capture-handle" style="position: absolute; left: 20px; top: 20px; width: 40px; height: 40px; background: #888"></div>
     </div>
@@ -58,6 +60,8 @@
         event.preventDefault()
         window.htmlDrag.dropped = event.dataTransfer.getData('text/plain')
       })
+      window.followUps = 0
+      document.getElementById('follow-up').addEventListener('click', () => window.followUps++)
       // Sliders and sortable lists capture the pointer on pointerdown and follow only the
       // moves delivered under that capture, so a move without the held button never lands.
       window.pointerDrag = { capturedMoves: 0, released: false, hadCapture: false, moved: null }

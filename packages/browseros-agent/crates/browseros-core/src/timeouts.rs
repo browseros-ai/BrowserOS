@@ -44,10 +44,6 @@ pub const CHECK_STATE_POLL: Duration = Duration::from_millis(50);
 /// Mouse moves a drag takes between press and release. Steps past the first are what turn
 /// a press into a drag for scripts that track movement, and give drop targets dragover.
 pub const DRAG_STEPS: u32 = 10;
-/// How long a drag waits after its first held move for the browser to report that a native
-/// (HTML drag-and-drop) drag started. A script-driven drag never reports one and pays this
-/// once.
-pub const DRAG_START_GRACE: Duration = Duration::from_millis(100);
 
 /// Agent pointer travel time: the page plays each move over about this long.
 pub const POINTER_TRAVEL: Duration = Duration::from_millis(400);
