@@ -41,7 +41,7 @@ describe('SavingsCard', () => {
   it('shows hours and tokens saved on one line, with what claude / codex would have used under the bar', () => {
     const text = strip(stats(window(314_600_000, 573_900_000, 1_054 * HOUR_MS)))
     expect(text).toContain('1,054 hours saved')
-    expect(text).toContain('259.3M AI tokens saved · 45% fewer')
+    expect(text).toContain('259.3M estimated AI tokens saved · 45% fewer')
     expect(text).toContain('Details')
     expect(text).toContain(
       'claude / codex browser would have used 573.9M tokens',

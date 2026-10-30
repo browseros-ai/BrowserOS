@@ -408,13 +408,13 @@ impl Default for SkillRunMode {
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SkillTokenSavings {
-    /// Tokens saved versus a screenshot-first agent, summed across the skill's measured runs. Signed; clamp to zero for display.
+    /// Estimated savings from a fixed 45% proxy applied to the skill's combined recorded tool-token usage. Signed for compatibility; clamp to zero for display.
     #[serde(rename = "saved")]
     pub saved: i64,
-    /// Tokens a screenshot-first agent (other browsers) would have spent across the same runs.
+    /// Estimated comparison usage from the same 45% savings proxy, rounded up and bounded to JavaScript-safe integers.
     #[serde(rename = "otherBrowsers")]
     pub other_browsers: i64,
-    /// Tokens BrowserOS neo actually used across the measured runs.
+    /// Recorded browser tool input and output token estimate across the measured runs.
     #[serde(rename = "used")]
     pub used: i64,
     /// How many of the skill's runs had a measured efficiency projection.

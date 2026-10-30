@@ -729,11 +729,20 @@ export interface components {
       last7Days: components['schemas']['CockpitStatsWindow']
     }
     CockpitStatsWindow: {
-      /** Format: int64 */
+      /**
+       * Format: int64
+       * @description Recorded browser tool input and output token estimate for this period.
+       */
       browserClawTokenEstimate: number
-      /** Format: int64 */
+      /**
+       * Format: int64
+       * @description Estimated comparison usage from a fixed 45% savings proxy, rounded up and bounded to JavaScript-safe integers.
+       */
       screenshotFirstTokenEstimate: number
-      /** Format: int64 */
+      /**
+       * Format: int64
+       * @description Estimated comparison usage minus the recorded token estimate. Signed for compatibility with earlier estimators.
+       */
       rawTokenSavingsEstimate: number
       /** Format: int64 */
       humanTimeSavedMs: number
@@ -1189,17 +1198,17 @@ export interface components {
     SkillTokenSavings: {
       /**
        * Format: int64
-       * @description Tokens saved versus a screenshot-first agent, summed across the skill's measured runs. Signed; clamp to zero for display.
+       * @description Estimated savings from a fixed 45% proxy applied to the skill's combined recorded tool-token usage. Signed for compatibility; clamp to zero for display.
        */
       saved: number
       /**
        * Format: int64
-       * @description Tokens a screenshot-first agent (other browsers) would have spent across the same runs.
+       * @description Estimated comparison usage from the same 45% savings proxy, rounded up and bounded to JavaScript-safe integers.
        */
       otherBrowsers: number
       /**
        * Format: int64
-       * @description Tokens BrowserOS neo actually used across the measured runs.
+       * @description Recorded browser tool input and output token estimate across the measured runs.
        */
       used: number
       /**

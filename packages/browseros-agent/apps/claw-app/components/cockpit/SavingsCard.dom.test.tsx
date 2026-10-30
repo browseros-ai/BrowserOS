@@ -123,7 +123,7 @@ describe('Savings details', () => {
   it('draws one meter: saved first, then what neo used, with no "Without neo" row', async () => {
     await click(body.querySelector('button[aria-haspopup="dialog"]'))
     const text = dialogText()
-    expect(text).toContain('255.7M AI tokens saved')
+    expect(text).toContain('255.7M estimated AI tokens saved')
     expect(text).toContain('45% fewer')
     expect(text.indexOf('saved', text.indexOf('fewer'))).toBeLessThan(
       text.indexOf('neo used 313.7M'),
@@ -140,7 +140,7 @@ describe('Savings details', () => {
       )
 
     await click(tab('30 days'))
-    expect(dialogText()).toContain('31M AI tokens saved')
+    expect(dialogText()).toContain('31M estimated AI tokens saved')
     expect(dialogText()).toContain('50% fewer')
 
     await click(tab('7 days'))

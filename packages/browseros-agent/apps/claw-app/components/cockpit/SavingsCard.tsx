@@ -62,7 +62,7 @@ export function SavingsCard({
                 value={formatTokens(usage.saved)}
                 label={
                   <>
-                    AI tokens saved ·{' '}
+                    estimated AI tokens saved ·{' '}
                     <span className="font-semibold text-accent-ink">
                       {usage.percentLess}% fewer
                     </span>
@@ -160,7 +160,7 @@ function SavingsDialog({ stats }: { stats: CockpitStats }) {
           {usage ? <UsageMeter usage={usage} /> : null}
           <p className="text-[13.5px] text-ink-3 leading-5">
             neo gives your AI agents short page descriptions instead of
-            screenshots, so they use fewer tokens, the units AI is paid in.
+            screenshots. Token savings shown are estimates.
           </p>
         </div>
       </CenterMorphModalContent>
@@ -191,7 +191,7 @@ function UsageMeter({ usage }: { usage: UsageComparison }) {
           <strong className="font-extrabold text-[17px] text-cyanotype-ink tracking-[-0.01em]">
             {formatTokens(usage.saved)}
           </strong>{' '}
-          AI tokens saved
+          estimated AI tokens saved
         </span>
         <span className="font-semibold text-[13.5px] text-accent-ink leading-[18px]">
           {usage.percentLess}% fewer
@@ -231,5 +231,5 @@ function SplitBar({
 }
 
 function usageLabel(usage: UsageComparison): string {
-  return `${formatTokens(usage.saved)} AI tokens saved, ${usage.percentLess}% fewer. neo used ${formatTokens(usage.withNeo)}.`
+  return `${formatTokens(usage.saved)} estimated AI tokens saved, ${usage.percentLess}% fewer. neo used ${formatTokens(usage.withNeo)}.`
 }

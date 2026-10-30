@@ -13,11 +13,12 @@ use std::sync::{Arc, Mutex};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::warn;
 
-pub const EFFICIENCY_ESTIMATOR_VERSION: i64 = 4;
+pub const EFFICIENCY_ESTIMATOR_VERSION: i64 = 5;
 pub const SCREENSHOT_BASELINE_WIDTH: usize = 1920;
 pub const SCREENSHOT_BASELINE_HEIGHT: usize = 1080;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 const JS_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+const TOKEN_SAVINGS_PROXY_PERCENT: i128 = 45;
 
 /// Fixed provider-neutral baseline for one 1920x1080 screenshot. Anthropic documents
 /// 2,691 visual tokens for Claude Sonnet 5 at this resolution and a 4,784-token
@@ -195,6 +196,7 @@ impl SessionEfficiencyService {
         let input = i128::from(stats.tool_input_token_estimate.max(0));
         let output = i128::from(stats.tool_output_token_estimate.max(0));
         let screenshot = i128::from(stats.screenshot_baseline_token_estimate.max(0));
+        let comparison = token_comparison(input.saturating_add(output));
         self.analytics.capture(
             events::AGENT_SESSION_EFFICIENCY_COMPUTED,
             json!({
@@ -204,10 +206,10 @@ impl SessionEfficiencyService {
                 "active_duration_ms": js_safe_nonnegative(i128::from(stats.active_duration_ms)),
                 "tool_input_token_estimate": js_safe_nonnegative(input),
                 "tool_output_token_estimate": js_safe_nonnegative(output),
-                "browserclaw_token_estimate": js_safe_nonnegative(input.saturating_add(output)),
+                "browserclaw_token_estimate": comparison.used,
                 "screenshot_baseline_token_estimate": js_safe_nonnegative(screenshot),
-                "screenshot_first_token_estimate": js_safe_nonnegative(input.saturating_add(screenshot)),
-                "raw_token_savings_estimate": js_safe_signed(screenshot.saturating_sub(output)),
+                "screenshot_first_token_estimate": comparison.baseline,
+                "raw_token_savings_estimate": comparison.saved,
                 "efficiency_estimator_version": EFFICIENCY_ESTIMATOR_VERSION,
                 "screenshot_baseline_width": SCREENSHOT_BASELINE_WIDTH,
                 "screenshot_baseline_height": SCREENSHOT_BASELINE_HEIGHT,
@@ -290,12 +292,11 @@ fn aggregate_rows(
     })
 }
 
-// Wider signed accumulation preserves cancellation and the sign of raw savings until the API clamp.
+// Apply the comparison after summing usage so every period uses the same proxy,
+// including historical rows, without depending on their stored screenshot allowance.
 #[derive(Default)]
 struct WindowAccumulator {
     browser_claw_token_estimate: i128,
-    screenshot_first_token_estimate: i128,
-    raw_token_savings_estimate: i128,
     human_time_saved_ms: i128,
     session_count: i128,
     tool_call_count: i128,
@@ -305,16 +306,9 @@ impl WindowAccumulator {
     fn add(&mut self, row: &session_efficiency_stats::Model) {
         let input = i128::from(row.tool_input_token_estimate.max(0));
         let output = i128::from(row.tool_output_token_estimate.max(0));
-        let screenshot = i128::from(row.screenshot_baseline_token_estimate.max(0));
         self.browser_claw_token_estimate = self
             .browser_claw_token_estimate
             .saturating_add(input.saturating_add(output));
-        self.screenshot_first_token_estimate = self
-            .screenshot_first_token_estimate
-            .saturating_add(input.saturating_add(screenshot));
-        self.raw_token_savings_estimate = self
-            .raw_token_savings_estimate
-            .saturating_add(screenshot.saturating_sub(output));
         self.human_time_saved_ms = self
             .human_time_saved_ms
             .saturating_add(i128::from(row.active_duration_ms.max(0)));
@@ -325,12 +319,11 @@ impl WindowAccumulator {
     }
 
     fn finish(self) -> SessionEfficiencyWindow {
+        let comparison = token_comparison(self.browser_claw_token_estimate);
         SessionEfficiencyWindow {
-            browser_claw_token_estimate: js_safe_nonnegative(self.browser_claw_token_estimate),
-            screenshot_first_token_estimate: js_safe_nonnegative(
-                self.screenshot_first_token_estimate,
-            ),
-            raw_token_savings_estimate: js_safe_signed(self.raw_token_savings_estimate),
+            browser_claw_token_estimate: comparison.used,
+            screenshot_first_token_estimate: comparison.baseline,
+            raw_token_savings_estimate: comparison.saved,
             human_time_saved_ms: js_safe_nonnegative(self.human_time_saved_ms),
             session_count: js_safe_nonnegative(self.session_count),
             tool_call_count: js_safe_nonnegative(self.tool_call_count),
@@ -342,15 +335,26 @@ fn js_safe_nonnegative(value: i128) -> i64 {
     i64::try_from(value.clamp(0, i128::from(JS_SAFE_INTEGER))).unwrap_or(JS_SAFE_INTEGER)
 }
 
-fn js_safe_signed(value: i128) -> i64 {
-    let max = i128::from(JS_SAFE_INTEGER);
-    i64::try_from(value.clamp(-max, max)).unwrap_or_else(|_| {
-        if value.is_negative() {
-            -JS_SAFE_INTEGER
-        } else {
-            JS_SAFE_INTEGER
-        }
-    })
+struct TokenComparison {
+    used: i64,
+    baseline: i64,
+    saved: i64,
+}
+
+/// A fixed savings proxy, not a measurement of another browser's token usage.
+fn token_comparison(used: i128) -> TokenComparison {
+    let used = js_safe_nonnegative(used);
+    let retained_percent = 100 - TOKEN_SAVINGS_PROXY_PERCENT;
+    let baseline =
+        js_safe_nonnegative((i128::from(used) * 100 + retained_percent - 1) / retained_percent);
+    // Subtract after bounding both totals so saved + used always equals baseline.
+    // At the API ceiling the ratio can fall below 45%; recorded usage stays intact.
+    let saved = baseline - used;
+    TokenComparison {
+        used,
+        baseline,
+        saved,
+    }
 }
 
 #[cfg(test)]
@@ -501,7 +505,7 @@ mod tests {
         assert_eq!(stats.tool_input_token_estimate, 30);
         assert_eq!(stats.tool_output_token_estimate, 300);
         assert_eq!(stats.screenshot_baseline_token_estimate, 6_000);
-        assert_eq!(stats.efficiency_estimator_version, 4);
+        assert_eq!(stats.efficiency_estimator_version, 5);
         assert_eq!(stats.computed_at, 12_000);
         Ok(())
     }
@@ -768,9 +772,9 @@ mod tests {
                     "tool_output_token_estimate": 4_000,
                     "browserclaw_token_estimate": 4_030,
                     "screenshot_baseline_token_estimate": 3_000,
-                    "screenshot_first_token_estimate": 3_030,
-                    "raw_token_savings_estimate": -1_000,
-                    "efficiency_estimator_version": 4,
+                    "screenshot_first_token_estimate": 7_328,
+                    "raw_token_savings_estimate": 3_298,
+                    "efficiency_estimator_version": 5,
                     "screenshot_baseline_width": 1_920,
                     "screenshot_baseline_height": 1_080,
                     "screenshot_tokens_per_dispatch": 3_000,
@@ -1034,22 +1038,22 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("aggregate missing"))?;
         assert_eq!(aggregate.all_time.browser_claw_token_estimate, 140);
-        assert_eq!(aggregate.all_time.screenshot_first_token_estimate, 190);
-        assert_eq!(aggregate.all_time.raw_token_savings_estimate, 50);
+        assert_eq!(aggregate.all_time.screenshot_first_token_estimate, 255);
+        assert_eq!(aggregate.all_time.raw_token_savings_estimate, 115);
         assert_eq!(aggregate.all_time.human_time_saved_ms, 600);
         assert_eq!(aggregate.all_time.session_count, 3);
         assert_eq!(aggregate.all_time.tool_call_count, 6);
 
         assert_eq!(aggregate.last_30_days.browser_claw_token_estimate, 110);
-        assert_eq!(aggregate.last_30_days.screenshot_first_token_estimate, 150);
-        assert_eq!(aggregate.last_30_days.raw_token_savings_estimate, 40);
+        assert_eq!(aggregate.last_30_days.screenshot_first_token_estimate, 200);
+        assert_eq!(aggregate.last_30_days.raw_token_savings_estimate, 90);
         assert_eq!(aggregate.last_30_days.human_time_saved_ms, 500);
         assert_eq!(aggregate.last_30_days.session_count, 2);
         assert_eq!(aggregate.last_30_days.tool_call_count, 5);
 
         assert_eq!(aggregate.last_7_days.browser_claw_token_estimate, 40);
-        assert_eq!(aggregate.last_7_days.screenshot_first_token_estimate, 90);
-        assert_eq!(aggregate.last_7_days.raw_token_savings_estimate, 50);
+        assert_eq!(aggregate.last_7_days.screenshot_first_token_estimate, 73);
+        assert_eq!(aggregate.last_7_days.raw_token_savings_estimate, 33);
         assert_eq!(aggregate.last_7_days.human_time_saved_ms, 300);
         assert_eq!(aggregate.last_7_days.session_count, 1);
         assert_eq!(aggregate.last_7_days.tool_call_count, 3);
@@ -1086,10 +1090,7 @@ mod tests {
             aggregate.all_time.screenshot_first_token_estimate,
             JS_SAFE_INTEGER
         );
-        assert_eq!(
-            aggregate.all_time.raw_token_savings_estimate,
-            -JS_SAFE_INTEGER
-        );
+        assert_eq!(aggregate.all_time.raw_token_savings_estimate, 0);
         assert_eq!(aggregate.all_time.human_time_saved_ms, JS_SAFE_INTEGER);
         assert_eq!(aggregate.all_time.tool_call_count, JS_SAFE_INTEGER);
         Ok(())
@@ -1119,15 +1120,59 @@ mod tests {
         assert_eq!(measured, 2);
         // used = (10+20) + (30+40)
         assert_eq!(window.browser_claw_token_estimate, 100);
-        // other browsers = (10+6000) + (30+9000)
-        assert_eq!(window.screenshot_first_token_estimate, 15_040);
-        // saved = (6000-20) + (9000-40)
-        assert_eq!(window.raw_token_savings_estimate, 14_940);
+        // The same 45% proxy applies to the skill's combined usage.
+        assert_eq!(window.screenshot_first_token_estimate, 182);
+        assert_eq!(window.raw_token_savings_estimate, 82);
 
         let (empty, none) = service.aggregate_for_sessions(&[]).await?;
         assert_eq!(none, 0);
         assert_eq!(empty.browser_claw_token_estimate, 0);
         assert_eq!(empty.raw_token_savings_estimate, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_the_fixed_proxy_recalculates_history_in_every_window() -> anyhow::Result<()> {
+        let now = 40 * DAY_MS;
+        let mut old = stats_row("old", now - 31 * DAY_MS, 1, 100, 478_499_890, 0, 3_000);
+        old.efficiency_estimator_version = 1;
+        let month = stats_row("month", now - 30 * DAY_MS, 2, 200, 20, 50, 6_000);
+        let week = stats_row("week", now - 7 * DAY_MS, 3, 300, 30, 10, 0);
+        let aggregate = super::aggregate_rows(&[old, month, week], now)
+            .ok_or_else(|| anyhow::anyhow!("aggregate missing"))?;
+
+        for (window, used, baseline, saved) in [
+            (aggregate.all_time, 478_500_000, 870_000_000, 391_500_000),
+            (aggregate.last_30_days, 110, 200, 90),
+            (aggregate.last_7_days, 40, 73, 33),
+        ] {
+            assert_eq!(window.browser_claw_token_estimate, used);
+            assert_eq!(window.screenshot_first_token_estimate, baseline);
+            assert_eq!(window.raw_token_savings_estimate, saved);
+            assert_eq!(saved + used, baseline);
+            assert_eq!((saved as f64 / baseline as f64 * 100.0).round(), 45.0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_empty_tiny_and_capped_comparisons_keep_totals_consistent() -> anyhow::Result<()> {
+        for (input, output, used, baseline, saved) in [
+            (0, 0, 0, 0, 0),
+            (1, 0, 1, 2, 1),
+            (0, 11, 11, 20, 9),
+            (-10, 11, 11, 20, 9),
+            (i64::MAX, i64::MAX, JS_SAFE_INTEGER, JS_SAFE_INTEGER, 0),
+        ] {
+            let row = stats_row("run", 1, 1, 1, input, output, 3_000);
+            let window = super::aggregate_rows(&[row], 1)
+                .ok_or_else(|| anyhow::anyhow!("aggregate missing"))?
+                .all_time;
+            assert_eq!(window.browser_claw_token_estimate, used);
+            assert_eq!(window.screenshot_first_token_estimate, baseline);
+            assert_eq!(window.raw_token_savings_estimate, saved);
+            assert_eq!(used + saved, baseline);
+        }
         Ok(())
     }
 

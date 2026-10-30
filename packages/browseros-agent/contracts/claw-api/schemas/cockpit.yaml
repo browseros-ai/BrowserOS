@@ -25,16 +25,19 @@ CockpitStatsWindow:
     browserClawTokenEstimate:
       type: integer
       format: int64
+      description: Recorded browser tool input and output token estimate for this period.
       minimum: 0
       maximum: 9007199254740991
     screenshotFirstTokenEstimate:
       type: integer
       format: int64
+      description: Estimated comparison usage from a fixed 45% savings proxy, rounded up and bounded to JavaScript-safe integers.
       minimum: 0
       maximum: 9007199254740991
     rawTokenSavingsEstimate:
       type: integer
       format: int64
+      description: Estimated comparison usage minus the recorded token estimate. Signed for compatibility with earlier estimators.
       minimum: -9007199254740991
       maximum: 9007199254740991
     humanTimeSavedMs:

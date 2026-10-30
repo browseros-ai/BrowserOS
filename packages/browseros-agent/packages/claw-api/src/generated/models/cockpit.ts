@@ -51,19 +51,19 @@ export interface CockpitStats {
  */
 export interface CockpitStatsWindow {
     /**
-     *
+     * Recorded browser tool input and output token estimate for this period.
      * @type {number}
      * @memberof CockpitStatsWindow
      */
     browserClawTokenEstimate: number;
     /**
-     *
+     * Estimated comparison usage from a fixed 45% savings proxy, rounded up and bounded to JavaScript-safe integers.
      * @type {number}
      * @memberof CockpitStatsWindow
      */
     screenshotFirstTokenEstimate: number;
     /**
-     *
+     * Estimated comparison usage minus the recorded token estimate. Signed for compatibility with earlier estimators.
      * @type {number}
      * @memberof CockpitStatsWindow
      */

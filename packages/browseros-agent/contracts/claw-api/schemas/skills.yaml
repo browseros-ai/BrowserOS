@@ -224,15 +224,15 @@ SkillTokenSavings:
     saved:
       type: integer
       format: int64
-      description: Tokens saved versus a screenshot-first agent, summed across the skill's measured runs. Signed; clamp to zero for display.
+      description: Estimated savings from a fixed 45% proxy applied to the skill's combined recorded tool-token usage. Signed for compatibility; clamp to zero for display.
     otherBrowsers:
       type: integer
       format: int64
-      description: Tokens a screenshot-first agent (other browsers) would have spent across the same runs.
+      description: Estimated comparison usage from the same 45% savings proxy, rounded up and bounded to JavaScript-safe integers.
     used:
       type: integer
       format: int64
-      description: Tokens BrowserOS neo actually used across the measured runs.
+      description: Recorded browser tool input and output token estimate across the measured runs.
     measuredRunCount:
       type: integer
       format: int64

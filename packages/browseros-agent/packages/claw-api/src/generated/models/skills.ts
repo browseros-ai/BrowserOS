@@ -465,19 +465,19 @@ export type SkillRunMode = typeof SkillRunMode[keyof typeof SkillRunMode];
  */
 export interface SkillTokenSavings {
     /**
-     * Tokens saved versus a screenshot-first agent, summed across the skill's measured runs. Signed; clamp to zero for display.
+     * Estimated savings from a fixed 45% proxy applied to the skill's combined recorded tool-token usage. Signed for compatibility; clamp to zero for display.
      * @type {number}
      * @memberof SkillTokenSavings
      */
     saved: number;
     /**
-     * Tokens a screenshot-first agent (other browsers) would have spent across the same runs.
+     * Estimated comparison usage from the same 45% savings proxy, rounded up and bounded to JavaScript-safe integers.
      * @type {number}
      * @memberof SkillTokenSavings
      */
     otherBrowsers: number;
     /**
-     * Tokens BrowserOS neo actually used across the measured runs.
+     * Recorded browser tool input and output token estimate across the measured runs.
      * @type {number}
      * @memberof SkillTokenSavings
      */

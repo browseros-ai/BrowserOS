@@ -224,13 +224,20 @@ describe('cockpit stats API schema', () => {
         'toolCallCount',
       ],
       properties: {
-        browserClawTokenEstimate: unsignedInteger,
-        screenshotFirstTokenEstimate: unsignedInteger,
+        browserClawTokenEstimate: {
+          ...unsignedInteger,
+          description: expect.any(String),
+        },
+        screenshotFirstTokenEstimate: {
+          ...unsignedInteger,
+          description: expect.any(String),
+        },
         rawTokenSavingsEstimate: {
           type: 'integer',
           format: 'int64',
           minimum: -9_007_199_254_740_991,
           maximum: 9_007_199_254_740_991,
+          description: expect.any(String),
         },
         humanTimeSavedMs: unsignedInteger,
         sessionCount: unsignedInteger,

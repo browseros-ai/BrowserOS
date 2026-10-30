@@ -41,10 +41,13 @@ impl CockpitStats {
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CockpitStatsWindow {
+    /// Recorded browser tool input and output token estimate for this period.
     #[serde(rename = "browserClawTokenEstimate")]
     pub browser_claw_token_estimate: i64,
+    /// Estimated comparison usage from a fixed 45% savings proxy, rounded up and bounded to JavaScript-safe integers.
     #[serde(rename = "screenshotFirstTokenEstimate")]
     pub screenshot_first_token_estimate: i64,
+    /// Estimated comparison usage minus the recorded token estimate. Signed for compatibility with earlier estimators.
     #[serde(rename = "rawTokenSavingsEstimate")]
     pub raw_token_savings_estimate: i64,
     #[serde(rename = "humanTimeSavedMs")]
