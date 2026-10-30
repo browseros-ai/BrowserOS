@@ -8,7 +8,7 @@
 use crate::{CoreError, FrameId};
 use browseros_cdp::CdpError;
 use serde::Serialize;
-use std::ops::Range;
+use std::{borrow::Cow, ops::Range};
 
 /// The iframe element holding a child frame, as its parent document's capture saw it. Stable
 /// while that element lives, so it names a frame whose own id could not be read.
@@ -203,9 +203,16 @@ pub(super) fn unevenly_read(
 }
 
 /// `text` without the lines of `frames` that `uncompared` names; empty once the main frame is.
-pub(super) fn compared_text(text: &str, frames: &[FrameSpan], uncompared: &[FrameError]) -> String {
+pub(super) fn compared_text<'a>(
+    text: &'a str,
+    frames: &[FrameSpan],
+    uncompared: &[FrameError],
+) -> Cow<'a, str> {
+    if uncompared.is_empty() {
+        return Cow::Borrowed(text);
+    }
     if uncompared.iter().any(FrameError::is_main_frame) {
-        return String::new();
+        return Cow::Borrowed("");
     }
     let lines = if text.is_empty() {
         Vec::new()
@@ -223,12 +230,14 @@ pub(super) fn compared_text(text: &str, frames: &[FrameSpan], uncompared: &[Fram
             }
         }
     }
-    lines
-        .into_iter()
-        .zip(keep)
-        .filter_map(|(line, kept)| kept.then_some(line))
-        .collect::<Vec<_>>()
-        .join("\n")
+    Cow::Owned(
+        lines
+            .into_iter()
+            .zip(keep)
+            .filter_map(|(line, kept)| kept.then_some(line))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
 }
 
 #[cfg(test)]

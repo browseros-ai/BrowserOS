@@ -9,10 +9,7 @@ use serde_json::{Map, Value};
 
 /// `partial`, and `frameErrors` when a frame failed, for a tool's structured result. Present
 /// only where a capture was taken: absent coverage is never reported as complete.
-pub fn coverage_fields(
-    coverage: &SnapshotCoverage,
-    uncompared: &[FrameError],
-) -> Map<String, Value> {
+fn coverage_fields(coverage: &SnapshotCoverage, uncompared: &[FrameError]) -> Map<String, Value> {
     let mut fields = Map::new();
     fields.insert("partial".to_string(), Value::Bool(coverage.is_partial()));
     if coverage.is_partial() {
