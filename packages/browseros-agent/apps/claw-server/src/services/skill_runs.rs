@@ -129,8 +129,15 @@ impl SkillRunService {
         let tokens = task
             .tokens_measured
             .then(|| task.tool_input_token_estimate + task.tool_output_token_estimate);
-        let clean = task.error_count == 0
-            && !matches!(task.status, TaskStatus::Failed | TaskStatus::Cancelled);
+        let finished = match task.status {
+            TaskStatus::Failed => false,
+            // People press Stop to close a task that already finished, so a Stop only counts
+            // against the run when it cut off a call that was still running.
+            TaskStatus::Cancelled => !self.repo.has_cancelled_dispatch(session_id).await?,
+            _ => true,
+        };
+        // A session is only marked ultrafast when its flow returned done.
+        let clean = mark.mode == RunMode::ultrafast().mode || (task.error_count == 0 && finished);
         let errored_tool = if clean {
             None
         } else {

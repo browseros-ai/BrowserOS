@@ -170,6 +170,17 @@ impl SkillsRepository {
             .map(|row| row.tool_name))
     }
 
+    /// Whether any call in the session was cut off before it returned.
+    pub async fn has_cancelled_dispatch(&self, session_id: &str) -> AppResult<bool> {
+        let rows = ToolDispatches::find()
+            .filter(tool_dispatches::Column::SessionId.eq(session_id))
+            .all(self.db.connection())
+            .await?;
+        Ok(rows
+            .iter()
+            .any(|row| dispatch_was_cancelled(row.result_meta.as_deref())))
+    }
+
     pub async fn upsert_mark(&self, session_id: &str, skill_name: &str, now: i64) -> AppResult<()> {
         self.upsert_mark_as(session_id, skill_name, now, &RunMode::agent())
             .await
@@ -309,6 +320,14 @@ impl RunMode {
             handover_cause: None,
         }
     }
+}
+
+fn dispatch_was_cancelled(result_meta: Option<&str>) -> bool {
+    result_meta
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .is_some_and(|value| {
+            value.get("cancelled").and_then(serde_json::Value::as_bool) == Some(true)
+        })
 }
 
 fn dispatch_is_error(result_meta: Option<&str>) -> bool {
