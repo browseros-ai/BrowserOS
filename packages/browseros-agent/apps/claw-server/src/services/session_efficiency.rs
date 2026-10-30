@@ -9,11 +9,14 @@ use crate::{
     error::AppResult,
 };
 use serde_json::json;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::warn;
 
-pub const EFFICIENCY_ESTIMATOR_VERSION: i64 = 4;
+pub const EFFICIENCY_ESTIMATOR_VERSION: i64 = 5;
 pub const SCREENSHOT_BASELINE_WIDTH: usize = 1920;
 pub const SCREENSHOT_BASELINE_HEIGHT: usize = 1080;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
@@ -29,6 +32,23 @@ const JS_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 #[must_use]
 pub const fn screenshot_tokens_per_dispatch() -> i64 {
     3_000
+}
+
+/// Proxy comparison, not a measurement: a screenshot-first agent reads what neo's agent read
+/// and also takes one screenshot per browser step, so the screenshots are the saving.
+struct TokenComparison {
+    with_neo: i128,
+    without_neo: i128,
+    saved: i128,
+}
+
+fn token_comparison(input: i128, output: i128, screenshot: i128) -> TokenComparison {
+    let with_neo = input.saturating_add(output);
+    TokenComparison {
+        with_neo,
+        without_neo: with_neo.saturating_add(screenshot),
+        saved: screenshot,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,6 +215,7 @@ impl SessionEfficiencyService {
         let input = i128::from(stats.tool_input_token_estimate.max(0));
         let output = i128::from(stats.tool_output_token_estimate.max(0));
         let screenshot = i128::from(stats.screenshot_baseline_token_estimate.max(0));
+        let tokens = token_comparison(input, output, screenshot);
         self.analytics.capture(
             events::AGENT_SESSION_EFFICIENCY_COMPUTED,
             json!({
@@ -204,10 +225,10 @@ impl SessionEfficiencyService {
                 "active_duration_ms": js_safe_nonnegative(i128::from(stats.active_duration_ms)),
                 "tool_input_token_estimate": js_safe_nonnegative(input),
                 "tool_output_token_estimate": js_safe_nonnegative(output),
-                "browserclaw_token_estimate": js_safe_nonnegative(input.saturating_add(output)),
+                "browserclaw_token_estimate": js_safe_nonnegative(tokens.with_neo),
                 "screenshot_baseline_token_estimate": js_safe_nonnegative(screenshot),
-                "screenshot_first_token_estimate": js_safe_nonnegative(input.saturating_add(screenshot)),
-                "raw_token_savings_estimate": js_safe_signed(screenshot.saturating_sub(output)),
+                "screenshot_first_token_estimate": js_safe_nonnegative(tokens.without_neo),
+                "raw_token_savings_estimate": js_safe_signed(tokens.saved),
                 "efficiency_estimator_version": EFFICIENCY_ESTIMATOR_VERSION,
                 "screenshot_baseline_width": SCREENSHOT_BASELINE_WIDTH,
                 "screenshot_baseline_height": SCREENSHOT_BASELINE_HEIGHT,
@@ -230,13 +251,31 @@ fn calculate_session_efficiency(
         return None;
     }
 
+    // A code-mode script's inner steps are audit rows with a parent. Their results stay inside
+    // the script, so only top-level calls reach the model; the steps are what a screenshot-first
+    // agent would take one call and one screenshot each for, and the script wrapping them is not.
+    let script_ids: HashSet<&str> = source
+        .dispatches
+        .iter()
+        .filter_map(|dispatch| dispatch.parent_dispatch_id.as_deref())
+        .collect();
     let mut tool_input_token_estimate = 0_i64;
     let mut tool_output_token_estimate = 0_i64;
+    let mut screenshot_action_count = 0_i64;
     for dispatch in &source.dispatches {
-        tool_input_token_estimate =
-            tool_input_token_estimate.saturating_add(dispatch.tool_input_token_estimate.max(0));
-        tool_output_token_estimate =
-            tool_output_token_estimate.saturating_add(dispatch.tool_output_token_estimate.max(0));
+        if dispatch.parent_dispatch_id.is_none() {
+            tool_input_token_estimate =
+                tool_input_token_estimate.saturating_add(dispatch.tool_input_token_estimate.max(0));
+            tool_output_token_estimate = tool_output_token_estimate
+                .saturating_add(dispatch.tool_output_token_estimate.max(0));
+        }
+        if !dispatch
+            .dispatch_id
+            .as_deref()
+            .is_some_and(|id| script_ids.contains(id))
+        {
+            screenshot_action_count = screenshot_action_count.saturating_add(1);
+        }
     }
 
     let started_at = source
@@ -253,7 +292,7 @@ fn calculate_session_efficiency(
         active_duration_ms,
         tool_input_token_estimate,
         tool_output_token_estimate,
-        screenshot_baseline_token_estimate: dispatch_count
+        screenshot_baseline_token_estimate: screenshot_action_count
             .saturating_mul(screenshot_tokens_per_dispatch()),
         efficiency_estimator_version: EFFICIENCY_ESTIMATOR_VERSION,
         computed_at,
@@ -290,7 +329,7 @@ fn aggregate_rows(
     })
 }
 
-// Wider signed accumulation preserves cancellation and the sign of raw savings until the API clamp.
+// Wider accumulation saturates instead of overflowing until the API clamp.
 #[derive(Default)]
 struct WindowAccumulator {
     browser_claw_token_estimate: i128,
@@ -306,15 +345,15 @@ impl WindowAccumulator {
         let input = i128::from(row.tool_input_token_estimate.max(0));
         let output = i128::from(row.tool_output_token_estimate.max(0));
         let screenshot = i128::from(row.screenshot_baseline_token_estimate.max(0));
+        let tokens = token_comparison(input, output, screenshot);
         self.browser_claw_token_estimate = self
             .browser_claw_token_estimate
-            .saturating_add(input.saturating_add(output));
+            .saturating_add(tokens.with_neo);
         self.screenshot_first_token_estimate = self
             .screenshot_first_token_estimate
-            .saturating_add(input.saturating_add(screenshot));
-        self.raw_token_savings_estimate = self
-            .raw_token_savings_estimate
-            .saturating_add(screenshot.saturating_sub(output));
+            .saturating_add(tokens.without_neo);
+        self.raw_token_savings_estimate =
+            self.raw_token_savings_estimate.saturating_add(tokens.saved);
         self.human_time_saved_ms = self
             .human_time_saved_ms
             .saturating_add(i128::from(row.active_duration_ms.max(0)));
@@ -501,8 +540,36 @@ mod tests {
         assert_eq!(stats.tool_input_token_estimate, 30);
         assert_eq!(stats.tool_output_token_estimate, 300);
         assert_eq!(stats.screenshot_baseline_token_estimate, 6_000);
-        assert_eq!(stats.efficiency_estimator_version, 4);
+        assert_eq!(stats.efficiency_estimator_version, 5);
         assert_eq!(stats.computed_at, 12_000);
+        Ok(())
+    }
+
+    #[test]
+    fn calculator_counts_script_steps_as_screenshots_but_not_model_tokens() -> anyhow::Result<()> {
+        let mut script = dispatch(2, 1_100, Some(300), 400, 50, 1);
+        script.dispatch_id = Some("script".to_owned());
+        let mut steps = [
+            dispatch(3, 1_200, Some(100), 5, 9_000, 1),
+            dispatch(4, 1_300, Some(100), 5, 20, 1),
+        ];
+        for step in &mut steps {
+            step.parent_dispatch_id = Some("script".to_owned());
+        }
+        let [read, click] = steps;
+        let source = source(vec![
+            dispatch(1, 1_000, Some(500), 10, 100, 1),
+            script,
+            read,
+            click,
+        ]);
+
+        let stats = calculate_session_efficiency(&source, 12_000)
+            .ok_or_else(|| anyhow::anyhow!("eligible session was skipped"))?;
+        assert_eq!(stats.dispatch_count, 4);
+        assert_eq!(stats.tool_input_token_estimate, 410);
+        assert_eq!(stats.tool_output_token_estimate, 150);
+        assert_eq!(stats.screenshot_baseline_token_estimate, 9_000);
         Ok(())
     }
 
@@ -731,25 +798,31 @@ mod tests {
         let analytics = Arc::new(RecordingAnalytics::default());
         let service = SessionEfficiencyService::new_with_analytics(db, analytics.clone());
         audit
-            .record_session_start("negative", "agent", "agent", "Agent", "Claude Code", "1")
+            .record_session_start("text-heavy", "agent", "agent", "Agent", "Claude Code", "1")
             .await?;
         audit
             .record_tool_dispatch(dispatch_input(
-                "negative", "navigate", 30, 4_000, 1, true, false,
+                "text-heavy",
+                "navigate",
+                30,
+                4_000,
+                1,
+                true,
+                false,
             ))
             .await?;
         audit
-            .record_session_end("negative", "errored", None)
+            .record_session_end("text-heavy", "errored", None)
             .await?;
         let task_duration_ms = audit
-            .get_task_summary("negative")
+            .get_task_summary("text-heavy")
             .await?
             .ok_or_else(|| anyhow::anyhow!("task summary missing"))?
             .duration_ms;
 
         let (left, right) = tokio::join!(
-            service.finalize_session_at("negative", 1),
-            service.finalize_session_at("negative", 2),
+            service.finalize_session_at("text-heavy", 1),
+            service.finalize_session_at("text-heavy", 2),
         );
         assert_eq!(
             [left?, right?].into_iter().filter(Option::is_some).count(),
@@ -768,9 +841,9 @@ mod tests {
                     "tool_output_token_estimate": 4_000,
                     "browserclaw_token_estimate": 4_030,
                     "screenshot_baseline_token_estimate": 3_000,
-                    "screenshot_first_token_estimate": 3_030,
-                    "raw_token_savings_estimate": -1_000,
-                    "efficiency_estimator_version": 4,
+                    "screenshot_first_token_estimate": 7_030,
+                    "raw_token_savings_estimate": 3_000,
+                    "efficiency_estimator_version": 5,
                     "screenshot_baseline_width": 1_920,
                     "screenshot_baseline_height": 1_080,
                     "screenshot_tokens_per_dispatch": 3_000,
@@ -1034,22 +1107,22 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("aggregate missing"))?;
         assert_eq!(aggregate.all_time.browser_claw_token_estimate, 140);
-        assert_eq!(aggregate.all_time.screenshot_first_token_estimate, 190);
-        assert_eq!(aggregate.all_time.raw_token_savings_estimate, 50);
+        assert_eq!(aggregate.all_time.screenshot_first_token_estimate, 270);
+        assert_eq!(aggregate.all_time.raw_token_savings_estimate, 130);
         assert_eq!(aggregate.all_time.human_time_saved_ms, 600);
         assert_eq!(aggregate.all_time.session_count, 3);
         assert_eq!(aggregate.all_time.tool_call_count, 6);
 
         assert_eq!(aggregate.last_30_days.browser_claw_token_estimate, 110);
-        assert_eq!(aggregate.last_30_days.screenshot_first_token_estimate, 150);
-        assert_eq!(aggregate.last_30_days.raw_token_savings_estimate, 40);
+        assert_eq!(aggregate.last_30_days.screenshot_first_token_estimate, 210);
+        assert_eq!(aggregate.last_30_days.raw_token_savings_estimate, 100);
         assert_eq!(aggregate.last_30_days.human_time_saved_ms, 500);
         assert_eq!(aggregate.last_30_days.session_count, 2);
         assert_eq!(aggregate.last_30_days.tool_call_count, 5);
 
         assert_eq!(aggregate.last_7_days.browser_claw_token_estimate, 40);
-        assert_eq!(aggregate.last_7_days.screenshot_first_token_estimate, 90);
-        assert_eq!(aggregate.last_7_days.raw_token_savings_estimate, 50);
+        assert_eq!(aggregate.last_7_days.screenshot_first_token_estimate, 100);
+        assert_eq!(aggregate.last_7_days.raw_token_savings_estimate, 60);
         assert_eq!(aggregate.last_7_days.human_time_saved_ms, 300);
         assert_eq!(aggregate.last_7_days.session_count, 1);
         assert_eq!(aggregate.last_7_days.tool_call_count, 3);
@@ -1057,7 +1130,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn aggregation_returns_no_data_and_bounds_signed_outward_values() -> anyhow::Result<()> {
+    async fn aggregation_returns_no_data_and_bounds_outward_values() -> anyhow::Result<()> {
         let (_dir, _audit, service, repository) = test_services().await?;
         assert!(service.aggregate_at(1).await?.is_none());
 
@@ -1070,7 +1143,7 @@ mod tests {
                     i64::MAX,
                     i64::MAX,
                     i64::MAX,
-                    0,
+                    i64::MAX,
                 ))
                 .await?
         );
@@ -1088,7 +1161,7 @@ mod tests {
         );
         assert_eq!(
             aggregate.all_time.raw_token_savings_estimate,
-            -JS_SAFE_INTEGER
+            JS_SAFE_INTEGER
         );
         assert_eq!(aggregate.all_time.human_time_saved_ms, JS_SAFE_INTEGER);
         assert_eq!(aggregate.all_time.tool_call_count, JS_SAFE_INTEGER);
@@ -1119,10 +1192,10 @@ mod tests {
         assert_eq!(measured, 2);
         // used = (10+20) + (30+40)
         assert_eq!(window.browser_claw_token_estimate, 100);
-        // other browsers = (10+6000) + (30+9000)
-        assert_eq!(window.screenshot_first_token_estimate, 15_040);
-        // saved = (6000-20) + (9000-40)
-        assert_eq!(window.raw_token_savings_estimate, 14_940);
+        // other browsers = used + screenshots = 100 + 6000 + 9000
+        assert_eq!(window.screenshot_first_token_estimate, 15_100);
+        // saved = the screenshots = 6000 + 9000
+        assert_eq!(window.raw_token_savings_estimate, 15_000);
 
         let (empty, none) = service.aggregate_for_sessions(&[]).await?;
         assert_eq!(none, 0);

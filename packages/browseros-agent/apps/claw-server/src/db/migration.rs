@@ -27,6 +27,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0018_add_feedback_invite::Migration),
             Box::new(m0019_add_feedback_invite_dismissal::Migration),
             Box::new(m0020_add_feedback_invite_snooze::Migration),
+            Box::new(m0021_exclude_script_steps_from_efficiency::Migration),
         ]
     }
 }
@@ -2377,5 +2378,167 @@ mod m0020_add_feedback_invite_snooze {
     enum FeedbackInvite {
         Table,
         SnoozedAtMs,
+    }
+}
+
+mod m0021_exclude_script_steps_from_efficiency {
+    use super::*;
+    use sea_orm_migration::sea_orm::{DbBackend, Statement};
+
+    const SOURCE_EFFICIENCY_ESTIMATOR_VERSION: i64 = 4;
+    const EFFICIENCY_ESTIMATOR_VERSION: i64 = 5;
+    const SCREENSHOT_TOKENS_PER_ACTION: i64 = 3_000;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0021_exclude_script_steps_from_efficiency"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Code-mode steps never reach the model, so tokens count top-level calls only, and the
+            // screenshot baseline counts every step but not the script that wraps them. Only
+            // projections whose audit rows are all still present can be recomputed.
+            manager
+                .get_connection()
+                .execute(Statement::from_sql_and_values(
+                    DbBackend::Sqlite,
+                    r#"
+                    UPDATE session_efficiency_stats
+                    SET tool_input_token_estimate = COALESCE((
+                            SELECT SUM(MAX(d.tool_input_token_estimate, 0))
+                            FROM tool_dispatches AS d
+                            WHERE d.session_id = session_efficiency_stats.session_id
+                                AND d.parent_dispatch_id IS NULL
+                        ), 0),
+                        tool_output_token_estimate = COALESCE((
+                            SELECT SUM(MAX(d.tool_output_token_estimate, 0))
+                            FROM tool_dispatches AS d
+                            WHERE d.session_id = session_efficiency_stats.session_id
+                                AND d.parent_dispatch_id IS NULL
+                        ), 0),
+                        screenshot_baseline_token_estimate = ? * (
+                            SELECT COUNT(*)
+                            FROM tool_dispatches AS d
+                            WHERE d.session_id = session_efficiency_stats.session_id
+                                AND (d.dispatch_id IS NULL OR d.dispatch_id NOT IN (
+                                    SELECT step.parent_dispatch_id
+                                    FROM tool_dispatches AS step
+                                    WHERE step.session_id = d.session_id
+                                        AND step.parent_dispatch_id IS NOT NULL
+                                ))
+                        ),
+                        efficiency_estimator_version = ?
+                    WHERE efficiency_estimator_version = ?
+                        AND dispatch_count = (
+                            SELECT COUNT(*)
+                            FROM tool_dispatches AS d
+                            WHERE d.session_id = session_efficiency_stats.session_id
+                        )
+                    "#,
+                    [
+                        SCREENSHOT_TOKENS_PER_ACTION.into(),
+                        EFFICIENCY_ESTIMATOR_VERSION.into(),
+                        SOURCE_EFFICIENCY_ESTIMATOR_VERSION.into(),
+                    ],
+                ))
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
+            // Recomputed projections keep the corrected totals; the old ones overcounted.
+            Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use sea_orm_migration::sea_orm::{
+            ConnectionTrait, Database as SeaDatabase, DatabaseConnection, DbBackend, Statement,
+        };
+
+        async fn insert_projection(
+            connection: &DatabaseConnection,
+            session_id: &str,
+            dispatch_count: i64,
+        ) -> Result<(), DbErr> {
+            connection
+                .execute_unprepared(&format!(
+                    "INSERT INTO session_efficiency_stats VALUES ('{session_id}', 1, {dispatch_count}, 900, 9999, 9999, 9999, 4, 0)"
+                ))
+                .await?;
+            Ok(())
+        }
+
+        async fn insert_dispatch(
+            connection: &DatabaseConnection,
+            session_id: &str,
+            dispatch_id: &str,
+            parent_dispatch_id: Option<&str>,
+            input_tokens: i64,
+            output_tokens: i64,
+        ) -> Result<(), DbErr> {
+            let parent = parent_dispatch_id.map_or("NULL".to_owned(), |id| format!("'{id}'"));
+            connection
+                .execute_unprepared(&format!(
+                    "INSERT INTO tool_dispatches (created_at, agent_id, slug, agent_label, session_id, tool_name, has_screenshot, tool_input_token_estimate, tool_output_token_estimate, token_estimator_version, dispatch_id, parent_dispatch_id) VALUES (0, 'agent', 'agent', 'Agent', '{session_id}', 'navigate', 0, {input_tokens}, {output_tokens}, 1, '{dispatch_id}', {parent})"
+                ))
+                .await?;
+            Ok(())
+        }
+
+        async fn projection(
+            connection: &DatabaseConnection,
+            session_id: &str,
+        ) -> Result<(i64, i64, i64, i64), DbErr> {
+            let row = connection
+                .query_one(Statement::from_string(
+                    DbBackend::Sqlite,
+                    format!(
+                        "SELECT tool_input_token_estimate, tool_output_token_estimate, screenshot_baseline_token_estimate, efficiency_estimator_version FROM session_efficiency_stats WHERE session_id = '{session_id}'"
+                    ),
+                ))
+                .await?
+                .ok_or_else(|| DbErr::RecordNotFound(session_id.to_owned()))?;
+            Ok((
+                row.try_get("", "tool_input_token_estimate")?,
+                row.try_get("", "tool_output_token_estimate")?,
+                row.try_get("", "screenshot_baseline_token_estimate")?,
+                row.try_get("", "efficiency_estimator_version")?,
+            ))
+        }
+
+        #[tokio::test]
+        async fn upgrade_recomputes_sessions_with_intact_audit_rows() -> anyhow::Result<()> {
+            let connection = SeaDatabase::connect("sqlite::memory:").await?;
+            super::super::Migrator::up(&connection, Some(20)).await?;
+
+            insert_projection(&connection, "script", 4).await?;
+            insert_dispatch(&connection, "script", "granular", None, 10, 100).await?;
+            insert_dispatch(&connection, "script", "run", None, 400, 50).await?;
+            insert_dispatch(&connection, "script", "read", Some("run"), 5, 9_000).await?;
+            insert_dispatch(&connection, "script", "click", Some("run"), 5, 20).await?;
+
+            insert_projection(&connection, "pruned", 3).await?;
+            insert_dispatch(&connection, "pruned", "only", None, 10, 100).await?;
+
+            super::super::Migrator::up(&connection, None).await?;
+
+            assert_eq!(
+                projection(&connection, "script").await?,
+                (410, 150, 9_000, 5)
+            );
+            assert_eq!(
+                projection(&connection, "pruned").await?,
+                (9_999, 9_999, 9_999, 4)
+            );
+            Ok(())
+        }
     }
 }
