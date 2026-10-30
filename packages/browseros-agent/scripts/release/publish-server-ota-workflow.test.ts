@@ -29,7 +29,7 @@ describe('publish-server-ota workflow', () => {
     ]) {
       expect(build).toContain(`platform: ${platform}`)
     }
-    expect(build).toContain('runner: macos-14')
+    expect(build).toContain('runner: macos-15')
     expect(build).toContain('runner: windows-latest')
     expect(build).toContain('runner: ubuntu-latest')
     expect(build).toContain('Import macOS signing certificate')
