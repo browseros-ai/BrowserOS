@@ -5,6 +5,7 @@ use axum::{http::StatusCode, response::IntoResponse};
 use claw_api::models::{
     AgentSettings, ApiError, AppendRecordingEventsResponse, AuditAgentList, CancelSessionResponse,
     ClaudeDesktopExtension, ClaudeDesktopInstallResult, Connection, ConnectionList, HealthResponse,
+    Plan, PlanCheckout, PlanCheckoutStatus, PlanKey, PlanKeyFullError, PlanPricing,
     RecordingMetadata, SessionDetail, SessionList, ShutdownResponse, SystemInfo, TelemetryState,
 };
 use claw_server::error::{CanonicalError, RequestId};
@@ -37,6 +38,24 @@ fn generated_dtos_deserialize_shared_fixtures() -> anyhow::Result<()> {
     let _: ClaudeDesktopInstallResult = fixture("claude-desktop-install.json")?;
     let _: ApiError = fixture("api-error.json")?;
     let _: ApiError = fixture("api-error-minimal.json")?;
+    for plan in [
+        "plan-none.json",
+        "plan-active.json",
+        "plan-ending.json",
+        "plan-payment-failed.json",
+        "plan-unpaid.json",
+        "plan-stale.json",
+        "plan-unavailable.json",
+    ] {
+        let _: Plan = fixture(plan)?;
+    }
+    let _: PlanPricing = fixture("plan-pricing.json")?;
+    let _: PlanCheckout = fixture("plan-checkout.json")?;
+    let _: PlanCheckoutStatus = fixture("plan-checkout-complete.json")?;
+    let _: PlanKey = fixture("plan-key.json")?;
+    let _: PlanKeyFullError = fixture("plan-error-key-full.json")?;
+    let _: ApiError = fixture("plan-error-key-invalid.json")?;
+    let _: PlanKeyFullError = fixture("plan-error-already-subscribed.json")?;
     Ok(())
 }
 

@@ -199,6 +199,16 @@ impl AppRuntime {
             });
         }
 
+        if state.billing.is_available() {
+            tasks.push(BackgroundTask {
+                name: "billing licence refresh",
+                handle: crate::services::billing::refresher::spawn(
+                    (*state.billing).clone(),
+                    shutdown.child_token(),
+                ),
+            });
+        }
+
         Self { state, tasks }
     }
 

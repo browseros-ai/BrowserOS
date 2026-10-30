@@ -27,6 +27,7 @@ anyhow.workspace = true
 axum = { workspace = true, features = ["ws"] }
 base64.workspace = true
 bytes.workspace = true
+ed25519-dalek.workspace = true
 clap.workspace = true
 futures-util.workspace = true
 posthog-rs.workspace = true
@@ -55,6 +56,10 @@ tracing-subscriber.workspace = true
 ulid.workspace = true
 url.workspace = true
 uuid.workspace = true
+
+[features]
+# Points billing at the staging gateway. Never enabled for a shipped build.
+billing-staging = []
 
 [dev-dependencies]
 syn = { version = "2", features = ["full", "visit"] }
