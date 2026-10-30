@@ -129,6 +129,20 @@ Recreate the container after editing the file.
 | Key | Values | Hosted default | Desktop default |
 |---|---|---|---|
 | `[tabs] grouping` | `"explicit"`: a page joins a group only when the agent passes `groupId`. `"auto"`: Neo keeps each task's pages in a `<client>/<task>` group it titles, collapses and closes. | `"explicit"` | `"auto"` |
+| `[tabs] close_after_minutes` | Positive whole minutes to keep finished sessions' tabs before automatic cleanup. Applies with either grouping mode. | `30` | `60` |
+
+For example, to keep finished sessions' tabs for 90 minutes:
+
+```toml
+[tabs]
+close_after_minutes = 90
+```
+
+The grace period starts when a session ends. The separate session idle timeout remains
+30 minutes by default. Both automatic group cleanup and individual-tab cleanup use this
+grace period; individual-tab cleanup skips active tabs and tabs owned by a live session.
+Cleanup runs once per minute by default. Existing `CLAW_SESSION_RETENTION_MS` overrides
+remain a fallback; a valid `close_after_minutes` in the file takes precedence.
 
 The server logs the values it runs with at startup (`server behaviour`).
 
