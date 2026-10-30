@@ -1,5 +1,4 @@
 {
   "humanHelpEnabled": false,
-  "taskCleanupTipEnabled": false,
-  "jevTokenSource": "environment"
+  "taskCleanupTipEnabled": false
 }

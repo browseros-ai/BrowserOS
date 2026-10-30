@@ -173,17 +173,11 @@ async fn a_plain_agent_run_is_recorded_as_agent() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn ultrafast_state_is_reported_only_while_the_flag_is_on() -> anyhow::Result<()> {
+async fn ultrafast_state_is_reported_on_skills() -> anyhow::Result<()> {
     let app = test_app().await?;
     let state = &app.state;
     create_skill(state, "neo-shop-add").await?;
 
-    let (_, detail) = get(&app.router, "/api/v1/skills/neo-shop-add").await?;
-    assert!(detail["skill"].get("ultrafast").is_none());
-    let (_, list) = get(&app.router, "/api/v1/skills").await?;
-    assert!(list["items"][0].get("ultrafast").is_none());
-
-    state.agent_settings.set_jev_token("test-token").await?;
     let (_, detail) = get(&app.router, "/api/v1/skills/neo-shop-add").await?;
     assert_eq!(detail["skill"]["ultrafast"]["status"], "none");
 
@@ -245,7 +239,6 @@ fn two_step_flow() -> flow::store::FlowDoc {
 async fn editing_steps_keeps_run_it_fast_only_while_they_line_up() -> anyhow::Result<()> {
     let app = test_app().await?;
     let state = &app.state;
-    state.agent_settings.set_jev_token("test-token").await?;
     create_skill(state, "neo-shop-add").await?;
     flow::store::write(&state.skills.skill_dir("neo-shop-add"), &two_step_flow())?;
     state

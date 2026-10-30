@@ -69,34 +69,6 @@ impl JsonStore {
         fs::rename(&tmp, &abs).await.with_path(abs)
     }
 
-    /// Writes a file only its owner can read.
-    ///
-    /// For a credential. The mode is set on the temporary file before the
-    /// rename, which carries it over, so the file never exists at the final
-    /// path with a wider mode than it should have.
-    pub async fn write_json_private<T>(&self, rel_path: &str, value: &T) -> AppResult<()>
-    where
-        T: Serialize,
-    {
-        let abs = self.resolve(rel_path)?;
-        let parent = abs
-            .parent()
-            .map(Path::to_path_buf)
-            .ok_or_else(|| AppError::InvalidStoragePath(rel_path.to_string()))?;
-        fs::create_dir_all(&parent).await.with_path(parent)?;
-        let tmp = abs.with_extension(tmp_extension(abs.extension()));
-        let body = serde_json::to_string_pretty(value)?;
-        fs::write(&tmp, body).await.with_path(tmp.clone())?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))
-                .await
-                .with_path(tmp.clone())?;
-        }
-        fs::rename(&tmp, &abs).await.with_path(abs)
-    }
-
     pub async fn remove_file(&self, rel_path: &str) -> AppResult<bool> {
         let abs = self.resolve(rel_path)?;
         match fs::remove_file(&abs).await {

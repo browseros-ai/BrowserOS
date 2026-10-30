@@ -26,8 +26,6 @@ paths:
     $ref: ./paths/settings.yaml#/telemetry
   /api/v1/settings/agent:
     $ref: ./paths/settings.yaml#/agent
-  /api/v1/settings/agent/jev-token:
-    $ref: ./paths/settings.yaml#/jevToken
   /api/v1/help/events:
     $ref: ./paths/sessions.yaml#/helpEvents
   /api/v1/sessions:
@@ -152,10 +150,6 @@ components:
       $ref: ./schemas/settings.yaml#/UpdateTelemetryRequest
     AgentSettings:
       $ref: ./schemas/settings.yaml#/AgentSettings
-    JevTokenSource:
-      $ref: ./schemas/settings.yaml#/JevTokenSource
-    SaveJevTokenRequest:
-      $ref: ./schemas/settings.yaml#/SaveJevTokenRequest
     UpdateAgentSettingsRequest:
       $ref: ./schemas/settings.yaml#/UpdateAgentSettingsRequest
     SessionStatus:

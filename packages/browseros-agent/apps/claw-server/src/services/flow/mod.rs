@@ -10,6 +10,10 @@ pub mod store;
 pub mod triage;
 pub mod verify;
 
+/// Whether saved skills compile into ultrafast flows. `false` turns the whole feature off and
+/// saving works as it did before.
+pub const ULTRAFAST_ENABLED: bool = true;
+
 use crate::{clock::now_epoch_ms, db::entities::skill_flows};
 use compose::Mode;
 use futures_util::future::BoxFuture;

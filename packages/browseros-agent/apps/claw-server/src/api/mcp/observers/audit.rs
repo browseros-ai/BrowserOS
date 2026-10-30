@@ -425,7 +425,7 @@ mod tests {
             LocalToolDispatch {
                 session,
                 agent_label: "Codex",
-                tool_name: "pursue",
+                tool_name: "save_skill",
                 raw_args: &json!({}),
                 result: &result,
                 duration_ms: 5_000,

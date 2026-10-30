@@ -4,7 +4,7 @@ use crate::{
     db::entities::{skill_flows, skill_runs},
     error::{AppError, AppResult, CanonicalError, RequestId},
     services::{
-        flow::FlowStatus,
+        flow::{FlowStatus, ULTRAFAST_ENABLED},
         skills::{CreateSkill, SkillDetailView, SkillOrigin, SkillView, UpdateSkill},
     },
 };
@@ -45,8 +45,7 @@ pub(super) async fn list(
             .or_default()
             .push(run);
     }
-    let mut flows: HashMap<String, skill_flows::Model> = if state.agent_settings.ultrafast_enabled()
-    {
+    let mut flows: HashMap<String, skill_flows::Model> = if ULTRAFAST_ENABLED {
         state
             .skills
             .flow_rows()
@@ -70,7 +69,7 @@ pub(super) async fn list(
             .map_err(|source| map_error(&request_id, source))?;
         let mut dto = skill_to_dto(view);
         dto.token_savings = Some(Box::new(token_savings));
-        if state.agent_settings.ultrafast_enabled() {
+        if ULTRAFAST_ENABLED {
             dto.ultrafast = Some(Box::new(ultrafast_to_dto(flow.as_ref())));
         }
         items.push(dto);
@@ -115,7 +114,7 @@ pub(super) async fn create(
         .await
         .map_err(|source| map_error(&request_id, source))?;
     let mut skill = skill_to_dto(view);
-    if state.agent_settings.ultrafast_enabled() {
+    if ULTRAFAST_ENABLED {
         skill.ultrafast = Some(Box::new(ultrafast_to_dto(None)));
     }
     Ok((StatusCode::CREATED, Json(skill)))
@@ -141,7 +140,7 @@ pub(super) async fn update(
         )
         .await
         .map_err(|source| map_error(&request_id, source))?;
-    let detail = if state.agent_settings.ultrafast_enabled() {
+    let detail = if ULTRAFAST_ENABLED {
         state
             .skills
             .reconcile_flow_after_edit(&name)
@@ -303,7 +302,7 @@ async fn with_ultrafast(
     request_id: &RequestId,
     mut detail: SkillDetail,
 ) -> Result<SkillDetail, CanonicalError> {
-    if state.agent_settings.ultrafast_enabled() {
+    if ULTRAFAST_ENABLED {
         let flow = state
             .skills
             .flow_row(&detail.skill.name)

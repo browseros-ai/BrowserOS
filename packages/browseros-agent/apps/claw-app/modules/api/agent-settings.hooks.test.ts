@@ -1,18 +1,15 @@
 import { afterAll, describe, expect, it, mock } from 'bun:test'
 import type { AgentSettings } from '@browseros/claw-api'
-import { JevTokenSource } from '@browseros/claw-api'
 import { MutationObserver, QueryClient } from '@tanstack/react-query'
 import * as api from './client'
 
 const on: AgentSettings = {
   humanHelpEnabled: true,
   taskCleanupTipEnabled: false,
-  jevTokenSource: JevTokenSource.None,
 }
 const off: AgentSettings = {
   humanHelpEnabled: false,
   taskCleanupTipEnabled: false,
-  jevTokenSource: JevTokenSource.None,
 }
 const read = Promise.withResolvers<AgentSettings>()
 const readStarted = Promise.withResolvers<void>()

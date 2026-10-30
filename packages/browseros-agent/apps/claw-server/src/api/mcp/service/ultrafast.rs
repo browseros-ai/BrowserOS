@@ -134,7 +134,7 @@ impl FlowExec for SessionFlowExec<'_> {
 
 impl ClawMcpService {
     pub(super) fn ultrafast(&self) -> bool {
-        self.state.agent_settings.ultrafast_enabled() && !self.mode().is_hosted()
+        crate::services::flow::ULTRAFAST_ENABLED && !self.mode().is_hosted()
     }
 
     pub(super) fn run_skill_offer(&self) -> Option<Tool> {

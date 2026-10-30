@@ -312,16 +312,6 @@ describe('calls made inside a run script', () => {
     )
   })
 
-  it('names a decision-model goal in its own words', () => {
-    expect(
-      describeStep(
-        call('pursue', {
-          args: { goal: 'add a Sensodyne toothpaste to the cart.', page: 3 },
-        }),
-      ),
-    ).toBe('Set out to add a Sensodyne toothpaste to the cart')
-  })
-
   it('picks the typing icon for typing and the click icon for other input', () => {
     expect(verbForCall(call('act', { args: { kind: 'fill' } }))).toBe('type')
     expect(verbForCall(call('input.click', { args: [3, 'e1'] }))).toBe('click')

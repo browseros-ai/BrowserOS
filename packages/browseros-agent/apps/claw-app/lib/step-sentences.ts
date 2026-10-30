@@ -30,7 +30,6 @@ export const TOOL_TO_VERB: Record<string, ReplayVerb> = {
   wait: 'read',
   run: 'type',
   evaluate: 'type',
-  pursue: 'click',
   'pages.newPage': 'navigate',
   'nav.goto': 'navigate',
   'nav.back': 'navigate',
@@ -323,10 +322,6 @@ export function describeStep(dispatch: ToolDispatchRow): string {
       return `Read ${onPage}`
     case 'evaluate':
       return clicksInPage(args) ? `Clicked on ${onPage}` : `Read ${onPage}`
-    case 'pursue': {
-      const goal = stringArg(args, 'goal')?.replace(/[.\s]+$/, '')
-      return goal ? `Set out to ${goal}` : `Worked on ${onPage}`
-    }
     case 'history':
       return 'Looked through your browsing history'
     // Behind-the-scenes calls, seen only when the person asks to show them.

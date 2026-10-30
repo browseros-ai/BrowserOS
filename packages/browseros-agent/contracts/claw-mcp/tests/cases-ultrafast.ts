@@ -30,20 +30,6 @@ type Structured = Record<string, unknown> & {
   brief?: { runs?: Array<{ tag?: string }>; hints?: string[] }
 }
 
-async function setUltrafast(ctx: CaseContext, on: boolean): Promise<void> {
-  const response = await fetch(
-    `${ctx.server.baseUrl}/api/v1/settings/agent/jev-token`,
-    {
-      method: on ? 'PUT' : 'DELETE',
-      headers: { 'content-type': 'application/json' },
-      body: on ? JSON.stringify({ token: 'contract-ultrafast' }) : undefined,
-    },
-  )
-  if (!response.ok && response.status !== 404) {
-    throw new Error(`toggling ultrafast failed: ${response.status}`)
-  }
-}
-
 async function api(
   ctx: CaseContext,
   method: string,
@@ -110,32 +96,30 @@ async function withShop(
   body: (shop: UltrafastShop, session: McpSession) => Promise<void>,
 ): Promise<void> {
   const shop = await startUltrafastShop()
-  await setUltrafast(ctx, true)
   const session = await ctx.openSession('ultrafast-contract')
   try {
     await body(shop, session)
   } finally {
     await closeMyPages(session)
-    await setUltrafast(ctx, false)
     await shop.stop()
   }
 }
 
 export const ultrafastCases: ContractCase[] = [
   {
-    name: 'ultrafast: off by default, the tool list is unchanged',
+    name: 'ultrafast: on, run_skill is listed and save_skill takes a flow',
     async run(ctx) {
-      const session = await ctx.openSession('ultrafast-off')
+      const session = await ctx.openSession('ultrafast-on')
       const tools = await session.listTools()
-      if (tools.some((tool) => tool.name === 'run_skill')) {
-        throw new Error('run_skill is listed without ultrafast')
+      if (!tools.some((tool) => tool.name === 'run_skill')) {
+        throw new Error('run_skill is not listed')
       }
       const save = tools.find((tool) => tool.name === 'save_skill')
       const schema = save?.inputSchema as {
         properties?: Record<string, unknown>
       }
-      if (schema?.properties?.flow) {
-        throw new Error('save_skill offers flow fields without ultrafast')
+      if (!schema?.properties?.flow) {
+        throw new Error('save_skill does not offer flow fields')
       }
     },
   },

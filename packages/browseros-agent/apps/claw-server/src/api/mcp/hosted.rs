@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn desktop_refuses_nothing() {
-        for tool in HIDDEN.into_iter().chain(["tabs", "run", "pursue"]) {
+        for tool in HIDDEN.into_iter().chain(["tabs", "run"]) {
             assert_eq!(refusal(ServerMode::Desktop, tool), None, "{tool}");
         }
     }
@@ -180,8 +180,7 @@ mod tests {
         for tool in HIDDEN {
             assert!(refusal(ServerMode::Hosted, tool).is_some(), "{tool}");
         }
-        // pursue keeps its own gate, the decision-model credential.
-        for tool in ["tabs", "run", "act", "pursue"] {
+        for tool in ["tabs", "run", "act"] {
             assert_eq!(refusal(ServerMode::Hosted, tool), None, "{tool}");
         }
     }

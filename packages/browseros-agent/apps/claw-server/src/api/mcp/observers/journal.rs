@@ -23,7 +23,7 @@ pub fn apply(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result<(
         if call.tool().name != "run" || context.cancelled || call.identity.is_none() {
             return Ok(());
         }
-        if !call.state.agent_settings.ultrafast_enabled() {
+        if !crate::services::flow::ULTRAFAST_ENABLED {
             return Ok(());
         }
         let Some(code) = call.raw_args.get("code").and_then(Value::as_str) else {

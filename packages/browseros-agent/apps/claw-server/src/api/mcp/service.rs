@@ -10,7 +10,6 @@ use crate::{
         naming::{SESSION_NAME_INPUT_MAX_LEN, normalize_small_name, session_group_title},
         observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
         prompt::mcp_instructions,
-        pursue::PursueOffering,
         session_handle, tab_grouping,
     },
     config::{ServerMode, TabGrouping},
@@ -74,83 +73,10 @@ pub(super) use ultrafast::RUN_SKILL_TOOL_NAME;
 pub(super) const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
 const SAVE_SKILL_DESCRIPTION: &str = "When you finish a repeatable browser task the user is likely to run again, save it as a BrowserOS neo skill so it can be re-run by name later; save genuinely repeatable, user-valuable tasks, not one-offs. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). The skill is saved and linked into your agents under a neo- prefix (neo-<name>) so it never clobbers your own skills and you can list them all by typing /neo; a name given without the prefix is namespaced automatically. Call again with the same name to update it in place.";
 pub(super) const MARK_SKILL_RUN_TOOL_NAME: &str = "mark_skill_run";
-const RUN_TOOL_NAME: &str = "run";
 const MARK_SKILL_RUN_DESCRIPTION: &str = "Mark this browser session as a run of a saved skill so BrowserOS neo records the run and its cost once the session ends. Call this once, at the start, when you are running a skill, with the skill's name.";
 pub(super) const REQUEST_HELP_TOOL_NAME: &str = "request_human_help";
 const REQUEST_HELP_DESCRIPTION: &str = "Ask a human to take over a page when you hit something only a person can do: a sign-in, a one-time code, a captcha, an account choice, or an approval you should not make yourself. Pass `page` (the id of the page that needs the person, the same number you use with snapshot and act) and a short `reason` (what you need); optionally `details` (what the human should know), a `resumeHint` (what you will do after, so the human knows the task continues), and a `kind` (login, captcha, approval, other). This blocks for a short while and returns a status. If the status is \"waiting\", call await_human_help to keep waiting; do nothing else on the page until the status is \"resolved\". The cockpit shows your request so a human can take over that tab and hand control back.";
 pub(super) const AWAIT_HELP_TOOL_NAME: &str = "await_human_help";
-const PURSUE_TOOL_NAME: &str = "pursue";
-/// What the caller is told about `pursue`, and it has to earn every line.
-///
-/// Written against what was measured rather than against what sounds good. Each
-/// paragraph exists because a run failed without it: goals arriving one step at
-/// a time, fields that could not be typed because nothing supplied the text,
-/// callers reading a bare status word and learning nothing, and a caller that
-/// split an errand into "get there" and "read it", wrote the first half as the
-/// whole goal, and got a run that correctly stopped without reporting.
-const PURSUE_DESCRIPTION: &str = "\
-Pursue a whole outcome on one page. Every step is decided on the server, so one \
-call does the work of a snapshot, your reasoning, an act, and another snapshot, \
-repeated until it is done.
-
-STATE THE OUTCOME, NOT THE STEP. Say \"narrow these results to the Corsair \
-brand and sort them by price, lowest first\" rather than \"click the Corsair \
-checkbox\". It plans each step against the page as it is now. If you already \
-know the single control you want, `act` is cheaper and more direct.
-
-ASK FOR WHAT YOU WANT TO KNOW, AND READ THE PAGE YOURSELF. A goal may describe \
-the whole outcome, including the part you want to find out: \"find the docs page \
-about the secure tunnel and get me to it\" works. It gets the page into the state \
-where the answer is visible, stops, and tells you which page to read. Then read \
-it, with whatever selector and format you want. It does not read for you, \
-because you know the goal and are not working to a byte budget.
-
-DO NOT SPLIT AN ERRAND IN TWO. \"Get there\" and then \"read it\" costs two calls \
-and gets no report from the first. One call does the first part and tells you to \
-do the second.
-
-IT CANNOT INVENT STRINGS, SO SUPPLY THEM. It chooses between things you give \
-it and never writes text of its own.
- - `values`: anything that must be typed, named by what it is, for instance \
-{\"pincode\": \"600042\", \"search term\": \"wireless headphones\"}. Without \
-this a run that needs to type will stop and ask you.
- - `destinations`: anywhere it may go, as label and url. Without this it cannot \
-leave the page, because it will not invent a url. It can also go back and \
-reload without being told.
-Never put a password, API key, token or card number in `values`. The text is \
-typed into the page and recorded with the call like any other argument. For a \
-secret, use request_human_help so a person enters it in the browser.
-
-IT STOPS RATHER THAN GUESSING. Anything consequential needs high confidence \
-before it runs, so a run will hand back rather than submit, pay or delete on a \
-hunch. Read `status` to see which happened:
- - `satisfied`: the page now holds what the goal asked for. That is a claim, not \
-evidence: read the page to check it, and check `url` and `story`.
- - `too_risky_to_guess`, `nothing_offered`, `no_field_named`: it came back to \
-you, and the sentence says what it needs.
- - `not_confident`, `nothing_changed`, `budget_spent`: it stopped making \
-progress. The sentence says what it tried.
- - `cancelled`: something outside the run stopped it. Not the same as running \
-out of steps, and worth retrying.
-
-WHAT THE RESULT TELLS YOU. Read `story` first: it is what the run did, in \
-order, in sentences, including what observably moved on the page, so \"clicked \
-Add to cart, and \\\"0 items in cart\\\" became \\\"2 items in cart\\\"\". If the run did \
-not finish, `tryNext` is one line saying what to change about the goal before \
-you try again. `decided` is the same information as `story` with the numbers \
-attached: each decision's `margin` against the `needed` bar it had to clear, and \
-`weakest`, which names the judgement that decided the outcome. Compare `margin` \
-with `needed` rather than reading either alone.
-
-`actions` is what it ran and `changed` is how many of those moved the page; the \
-two differing is the signal that something is not working. `omitted` is how much \
-of the page would not fit in one decision, so a large number means the answer \
-may not have been in front of it. `page.obstructed` says what is covering the \
-page, if anything: read the page only once nothing is. `unlabelledImages` counts \
-pictures with no text label, which nothing here can read: take a screenshot \
-yourself if the goal depends on them.
-
-Needs JEV_TOKEN in the server's environment, and is not listed without one.";
 const AWAIT_HELP_DESCRIPTION: &str = "Keep waiting on an open human-help request. Call this repeatedly after request_human_help until the status is \"resolved\" (the human handed control back), \"cancelled\" (the run was stopped), or \"timed_out\" (no human responded in time). Do nothing else on the page while waiting.";
 /// For an agent whose cached tool list still offers request_human_help after the user turned
 /// human help off.
@@ -169,7 +95,6 @@ pub struct ClawMcpService {
     mark_skill_run_tool: Tool,
     request_help_tool: Tool,
     await_help_tool: Tool,
-    pursue_tool: Tool,
     output_files: OutputFileAccess,
     lifecycle: Arc<Mutex<ServiceLifecycle>>,
     fallback_session_id: SessionId,
@@ -233,7 +158,6 @@ impl ClawMcpService {
             mark_skill_run_tool: mark_skill_run_tool(),
             request_help_tool: request_help_tool(),
             await_help_tool: await_help_tool(),
-            pursue_tool: pursue_tool(),
             output_files: browseros_mcp::output_file::create_browser_output_file_access(),
             lifecycle: Arc::new(Mutex::new(ServiceLifecycle::default())),
             fallback_session_id: SessionId::new(format!("stdio-{}", Ulid::new())),
@@ -270,21 +194,11 @@ impl ClawMcpService {
     /// `declare_agent_name` gates the optional `agentName` fallback to clients on
     /// 2026-07-28 or later. Older peers negotiated `initialize`, still carry their
     /// identity in the handshake, and must keep receiving the schema unchanged.
-    /// Whether the loop is offered, asked of the settings store each time.
-    ///
-    /// Read rather than cached, so a token saved in the settings page shows up in the next
-    /// `tools/list` without a restart. Caching it here is the one way to make the setting look
-    /// like it did not work.
-    fn pursue_offering(&self) -> PursueOffering {
-        PursueOffering::of(self.state.agent_settings.jev_token_source())
-    }
-
     fn listed_tools(&self, declare_agent_name: bool) -> Vec<Tool> {
-        let pursue = self.pursue_offering();
         let mode = self.mode();
         let tab_grouping = self.tab_grouping();
         let decorate = |tool: Tool| {
-            let mut tool = session_handle::offer(with_pursue_fallback_note(tool, pursue));
+            let mut tool = session_handle::offer(tool);
             if mode.is_hosted() {
                 tool = hosted::with_viewport_sdk_note(hosted::with_task_name_arg(tool));
             }
@@ -309,11 +223,6 @@ impl ClawMcpService {
             self.save_skill_offer(),
             self.mark_skill_run_tool.clone(),
         ];
-        // Offered only when the server has a credential for the decision model.
-        // A tool that can only fail is worse than one that is not there.
-        if pursue.is_offered() {
-            local.push(self.pursue_tool.clone());
-        }
         if self.ultrafast() {
             local.push(ultrafast::run_skill_tool());
         }
@@ -350,277 +259,6 @@ impl ClawMcpService {
             started.session.child_token(),
         )
         .await;
-    }
-
-    /// Pursues a whole outcome on one page, deciding each step here.
-    ///
-    /// Every move the loop makes goes down the same dispatch path a connected
-    /// agent uses, so it gets the same guards, effects and audit record as
-    /// anything else.
-    async fn call_pursue(
-        &self,
-        started: &StartedSession,
-        raw_args: &Value,
-        client_cancel: CancellationToken,
-    ) -> CallToolResult {
-        // Registered and recorded like any other local tool. Without this the run
-        // is invisible in the audit: its inner actions appear as though the
-        // caller made them directly, and the one call that explains them does
-        // not appear at all. Measured the hard way, on a session where pursue
-        // ran twice and the timeline showed eight bare acts.
-        let dispatch_id = DispatchId::new();
-        let dispatch_registration = CancellationToken::new();
-        if !started
-            .session
-            .try_register_dispatch(dispatch_id.clone(), dispatch_registration)
-            .await
-        {
-            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
-                "BrowserOS neo session is no longer live",
-            )]);
-        }
-        let started_at = StdInstant::now();
-
-        let Some(token) = self.state.agent_settings.jev_credential() else {
-            return self
-                .refuse_pursue(
-                    started,
-                    raw_args,
-                    "this server has no credential for the decision model".to_string(),
-                    started_at,
-                    &dispatch_id,
-                )
-                .await;
-        };
-        let Some(page) = raw_args.get("page").and_then(Value::as_u64) else {
-            return self
-                .refuse_pursue(
-                    started,
-                    raw_args,
-                    "pursue needs the page to work on".to_string(),
-                    started_at,
-                    &dispatch_id,
-                )
-                .await;
-        };
-        let Some(goal) = raw_args.get("goal").and_then(Value::as_str) else {
-            return self
-                .refuse_pursue(
-                    started,
-                    raw_args,
-                    "pursue needs a goal".to_string(),
-                    started_at,
-                    &dispatch_id,
-                )
-                .await;
-        };
-        if goal.trim().is_empty() {
-            return self
-                .refuse_pursue(
-                    started,
-                    raw_args,
-                    "the goal was empty".to_string(),
-                    started_at,
-                    &dispatch_id,
-                )
-                .await;
-        }
-
-        let browser_session = self.state.browser.session().await;
-        let Some(browser_session) = browser_session else {
-            return self
-                .refuse_pursue(
-                    started,
-                    raw_args,
-                    "no browser is connected".to_string(),
-                    started_at,
-                    &dispatch_id,
-                )
-                .await;
-        };
-        // Captured once for the whole run. Every tool call a decision makes
-        // needs these, and they describe which window and tab group the session
-        // is bound to, which does not move under a run working one page.
-        let binding = self
-            .state
-            .targets
-            .binding_for_execution(started.session.id())
-            .await
-            .ok()
-            .flatten();
-        let view = Some(BrowserView::capture(browser_session.clone(), binding, None).await);
-        let target_store: Arc<dyn TargetStore> = Arc::new(ClawTargetStore {
-            bindings: self.state.targets.clone(),
-            session: started.session.id().clone(),
-        });
-        let ownership_key = started.session.convo_id().clone();
-        let default_tab_group_id = self
-            .state
-            .sessions
-            .ownership()
-            .tab_group_ref(&ownership_key)
-            .await;
-        let dispatch_cancel = CancellationToken::new();
-        let cancel = linked_cancel_token(
-            started.session.child_token(),
-            client_cancel,
-            dispatch_cancel.clone(),
-        );
-        let identity = ToolIdentity {
-            session: started.session.clone(),
-            agent: started.session.agent().clone(),
-            ownership_key,
-            agent_label: started.agent_label.clone(),
-        };
-
-        let Some(driver) = crate::api::mcp::pursue::PageDriver::new(
-            browser_session,
-            page as u32,
-            self.catalog.clone(),
-            started.session.id().clone(),
-            identity,
-            view,
-            target_store,
-            default_tab_group_id,
-            self.state.clone(),
-            self.output_files.clone(),
-            cancel,
-        ) else {
-            return self
-                .refuse_pursue(
-                    started,
-                    raw_args,
-                    "this browser does not offer the act tool".to_string(),
-                    started_at,
-                    &dispatch_id,
-                )
-                .await;
-        };
-
-        let offered = browseros_decide::run::Offered {
-            destinations: destinations_from(raw_args),
-            values: values_from(raw_args),
-            tabs: Vec::new(),
-            // Whatever this browser cannot do is never offered as a choice, so
-            // the model is not asked for a move that would only fail.
-            unavailable: driver.unavailable(),
-        };
-        let budget = browseros_decide::run::Budget {
-            max_steps: raw_args
-                .get("maxSteps")
-                .and_then(Value::as_u64)
-                .unwrap_or(12)
-                .clamp(1, 40) as u32,
-            max_seconds: 120,
-        };
-        let run = browseros_decide::run::Run::new(goal, budget).offering(offered);
-
-        let jev = browseros_decide::client::Jev::new(token);
-        let outcome = browseros_decide::pursue::advance(&jev, &driver, run).await;
-        let told = browseros_decide::report::tell(&outcome);
-
-        let mut said = vec![told.said.clone()];
-        if told.omitted > 0 {
-            said.push(format!(
-                "\nIt chose between {} controls; {} more were on the page and did not fit.",
-                told.offered, told.omitted
-            ));
-        }
-        if told.unlabelled_images > 0 {
-            said.push(format!(
-                "\n{} images on this page carry no text label, so nothing here could read them. Take a screenshot if the goal depends on them.",
-                told.unlabelled_images
-            ));
-        }
-
-        // The line stays, because a caller reading text gets something it can
-        // branch on without parsing JSON. What is new is beside it.
-        said.push(format!(
-            "\nstatus={} actions={} changed={} decisions={} batches={} offered={} omitted={} retired={} tokens={} url={}",
-            told.status,
-            told.actions,
-            told.changed,
-            told.decisions,
-            told.batches,
-            told.offered,
-            told.omitted,
-            told.retired,
-            told.input_tokens,
-            told.url,
-        ));
-
-        // The page, as structured content, which is the whole point. A caller
-        // that gets `not_confident` and a sentence can only reword its goal and
-        // hope; one holding control names can change the goal to something the
-        // page can satisfy.
-        //
-        // An earlier version of this tool returned text alone and explained
-        // that dispatch strips structured content from a tool with no output
-        // schema. That is true of `wire_result`, which is on the browser-tool
-        // dispatch path. A local tool returns through `into_call_tool_result`,
-        // which keeps structured content unconditionally, so the constraint was
-        // never on this path. The output schema is declared anyway, for the
-        // better reason: it puts the shape in `tools/list` where a caller can
-        // see it, and makes the field contractual rather than incidental.
-        let result = ToolResult::text(said.join("\n"), Some(pursue_structured(&told)));
-        self.record_pursue(started, raw_args, &result, started_at, &dispatch_id)
-            .await;
-        finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
-            .await
-            .into_call_tool_result()
-    }
-
-    /// A refusal that still appears in the audit.
-    ///
-    /// A run that never started is the one most worth seeing, because the
-    /// caller is about to try again and the reason is the only thing that would
-    /// stop it.
-    async fn refuse_pursue(
-        &self,
-        started: &StartedSession,
-        raw_args: &Value,
-        said: String,
-        started_at: StdInstant,
-        dispatch_id: &DispatchId,
-    ) -> CallToolResult {
-        let result = ToolResult {
-            content: vec![rmcp::model::ContentBlock::text(said)],
-            is_error: true,
-            structured_content: None,
-            audit_hints: None,
-        };
-        self.record_pursue(started, raw_args, &result, started_at, dispatch_id)
-            .await;
-        finish_local_dispatch(started.session.as_ref(), dispatch_id, result)
-            .await
-            .into_call_tool_result()
-    }
-
-    /// Puts one pursue run in the audit, beside the actions it took.
-    async fn record_pursue(
-        &self,
-        started: &StartedSession,
-        raw_args: &Value,
-        result: &ToolResult,
-        started_at: StdInstant,
-        dispatch_id: &DispatchId,
-    ) {
-        if let Err(error) = record_local_tool_dispatch(
-            &self.state,
-            LocalToolDispatch {
-                session: &started.session,
-                agent_label: &started.agent_label,
-                tool_name: PURSUE_TOOL_NAME,
-                raw_args,
-                result,
-                duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
-                dispatch_id: dispatch_id.clone(),
-            },
-        )
-        .await
-        {
-            warn!(error = %error, "local tool audit submission failed");
-        }
     }
 
     async fn call_name_session(
@@ -1387,7 +1025,7 @@ impl ServerHandler for ClawMcpService {
             .with_instructions(mcp_instructions(
                 self.mode(),
                 self.human_help(),
-                self.pursue_offering(),
+                self.ultrafast(),
                 self.native(),
                 self.tab_grouping(),
             ))
@@ -1463,22 +1101,14 @@ impl ServerHandler for ClawMcpService {
         if name == MARK_SKILL_RUN_TOOL_NAME {
             return Some(session_handle::offer(self.mark_skill_run_tool.clone()));
         }
-        if name == PURSUE_TOOL_NAME && self.pursue_offering().is_offered() {
-            return Some(session_handle::offer(self.pursue_tool.clone()));
-        }
         if name == RUN_SKILL_TOOL_NAME {
             return self.run_skill_offer();
         }
         // Catalog-wide even for hidden tools: rmcp caches these input schemas by name, and a
         // cached caller should reach execute_tool's explanation, not method-not-found.
-        let pursue = self.pursue_offering();
         let native = self.native();
-        self.find_tool_index(name).map(|index| {
-            session_handle::offer(with_pursue_fallback_note(
-                self.catalog[index].to_mcp_tool(native),
-                pursue,
-            ))
-        })
+        self.find_tool_index(name)
+            .map(|index| session_handle::offer(self.catalog[index].to_mcp_tool(native)))
     }
 
     async fn call_tool(
@@ -1497,7 +1127,6 @@ impl ServerHandler for ClawMcpService {
         let is_mark_skill_run = request.name == MARK_SKILL_RUN_TOOL_NAME;
         let is_request_help = request.name == REQUEST_HELP_TOOL_NAME;
         let is_await_help = request.name == AWAIT_HELP_TOOL_NAME;
-        let is_pursue = request.name == PURSUE_TOOL_NAME && self.pursue_offering().is_offered();
         let is_run_skill = request.name == RUN_SKILL_TOOL_NAME && self.ultrafast();
         let is_solve_captcha = request.name == "solve_captcha" && self.state.captcha.is_some();
         let tool_index = self.find_tool_index(&request.name);
@@ -1506,7 +1135,6 @@ impl ServerHandler for ClawMcpService {
             && !is_mark_skill_run
             && !is_request_help
             && !is_await_help
-            && !is_pursue
             && !is_run_skill
             && !is_solve_captcha
             && tool_index.is_none()
@@ -1613,10 +1241,6 @@ impl ServerHandler for ClawMcpService {
                 self.human_help() == HumanHelp::On,
             )
             .await)
-        } else if is_pursue {
-            Ok(self
-                .call_pursue(&started, &raw_args, context.ct.clone())
-                .await)
         } else if is_run_skill {
             Ok(self
                 .call_run_skill(&started, &raw_args, context.ct.clone())
@@ -1893,274 +1517,6 @@ fn mark_skill_run_tool() -> Tool {
     )
 }
 
-/// Destinations the caller authored, which is the only way this run may move.
-fn destinations_from(raw_args: &Value) -> Vec<browseros_decide::offer::Destination> {
-    raw_args
-        .get("destinations")
-        .and_then(Value::as_array)
-        .map(|listed| {
-            listed
-                .iter()
-                .filter_map(|entry| {
-                    Some(browseros_decide::offer::Destination {
-                        label: entry.get("label")?.as_str()?.to_string(),
-                        url: entry.get("url")?.as_str()?.to_string(),
-                        new_tab: entry
-                            .get("newTab")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Values the caller supplied, which is the only way this run may type.
-fn values_from(raw_args: &Value) -> Vec<browseros_decide::offer::NamedValue> {
-    raw_args
-        .get("values")
-        .and_then(Value::as_object)
-        .map(|given| {
-            given
-                .iter()
-                .filter_map(|(name, text)| {
-                    Some(browseros_decide::offer::NamedValue::new(
-                        name.clone(),
-                        text.as_str()?.to_string(),
-                    ))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// What `pursue` hands back beside its text.
-///
-/// Built by hand rather than derived, because `Told` is the decision layer's
-/// shape and this is the wire's. Keeping them apart means a field can be
-/// renamed in one without silently changing the other's contract.
-fn pursue_structured(told: &browseros_decide::report::Told) -> Value {
-    let mut body = json!({
-        "status": told.status,
-        "said": told.said,
-        "actions": told.actions,
-        "changed": told.changed,
-        "decisions": told.decisions,
-        "batches": told.batches,
-        "retired": told.retired,
-        "inputTokens": told.input_tokens,
-        "url": told.url,
-        "title": told.title,
-        "offered": told.offered,
-        "unlabelledImages": told.unlabelled_images,
-        "story": told.story,
-        "tryNext": told.try_next,
-        "decided": told
-            .decided
-            .iter()
-            .map(|decided| {
-                let mut one = json!({
-                    "operation": decided.operation,
-                    "verdict": decided.verdict,
-                    "batch": decided.batch,
-                    "inputTokens": decided.input_tokens,
-                });
-                if let Some(how) = decided.how {
-                    one["how"] = json!(how);
-                }
-                if let Some(target) = &decided.target {
-                    one["target"] = json!(target);
-                }
-                if let Some(name) = &decided.target_name {
-                    one["targetName"] = json!(name);
-                }
-                if let Some(weakest) = decided.weakest {
-                    one["weakest"] = json!(weakest);
-                }
-                if let Some(margin) = decided.margin {
-                    one["margin"] = json!(margin);
-                }
-                if let Some(needed) = decided.needed {
-                    one["needed"] = json!(needed);
-                }
-                if let Some(share) = decided.share {
-                    one["share"] = json!(share);
-                }
-                if let Some(why) = &decided.why {
-                    one["why"] = json!(why);
-                }
-                one
-            })
-            .collect::<Vec<_>>(),
-    });
-    if let Some(goal_met) = told.goal_met {
-        body["goalMet"] = json!(goal_met);
-    }
-    if let Some(page) = &told.page {
-        body["page"] = json!({
-            "url": page.url,
-            "title": page.title,
-            "omitted": page.omitted,
-            "obstructed": page.obstructed,
-            "controls": page
-                .controls
-                .iter()
-                .map(|control| {
-                    let mut shown = json!({
-                        "ref": control.reference,
-                        "role": control.role,
-                        "name": control.name,
-                    });
-                    if let Some(state) = &control.state {
-                        shown["state"] = json!(state);
-                    }
-                    shown
-                })
-                .collect::<Vec<_>>(),
-        });
-    }
-    body
-}
-
-/// The shape `pursue` promises to return.
-///
-/// Declared so the shape is visible in `tools/list` rather than discovered by
-/// a caller parsing what arrives. `run` is the precedent on this server for a
-/// tool that promises structured content and delivers it.
-fn pursue_output_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "status": {
-                "type": "string",
-                "description": "One word to branch on: satisfied, blocked, budget_spent, cancelled, nothing_changed, not_confident, going_in_circles, browser_kept_failing, only_waiting, nothing_offered, too_risky_to_guess, no_field_named, asked_too_often, unverifiable. On satisfied the page holds what the goal asked for: read it."
-            },
-            "said": { "type": "string", "description": "One sentence, true of what actually happened." },
-            "page": {
-                "type": "object",
-                "description": "The page it ended on. Read the controls: if it could not finish, these are what it had to choose between, and naming one of them in a new goal is how you get further than rewording.",
-                "properties": {
-                    "url": { "type": "string" },
-                    "title": { "type": "string" },
-                    "obstructed": { "type": ["string", "null"], "description": "What is covering the page, if anything. A page with a dialog over it is not the page you would be reading." },
-                    "omitted": { "type": "integer", "description": "Controls that exist and are not listed, so you know the list is partial." },
-                    "controls": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "ref": { "type": "string", "description": "Name this back in a goal, or pass it to act." },
-                                "role": { "type": "string" },
-                                "name": { "type": "string" },
-                                "state": { "type": "string", "description": "Present when the control has one: checked, unchecked, selected, expanded, collapsed." }
-                            },
-                            "required": ["ref", "role", "name"]
-                        }
-                    }
-                },
-                "required": ["url", "title", "controls", "omitted"]
-            },
-            "offered": { "type": "integer", "description": "How many controls the deciding question could choose between." },
-            "unlabelledImages": { "type": "integer", "description": "Images carrying no text label, which nothing here could read." },
-            "tryNext": {
-                "type": ["string", "null"],
-                "description": "One line saying what to change and try again, derived from how the run ended and which judgement was weakest. Present only when the run did not finish. Read this before rewording a goal."
-            },
-            "story": {
-                "type": "array",
-                "description": "What the run did, in order, as sentences. Read this first: it is the same information as `decided` in a form a person can read, including what observably moved on the page.",
-                "items": { "type": "string" }
-            },
-            "decided": {
-                "type": "array",
-                "description": "Every decision the run paid for, in order, including the ones that never ran. Read `verdict` and `why` to see why a run did nothing.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "operation": { "type": "string" },
-                        "how": { "type": "string" },
-                        "target": { "type": "string" },
-                        "targetName": { "type": "string" },
-                        "verdict": { "type": "string", "description": "ran, explored, or handed_back." },
-                        "weakest": { "type": "string", "description": "Which judgement was least certain, in words." },
-                        "margin": { "type": "number", "description": "How far the weakest judgement led its runner-up by." },
-                        "needed": { "type": "number", "description": "The margin it had to clear. Compare with `margin`: a margin alone says nothing, because 0.23 is comfortable for a report and refused for a submit." },
-                        "share": { "type": "number" },
-                        "why": { "type": "string", "description": "What the gate made of it, where it had something to say." },
-                        "batch": { "type": "integer", "description": "Which part of the page this decision was asked about, from one." },
-                        "inputTokens": { "type": "integer" }
-                    },
-                    "required": ["operation", "verdict", "batch", "inputTokens"]
-                }
-            },
-            "actions": { "type": "integer", "description": "Actions that ran, which is not the same as decisions asked for." },
-            "changed": { "type": "integer", "description": "How many of those changed the page." },
-            "decisions": { "type": "integer" },
-            "batches": { "type": "integer", "description": "Questions asked about part of a page. More than one per decision when a page is larger than one question." },
-            "retired": { "type": "integer", "description": "Controls set aside for changing nothing when acted on." },
-            "goalMet": { "type": "number", "description": "How likely the last decision thought the goal was already satisfied. Reported, never acted on: a completion claim is not evidence." },
-            "inputTokens": { "type": "integer" },
-            "url": { "type": "string" },
-            "title": { "type": "string" }
-        },
-        "required": ["status", "said", "actions", "changed", "decisions", "batches", "retired", "inputTokens", "url", "title"]
-    })
-}
-
-fn pursue_tool() -> Tool {
-    let Value::Object(input_schema) = json!({
-        "type": "object",
-        "properties": {
-            "page": {
-                "type": "integer",
-                "description": "The page to work on, from tabs or navigate. It is already yours, and it stays yours."
-            },
-            "goal": {
-                "type": "string",
-                "description": "The whole outcome you want, for instance \"sort these results by price, lowest first, and narrow them to the Corsair brand\". Not a single step."
-            },
-            "maxSteps": {
-                "type": "integer",
-                "description": "Stop after this many actions. Defaults to 12."
-            },
-            "destinations": {
-                "type": "array",
-                "description": "Pages this run may move to. It picks one by label and never invents a url, so moving stays inside the set you wrote.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "label": { "type": "string", "description": "What this page is, in the words your goal uses." },
-                        "url": { "type": "string" },
-                        "newTab": { "type": "boolean", "description": "Open it beside this page instead of moving this one." }
-                    },
-                    "required": ["label", "url"]
-                }
-            },
-            "values": {
-                "type": "object",
-                "description": "Values this run may type, named by what they are, for instance {\"pincode\": \"600042\"}. It picks which one belongs in a field it chose and never invents a string. Never put a password, key, token or card number here.",
-                "additionalProperties": { "type": "string" }
-            }
-        },
-        "required": ["page", "goal"]
-    }) else {
-        unreachable!();
-    };
-    let Value::Object(output_schema) = pursue_output_schema() else {
-        unreachable!();
-    };
-    Tool::new(PURSUE_TOOL_NAME, PURSUE_DESCRIPTION, input_schema)
-        .with_raw_output_schema(std::sync::Arc::new(output_schema))
-        .with_annotations(
-            ToolAnnotations::with_title("Pursue a goal")
-                .read_only(false)
-                .destructive(false)
-                .idempotent(false)
-                .open_world(true),
-        )
-}
-
 fn request_help_tool() -> Tool {
     let Value::Object(input_schema) = json!({
         "type": "object",
@@ -2401,35 +1757,6 @@ fn started_session_from(session: Arc<Session>, client: &ClientInfo) -> StartedSe
         session,
         agent_label,
     }
-}
-
-/// The opening sentence of `run`'s own description, which ranks it first.
-///
-/// Owned by the tool crate, which knows nothing about the decision loop and
-/// should not: a production build has no loop to rank. So the sentence is
-/// recast here, at the edge that already knows whether the loop is offered.
-const RUN_RANKED_FIRST: &str = "The primary way to drive the browser - prefer run for any task; the granular tools are the fallback.";
-
-/// What it is recast as while the decision loop is offered.
-const RUN_RANKED_AFTER_PURSUE: &str = "The fallback once two pursue calls have come back with a status other than satisfied, and the right first call for work that is a script rather than an outcome: pagination over many pages, bulk extraction, or anything needing a saved helper. The granular tools are the fallback to this.";
-
-/// Demotes `run` below `pursue` in its own description, leaving the rest of it.
-///
-/// A catalogue entry that still calls itself the primary way to drive the
-/// browser outranks any amount of instruction text that says otherwise: the
-/// description travels with the tool and the instructions do not.
-fn with_pursue_fallback_note(mut tool: Tool, pursue: PursueOffering) -> Tool {
-    if !pursue.is_offered() || tool.name != RUN_TOOL_NAME {
-        return tool;
-    }
-    if let Some(description) = tool.description.as_deref() {
-        tool.description = Some(
-            description
-                .replace(RUN_RANKED_FIRST, RUN_RANKED_AFTER_PURSUE)
-                .into(),
-        );
-    }
-    tool
 }
 
 /// Offers a product-name fallback to modern clients in one consistent schema.
@@ -2889,16 +2216,6 @@ mod tests {
         assert!(SUPPORTED_PROTOCOL_VERSIONS.contains(&ProtocolVersion::V_2025_11_25));
     }
 
-    /// `pursue` is listed only when the server holds a credential for the
-    /// decision model, so an exact tool list has to say so. Asked of this
-    /// service's own settings store rather than of the ambient environment,
-    /// which is what used to make the suite pass or fail by whose shell ran it.
-    fn expect_pursue_if_credentialled(service: &ClawMcpService, expected: &mut Vec<String>) {
-        if service.pursue_offering().is_offered() {
-            expected.push(PURSUE_TOOL_NAME.to_string());
-        }
-    }
-
     #[tokio::test]
     async fn subscriptions_listen_is_accepted_not_method_not_found() -> anyhow::Result<()> {
         // rmcp turns a None subscription filter into JSON-RPC -32601 for subscriptions/listen,
@@ -2950,10 +2267,7 @@ mod tests {
             .catalog
             .iter()
             .map(|tool| tool.to_mcp_tool(native))
-            .chain([
-                service.pursue_tool.clone(),
-                super::super::captcha::solve_captcha_tool(),
-            ]);
+            .chain([super::super::captcha::solve_captcha_tool()]);
         for tool in own {
             if let Some(output) = &tool.output_schema {
                 assert!(
@@ -3448,7 +2762,7 @@ mod tests {
                 mcp_instructions(
                     ServerMode::Desktop,
                     HumanHelp::On,
-                    service.pursue_offering(),
+                    service.ultrafast(),
                     native,
                     service.tab_grouping()
                 )
@@ -3460,13 +2774,7 @@ mod tests {
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("BrowserOS neo instructions missing"))?;
         assert!(instructions.contains("BrowserOS neo — the browser for agents"));
-        // Which tool the instructions name depends on whether the loop is
-        // offered, which this service's own settings store answers.
-        if service.pursue_offering().is_offered() {
-            assert!(instructions.contains("Reach for pursue first"));
-        } else {
-            assert!(instructions.contains("Reach for run first"));
-        }
+        assert!(instructions.contains("Reach for run first"));
         assert!(instructions.contains("optional fallback for your client"));
         assert!(instructions.contains("Put your task\n  name in name_session."));
         assert!(instructions.contains("tabs group as <client>/<name>."));
@@ -3562,7 +2870,7 @@ mod tests {
         Ok(())
     }
 
-    /// Hosted lists the browser catalog (plus pursue when credentialled) and nothing that
+    /// Hosted lists the browser catalog and nothing that
     /// assumes a local harness or a watching person, even with human help on in settings.
     #[tokio::test]
     async fn hosted_surface_is_the_catalog_with_task_name_on_every_tool() -> anyhow::Result<()> {
@@ -3576,13 +2884,12 @@ mod tests {
             .iter()
             .map(|tool| tool.name.to_string())
             .collect::<Vec<_>>();
-        let mut expected = service
+        let expected = service
             .catalog
             .iter()
             .filter(|tool| tool.available(service.native()))
             .map(|tool| tool.name.to_string())
             .collect::<Vec<_>>();
-        expect_pursue_if_credentialled(&service, &mut expected);
         assert_eq!(names, expected);
         for tool in &tools {
             let schema = Value::Object(tool.input_schema.as_ref().clone());
@@ -3606,7 +2913,7 @@ mod tests {
                 mcp_instructions(
                     ServerMode::Hosted,
                     HumanHelp::Off,
-                    service.pursue_offering(),
+                    service.ultrafast(),
                     service.native(),
                     service.tab_grouping()
                 )
@@ -3761,7 +3068,7 @@ mod tests {
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
         expected.push(SAVE_SKILL_TOOL_NAME.to_string());
         expected.push(MARK_SKILL_RUN_TOOL_NAME.to_string());
-        expect_pursue_if_credentialled(&service, &mut expected);
+        expected.push(RUN_SKILL_TOOL_NAME.to_string());
         expected.push(REQUEST_HELP_TOOL_NAME.to_string());
         expected.push(AWAIT_HELP_TOOL_NAME.to_string());
         assert_eq!(names, expected);
@@ -3771,61 +3078,6 @@ mod tests {
         assert!(names.contains(&"mark_skill_run".to_string()));
         assert!(names.contains(&"request_human_help".to_string()));
         assert!(names.contains(&"await_human_help".to_string()));
-        Ok(())
-    }
-
-    /// The recast is a string replace against a description owned by another
-    /// crate. If that crate rewords its opening sentence, the replace silently
-    /// does nothing and run keeps calling itself the primary way to drive the
-    /// browser while pursue is offered. This is the test that catches it.
-    #[tokio::test]
-    async fn run_still_opens_with_the_sentence_that_gets_recast() -> anyhow::Result<()> {
-        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
-        let service = ClawMcpService::new(call.state);
-        let run = service
-            .catalog
-            .iter()
-            .find(|tool| tool.name == RUN_TOOL_NAME)
-            .map(|tool| tool.to_mcp_tool(service.native()))
-            .ok_or_else(|| anyhow::anyhow!("run is missing from the catalogue"))?;
-        let description = run
-            .description
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("run has no description"))?;
-        assert_eq!(description.matches(RUN_RANKED_FIRST).count(), 1);
-
-        let absent = with_pursue_fallback_note(run.clone(), PursueOffering::Absent);
-        assert_eq!(absent.description.as_deref(), Some(description));
-
-        let offered = with_pursue_fallback_note(run, PursueOffering::Offered);
-        let offered = offered
-            .description
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("recast run has no description"))?;
-        assert!(offered.starts_with(RUN_RANKED_AFTER_PURSUE));
-        assert!(!offered.contains(RUN_RANKED_FIRST));
-        // Everything past the first sentence is the SDK reference, which the
-        // fallback still needs in full.
-        assert!(offered.contains("a bare engine, not Node and not a page"));
-        assert!(offered.contains("browser.open(url)"));
-        Ok(())
-    }
-
-    /// Only run is recast. A granular tool keeps its own description, because
-    /// its ranking relative to run did not change.
-    #[tokio::test]
-    async fn a_granular_tool_is_left_alone_by_the_recast() -> anyhow::Result<()> {
-        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
-        let service = ClawMcpService::new(call.state);
-        let native = service.native();
-        for tool in service.catalog.iter().map(|tool| tool.to_mcp_tool(native)) {
-            if tool.name == RUN_TOOL_NAME {
-                continue;
-            }
-            let before = tool.description.clone();
-            let after = with_pursue_fallback_note(tool, PursueOffering::Offered);
-            assert_eq!(after.description, before);
-        }
         Ok(())
     }
 
@@ -4037,7 +3289,7 @@ mod tests {
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
         expected.push(SAVE_SKILL_TOOL_NAME.to_string());
         expected.push(MARK_SKILL_RUN_TOOL_NAME.to_string());
-        expect_pursue_if_credentialled(&service, &mut expected);
+        expected.push(RUN_SKILL_TOOL_NAME.to_string());
         for declare_agent_name in [false, true] {
             assert_eq!(tool_names(&service, declare_agent_name), expected);
         }
@@ -4059,7 +3311,7 @@ mod tests {
                 mcp_instructions(
                     ServerMode::Desktop,
                     HumanHelp::Off,
-                    service.pursue_offering(),
+                    service.ultrafast(),
                     call.state.config.native.capabilities,
                     service.tab_grouping()
                 )
@@ -4289,7 +3541,15 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("save_skill missing from get_tool"))?;
 
         assert_eq!(listed, fetched);
-        assert_eq!(listed.description.as_deref(), Some(SAVE_SKILL_DESCRIPTION));
+        // Ultrafast extends the description and schema; the base tool is the same either way.
+        assert!(
+            listed
+                .description
+                .as_deref()
+                .is_some_and(|description| description.starts_with(SAVE_SKILL_DESCRIPTION))
+        );
+        let properties = &listed.input_schema["properties"];
+        assert_eq!(properties.get("flow").is_some(), service.ultrafast());
         assert_eq!(
             listed.annotations,
             Some(
