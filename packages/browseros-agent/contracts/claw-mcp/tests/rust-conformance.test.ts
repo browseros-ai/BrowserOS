@@ -149,11 +149,20 @@ async function startScoped(
   }
 }
 
-/** Starts the suite's runtime once to learn whether `scoped` cases can run on this browser. */
+/**
+ * Starts the suite's runtime once to learn whether `scoped` cases can run on this browser.
+ * It runs before any cleanup hook is registered, so a failure reclaims what it started.
+ */
 async function detectProfileTargeting(): Promise<boolean> {
-  const current = await ensureRun()
-  current.scoped ??= startScoped(current)
-  return (await current.scoped) !== undefined
+  try {
+    const current = await ensureRun()
+    current.scoped ??= startScoped(current)
+    return (await current.scoped) !== undefined
+  } catch (error) {
+    await teardownRun()
+    await fixtures?.stop().catch(() => {})
+    throw error
+  }
 }
 
 function makeContext(run: ServerRun): CaseContext {
