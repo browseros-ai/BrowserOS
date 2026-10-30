@@ -96,10 +96,10 @@ jobs:
         include:
           - platform: darwin_arm64
             target: darwin-arm64
-            runner: macos-14
+            runner: macos-15
           - platform: darwin_x64
             target: darwin-x64
-            runner: macos-14
+            runner: macos-15
           - platform: linux_arm64
             target: linux-arm64
             runner: ubuntu-latest
