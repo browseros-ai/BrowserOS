@@ -25,6 +25,7 @@ const EXPECTED_TOOLS = [
   'read',
   'request_human_help',
   'run',
+  'run_skill',
   'save_skill',
   'screenshot',
   'snapshot',
