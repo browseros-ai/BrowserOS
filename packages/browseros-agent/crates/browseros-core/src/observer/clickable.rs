@@ -15,7 +15,7 @@
 //! ```
 
 use super::acquisition::SnapshotBudget;
-use crate::{CoreError, ProtocolSession};
+use crate::{ProtocolSession, snapshot::FrameReadReason};
 use serde::Deserialize;
 use serde_json::json;
 use std::{
@@ -64,26 +64,26 @@ pub(super) enum ClickableDocument {
 ///
 /// Same-process child frames share their parent's session and appear as extra documents in its
 /// capture, so every frame of a session reads the same capture instead of re-serializing the
-/// whole process's DOM once per frame. A failed capture is remembered too: clickables are
-/// best-effort, and retrying per frame would multiply the cost of a page that cannot be captured.
+/// whole process's DOM once per frame. A failed capture is remembered too: retrying per frame
+/// would multiply the cost of a page that cannot be captured, and each of its frames reports it.
 #[derive(Clone, Default)]
 pub(super) struct DomSnapshots {
     captures: Arc<Mutex<HashMap<Option<String>, CaptureCell>>>,
 }
 
-/// A session's capture, filled once by whichever frame asks first; `None` when it failed.
-type CaptureCell = Arc<OnceCell<Option<Arc<Capture>>>>;
+/// A session's capture, filled once by whichever frame asks first.
+type CaptureCell = Arc<OnceCell<Result<Arc<Capture>, FrameReadReason>>>;
 
 impl DomSnapshots {
     async fn capture(
         &self,
         session: &ProtocolSession,
         budget: &SnapshotBudget,
-    ) -> Option<Arc<Capture>> {
+    ) -> Result<Arc<Capture>, FrameReadReason> {
         let key = session.session_id().map(|id| id.0.clone());
         let cell = {
             let Ok(mut captures) = self.captures.lock() else {
-                return None;
+                return Err(FrameReadReason::BrowserError);
             };
             captures.entry(key).or_default().clone()
         };
@@ -95,9 +95,11 @@ impl DomSnapshots {
                     json!({ "computedStyles": ["cursor"] }),
                 )
                 .await
-                .inspect_err(|error| tracing::debug!(%error, "DOM snapshot unavailable"))
-                .ok()
                 .map(Arc::new)
+                .map_err(|error| {
+                    tracing::debug!(%error, "DOM snapshot unavailable");
+                    FrameReadReason::of(&error)
+                })
         })
         .await
         .clone()
@@ -111,16 +113,11 @@ pub(super) async fn find_clickables(
     session: &ProtocolSession,
     document: ClickableDocument,
     budget: &SnapshotBudget,
-) -> Result<HashMap<i64, Vec<String>>, CoreError> {
+) -> Result<HashMap<i64, Vec<String>>, FrameReadReason> {
     if let ClickableDocument::Unavailable = document {
-        return Err(CoreError::Message(
-            "Child frame document was unavailable for clickable acquisition".to_string(),
-        ));
+        return Err(FrameReadReason::NotFound);
     }
-    let capture = snapshots
-        .capture(session, budget)
-        .await
-        .ok_or_else(|| CoreError::Message("DOM snapshot unavailable".to_string()))?;
+    let capture = snapshots.capture(session, budget).await?;
     let selected = match document {
         // Blink serializes the session's root frame first.
         ClickableDocument::SessionDefault => capture.documents.first(),
@@ -130,9 +127,7 @@ pub(super) async fn find_clickables(
             .find(|document| document.nodes.backend_node_id.first() == Some(&id)),
         ClickableDocument::Unavailable => None,
     };
-    let selected = selected.ok_or_else(|| {
-        CoreError::Message("Frame document was missing from the DOM snapshot".to_string())
-    })?;
+    let selected = selected.ok_or(FrameReadReason::NotFound)?;
     Ok(clickables(selected, &capture.strings))
 }
 

@@ -89,7 +89,8 @@ fn handler<'a>(
                 depth,
             })
             .await?;
-        let formatted = format_snapshot_result(&snapshot.text, &snapshot.url, ctx).await;
+        let formatted =
+            format_snapshot_result(&snapshot.text, &snapshot.coverage, &snapshot.url, ctx).await;
         let mut structured = formatted.structured;
         if let Value::Object(object) = &mut structured {
             object.insert("page".to_string(), json!(args.page));

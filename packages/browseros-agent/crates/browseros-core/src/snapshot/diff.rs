@@ -1,3 +1,5 @@
+use super::coverage::{FrameError, FrameSpan, SnapshotCoverage, compared_text, unevenly_read};
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SnapshotDiff {
     pub text: String,
@@ -13,8 +15,14 @@ pub struct SnapshotDiff {
     ///
     /// A narrower question than `changed`, which is a text diff and so reads
     /// a ticking countdown or a rotating ad as the page having changed. None
-    /// when there was no baseline to compare an arrangement against.
+    /// when there was no baseline to compare an arrangement against, or when the two captures
+    /// did not read the same frames.
     pub arrangement_changed: Option<bool>,
+    /// What the current capture read, as its snapshot reports it.
+    pub coverage: SnapshotCoverage,
+    /// Frames left out of the comparison because the baseline and the current capture read them
+    /// differently. Their lines are neither removed nor added: one side could not read them.
+    pub uncompared: Vec<FrameError>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -26,6 +34,9 @@ pub struct DiffOptions {
 pub struct SnapshotObservation {
     pub text: String,
     pub url: Option<String>,
+    pub coverage: SnapshotCoverage,
+    /// Where each child frame the capture read sits in `text`.
+    pub frames: Vec<FrameSpan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +74,8 @@ pub fn diff_snapshots(before: &str, after: &str, opts: DiffOptions) -> SnapshotD
         // Filled in by the caller that holds both arrangements. A text diff
         // on its own cannot answer the structural question.
         arrangement_changed: None,
+        coverage: SnapshotCoverage::default(),
+        uncompared: Vec::new(),
     }
 }
 
@@ -84,14 +97,29 @@ pub fn diff_snapshot_observations(
             after_url: after_url.map(ToString::to_string),
             // A different url is a different page by any instrument.
             arrangement_changed: Some(true),
+            coverage: after.coverage.clone(),
+            uncompared: Vec::new(),
         };
     }
 
-    let before_text = before.map(|before| before.text.as_str()).unwrap_or("");
-    let mut diff = diff_snapshots(before_text, &after.text, opts);
+    let uncompared = before
+        .map(|before| {
+            unevenly_read(
+                (&before.coverage, &before.frames),
+                (&after.coverage, &after.frames),
+            )
+        })
+        .unwrap_or_default();
+    let before_text = before
+        .map(|before| compared_text(&before.text, &before.frames, &uncompared))
+        .unwrap_or_default();
+    let after_text = compared_text(&after.text, &after.frames, &uncompared);
+    let mut diff = diff_snapshots(&before_text, &after_text, opts);
     if is_known_url(after_url) {
         diff.after_url = after_url.map(ToString::to_string);
     }
+    diff.coverage = after.coverage.clone();
+    diff.uncompared = uncompared;
     diff
 }
 
@@ -290,10 +318,12 @@ mod tests {
         let before = SnapshotObservation {
             text: "- main\n  - button \"Old page\" [ref=e1]".to_string(),
             url: Some("https://example.com/old".to_string()),
+            ..SnapshotObservation::default()
         };
         let after = SnapshotObservation {
             text: "- main\n  - heading \"New page\"".to_string(),
             url: Some("https://example.com/new".to_string()),
+            ..SnapshotObservation::default()
         };
         let diff = diff_snapshot_observations(Some(&before), &after, DiffOptions::default());
         assert_eq!(diff.text, after.text);
@@ -311,10 +341,12 @@ mod tests {
             Some(&SnapshotObservation {
                 text: "- main\n  - button \"Old\"".to_string(),
                 url: Some("unknown".to_string()),
+                ..SnapshotObservation::default()
             }),
             &SnapshotObservation {
                 text: "- main\n  - button \"New\"".to_string(),
                 url: Some("https://example.com/new".to_string()),
+                ..SnapshotObservation::default()
             },
             DiffOptions::default(),
         );
@@ -332,10 +364,12 @@ mod tests {
             Some(&SnapshotObservation {
                 text: "- main\n  - button \"Save\" [ref=e1]".to_string(),
                 url: Some("https://example.com/form".to_string()),
+                ..SnapshotObservation::default()
             }),
             &SnapshotObservation {
                 text: "- main\n  - button \"Saved\" [ref=e1]".to_string(),
                 url: Some("https://example.com/form".to_string()),
+                ..SnapshotObservation::default()
             },
             DiffOptions::default(),
         );
@@ -351,10 +385,12 @@ mod tests {
         let before = SnapshotObservation {
             text: "link \"Deal of the Day, Ends in 08:54:33\"".to_string(),
             url: Some("https://example.com/".to_string()),
+            ..SnapshotObservation::default()
         };
         let after = SnapshotObservation {
             text: "link \"Deal of the Day, Ends in 08:54:32\"".to_string(),
             url: Some("https://example.com/".to_string()),
+            ..SnapshotObservation::default()
         };
         let diff = diff_snapshot_observations(Some(&before), &after, DiffOptions::default());
         assert!(diff.changed, "the text really did change");
@@ -369,10 +405,12 @@ mod tests {
         let before = SnapshotObservation {
             text: "button \"Go\"".to_string(),
             url: Some("https://example.com/".to_string()),
+            ..SnapshotObservation::default()
         };
         let after = SnapshotObservation {
             text: "button \"Go\"".to_string(),
             url: Some("https://example.com/next".to_string()),
+            ..SnapshotObservation::default()
         };
         let diff = diff_snapshot_observations(Some(&before), &after, DiffOptions::default());
         assert_eq!(diff.arrangement_changed, Some(true));

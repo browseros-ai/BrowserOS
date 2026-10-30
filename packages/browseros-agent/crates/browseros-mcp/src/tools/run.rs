@@ -1,5 +1,6 @@
 use super::evaluate_in_page::safe_prefix;
 use crate::{
+    format::coverage::insert_coverage,
     framework::{
         HelperSource, InnerCallRecord, ToolCtx, ToolDef, ToolError, ToolExecResult, ToolResult,
         execute_tool, page_json, parse_args, text_result,
@@ -65,8 +66,8 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.goto(url)                     -> { status } (the HTTP status, null when unknown), or { download: true } when the url is a file the browser downloaded instead. A url the browser cannot load (unknown host, refused connection) throws.
   page.back() / forward()            -> { navigated }, false when there is no history entry that way (the page is unchanged)
   page.reload()
-  page.snapshot({ mode, depth }?)    -> { text, refs, url }. mode "interactive" plus depth keeps a big page small.
-  page.diff()                        -> { text, added, removed, changed }
+  page.snapshot({ mode, depth }?)    -> { text, refs, url, partial, frameErrors? }. mode "interactive" plus depth keeps a big page small. partial: some frame was not fully read (frameErrors says which and why), so content it holds is unknown, not absent; every ref returned still works.
+  page.diff()                        -> { text, added, removed, changed, partial, frameErrors?, uncomparedFrames? }. uncomparedFrames: frames the previous capture read differently, left out of the diff rather than counted as added or removed.
   page.resolveRef(ref)               -> { backendNodeId, sessionId }
   page.read(selector?)               -> the whole page as a markdown STRING, so the script can search or slice all of it; return only what you need
   page.grep(pattern, { over, limit }?) -> matching lines as a STRING
@@ -1171,11 +1172,13 @@ impl BrowserBridge {
                     .control
                     .race(observer.snapshot_with_options(options))
                     .await?;
-                Ok(BrowserCallValue::Json(json!({
+                let mut value = json!({
                     "text": snapshot.text,
                     "refs": refs_json(&snapshot.refs),
                     "url": snapshot.url,
-                })))
+                });
+                insert_coverage(&mut value, &snapshot.coverage, &[]);
+                Ok(BrowserCallValue::Json(value))
             }
             "observe.diff" => {
                 let page_id = page_arg(&args, 0)?;
@@ -1743,6 +1746,7 @@ fn diff_json(diff: &browseros_core::snapshot::SnapshotDiff) -> Value {
             object.insert("afterUrl".to_string(), json!(after_url));
         }
     }
+    insert_coverage(&mut value, &diff.coverage, &diff.uncompared);
     value
 }
 

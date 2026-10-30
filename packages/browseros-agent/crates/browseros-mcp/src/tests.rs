@@ -17,7 +17,7 @@ use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, DocumentMark,
     NativeCapabilities, PageId, Ref, SessionId,
     settle::SettleOutcome,
-    snapshot::{AxNode, AxValue, SnapshotDiff},
+    snapshot::{AxNode, AxValue, SnapshotCoverage, SnapshotDiff},
 };
 use futures_util::future::BoxFuture;
 use rmcp::handler::server::ServerHandler;
@@ -191,6 +191,10 @@ struct HarnessConnection {
     history: Mutex<Value>,
     /// The main document's HTTP status as Navigation Timing reports it.
     http_status: Mutex<Value>,
+    /// Serve the page of [`framed_nodes`]: two same-process iframes beside the Save button.
+    framed: AtomicBool,
+    /// Fail every accessibility read of the framed page's second iframe, `frame-b`.
+    fail_frame_b: AtomicBool,
 }
 
 impl HarnessConnection {
@@ -212,6 +216,8 @@ impl HarnessConnection {
                 ]
             })),
             http_status: Mutex::new(Value::Null),
+            framed: AtomicBool::new(false),
+            fail_frame_b: AtomicBool::new(false),
         })
     }
 
@@ -226,6 +232,53 @@ impl HarnessConnection {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    fn serve_frames(&self, fail_frame_b: bool) {
+        self.framed.store(true, Ordering::SeqCst);
+        self.fail_frame_b.store(fail_frame_b, Ordering::SeqCst);
+    }
+
+    fn frame_tree(&self) -> Value {
+        let mut tree = json!({
+            "frame": { "id": "main", "loaderId": "loader-1", "url": "https://example.test/" }
+        });
+        if self.framed.load(Ordering::SeqCst) {
+            tree["childFrames"] = json!([
+                { "frame": { "id": "frame-a", "parentId": "main", "loaderId": "loader-a", "url": "https://example.test/a" } },
+                { "frame": { "id": "frame-b", "parentId": "main", "loaderId": "loader-b", "url": "https://example.test/b" } }
+            ]);
+        }
+        tree
+    }
+
+    fn ax_tree(&self, params: &Value) -> Result<Value, CdpError> {
+        let nodes = match params.get("frameId").and_then(Value::as_str) {
+            None => {
+                assert_eq!(params, &json!({}));
+                if self.framed.load(Ordering::SeqCst) {
+                    framed_nodes()
+                } else {
+                    snapshot_nodes()
+                }
+            }
+            Some("frame-a") => frame_nodes("A", 101),
+            Some("frame-b") if self.fail_frame_b.load(Ordering::SeqCst) => {
+                return Err(CdpError::Protocol {
+                    code: -32000,
+                    message: "Frame frame-b read failed at https://secret.example/?token=abc"
+                        .to_string(),
+                });
+            }
+            Some("frame-b") => frame_nodes("B", 201),
+            Some(other) => {
+                return Err(CdpError::Protocol {
+                    code: -1,
+                    message: format!("unexpected harness frame: {other}"),
+                });
+            }
+        };
+        Ok(json!({ "nodes": nodes }))
     }
 
     fn emit(&self, method: &str, params: Value, session_id: Option<&str>) {
@@ -355,15 +408,7 @@ impl CdpConnection for HarnessConnection {
                 | "Page.handleJavaScriptDialog" => Ok(json!({})),
                 "Page.navigate" => Ok(Self::get(&self.navigate_reply)),
                 "Page.getNavigationHistory" => Ok(Self::get(&self.history)),
-                "Page.getFrameTree" => Ok(json!({
-                    "frameTree": {
-                        "frame": {
-                            "id": "main",
-                            "loaderId": "loader-1",
-                            "url": "https://example.test/"
-                        }
-                    }
-                })),
+                "Page.getFrameTree" => Ok(json!({ "frameTree": self.frame_tree() })),
                 "Page.getLayoutMetrics" => Ok(json!({
                     "layoutViewport": {
                         "pageX": 10, "pageY": 14, "clientWidth": 2880, "clientHeight": 3600
@@ -373,9 +418,30 @@ impl CdpConnection for HarnessConnection {
                     }
                 })),
                 "Page.captureScreenshot" => Ok(json!({ "data": "cG5n" })),
-                "Accessibility.getFullAXTree" => {
-                    assert_eq!(params, json!({}));
-                    Ok(json!({ "nodes": snapshot_nodes() }))
+                "Accessibility.getFullAXTree" => self.ax_tree(&params),
+                // One document per frame, none with clickables: the frames' contents come only
+                // from their accessibility trees.
+                "DOMSnapshot.captureSnapshot" => {
+                    let documents = [1, 1040, 1050]
+                        .map(|document| json!({ "nodes": { "backendNodeId": [document] } }));
+                    Ok(json!({ "documents": documents, "strings": [] }))
+                }
+                "DOM.describeNode" => {
+                    let backend = params.get("backendNodeId").and_then(Value::as_i64);
+                    let frame = match backend {
+                        Some(40) => "frame-a",
+                        Some(50) => "frame-b",
+                        _ => {
+                            return Err(CdpError::Protocol {
+                                code: -32000,
+                                message: "No node with given id found".to_string(),
+                            });
+                        }
+                    };
+                    Ok(json!({ "node": { "contentDocument": {
+                        "frameId": frame,
+                        "backendNodeId": backend.map(|backend| backend + 1000)
+                    } } }))
                 }
                 "Runtime.evaluate"
                     if params
@@ -602,6 +668,30 @@ fn snapshot_nodes() -> Vec<AxNode> {
         named_ax("4", "section", "Actions", &["6"]),
         named_ax("5", "heading", "Title", &[]),
         button_ax("6", "Save", 10),
+    ]
+}
+
+/// The framed page: Save in the main frame, then two iframes holding buttons A and B.
+fn framed_nodes() -> Vec<AxNode> {
+    vec![
+        ax("1", "RootWebArea", &["2"]),
+        ax("2", "main", &["3", "4", "5"]),
+        button_ax("3", "Save", 10),
+        AxNode {
+            backend_dom_node_id: Some(40),
+            ..ax("4", "Iframe", &[])
+        },
+        AxNode {
+            backend_dom_node_id: Some(50),
+            ..ax("5", "Iframe", &[])
+        },
+    ]
+}
+
+fn frame_nodes(name: &str, backend_id: i64) -> Vec<AxNode> {
+    vec![
+        ax("1", "RootWebArea", &["2"]),
+        button_ax("2", name, backend_id),
     ]
 }
 
@@ -1761,6 +1851,7 @@ async fn act_appends_console_error_summary_for_action_window() {
 async fn snapshot_formatter_wraps_small_page_content() {
     let formatted = format_snapshot_result(
         "- button \"Save\" [ref=e1]",
+        &SnapshotCoverage::default(),
         "https://example.com/current",
         &fake_ctx(),
     )
@@ -1801,6 +1892,266 @@ async fn snapshot_tool_plumbs_mode_depth_and_structured_fields() {
     assert_eq!(structured.get("writtenToFile"), Some(&json!(false)));
 }
 
+/// What every tool reports for the framed page while `frame-b` cannot be read.
+fn frame_b_errors() -> Value {
+    json!([{
+        "frameId": "frame-b",
+        "owner": { "backendNodeId": 50 },
+        "stage": "ax",
+        "reason": "browser_error"
+    }])
+}
+
+/// The tool's text split at the untrusted-content fence: BrowserOS's own report, then the page's.
+fn split_at_fence(text: &str) -> (&str, &str) {
+    text.split_once("[UNTRUSTED_PAGE_CONTENT")
+        .unwrap_or_else(|| panic!("missing untrusted fence: {text}"))
+}
+
+#[tokio::test]
+async fn snapshot_tool_reports_an_unreadable_frame_and_keeps_its_sibling() {
+    let (ctx, connection, page) = harness_ctx().await;
+    connection.serve_frames(true);
+    for mode in ["full", "interactive"] {
+        let result = execute_tool(
+            &snapshot::definition(),
+            json!({ "page": page, "mode": mode }),
+            &ctx,
+        )
+        .await
+        .unwrap_or_else(|err| panic!("snapshot should execute: {err}"));
+
+        assert!(!result.is_error);
+        let text = result_text(&result);
+        let (report, content) = split_at_fence(&text);
+        assert!(
+            report.contains("Partial capture: 1 frame was not fully read")
+                && report.contains("- frame frame-b: contents not read (ax: browser_error)"),
+            "{mode}: {text}"
+        );
+        assert!(content.contains("button \"A\" [ref="), "{mode}: {text}");
+        assert!(!content.contains("button \"B\""), "{mode}: {text}");
+        assert!(!text.contains("secret.example"), "{mode}: {text}");
+        let structured = result
+            .structured_content
+            .unwrap_or_else(|| panic!("snapshot should return structured content"));
+        assert_eq!(structured["partial"], json!(true), "{mode}");
+        assert_eq!(structured["frameErrors"], frame_b_errors(), "{mode}");
+    }
+}
+
+#[tokio::test]
+async fn snapshot_tool_reports_a_complete_capture_without_a_warning() {
+    let (ctx, connection, page) = harness_ctx().await;
+    connection.serve_frames(false);
+    let result = execute_tool(&snapshot::definition(), json!({ "page": page }), &ctx)
+        .await
+        .unwrap_or_else(|err| panic!("snapshot should execute: {err}"));
+
+    let text = result_text(&result);
+    assert!(text.starts_with("[UNTRUSTED_PAGE_CONTENT"), "{text}");
+    assert!(text.contains("button \"B\" [ref="), "{text}");
+    let structured = result
+        .structured_content
+        .unwrap_or_else(|| panic!("snapshot should return structured content"));
+    assert_eq!(structured["partial"], json!(false));
+    assert!(structured.get("frameErrors").is_none());
+}
+
+#[tokio::test]
+async fn large_partial_snapshot_keeps_its_warning_inline() {
+    let coverage = SnapshotCoverage {
+        frame_errors: vec![browseros_core::snapshot::FrameError {
+            frame_id: Some(browseros_core::FrameId("frame-b".to_string())),
+            owner: None,
+            stage: browseros_core::snapshot::FrameReadStage::CursorScan,
+            reason: browseros_core::snapshot::FrameReadReason::Timeout,
+        }],
+    };
+    let large = "- button \"Go\" [ref=e1]\n".repeat(8_000);
+    let formatted =
+        format_snapshot_result(&large, &coverage, "https://example.test/", &fake_ctx()).await;
+
+    assert!(
+        formatted.text.starts_with(
+            "Partial capture: 1 frame was not fully read, so content it would hold is unknown, not absent.\n\
+             - frame frame-b: clickable elements not scanned (cursor_scan: timeout)\n\
+             Large snapshot"
+        ),
+        "{}",
+        &formatted.text[..400.min(formatted.text.len())]
+    );
+    assert_eq!(formatted.structured["writtenToFile"], json!(true));
+    assert_eq!(formatted.structured["partial"], json!(true));
+}
+
+#[tokio::test]
+async fn diff_tool_leaves_an_unreadable_frame_out_through_failure_and_recovery() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let diff = tool_by_name("diff");
+    let run_diff = || async {
+        let result = execute_tool(&diff, json!({ "page": page }), &ctx)
+            .await
+            .unwrap_or_else(|err| panic!("diff should execute: {err}"));
+        assert!(!result.is_error);
+        let structured = result
+            .structured_content
+            .clone()
+            .unwrap_or_else(|| panic!("diff should return structured content"));
+        (result_text(&result), structured)
+    };
+    connection.serve_frames(false);
+    execute_tool(&snapshot::definition(), json!({ "page": page }), &ctx)
+        .await
+        .unwrap_or_else(|err| panic!("baseline snapshot should execute: {err}"));
+
+    // Complete -> partial: B is unknown, not removed.
+    connection.fail_frame_b.store(true, Ordering::SeqCst);
+    let (text, structured) = run_diff().await;
+    assert!(!text.contains("button \"B\""), "{text}");
+    assert!(
+        text.contains("- frame frame-b: contents not read (ax: browser_error)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Not compared: 1 frame was read differently"),
+        "{text}"
+    );
+    assert!(text.ends_with("no change since last snapshot"), "{text}");
+    assert_eq!(structured["changed"], json!(false));
+    assert_eq!(structured["partial"], json!(true));
+    assert_eq!(structured["frameErrors"], frame_b_errors());
+    assert_eq!(structured["uncomparedFrames"], frame_b_errors());
+
+    // Partial -> complete: B reads again, which is not a new control.
+    connection.fail_frame_b.store(false, Ordering::SeqCst);
+    let (text, structured) = run_diff().await;
+    assert!(!text.contains("button \"B\""), "{text}");
+    assert!(!text.contains("Partial capture"), "{text}");
+    assert!(
+        text.contains("Not compared: 1 frame was read differently"),
+        "{text}"
+    );
+    assert_eq!(structured["changed"], json!(false));
+    assert_eq!(structured["partial"], json!(false));
+    assert!(structured.get("frameErrors").is_none());
+    assert_eq!(structured["uncomparedFrames"], frame_b_errors());
+
+    // Complete -> complete compares everything again.
+    let (text, structured) = run_diff().await;
+    assert_eq!(text, "no change since last snapshot");
+    assert_eq!(structured, json!({ "changed": false, "partial": false }));
+}
+
+#[tokio::test]
+async fn act_succeeds_while_its_follow_up_capture_is_partial() {
+    let (ctx, connection, page) = harness_ctx().await;
+    connection.serve_frames(true);
+    let act = tool_by_name("act");
+    for detail in [json!("full"), json!("summary"), json!(5)] {
+        let result = execute_tool(
+            &act,
+            json!({ "page": page, "kind": "press", "key": "Enter", "diff": detail }),
+            &ctx,
+        )
+        .await
+        .unwrap_or_else(|err| panic!("act should return a tool result: {err}"));
+
+        assert!(!result.is_error, "{detail}");
+        let text = result_text(&result);
+        assert!(text.starts_with("ok (press)"), "{detail}: {text}");
+        let diff = text
+            .split_once("[Page 1 diff]\n")
+            .unwrap_or_else(|| panic!("{detail}: missing diff: {text}"))
+            .1;
+        assert!(
+            diff.starts_with("Partial capture: 1 frame was not fully read"),
+            "{detail}: {text}"
+        );
+        let structured = result
+            .structured_content
+            .unwrap_or_else(|| panic!("act should return structured content"));
+        assert_eq!(structured["kind"], json!("press"), "{detail}");
+        assert_eq!(structured["partial"], json!(true), "{detail}");
+        assert_eq!(structured["frameErrors"], frame_b_errors(), "{detail}");
+    }
+
+    // Without a capture there is no coverage to claim, complete or not.
+    let result = execute_tool(
+        &act,
+        json!({ "page": page, "kind": "press", "key": "Enter", "diff": "none" }),
+        &ctx,
+    )
+    .await
+    .unwrap_or_else(|err| panic!("act should return a tool result: {err}"));
+    assert!(!result_text(&result).contains("Partial capture"));
+    let structured = result
+        .structured_content
+        .unwrap_or_else(|| panic!("act should return structured content"));
+    assert!(structured.get("partial").is_none(), "{structured}");
+}
+
+#[tokio::test]
+async fn run_snapshot_and_diff_report_the_same_coverage() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let run = tool_by_name("run");
+    let script = |code: String| {
+        let run = &run;
+        let ctx = &ctx;
+        async move {
+            let result = execute_tool(run, json!({ "code": code }), ctx)
+                .await
+                .unwrap_or_else(|err| panic!("run should execute: {err}"));
+            assert!(!result.is_error, "{:?}", result.content);
+            result
+                .structured_content
+                .unwrap_or_else(|| panic!("run should return structured content"))["value"]
+                .clone()
+        }
+    };
+    connection.serve_frames(false);
+    let baseline = script(format!(
+        "const s = await browser.page({page}).snapshot(); return {{ partial: s.partial, errors: s.frameErrors ?? null }};"
+    ))
+    .await;
+    assert_eq!(baseline, json!({ "partial": false, "errors": null }));
+
+    connection.fail_frame_b.store(true, Ordering::SeqCst);
+    let failed = script(format!(
+        "const page = browser.page({page});
+         const d = await page.diff();
+         const s = await page.snapshot();
+         return {{
+           diff: {{ partial: d.partial, removed: d.removed, errors: d.frameErrors, uncompared: d.uncomparedFrames }},
+           snapshot: {{ partial: s.partial, errors: s.frameErrors, names: s.refs.map((r) => r.name) }},
+         }};"
+    ))
+    .await;
+    assert_eq!(
+        failed,
+        json!({
+            "diff": {
+                "partial": true,
+                "removed": 0,
+                "errors": frame_b_errors(),
+                "uncompared": frame_b_errors()
+            },
+            "snapshot": { "partial": true, "errors": frame_b_errors(), "names": ["Save", "A"] }
+        })
+    );
+
+    connection.fail_frame_b.store(false, Ordering::SeqCst);
+    let recovered = script(format!(
+        "const d = await browser.page({page}).diff();
+         return {{ partial: d.partial, added: d.added, uncompared: d.uncomparedFrames }};"
+    ))
+    .await;
+    assert_eq!(
+        recovered,
+        json!({ "partial": false, "added": 0, "uncompared": frame_b_errors() })
+    );
+}
+
 #[tokio::test]
 async fn diff_formatter_keeps_unchanged_compact() {
     let formatted = format_diff_result(
@@ -1814,7 +2165,10 @@ async fn diff_formatter_keeps_unchanged_compact() {
     )
     .await;
     assert_eq!(formatted.text, "no change since last snapshot");
-    assert_eq!(formatted.structured, json!({ "changed": false }));
+    assert_eq!(
+        formatted.structured,
+        json!({ "changed": false, "partial": false })
+    );
 }
 
 #[tokio::test]
