@@ -1,5 +1,5 @@
 import { describe, expect, it, mock } from 'bun:test'
-import { Harness } from '@browseros/claw-api'
+import { Harness, type Plan } from '@browseros/claw-api'
 import {
   ApiResponseError,
   buildSessionPreviewUrl,
@@ -370,6 +370,121 @@ describe('ClawApiClient', () => {
         requestId: 'request-1',
       })
     }
+  })
+
+  it('reads the code, message and details of an API error body', async () => {
+    const computers = [
+      {
+        installId: '2a9b7c6d-1e0f-4a3b-8c5d-6e7f8091a2b3',
+        label: 'DESKTOP-4FQ7K2L',
+        platform: 'windows',
+        lastSeenAt: 1_793_059_200_000,
+        activatedAt: 1_792_627_200_000,
+        thisComputer: false,
+      },
+    ]
+    const body = {
+      code: 'key_full',
+      message: 'This key is already on 5 computers. Remove one to use it here.',
+      requestId: 'request-key-full',
+      computers,
+    }
+    const client = new ClawApiClient(baseUrl, {
+      fetch: async () => Response.json(body, { status: 409 }),
+    })
+
+    const error = await client
+      .activatePlanKey({ key: 'pasted-key' })
+      .catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(ApiResponseError)
+    const apiError = error as ApiResponseError
+    expect(apiError.code).toBe('key_full')
+    expect(apiError.apiMessage).toBe(body.message)
+    expect(apiError.requestId).toBe('request-key-full')
+    expect(apiError.details).toEqual({ computers })
+    expect(apiError.response.status).toBe(409)
+    await expect(apiError.response.json()).resolves.toEqual(body)
+  })
+
+  it('keeps the status message when the error body is not JSON', async () => {
+    const client = new ClawApiClient(baseUrl, {
+      fetch: async () =>
+        new Response('Bad Request', {
+          status: 400,
+          headers: { 'content-type': 'text/plain' },
+        }),
+    })
+
+    const error = await client
+      .startPlanCheckout({ plan: 'pro', interval: 'month' })
+      .catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(ApiResponseError)
+    const apiError = error as ApiResponseError
+    expect(apiError.message).toBe(
+      'BrowserOS neo API request failed with status 400',
+    )
+    expect(apiError.code).toBeUndefined()
+    expect(apiError.apiMessage).toBeUndefined()
+    expect(apiError.details).toBeUndefined()
+    expect(apiError.response.status).toBe(400)
+    await expect(apiError.response.text()).resolves.toBe('Bad Request')
+  })
+
+  it('sends plan requests to their exact routes', async () => {
+    const plan: Plan = {
+      available: true,
+      plan: 'pro',
+      planName: 'neo Pro',
+      features: ['claw.ultrafast'],
+      status: 'ending',
+      periodEnd: 1_795_737_600_000,
+      endsAt: 1_795_737_600_000,
+      graceUntil: null,
+      onKey: true,
+      checkedAt: 1_793_145_600_000,
+      stale: false,
+    }
+    const key = { hint: '7K2QM', cap: 5, computers: [] }
+    const requests: Request[] = []
+    const client = new ClawApiClient(baseUrl, {
+      fetch: async (input, init) => {
+        const request =
+          input instanceof Request ? input : new Request(input, init)
+        requests.push(request)
+        const { pathname } = new URL(request.url)
+        if (pathname.endsWith('/rename')) return Response.json(key)
+        if (pathname.startsWith('/api/v1/plan/checkout/')) {
+          return Response.json({ status: 'open', plan: null })
+        }
+        return Response.json(plan)
+      },
+    })
+    const installId = '2a9b7c6d-1e0f-4a3b-8c5d-6e7f8091a2b3'
+
+    await expect(
+      client.renamePlanComputer({ installId, name: 'Studio iMac' }),
+    ).resolves.toEqual(key)
+    await expect(
+      client.getPlanCheckout({ checkoutId: 'checkout-1' }),
+    ).resolves.toEqual({ status: 'open', plan: null })
+    await expect(client.cancelPlan()).resolves.toEqual(plan)
+    await expect(client.refreshPlan()).resolves.toEqual(plan)
+
+    expect(
+      requests.map((request) => [
+        request.method,
+        new URL(request.url).pathname,
+      ]),
+    ).toEqual([
+      ['POST', `/api/v1/plan/key/computers/${installId}/rename`],
+      ['GET', '/api/v1/plan/checkout/checkout-1'],
+      ['POST', '/api/v1/plan/cancel'],
+      ['POST', '/api/v1/plan/refresh'],
+    ])
+    await expect(requests[0]?.json()).resolves.toEqual({ name: 'Studio iMac' })
+    await expect(requests[2]?.json()).resolves.toEqual({})
   })
 
   it('does not clone successful response bodies', async () => {
