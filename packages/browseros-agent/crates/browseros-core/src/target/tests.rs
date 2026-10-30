@@ -38,6 +38,9 @@ struct Fixture {
     fail_load: bool,
     /// What `Page.navigate` answers, for a load that fails or downloads.
     navigate_reply: Option<Value>,
+    /// Reconciles the newest tab onto this target as soon as something attaches to it: the
+    /// window between creating a tab and navigating it.
+    replace_newest_on_attach: Option<String>,
 }
 struct Native {
     state: Mutex<Fixture>,
@@ -116,6 +119,7 @@ impl Native {
                 epoch_after_profiles: false,
                 fail_load: false,
                 navigate_reply: None,
+                replace_newest_on_attach: None,
             }),
         })
     }
@@ -375,6 +379,20 @@ impl Native {
             "Target.attachToTarget" => {
                 if let Some(target) = state.replace_on_attach.pop_front() {
                     state.tabs[0]["targetId"] = json!(target);
+                }
+                let newest = state
+                    .tabs
+                    .iter()
+                    .max_by_key(|tab| tab["tabId"].as_i64())
+                    .map(|tab| tab["targetId"].clone());
+                if newest.as_ref() == Some(&params["targetId"])
+                    && let Some(replacement) = state.replace_newest_on_attach.take()
+                    && let Some(tab) = state
+                        .tabs
+                        .iter_mut()
+                        .find(|tab| tab["targetId"] == params["targetId"])
+                {
+                    tab["targetId"] = json!(replacement);
                 }
                 json!({"sessionId":format!("session-{}",params["targetId"].as_str().unwrap_or_default())})
             }
@@ -3349,4 +3367,49 @@ async fn a_tab_whose_url_fails_to_load_stays_open_and_says_why() -> TestResult {
             .any(|page| page.page_id == opened.page.page_id)
     );
     Ok(())
+}
+
+/// A tab reconciled onto a new target between its creation and its load is never navigated, and
+/// keeps the identity its creation returned: the replacement is not adopted.
+async fn a_replaced_tab_is_not_loaded_or_adopted(
+    view: BrowserView,
+    native: &Arc<Native>,
+) -> TestResult {
+    native.lock().replace_newest_on_attach = Some("replacement-target".into());
+    let opened = view
+        .open_page("https://opened.test/", NewPageOptions::default())
+        .await?;
+    assert!(
+        native.calls("Page.navigate").is_empty(),
+        "navigated a tab reconciled onto a new target"
+    );
+    assert!(
+        matches!(
+            opened.load,
+            Some(Err(CoreError::Target(TargetError::PageTargetChanged(_))))
+        ),
+        "{:?}",
+        opened.load
+    );
+    assert_ne!(opened.page.target_id.as_str(), "replacement-target");
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_unbound_view_never_loads_or_adopts_a_replaced_tab() -> TestResult {
+    let native = Native::new();
+    a_replaced_tab_is_not_loaded_or_adopted(unbound_view(&native), &native).await
+}
+
+#[tokio::test]
+async fn a_bound_view_never_loads_or_adopts_a_replaced_tab() -> TestResult {
+    let native = Native::new();
+    let bound = view(
+        native.clone(),
+        Some(WindowSelection::Working {
+            window_id: WindowId(11),
+        }),
+    )
+    .await;
+    a_replaced_tab_is_not_loaded_or_adopted(bound, &native).await
 }

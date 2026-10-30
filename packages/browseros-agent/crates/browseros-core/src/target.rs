@@ -1232,10 +1232,13 @@ impl BrowserView {
             }
             opts.window_id = opts.window_id.or(self.unbound_default_window);
             let (creation, fresh) = self.session.pages.new_page_info(opts).await?;
+            let original = creation.original.clone();
             self.retain_created_page(creation)?;
-            // An unbound view admits pages by ID, as the readiness wait this replaces did.
-            let nav = self.nav(fresh.page_id.clone()).await?;
-            return self.load_opened(fresh, nav, url).await;
+            // An unbound view resolves pages by ID, which would follow a reconciliation or a
+            // reconnect onto another target. Load through the creation's own incarnation.
+            let creating_view = self.with_expected_created_page(&original)?;
+            let access = Arc::new(PageAccess::new(creating_view, original));
+            return self.load_opened(fresh, access, url).await;
         };
         scope.context()?;
         if opts
@@ -1291,30 +1294,33 @@ impl BrowserView {
                 )
                 .await?;
         }
-        // Navigate through the capability seeded from the creation reply, never one resolved
-        // anew by page ID: a tab reconciled onto a new target meanwhile must fail the creation,
-        // not be adopted.
         let settled = access.fresh().await?;
-        let nav = self
-            .session
-            .nav(settled.page_id.clone())
-            .with_access(Arc::new(access));
-        self.load_opened(settled, nav, url).await
+        self.load_opened(settled, Arc::new(access), url).await
     }
 
     /// Loads `url` into a tab just opened on about:blank, reporting how the load went.
+    ///
+    /// `access` is seeded from the creation reply, never resolved anew by page ID: a tab
+    /// reconciled onto a new target meanwhile is neither navigated nor adopted. The load then
+    /// reports `PageTargetChanged`, and the page keeps the identity its creation returned.
     async fn load_opened(
         &self,
         page: PageInfo,
-        nav: Navigation,
+        access: Arc<PageAccess>,
         url: &str,
     ) -> Result<OpenedPage, CoreError> {
         if url.is_empty() || url == crate::pages::BLANK_URL {
             return Ok(OpenedPage { page, load: None });
         }
-        let load = nav.goto(url).await;
-        // The registry still holds the about:blank the tab was created on.
-        let page = self.page(page.page_id.clone()).await.unwrap_or(page);
+        let load = self
+            .session
+            .nav(page.page_id.clone())
+            .with_access(access.clone())
+            .goto(url)
+            .await;
+        // The page as the load left it: the registry still holds the about:blank it was
+        // created on.
+        let page = access.fresh().await.unwrap_or(page);
         Ok(OpenedPage {
             page,
             load: Some(load),
