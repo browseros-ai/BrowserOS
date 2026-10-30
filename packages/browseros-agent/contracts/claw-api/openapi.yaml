@@ -78,6 +78,32 @@ paths:
     $ref: ./paths/skills.yaml#/directoryItem
   /api/v1/directory/{name}/add:
     $ref: ./paths/skills.yaml#/directoryAdd
+  /api/v1/plan:
+    $ref: ./paths/plan.yaml#/plan
+  /api/v1/plan/pricing:
+    $ref: ./paths/plan.yaml#/pricing
+  /api/v1/plan/checkout:
+    $ref: ./paths/plan.yaml#/checkout
+  /api/v1/plan/checkout/{checkoutId}:
+    $ref: ./paths/plan.yaml#/checkoutStatus
+  /api/v1/plan/key:
+    $ref: ./paths/plan.yaml#/key
+  /api/v1/plan/key/activate:
+    $ref: ./paths/plan.yaml#/activateKey
+  /api/v1/plan/key/computers/{installId}/remove:
+    $ref: ./paths/plan.yaml#/removeComputer
+  /api/v1/plan/key/computers/{installId}/rename:
+    $ref: ./paths/plan.yaml#/renameComputer
+  /api/v1/plan/key/reset:
+    $ref: ./paths/plan.yaml#/resetKey
+  /api/v1/plan/cancel:
+    $ref: ./paths/plan.yaml#/cancel
+  /api/v1/plan/resume:
+    $ref: ./paths/plan.yaml#/resume
+  /api/v1/plan/portal:
+    $ref: ./paths/plan.yaml#/portal
+  /api/v1/plan/refresh:
+    $ref: ./paths/plan.yaml#/refresh
 components:
   parameters:
     SessionId:
@@ -96,6 +122,10 @@ components:
       $ref: ./parameters.yaml#/RecordingBatchId
     RecordingGap:
       $ref: ./parameters.yaml#/RecordingGap
+    CheckoutId:
+      $ref: ./parameters.yaml#/CheckoutId
+    InstallId:
+      $ref: ./parameters.yaml#/InstallId
   responses:
     BadRequest:
       $ref: ./responses.yaml#/BadRequest
@@ -109,6 +139,14 @@ components:
       $ref: ./responses.yaml#/PayloadTooLarge
     InternalError:
       $ref: ./responses.yaml#/InternalError
+    PlanForbidden:
+      $ref: ./responses.yaml#/PlanForbidden
+    PlanNotFound:
+      $ref: ./responses.yaml#/PlanNotFound
+    PlanRateLimited:
+      $ref: ./responses.yaml#/PlanRateLimited
+    BillingUnreachable:
+      $ref: ./responses.yaml#/BillingUnreachable
   schemas:
     ApiError:
       $ref: ./schemas/common.yaml#/ApiError
@@ -248,3 +286,45 @@ components:
       $ref: ./schemas/skills.yaml#/DirectorySkillList
     DirectorySkillDetail:
       $ref: ./schemas/skills.yaml#/DirectorySkillDetail
+    PlanStatus:
+      $ref: ./schemas/plan.yaml#/PlanStatus
+    Plan:
+      $ref: ./schemas/plan.yaml#/Plan
+    PriceInterval:
+      $ref: ./schemas/plan.yaml#/PriceInterval
+    PlanPrice:
+      $ref: ./schemas/plan.yaml#/PlanPrice
+    PricedPlan:
+      $ref: ./schemas/plan.yaml#/PricedPlan
+    PlanPricing:
+      $ref: ./schemas/plan.yaml#/PlanPricing
+    StartPlanCheckoutRequest:
+      $ref: ./schemas/plan.yaml#/StartPlanCheckoutRequest
+    PlanCheckout:
+      $ref: ./schemas/plan.yaml#/PlanCheckout
+    PlanCheckoutPhase:
+      $ref: ./schemas/plan.yaml#/PlanCheckoutPhase
+    PlanCheckoutStatus:
+      $ref: ./schemas/plan.yaml#/PlanCheckoutStatus
+    PlanComputer:
+      $ref: ./schemas/plan.yaml#/PlanComputer
+    PlanKey:
+      $ref: ./schemas/plan.yaml#/PlanKey
+    ActivatePlanKeyRequest:
+      $ref: ./schemas/plan.yaml#/ActivatePlanKeyRequest
+    RenamePlanComputerRequest:
+      $ref: ./schemas/plan.yaml#/RenamePlanComputerRequest
+    PlanKeyChange:
+      $ref: ./schemas/plan.yaml#/PlanKeyChange
+    PlanKeyFullError:
+      $ref: ./schemas/plan.yaml#/PlanKeyFullError
+    PlanRateLimitedError:
+      $ref: ./schemas/plan.yaml#/PlanRateLimitedError
+    CancelPlanRequest:
+      $ref: ./schemas/plan.yaml#/CancelPlanRequest
+    PlanPortalFlow:
+      $ref: ./schemas/plan.yaml#/PlanPortalFlow
+    PlanPortalRequest:
+      $ref: ./schemas/plan.yaml#/PlanPortalRequest
+    PlanPortal:
+      $ref: ./schemas/plan.yaml#/PlanPortal

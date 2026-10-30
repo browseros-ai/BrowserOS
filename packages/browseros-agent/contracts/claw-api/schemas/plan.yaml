@@ -1,0 +1,310 @@
+PlanStatus:
+  type: string
+  enum: [none, active, ending, paymentFailed, unpaid]
+  description: >-
+    none: this computer has no plan. active: paid and renewing. ending: cancelled, Pro lasts
+    until endsAt. paymentFailed: a payment failed and Pro lasts until graceUntil. unpaid: still
+    billed but past the grace period, or paused, so features is empty while the key, the
+    portal and cancel keep working.
+Plan:
+  type: object
+  additionalProperties: false
+  required:
+    [available, plan, planName, features, status, periodEnd, endsAt, graceUntil, onKey, checkedAt, stale]
+  description: >-
+    This computer's plan, read from the last verified licence. Reading it never reaches the
+    billing gateway.
+  properties:
+    available:
+      type: boolean
+      description: False when this build has no billing gateway, in which case every other plan route answers 404 billing_unavailable.
+    plan:
+      type: string
+      nullable: true
+      description: The plan id, such as "pro". Null when status is none.
+    planName:
+      type: string
+      nullable: true
+      description: The plan's display name from the pricing list, such as "neo Pro".
+    features:
+      type: array
+      description: Feature flags the plan turns on. Empty when status is none or unpaid.
+      items:
+        type: string
+    status:
+      $ref: '#/PlanStatus'
+    periodEnd:
+      type: integer
+      format: int64
+      minimum: 0
+      nullable: true
+      description: End of the current billing period, in epoch milliseconds.
+    endsAt:
+      type: integer
+      format: int64
+      minimum: 0
+      nullable: true
+      description: When a cancelled plan stops, in epoch milliseconds. Set only while status is ending.
+    graceUntil:
+      type: integer
+      format: int64
+      minimum: 0
+      nullable: true
+      description: When the grace period after a failed payment ends, in epoch milliseconds. Set only while status is paymentFailed.
+    onKey:
+      type: boolean
+      description: Whether this computer is on a licence key. The key itself is never returned.
+    checkedAt:
+      type: integer
+      format: int64
+      minimum: 0
+      nullable: true
+      description: The last successful refresh from the billing gateway, in epoch milliseconds.
+    stale:
+      type: boolean
+      description: True when the last refresh failed and the saved licence is still valid.
+PriceInterval:
+  type: string
+  enum: [day, week, month, year]
+PlanPrice:
+  type: object
+  additionalProperties: false
+  required: [interval, intervalCount, amount, currency]
+  properties:
+    interval:
+      $ref: '#/PriceInterval'
+    intervalCount:
+      type: integer
+      format: int32
+      minimum: 1
+      description: How many intervals one billing period lasts.
+    amount:
+      type: integer
+      format: int64
+      minimum: 0
+      description: The price per period in the currency's smallest unit, such as cents.
+    currency:
+      type: string
+      minLength: 1
+      description: Lower-case ISO 4217 code, such as "usd".
+PricedPlan:
+  type: object
+  additionalProperties: false
+  required: [plan, name, description, features, prices]
+  properties:
+    plan:
+      type: string
+      minLength: 1
+    name:
+      type: string
+    description:
+      type: string
+      nullable: true
+    features:
+      type: array
+      items:
+        type: string
+    prices:
+      type: array
+      items:
+        $ref: '#/PlanPrice'
+PlanPricing:
+  type: object
+  additionalProperties: false
+  required: [plans]
+  properties:
+    plans:
+      type: array
+      items:
+        $ref: '#/PricedPlan'
+StartPlanCheckoutRequest:
+  type: object
+  additionalProperties: false
+  required: [plan, interval]
+  properties:
+    plan:
+      type: string
+      minLength: 1
+    interval:
+      $ref: '#/PriceInterval'
+    intervalCount:
+      type: integer
+      format: int32
+      minimum: 1
+      description: Defaults to 1.
+PlanCheckout:
+  type: object
+  additionalProperties: false
+  required: [checkoutId, url]
+  properties:
+    checkoutId:
+      type: string
+      minLength: 1
+      description: The checkout's UUID, for polling its status.
+    url:
+      type: string
+      format: uri
+      description: The hosted payment page to open in a new tab.
+PlanCheckoutPhase:
+  type: string
+  enum: [open, complete, expired]
+PlanCheckoutStatus:
+  type: object
+  additionalProperties: false
+  required: [status, plan]
+  description: A checkout's progress. The licence key is never included; it is sent by email only.
+  properties:
+    status:
+      $ref: '#/PlanCheckoutPhase'
+    plan:
+      allOf:
+        - $ref: '#/Plan'
+      nullable: true
+      description: This computer's plan once the checkout is complete and its licence is saved. Null until then.
+PlanComputer:
+  type: object
+  additionalProperties: false
+  required: [installId, label, platform, lastSeenAt, activatedAt, thisComputer]
+  properties:
+    installId:
+      type: string
+      minLength: 1
+      description: The computer's install UUID.
+    label:
+      type: string
+      nullable: true
+      description: The computer's name. It starts as the computer's own name and can be renamed from any computer on the key.
+    platform:
+      type: string
+      description: The operating system, such as "macos", "windows" or "linux".
+    lastSeenAt:
+      type: integer
+      format: int64
+      minimum: 0
+      description: When the computer last reached the billing gateway, in epoch milliseconds.
+    activatedAt:
+      type: integer
+      format: int64
+      minimum: 0
+      description: When the computer joined the key, in epoch milliseconds.
+    thisComputer:
+      type: boolean
+PlanKey:
+  type: object
+  additionalProperties: false
+  required: [hint, cap, computers]
+  description: The licence key this computer is on. Only its first group is returned, never the key.
+  properties:
+    hint:
+      type: string
+      pattern: '^[0-9A-Z]{5}$'
+      description: The key's first group, such as "7K2QM" for a key that starts NEO-7K2QM. It cannot be used as a key.
+    cap:
+      type: integer
+      format: int32
+      minimum: 1
+      description: How many computers the key can be on at once.
+    computers:
+      type: array
+      items:
+        $ref: '#/PlanComputer'
+ActivatePlanKeyRequest:
+  type: object
+  additionalProperties: false
+  required: [key]
+  properties:
+    key:
+      type: string
+      minLength: 1
+      maxLength: 80
+      description: The licence key from the email. Write only. It is passed to the billing gateway and never stored or returned.
+    replace:
+      type: string
+      minLength: 1
+      description: When the key is full, the install UUID of the computer this one takes the place of.
+RenamePlanComputerRequest:
+  type: object
+  additionalProperties: false
+  required: [name]
+  properties:
+    name:
+      type: string
+      minLength: 1
+      maxLength: 40
+      description: The new name, trimmed. Empty after trimming is refused.
+PlanKeyChange:
+  type: object
+  additionalProperties: false
+  required: [plan, key]
+  description: The result of activating, removing or resetting a key. A reset emails the new key and never returns it.
+  properties:
+    plan:
+      $ref: '#/Plan'
+    key:
+      allOf:
+        - $ref: '#/PlanKey'
+      nullable: true
+      description: The key this computer is on afterwards. Null when this computer removed itself.
+PlanKeyFullError:
+  type: object
+  additionalProperties: false
+  required: [code, message]
+  description: >-
+    A conflict from activating a key. key_full carries computers, the computers already on the
+    key, so the request can be sent again with one to replace. already_subscribed carries none.
+  properties:
+    code:
+      type: string
+    message:
+      type: string
+    requestId:
+      type: string
+    computers:
+      type: array
+      description: Present only when code is key_full.
+      items:
+        $ref: '#/PlanComputer'
+PlanRateLimitedError:
+  type: object
+  additionalProperties: false
+  required: [code, message]
+  description: A too_many_tries or rate_limited error.
+  properties:
+    code:
+      type: string
+    message:
+      type: string
+    requestId:
+      type: string
+    retryAfterSeconds:
+      type: integer
+      format: int32
+      minimum: 0
+      description: How long to wait before trying again, when known.
+CancelPlanRequest:
+  type: object
+  additionalProperties: false
+  properties:
+    feedback:
+      type: string
+      maxLength: 1000
+      description: Why the person is cancelling, if they said. Never logged.
+PlanPortalFlow:
+  type: string
+  enum: [billing, updateCard]
+PlanPortalRequest:
+  type: object
+  additionalProperties: false
+  required: [flow]
+  properties:
+    flow:
+      $ref: '#/PlanPortalFlow'
+PlanPortal:
+  type: object
+  additionalProperties: false
+  required: [url]
+  properties:
+    url:
+      type: string
+      format: uri
+      description: The billing portal page to open in a new tab.

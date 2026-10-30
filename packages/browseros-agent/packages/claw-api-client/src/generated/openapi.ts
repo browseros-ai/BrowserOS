@@ -612,6 +612,263 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/plan': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * This computer's plan.
+     * @description Answers from memory and never reaches the billing gateway, so it works offline and before launch.
+     */
+    get: operations['getPlan']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/pricing': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * The plans and prices on sale.
+     * @description Cached for a few minutes. A cached copy is served while the billing gateway is down.
+     */
+    get: operations['getPlanPricing']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/checkout': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Start buying a plan.
+     * @description Returns the hosted payment page. The payment page asks for the email; this request carries none.
+     */
+    post: operations['startPlanCheckout']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/checkout/{checkoutId}': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * A checkout's progress.
+     * @description Poll every couple of seconds while the payment page is open. On complete, the licence is verified and saved before the reply.
+     */
+    get: operations['getPlanCheckout']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/key': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * The licence key this computer is on.
+     * @description Its first group and the computers on it. The key itself is never returned.
+     */
+    get: operations['getPlanKey']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/key/activate': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Put this computer on a licence key.
+     * @description The pasted key is passed to the billing gateway and dropped. It is never stored, logged or returned.
+     */
+    post: operations['activatePlanKey']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/key/computers/{installId}/remove': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Take a computer off this computer's key.
+     * @description Works for any computer on the key, including this one.
+     */
+    post: operations['removePlanComputer']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/key/computers/{installId}/rename': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Rename a computer on this computer's key.
+     * @description The name is kept when the key is pasted on that computer again.
+     */
+    post: operations['renamePlanComputer']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/key/reset': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Replace this computer's key with a new one.
+     * @description The new key is emailed and never returned. The old key stops working and every other computer leaves the key until the new one is pasted there.
+     */
+    post: operations['resetPlanKey']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/cancel': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Cancel the plan at the end of the period.
+     * @description Pro stays on until the period ends. Works from any computer on the key.
+     */
+    post: operations['cancelPlan']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/resume': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** Keep a cancelled plan. */
+    post: operations['resumePlan']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/portal': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * A billing portal link.
+     * @description Plan, period and card changes happen there. The plan is refreshed shortly after.
+     */
+    post: operations['openPlanPortal']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/plan/refresh': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Fetch a fresh licence now.
+     * @description At most once a minute; sooner calls return the saved plan. A failed refresh returns the saved plan with stale set.
+     */
+    post: operations['refreshPlan']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
 }
 export type webhooks = Record<string, never>
 export interface components {
@@ -1244,6 +1501,181 @@ export interface components {
       /** @description The catalog SKILL.md contents, shown for preview before install. */
       body: string
     }
+    /**
+     * @description none: this computer has no plan. active: paid and renewing. ending: cancelled, Pro lasts until endsAt. paymentFailed: a payment failed and Pro lasts until graceUntil. unpaid: still billed but past the grace period, or paused, so features is empty while the key, the portal and cancel keep working.
+     * @enum {string}
+     */
+    PlanStatus: 'none' | 'active' | 'ending' | 'paymentFailed' | 'unpaid'
+    /** @description This computer's plan, read from the last verified licence. Reading it never reaches the billing gateway. */
+    Plan: {
+      /** @description False when this build has no billing gateway, in which case every other plan route answers 404 billing_unavailable. */
+      available: boolean
+      /** @description The plan id, such as "pro". Null when status is none. */
+      plan: string | null
+      /** @description The plan's display name from the pricing list, such as "neo Pro". */
+      planName: string | null
+      /** @description Feature flags the plan turns on. Empty when status is none or unpaid. */
+      features: string[]
+      status: components['schemas']['PlanStatus']
+      /**
+       * Format: int64
+       * @description End of the current billing period, in epoch milliseconds.
+       */
+      periodEnd: number | null
+      /**
+       * Format: int64
+       * @description When a cancelled plan stops, in epoch milliseconds. Set only while status is ending.
+       */
+      endsAt: number | null
+      /**
+       * Format: int64
+       * @description When the grace period after a failed payment ends, in epoch milliseconds. Set only while status is paymentFailed.
+       */
+      graceUntil: number | null
+      /** @description Whether this computer is on a licence key. The key itself is never returned. */
+      onKey: boolean
+      /**
+       * Format: int64
+       * @description The last successful refresh from the billing gateway, in epoch milliseconds.
+       */
+      checkedAt: number | null
+      /** @description True when the last refresh failed and the saved licence is still valid. */
+      stale: boolean
+    }
+    /** @enum {string} */
+    PriceInterval: 'day' | 'week' | 'month' | 'year'
+    PlanPrice: {
+      interval: components['schemas']['PriceInterval']
+      /**
+       * Format: int32
+       * @description How many intervals one billing period lasts.
+       */
+      intervalCount: number
+      /**
+       * Format: int64
+       * @description The price per period in the currency's smallest unit, such as cents.
+       */
+      amount: number
+      /** @description Lower-case ISO 4217 code, such as "usd". */
+      currency: string
+    }
+    PricedPlan: {
+      plan: string
+      name: string
+      description: string | null
+      features: string[]
+      prices: components['schemas']['PlanPrice'][]
+    }
+    PlanPricing: {
+      plans: components['schemas']['PricedPlan'][]
+    }
+    StartPlanCheckoutRequest: {
+      plan: string
+      interval: components['schemas']['PriceInterval']
+      /**
+       * Format: int32
+       * @description Defaults to 1.
+       */
+      intervalCount?: number
+    }
+    PlanCheckout: {
+      /** @description The checkout's UUID, for polling its status. */
+      checkoutId: string
+      /**
+       * Format: uri
+       * @description The hosted payment page to open in a new tab.
+       */
+      url: string
+    }
+    /** @enum {string} */
+    PlanCheckoutPhase: 'open' | 'complete' | 'expired'
+    /** @description A checkout's progress. The licence key is never included; it is sent by email only. */
+    PlanCheckoutStatus: {
+      status: components['schemas']['PlanCheckoutPhase']
+      /** @description This computer's plan once the checkout is complete and its licence is saved. Null until then. */
+      plan: components['schemas']['Plan'] | null
+    }
+    PlanComputer: {
+      /** @description The computer's install UUID. */
+      installId: string
+      /** @description The computer's name. It starts as the computer's own name and can be renamed from any computer on the key. */
+      label: string | null
+      /** @description The operating system, such as "macos", "windows" or "linux". */
+      platform: string
+      /**
+       * Format: int64
+       * @description When the computer last reached the billing gateway, in epoch milliseconds.
+       */
+      lastSeenAt: number
+      /**
+       * Format: int64
+       * @description When the computer joined the key, in epoch milliseconds.
+       */
+      activatedAt: number
+      thisComputer: boolean
+    }
+    /** @description The licence key this computer is on. Only its first group is returned, never the key. */
+    PlanKey: {
+      /** @description The key's first group, such as "7K2QM" for a key that starts NEO-7K2QM. It cannot be used as a key. */
+      hint: string
+      /**
+       * Format: int32
+       * @description How many computers the key can be on at once.
+       */
+      cap: number
+      computers: components['schemas']['PlanComputer'][]
+    }
+    ActivatePlanKeyRequest: {
+      /** @description The licence key from the email. Write only. It is passed to the billing gateway and never stored or returned. */
+      key: string
+      /** @description When the key is full, the install UUID of the computer this one takes the place of. */
+      replace?: string
+    }
+    RenamePlanComputerRequest: {
+      /** @description The new name, trimmed. Empty after trimming is refused. */
+      name: string
+    }
+    /** @description The result of activating, removing or resetting a key. A reset emails the new key and never returns it. */
+    PlanKeyChange: {
+      plan: components['schemas']['Plan']
+      /** @description The key this computer is on afterwards. Null when this computer removed itself. */
+      key: components['schemas']['PlanKey'] | null
+    }
+    /** @description A conflict from activating a key. key_full carries computers, the computers already on the key, so the request can be sent again with one to replace. already_subscribed carries none. */
+    PlanKeyFullError: {
+      code: string
+      message: string
+      requestId?: string
+      /** @description Present only when code is key_full. */
+      computers?: components['schemas']['PlanComputer'][]
+    }
+    /** @description A too_many_tries or rate_limited error. */
+    PlanRateLimitedError: {
+      code: string
+      message: string
+      requestId?: string
+      /**
+       * Format: int32
+       * @description How long to wait before trying again, when known.
+       */
+      retryAfterSeconds?: number
+    }
+    CancelPlanRequest: {
+      /** @description Why the person is cancelling, if they said. Never logged. */
+      feedback?: string
+    }
+    /** @enum {string} */
+    PlanPortalFlow: 'billing' | 'updateCard'
+    PlanPortalRequest: {
+      flow: components['schemas']['PlanPortalFlow']
+    }
+    PlanPortal: {
+      /**
+       * Format: uri
+       * @description The billing portal page to open in a new tab.
+       */
+      url: string
+    }
   }
   responses: {
     /** @description Invalid request input. */
@@ -1300,6 +1732,42 @@ export interface components {
         'application/json': components['schemas']['ApiError']
       }
     }
+    /** @description forbidden, when the request comes from a browser origin other than the app. */
+    PlanForbidden: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        'application/json': components['schemas']['ApiError']
+      }
+    }
+    /** @description billing_unavailable when this build has no billing gateway, or not_found when the checkout or computer is unknown. */
+    PlanNotFound: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        'application/json': components['schemas']['ApiError']
+      }
+    }
+    /** @description too_many_tries or rate_limited. */
+    PlanRateLimited: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        'application/json': components['schemas']['PlanRateLimitedError']
+      }
+    }
+    /** @description billing_unreachable, when the billing gateway is down or this computer is offline. */
+    BillingUnreachable: {
+      headers: {
+        [name: string]: unknown
+      }
+      content: {
+        'application/json': components['schemas']['ApiError']
+      }
+    }
     /** @description The browser origin is not allowed to write recordings. */
     Forbidden: {
       headers: {
@@ -1321,6 +1789,8 @@ export interface components {
     RecordingBatchId: string
     /** @description Permanently marks this document stream partial after recorder-side loss. */
     RecordingGap: boolean
+    CheckoutId: string
+    InstallId: string
   }
   requestBodies: never
   headers: never
@@ -2424,6 +2894,461 @@ export interface operations {
       }
       404: components['responses']['NotFound']
       409: components['responses']['Conflict']
+      500: components['responses']['InternalError']
+    }
+  }
+  getPlan: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The plan from the last verified licence. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['Plan']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      500: components['responses']['InternalError']
+    }
+  }
+  getPlanPricing: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The plans on sale. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanPricing']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  startPlanCheckout: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['StartPlanCheckoutRequest']
+      }
+    }
+    responses: {
+      /** @description The checkout to open and poll. */
+      201: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanCheckout']
+        }
+      }
+      /** @description invalid_request, or unknown_plan when the plan or price is not on sale. */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description already_subscribed, when this computer's key already has a live plan. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  getPlanCheckout: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        checkoutId: components['parameters']['CheckoutId']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The checkout's status, with the plan once it is complete. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanCheckoutStatus']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  getPlanKey: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The key's hint, cap and computers. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanKey']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description not_linked, when this computer is on no key. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  activatePlanKey: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['ActivatePlanKeyRequest']
+      }
+    }
+    responses: {
+      /** @description The plan and key afterwards. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanKeyChange']
+        }
+      }
+      /** @description key_invalid, or invalid_request. */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description key_full with the computers on the key, so the request can be sent again with one to replace; or already_subscribed, when this computer pays through another key. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanKeyFullError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  removePlanComputer: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        installId: components['parameters']['InstallId']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The plan and key afterwards. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanKeyChange']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description not_linked, when this computer is on no key. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  renamePlanComputer: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        installId: components['parameters']['InstallId']
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['RenamePlanComputerRequest']
+      }
+    }
+    responses: {
+      /** @description The key with the new name. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanKey']
+        }
+      }
+      /** @description invalid_request, when the name is empty or longer than 40 characters. */
+      400: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description not_linked, when this computer is on no key. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  resetPlanKey: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The plan and new key's hint afterwards. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanKeyChange']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description not_linked, when this computer is on no key. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  cancelPlan: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['CancelPlanRequest']
+      }
+    }
+    responses: {
+      /** @description The plan afterwards, normally ending. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['Plan']
+        }
+      }
+      400: components['responses']['BadRequest']
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description not_linked, when this computer is on no key. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  resumePlan: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The plan afterwards, normally active. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['Plan']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description not_linked, when this computer is on no key. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  openPlanPortal: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['PlanPortalRequest']
+      }
+    }
+    responses: {
+      /** @description The portal page to open. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['PlanPortal']
+        }
+      }
+      400: components['responses']['BadRequest']
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
+      /** @description not_linked, when this computer is on no key. */
+      409: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
+      429: components['responses']['PlanRateLimited']
+      500: components['responses']['InternalError']
+      503: components['responses']['BillingUnreachable']
+    }
+  }
+  refreshPlan: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The plan afterwards. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['Plan']
+        }
+      }
+      403: components['responses']['PlanForbidden']
+      404: components['responses']['PlanNotFound']
       500: components['responses']['InternalError']
     }
   }

@@ -57,3 +57,17 @@ RecordingGap:
   description: Permanently marks this document stream partial after recorder-side loss.
   schema:
     type: boolean
+CheckoutId:
+  name: checkoutId
+  in: path
+  required: true
+  schema:
+    type: string
+    minLength: 1
+InstallId:
+  name: installId
+  in: path
+  required: true
+  schema:
+    type: string
+    minLength: 1

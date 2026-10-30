@@ -1,0 +1,389 @@
+plan:
+  get:
+    operationId: getPlan
+    summary: This computer's plan.
+    description: Answers from memory and never reaches the billing gateway, so it works offline and before launch.
+    responses:
+      '200':
+        description: The plan from the last verified licence.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/plan.yaml#/Plan
+      '403':
+        $ref: ../responses.yaml#/PlanForbidden
+      '500':
+        $ref: ../responses.yaml#/InternalError
+pricing:
+  get:
+    operationId: getPlanPricing
+    summary: The plans and prices on sale.
+    description: Cached for a few minutes. A cached copy is served while the billing gateway is down.
+    responses:
+      '200':
+        description: The plans on sale.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/plan.yaml#/PlanPricing
+      '403':
+        $ref: ../responses.yaml#/PlanForbidden
+      '404':
+        $ref: ../responses.yaml#/PlanNotFound
+      '503':
+        $ref: ../responses.yaml#/BillingUnreachable
+      '500':
+        $ref: ../responses.yaml#/InternalError
+checkout:
+  post:
+    operationId: startPlanCheckout
+    summary: Start buying a plan.
+    description: Returns the hosted payment page. The payment page asks for the email; this request carries none.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/plan.yaml#/StartPlanCheckoutRequest
+    responses:
+      '201':
+        description: The checkout to open and poll.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/plan.yaml#/PlanCheckout
+      '400':
+        description: invalid_request, or unknown_plan when the plan or price is not on sale.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+      '403':
+        $ref: ../responses.yaml#/PlanForbidden
+      '404':
+        $ref: ../responses.yaml#/PlanNotFound
+      '409':
+        description: already_subscribed, when this computer's key already has a live plan.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+      '429':
+        $ref: ../responses.yaml#/PlanRateLimited
+      '503':
+        $ref: ../responses.yaml#/BillingUnreachable
+      '500':
+        $ref: ../responses.yaml#/InternalError
+checkoutStatus:
+  get:
+    operationId: getPlanCheckout
+    summary: A checkout's progress.
+    description: Poll every couple of seconds while the payment page is open. On complete, the licence is verified and saved before the reply.
+    parameters:
+      - $ref: ../parameters.yaml#/CheckoutId
+    responses:
+      '200':
+        description: The checkout's status, with the plan once it is complete.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/plan.yaml#/PlanCheckoutStatus
+      '403':
+        $ref: ../responses.yaml#/PlanForbidden
+      '404':
+        $ref: ../responses.yaml#/PlanNotFound
+      '429':
+        $ref: ../responses.yaml#/PlanRateLimited
+      '503':
+        $ref: ../responses.yaml#/BillingUnreachable
+      '500':
+        $ref: ../responses.yaml#/InternalError
+key:
+  get:
+    operationId: getPlanKey
+    summary: The licence key this computer is on.
+    description: Its first group and the computers on it. The key itself is never returned.
+    responses:
+      '200':
+        description: The key's hint, cap and computers.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/plan.yaml#/PlanKey
+      '403':
+        $ref: ../responses.yaml#/PlanForbidden
+      '404':
+        $ref: ../responses.yaml#/PlanNotFound
+      '409':
+        description: not_linked, when this computer is on no key.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+      '429':
+        $ref: ../responses.yaml#/PlanRateLimited
+      '503':
+        $ref: ../responses.yaml#/BillingUnreachable
+      '500':
+        $ref: ../responses.yaml#/InternalError
+activateKey:
+  post:
+    operationId: activatePlanKey
+    summary: Put this computer on a licence key.
+    description: The pasted key is passed to the billing gateway and dropped. It is never stored, logged or returned.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/plan.yaml#/ActivatePlanKeyRequest
+    responses:
+      '200':
+        description: The plan and key afterwards.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/plan.yaml#/PlanKeyChange
+      '400':
+        description: key_invalid, or invalid_request.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+      '403':
+        $ref: ../responses.yaml#/PlanForbidden
+      '404':
+        $ref: ../responses.yaml#/PlanNotFound
+      '409':
+        description: >-
+          key_full with the computers on the key, so the request can be sent again with one to
+          replace; or already_subscribed, when this computer pays through another key.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/plan.yaml#/PlanKeyFullError
+      '429':
+        $ref: ../responses.yaml#/PlanRateLimited
+      '503':
+        $ref: ../responses.yaml#/BillingUnreachable
+      '500':
+        $ref: ../responses.yaml#/InternalError
+removeComputer:
+  post:
+    operationId: removePlanComputer
+    summary: Take a computer off this computer's key.
+    description: Works for any computer on the key, including this one.
+    parameters:
+      - $ref: ../parameters.yaml#/InstallId
+    responses:
+      '200':
+        description: The plan and key afterwards.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/plan.yaml#/PlanKeyChange
+      '403':
+        $ref: ../responses.yaml#/PlanForbidden
+      '404':
+        $ref: ../responses.yaml#/PlanNotFound
+      '409':
+        description: not_linked, when this computer is on no key.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+      '429':
+        $ref: ../responses.yaml#/PlanRateLimited
+      '503':
+        $ref: ../responses.yaml#/BillingUnreachable
+      '500':
+        $ref: ../responses.yaml#/InternalError
+renameComputer:
+  post:
+    operationId: renamePlanComputer
+    summary: Rename a computer on this computer's key.
+    description: The name is kept when the key is pasted on that computer again.
+    parameters:
+      - $ref: ../parameters.yaml#/InstallId
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/plan.yaml#/RenamePlanComputerRequest
+    responses:
+      '200':
+        description: The key with the new name.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/plan.yaml#/PlanKey
+      '400':
+        description: invalid_request, when the name is empty or longer than 40 characters.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+      '403':
+        $ref: ../responses.yaml#/PlanForbidden
+      '404':
+        $ref: ../responses.yaml#/PlanNotFound
+      '409':
+        description: not_linked, when this computer is on no key.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+      '429':
+        $ref: ../responses.yaml#/PlanRateLimited
+      '503':
+        $ref: ../responses.yaml#/BillingUnreachable
+      '500':
+        $ref: ../responses.yaml#/InternalError
+resetKey:
+  post:
+    operationId: resetPlanKey
+    summary: Replace this computer's key with a new one.
+    description: >-
+      The new key is emailed and never returned. The old key stops working and every other
+      computer leaves the key until the new one is pasted there.
+    responses:
+      '200':
+        description: The plan and new key's hint afterwards.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/plan.yaml#/PlanKeyChange
+      '403':
+        $ref: ../responses.yaml#/PlanForbidden
+      '404':
+        $ref: ../responses.yaml#/PlanNotFound
+      '409':
+        description: not_linked, when this computer is on no key.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+      '429':
+        $ref: ../responses.yaml#/PlanRateLimited
+      '503':
+        $ref: ../responses.yaml#/BillingUnreachable
+      '500':
+        $ref: ../responses.yaml#/InternalError
+cancel:
+  post:
+    operationId: cancelPlan
+    summary: Cancel the plan at the end of the period.
+    description: Pro stays on until the period ends. Works from any computer on the key.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/plan.yaml#/CancelPlanRequest
+    responses:
+      '200':
+        description: The plan afterwards, normally ending.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/plan.yaml#/Plan
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '403':
+        $ref: ../responses.yaml#/PlanForbidden
+      '404':
+        $ref: ../responses.yaml#/PlanNotFound
+      '409':
+        description: not_linked, when this computer is on no key.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+      '429':
+        $ref: ../responses.yaml#/PlanRateLimited
+      '503':
+        $ref: ../responses.yaml#/BillingUnreachable
+      '500':
+        $ref: ../responses.yaml#/InternalError
+resume:
+  post:
+    operationId: resumePlan
+    summary: Keep a cancelled plan.
+    responses:
+      '200':
+        description: The plan afterwards, normally active.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/plan.yaml#/Plan
+      '403':
+        $ref: ../responses.yaml#/PlanForbidden
+      '404':
+        $ref: ../responses.yaml#/PlanNotFound
+      '409':
+        description: not_linked, when this computer is on no key.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+      '429':
+        $ref: ../responses.yaml#/PlanRateLimited
+      '503':
+        $ref: ../responses.yaml#/BillingUnreachable
+      '500':
+        $ref: ../responses.yaml#/InternalError
+portal:
+  post:
+    operationId: openPlanPortal
+    summary: A billing portal link.
+    description: Plan, period and card changes happen there. The plan is refreshed shortly after.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/plan.yaml#/PlanPortalRequest
+    responses:
+      '200':
+        description: The portal page to open.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/plan.yaml#/PlanPortal
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '403':
+        $ref: ../responses.yaml#/PlanForbidden
+      '404':
+        $ref: ../responses.yaml#/PlanNotFound
+      '409':
+        description: not_linked, when this computer is on no key.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+      '429':
+        $ref: ../responses.yaml#/PlanRateLimited
+      '503':
+        $ref: ../responses.yaml#/BillingUnreachable
+      '500':
+        $ref: ../responses.yaml#/InternalError
+refresh:
+  post:
+    operationId: refreshPlan
+    summary: Fetch a fresh licence now.
+    description: At most once a minute; sooner calls return the saved plan. A failed refresh returns the saved plan with stale set.
+    responses:
+      '200':
+        description: The plan afterwards.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/plan.yaml#/Plan
+      '403':
+        $ref: ../responses.yaml#/PlanForbidden
+      '404':
+        $ref: ../responses.yaml#/PlanNotFound
+      '500':
+        $ref: ../responses.yaml#/InternalError

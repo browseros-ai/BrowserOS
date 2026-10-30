@@ -1,0 +1,13 @@
+{
+  "available": true,
+  "plan": "pro",
+  "planName": "neo Pro",
+  "features": ["claw.ultrafast"],
+  "status": "ending",
+  "periodEnd": 1795737600000,
+  "endsAt": 1795737600000,
+  "graceUntil": null,
+  "onKey": true,
+  "checkedAt": 1793145600000,
+  "stale": false
+}

@@ -1,0 +1,24 @@
+{
+  "plans": [
+    {
+      "plan": "pro",
+      "name": "neo Pro",
+      "description": "Faster agents in neo.",
+      "features": ["claw.ultrafast"],
+      "prices": [
+        {
+          "interval": "month",
+          "intervalCount": 1,
+          "amount": 900,
+          "currency": "usd"
+        },
+        {
+          "interval": "year",
+          "intervalCount": 1,
+          "amount": 9000,
+          "currency": "usd"
+        }
+      ]
+    }
+  ]
+}

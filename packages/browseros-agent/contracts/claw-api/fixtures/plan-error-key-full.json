@@ -1,0 +1,47 @@
+{
+  "code": "key_full",
+  "message": "This key is already on 5 computers. Remove one to use it here.",
+  "requestId": "01JPLANKEYFULL",
+  "computers": [
+    {
+      "installId": "2a9b7c6d-1e0f-4a3b-8c5d-6e7f8091a2b3",
+      "label": "DESKTOP-4FQ7K2L",
+      "platform": "windows",
+      "lastSeenAt": 1793059200000,
+      "activatedAt": 1792627200000,
+      "thisComputer": false
+    },
+    {
+      "installId": "c4d5e6f7-0819-4a2b-9c3d-4e5f60718293",
+      "label": "Studio iMac",
+      "platform": "macos",
+      "lastSeenAt": 1793102400000,
+      "activatedAt": 1792713600000,
+      "thisComputer": false
+    },
+    {
+      "installId": "7e8f9a0b-1c2d-4e3f-a4b5-c6d7e8f90a1b",
+      "label": null,
+      "platform": "linux",
+      "lastSeenAt": 1792972800000,
+      "activatedAt": 1792800000000,
+      "thisComputer": false
+    },
+    {
+      "installId": "0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9",
+      "label": "Mac mini",
+      "platform": "macos",
+      "lastSeenAt": 1793016000000,
+      "activatedAt": 1792886400000,
+      "thisComputer": false
+    },
+    {
+      "installId": "9a8b7c6d-5e4f-4321-a0b9-c8d7e6f5a4b3",
+      "label": "Work laptop",
+      "platform": "windows",
+      "lastSeenAt": 1793131200000,
+      "activatedAt": 1792972800000,
+      "thisComputer": false
+    }
+  ]
+}
