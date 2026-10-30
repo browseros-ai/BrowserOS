@@ -1,6 +1,7 @@
 pub mod agent_settings;
 pub mod audit;
 pub mod audit_settings;
+pub mod billing;
 pub mod browser;
 pub mod captcha;
 pub mod capture;

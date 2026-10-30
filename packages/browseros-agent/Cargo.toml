@@ -55,6 +55,7 @@ tracing-appender = "0.2"
 socket2 = "0.6"
 url = "2"
 base64 = "0.22"
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 bytes = "1"
 imagesize = "0.15"
 tokio-util = { version = "0.7", features = ["rt"] }
@@ -67,7 +68,7 @@ clap = { version = "4.5", features = ["derive"] }
 sea-orm = { version = "1.1", default-features = false, features = ["sqlx-sqlite", "runtime-tokio", "macros"] }
 sea-orm-migration = { version = "1.1", default-features = false, features = ["sqlx-sqlite", "runtime-tokio"] }
 ulid = "1.2"
-time = { version = "0.3", features = ["formatting"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }
 tempfile = "3.14"
 toml = "0.8"
 
