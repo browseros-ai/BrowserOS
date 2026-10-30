@@ -57,10 +57,12 @@ async function viewport(ctx: CaseContext, page: number) {
   return result
 }
 
+/** Boxes are in image pixels: CSS boxes times `imageScale`, the image pixels per CSS pixel. */
 async function assertAnnotations(
   ctx: CaseContext,
   page: number,
   annotations: Annotation[],
+  imageScale = 1,
 ) {
   const boxes = await evalValue<Record<string, Box>>(
     ctx,
@@ -78,7 +80,7 @@ async function assertAnnotations(
     const box = boxes[annotation.name]
     expect(box).toBeDefined()
     for (const axis of ['x', 'y', 'width', 'height'] as const) {
-      expect(annotation.box[axis]).toBeCloseTo(box[axis], 0)
+      expect(annotation.box[axis]).toBeCloseTo(box[axis] * imageScale, 0)
     }
   }
 }
@@ -174,6 +176,22 @@ export const screenshotScaleCases: ContractCase[] = [
           expect(device.bytes).toBeGreaterThan(0)
         }
         await assertAnnotations(ctx, page, annotations)
+      },
+    }),
+  ),
+  ...(['{ scale: "device" }', '{ fullPage: true }'] as const).map(
+    (options): ContractCase => ({
+      name: `run: screenshot ${options} annotations are in device pixels at 2x density`,
+      browserArgs: ['--force-device-scale-factor=2'],
+      async run(ctx) {
+        const page = await ctx.openPage(ctx.fixture('/sdk-screenshot.html'))
+        const { dpr } = await viewport(ctx, page)
+        const result = await runValue<{ annotations: Annotation[] }>(
+          ctx,
+          page,
+          `return await p.screenshot({ ...${options}, format: "png", annotate: true })`,
+        )
+        await assertAnnotations(ctx, page, result.annotations, dpr)
       },
     }),
   ),
