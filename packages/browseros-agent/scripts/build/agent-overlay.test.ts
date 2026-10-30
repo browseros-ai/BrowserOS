@@ -65,7 +65,14 @@ function page(options: { frame?: boolean } = {}) {
       reveal(): boolean
     }
   const hosts = () => document.querySelectorAll('browseros-agent-overlay')
-  return { window, document, run, api, hosts }
+  /** The person's Escape: trusted, as a real keyboard's is. */
+  const pressEsc = () => {
+    const event = new window.Event('keydown', { bubbles: true })
+    Object.defineProperty(event, 'key', { value: 'Escape' })
+    Object.defineProperty(event, 'isTrusted', { value: true })
+    window.dispatchEvent(event)
+  }
+  return { window, document, run, api, hosts, pressEsc }
 }
 
 describe('working overlay script', () => {
@@ -97,15 +104,25 @@ describe('working overlay script', () => {
     expect(beat.events).toEqual([])
   })
 
-  test('tests that neo lowers the shield only while it acts, and never while the person has the page', () => {
-    const { run, api } = page()
+  test('tests that neo lowers the shield only while it acts, and never once the person took over', () => {
+    const { run, api, pressEsc } = page()
     expect(run({ op: 'beat', expiryMs: 35_000 }).status).toBe('absent')
     run(show)
     const id = api().yieldInput(30_000)
     expect(typeof id).toBe('number')
     expect(api().resumeInput(id)).toBe(true)
-    run({ ...show, phase: 'person', label: '' })
+    pressEsc()
     expect(api().yieldInput(30_000)).toBe('person')
+  })
+
+  test('tests that taking over removes the overlay and tells the server', () => {
+    const { run, hosts, pressEsc } = page()
+    run(show)
+    pressEsc()
+    expect(hosts().length).toBe(0)
+    const beat = run({ op: 'beat', expiryMs: 35_000 })
+    expect(beat.status).toBe('person')
+    expect(beat.events.map((event) => event.type)).toEqual(['take-over'])
   })
 
   test('tests that concurrent actions each keep the shield down until the last one ends', () => {
@@ -132,13 +149,23 @@ describe('working overlay script', () => {
     }
   })
 
-  test('tests that a held phase never overrides the person until the server resumes', () => {
-    const { run } = page()
-    run({ ...show, phase: 'person', label: '' })
+  test('tests that nothing is drawn after a take over until the server resumes', () => {
+    const { run, hosts, pressEsc } = page()
+    run(show)
+    pressEsc()
     expect(run(show).status).toBe('person')
-    expect(
-      run({ ...show, phase: 'between', rect: null, resume: true }).state,
-    ).toBe('between')
+    expect(hosts().length).toBe(0)
+    const resumed = run({ ...show, resume: true })
+    expect(resumed.state).toBe('working')
+    expect(hosts().length).toBe(1)
+  })
+
+  test('tests that a take over the server already has is not reported again', () => {
+    const { run, pressEsc } = page()
+    run(show)
+    pressEsc()
+    // Never drained: the binding call reached the server instead.
+    expect(run({ ...show, resume: true }).events).toEqual([])
   })
 
   test('tests that hiding for a capture is counted and undone', () => {

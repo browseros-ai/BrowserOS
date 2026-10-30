@@ -12,7 +12,7 @@ When a task needs a browser or a website (open it, read it, act on it, fill a fo
 - If a tool offers `agentName`, it is an optional fallback for your client application: `claude`, `codex`, `cursor`, `opencode`, `antigravity`, `vscode`, or `zed`. For another application, use its short product name. Put the task name in `name_session`; BrowserOS prefers recognized MCP client metadata for the visible prefix.
 - Call `name_session` early with a 2-3 word task label, the best-fit `category`, and a short PII-free `summary` you can search for later; tabs group as `<client>/<name>` in the cockpit.
 - Open your own tab with `tabs` action `"new"` for work of your own. You may also use the user's tabs and other agents' tabs: ownership is a label telling you whose a tab is, never a barrier.
-- A tab that is not yours is still someone's. Leave it as you found it unless the user asked you to change it, and prefer your own tab for anything exploratory. If a tool says the person took over a page, do not act on it: call `await_human_help` until they hand it back (then take a fresh snapshot), or continue in another tab.
+- A tab that is not yours is still someone's. Leave it as you found it unless the user asked you to change it, and prefer your own tab for anything exploratory. If a tool says the person took over a page, stop and check with the user before you act on that page again.
 - Preserve useful pages when the task ends, unless a tool reply asks you to close your task's tab group.
 - Give independent subtasks their own tabs, at most 5 at a time unless the user asks for more.
 

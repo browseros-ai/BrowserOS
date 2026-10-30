@@ -1,5 +1,6 @@
-//! Refuses page-changing calls on a page the person took over from the working overlay. Reading
-//! stays allowed: the person is using the page, and looking at it disturbs nothing.
+//! Refuses an agent's first page-changing call on a page the person took over from it, so the
+//! agent stops and checks with the user instead of taking the page straight back. Reading stays
+//! allowed: looking at a page disturbs nothing.
 
 use crate::api::mcp::dispatch::{ToolCall, ToolGuard, extract_page_id};
 use browseros_core::PageId;
@@ -23,9 +24,10 @@ pub fn guard(call: &ToolCall) -> BoxFuture<'_, Option<ToolResult>> {
             return None;
         }
         let page = extract_page_id(call)?;
+        let identity = call.identity.as_ref()?;
         call.state
             .page_hold
-            .person_message(&PageId(page))
+            .take_notice(&PageId(page), identity.session.id())
             .await
             .map(ToolResult::error)
     })

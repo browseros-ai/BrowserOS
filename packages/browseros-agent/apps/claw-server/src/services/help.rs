@@ -21,16 +21,6 @@ use std::{
 };
 use tokio::sync::{Mutex, Notify, watch};
 
-/// Who opened a request. A person who takes over a page from the working overlay opens one so the
-/// agent waits for the hand back with `await_human_help`, the same way it waits for help it asked
-/// for. Person requests stay inside the server: the cockpit never shows them, because the person is
-/// already on the page and hands back there.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HelpOrigin {
-    Agent,
-    Person,
-}
-
 /// What the agent said when it opened the request, plus the tab it was blocked on, captured at
 /// request time so takeover targets the exact page even if the agent has several tabs open.
 pub struct HelpOpenParams {
@@ -42,7 +32,6 @@ pub struct HelpOpenParams {
     pub browser_tab_id: Option<i64>,
     pub url: Option<String>,
     pub title: Option<String>,
-    pub origin: HelpOrigin,
 }
 
 /// The outcome the agent observes after waiting a chunk.
@@ -71,7 +60,6 @@ pub struct HelpEntry {
     browser_tab_id: Option<i64>,
     url: Option<String>,
     title: Option<String>,
-    origin: HelpOrigin,
     requested_at_ms: i64,
     created: Instant,
     resolved: AtomicBool,
@@ -82,16 +70,6 @@ pub struct HelpEntry {
 impl HelpEntry {
     pub fn request_id(&self) -> &str {
         &self.request_id
-    }
-
-    #[must_use]
-    pub fn origin(&self) -> HelpOrigin {
-        self.origin
-    }
-
-    #[must_use]
-    pub fn is_open(&self) -> bool {
-        !self.resolved.load(Ordering::Acquire)
     }
 
     fn mark_resolved(&self, note: Option<String>) {
@@ -144,20 +122,15 @@ impl HelpRegistry {
     /// Open a request, or return the existing one for this session so a re-call reattaches without
     /// resetting the waiting timer. Also sweeps orphaned entries (past the cap, left by a crashed
     /// or disconnected agent) so stale memory cannot accumulate.
-    ///
-    /// An agent's request replaces a person's take over: the person is already on the page, and
-    /// the agent's question is what they should see now.
     pub async fn open(&self, session: &SessionId, params: HelpOpenParams) -> Arc<HelpEntry> {
         let mut entries = self.entries.lock().await;
         let max_wait = self.max_wait;
         entries.retain(|_, entry| entry.created.elapsed() < max_wait);
         if let Some(existing) = entries.get(session)
             && !existing.resolved.load(Ordering::Acquire)
-            && !(existing.origin == HelpOrigin::Person && params.origin == HelpOrigin::Agent)
         {
             return existing.clone();
         }
-        let origin = params.origin;
         let entry = Arc::new(HelpEntry {
             request_id: params.request_id,
             reason: params.reason,
@@ -167,7 +140,6 @@ impl HelpRegistry {
             browser_tab_id: params.browser_tab_id,
             url: params.url,
             title: params.title,
-            origin: params.origin,
             requested_at_ms: now_ms(),
             created: Instant::now(),
             resolved: AtomicBool::new(false),
@@ -176,9 +148,6 @@ impl HelpRegistry {
         });
         entries.insert(session.clone(), entry.clone());
         drop(entries);
-        if origin == HelpOrigin::Person {
-            return entry;
-        }
         self.announce_change();
         // An expired request disappears from the snapshot without any call, so say so when the
         // cap passes; a listener re-reads and drops it.
@@ -200,9 +169,7 @@ impl HelpRegistry {
         match entry {
             Some(entry) => {
                 entry.mark_resolved(note);
-                if entry.origin == HelpOrigin::Agent {
-                    self.announce_change();
-                }
+                self.announce_change();
                 true
             }
             None => false,
@@ -219,9 +186,7 @@ impl HelpRegistry {
         {
             entries.remove(session);
             drop(entries);
-            if entry.origin == HelpOrigin::Agent {
-                self.announce_change();
-            }
+            self.announce_change();
         }
     }
 
@@ -292,10 +257,7 @@ impl HelpRegistry {
     ) -> Option<HelpRequest> {
         let entries = self.entries.lock().await;
         let entry = entries.get(session)?.clone();
-        if entry.origin == HelpOrigin::Person
-            || entry.resolved.load(Ordering::Acquire)
-            || entry.created.elapsed() >= self.max_wait
-        {
+        if entry.resolved.load(Ordering::Acquire) || entry.created.elapsed() >= self.max_wait {
             return None;
         }
         let tab = entry.browser_tab_id.or(fallback_tab_id)?;
@@ -357,36 +319,6 @@ mod tests {
         assert!(changes.has_changed().is_ok_and(|changed| changed));
     }
 
-    #[tokio::test]
-    async fn an_agent_request_replaces_a_take_over_but_not_the_other_way_round() {
-        let registry = HelpRegistry::new(Duration::from_secs(60));
-        let session = SessionId::new("s1".to_string());
-        let person = HelpOpenParams {
-            origin: HelpOrigin::Person,
-            ..params("takeover")
-        };
-        registry.open(&session, person).await;
-        assert_eq!(registry.snapshot(&session, Some(1), None, None).await, None);
-        let agent = registry.open(&session, params("help")).await;
-        assert_eq!(agent.request_id(), "help");
-        assert!(
-            registry
-                .snapshot(&session, Some(1), None, None)
-                .await
-                .is_some()
-        );
-        let kept = registry
-            .open(
-                &session,
-                HelpOpenParams {
-                    origin: HelpOrigin::Person,
-                    ..params("takeover-2")
-                },
-            )
-            .await;
-        assert_eq!(kept.request_id(), "help");
-    }
-
     fn params(id: &str) -> HelpOpenParams {
         HelpOpenParams {
             request_id: id.to_string(),
@@ -397,7 +329,6 @@ mod tests {
             browser_tab_id: None,
             url: None,
             title: None,
-            origin: HelpOrigin::Agent,
         }
     }
 

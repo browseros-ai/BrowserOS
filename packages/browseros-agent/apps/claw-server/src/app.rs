@@ -68,7 +68,7 @@ pub struct AppState {
     pub capture: Arc<CaptureHub>,
     pub cockpit: Arc<CockpitQuery>,
     pub help: Arc<crate::services::help::HelpRegistry>,
-    /// Which tabs show the working overlay, and the person's take over and hand back.
+    /// Which tabs show the working overlay, and what the person's take over does.
     pub page_hold: Arc<PageHoldService>,
     pub claude_desktop: Arc<crate::services::claude_desktop::ClaudeDesktop>,
     pub extension_updates: Arc<crate::services::extension_updates::ExtensionUpdates>,
@@ -234,7 +234,6 @@ impl AppState {
         let page_hold = PageHoldService::new(
             config.behavior.working_overlay,
             agent_settings.clone(),
-            help.clone(),
             sessions.clone(),
             browser.clone(),
             analytics.clone(),

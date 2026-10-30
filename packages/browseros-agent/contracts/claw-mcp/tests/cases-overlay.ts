@@ -108,48 +108,9 @@ class Person {
     })
   }
 
-  /** The centre of a button inside the overlay's closed shadow root, found by its text. */
-  async overlayButton(text: string): Promise<{ x: number; y: number }> {
-    const { root } = (await this.send('DOM.getDocument', {
-      depth: -1,
-      pierce: true,
-    })) as { root: DomNode }
-    const button = findButton(root, text)
-    if (!button) throw new Error(`no overlay button "${text}"`)
-    const { model } = (await this.send('DOM.getBoxModel', {
-      nodeId: button.nodeId,
-    })) as { model: { content: number[] } }
-    const [x1, y1, , , x3, y3] = model.content
-    return { x: (x1 + x3) / 2, y: (y1 + y3) / 2 }
-  }
-
   close(): void {
     this.#ws.close()
   }
-}
-
-interface DomNode {
-  nodeId: number
-  nodeName: string
-  nodeValue?: string
-  children?: DomNode[]
-  shadowRoots?: DomNode[]
-}
-
-function textIn(node: DomNode): string {
-  if (node.nodeName === '#text') return node.nodeValue ?? ''
-  return [...(node.children ?? []), ...(node.shadowRoots ?? [])]
-    .map(textIn)
-    .join('')
-}
-
-function findButton(node: DomNode, text: string): DomNode | undefined {
-  if (node.nodeName === 'BUTTON' && textIn(node).includes(text)) return node
-  for (const child of [...(node.children ?? []), ...(node.shadowRoots ?? [])]) {
-    const found = findButton(child, text)
-    if (found) return found
-  }
-  return undefined
 }
 
 function refFor(snapshot: string, needle: string): string {
@@ -270,21 +231,31 @@ export const overlayCases: ContractCase[] = [
     },
   },
   {
-    name: 'overlay: Esc takes the page over and handing back lets neo continue',
+    name: 'overlay: Esc takes the page over and neo checks in before acting again',
     async run(ctx) {
       const { page, cart, person } = await heldPage(ctx)
       try {
         await person.press('Escape', 27)
-        await waitUntil(async () => {
-          const result = await ctx.mcp.callTool('act', {
-            page,
-            kind: 'click',
-            ref: cart,
-          })
-          return (
-            result.isError && textOf(result).includes('took over this page')
+        await waitUntil(
+          async () =>
+            !(await person.read<boolean>(
+              `!!document.querySelector('${HOST}')`,
+            )),
+          'the overlay to leave the page',
+        )
+        const refused = await ctx.mcp.callTool('act', {
+          page,
+          kind: 'click',
+          ref: cart,
+        })
+        if (
+          !refused.isError ||
+          !textOf(refused).includes('check with the user')
+        ) {
+          throw new Error(
+            `neo was not told the person took over: ${textOf(refused)}`,
           )
-        }, 'neo to be told the person took over')
+        }
         expectOk(
           await ctx.mcp.callTool('snapshot', { page }),
           'reading still works',
@@ -295,17 +266,6 @@ export const overlayCases: ContractCase[] = [
           throw new Error('the person could not use the page after taking over')
         }
 
-        const handBack = await person.overlayButton('Hand back to neo')
-        await person.click(handBack.x, handBack.y)
-        let waited = ''
-        await waitUntil(async () => {
-          const result = await ctx.mcp.callTool('await_human_help', {})
-          waited = textOf(result)
-          return waited.includes('handed the page back')
-        }, 'the hand back to reach neo')
-        if (!waited.includes('fresh snapshot')) {
-          throw new Error(`the agent was not told to look again: ${waited}`)
-        }
         const fresh = expectOk(
           await ctx.mcp.callTool('snapshot', { page }),
           'fresh snapshot',
@@ -316,7 +276,12 @@ export const overlayCases: ContractCase[] = [
             kind: 'click',
             ref: refFor(fresh, 'Add to cart'),
           }),
-          'neo continues after the hand back',
+          'neo continues once it has checked in',
+        )
+        await waitUntil(
+          async () =>
+            await person.read<boolean>(`!!document.querySelector('${HOST}')`),
+          'the overlay to come back',
         )
       } finally {
         person.close()

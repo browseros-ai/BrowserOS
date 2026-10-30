@@ -8,9 +8,13 @@
 //! ```text
 //! begin_action -> Working --end_action--> Between --grace--> (gone)
 //!                    |                       |
-//!                    +------ take over ------+--> Person --hand back--> Between
-//! session ends: Working/Between -> Finished (the page fades it), Person -> gone
+//!                    +------ take over ------+--> (gone)
+//! session ends: Working/Between -> Finished (the page fades it)
 //! ```
+//!
+//! A take over removes the overlay and ends the hold. The calls acting on the page are
+//! interrupted, and every other session on it is refused its next page-changing call there once,
+//! so neo stops and checks with the user instead of taking the page straight back.
 //!
 //! The overlay itself keeps no server state alive: a beat every [`BEAT_EVERY`] keeps it drawn,
 //! re-draws it after the page navigates, and drains the events it queued in case a binding call
@@ -21,12 +25,7 @@ pub mod labels;
 use crate::{
     analytics::{AnalyticsSink, events},
     ids::{DispatchId, SessionId},
-    services::{
-        agent_settings::AgentSettingsStore,
-        browser::BrowserService,
-        help::{HelpOpenParams, HelpOrigin, HelpRegistry},
-        sessions::Sessions,
-    },
+    services::{agent_settings::AgentSettingsStore, browser::BrowserService, sessions::Sessions},
 };
 use browseros_core::{
     BrowserSession, CoreError, PageId, ProtocolSession, SessionId as CdpSessionId,
@@ -48,8 +47,8 @@ pub const HOLD_GRACE: Duration = Duration::from_secs(20);
 /// a navigated page goes without its overlay.
 pub const BEAT_EVERY: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_secs(1);
-/// A take over the agent never answered is dropped after the same cap as a help request.
-const PERSON_MAX: Duration = Duration::from_secs(20 * 60);
+/// A take over notice the agent never ran into is dropped after this.
+const NOTICE_MAX: Duration = Duration::from_secs(20 * 60);
 /// A call whose end never arrived (its future was dropped) stops holding the page after this.
 const WORKING_MAX: Duration = Duration::from_secs(2 * 60);
 /// The page reports a reach-in at most every 10s, through the binding and again in its queue.
@@ -59,7 +58,6 @@ const REACH_IN_DEDUPE: Duration = Duration::from_secs(9);
 pub(crate) enum HoldPhase {
     Working,
     Between,
-    Person,
 }
 
 struct Hold {
@@ -71,9 +69,8 @@ struct Hold {
     /// Calls acting on the page right now and the session each belongs to, interrupted when the
     /// person takes over.
     in_flight: HashMap<DispatchId, SessionId>,
-    /// Sessions waiting on this page's take over, released when the person hands it back.
-    paused: HashSet<SessionId>,
-    /// The next draw must clear the page's local "you have control" state.
+    /// The next draw must clear a take over the page may still keep locally. True for a new hold:
+    /// the server ends a hold when it hears a take over, so a new one comes after it.
     resume: bool,
     reach_in_at: Option<Instant>,
 }
@@ -88,8 +85,7 @@ impl Hold {
             since: now,
             beat_at: now,
             in_flight: HashMap::new(),
-            paused: HashSet::new(),
-            resume: false,
+            resume: true,
             reach_in_at: None,
         }
     }
@@ -98,7 +94,6 @@ impl Hold {
         let (phase, label) = match self.phase {
             HoldPhase::Working => (Phase::Working, self.label.clone()),
             HoldPhase::Between => (Phase::Between, labels::BETWEEN.to_string()),
-            HoldPhase::Person => (Phase::Person, String::new()),
         };
         OverlayState {
             phase,
@@ -109,25 +104,27 @@ impl Hold {
     }
 }
 
-/// What a person sees in the agent's reply when it acts on a page they took over.
+/// What the agent is told when the person took over a page it was working on.
 #[must_use]
 pub fn person_control_message() -> String {
     CoreError::PersonControl.to_string()
 }
 
 /// What an action the person interrupted returns.
-pub const INTERRUPTED_MESSAGE: &str = "Interrupted: the person took over this page. Do not act on it: call await_human_help to wait until they hand it back, or work in another tab.";
+pub const INTERRUPTED_MESSAGE: &str = "Interrupted: the person took over this page and is using it. Stop and check with the user before you act on it again.";
 
 pub struct PageHoldService {
     /// The server's rollout switch (`[pages] working_overlay`).
     switch: bool,
     agent_settings: Arc<AgentSettingsStore>,
-    help: Arc<HelpRegistry>,
     sessions: Arc<Sessions>,
     browser: Arc<BrowserService>,
     analytics: Arc<dyn AnalyticsSink>,
     holds: Mutex<HashMap<PageId, Hold>>,
     interrupted: Mutex<HashSet<DispatchId>>,
+    /// Sessions that were working on a page the person took over and have not been told yet:
+    /// their next page-changing call there is refused once.
+    notices: Mutex<HashMap<(PageId, SessionId), Instant>>,
     /// CDP sessions the binding was added to, and their page, for routing binding calls.
     bindings: Mutex<HashMap<CdpSessionId, PageId>>,
     listening: Mutex<Weak<BrowserSession>>,
@@ -139,7 +136,6 @@ impl PageHoldService {
     pub fn new(
         switch: bool,
         agent_settings: Arc<AgentSettingsStore>,
-        help: Arc<HelpRegistry>,
         sessions: Arc<Sessions>,
         browser: Arc<BrowserService>,
         analytics: Arc<dyn AnalyticsSink>,
@@ -147,12 +143,12 @@ impl PageHoldService {
         Arc::new(Self {
             switch,
             agent_settings,
-            help,
             sessions,
             browser,
             analytics,
             holds: Mutex::new(HashMap::new()),
             interrupted: Mutex::new(HashSet::new()),
+            notices: Mutex::new(HashMap::new()),
             bindings: Mutex::new(HashMap::new()),
             listening: Mutex::new(Weak::new()),
             started: Mutex::new(HashSet::new()),
@@ -186,12 +182,14 @@ impl PageHoldService {
         });
     }
 
-    /// The refusal for a page-changing call on a page the person has taken over.
-    pub async fn person_message(&self, page: &PageId) -> Option<String> {
-        let holds = self.holds.lock().await;
-        holds
-            .get(page)
-            .filter(|hold| hold.phase == HoldPhase::Person)
+    /// The refusal for `session`'s first page-changing call on a page the person took over from
+    /// it. Later calls go ahead: by then the agent has stopped and the user has had their say.
+    pub async fn take_notice(&self, page: &PageId, session: &SessionId) -> Option<String> {
+        self.notices
+            .lock()
+            .await
+            .remove(&(page.clone(), session.clone()))
+            .filter(|at| at.elapsed() < NOTICE_MAX)
             .map(|_| person_control_message())
     }
 
@@ -200,8 +198,9 @@ impl PageHoldService {
         self.interrupted.lock().await.remove(dispatch)
     }
 
-    /// Draws the overlay for an action neo is about to take on `page`. Refuses when the person
-    /// has taken the page over, including a take over the page made locally a moment ago.
+    /// Draws the overlay for an action neo is about to take on `page`. Refuses the first action
+    /// after the person took the page over, including a take over the page made locally a moment
+    /// ago.
     pub async fn begin_action(
         self: &Arc<Self>,
         browser: &Arc<BrowserSession>,
@@ -214,7 +213,7 @@ impl PageHoldService {
         if !self.enabled() {
             return Ok(());
         }
-        if let Some(refusal) = self.person_message(&page).await {
+        if let Some(refusal) = self.take_notice(&page, owner).await {
             return Err(refusal);
         }
         let Ok(page_session) = browser.pages.get_session(page.clone()).await else {
@@ -229,12 +228,6 @@ impl PageHoldService {
         .await;
         let resume = {
             let mut holds = self.holds.lock().await;
-            if holds
-                .get(&page)
-                .is_some_and(|hold| hold.phase == HoldPhase::Person)
-            {
-                return Err(person_control_message());
-            }
             let hold = holds
                 .entry(page.clone())
                 .or_insert_with(|| Hold::new(owner));
@@ -258,16 +251,12 @@ impl PageHoldService {
         )
         .await;
         self.handle_reply(&page, reply).await;
-        let mut holds = self.holds.lock().await;
-        match holds.get_mut(&page) {
-            Some(hold) if hold.phase == HoldPhase::Person => {
-                hold.in_flight.remove(dispatch);
-                drop(holds);
-                self.interrupted.lock().await.remove(dispatch);
-                Err(person_control_message())
-            }
-            _ => Ok(()),
+        // The page answered with a take over the server had not heard yet, which interrupted
+        // this very call.
+        if self.interrupted.lock().await.remove(dispatch) {
+            return Err(person_control_message());
         }
+        Ok(())
     }
 
     /// Moves a page to "between actions" once no call is acting on it.
@@ -339,41 +328,38 @@ impl PageHoldService {
         }
     }
 
-    /// Ends every hold of a finished session: "Finished" where neo was working, nothing where
-    /// the person already has the page.
+    /// Ends every hold of a finished session with "Finished", unless another session is still
+    /// acting on the page.
     pub async fn finish_session(&self, owner: &SessionId) {
-        let finished: Vec<(PageId, HoldPhase)> = {
+        let finished: Vec<PageId> = {
             let mut holds = self.holds.lock().await;
             let mut finished = Vec::new();
             holds.retain(|page, hold| {
                 hold.in_flight.retain(|_, session| session != owner);
-                hold.paused.remove(owner);
                 if &hold.owner != owner {
                     return true;
                 }
-                // Another session is still acting on the page, or still waiting on the person's
-                // take over of it: it keeps the hold, and with it the hand back.
-                if let Some(other) = hold.in_flight.values().chain(hold.paused.iter()).next() {
+                if let Some(other) = hold.in_flight.values().next() {
                     hold.owner = other.clone();
                     return true;
                 }
-                finished.push((page.clone(), hold.phase));
+                finished.push(page.clone());
                 false
             });
             finished
         };
+        self.notices
+            .lock()
+            .await
+            .retain(|(_, session), _| session != owner);
         self.started
             .lock()
             .await
             .retain(|(session, _)| session != owner);
-        for (page, phase) in finished {
+        for page in finished {
             let Some(session) = self.page_session(&page).await else {
                 continue;
             };
-            if phase == HoldPhase::Person {
-                overlay::dispose(&session).await;
-                continue;
-            }
             let _ = overlay::show(
                 &session,
                 &OverlayState {
@@ -389,21 +375,25 @@ impl PageHoldService {
 
     async fn tick(self: &Arc<Self>) {
         if !self.enabled() {
-            let drained: Vec<(PageId, Hold)> = self.holds.lock().await.drain().collect();
-            let mut paused = HashSet::new();
-            for (page, hold) in drained {
-                paused.extend(hold.paused);
+            let drained: Vec<PageId> = self
+                .holds
+                .lock()
+                .await
+                .drain()
+                .map(|(page, _)| page)
+                .collect();
+            self.notices.lock().await.clear();
+            for page in drained {
                 if let Some(session) = self.page_session(&page).await {
                     overlay::dispose(&session).await;
                 }
             }
-            // The person's hand back button just went away with the overlay, so nobody is left
-            // to end these waits.
-            for session in paused {
-                self.release_wait(&session).await;
-            }
             return;
         }
+        self.notices
+            .lock()
+            .await
+            .retain(|_, at| at.elapsed() < NOTICE_MAX);
         let now = Instant::now();
         let mut expired = Vec::new();
         let mut due = Vec::new();
@@ -415,12 +405,7 @@ impl PageHoldService {
                     hold.phase = HoldPhase::Between;
                     hold.since = now;
                 }
-                let over = match hold.phase {
-                    HoldPhase::Between => hold.since.elapsed() >= HOLD_GRACE,
-                    HoldPhase::Person => hold.since.elapsed() >= PERSON_MAX,
-                    HoldPhase::Working => false,
-                };
-                if over {
+                if hold.phase == HoldPhase::Between && hold.since.elapsed() >= HOLD_GRACE {
                     expired.push(page.clone());
                     return false;
                 }
@@ -475,7 +460,6 @@ impl PageHoldService {
     pub(crate) async fn handle_event(&self, page: &PageId, event: OverlayEvent) {
         match event {
             OverlayEvent::TakeOver { via } => self.take_over(page, via).await,
-            OverlayEvent::HandBack => self.hand_back(page).await,
             OverlayEvent::ReachIn => {
                 let held = {
                     let mut holds = self.holds.lock().await;
@@ -504,126 +488,40 @@ impl PageHoldService {
         }
     }
 
+    /// The page has already removed its overlay. Ends the hold, interrupts the calls acting on the
+    /// page, and leaves a notice for the sessions that had none in flight.
     async fn take_over(&self, page: &PageId, via: Via) {
-        let (owner, in_flight, paused) = {
-            let mut holds = self.holds.lock().await;
-            let Some(hold) = holds.get_mut(page) else {
-                return;
-            };
-            if hold.phase == HoldPhase::Person {
-                return;
-            }
-            hold.phase = HoldPhase::Person;
-            hold.since = Instant::now();
-            hold.resume = false;
-            let in_flight = std::mem::take(&mut hold.in_flight);
-            hold.paused = in_flight.values().cloned().collect();
-            hold.paused.insert(hold.owner.clone());
-            (hold.owner.clone(), in_flight, hold.paused.clone())
+        let Some(hold) = self.holds.lock().await.remove(page) else {
+            return;
         };
-        if !in_flight.is_empty() {
+        // An interrupted call tells its own session.
+        if !hold
+            .in_flight
+            .values()
+            .any(|session| session == &hold.owner)
+        {
+            self.notices
+                .lock()
+                .await
+                .insert((page.clone(), hold.owner.clone()), Instant::now());
+        }
+        if !hold.in_flight.is_empty() {
             self.interrupted
                 .lock()
                 .await
-                .extend(in_flight.keys().cloned());
-            for (dispatch, session) in &in_flight {
+                .extend(hold.in_flight.keys().cloned());
+            for (dispatch, session) in &hold.in_flight {
                 if let Some(session) = self.sessions.lookup(session).await {
                     session.interrupt_dispatch(dispatch).await;
                 }
             }
         }
-        let info = match self.browser.session().await {
-            Some(browser) => browser.pages.get_info(page.clone()).await,
-            None => None,
-        };
-        for session in &paused {
-            let agent_waiting = self
-                .help
-                .get(session)
-                .await
-                .is_some_and(|entry| entry.is_open() && entry.origin() == HelpOrigin::Agent);
-            if agent_waiting {
-                continue;
-            }
-            self.help
-                .open(
-                    session,
-                    HelpOpenParams {
-                        request_id: format!("takeover-{}", ulid::Ulid::new()),
-                        reason: "You took over this page".to_string(),
-                        details: None,
-                        resume_hint: None,
-                        kind: Some(claw_api::models::HelpRequestKind::Other),
-                        browser_tab_id: info.as_ref().map(|info| info.tab_id.0),
-                        url: info.as_ref().map(|info| info.url.clone()),
-                        title: info.as_ref().map(|info| info.title.clone()),
-                        origin: HelpOrigin::Person,
-                    },
-                )
-                .await;
-        }
         let via = match via {
             Via::Button => "button",
             Via::Esc => "esc",
         };
-        self.capture(events::PAGE_TAKEN_OVER, &owner, json!({ "via": via }))
+        self.capture(events::PAGE_TAKEN_OVER, &hold.owner, json!({ "via": via }))
             .await;
-    }
-
-    async fn hand_back(&self, page: &PageId) {
-        let (owner, held_for, state, released) = {
-            let mut holds = self.holds.lock().await;
-            let Some(hold) = holds.get_mut(page) else {
-                return;
-            };
-            if hold.phase != HoldPhase::Person {
-                return;
-            }
-            let held_for = hold.since.elapsed();
-            hold.phase = HoldPhase::Between;
-            hold.since = Instant::now();
-            hold.beat_at = Instant::now();
-            hold.resume = true;
-            let paused = std::mem::take(&mut hold.paused);
-            let (owner, state) = (hold.owner.clone(), hold.state());
-            // A session's one wait covers every page the person took from it: it ends with the
-            // last of them.
-            let released: Vec<SessionId> = paused
-                .into_iter()
-                .filter(|session| {
-                    !holds.values().any(|other| {
-                        other.phase == HoldPhase::Person && other.paused.contains(session)
-                    })
-                })
-                .collect();
-            (owner, held_for, state, released)
-        };
-        for session in &released {
-            self.release_wait(session).await;
-        }
-        if let Some(session) = self.page_session(page).await {
-            overlay::show(&session, &state).await;
-            if let Some(hold) = self.holds.lock().await.get_mut(page) {
-                hold.resume = false;
-            }
-        }
-        // Whole seconds: enough to tell a glance from a real use of the page.
-        self.capture(
-            events::PAGE_HANDED_BACK,
-            &owner,
-            json!({ "held_ms": held_for.as_secs() * 1000 }),
-        )
-        .await;
-    }
-
-    /// Ends a session's wait on a take over, leaving any request the agent made itself alone.
-    async fn release_wait(&self, session: &SessionId) {
-        if let Some(entry) = self.help.get(session).await
-            && entry.is_open()
-            && entry.origin() == HelpOrigin::Person
-        {
-            self.help.resolve(session, None).await;
-        }
     }
 
     async fn report_started(&self, owner: &SessionId, page: &PageId) {

@@ -14,7 +14,6 @@
         grab: 'M188,76a31.85,31.85,0,0,0-11.21,2,32,32,0,0,0-48.79-11A32,32,0,0,0,76,92v16H68a32,32,0,0,0-32,32v12a92,92,0,0,0,184,0V108A32,32,0,0,0,188,76Zm8,76a68,68,0,0,1-136,0V140a8,8,0,0,1,8-8h8v20a12,12,0,0,0,24,0V92a8,8,0,0,1,16,0v28a12,12,0,0,0,24,0V92a8,8,0,0,1,16,0v28a12,12,0,0,0,24,0V108a8,8,0,0,1,16,0Z',
         palm: 'M216,104v48a88,88,0,0,1-176,0V64a16,16,0,0,1,32,0v56a8,8,0,0,0,16,0V32a16,16,0,0,1,32,0v80a8,8,0,0,0,16,0V48a16,16,0,0,1,32,0v80.67A48.08,48.08,0,0,0,128,176a8,8,0,0,0,16,0,32,32,0,0,1,32-32,8,8,0,0,0,8-8V104a16,16,0,0,1,32,0Z',
         check: 'M232.49,80.49l-128,128a12,12,0,0,1-17,0l-56-56a12,12,0,1,1,17-17L96,183,215.51,63.51a12,12,0,0,1,17,17Z',
-        back: 'M236,144a68.07,68.07,0,0,1-68,68H80a12,12,0,0,1,0-24h88a44,44,0,0,0,0-88H61l27.52,27.51a12,12,0,0,1-17,17l-48-48a12,12,0,0,1,0-17l48-48a12,12,0,1,1,17,17L61,76H168A68.08,68.08,0,0,1,236,144Z',
         close: 'M208.49,191.51a12,12,0,0,1-17,17L128,145,64.49,208.49a12,12,0,0,1-17-17L111,128,47.51,64.49a12,12,0,0,1,17-17L128,111l63.51-63.52a12,12,0,0,1,17,17L145,128Z',
       };
       const icon = (name) => `<svg viewBox="0 0 256 256" aria-hidden="true"><path fill="currentColor" d="${ICON[name]}"/></svg>`;
@@ -75,7 +74,6 @@
   box-shadow: 0 1px 0 rgba(255,255,255,0.14) inset, 0 18px 50px -12px rgba(2,22,51,0.55), 0 0 0 6px rgba(2,84,236,0.10);
   transition: transform 0.7s var(--spring), opacity 0.4s var(--out), background 0.4s, color 0.4s; }
 .layer[data-state] .island { transform: translate(-50%, 0); opacity: 1; }
-.layer[data-state="person"] .island, .layer[data-state="handing"] .island { background: rgba(255,255,255,0.97); color: #0c2742; border-color: rgba(2,84,236,0.2); box-shadow: 0 18px 50px -12px rgba(2,22,51,0.35); }
 .island[data-nudge="on"] { animation: nudge 0.42s var(--out); }
 .row { display: flex; align-items: center; gap: 12px; padding: 10px; }
 .mark { position: relative; width: 36px; height: 36px; flex: none; display: grid; place-items: center; }
@@ -104,9 +102,7 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
 .ghost:hover { background: rgba(255,255,255,0.18); }
 .primary { background: #0254ec; color: #fff; }
 .primary:hover { background: #0246c6; }
-.layer[data-state="person"] .ghost, .layer[data-state="handing"] .ghost, .layer[data-state="finished"] .ghost { background: #eaf1ff; color: #0254ec; }
 .layer[data-state="finished"] .ghost { background: rgba(255,255,255,0.10); color: #fff; }
-.layer[data-state="handing"] .main { opacity: 0.6; pointer-events: none; }
 .layer[data-touch="on"] .main { display: none; }
 .ask { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.5s var(--out); }
 .ask > div { overflow: hidden; }
@@ -130,10 +126,7 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
 }`;
       const COPY = {
         working: 'BrowserOS neo is working on this page',
-        person: 'You have control',
         finished: 'BrowserOS neo',
-        paused: 'neo is paused on this page',
-        handing: 'Handing back to neo',
         done: 'Finished. The page is yours.',
         between: 'Working out the next step',
       };
@@ -147,6 +140,9 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
       let state = null;
       let label = '';
       let yielded = false;
+      // The person took the page over: the overlay is gone and neo's input stays out until the
+      // server has heard it and draws the overlay again with resume.
+      let taken = false;
       // Every input action neo has in flight, each with its own expiry, so concurrent actions
       // each hold the shield down and one that is never resumed cannot keep it down for others.
       const yields = new Map();
@@ -208,14 +204,9 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
       const releaseTouch = () => { if (layer) layer.dataset.touch = 'off'; };
       const takeOver = (via) => {
         if (!held() && !(yielded && HELD.has(state))) return;
-        clearYields();
-        enter('person', { label: COPY.paused });
+        taken = true;
         emit({ type: 'take-over', via });
-      };
-      const handBack = () => {
-        if (state !== 'person') return;
-        enter('handing', { label: COPY.handing });
-        emit({ type: 'hand-back' });
+        dispose();
       };
       const enter = (next, command) => {
         const previous = state;
@@ -228,11 +219,6 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
           swapText(next === 'between' ? (command.label || COPY.between) : label);
           if (next === 'working') setRing(command.rect); else setRing(null);
           if (previous !== 'working' && previous !== 'between') setMain('Take over', 'grab', () => takeOver('button'));
-        } else if (next === 'person' || next === 'handing') {
-          setRing(null);
-          el.who.textContent = COPY.person;
-          swapText(next === 'handing' ? COPY.handing : COPY.paused);
-          setMain('Hand back to neo', 'back', handBack);
         } else if (next === 'finished') {
           setRing(null);
           el.who.textContent = COPY.finished;
@@ -350,25 +336,27 @@ button:focus-visible { outline: 2px solid #7fb4ff; outline-offset: 2px; }
       api = {
         show(command) {
           if (command.phase === 'quiet') { dispose(); return { status: 'disposed', events: drain() }; }
+          // A local take over wins until the server has heard it and answers with resume.
+          if (taken && !command.resume) return { status: 'person', events: drain() };
+          if (command.resume) {
+            // The server has the take over already; a copy still queued must not end this hold.
+            taken = false;
+            queue = queue.filter((event) => event.type !== 'take-over');
+          }
           if (host && !host.isConnected) { dispose(); }
           if (!host && !mount()) return { status: 'skipped', reason: 'unsupported', events: drain() };
-          // A local take over wins until the server has heard it and answers with a later phase.
-          if ((state === 'person' || state === 'handing') && HELD.has(command.phase) && !command.resume) {
-            arm(command.expiryMs);
-            return { status: 'person', events: drain() };
-          }
           enter(command.phase, command);
           arm(command.expiryMs);
           return { status: 'shown', state, events: drain() };
         },
         beat(expiryMs) {
-          if (!host || !host.isConnected) return { status: 'absent', events: drain() };
+          if (!host || !host.isConnected) return { status: taken ? 'person' : 'absent', events: drain() };
           arm(expiryMs);
           return { status: state, events: drain() };
         },
         yieldInput(expiryMs) {
+          if (taken) return 'person';
           if (!layer) return 'absent';
-          if (state === 'person' || state === 'handing') return 'person';
           const id = ++yieldSeq;
           // A yield that is never resumed (its action was cancelled) must not leave the page
           // unheld: it lapses on its own, long enough for neo to type into a slow page.

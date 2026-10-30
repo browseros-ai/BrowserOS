@@ -75,7 +75,7 @@ pub enum CoreError {
         reported: Option<BrowserOsVersion>,
     },
     #[error(
-        "The person took over this page. Do not act on it: call await_human_help to wait until they hand it back, or work in another tab."
+        "The person took over this page and is using it. Stop and check with the user before you act on it again."
     )]
     PersonControl,
     #[error(transparent)]

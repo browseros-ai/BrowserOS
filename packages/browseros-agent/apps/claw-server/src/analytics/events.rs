@@ -36,7 +36,6 @@ const SCREENSHOT_BASELINE_HEIGHT: &str = "screenshot_baseline_height";
 const SCREENSHOT_TOKENS_PER_DISPATCH: &str = "screenshot_tokens_per_dispatch";
 const PHASE: &str = "phase";
 const VIA: &str = "via";
-const HELD_MS: &str = "held_ms";
 
 pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
@@ -343,15 +342,8 @@ pub const PAGE_TAKEN_OVER: EventDefinition = EventDefinition::new(
         PropertyDefinition::new(VIA, PropertyKind::TakeOverVia),
     ],
 );
-pub const PAGE_HANDED_BACK: EventDefinition = EventDefinition::new(
-    "page_handed_back",
-    &[
-        PropertyDefinition::new(CLIENT_NAME, PropertyKind::ClientName),
-        PropertyDefinition::new(HELD_MS, PropertyKind::UnsignedInteger),
-    ],
-);
 
-pub const ALL: [EventDefinition; 12] = [
+pub const ALL: [EventDefinition; 11] = [
     SERVER_STARTED,
     AGENT_SESSION_STARTED,
     AGENT_SESSION_TASK_DECLARED,
@@ -363,7 +355,6 @@ pub const ALL: [EventDefinition; 12] = [
     PAGE_HOLD_STARTED,
     PAGE_REACH_IN,
     PAGE_TAKEN_OVER,
-    PAGE_HANDED_BACK,
 ];
 
 pub(crate) fn by_wire_name(name: &str) -> Option<EventDefinition> {
@@ -425,7 +416,7 @@ mod tests {
 
     #[test]
     fn catalog_pins_wire_names_and_required_properties() {
-        assert_eq!(ALL.len(), 12);
+        assert_eq!(ALL.len(), 11);
         assert_eq!(
             ALL.map(EventDefinition::name),
             [
@@ -440,7 +431,6 @@ mod tests {
                 PAGE_HOLD_STARTED.name(),
                 PAGE_REACH_IN.name(),
                 PAGE_TAKEN_OVER.name(),
-                PAGE_HANDED_BACK.name(),
             ]
         );
         assert_eq!(PAGE_TAKEN_OVER.property_names(), vec!["client_name", "via"]);

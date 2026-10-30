@@ -23,7 +23,7 @@ use std::{
 };
 use tokio::time::timeout;
 
-/// Name of the CDP binding the overlay calls for take over, hand back and reach in. It is
+/// Name of the CDP binding the overlay calls for take over and reach in. It is
 /// added with `executionContextName` set to the isolated world, so page scripts never see it.
 pub const BINDING: &str = "__browserosOverlay";
 
@@ -45,7 +45,6 @@ pub fn enabled() -> bool {
 pub enum Phase {
     Working,
     Between,
-    Person,
     Finished,
     Quiet,
 }
@@ -64,8 +63,8 @@ pub struct OverlayState {
     pub phase: Phase,
     pub label: String,
     pub rect: Option<Rect>,
-    /// Set by the server once it has handled a hand back, so the page leaves its local
-    /// "you have control" state. Without it a held phase never overrides a local take over.
+    /// Set by the server on a page's first draw after a take over it has handled. Without it the
+    /// page keeps a local take over and draws nothing.
     pub resume: bool,
 }
 
@@ -81,7 +80,6 @@ pub enum Via {
 pub enum OverlayEvent {
     ReachIn,
     TakeOver { via: Via },
-    HandBack,
     LetFinish,
 }
 
@@ -93,8 +91,9 @@ impl OverlayEvent {
     }
 }
 
-/// What the page answered. `status` is the page's phase after the call, `person` when a local
-/// take over is waiting for the server, or `absent` / `skipped` when nothing is drawn.
+/// What the page answered. `status` is the page's phase after the call, `person` when the person
+/// took the page over and the server has not answered with resume yet, or `absent` / `skipped`
+/// when nothing is drawn.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OverlayReply {
     pub status: String,
@@ -405,8 +404,8 @@ mod tests {
             Some(OverlayEvent::TakeOver { via: Via::Button })
         );
         assert_eq!(
-            OverlayEvent::parse(r#"{"type":"hand-back"}"#),
-            Some(OverlayEvent::HandBack)
+            OverlayEvent::parse(r#"{"type":"let-finish","at":6}"#),
+            Some(OverlayEvent::LetFinish)
         );
         assert_eq!(OverlayEvent::parse("not json"), None);
     }

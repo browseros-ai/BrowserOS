@@ -286,7 +286,6 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
         "page_hold_started",
         "page_reach_in",
         "page_taken_over",
-        "page_handed_back",
     ];
     let mut wire_locations = wire_names
         .iter()
@@ -327,7 +326,7 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
         sdk_locations,
         ["analytics/aliases.rs", "analytics/service.rs"]
     );
-    assert_eq!(claw_server::analytics::events::ALL.len(), 12);
+    assert_eq!(claw_server::analytics::events::ALL.len(), 11);
     Ok(())
 }
 
@@ -557,9 +556,9 @@ fn allowed_service_edge(source: &str, target: &str) -> bool {
             | ("replay", "recordings")
             | ("tab_cleanup", "browser")
             | ("skills", "harness")
-            // A take over pauses the session's calls on the page and waits like a help request;
-            // the person's own switch gates the overlay.
-            | ("page_hold", "agent_settings" | "browser" | "help" | "sessions")
+            // A take over interrupts the session's calls on the page; the person's own switch
+            // gates the overlay.
+            | ("page_hold", "agent_settings" | "browser" | "sessions")
     )
 }
 
