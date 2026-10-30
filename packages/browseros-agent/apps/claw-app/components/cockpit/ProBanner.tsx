@@ -3,22 +3,23 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Cockpit entry to the Ultrafast waitlist. Impressions are not tracked: the
- * cockpit is the new tab page, and the waitlist's own view event is the
- * funnel's denominator.
+ * Home's way to the neo Pro page, for Free installs on a build that sells
+ * Pro. Impressions are not tracked: the cockpit is the new tab page, and the
+ * Pro page's own view event is the funnel's denominator.
  */
 
-import { ArrowRight, Zap } from 'lucide-react'
+import { ArrowRight, Sparkles } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useHref } from 'react-router'
 import { ButtonLink } from '@/components/motion/button/base'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
-import { useUltrafastJoined } from '@/screens/ultrafast/ultrafast-price'
+import { usePlanPricing } from '@/modules/api/plan.hooks'
+import { formatPrice, proPrices } from '@/screens/pro/pro.helpers'
 import { PromoCard } from './PromoCard'
 
-const DISMISS_KEY = 'ultrafastBannerDismissed:v1'
+const DISMISS_KEY = 'proBannerDismissed:v1'
 
-export function readUltrafastBannerDismissed(): boolean {
+export function readProBannerDismissed(): boolean {
   try {
     return localStorage.getItem(DISMISS_KEY) === 'true'
   } catch {
@@ -26,14 +27,14 @@ export function readUltrafastBannerDismissed(): boolean {
   }
 }
 
-export function UltrafastBanner({ onClosed }: { onClosed?: () => void }) {
-  const joined = useUltrafastJoined()
-  const [dismissed, setDismissed] = useState(readUltrafastBannerDismissed)
-  const waitlistHref = useHref('/ultrafast')
+export function ProBanner({ onClosed }: { onClosed?: () => void }) {
+  const pricing = usePlanPricing()
+  const [dismissed, setDismissed] = useState(readProBannerDismissed)
+  const proHref = useHref('/pro')
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
-      if (event.key === DISMISS_KEY && readUltrafastBannerDismissed()) {
+      if (event.key === DISMISS_KEY && readProBannerDismissed()) {
         setDismissed(true)
         onClosed?.()
       }
@@ -52,28 +53,31 @@ export function UltrafastBanner({ onClosed }: { onClosed?: () => void }) {
     onClosed?.()
   }
 
-  if (joined || dismissed) return null
+  // The line quotes the monthly price, so the bar waits for it and stays away
+  // when the prices can't be read.
+  const month = pricing.data ? proPrices(pricing.data)?.month : undefined
+  if (dismissed || pricing.isPending || pricing.isError || !month) return null
   return (
     <PromoCard
-      aria-label="Ultrafast mode"
-      icon={<Zap />}
+      aria-label="neo Pro"
+      icon={<Sparkles />}
       title={
         <>
-          <em className="text-accent-ink">Ultrafast</em> mode
+          neo <em className="text-accent-ink">Pro</em>
         </>
       }
-      description="Faster browser tasks, with far fewer AI tokens."
-      dismissLabel="Dismiss this banner"
+      description={`Faster tasks, a year of history and more, for ${formatPrice(month)} a month.`}
+      dismissLabel="Hide this"
       onDismiss={dismiss}
       action={
         <ButtonLink
-          href={waitlistHref}
+          href={proHref}
           size="sm"
           variant="ghost"
           onClick={() => track(AnalyticsEvent.UltrafastBannerClicked)}
           className="h-8 px-2.5 font-semibold text-[13.5px] text-accent-ink hover:bg-card/70 hover:text-accent-ink"
         >
-          Join the waitlist
+          See Pro
           <ArrowRight aria-hidden className="size-[15px]" />
         </ButtonLink>
       }

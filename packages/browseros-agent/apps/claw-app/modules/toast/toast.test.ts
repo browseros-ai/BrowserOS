@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+import { ApiResponseError } from '@browseros/claw-api-client'
 import type { ToastInput } from '@/components/motion/animated-toast-stack'
 import {
   connectToastHost,
@@ -47,6 +48,36 @@ describe('toast helpers', () => {
         status: 'error',
       },
       { title: 'Could not connect', description: undefined, status: 'error' },
+    ])
+    disconnect()
+  })
+
+  it('prefers the server’s own message over the status line', () => {
+    const host = fakeHost()
+    const disconnect = connectToastHost(host.handle)
+    const response = new Response(null, { status: 409 })
+    toastApiError(
+      'Couldn’t open the payment page',
+      new ApiResponseError(response, {
+        code: 'already_subscribed',
+        message: 'This computer already has Pro.',
+      }),
+    )
+    toastApiError(
+      'Couldn’t open the payment page',
+      new ApiResponseError(new Response('busy', { status: 502 }), 'busy'),
+    )
+    expect(host.shown).toEqual([
+      {
+        title: 'Couldn’t open the payment page',
+        description: 'This computer already has Pro.',
+        status: 'error',
+      },
+      {
+        title: 'Couldn’t open the payment page',
+        description: 'BrowserOS neo API request failed with status 502',
+        status: 'error',
+      },
     ])
     disconnect()
   })
