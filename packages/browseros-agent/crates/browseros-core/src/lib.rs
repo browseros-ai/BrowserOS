@@ -38,8 +38,8 @@ pub use profiles::{
 };
 pub use session::{BrowserSession, BrowserSessionHooks};
 pub use target::{
-    BrowserView, CapturedScope, PageAdmission, PageListing, TargetBinding, TargetIntent,
-    TargetSource, TargetStatus, WindowSelection,
+    BrowserView, CapturedScope, OpenedPage, PageAdmission, PageListing, TargetBinding,
+    TargetIntent, TargetSource, TargetStatus, WindowSelection,
 };
 pub use types::{
     BrowserContextId, BrowserProfileId, FrameId, PageId, Ref, SessionId, TabId, TargetId, WindowId,

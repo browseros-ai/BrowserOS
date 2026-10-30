@@ -431,24 +431,25 @@ impl PageManager {
         Ok(out)
     }
 
-    pub async fn new_page(&self, url: &str, opts: NewPageOptions) -> Result<PageId, CoreError> {
-        let (creation, _) = self.new_page_info(url, opts).await?;
+    /// Opens a tab on about:blank. [`crate::BrowserView::open_page`] then navigates it.
+    pub async fn new_blank_page(&self, opts: NewPageOptions) -> Result<PageId, CoreError> {
+        let (creation, _) = self.new_page_info(opts).await?;
         Ok(creation.original.page_id)
     }
 
     /// Ordinary unbound creation keeps its placement and best-effort default grouping. Once
     /// native creation returns, all follow-up work belongs to that exact target and epoch;
-    /// neither readiness nor a later registry lookup may provide a new initial identity.
+    /// neither a later registry lookup nor the navigation that follows may provide a new
+    /// initial identity. The tab opens on about:blank, which is ready at once.
     pub(crate) async fn new_page_info(
         &self,
-        url: &str,
         opts: NewPageOptions,
     ) -> Result<(PageCreation, PageInfo), CoreError> {
         self.ensure_connected().await?;
         let epoch = self.cdp.connection_epoch();
         let root = ProtocolSession::root(self.cdp.clone());
         let mut params = serde_json::Map::new();
-        params.insert("url".to_string(), Value::String(url.to_string()));
+        params.insert("url".to_string(), Value::String(BLANK_URL.to_string()));
         if let Some(context) = opts.browser_context_id {
             params.insert("browserContextId".to_string(), Value::String(context.0));
         }
@@ -461,7 +462,9 @@ impl PageManager {
         let created: NativeTabReply = root
             .send("Browser.createTab", Value::Object(params))
             .await?;
-        let creation = self.register_created(created.tab, url, epoch, None).await?;
+        let creation = self
+            .register_created(created.tab, BLANK_URL, epoch, None)
+            .await?;
         let root = root.with_epoch_guard(Some(creation.guard.clone()));
         let tab_id = creation.original.tab_id.0;
 
@@ -516,20 +519,6 @@ impl PageManager {
             }
         }
         self.publish_created_readback(&creation, &tab).await?;
-        // Readiness goes last, after every call that resolves this tab's
-        // identity. The wait can take a quiet interval or the whole ceiling,
-        // and a tab can be reconciled onto a new target while it does, so
-        // running it earlier would widen the window in which the native
-        // mutations above see a replacement and fail the creation outright.
-        // Its outcome is advisory: a page still moving at the ceiling is
-        // handed back anyway, which is what the ceiling is for.
-        let _ = crate::settle::wait_for_created_page_ready(
-            self,
-            creation.original.page_id.clone(),
-            url,
-            timeouts::ARRIVAL_READY_BUDGET,
-        )
-        .await;
         Ok((creation, tab))
     }
 
@@ -842,6 +831,10 @@ impl PageManager {
     }
 }
 
+/// Where every new tab starts. It is ready at once, so creation never waits on the page; the
+/// requested URL is loaded afterwards by a navigation whose outcome the caller can see.
+pub(crate) const BLANK_URL: &str = "about:blank";
+
 #[derive(Debug, Clone, Default)]
 pub struct NewPageOptions {
     pub browser_context_id: Option<BrowserContextId>,
@@ -1000,9 +993,7 @@ mod tests {
         let connection = TestConnection::new(responses);
         let manager = PageManager::new(connection.clone(), PageManagerHooks::default());
 
-        let page_id = manager
-            .new_page("https://example.com", NewPageOptions::default())
-            .await?;
+        let page_id = manager.new_blank_page(NewPageOptions::default()).await?;
         manager.get_session(page_id).await?;
 
         let calls = connection.calls()?;

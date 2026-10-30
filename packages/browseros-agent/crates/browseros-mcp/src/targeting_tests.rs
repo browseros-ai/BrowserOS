@@ -2047,7 +2047,16 @@ async fn default_without_a_window_gets_one_from_tabs_and_run() -> anyhow::Result
     assert_eq!(window["isActive"], json!(false));
     assert_eq!(created[1].0, "Browser.createTab");
     assert_eq!(created[1].1["windowId"], window["windowId"]);
-    assert_eq!(created[1].1["url"], json!("https://first.test/"));
+    // The tab opens on about:blank and is then navigated to the requested URL.
+    assert_eq!(created[1].1["url"], json!("about:blank"));
+    assert!(
+        connection
+            .calls()
+            .iter()
+            .any(|call| call.method == "Page.navigate"
+                && call.params["url"] == "https://first.test/"),
+        "tabs new did not navigate the new tab"
+    );
 
     // The next call captures that window as Default's placement and creates tabs there.
     let run_ctx = ctx(session, Arc::new(StaticTargetStore::new())).await?;

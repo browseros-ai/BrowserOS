@@ -2598,7 +2598,8 @@ async fn handle_mock_ws(
             .get("sessionId")
             .and_then(Value::as_str)
             .map(str::to_string);
-        let result = handle_mock_cdp_method(method, params.clone(), tabs.clone()).await;
+        let result =
+            handle_mock_cdp_method(method, params.clone(), session.as_deref(), tabs.clone()).await;
         if method == "Page.captureScreenshot" {
             captures
                 .lock()
@@ -2619,9 +2620,28 @@ async fn handle_mock_ws(
 async fn handle_mock_cdp_method(
     method: &str,
     params: Value,
+    session: Option<&str>,
     tabs: Arc<tokio::sync::Mutex<Vec<MockTab>>>,
 ) -> Result<Value, String> {
     match method {
+        // A new tab opens on about:blank and is then navigated; the navigation commits the
+        // requested URL on the tab whose session sent it.
+        "Page.navigate" => {
+            let target = session.and_then(|session| session.strip_prefix("session-"));
+            let url = params
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if let Some(tab) = tabs
+                .lock()
+                .await
+                .iter_mut()
+                .find(|tab| Some(tab.target_id.as_str()) == target)
+            {
+                tab.url = url.to_string();
+            }
+            Ok(json!({ "frameId": "frame", "loaderId": "loader" }))
+        }
         "Browser.getVersion" => Ok(json!({ "product": "BrowserOS Mock" })),
         "Browser.getTabs" => {
             let tabs = tabs.lock().await;

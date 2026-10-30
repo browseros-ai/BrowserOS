@@ -36,6 +36,8 @@ struct Fixture {
     move_group_on_tab_read: Option<(usize, i64)>,
     epoch_after_profiles: bool,
     fail_load: bool,
+    /// What `Page.navigate` answers, for a load that fails or downloads.
+    navigate_reply: Option<Value>,
 }
 struct Native {
     state: Mutex<Fixture>,
@@ -113,6 +115,7 @@ impl Native {
                 move_group_on_tab_read: None,
                 epoch_after_profiles: false,
                 fail_load: false,
+                navigate_reply: None,
             }),
         })
     }
@@ -384,6 +387,22 @@ impl Native {
             }
             "Target.getTargetInfo" => {
                 json!({"targetInfo":{"targetId":params["targetId"],"type":"service_worker","url":"chrome-extension://synthetic/worker.js","browserContextId":"live-eng"}})
+            }
+            "Page.navigate" => {
+                let reply = state
+                    .navigate_reply
+                    .clone()
+                    .unwrap_or_else(|| json!({"frameId":"frame","loaderId":"loader"}));
+                // A committed navigation changes the tab's URL, as the browser then reports it.
+                let committed = reply.get("errorText").is_none() && reply["isDownload"] != true;
+                if committed
+                    && let Some(target) =
+                        session.and_then(|id| id.as_str().strip_prefix("session-"))
+                    && let Some(tab) = state.tabs.iter_mut().find(|tab| tab["targetId"] == target)
+                {
+                    tab["url"] = params["url"].clone();
+                }
+                reply
             }
             "Runtime.evaluate" => {
                 if params["expression"] == "document.readyState" {
@@ -2730,7 +2749,12 @@ async fn default_without_a_window_opens_an_inactive_normal_window_there() -> Tes
     let tabs = native.calls("Browser.createTab");
     assert_eq!(tabs.len(), 1);
     assert_eq!(tabs[0].params["windowId"], created_window["windowId"]);
-    assert_eq!(tabs[0].params["url"], json!("https://first.test/"));
+    // The tab opens on about:blank and is then navigated, so the load's outcome is seen.
+    assert_eq!(tabs[0].params["url"], json!("about:blank"));
+    assert_eq!(
+        native.calls("Page.navigate")[0].params["url"],
+        json!("https://first.test/")
+    );
     assert_eq!(opened.url, "https://first.test/");
     assert_eq!(
         opened.window_id.map(|id| id.0),
@@ -3238,5 +3262,91 @@ async fn viewport_changes_never_reach_pages_outside_the_scope() -> TestResult {
     ] {
         assert!(native.calls(method).is_empty(), "{method} was sent");
     }
+    Ok(())
+}
+
+fn unbound_view(native: &Arc<Native>) -> BrowserView {
+    BrowserView::unbound(
+        BrowserSession::new_with_native(
+            native.clone(),
+            crate::BrowserSessionHooks::default(),
+            current_native(),
+        ),
+        Some(WindowId(11)),
+    )
+}
+
+/// A tab opens on about:blank and is then navigated like `goto`, so the load's outcome is known:
+/// creating it at the URL answers before the page commits and shows a failure as a page.
+async fn opens_on_blank_then_navigates(view: BrowserView, native: &Arc<Native>) -> TestResult {
+    let opened = view
+        .open_page("https://opened.test/", NewPageOptions::default())
+        .await?;
+    assert_eq!(
+        native.calls("Browser.createTab")[0].params["url"],
+        "about:blank"
+    );
+    let navigations = native.calls("Page.navigate");
+    assert_eq!(navigations.len(), 1);
+    assert_eq!(navigations[0].params["url"], "https://opened.test/");
+    assert!(matches!(opened.load, Some(Ok(_))), "{:?}", opened.load);
+    // The page comes back as the navigation left it, not as the blank tab it was created on.
+    assert_eq!(opened.page.url, "https://opened.test/");
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_unbound_view_opens_a_tab_on_blank_then_navigates_it() -> TestResult {
+    let native = Native::new();
+    opens_on_blank_then_navigates(unbound_view(&native), &native).await
+}
+
+#[tokio::test]
+async fn a_bound_view_opens_a_tab_on_blank_then_navigates_it() -> TestResult {
+    let native = Native::new();
+    let bound = view(
+        native.clone(),
+        Some(WindowSelection::Working {
+            window_id: WindowId(11),
+        }),
+    )
+    .await;
+    opens_on_blank_then_navigates(bound, &native).await
+}
+
+#[tokio::test]
+async fn a_tab_opened_on_blank_needs_no_navigation() -> TestResult {
+    let native = Native::new();
+    let opened = unbound_view(&native)
+        .open_page("about:blank", NewPageOptions::default())
+        .await?;
+    assert!(opened.load.is_none());
+    assert!(native.calls("Page.navigate").is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_tab_whose_url_fails_to_load_stays_open_and_says_why() -> TestResult {
+    let native = Native::new();
+    native.lock().navigate_reply =
+        Some(json!({"frameId":"frame","errorText":"net::ERR_NAME_NOT_RESOLVED"}));
+    let view = unbound_view(&native);
+    let opened = view
+        .open_page("https://nowhere.test/", NewPageOptions::default())
+        .await?;
+    let Some(Err(error)) = &opened.load else {
+        return Err(format!("expected a load failure, got {:?}", opened.load).into());
+    };
+    assert!(
+        error.to_string().contains("net::ERR_NAME_NOT_RESOLVED"),
+        "{error}"
+    );
+    assert!(
+        view.list_pages()
+            .await?
+            .pages
+            .iter()
+            .any(|page| page.page_id == opened.page.page_id)
+    );
     Ok(())
 }
