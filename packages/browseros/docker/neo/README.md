@@ -156,6 +156,11 @@ docker run ... -e NEO_ARGS="--disable-browseros-features=VerticalTabs,HomeButton
 The bookmarks bar and the window buttons have no names. Every container start turns the bar
 off with a managed policy and gives the window an empty GTK button layout.
 
+In hosted mode (`BROWSERCLAW_HOSTED_MODE=1`, the image default) the browser also skips Chromium's
+"To exit full screen, press and hold Esc" notice when it goes full screen itself, as an owner's
+phone view does (F11). A page that goes full screen keeps its notice. Browsers built before this
+change show the notice.
+
 ### Zoom
 
 Viewers can't zoom Neo: the page in the viewer is the page your agent works in. To see it bigger,
