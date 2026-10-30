@@ -12,7 +12,7 @@ use axum::{
 use claw_server::{
     AppState, build_router,
     config::{Config, ServerMode},
-    services::billing::Billing,
+    services::billing::{Billing, RefreshOutcome},
 };
 use fake_gateway::{FakeGateway, FakePlan, KEY, RESET_KEY, now_ms};
 use serde_json::{Value, json};
@@ -944,6 +944,35 @@ async fn a_failed_refresh_keeps_the_plan_and_marks_it_stale() -> anyhow::Result<
     let soon = a.call("POST", "/api/v1/plan/refresh", None).await?;
     assert_eq!(soon.body["stale"], true, "at most one refresh a minute");
     assert_eq!(gateway.count("POST", "/v1/licence/refresh"), calls);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_refresh_before_registering_does_not_hold_back_the_next_one() -> anyhow::Result<()> {
+    let gateway = FakeGateway::start().await?;
+    let a = computer(Some(&gateway)).await?;
+    let b = computer(Some(&gateway)).await?;
+    assert_eq!(
+        b.state.billing.scheduled_refresh().await,
+        RefreshOutcome::Skipped
+    );
+    let early = b.call("POST", "/api/v1/plan/refresh", None).await?;
+    assert_eq!(early.body["status"], "none");
+    assert!(gateway.requests().is_empty());
+
+    buy(&a, &gateway).await?;
+    b.activate(KEY).await?;
+    let b_id = b.install_id().await?;
+    a.call(
+        "POST",
+        &format!("/api/v1/plan/key/computers/{b_id}/remove"),
+        None,
+    )
+    .await?;
+    let refreshed = b.call("POST", "/api/v1/plan/refresh", None).await?;
+    assert_eq!(refreshed.body["status"], "none");
+    assert_eq!(refreshed.body["onKey"], false);
+    assert_eq!(gateway.count("POST", "/v1/licence/refresh"), 1);
     Ok(())
 }
 

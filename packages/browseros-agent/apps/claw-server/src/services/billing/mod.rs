@@ -477,9 +477,14 @@ impl Billing {
         let Some(inner) = &self.inner else {
             return RefreshOutcome::Skipped;
         };
+        // Only a refresh that reaches the gateway counts toward the once-a-minute limit, so the
+        // start-up tick of a computer that has not registered yet cannot hold back the first
+        // refresh after it pastes a key.
         let install = {
             let mut state = inner.state.write().await;
-            state.last_refresh_at = Some(now_epoch_ms());
+            if state.install.is_some() {
+                state.last_refresh_at = Some(now_epoch_ms());
+            }
             state.install.clone()
         };
         let Some(install) = install else {
