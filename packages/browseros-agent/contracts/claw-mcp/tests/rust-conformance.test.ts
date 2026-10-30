@@ -31,10 +31,15 @@ interface ServerRun {
   server: ContractServer
   browser: BrowserHandle
   mcp: McpSession
+  scoped?: Promise<{ server: ContractServer; mcp: McpSession }>
   extraSessions: McpSession[]
   openedPages: Array<{ session: McpSession; page: number }>
   scratchDir: string
 }
+
+// The lowest BrowserOS release with profile targeting; asserting it gives the scoped server
+// the same bound views a BrowserOS-launched server uses.
+const PROFILE_TARGETING_VERSION = '0.51.1.3'
 
 let fixtures: FixturePair | undefined
 let run: ServerRun | undefined
@@ -74,21 +79,7 @@ async function ensureRun(browserArgs: string[] = []): Promise<ServerRun> {
       )
     }
     server = await startRustServer(browser.cdpPort)
-    const mcp = await McpSession.connect(server.baseUrl, 'claw-contract')
-    // The rust server attaches to the browser asynchronously after
-    // /system/health turns ok; wait until tool calls stop reporting a
-    // disconnected browser before running cases.
-    await waitUntil(
-      async () => {
-        const result = await mcp.callTool('tabs', { action: 'list' })
-        return !(
-          result.isError &&
-          textOf(result).includes('browser session not connected')
-        )
-      },
-      'Rust server to attach to the browser',
-      { timeoutMs: 30_000, intervalMs: 500 },
-    )
+    const mcp = await connectAttached(server, 'claw-contract')
     run = {
       browserArgs,
       server,
@@ -106,6 +97,46 @@ async function ensureRun(browserArgs: string[] = []): Promise<ServerRun> {
   }
 }
 
+/** An MCP session once the server has attached to the browser. */
+async function connectAttached(
+  server: ContractServer,
+  clientName: string,
+): Promise<McpSession> {
+  const mcp = await McpSession.connect(server.baseUrl, clientName)
+  // The rust server attaches to the browser asynchronously after
+  // /system/health turns ok; wait until tool calls stop reporting a
+  // disconnected browser before running cases.
+  await waitUntil(
+    async () => {
+      const result = await mcp.callTool('tabs', { action: 'list' })
+      return !(
+        result.isError &&
+        textOf(result).includes('browser session not connected')
+      )
+    },
+    'Rust server to attach to the browser',
+    { timeoutMs: 30_000, intervalMs: 500 },
+  )
+  return mcp
+}
+
+async function startScoped(
+  run: ServerRun,
+): Promise<{ server: ContractServer; mcp: McpSession }> {
+  const server = await startRustServer(run.browser.cdpPort, {
+    env: { CLAW_NATIVE_BROWSEROS_VERSION: PROFILE_TARGETING_VERSION },
+  })
+  try {
+    return {
+      server,
+      mcp: await connectAttached(server, 'claw-contract-scoped'),
+    }
+  } catch (error) {
+    await server.stop().catch(() => {})
+    throw error
+  }
+}
+
 function makeContext(run: ServerRun): CaseContext {
   const pair = fixtures
   if (!pair) throw new Error('fixture servers not started')
@@ -113,6 +144,10 @@ function makeContext(run: ServerRun): CaseContext {
     server: run.server,
     browser: run.browser,
     mcp: run.mcp,
+    async scopedMcp() {
+      run.scoped ??= startScoped(run)
+      return (await run.scoped).mcp
+    },
     scratchDir: run.scratchDir,
     async openSession(clientName = 'claw-contract-extra') {
       const session = await McpSession.connect(run.server.baseUrl, clientName)
@@ -152,6 +187,9 @@ async function teardownRun(): Promise<void> {
   for (const session of [...current.extraSessions, current.mcp]) {
     await session.close().catch(() => {})
   }
+  const scoped = await current.scoped?.catch(() => undefined)
+  await scoped?.mcp.close().catch(() => {})
+  await scoped?.server.stop().catch(() => {})
   await current.server.stop().catch(() => {})
   await current.browser.kill().catch(() => {})
   await rm(current.scratchDir, { recursive: true, force: true })
