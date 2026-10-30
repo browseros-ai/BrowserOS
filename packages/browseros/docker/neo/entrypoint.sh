@@ -199,7 +199,7 @@ fi
 # switch, so a deployment replaces this whole list with its own
 # --disable-browseros-features in NEO_ARGS, which start_neo passes last.
 # Browsers before 0.51.2.5 ignore the switch and show every control.
-readonly HIDDEN_BROWSEROS_FEATURES=VerticalTabs,HomeButton,SplitTabButton,TabSearchButton,BookmarkEditing,WebAppInstall,AvatarButton,ExtensionsToolbar,NewTabPage,FullscreenExitBubble
+readonly HIDDEN_BROWSEROS_FEATURES=VerticalTabs,HomeButton,SplitTabButton,TabSearchButton,BookmarkEditing,WebAppInstall,AvatarButton,ExtensionsToolbar,NewTabPage
 
 # --no-sandbox is deliberate here, so drop Chromium's "unsupported command-line
 # flag" bar for it. Written only in that mode: the same policy would also hide
