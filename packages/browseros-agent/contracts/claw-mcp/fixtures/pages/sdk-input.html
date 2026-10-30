@@ -24,8 +24,17 @@
     <button id="inert" role="checkbox" aria-checked="false">Inert checkbox</button>
     <!-- Unchecked beneath an indeterminate look: a click would turn it on, not off. -->
     <label><input id="mixed" type="checkbox" /> Mixed checkbox</label>
+    <!-- A framework re-render swaps the clicked control for a new node that keeps its state. -->
+    <div id="rerender-host"><label><input class="rerendered" type="checkbox" /> Re-rendered checkbox</label></div>
+    <!-- Checking this filter navigates, like a shopping-site facet. -->
+    <label><input id="facet" type="checkbox" /> Navigating facet</label>
     <script>
       document.getElementById('mixed').indeterminate = true
+      document.getElementById('rerender-host').addEventListener('change', event => {
+        event.currentTarget.innerHTML =
+          '<label><input class="rerendered" type="checkbox" checked /> Re-rendered checkbox</label>'
+      })
+      document.getElementById('facet').addEventListener('change', () => location.assign('/links.html'))
       window.submits = 0
       window.enterKeys = 0
       window.switchClicks = 0

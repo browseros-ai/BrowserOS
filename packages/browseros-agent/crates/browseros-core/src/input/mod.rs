@@ -440,11 +440,18 @@ impl Input {
         // instead of reading once.
         let deadline = tokio::time::Instant::now() + timeouts::CHECK_STATE_SETTLE;
         loop {
-            let after: Option<CheckState> = js
-                .call(resolved.backend_node_id, CHECK_STATE_FN, &[])
-                .await?;
-            if after.is_some_and(|after| after.checked == checked) {
+            // The click has landed. A control the page then replaced, or a page that navigated
+            // away, can no longer report its state; the readback shows the page as it is, and
+            // an error here would only invite a retry that clicks again and flips it back.
+            let Ok(after) = js
+                .call::<Option<CheckState>>(resolved.backend_node_id, CHECK_STATE_FN, &[])
+                .await
+            else {
                 return Ok(checked);
+            };
+            match after {
+                Some(after) if after.detached || after.checked == checked => return Ok(checked),
+                _ => {}
             }
             if tokio::time::Instant::now() >= deadline {
                 let wanted = if checked { "checked" } else { "unchecked" };
@@ -707,6 +714,9 @@ const POINT_SENSITIVE_JS: &str = "(()=>{const pred=__PRED__;\
 struct CheckState {
     checked: bool,
     radio: bool,
+    /// The control is no longer in the document, typically replaced by a re-render.
+    #[serde(default)]
+    detached: bool,
 }
 
 /// Reads a control's checked state, following a label to the control it names. Returns null
@@ -719,6 +729,7 @@ struct CheckState {
 /// unchecked.
 const CHECK_STATE_FN: &str = "function(){\
 const el=this.tagName==='LABEL'&&this.control?this.control:this;\
+if(!el.isConnected)return{checked:false,radio:false,detached:true};\
 if(el.tagName==='INPUT'&&(el.type==='checkbox'||el.type==='radio'))\
 return{checked:el.checked,radio:el.type==='radio'};\
 const aria=el.getAttribute&&el.getAttribute('aria-checked');\
@@ -2245,6 +2256,21 @@ mod tests {
             .err()
             .map(|error| error.to_string());
         assert!(error.is_some_and(|error| error.contains("did not make it checked")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn check_trusts_a_click_after_which_the_page_replaced_the_control()
+    -> Result<(), CoreError> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| {
+            state.check_state = json!({ "checked": false, "radio": false });
+            state.check_state_after_click =
+                Some(json!({ "checked": false, "radio": false, "detached": true }));
+        })?;
+        connection.take_calls()?;
+        assert!(input.check(&ref_id).await?);
+        assert_eq!(press_count(&connection.take_calls()?), 1);
         Ok(())
     }
 

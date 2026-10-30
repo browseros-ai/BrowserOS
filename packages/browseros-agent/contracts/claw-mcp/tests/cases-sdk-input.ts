@@ -180,6 +180,48 @@ function checkboxCases(surface: Surface): ContractCase[] {
         })
       },
     },
+    // The click lands but the clicked node can no longer be read; an error would invite a retry
+    // that clicks again and flips the control back.
+    {
+      name: `${surface}: check succeeds when the page re-renders the checkbox it clicked`,
+      async run(ctx) {
+        const page = await ctx.openPage(ctx.fixture('/sdk-input.html'))
+        expectOk(
+          await inputCall(
+            ctx,
+            page,
+            surface,
+            'check',
+            await fieldRef(ctx, page, 'Re-rendered checkbox'),
+          ),
+        )
+        expect(
+          await evalValue(
+            ctx,
+            page,
+            'return document.querySelector(".rerendered").checked',
+          ),
+        ).toBe(true)
+      },
+    },
+    {
+      name: `${surface}: check succeeds when the checkbox it clicked navigates the page`,
+      async run(ctx) {
+        const page = await ctx.openPage(ctx.fixture('/sdk-input.html'))
+        expectOk(
+          await inputCall(
+            ctx,
+            page,
+            surface,
+            'check',
+            await fieldRef(ctx, page, 'Navigating facet'),
+          ),
+        )
+        expect(await evalValue(ctx, page, 'return location.pathname')).toBe(
+          '/links.html',
+        )
+      },
+    },
   ]
 }
 
