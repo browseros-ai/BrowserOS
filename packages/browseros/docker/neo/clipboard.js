@@ -7,6 +7,7 @@ import { isIOS, isMac } from '../core/util/browser.js';
 
 let copyRequest = null;
 const heldControls = new Map();
+const heldCommands = new Map();
 const commandKey = () => isMac() || isIOS();
 const active = (rfb = UI.rfb) => UI.connected && rfb === UI.rfb && !rfb.viewOnly;
 const screen = (target) => target?.tagName === 'CANVAS' ||
@@ -28,6 +29,12 @@ function controlKey(rfb, key) {
     rfb.sendKey(symbol, code, true);
     rfb.sendKey(key.charCodeAt(0), 'Key' + key.toUpperCase());
     if (!held) rfb.sendKey(symbol, code, false);
+    // The physical Command key may span several shortcuts. Restore noVNC's
+    // platform mapping so the next key keeps its modifier until real keyup.
+    for (const [code, connection] of heldCommands) {
+        if (connection === rfb) rfb.sendKey(
+            code === 'MetaRight' ? KeyTable.XK_Super_L : KeyTable.XK_Alt_L, code, true);
+    }
 }
 
 function paste(text, rfb = UI.rfb) {
@@ -76,9 +83,10 @@ export async function pasteFromClipboard() {
 for (const type of ['keydown', 'keyup']) {
     window.addEventListener(type, (event) => {
         if (type === 'keydown' && !event.repeat) copyRequest = null;
-        if (event.key === 'Control') {
-            if (type === 'keyup') heldControls.delete(event.code);
-            else if (active() && screen(event.target)) heldControls.set(event.code, UI.rfb);
+        if (event.key === 'Control' || (commandKey() && event.key === 'Meta')) {
+            const held = event.key === 'Control' ? heldControls : heldCommands;
+            if (type === 'keyup') held.delete(event.code);
+            else if (active() && screen(event.target)) held.set(event.code, UI.rfb);
             return; // noVNC still owns the physical modifier events.
         }
         if (!active() || !screen(event.target) || event.altKey || event.shiftKey) return;
@@ -86,6 +94,9 @@ for (const type of ['keydown', 'keyup']) {
         const command = commandKey() && event.metaKey;
         if (!(command || event.ctrlKey) || !['c', 'x', 'v'].includes(key)) return;
         if (key === 'v') {
+            // Mac Ctrl+V has no native paste event. Preserve the remote Linux
+            // shortcut; only Command+V transfers the Mac's local clipboard.
+            if (commandKey() && !event.metaKey) return;
             event.stopPropagation();
             return;
         }
@@ -111,9 +122,17 @@ document.addEventListener('paste', (event) => {
     event.preventDefault();
     paste(event.clipboardData.getData('text/plain'));
 });
-window.addEventListener('blur', () => { copyRequest = null; heldControls.clear(); });
+window.addEventListener('blur', () => {
+    copyRequest = null;
+    heldControls.clear();
+    heldCommands.clear();
+});
 for (const type of ['pointerdown', 'wheel']) {
-    window.addEventListener(type, () => { copyRequest = null; }, { capture: true, passive: true });
+    window.addEventListener(type, (event) => {
+        copyRequest = null;
+        // Returning to the remote screen dismisses completed manual transfer.
+        if (type === 'pointerdown' && screen(event.target)) UI.closeClipboardPanel();
+    }, { capture: true, passive: true });
 }
 
 // Preserve the native Clipboard panel and future reconnects: connect() registers
@@ -123,17 +142,20 @@ for (const type of ['pointerdown', 'wheel']) {
 // debug mode. Keep their panel behavior without sending owner text to console.
 const receive = UI.clipboardReceive;
 UI.clipboardReceive = async function(event) {
-    document.getElementById('noVNC_clipboard_text').value = event.detail.text;
+    // Extended Clipboard can retain CRLF after noVNC's partial conversion;
+    // textarea values normalize it. Compare and write the same normalized text.
+    const text = event.detail.text.replace(/\r\n?/g, '\n');
+    document.getElementById('noVNC_clipboard_text').value = text;
     if (copyRequest?.rfb !== this || performance.now() > copyRequest.until ||
         !active(this) || !document.hasFocus() || document.hidden) return;
     const expected = copyRequest.text;
     copyRequest = null;
-    if (event.detail.text !== expected) {
+    if (text !== expected) {
         clipboardPanel();
         return;
     }
     try {
-        await navigator.clipboard.writeText(event.detail.text);
+        await navigator.clipboard.writeText(text);
     } catch {
         if (active(this)) clipboardPanel();
     }
