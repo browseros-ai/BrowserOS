@@ -145,6 +145,7 @@ Neo 0.51.2.5 or later; older browsers ignore the switch and show the full frame.
 | `AvatarButton` | The profile button |
 | `ExtensionsToolbar` | The extensions button |
 | `NewTabPage` | The new tab page; new tabs open `about:blank` |
+| `FullscreenExitBubble` | The "To exit full screen, press and hold Esc" notice when the browser itself goes full screen (F11), as an owner's phone view does; a page that goes full screen keeps its notice. Browsers without this name ignore it |
 
 To keep some of these, pass your own list in `NEO_ARGS`. It replaces the image's list, because
 Neo keeps the last value of a repeated switch; an empty value turns none off:
