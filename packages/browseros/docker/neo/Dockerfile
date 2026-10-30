@@ -88,6 +88,9 @@ COPY openbox-rc.xml /etc/neo/openbox-rc.xml
 # COPY their own over it (README).
 COPY neo.toml /etc/neo/neo.toml
 COPY novnc-index.html /usr/share/novnc/index.html
+# Load the clipboard bridge from vnc.html too: embedded viewers bypass index.html.
+COPY clipboard.js /usr/share/novnc/app/clipboard.js
+RUN sed -i '/<\/body>/i\    <script type="module" src="app/clipboard.js"></script>' /usr/share/novnc/vnc.html
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/neo-entrypoint
 COPY --chmod=0755 healthcheck.sh /usr/local/bin/neo-healthcheck
 COPY --chmod=0755 neo-quit.py /usr/local/bin/neo-quit
