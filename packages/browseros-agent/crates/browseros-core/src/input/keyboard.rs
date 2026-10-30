@@ -124,6 +124,16 @@ pub async fn type_text(session: &ProtocolSession, text: &str) -> Result<(), Core
     Ok(())
 }
 
+/// Inserts `text` into whatever has focus as one native insertion, the way an IME or a
+/// paste does. Unlike [`type_text`] it sends no key events, so a newline stays a newline
+/// instead of becoming an Enter that submits a form or sends a chat message.
+pub async fn insert_text(session: &ProtocolSession, text: &str) -> Result<(), CoreError> {
+    let _: Value = session
+        .send("Input.insertText", json!({ "text": text }))
+        .await?;
+    Ok(())
+}
+
 pub async fn clear_field(session: &ProtocolSession) -> Result<(), CoreError> {
     dispatch_key(
         session,

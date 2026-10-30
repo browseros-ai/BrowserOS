@@ -185,6 +185,12 @@ struct HarnessConnection {
     /// Probe reads on the created tab that still find the about:blank it opened on, as while a
     /// slow server has not answered.
     placeholder_reads: AtomicU64,
+    /// What `Page.navigate` answers, such as an `errorText` for a host that does not resolve.
+    navigate_reply: Mutex<Value>,
+    /// The tab's session history as `Page.getNavigationHistory` reports it.
+    history: Mutex<Value>,
+    /// The main document's HTTP status as Navigation Timing reports it.
+    http_status: Mutex<Value>,
 }
 
 impl HarnessConnection {
@@ -197,7 +203,29 @@ impl HarnessConnection {
             emit_console_on_input: AtomicBool::new(false),
             mutations: AtomicU64::new(0),
             placeholder_reads: AtomicU64::new(0),
+            navigate_reply: Mutex::new(json!({ "frameId": "main", "loaderId": "loader-2" })),
+            history: Mutex::new(json!({
+                "currentIndex": 1,
+                "entries": [
+                    { "id": 11, "url": "https://example.test/first", "title": "First" },
+                    { "id": 12, "url": "https://example.test/", "title": "Example" }
+                ]
+            })),
+            http_status: Mutex::new(Value::Null),
         })
+    }
+
+    fn set(&self, field: &Mutex<Value>, value: Value) {
+        *field
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = value;
+    }
+
+    fn get(field: &Mutex<Value>) -> Value {
+        field
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     fn emit(&self, method: &str, params: Value, session_id: Option<&str>) {
@@ -323,7 +351,10 @@ impl CdpConnection for HarnessConnection {
                 | "Runtime.runIfWaitingForDebugger"
                 | "Target.setAutoAttach"
                 | "Page.reload"
+                | "Page.navigateToHistoryEntry"
                 | "Page.handleJavaScriptDialog" => Ok(json!({})),
+                "Page.navigate" => Ok(Self::get(&self.navigate_reply)),
+                "Page.getNavigationHistory" => Ok(Self::get(&self.history)),
                 "Page.getFrameTree" => Ok(json!({
                     "frameTree": {
                         "frame": {
@@ -375,6 +406,14 @@ impl CdpConnection for HarnessConnection {
                         "showing": true,
                         "complete": true
                     } } }))
+                }
+                "Runtime.evaluate"
+                    if params
+                        .get("expression")
+                        .and_then(Value::as_str)
+                        .is_some_and(|expression| expression.contains("responseStatus")) =>
+                {
+                    Ok(json!({ "result": { "value": Self::get(&self.http_status) } }))
                 }
                 "Runtime.evaluate" => Ok(json!({ "result": { "value": 0 } })),
                 "Input.dispatchKeyEvent" => {
@@ -1262,18 +1301,26 @@ async fn retired_window_activate_action_is_rejected() {
     assert!(result_text(&result).starts_with("Invalid arguments for windows:"));
 }
 
+/// The harness display is 2x (a 2880 device-pixel layout viewport over 1440 CSS pixels), so
+/// the default CSS scale halves the clip scale: one image pixel per CSS pixel, the point
+/// click_at takes. "device" keeps the display's density.
 #[tokio::test]
 async fn screenshot_caps_only_supplied_css_dimensions_without_resizing_the_page() {
     for (options, scale) in [
-        (json!({}), 1.0),
-        (json!({ "size": {} }), 1.0),
+        (json!({}), 0.5),
+        (json!({ "size": {} }), 0.5),
         (
             json!({ "size": { "width": 1024, "height": 768 } }),
-            768.0 / 1800.0,
+            768.0 / 1800.0 / 2.0,
         ),
-        (json!({ "size": { "width": 1024 } }), 1024.0 / 1440.0),
-        (json!({ "size": { "height": 768 } }), 768.0 / 1800.0),
-        (json!({ "size": { "width": 4096, "height": 4096 } }), 1.0),
+        (json!({ "size": { "width": 1024 } }), 1024.0 / 1440.0 / 2.0),
+        (json!({ "size": { "height": 768 } }), 768.0 / 1800.0 / 2.0),
+        (json!({ "size": { "width": 4096, "height": 4096 } }), 0.5),
+        (json!({ "scale": "device" }), 1.0),
+        (
+            json!({ "scale": "device", "size": { "width": 1024 } }),
+            1024.0 / 1440.0,
+        ),
     ] {
         let (ctx, connection, page) = harness_ctx().await;
         let mut args = options;
@@ -2070,6 +2117,129 @@ async fn a_same_document_history_step_does_not_wait_for_a_navigation() {
         start.elapsed() < Duration::from_millis(700),
         "took {:?}",
         start.elapsed()
+    );
+}
+
+async fn navigate(ctx: &ToolCtx, args: Value) -> crate::framework::ToolResult {
+    execute_tool(&tool_by_name("navigate"), args, ctx)
+        .await
+        .unwrap_or_else(|err| panic!("navigate should execute: {err}"))
+}
+
+fn sent_methods(connection: &HarnessConnection) -> Vec<String> {
+    connection
+        .calls
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .map(|call| call.method.clone())
+        .collect()
+}
+
+/// Chrome shows its own error page for a host that does not resolve; reporting that as an
+/// arrival had the agent read the error page as the site.
+#[tokio::test]
+async fn a_url_the_browser_cannot_load_is_an_error() {
+    let (ctx, connection, page) = harness_ctx().await;
+    connection.set(
+        &connection.navigate_reply,
+        json!({ "frameId": "main", "loaderId": "loader-2", "errorText": "net::ERR_NAME_NOT_RESOLVED" }),
+    );
+    let result = navigate(
+        &ctx,
+        json!({ "page": page, "url": "https://nowhere.invalid/" }),
+    )
+    .await;
+    assert!(result.is_error, "{}", result_text(&result));
+    assert!(result_text(&result).contains("net::ERR_NAME_NOT_RESOLVED"));
+}
+
+#[tokio::test]
+async fn a_url_that_is_a_file_reports_the_download() {
+    let (ctx, connection, page) = harness_ctx().await;
+    connection.set(
+        &connection.navigate_reply,
+        json!({ "frameId": "main", "errorText": "net::ERR_ABORTED", "isDownload": true }),
+    );
+    let result = navigate(
+        &ctx,
+        json!({ "page": page, "url": "https://example.test/report.csv" }),
+    )
+    .await;
+    assert!(!result.is_error, "{}", result_text(&result));
+    assert!(
+        result_text(&result).contains("downloaded"),
+        "{}",
+        result_text(&result)
+    );
+    assert_eq!(
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|data| data.get("download")),
+        Some(&json!(true))
+    );
+}
+
+#[tokio::test]
+async fn an_http_error_status_is_reported_with_the_page() {
+    let (ctx, connection, page) = harness_ctx().await;
+    connection.set(&connection.http_status, json!(404));
+    let result = navigate(
+        &ctx,
+        json!({ "page": page, "url": "https://example.test/missing" }),
+    )
+    .await;
+    assert!(!result.is_error, "{}", result_text(&result));
+    assert!(
+        result_text(&result).contains("(HTTP 404)"),
+        "{}",
+        result_text(&result)
+    );
+    assert_eq!(
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|data| data.get("status")),
+        Some(&json!(404))
+    );
+}
+
+#[tokio::test]
+async fn back_steps_the_tab_history_from_the_browser() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let result = navigate(&ctx, json!({ "page": page, "action": "back" })).await;
+    assert!(!result.is_error, "{}", result_text(&result));
+    let steps: Vec<Value> = connection
+        .calls
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .filter(|call| call.method == "Page.navigateToHistoryEntry")
+        .map(|call| call.params.clone())
+        .collect();
+    assert_eq!(steps, [json!({ "entryId": 11 })]);
+}
+
+/// `history.back()` with nowhere to go did nothing, while the tool still reported a navigation.
+#[tokio::test]
+async fn back_without_history_leaves_the_page_and_says_so() {
+    let (ctx, connection, page) = harness_ctx().await;
+    connection.set(
+        &connection.history,
+        json!({ "currentIndex": 0, "entries": [{ "id": 12, "url": "https://example.test/" }] }),
+    );
+    let result = navigate(&ctx, json!({ "page": page, "action": "back" })).await;
+    assert!(!result.is_error, "{}", result_text(&result));
+    assert!(
+        result_text(&result).contains("no back history entry"),
+        "{}",
+        result_text(&result)
+    );
+    assert!(
+        !sent_methods(&connection)
+            .iter()
+            .any(|method| method == "Page.navigateToHistoryEntry")
     );
 }
 

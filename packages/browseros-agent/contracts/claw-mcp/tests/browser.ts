@@ -65,7 +65,11 @@ export async function isBrowserRunning(cdpPort: number): Promise<boolean> {
   }
 }
 
-function launchArgs(cdpPort: number, userDataDir: string): string[] {
+function launchArgs(
+  cdpPort: number,
+  userDataDir: string,
+  extraArgs: string[],
+): string[] {
   const args = [
     '--no-first-run',
     '--no-default-browser-check',
@@ -83,6 +87,7 @@ function launchArgs(cdpPort: number, userDataDir: string): string[] {
   if (extra) {
     args.push(...extra.split(' ').filter(Boolean))
   }
+  args.push(...extraArgs)
   args.push(
     `--user-data-dir=${userDataDir}`,
     `--remote-debugging-port=${cdpPort}`,
@@ -119,7 +124,9 @@ async function seedDownloadDirectory(userDataDir: string): Promise<void> {
   )
 }
 
-export async function launchBrowser(): Promise<BrowserHandle> {
+export async function launchBrowser(
+  extraArgs: string[] = [],
+): Promise<BrowserHandle> {
   const binary = browserBinary()
   const userDataDir = await mkdtemp(
     join(tmpdir(), 'browseros-contract-browser-'),
@@ -127,7 +134,7 @@ export async function launchBrowser(): Promise<BrowserHandle> {
   await seedDownloadDirectory(userDataDir)
   const cdpPort = await findFreePort()
   const child = Bun.spawn({
-    cmd: [binary, ...launchArgs(cdpPort, userDataDir)],
+    cmd: [binary, ...launchArgs(cdpPort, userDataDir, extraArgs)],
     stdout: process.env.BROWSEROS_TEST_DEBUG === 'true' ? 'inherit' : 'ignore',
     stderr: process.env.BROWSEROS_TEST_DEBUG === 'true' ? 'inherit' : 'ignore',
     detached: process.platform !== 'win32',

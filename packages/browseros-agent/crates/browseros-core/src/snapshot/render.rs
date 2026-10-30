@@ -412,8 +412,13 @@ fn format_line(
         line.push(']');
     }
 
+    // A slider's value arrives as a number, so it is displayed rather than read as a string.
     if is_value_role(role)
-        && let Some(value) = str_val(node.value.as_ref())
+        && let Some(value) = node
+            .value
+            .as_ref()
+            .and_then(|value| value.value.as_ref())
+            .map(value_display)
         && !value.is_empty()
     {
         line.push_str(": ");
@@ -691,6 +696,63 @@ mod tests {
                 "  - heading \"Results\" [level=1]",
                 "  - button \"Load more\" [disabled] [ref=e2]",
                 "  - textbox \"Search\" [ref=e3]: \"abc\"",
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
+    fn a_slider_shows_its_numeric_value() {
+        let mut nodes = vec![ax("1", "RootWebArea", &["2"]), ax("2", "slider", &[])];
+        nodes[1].name = Some(name("Volume"));
+        nodes[1].backend_dom_node_id = Some(200);
+        nodes[1].value = Some(AxValue {
+            value_type: "number".to_string(),
+            value: Some(json!(75)),
+            sources: None,
+        });
+        assert_eq!(
+            render(&nodes, &mut RefMap::new()),
+            "- slider \"Volume\" [ref=e1]: \"75\""
+        );
+    }
+
+    #[test]
+    fn date_time_and_color_inputs_get_refs_and_show_their_value() {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2", "3", "4", "5"]),
+            ax("2", "Date", &[]),
+            ax("3", "DateTime", &[]),
+            ax("4", "InputTime", &[]),
+            ax("5", "ColorWell", &[]),
+        ];
+        for (index, (label, value)) in [
+            ("Start", "2026-10-29"),
+            ("Meeting", "2026-10-29T14:30"),
+            ("Alarm", "07:15"),
+            ("Accent", "#ff8800"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let node = &mut nodes[index + 1];
+            node.name = Some(name(label));
+            node.backend_dom_node_id = Some(200 + index as i64);
+            node.value = Some(AxValue {
+                value_type: "string".to_string(),
+                value: Some(json!(value)),
+                sources: None,
+            });
+        }
+
+        let text = render(&nodes, &mut RefMap::new());
+        assert_eq!(
+            text,
+            [
+                "- Date \"Start\" [ref=e1]: \"2026-10-29\"",
+                "- DateTime \"Meeting\" [ref=e2]: \"2026-10-29T14:30\"",
+                "- InputTime \"Alarm\" [ref=e3]: \"07:15\"",
+                "- ColorWell \"Accent\" [ref=e4]: \"#ff8800\"",
             ]
             .join("\n")
         );

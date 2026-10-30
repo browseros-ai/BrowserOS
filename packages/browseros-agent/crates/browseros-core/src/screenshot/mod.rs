@@ -52,8 +52,10 @@ pub struct ScreenshotCaptureOptions {
     pub clip: Option<Viewport>,
 }
 
-/// Viewport boxes are viewport-relative and apply the clip scale. Full-page
-/// boxes add the sampled scroll offsets when that best-effort read succeeds.
+/// Boxes are in the image's own pixels, so they line up with what the caller sees: CSS
+/// boxes times the clip scale and the device pixel ratio. Viewport boxes are
+/// viewport-relative; full-page boxes add the sampled scroll offsets when that best-effort
+/// read succeeds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScreenshotAnnotationBox {
     pub x: i64,
@@ -198,6 +200,18 @@ async fn capture_annotated_screenshot(
         } else {
             None
         };
+        // Boxes are measured in CSS pixels; the image has clip.scale times the device pixel
+        // ratio of them per CSS pixel (a full-page capture has no clip and keeps device pixels).
+        let image_scale = if annotations.is_empty() {
+            1.0
+        } else {
+            read_device_pixel_ratio(&page_session).await
+                * if full_page {
+                    1.0
+                } else {
+                    options.clip.map_or(1.0, |clip| clip.scale)
+                }
+        };
         if !annotations.is_empty() {
             inject_annotation_overlay(&page_session, &token, full_page, &annotations, scroll)
                 .await?;
@@ -217,15 +231,7 @@ async fn capture_annotated_screenshot(
         Ok(ScreenshotCaptureResult {
             data: captured.data,
             mime_type: format!("image/{}", format.as_str()),
-            annotations: project_annotations(
-                &annotations,
-                scroll,
-                if full_page {
-                    None
-                } else {
-                    options.clip.map(|clip| clip.scale)
-                },
-            ),
+            annotations: project_annotations(&annotations, scroll, Some(image_scale)),
         })
     }
     .await;
@@ -400,6 +406,16 @@ async fn read_viewport_rect(session: &ProtocolSession) -> Result<Rect, CoreError
         width: 0.0,
         height: 0.0,
     }))
+}
+
+async fn read_device_pixel_ratio(session: &ProtocolSession) -> f64 {
+    PageJs::isolated(session)
+        .eval::<Option<f64>>("window.devicePixelRatio")
+        .await
+        .ok()
+        .flatten()
+        .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+        .unwrap_or(1.0)
 }
 
 async fn read_scroll_offsets(session: &ProtocolSession) -> Result<PointOffset, CoreError> {

@@ -33,6 +33,8 @@ export interface CaseContext {
 
 export interface ContractCase {
   name: string
+  /** Browser arguments scoped to this case; changing them restarts the isolated runtime. */
+  browserArgs?: string[]
   /** ~12 cases carry true: the <60s tier run by test:claw-mcp-smoke. */
   smoke?: boolean
   run(ctx: CaseContext): Promise<void>
@@ -47,6 +49,10 @@ import { isolationCases } from './cases-isolation'
 import { labelCases } from './cases-labels'
 import { navigateSnapshotCases } from './cases-navigate-snapshot'
 import { readEvalCases } from './cases-read-eval'
+import { screenshotScaleCases } from './cases-screenshot-scale'
+import { sdkInputCases } from './cases-sdk-input'
+import { sdkNavigationCases } from './cases-sdk-navigation'
+import { sdkReadEvalCases } from './cases-sdk-read-eval'
 import { snapshotConcurrencyCases } from './cases-snapshot-concurrency'
 import { tabsCases } from './cases-tabs'
 import { transportCases } from './cases-transport'
@@ -65,5 +71,9 @@ export const contractCases: ContractCase[] = [
   ...readEvalCases,
   ...isolationCases,
   ...captureIoCases,
+  ...sdkInputCases,
+  ...sdkNavigationCases,
+  ...sdkReadEvalCases,
+  ...screenshotScaleCases,
   ...clawLayerCases,
 ]

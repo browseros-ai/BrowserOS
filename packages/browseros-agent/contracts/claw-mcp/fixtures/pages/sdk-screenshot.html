@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>CSS screenshot geometry contract</title>
+    <style>
+      /* Keep every box within the short CSS viewport of a 2x headless browser;
+         clipping a partly visible control would legitimately shorten its box. */
+      body { margin: 0; }
+      button { position: absolute; top: 20px; width: 100px; height: 40px; }
+      #first { left: 20px; }
+      #second { left: 150px; }
+    </style>
+  </head>
+  <body>
+    <button id="first">First target</button>
+    <button id="second">Second target</button>
+  </body>
+</html>

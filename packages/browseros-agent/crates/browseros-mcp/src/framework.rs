@@ -129,6 +129,10 @@ pub struct ToolCtx {
     pub inner_call_hook: Option<Arc<dyn InnerCallHook>>,
     /// See [`BrowserToolOptions::preloaded_helpers`].
     pub preloaded_helpers: Vec<HelperSource>,
+    /// Set for calls a `run` script makes. Their results go to the script, not the model, so
+    /// tools hand back the whole value instead of an inline excerpt plus a file the script
+    /// cannot open; what the script returns is capped on its way to the model instead.
+    pub within_script: bool,
 }
 
 impl ToolCtx {
@@ -142,6 +146,7 @@ impl ToolCtx {
             output_files: options.output_files,
             inner_call_hook: options.inner_call_hook,
             preloaded_helpers: options.preloaded_helpers,
+            within_script: false,
         }
     }
 

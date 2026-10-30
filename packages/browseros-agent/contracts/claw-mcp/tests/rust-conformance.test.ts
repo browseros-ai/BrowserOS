@@ -27,6 +27,7 @@ const activeCases =
     : contractCases
 
 interface ServerRun {
+  browserArgs: string[]
   server: ContractServer
   browser: BrowserHandle
   mcp: McpSession
@@ -44,11 +45,17 @@ async function ensureFixtures(): Promise<FixturePair> {
   return fixtures
 }
 
-async function ensureRun(): Promise<ServerRun> {
+async function ensureRun(browserArgs: string[] = []): Promise<ServerRun> {
+  // Density-sensitive captures need a real launch flag, not page emulation.
+  // Replace only the suite-owned runtime when a case's launch contract changes;
+  // ordinary cases keep their existing arguments and shared-session ordering.
+  if (run && JSON.stringify(run.browserArgs) !== JSON.stringify(browserArgs)) {
+    await teardownRun()
+  }
   if (run) return run
 
   await ensureFixtures()
-  const browser = await launchBrowser()
+  const browser = await launchBrowser(browserArgs)
   // Everything after the launch is wrapped so a failure (capture-mode,
   // server boot, browser attach, scratch-dir mint) never leaks the
   // browser: nothing is stored in `runs` until the run is fully built,
@@ -83,6 +90,7 @@ async function ensureRun(): Promise<ServerRun> {
       { timeoutMs: 30_000, intervalMs: 500 },
     )
     run = {
+      browserArgs,
       server,
       browser,
       mcp,
@@ -158,7 +166,7 @@ gate('Rust /mcp conformance', () => {
     test(
       contractCase.name,
       async () => {
-        const activeRun = await ensureRun()
+        const activeRun = await ensureRun(contractCase.browserArgs)
         try {
           await contractCase.run(makeContext(activeRun))
         } finally {
