@@ -15,24 +15,24 @@
     "lint:fix": "bunx biome check --write --unsafe"
   },
   "dependencies": {
-    "@base-ui/react": "^1.8.0",
+    "@base-ui/react": "^1.9.0",
     "@browseros/shared": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.577.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
-    "react-router": "^7.18.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router": "^7.18.5",
     "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
-    "@types/bun": "^1.4.2",
-    "@types/node": "^24.13.6",
+    "@types/bun": "^1.4.4",
+    "@types/node": "^24.19.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.0.0",
     "tailwindcss": "^4.1.17",
-    "vite": "^7.3.6"
+    "vite": "^7.3.7"
   }
 }
