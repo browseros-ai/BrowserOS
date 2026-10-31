@@ -462,9 +462,10 @@ jobs:
           # Resolve its package identity from that checkout's release descriptor.
           server_package="$(uv run --directory ../browseros python -c 'from bos_build.release.components import component_by_id; print(component_by_id("claw-server-rust").package_name)')"
           # rustc links macOS binaries for its per-arch default minimum, but the
-          # cc crate compiles C dependencies (aws-lc, under rustls) for the
-          # runner's Xcode SDK version when this is unset. Pin it to rustc's
-          # defaults so the shipped minimum macOS stays fixed across runner images.
+          # cc crate compiles the C dependencies (aws-lc, ring, SQLite, QuickJS)
+          # for the runner's Xcode SDK version when this is unset. Pin it to
+          # rustc's defaults so the shipped minimum macOS stays fixed across
+          # runner images.
           case "$RUST_TARGET" in
             aarch64-apple-darwin) export MACOSX_DEPLOYMENT_TARGET=11.0 ;;
             x86_64-apple-darwin) export MACOSX_DEPLOYMENT_TARGET=10.12 ;;
