@@ -153,18 +153,36 @@ export async function waitUntil(
   ready: () => Promise<boolean>,
   timeoutMs = 30_000,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
+  const deadline = performance.now() + timeoutMs
+  const timedOut = () =>
+    new Error(
+      `Timed out waiting for ${label}\n${processes.map((process) => process.diagnostics()).join('\n')}`,
+    )
+  while (performance.now() < deadline) {
     for (const process of processes) process.assertRunning()
-    if (await ready()) {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let isReady: boolean
+    try {
+      isReady = await Promise.race([
+        Promise.resolve().then(ready),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(timedOut()),
+            Math.max(0, deadline - performance.now()),
+          )
+        }),
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+    if (performance.now() >= deadline) throw timedOut()
+    if (isReady) {
       for (const process of processes) process.assertRunning()
       return
     }
-    await Bun.sleep(50)
+    await Bun.sleep(Math.min(50, Math.max(0, deadline - performance.now())))
   }
-  throw new Error(
-    `Timed out waiting for ${label}\n${processes.map((process) => process.diagnostics()).join('\n')}`,
-  )
+  throw timedOut()
 }
 
 /** No inherited credentials, config overrides, telemetry keys or proxy settings. */
