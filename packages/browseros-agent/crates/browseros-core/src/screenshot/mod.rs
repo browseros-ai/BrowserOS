@@ -9,9 +9,13 @@ use std::{
         Arc, Mutex as StdMutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
+use tokio::time::timeout;
+
+const SCREENSHOT_CAPTURE_DEADLINE: Duration = Duration::from_millis(1_200);
+const SCREENCAST_FRAME_DEADLINE: Duration = Duration::from_secs(2);
 
 const OVERLAY_ATTR: &str = "data-browseros-screenshot-annotation";
 const OVERLAY_SCRIPT: &str = include_str!("../assets/screenshot-overlay.js");
@@ -149,14 +153,8 @@ async fn capture_plain_screenshot(
     options: &ScreenshotCaptureOptions,
 ) -> Result<ScreenshotCaptureResult, CoreError> {
     let format = options.format.unwrap_or(ScreenshotFormat::Png);
-    let full_page = options.full_page.unwrap_or(false);
     let hidden = pointer::hide_for_capture(page_session).await;
-    let result = page_session
-        .send::<_, CaptureScreenshotResult>(
-            "Page.captureScreenshot",
-            screenshot_params(format, options.quality, full_page, options.clip),
-        )
-        .await;
+    let result = capture_image(page_session, options).await;
     if hidden {
         pointer::restore_after_capture(page_session).await;
     }
@@ -218,12 +216,7 @@ async fn capture_annotated_screenshot(
             overlay_injected = true;
         }
         let hidden = pointer::hide_for_capture(&page_session).await;
-        let captured = page_session
-            .send::<_, CaptureScreenshotResult>(
-                "Page.captureScreenshot",
-                screenshot_params(format, options.quality, full_page, options.clip),
-            )
-            .await;
+        let captured = capture_image(&page_session, &options).await;
         if hidden {
             pointer::restore_after_capture(&page_session).await;
         }
@@ -240,6 +233,111 @@ async fn capture_annotated_screenshot(
         let _ = remove_annotation_overlay(&page_session, &token).await;
     }
     result
+}
+
+async fn capture_image(
+    page_session: &ProtocolSession,
+    options: &ScreenshotCaptureOptions,
+) -> Result<CaptureScreenshotResult, CoreError> {
+    let format = options.format.unwrap_or(ScreenshotFormat::Png);
+    let full_page = options.full_page.unwrap_or(false);
+    let params = screenshot_params(format, options.quality, full_page, options.clip);
+
+    // 部分 Windows 云桌面最小化后，Chromium 的 Surface 截图可能一直不返回。
+    // 仅对 JPEG 视口截图设置短等待，正常路径保持原有格式、裁剪和 CDP 行为。
+    if format != ScreenshotFormat::Jpeg || full_page {
+        return page_session.send("Page.captureScreenshot", params).await;
+    }
+    match timeout(
+        SCREENSHOT_CAPTURE_DEADLINE,
+        page_session.send("Page.captureScreenshot", params),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => capture_screencast_frame(page_session, options).await,
+    }
+}
+
+async fn capture_screencast_frame(
+    page_session: &ProtocolSession,
+    options: &ScreenshotCaptureOptions,
+) -> Result<CaptureScreenshotResult, CoreError> {
+    let mut params = json!({
+        "format": "jpeg",
+        "quality": options.quality.unwrap_or(80),
+        "maxFramesInFlight": 1
+    });
+    if let Some(clip) = options.clip {
+        // Screencast 返回的是完整视口，不支持任意子区域裁剪，不能悄悄返回错误图片。
+        let metrics: Value = page_session
+            .send("Page.getLayoutMetrics", json!({}))
+            .await?;
+        let viewport = metrics
+            .get("cssLayoutViewport")
+            .or_else(|| metrics.get("layoutViewport"));
+        let width = viewport
+            .and_then(|value| value.get("clientWidth"))
+            .and_then(Value::as_f64);
+        let height = viewport
+            .and_then(|value| value.get("clientHeight"))
+            .and_then(Value::as_f64);
+        if width.is_none_or(|width| (width - clip.width).abs() > 1.0)
+            || height.is_none_or(|height| (height - clip.height).abs() > 1.0)
+        {
+            return Err(CoreError::Message(
+                "CDP screenshot timed out; screencast cannot preserve a partial clip".into(),
+            ));
+        }
+        params["maxWidth"] = json!((clip.width * clip.scale).round().max(1.0) as u32);
+        params["maxHeight"] = json!((clip.height * clip.scale).round().max(1.0) as u32);
+    }
+
+    // 在发送开始命令前订阅，防止 Chromium 的第一帧在订阅前丢失。
+    let mut events = page_session.subscribe_events();
+    timeout(
+        SCREENCAST_FRAME_DEADLINE,
+        page_session.send::<_, Value>("Page.startScreencast", params),
+    )
+    .await
+    .map_err(|_| CoreError::Message("timed out starting screenshot screencast".into()))??;
+
+    let frame = timeout(SCREENCAST_FRAME_DEADLINE, async {
+        loop {
+            let event = match events.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(error) => {
+                    return Err(CoreError::Message(format!(
+                        "screencast event stream: {error}"
+                    )));
+                }
+            };
+            if event.method != "Page.screencastFrame"
+                || event.session_id.as_ref() != page_session.session_id()
+            {
+                continue;
+            }
+            if let Some(data) = event.params.get("data").and_then(Value::as_str)
+                && !data.is_empty()
+            {
+                return Ok(CaptureScreenshotResult {
+                    data: data.to_string(),
+                });
+            }
+        }
+    })
+    .await
+    .map_err(|_| CoreError::Message("timed out waiting for screenshot screencast frame".into()));
+
+    // 无论有没有得到帧都停止 screencast，且不能再被 60 秒的 CDP 默认超时拖住。
+    timeout(
+        Duration::from_millis(500),
+        page_session.send::<_, Value>("Page.stopScreencast", json!({})),
+    )
+    .await
+    .map_err(|_| CoreError::Message("timed out stopping screenshot screencast".into()))??;
+    frame?
 }
 
 fn screenshot_params(
@@ -602,8 +700,12 @@ fn annotation_number(ref_id: &str) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScreenshotCaptureOptions, capture_plain_screenshot};
+    use super::{
+        ScreenshotCaptureOptions, ScreenshotFormat, capture_plain_screenshot,
+        capture_screencast_frame,
+    };
     use crate::{ProtocolSession, test_support::TestConnection};
+    use browseros_cdp::CdpEvent;
     use serde_json::json;
 
     #[tokio::test]
@@ -655,6 +757,77 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].method, "Runtime.evaluate");
         assert_eq!(calls[1].method, "Page.captureScreenshot");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stalled_jpeg_can_use_a_session_scoped_screencast_frame()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let connection = TestConnection::new([
+            ("Page.startScreencast", json!({})),
+            ("Page.stopScreencast", json!({})),
+        ]);
+        let session = ProtocolSession::root(connection.clone());
+        let options = ScreenshotCaptureOptions {
+            format: Some(ScreenshotFormat::Jpeg),
+            quality: Some(45),
+            ..Default::default()
+        };
+        let worker =
+            tokio::spawn(async move { capture_screencast_frame(&session, &options).await });
+
+        while !connection
+            .calls()?
+            .iter()
+            .any(|call| call.method == "Page.startScreencast")
+        {
+            tokio::task::yield_now().await;
+        }
+        // 其他 CDP 会话的帧不能被当成当前标签页的截图。
+        connection.publish_event(CdpEvent {
+            method: "Page.screencastFrame".into(),
+            params: json!({ "data": "wrong-tab" }),
+            session_id: Some(browseros_cdp::SessionId::from("other-tab")),
+        });
+        connection.publish_event(CdpEvent {
+            method: "Page.screencastFrame".into(),
+            params: json!({ "data": "jpeg-frame" }),
+            session_id: None,
+        });
+        let screenshot = worker.await??;
+        assert_eq!(screenshot.data, "jpeg-frame");
+        let calls = connection.calls()?;
+        assert_eq!(calls[0].params["quality"], 45);
+        assert_eq!(calls[0].params["maxFramesInFlight"], 1);
+        assert_eq!(calls[1].method, "Page.stopScreencast");
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn missing_screencast_frame_still_stops_capture() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let connection = TestConnection::new([
+            ("Page.startScreencast", json!({})),
+            ("Page.stopScreencast", json!({})),
+        ]);
+        let session = ProtocolSession::root(connection.clone());
+        let worker = tokio::spawn(async move {
+            capture_screencast_frame(&session, &ScreenshotCaptureOptions::default()).await
+        });
+        while !connection
+            .calls()?
+            .iter()
+            .any(|call| call.method == "Page.startScreencast")
+        {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(super::SCREENCAST_FRAME_DEADLINE).await;
+        assert!(worker.await?.is_err());
+        let calls = connection.calls()?;
+        assert_eq!(
+            calls.last().map(|call| call.method.as_str()),
+            Some("Page.stopScreencast")
+        );
         Ok(())
     }
 }

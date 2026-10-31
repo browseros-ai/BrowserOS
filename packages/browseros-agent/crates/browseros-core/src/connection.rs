@@ -219,6 +219,10 @@ impl ProtocolSession {
         self.session_id.as_ref()
     }
 
+    pub(crate) fn subscribe_events(&self) -> broadcast::Receiver<CdpEvent> {
+        self.connection.events()
+    }
+
     #[must_use]
     pub fn same_session(&self, other: &Self) -> bool {
         self.session_id == other.session_id
