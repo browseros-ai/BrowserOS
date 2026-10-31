@@ -95,9 +95,10 @@ COPY --chmod=0755 entrypoint.sh /usr/local/bin/neo-entrypoint
 COPY --chmod=0755 healthcheck.sh /usr/local/bin/neo-healthcheck
 COPY --chmod=0755 neo-quit.py /usr/local/bin/neo-quit
 
-# CLAW_ANALYTICS_ENABLED=0 turns off the bundled server's product analytics:
-# every container would otherwise report to the desktop PostHog project as a
-# separate install. The browser's native metrics do not read it.
+# A container is not someone's install, so it must not report to the desktop
+# PostHog project as one. Hosted mode turns off the server's product analytics
+# and (entrypoint.sh) the browser's native metrics. CLAW_ANALYTICS_ENABLED=0
+# keeps the server's off on older servers and with BROWSERCLAW_HOSTED_MODE=0.
 ENV NEO_SCREEN=1600x1000 \
     NEO_DATA_DIR=/data \
     NEO_DOWNLOAD_DIR="" \

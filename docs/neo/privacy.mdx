@@ -42,6 +42,10 @@ None of the fields in the "never leaves" list above are in this stream. There is
 
 These events go to [PostHog](https://posthog.com), a product analytics service. They're subject to PostHog's own privacy policy. If you'd rather send nothing at all, open Settings and switch the toggle off.
 
+## Hosted and Docker
+
+BrowserOS neo in hosted mode, the default for the [Docker image](https://github.com/browseros-ai/BrowserOS/tree/main/packages/browseros/docker/neo), sends no product events, from its server or its browser. A hosted container isn't someone's install, so it doesn't report like one.
+
 ## Your AI's own provider
 
 When your AI works in BrowserOS neo, the AI itself (Claude Code, Cursor, Codex, and so on) talks to its own vendor with your prompts. What that vendor does with the data is governed by their privacy policy, not ours. BrowserOS neo does not intermediate that leg.

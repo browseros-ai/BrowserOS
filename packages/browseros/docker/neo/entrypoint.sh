@@ -36,7 +36,8 @@ readonly SERVER_PORT=9210
 : "${NEO_DISABLE_BROWSEROS_EXTENSIONS:=true}"
 : "${PUID:=1000}" "${PGID:=1000}"
 # Shared browser/server deployment flag (README). Hosted mode hides local-agent
-# MCP tools and enables hosted browser reporting; both processes require exact 1.
+# MCP tools, enables hosted browser reporting (the brand and GPU websites see)
+# and turns product analytics off; both processes require exact 1.
 : "${BROWSERCLAW_HOSTED_MODE:=1}"
 
 is_true() {
@@ -267,6 +268,14 @@ apply_minimal_ui() {
 # DevTools emulation, not browser zoom, and still works.
 start_neo() {
   forget_zoom_levels
+  # The browser's own usage metrics go to the desktop PostHog project and ignore
+  # CLAW_ANALYTICS_ENABLED. A hosted container is not someone's install, so
+  # hosted mode turns them off, as it does the server's. Browsers without the
+  # switch ignore it.
+  local metrics_flags=()
+  if [ "$BROWSERCLAW_HOSTED_MODE" = 1 ]; then
+    metrics_flags=(--disable-browseros-metrics)
+  fi
   # Releases verify the packaged/overlaid server, so pin it for the image's
   # lifetime. Keep this outside NEO_ARGS, which Compose/callers may replace.
   # NEO_ARGS goes last so a caller's value for a repeated switch wins.
@@ -275,6 +284,7 @@ start_neo() {
     "${sandbox_flags[@]}" \
     "${browseros_extension_flags[@]}" \
     "${gpu_flags[@]}" \
+    "${metrics_flags[@]}" \
     --user-data-dir="$PROFILE" \
     --no-first-run \
     --no-default-browser-check \
