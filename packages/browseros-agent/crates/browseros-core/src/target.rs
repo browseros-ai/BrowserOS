@@ -1061,9 +1061,11 @@ impl BrowserView {
                 children(document, frames);
             }
         }
-        let mut pending = vec![root];
+        // Each endpoint travels with the hops that admit it, so a child adds one hop to its
+        // parent's chain rather than checking the parent again through its admission.
+        let mut pending = vec![(root, Vec::new())];
         let mut visited = BTreeSet::new();
-        while let Some(parent) = pending.pop() {
+        while let Some((parent, parent_hops)) = pending.pop() {
             if !visited.insert(parent.session_id().cloned()) {
                 continue;
             }
@@ -1099,21 +1101,29 @@ impl BrowserView {
                         access.epoch_guard()?,
                     )
                     .await?;
-                let session = access
-                    .frame_capability(target.session, child.clone(), parent.clone(), backend)
-                    .await?;
+                let (Some(parent_id), Some(endpoint)) = (
+                    parent.session_id().cloned(),
+                    target.session.session_id().cloned(),
+                ) else {
+                    continue;
+                };
+                let mut hops: Vec<page_access::FrameHop> = parent_hops.clone();
+                hops.push(page_access::FrameHop {
+                    parent: parent_id,
+                    frame: child.clone(),
+                    endpoint,
+                    backend,
+                });
+                let session = access.frame_capability(target.session, hops.clone())?;
                 if child == frame {
                     return Ok(session);
                 }
                 if cross_process && !session.same_session(&parent) {
-                    pending.push(session);
+                    pending.push((session, hops));
                 }
             }
         }
-        Err(CoreError::Message(format!(
-            "Frame {} is no longer part of page {page:?}",
-            frame.as_str()
-        )))
+        Err(TargetError::FrameNotInPage { page, frame }.into())
     }
     pub async fn observe(&self, page: PageId) -> Result<Arc<Observer>, CoreError> {
         let access = self.page_access(page.clone()).await?;

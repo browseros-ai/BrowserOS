@@ -24,8 +24,8 @@ export interface CaseContext {
    * A session on a second server told the browser's BrowserOS version, as BrowserOS launches
    * it in production. Its views are profile-scoped, so page access runs through the scoped
    * admission guards; the primary server treats the browser as an unknown native and skips
-   * them. Started on first use and shared by later cases. On a browser without native
-   * profile targeting this is the primary session: such a BrowserOS runs unbound too.
+   * them. Started on first use and shared by later cases. Only `scoped` cases may use it: on
+   * a browser without native profile targeting they are skipped, and this throws.
    */
   scopedMcp(): Promise<McpSession>
   /** Extra sessions (ownership/naming/audit cases); auto-closed at run end. */
@@ -45,6 +45,8 @@ export interface ContractCase {
   browserArgs?: string[]
   /** ~12 cases carry true: the <60s tier run by test:claw-mcp-smoke. */
   smoke?: boolean
+  /** Needs `scopedMcp()`; reported as skipped on a browser without profile targeting. */
+  scoped?: boolean
   run(ctx: CaseContext): Promise<void>
 }
 

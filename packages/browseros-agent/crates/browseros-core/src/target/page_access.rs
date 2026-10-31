@@ -6,6 +6,7 @@ use crate::{
     connection::ProtocolAdmission,
     pages::{PageInfo, PageSession},
 };
+use browseros_cdp::CdpError;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -85,18 +86,11 @@ impl PageAccess {
         frame: FrameId,
     ) -> Result<ProtocolSession, CoreError> {
         let frames = self.view.session.frames();
-        let foreign = |frame: &FrameId| {
-            CoreError::Message(format!(
-                "Frame {} is no longer part of page {:?}",
-                frame.as_str(),
-                self.page
-            ))
-        };
         // Climb the recorded parents to this page's root. Each frame must still be on the
         // endpoint its parent read it through. An OOPIF that detached or re-attached waits for
-        // a new capture rather than lending its node ids to another process, including the
-        // page's own endpoint the registry falls back to. An intermediate parent must be an
-        // OOPIF's own endpoint, so the climb only reaches targets recorded under this page.
+        // a new capture rather than lending its node ids to another process. An intermediate
+        // parent must be an OOPIF's own endpoint, so the climb only reaches targets recorded
+        // under this page.
         let mut child = frame.clone();
         let mut endpoint = session.session_id().cloned();
         let mut chain = vec![(frame, session)];
@@ -105,7 +99,7 @@ impl PageAccess {
                 .frame_link(&child)
                 .await
                 .filter(|link| endpoint.as_ref() == Some(&link.endpoint))
-                .ok_or_else(|| foreign(&child))?;
+                .ok_or_else(|| self.refused(&child))?;
             if root.session_id() == Some(&link.parent) {
                 break;
             }
@@ -113,28 +107,39 @@ impl PageAccess {
                 .oopif_for_session(&link.parent)
                 .await
                 .filter(|owner| chain.iter().all(|(seen, _)| seen != owner))
-                .ok_or_else(|| foreign(&child))?;
+                .ok_or_else(|| self.refused(&child))?;
             let parent =
                 ProtocolSession::for_session(self.view.session.connection(), link.parent.clone());
             chain.push((owner.clone(), parent));
             child = owner;
             endpoint = Some(link.parent);
         }
+        // Down from the root, each owner is read through a parent the hops above have just
+        // vouched for; the capability then rechecks every hop on each call.
+        let mut hops = Vec::new();
         let mut admitted = root;
         for (frame, session) in chain.into_iter().rev() {
             // A same-process child shares its parent's endpoint and so its admission.
             if session.same_session(&admitted) {
                 continue;
             }
-            let owner = admitted
-                .send_value("DOM.getFrameOwner", json!({"frameId":frame.as_str()}))
-                .await?;
-            let backend = owner["backendNodeId"]
-                .as_i64()
-                .ok_or_else(|| CoreError::Message("Frame owner has no backend node".into()))?;
-            admitted = self
-                .frame_capability(session, frame, admitted, backend)
-                .await?;
+            let (Some(parent), Some(endpoint)) = (
+                admitted.session_id().cloned(),
+                session.session_id().cloned(),
+            ) else {
+                return Err(self.refused(&frame));
+            };
+            let backend = self
+                .frame_owner(&parent, &frame)
+                .await?
+                .ok_or_else(|| self.refused(&frame))?;
+            hops.push(FrameHop {
+                parent,
+                frame,
+                endpoint,
+                backend,
+            });
+            admitted = self.frame_capability(session, hops.clone())?;
         }
         Ok(admitted)
     }
@@ -143,34 +148,76 @@ impl PageAccess {
         self.view.epoch_guard()
     }
 
-    pub(super) async fn frame_capability(
+    /// `session` admitted as a child frame endpoint through `hops`, root first.
+    pub(super) fn frame_capability(
         self: &Arc<Self>,
         session: ProtocolSession,
-        frame: FrameId,
-        parent: ProtocolSession,
-        backend: i64,
+        hops: Vec<FrameHop>,
     ) -> Result<ProtocolSession, CoreError> {
-        let endpoint = session
-            .session_id()
-            .cloned()
-            .ok_or_else(|| cdp_policy::unsupported("frame_session"))?;
         Ok(session
             .with_epoch_guard(self.epoch_guard()?)
             .with_admission(Arc::new(FrameProtocol {
                 access: self.clone(),
-                parent,
-                frame,
-                endpoint,
-                backend,
+                hops,
             })))
     }
+
+    fn refused(&self, frame: &FrameId) -> CoreError {
+        TargetError::FrameNotInPage {
+            page: self.page.clone(),
+            frame: frame.clone(),
+        }
+        .into()
+    }
+
+    /// The owner element `parent` reports for `frame`, asked on the bare endpoint: callers
+    /// have already vouched for `parent`, and its own admission would recheck every hop above
+    /// it. A protocol error means `parent` no longer holds the frame, a refusal like another
+    /// owner; transport errors keep their own type.
+    async fn frame_owner(
+        &self,
+        parent: &SessionId,
+        frame: &FrameId,
+    ) -> Result<Option<i64>, CoreError> {
+        let parent = ProtocolSession::for_session(self.view.session.connection(), parent.clone())
+            .with_epoch_guard(self.epoch_guard()?);
+        match parent
+            .send_value("DOM.getFrameOwner", json!({"frameId":frame.as_str()}))
+            .await
+        {
+            Ok(owner) => Ok(owner["backendNodeId"].as_i64()),
+            Err(CoreError::Cdp(CdpError::Protocol { .. })) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// The page still owns its root endpoint at the captured incarnation.
+    async fn owns_root(&self, root: &SessionId, fresh: &PageInfo) -> Result<(), CoreError> {
+        let owner = self.view.session.pages.page_for_session(root).await;
+        if owner
+            .is_none_or(|owner| owner.page_id != fresh.page_id || owner.target_id != self.target)
+        {
+            return Err(TargetError::PageTargetChanged(fresh.page_id.clone()).into());
+        }
+        Ok(())
+    }
 }
+/// One step of a child frame endpoint's admission: `parent` must report `frame`'s owner
+/// element as `backend`, and the registry must still map `frame` to `endpoint`.
+#[derive(Clone)]
+pub(super) struct FrameHop {
+    pub(super) parent: SessionId,
+    pub(super) frame: FrameId,
+    pub(super) endpoint: SessionId,
+    pub(super) backend: i64,
+}
+/// Rechecks a child frame endpoint in one pass before and after every call: the page and its
+/// root endpoint as `PageProtocol` does, every hop from the root down, then the page again.
+/// Asking each parent through its own admission instead rechecked all hops above it twice,
+/// doubling the cost with each level of nesting.
 struct FrameProtocol {
     access: Arc<PageAccess>,
-    parent: ProtocolSession,
-    frame: FrameId,
-    endpoint: SessionId,
-    backend: i64,
+    hops: Vec<FrameHop>,
 }
 impl ProtocolAdmission for FrameProtocol {
     fn check<'a>(
@@ -179,27 +226,25 @@ impl ProtocolAdmission for FrameProtocol {
         params: &'a Value,
     ) -> BoxFuture<'a, Result<(), CoreError>> {
         Box::pin(async move {
-            self.access.fresh().await?;
+            let fresh = self.access.fresh().await?;
             cdp_policy::page_method(method, params)?;
-            let owner = self
-                .parent
-                .send_value("DOM.getFrameOwner", json!({"frameId":self.frame.as_str()}))
-                .await?;
-            if owner["backendNodeId"].as_i64() != Some(self.backend)
-                || !self
-                    .access
-                    .view
-                    .session
-                    .frames()
-                    .frame_session_matches(&self.frame, &self.endpoint)
-                    .await
-            {
-                return Err(CoreError::Message(format!(
-                    "Frame {} is no longer part of page {:?}",
-                    self.frame.as_str(),
-                    self.access.page
-                )));
+            let root = self
+                .hops
+                .first()
+                .map(|hop| &hop.parent)
+                .ok_or_else(|| cdp_policy::unsupported("frame_session"))?;
+            self.access.owns_root(root, &fresh).await?;
+            let frames = self.access.view.session.frames();
+            for hop in &self.hops {
+                if self.access.frame_owner(&hop.parent, &hop.frame).await? != Some(hop.backend)
+                    || !frames
+                        .frame_session_matches(&hop.frame, &hop.endpoint)
+                        .await
+                {
+                    return Err(self.access.refused(&hop.frame));
+                }
             }
+            // The owner reads are round trips: the page may have moved during them.
             self.access.fresh().await?;
             Ok(())
         })
@@ -238,22 +283,13 @@ impl ProtocolAdmission for PageProtocol {
         Box::pin(async move {
             let fresh = self.access.fresh().await?;
             cdp_policy::page_method(method, params)?;
-            let owner = self
-                .access
-                .view
-                .session
-                .pages
-                .page_for_session(&self.root_session)
-                .await;
-            if owner.is_none_or(|owner| {
-                owner.page_id != fresh.page_id || owner.target_id != self.access.target
-            }) {
-                return Err(TargetError::PageTargetChanged(fresh.page_id).into());
-            }
-            Ok(())
+            self.access.owns_root(&self.root_session, &fresh).await
         })
     }
 }
+
+#[cfg(test)]
+mod depth_tests;
 
 #[cfg(test)]
 mod frame_tests {
@@ -310,10 +346,15 @@ mod frame_tests {
                 .any(|(called, _)| called == method))
         }
 
+        /// The target an endpoint is attached to: `session-cross-2` re-attaches `cross`.
+        fn target_of(session: Option<&SessionId>) -> Option<&str> {
+            session.map(|id| id.as_str().strip_suffix("-2").unwrap_or(id.as_str()))
+        }
+
         /// The document each session or same-process frame shows: its controls, then owners.
         fn ax_tree(params: &Value, session: Option<&SessionId>) -> Value {
             let (button, name, backend, owners): (_, _, _, &[(&str, i64)]) =
-                match (session.map(SessionId::as_str), params["frameId"].as_str()) {
+                match (Self::target_of(session), params["frameId"].as_str()) {
                     (Some("session-cross"), Some("same")) => {
                         ("same-button", "Nested frame target", 21, &[])
                     }
@@ -373,7 +414,7 @@ mod frame_tests {
                 }
                 "Page.getFrameTree" => {
                     if self.split_tree.load(Ordering::SeqCst) {
-                        match session.map(SessionId::as_str) {
+                        match Self::target_of(session) {
                             Some("session-cross") => {
                                 json!({"frameTree":{"frame":{"id":"cross"},"childFrames":[{"frame":{"id":"same"}}]}})
                             }
@@ -385,7 +426,7 @@ mod frame_tests {
                     }
                 }
                 "DOM.getDocument" => {
-                    if session.is_some_and(|id| id.as_str() == "session-cross") {
+                    if Self::target_of(session) == Some("session-cross") {
                         json!({"root":{"nodeType":9,"children":[
                             {"nodeName":"IFRAME","frameId":"same","backendNodeId":2,"contentDocument":{"nodeType":9}},
                             {"nodeName":"IFRAME","frameId":"deep","backendNodeId":3}
@@ -407,8 +448,7 @@ mod frame_tests {
                         return Err(CdpError::SessionGone);
                     }
                     // Like Chromium, only the endpoint whose document holds the owner answers.
-                    let backend = match (session.map(SessionId::as_str), params["frameId"].as_str())
-                    {
+                    let backend = match (Self::target_of(session), params["frameId"].as_str()) {
                         (Some("session-page"), Some("cross")) => 1,
                         (Some("session-cross"), Some("same")) => 2,
                         (Some("session-cross"), Some("deep")) => 3,
@@ -493,10 +533,19 @@ mod frame_tests {
     }
 
     async fn fixture() -> Result<(Arc<Native>, BrowserView, crate::PageId), CoreError> {
+        fixture_in(true).await
+    }
+
+    /// `bound` views are profile-scoped and admit frames; unbound ones, on a browser without
+    /// profile targeting, have no admission at all.
+    async fn fixture_in(
+        bound: bool,
+    ) -> Result<(Arc<Native>, BrowserView, crate::PageId), CoreError> {
         let native = Native::new();
+        let version = bound.then_some("0.51.1.3");
         let browser = Browser::new_with_native(
             native.clone(),
-            NativeCapabilities::from_browseros_version(Some("0.51.1.3")),
+            NativeCapabilities::from_browseros_version(version),
         );
         browser
             .set_target(Some(TargetBinding {
@@ -545,7 +594,7 @@ mod frame_tests {
         let (native, view, page) = fixture().await?;
         assert!(matches!(
             view.frame_session(page, FrameId("foreign".into())).await,
-            Err(CoreError::Message(_))
+            Err(CoreError::Target(TargetError::FrameNotInPage { .. }))
         ));
         assert!(
             !native
@@ -739,6 +788,22 @@ mod frame_tests {
                     .await;
                 assert!(result.is_err(), "{name}/{change}: {result:?}");
                 assert!(!native.called("Runtime.evaluate")?, "{name}/{change}");
+                match change {
+                    // Admission refusals are typed, so callers can tell them from the browser.
+                    "owner" | "session" | "detach" => assert!(
+                        matches!(
+                            result,
+                            Err(CoreError::Target(TargetError::FrameNotInPage { .. }))
+                        ),
+                        "{name}/{change}: {result:?}"
+                    ),
+                    // A transport failure while asking for the owner keeps its own type.
+                    "tree" => assert!(
+                        matches!(result, Err(CoreError::Cdp(CdpError::SessionGone))),
+                        "{name}/{change}: {result:?}"
+                    ),
+                    _ => {}
+                }
                 if change == "owner" {
                     // The frame is still this page's through its current owner, which a fresh
                     // resolution verifies anew; only the retained endpoint was bound to the old one.
@@ -757,35 +822,90 @@ mod frame_tests {
 
     #[tokio::test]
     async fn tests_that_detached_oopif_refs_never_fall_back_to_the_page_session() -> TestResult {
-        let (native, view, page) = fixture().await?;
-        native.split_tree.store(true, Ordering::SeqCst);
-        let snapshot = view.observe(page.clone()).await?.snapshot().await?;
-        apply_change(&native, &view, "detach").await?;
-        native.calls.lock().map_err(|_| "poisoned")?.clear();
-        let input = view.input(page).await?;
-        // With the OOPIF gone the registry answers with the page's own endpoint, where these
-        // node ids would name unrelated nodes of another process.
-        for name in [
-            "Remote frame target",
-            "Nested frame target",
-            "Deep frame target",
-        ] {
-            let reference = ref_named(&snapshot, name)?;
-            let result = input
-                .click(&reference, crate::input::ClickOptions::default())
-                .await;
+        // Unbound views have no frame admission, so the registry alone must refuse.
+        for bound in [true, false] {
+            let (native, view, page) = fixture_in(bound).await?;
+            native.split_tree.store(true, Ordering::SeqCst);
+            let snapshot = view.observe(page.clone()).await?.snapshot().await?;
+            apply_change(&native, &view, "detach").await?;
+            native.calls.lock().map_err(|_| "poisoned")?.clear();
+            let input = view.input(page).await?;
+            // The detach dropped the frames' links. Answering them with the page's own
+            // endpoint would resolve these node ids against unrelated nodes of another process.
+            for name in [
+                "Remote frame target",
+                "Nested frame target",
+                "Deep frame target",
+            ] {
+                let reference = ref_named(&snapshot, name)?;
+                let result = input
+                    .click(&reference, crate::input::ClickOptions::default())
+                    .await;
+                assert!(
+                    matches!(
+                        result,
+                        Err(CoreError::Target(TargetError::FrameNotInPage { .. }))
+                    ),
+                    "bound={bound} {name}: {result:?}"
+                );
+            }
+            let calls = native.calls.lock().map_err(|_| "poisoned")?.clone();
             assert!(
-                matches!(result, Err(CoreError::Message(_))),
-                "{name}: {result:?}"
+                !calls.iter().any(|(method, _)| method.starts_with("DOM.")
+                    || method.starts_with("Input.")
+                    || method.starts_with("Runtime.")),
+                "bound={bound}: {calls:?}"
             );
         }
-        let calls = native.calls.lock().map_err(|_| "poisoned")?.clone();
-        assert!(
-            !calls.iter().any(|(method, _)| method.starts_with("DOM.")
-                || method.starts_with("Input.")
-                || method.starts_with("Runtime.")),
-            "{calls:?}"
-        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_old_refs_stay_refused_after_a_walk_records_a_reattached_frame() -> TestResult
+    {
+        for bound in [true, false] {
+            let (native, view, page) = fixture_in(bound).await?;
+            native.split_tree.store(true, Ordering::SeqCst);
+            let old = view.observe(page.clone()).await?.snapshot().await?;
+            apply_change(&native, &view, "session").await?;
+            // A download or upload walk re-resolves `cross` through its parent, which records
+            // the new endpoint for the frame. The old ref's node id was read through the old one.
+            view.frame_session(page.clone(), FrameId("cross".into()))
+                .await?;
+            let input = view.input(page.clone()).await?;
+            let result = input
+                .click(
+                    &ref_named(&old, "Remote frame target")?,
+                    crate::input::ClickOptions::default(),
+                )
+                .await;
+            assert!(
+                matches!(
+                    result,
+                    Err(CoreError::Target(TargetError::FrameNotInPage { .. }))
+                ),
+                "bound={bound}: {result:?}"
+            );
+            assert!(native.mouse.lock().map_err(|_| "poisoned")?.is_empty());
+
+            // A fresh capture reads the frame through its new endpoint, and its refs work.
+            let fresh = view.observe(page.clone()).await?.snapshot().await?;
+            let point = input
+                .click(
+                    &ref_named(&fresh, "Remote frame target")?,
+                    crate::input::ClickOptions::default(),
+                )
+                .await?;
+            assert_eq!(point, Some(crate::input::Point { x: 11.0, y: 11.0 }));
+            let mouse = native.mouse.lock().map_err(|_| "poisoned")?.clone();
+            assert!(
+                mouse
+                    .iter()
+                    .all(|(endpoint, _)| endpoint.as_ref().map(SessionId::as_str)
+                        == Some("session-cross-2")),
+                "bound={bound}: {mouse:?}"
+            );
+        }
         Ok(())
     }
 
@@ -801,7 +921,7 @@ mod frame_tests {
             access
                 .frame_session(foreign.clone(), Some(FrameId("foreign".into())))
                 .await,
-            Err(CoreError::Message(_))
+            Err(CoreError::Target(TargetError::FrameNotInPage { .. }))
         ));
         // A parent the registry knows but that no OOPIF of this page owns vouches for nothing.
         let other_page = ProtocolSession::for_session(native.clone(), "session-other".into());
@@ -818,7 +938,7 @@ mod frame_tests {
             access
                 .frame_session(foreign, Some(FrameId("foreign".into())))
                 .await,
-            Err(CoreError::Message(_))
+            Err(CoreError::Target(TargetError::FrameNotInPage { .. }))
         ));
         assert!(
             !native
@@ -846,7 +966,10 @@ mod frame_tests {
                 assert!(result.is_err(), "{frame}/{change}: {result:?}");
                 if change == "owner" {
                     assert!(
-                        matches!(result, Err(CoreError::Message(_))),
+                        matches!(
+                            result,
+                            Err(CoreError::Target(TargetError::FrameNotInPage { .. }))
+                        ),
                         "{frame}: {result:?}"
                     );
                 }

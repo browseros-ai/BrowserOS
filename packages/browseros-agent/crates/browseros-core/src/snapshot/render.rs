@@ -1,5 +1,5 @@
 use crate::{
-    FrameId,
+    FrameId, SessionId,
     snapshot::{
         ax_types::{AxNode, AxValue},
         refs::{DocumentId, MintRef, RefMap},
@@ -43,6 +43,8 @@ pub struct RenderOptions<'a> {
     pub document_id: Option<DocumentId>,
     pub cursor_hits: Option<HashMap<i64, Vec<String>>>,
     pub base_depth: usize,
+    /// The endpoint a child frame's nodes were read through, stamped on its refs.
+    pub session: Option<SessionId>,
 }
 
 pub fn render_snapshot<'a>(nodes: &'a [AxNode], opts: &mut RenderOptions<'a>) -> RenderResult {
@@ -382,13 +384,16 @@ fn format_line(
         node.backend_dom_node_id.is_some() && (is_interactive_role(role) || cursor_hit);
 
     if actionable && let Some(backend_node_id) = node.backend_dom_node_id {
-        let ref_id = opts.refs.mint(MintRef {
-            backend_node_id,
-            role,
-            name: name.tree,
-            document_id: opts.document_id.as_deref(),
-            frame_id: opts.frame_id.as_ref(),
-        });
+        let ref_id = opts.refs.mint_through(
+            MintRef {
+                backend_node_id,
+                role,
+                name: name.tree,
+                document_id: opts.document_id.as_deref(),
+                frame_id: opts.frame_id.as_ref(),
+            },
+            opts.session.as_ref(),
+        );
         line.push_str(" [ref=");
         line.push_str(ref_id.as_str());
         line.push(']');
@@ -632,6 +637,7 @@ mod tests {
             document_id: None,
             cursor_hits: None,
             base_depth: 0,
+            session: None,
         };
         render_snapshot(nodes, &mut opts).text
     }
@@ -871,6 +877,7 @@ mod tests {
             document_id: Some("main:loader-1".to_string()),
             cursor_hits: None,
             base_depth: 0,
+            session: None,
         };
         let first = render_snapshot(&before, &mut opts).text;
         refs.begin_snapshot();
@@ -880,6 +887,7 @@ mod tests {
             document_id: Some("main:loader-1".to_string()),
             cursor_hits: None,
             base_depth: 0,
+            session: None,
         };
         let second = render_snapshot(&after, &mut opts).text;
 
@@ -907,6 +915,7 @@ mod tests {
             document_id: None,
             cursor_hits: Some(HashMap::from([(42, vec!["onclick".to_string()])])),
             base_depth: 0,
+            session: None,
         };
         assert_eq!(
             render_snapshot(&nodes, &mut opts).text,
@@ -942,6 +951,7 @@ mod tests {
             document_id: None,
             cursor_hits: None,
             base_depth: 0,
+            session: None,
         };
         let out = render_snapshot(&nodes, &mut opts);
         assert_eq!(out.text, "- button \"Outer\" [ref=e1]\n- iframe");
@@ -962,6 +972,7 @@ mod tests {
             document_id: None,
             cursor_hits: None,
             base_depth: 2,
+            session: None,
         };
         assert_eq!(
             render_snapshot(&nodes, &mut opts).text,
@@ -980,6 +991,7 @@ mod tests {
             document_id: None,
             cursor_hits: Some(HashMap::from([(9, vec!["cursor:pointer".to_string()])])),
             base_depth: 0,
+            session: None,
         };
         assert_eq!(
             render_snapshot(&nodes, &mut opts).text,
@@ -1015,6 +1027,7 @@ mod tests {
                     .collect(),
             ),
             base_depth: 0,
+            session: None,
         };
         render_snapshot(nodes, &mut opts).text
     }
@@ -1095,6 +1108,7 @@ mod tests {
             document_id: None,
             cursor_hits: Some(HashMap::from([(9, vec!["clickable".to_string()])])),
             base_depth: 0,
+            session: None,
         };
         assert_eq!(
             render_snapshot(&nodes, &mut opts).text,

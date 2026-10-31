@@ -1,30 +1,36 @@
 /**
  * Live-browser contracts for refs inside iframes, through the public snapshot, act and run
- * tools. `frame-lab.html` nests same-site and cross-site (OOPIF) frames; its targets report
- * each click's `event.isTrusted`, so a pass means native input reached the frame, not a
- * scripted `click()`. Every case runs on the scoped server, whose bound views carry the frame
- * admission guards a BrowserOS-launched server uses, when the browser supports profile
- * targeting (see `CaseContext.scopedMcp`).
+ * tools. `frame-lab.html` nests same-site, cross-site and sandboxed frames, the last two as
+ * OOPIFs; its targets report each click's `event.isTrusted`, so a pass means native input
+ * reached the frame, not a scripted `click()`.
+ *
+ * Every case runs twice. Unbound, on the primary server, the way a browser without profile
+ * targeting runs. Scoped, on a server told the browser's BrowserOS version, the way BrowserOS
+ * launches it: its bound views run the frame admission guards. The scoped cases are skipped,
+ * and reported as skipped, on a browser without profile targeting.
  */
 
 import type { CaseContext, ContractCase } from './cases'
 import { expectError, expectOk, waitUntil } from './helpers'
 import type { McpSession } from './mcp-client'
 
-/** The case context plus the scoped server session every call here goes through. */
+type Mode = 'unbound' | 'scoped'
+
+/** The case context plus the session every call in one case goes through. */
 interface Lab {
   ctx: CaseContext
   mcp: McpSession
-  /** False on a browser without profile targeting, where `mcp` is the unbound primary. */
-  scoped: boolean
 }
 
 interface LabCase {
   id: string
   /** The target document's frame level; 0 is the top page. */
   level: number
-  /** The target document's site: A is the top page's host, B the other loopback name. */
-  site: 'A' | 'B'
+  /**
+   * The target document's site: A is the top page's host, B the other loopback name, S is A
+   * in a sandboxed iframe.
+   */
+  site: 'A' | 'B' | 'S'
 }
 
 interface LabEvent {
@@ -52,23 +58,11 @@ const LAB_CASES: LabCase[] = [
   { id: 'single-cross', level: 1, site: 'B' },
   { id: 'nested-cross', level: 2, site: 'B' },
   { id: 'nested-mixed', level: 2, site: 'A' },
+  { id: 'sandboxed', level: 1, site: 'S' },
 ]
 
-async function scoped(ctx: CaseContext): Promise<Lab> {
-  const mcp = await ctx.scopedMcp()
-  return { ctx, mcp, scoped: mcp !== ctx.mcp }
-}
-
-/**
- * Refusing a stale frame ref is the scoped frame guard's job. Unbound views have no frame
- * admission, and their registry can answer a gone OOPIF with the page's own session, where
- * the old node id may name an unrelated node; that is not covered here.
- */
-function requiresFrameAdmission(lab: Lab, name: string): boolean {
-  if (!lab.scoped) {
-    console.warn(`${name}: skipped, the session is unbound`)
-  }
-  return lab.scoped
+async function labIn(ctx: CaseContext, mode: Mode): Promise<Lab> {
+  return { ctx, mcp: mode === 'scoped' ? await ctx.scopedMcp() : ctx.mcp }
 }
 
 function labCase(id: string): LabCase {
@@ -219,12 +213,16 @@ async function trustedClick(
   return event
 }
 
-/** A click that should be refused must neither report success nor land anywhere. */
+/**
+ * A click that should be refused must neither report success nor land anywhere. A frame that
+ * is no longer this page's is refused with the typed `frame_not_in_page` code.
+ */
 async function requireRefusedClick(
   lab: Lab,
   page: number,
   ref: string,
   context: string,
+  typed: boolean,
 ): Promise<string> {
   const before = (await labState(lab, page)).events.length
   const text = expectError(
@@ -237,115 +235,118 @@ async function requireRefusedClick(
       `${context} delivered a click: ${JSON.stringify(after.slice(before))}`,
     )
   }
+  if (typed && !text.includes('frame_not_in_page')) {
+    throw new Error(`${context} was not refused as frame_not_in_page: ${text}`)
+  }
   return text
 }
 
-const perCaseContracts: ContractCase[] = LAB_CASES.map((labCase) => ({
-  name: `frame refs: ${labCase.id} refs click with trusted input through snapshot, act and run`,
-  async run(ctx) {
-    const lab = await scoped(ctx)
-    const page = await openLab(lab, labCase.id)
-    const buttonLabel = `Click target ${labCase.id}`
-    const checkboxLabel = `Check target ${labCase.id}`
+const scenarios = (mode: Mode): ContractCase[] => [
+  ...LAB_CASES.map((labCase) => ({
+    name: `frame refs (${mode}): ${labCase.id} refs click with trusted input through snapshot, act and run`,
+    async run(ctx: CaseContext) {
+      const lab = await labIn(ctx, mode)
+      const page = await openLab(lab, labCase.id)
+      const buttonLabel = `Click target ${labCase.id}`
+      const checkboxLabel = `Check target ${labCase.id}`
 
-    const buttonRef = await snapshotRef(lab, page, buttonLabel)
-    const interactive = expectOk(
-      await lab.mcp.callTool('snapshot', { page, mode: 'interactive' }),
-      'interactive frame lab snapshot',
-    )
-    if (refFor(interactive, buttonLabel) !== buttonRef) {
-      throw new Error(
-        `interactive snapshot lost ${buttonLabel} [ref=${buttonRef}]:\n${interactive.slice(0, 1600)}`,
+      const buttonRef = await snapshotRef(lab, page, buttonLabel)
+      const interactive = expectOk(
+        await lab.mcp.callTool('snapshot', { page, mode: 'interactive' }),
+        'interactive frame lab snapshot',
       )
-    }
-    if (!refFor(interactive, checkboxLabel)) {
-      throw new Error(`interactive snapshot has no ${checkboxLabel} ref`)
-    }
+      if (refFor(interactive, buttonLabel) !== buttonRef) {
+        throw new Error(
+          `interactive snapshot lost ${buttonLabel} [ref=${buttonRef}]:\n${interactive.slice(0, 1600)}`,
+        )
+      }
+      if (!refFor(interactive, checkboxLabel)) {
+        throw new Error(`interactive snapshot has no ${checkboxLabel} ref`)
+      }
 
-    expectOk(
-      await lab.mcp.callTool('act', { page, kind: 'click', ref: buttonRef }),
-      `act click ${buttonLabel}`,
-    )
-    await trustedClick(lab, page, labCase, 'button', 0)
-
-    // The run tool's page.snapshot() and page.click(ref) share the same refs and admission.
-    const run = await lab.mcp.callTool('run', {
-      code: `const p = browser.page(${page});
-        const full = await p.snapshot();
-        const compact = await p.snapshot({ mode: 'interactive' });
-        const entry = full.refs.find((ref) => ref.name === ${JSON.stringify(checkboxLabel)});
-        if (!entry) throw new Error('no checkbox ref in page.snapshot(): ' + full.text);
-        if (!compact.text.includes('[ref=' + entry.ref + ']')) throw new Error('interactive page.snapshot() lost ' + entry.ref);
-        await p.click(entry.ref);
-        return { frameId: entry.frameId ?? null };`,
-    })
-    expectOk(run, `run page.click ${checkboxLabel}`)
-    const event = await trustedClick(lab, page, labCase, 'checkbox', 1)
-    if (!event.checked) {
-      throw new Error(`${labCase.id}: the checkbox click did not check it`)
-    }
-    const value = (
-      run.structuredContent as { value?: { frameId?: string | null } }
-    )?.value
-    const framed = typeof value?.frameId === 'string'
-    if (framed !== labCase.level > 0) {
-      throw new Error(
-        `${labCase.id}: page.snapshot() ref frame mismatch: ${JSON.stringify(value)}`,
+      expectOk(
+        await lab.mcp.callTool('act', { page, kind: 'click', ref: buttonRef }),
+        `act click ${buttonLabel}`,
       )
-    }
-  },
-}))
+      await trustedClick(lab, page, labCase, 'button', 0)
 
-export const frameRefCases: ContractCase[] = [
-  ...perCaseContracts,
-  ...['single-cross', 'nested-cross', 'nested-mixed'].map(
-    (id): ContractCase => ({
-      name: `frame refs: ${id} scrolls nested frames to reach an off-screen ref`,
-      async run(ctx) {
-        const lab = await scoped(ctx)
-        const labCaseValue = labCase(id)
-        const page = await openLab(lab, id, true)
-        if ((await labState(lab, page)).inView) {
-          throw new Error(`${id}: the scroll target started in view`)
-        }
-        const ref = await snapshotRef(lab, page, `Click target ${id}`)
-        expectOk(
-          await lab.mcp.callTool('act', { page, kind: 'click', ref }),
-          `act click off-screen ${id} target`,
+      // The run tool's page.snapshot() and page.click(ref) share the same refs and admission.
+      const run = await lab.mcp.callTool('run', {
+        code: `const p = browser.page(${page});
+          const full = await p.snapshot();
+          const compact = await p.snapshot({ mode: 'interactive' });
+          const entry = full.refs.find((ref) => ref.name === ${JSON.stringify(checkboxLabel)});
+          if (!entry) throw new Error('no checkbox ref in page.snapshot(): ' + full.text);
+          if (!compact.text.includes('[ref=' + entry.ref + ']')) throw new Error('interactive page.snapshot() lost ' + entry.ref);
+          await p.click(entry.ref);
+          return { frameId: entry.frameId ?? null };`,
+      })
+      expectOk(run, `run page.click ${checkboxLabel}`)
+      const event = await trustedClick(lab, page, labCase, 'checkbox', 1)
+      if (!event.checked) {
+        throw new Error(`${labCase.id}: the checkbox click did not check it`)
+      }
+      const value = (
+        run.structuredContent as { value?: { frameId?: string | null } }
+      )?.value
+      const framed = typeof value?.frameId === 'string'
+      if (framed !== labCase.level > 0) {
+        throw new Error(
+          `${labCase.id}: page.snapshot() ref frame mismatch: ${JSON.stringify(value)}`,
         )
-        await trustedClick(lab, page, labCaseValue, 'button', 0)
-        await waitUntil(
-          async () => (await labState(lab, page)).inView,
-          `${id} target to be scrolled into the top viewport`,
-        )
-      },
-    }),
-  ),
+      }
+    },
+  })),
+  ...['single-cross', 'nested-cross', 'nested-mixed'].map((id) => ({
+    name: `frame refs (${mode}): ${id} scrolls nested frames to reach an off-screen ref`,
+    async run(ctx: CaseContext) {
+      const lab = await labIn(ctx, mode)
+      const page = await openLab(lab, id, true)
+      if ((await labState(lab, page)).inView) {
+        throw new Error(`${id}: the scroll target started in view`)
+      }
+      const ref = await snapshotRef(lab, page, `Click target ${id}`)
+      expectOk(
+        await lab.mcp.callTool('act', { page, kind: 'click', ref }),
+        `act click off-screen ${id} target`,
+      )
+      await trustedClick(lab, page, labCase(id), 'button', 0)
+      await waitUntil(
+        async () => (await labState(lab, page)).inView,
+        `${id} target to be scrolled into the top viewport`,
+      )
+    },
+  })),
   {
-    name: 'frame refs: refs of a detached frame are refused, never re-aimed',
-    async run(ctx) {
-      const lab = await scoped(ctx)
-      if (!requiresFrameAdmission(lab, 'detached frame refs')) return
-      // The top page detaches its OOPIF; then an OOPIF detaches its own same-site child
-      // (nested-cross) or cross-site child (nested-mixed). The old ref is used without a new
-      // snapshot, so only frame admission can refuse it.
-      for (const [id, level] of [
-        ['single-cross', 0],
-        ['nested-cross', 1],
-        ['nested-mixed', 1],
+    name: `frame refs (${mode}): refs of a detached frame are refused, never re-aimed`,
+    async run(ctx: CaseContext) {
+      const lab = await labIn(ctx, mode)
+      // The old ref is used without a new snapshot. An OOPIF that is gone is refused as
+      // frame_not_in_page; a same-process frame's old node is simply no longer found.
+      for (const [id, level, typed] of [
+        ['single-cross', 0, true],
+        ['sandboxed', 0, true],
+        ['single-same', 0, false],
+        ['nested-cross', 1, false],
+        ['nested-mixed', 1, true],
       ] as const) {
         const page = await openLab(lab, id)
         const ref = await snapshotRef(lab, page, `Click target ${id}`)
         await labCommand(lab, page, level, 'detach')
-        await requireRefusedClick(lab, page, ref, `${id} detached frame ref`)
+        await requireRefusedClick(
+          lab,
+          page,
+          ref,
+          `${id} detached frame ref`,
+          typed,
+        )
       }
     },
   },
   {
-    name: 'frame refs: a replaced frame owner refuses old refs; a new snapshot reaches the new frame',
-    async run(ctx) {
-      const lab = await scoped(ctx)
-      if (!requiresFrameAdmission(lab, 'replaced frame owner')) return
+    name: `frame refs (${mode}): a replaced frame owner refuses old refs; a new snapshot reaches the new frame`,
+    async run(ctx: CaseContext) {
+      const lab = await labIn(ctx, mode)
       const target = labCase('nested-mixed')
       const page = await openLab(lab, target.id)
       const label = `Click target ${target.id}`
@@ -354,7 +355,13 @@ export const frameRefCases: ContractCase[] = [
       // The B frame swaps its iframe element for a new one: a new owner and a new frame.
       await labCommand(lab, page, 1, 'replace')
       const newDoc = await newTargetDoc(lab, page, oldDoc)
-      await requireRefusedClick(lab, page, oldRef, 'replaced owner old ref')
+      await requireRefusedClick(
+        lab,
+        page,
+        oldRef,
+        'replaced owner old ref',
+        true,
+      )
       const newRef = await snapshotRef(lab, page, label)
       expectOk(
         await lab.mcp.callTool('act', { page, kind: 'click', ref: newRef }),
@@ -369,9 +376,9 @@ export const frameRefCases: ContractCase[] = [
     },
   },
   {
-    name: 'frame refs: a reloaded frame keeps its old refs inside that same frame',
-    async run(ctx) {
-      const lab = await scoped(ctx)
+    name: `frame refs (${mode}): a reloaded frame keeps its old refs inside that same frame`,
+    async run(ctx: CaseContext) {
+      const lab = await labIn(ctx, mode)
       for (const [id, level] of [
         ['single-cross', 0],
         ['nested-mixed', 1],
@@ -382,9 +389,8 @@ export const frameRefCases: ContractCase[] = [
         const oldDoc = (await labState(lab, page)).targetDoc
         await labCommand(lab, page, level, 'reload')
         const newDoc = await newTargetDoc(lab, page, oldDoc)
-        // The frame keeps its owner and endpoint, so admission still vouches for it and the
-        // ref is recovered by role and name inside that frame: it must reach the reloaded
-        // document, with trusted input.
+        // The frame keeps its owner and endpoint, so the ref is recovered by role and name
+        // inside that frame: it must reach the reloaded document, with trusted input.
         expectOk(
           await lab.mcp.callTool('act', { page, kind: 'click', ref }),
           `${id} ref after its frame reloaded`,
@@ -396,4 +402,9 @@ export const frameRefCases: ContractCase[] = [
       }
     },
   },
+]
+
+export const frameRefCases: ContractCase[] = [
+  ...scenarios('unbound'),
+  ...scenarios('scoped').map((scenario) => ({ ...scenario, scoped: true })),
 ]
