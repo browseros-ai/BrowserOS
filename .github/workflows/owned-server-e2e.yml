@@ -1,0 +1,48 @@
+name: Owned server E2E
+
+on:
+  push:
+    branches: [dots/owned-server-e2e-20261027]
+  pull_request:
+    paths:
+      - packages/browseros-agent/apps/server/tests/**
+      - packages/browseros-agent/ci/affected-suites*
+      - .github/workflows/owned-server-e2e.yml
+
+permissions:
+  contents: read
+
+jobs:
+  real-browser:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - name: Validate ownership and real BrowserOS HTTP flow
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$(id -u)" -ne 0
+          root=$(mktemp -d "$RUNNER_TEMP/browseros-e2e.XXXXXX")
+          mkdir -p "$root/home" "$root/config" "$root/cache" "$root/data" "$root/tmp" "$root/browser"
+          bun_bin=$(command -v bun)
+          test "$("$bun_bin" --version)" = "1.4.2"
+          curl --fail --show-error --location --proto '=https' --proto-redir '=https' --connect-timeout 30 --max-time 300 --retry 2 https://files.browseros.com/download/BrowserOS.AppImage -o "$root/browser/BrowserOS.AppImage"
+          printf '%s  %s\n' b586df72083c046e2ea2d1cc1b6463325ed4cb0c31975d48e09cc14215e3e7bf "$root/browser/BrowserOS.AppImage" | sha256sum --check --strict
+          chmod u+x "$root/browser/BrowserOS.AppImage"
+          cd "$root/browser"
+          env -i PATH="$PATH" HOME="$root/home" TMPDIR="$root/tmp" ./BrowserOS.AppImage --appimage-extract > "$root/extraction.log"
+          browser="$root/browser/squashfs-root/AppRun"
+          cd "$GITHUB_WORKSPACE/packages/browseros-agent"
+          isolated=(env -i PATH="$PATH" LANG=C.UTF-8 HOME="$root/home" XDG_CONFIG_HOME="$root/config" XDG_CACHE_HOME="$root/cache" XDG_DATA_HOME="$root/data" TMPDIR="$root/tmp" NODE_ENV=test)
+          "${isolated[@]}" "$bun_bin" install --frozen-lockfile --ignore-scripts
+          "${isolated[@]}" "$bun_bin" test apps/server/tests/e2e-lifecycle.test.ts apps/server/tests/run-test-group.test.ts ci/affected-suites.test.ts
+          "${isolated[@]}" ./node_modules/.bin/tsc --ignoreConfig --noEmit --target es2023 --module esnext --moduleResolution bundler --strict --esModuleInterop --skipLibCheck --types node,bun --lib ES2023,DOM,ESNext.Disposable,ESNext.Iterator,ESNext.Collection apps/server/tests/__helpers__/e2e.ts apps/server/tests/e2e-lifecycle.test.ts apps/server/tests/index.test.ts
+          cd apps/server
+          "${isolated[@]}" BROWSEROS_BINARY="$browser" "$bun_bin" test ./tests/index.test.ts
