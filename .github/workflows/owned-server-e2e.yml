@@ -42,7 +42,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/packages/browseros-agent"
           isolated=(env -i PATH="$PATH" LANG=C.UTF-8 HOME="$root/home" XDG_CONFIG_HOME="$root/config" XDG_CACHE_HOME="$root/cache" XDG_DATA_HOME="$root/data" TMPDIR="$root/tmp" NODE_ENV=test)
           "${isolated[@]}" "$bun_bin" install --frozen-lockfile --ignore-scripts
-          "${isolated[@]}" "$bun_bin" test apps/server/tests/e2e-lifecycle.test.ts apps/server/tests/run-test-group.test.ts ci/affected-suites.test.ts
-          "${isolated[@]}" ./node_modules/.bin/tsc --ignoreConfig --noEmit --target es2023 --module esnext --moduleResolution bundler --strict --esModuleInterop --skipLibCheck --types node,bun --lib ES2023,DOM,ESNext.Disposable,ESNext.Iterator,ESNext.Collection apps/server/tests/__helpers__/e2e.ts apps/server/tests/e2e-lifecycle.test.ts apps/server/tests/index.test.ts
+          "${isolated[@]}" "$bun_bin" test apps/server/tests/e2e-lifecycle.test.ts apps/server/tests/e2e-readiness-deadline.test.ts apps/server/tests/run-test-group.test.ts ci/affected-suites.test.ts
+          "${isolated[@]}" ./node_modules/.bin/tsc --ignoreConfig --noEmit --target es2023 --module esnext --moduleResolution bundler --strict --esModuleInterop --skipLibCheck --types node,bun --lib ES2023,DOM,ESNext.Disposable,ESNext.Iterator,ESNext.Collection apps/server/tests/__helpers__/e2e.ts apps/server/tests/e2e-lifecycle.test.ts apps/server/tests/e2e-readiness-deadline.test.ts apps/server/tests/index.test.ts
           cd apps/server
           "${isolated[@]}" BROWSEROS_BINARY="$browser" "$bun_bin" test ./tests/index.test.ts
