@@ -226,10 +226,14 @@ impl SkillService {
     }
 
     /// After a hand edit, keeps a working flow consistent with the prose it is numbered
-    /// against: "Run it fast" comes back while the steps still line up, and the flow is
-    /// switched off once they no longer do.
+    /// against: "Run it fast" comes back while the steps still say what they said when the flow
+    /// was verified, and the flow is switched off once they change.
     pub async fn reconcile_flow_after_edit(&self, name: &str) -> AppResult<()> {
-        use crate::services::flow::{FlowStatus, prose::prose_steps, store};
+        use crate::services::flow::{
+            FlowStatus,
+            prose::{fingerprint, prose_steps},
+            store,
+        };
         let Some(mut row) = self.repo.get_flow(name).await? else {
             return Ok(());
         };
@@ -240,8 +244,17 @@ impl SkillService {
         let model = self.require(name).await?;
         let steps = prose_steps(&self.read_body(&model.body_path).await);
         let doc = store::read(&self.skill_dir(name)).ok().flatten();
+        // A flow saved before fingerprints existed is matched on its step count alone.
+        let lines_up = |doc: &store::FlowDoc| {
+            doc.steps.len() == steps.len()
+                && doc
+                    .meta
+                    .prose_hash
+                    .as_deref()
+                    .is_none_or(|hash| hash == fingerprint(&steps))
+        };
         match doc {
-            Some(doc) if doc.steps.len() == steps.len() => {
+            Some(doc) if lines_up(&doc) => {
                 let fast = RunItFast {
                     status: status.as_str(),
                     inputs: doc

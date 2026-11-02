@@ -224,6 +224,7 @@ fn two_step_flow() -> flow::store::FlowDoc {
             output: Default::default(),
             examples: vec![],
             source_session: None,
+            prose_hash: None,
         },
         steps: (1..=2)
             .map(|n| FlowStep {
@@ -303,5 +304,40 @@ async fn a_handover_example_lands_on_the_newest_flow() -> anyhow::Result<()> {
     assert!(on_disk.steps[1].src.contains("repaired"));
     assert_eq!(on_disk.meta.examples.len(), 1);
     assert_eq!(on_disk.meta.examples[0].input["query"], "dove soap");
+    Ok(())
+}
+
+#[tokio::test]
+async fn rewriting_a_step_switches_the_flow_off_even_when_the_count_holds() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let state = &app.state;
+    create_skill(state, "neo-shop-add").await?;
+    let verified_against = vec!["Open the search".to_string(), "Add the first match".to_string()];
+    let mut doc = two_step_flow();
+    doc.meta.prose_hash = Some(flow::prose::fingerprint(&verified_against));
+    state.skills.write_flow("neo-shop-add", &doc).await?;
+    state
+        .skills
+        .put_flow_row(flow::new_row("neo-shop-add", FlowStatus::Verified))
+        .await?;
+
+    let (_, detail) = put(
+        &app.router,
+        "/api/v1/skills/neo-shop-add",
+        json!({ "steps": verified_against, "learnedNotes": ["The grid fills late."] }),
+    )
+    .await?;
+    assert_eq!(detail["skill"]["ultrafast"]["status"], "verified");
+    assert!(detail["body"].as_str().unwrap_or_default().contains("## Run it fast"));
+
+    let (_, detail) = put(
+        &app.router,
+        "/api/v1/skills/neo-shop-add",
+        json!({ "steps": ["Open the search", "Save the first match for later"], "learnedNotes": [] }),
+    )
+    .await?;
+    assert_eq!(detail["skill"]["ultrafast"]["status"], "off");
+    let body = detail["body"].as_str().unwrap_or_default();
+    assert!(!body.contains("Run it fast"), "{body}");
     Ok(())
 }

@@ -81,6 +81,7 @@ mod tests {
                 output: Default::default(),
                 examples: vec![],
                 source_session: None,
+                prose_hash: None,
             },
             steps: vec![FlowStep {
                 n: 1,

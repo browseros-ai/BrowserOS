@@ -60,6 +60,9 @@ pub struct FlowMeta {
     pub examples: Vec<Example>,
     #[serde(default)]
     pub source_session: Option<String>,
+    /// Fingerprint of the SKILL.md steps the flow was verified against.
+    #[serde(default)]
+    pub prose_hash: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -164,6 +167,9 @@ pub fn render(doc: &FlowDoc) -> String {
     }
     if let Some(session) = &meta.source_session {
         out.push_str(&format!("sourceSession: {}\n", json_scalar(session)));
+    }
+    if let Some(hash) = &meta.prose_hash {
+        out.push_str(&format!("proseHash: {}\n", json_scalar(hash)));
     }
     out.push_str("---\n");
     for step in &doc.steps {
@@ -302,6 +308,7 @@ mod tests {
                     expect: "done".to_string(),
                 }],
                 source_session: Some("01J0".to_string()),
+                prose_hash: Some("5f1d0c3a9b7e2468".to_string()),
             },
             steps: vec![
                 FlowStep {

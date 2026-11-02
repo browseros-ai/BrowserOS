@@ -574,6 +574,7 @@ fn candidate_flow(raw_args: &Value, name: &str, session: &str) -> Result<FlowDoc
             output: types("output")?,
             examples,
             source_session: Some(session.to_string()),
+            prose_hash: None,
         },
         steps,
     })
@@ -759,7 +760,7 @@ impl ClawMcpService {
         };
         let session_id = started.session.id().as_str().to_string();
         let is_patch = raw_args.get("patch").is_some();
-        let doc = if let Some(patch) = raw_args.get("patch") {
+        let mut doc = if let Some(patch) = raw_args.get("patch") {
             let patches = match parse_patches(patch) {
                 Ok(patches) => patches,
                 Err(message) => return ToolResult::error(message),
@@ -788,6 +789,7 @@ impl ClawMcpService {
             }
         };
         let labels = prose::prose_steps(&detail.body);
+        doc.meta.prose_hash = Some(prose::fingerprint(&labels));
         let exec = SessionFlowExec {
             service: self,
             started,
@@ -1146,6 +1148,7 @@ mod tests {
                 output: Default::default(),
                 examples: vec![],
                 source_session: None,
+                prose_hash: None,
             },
             steps: (1..=4)
                 .map(|n| store::FlowStep {

@@ -461,6 +461,7 @@ mod tests {
                     example("dove", "agent"),
                 ],
                 source_session: None,
+                prose_hash: None,
             },
             steps: steps
                 .into_iter()
