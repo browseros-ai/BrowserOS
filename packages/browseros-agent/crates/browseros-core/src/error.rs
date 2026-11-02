@@ -55,12 +55,20 @@ pub enum CoreError {
     #[error("Provide either target element or both targetX and targetY.")]
     InvalidDragTarget,
     #[error(
-        "Element {target} is covered by <{blocker}> at its click point; the click would hit that element instead. Dismiss or interact with the covering element first (often a dialog, banner, or sticky header)."
+        "Element {target} is covered by <{blocker}>; no click was sent. {}Handle the obstruction, then retry. DOM activation requires an explicit method=\"dom\" request.",
+        blocker_ref.as_ref().map(|id| format!("blocker ref={id}. ")).unwrap_or_default()
     )]
     ElementCovered {
-        target: CoveredElementTarget,
+        // Rich diagnostics are cold; keep the shared CoreError small for every Result.
+        target: Box<CoveredElementTarget>,
         blocker: String,
+        blocker_ref: Option<Ref>,
     },
+    /// Delivery may have happened; this deliberately does not carry a retryable CDP error.
+    #[error(
+        "Click outcome is unknown: {0}. The click may have been sent; inspect page state before another attempt. Do not automatically repeat it."
+    )]
+    ClickOutcomeUnknown(String),
     /// A gated native operation was refused before it was sent. See `crate::capabilities`.
     #[error(
         "native_feature_unavailable: {feature} needs BrowserOS {required} or newer; {}. The operation was not sent to the browser.",

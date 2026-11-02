@@ -6,7 +6,7 @@ use crate::framework::{
 use crate::response::FieldTarget;
 use browseros_core::{
     PageId, Ref,
-    input::{ClickOptions, Point, PublicMouseButton as MouseButton, ScrollDirection},
+    input::{ClickMethod, ClickOptions, Point, PublicMouseButton as MouseButton, ScrollDirection},
     snapshot::RefMap,
 };
 use futures_util::future::BoxFuture;
@@ -17,6 +17,10 @@ use std::time::Duration;
 
 const DESCRIPTION: &str = "\
 Act on the page using refs from the last snapshot. \
+Click scrolls, briefly waits, and finds an uncovered point before sending native input. \
+Persistent coverage returns a blocker ref: handle it and retry. \
+Only an explicit method=\"dom\" for kind=\"click\" bypasses coverage using DOM activation \
+(untrusted, single left click; verify application state). An unknown click outcome must not be automatically retried. \
 kinds: click, type (into focused element), fill (ref+value, or many via fields[]), \
 press (key/combo), hover, focus, check, uncheck, select (option value), scroll, drag. \
 dialog_accept/dialog_dismiss handle pending JavaScript dialogs. \
@@ -99,6 +103,13 @@ enum ActMouseButton {
     Right,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum ActClickMethod {
+    Pointer,
+    Dom,
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct FillField {
@@ -175,6 +186,9 @@ struct ActArgs {
     button: Option<ActMouseButton>,
     #[serde(rename = "clickCount")]
     click_count: Option<i64>,
+    /// Only for kind=click. "pointer" (default) recovers before native delivery;
+    /// "dom" explicitly activates the DOM node, bypassing coverage without trusted events.
+    method: Option<ActClickMethod>,
     /// Defaults to true for fill (replace; false appends), false for type_at.
     clear: Option<bool>,
     /// Post-action diff detail: "full" (default) whole diff, "summary" change counts, "none" to skip it, or a number to cap the inline diff to that many characters. Use "none"/"summary"/a small number on large pages where a full diff floods context.
@@ -206,6 +220,11 @@ fn handler<'a>(
 ) -> BoxFuture<'a, ToolExecResult<Option<ToolResult>>> {
     Box::pin(async move {
         let args: ActArgs = parse_args(raw)?;
+        if args.method.is_some() && !matches!(args.kind, ActKind::Click) {
+            return Err(crate::framework::ToolError::message(
+                "method is only supported for kind=click with an element ref.",
+            ));
+        }
         let page_id = PageId(args.page);
         if !args.kind.is_dialog()
             && let Some(result) = pending_dialog_result(ctx, page_id.clone())
@@ -300,6 +319,11 @@ fn handler<'a>(
             return Ok(Some(chooser));
         }
         response.data(json!({ "kind": args.kind.as_str() }));
+        if matches!(args.kind, ActKind::Click) {
+            response.data(json!({ "click": { "status": "dispatched", "method": match args.method.unwrap_or(ActClickMethod::Pointer) {
+                ActClickMethod::Pointer => "pointer", ActClickMethod::Dom => "dom",
+            } } }));
+        }
         if let Some(detail) = resolve_diff_detail(args.diff) {
             response.include_diff(args.page, true, detail, document_start);
         }
@@ -526,6 +550,10 @@ async fn run_kind(
 
 fn click_options(args: &ActArgs) -> ClickOptions {
     ClickOptions {
+        method: match args.method.unwrap_or(ActClickMethod::Pointer) {
+            ActClickMethod::Pointer => ClickMethod::Pointer,
+            ActClickMethod::Dom => ClickMethod::Dom,
+        },
         button: args.button.as_ref().map(|button| match button {
             ActMouseButton::Left => MouseButton::Left,
             ActMouseButton::Middle => MouseButton::Middle,

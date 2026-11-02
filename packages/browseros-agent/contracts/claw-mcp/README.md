@@ -13,6 +13,14 @@ The suite covers every MCP tool and major failure path: `tabs`, `tab_groups`,
 It also checks ownership isolation, untrusted-content fencing, auto-context,
 audit records, cancellation, browser-down guidance, and transport hygiene.
 
+`cases-click-recovery.ts` checks ordinary native clicks through both `act` and
+`run`: partial/transient coverage, sticky headers, hover-triggered coverage, and
+parent overlays above same-site and cross-site frames. Persistent coverage must
+leave the target untouched and name the actual blocking DOM node with a usable
+ref. `method: "dom"` is an explicit untrusted activation, never an automatic
+fallback. The Rust input tests separately inject lost mouse acknowledgements to
+ensure a click is never replayed after dispatch becomes uncertain.
+
 Each case asserts Rust behavior directly. The retired TypeScript server and its
 historical behavior are not test dependencies.
 
