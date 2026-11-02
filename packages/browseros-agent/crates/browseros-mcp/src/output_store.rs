@@ -401,10 +401,10 @@ impl OutputStore {
             if entry.file_name() == self.id.as_str() || !entry.file_type().await?.is_dir() {
                 continue;
             }
-            if !entry
+            if entry
                 .file_name()
                 .to_str()
-                .is_some_and(|name| Uuid::parse_str(name).is_ok())
+                .is_none_or(|name| Uuid::parse_str(name).is_err())
             {
                 continue; // Never prune unrelated directories on a caller-supplied mount.
             }
@@ -529,10 +529,10 @@ async fn session_usage(session: &Path) -> io::Result<(usize, u64)> {
     let mut entries = fs::read_dir(session).await?;
     while let Some(entry) = entries.next_entry().await? {
         if !entry.file_type().await?.is_dir()
-            || !entry
+            || entry
                 .file_name()
                 .to_str()
-                .is_some_and(|name| Uuid::parse_str(name).is_ok())
+                .is_none_or(|name| Uuid::parse_str(name).is_err())
         {
             continue;
         }
