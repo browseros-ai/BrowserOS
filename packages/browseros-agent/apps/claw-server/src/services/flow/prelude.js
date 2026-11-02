@@ -19,6 +19,26 @@ globalThis.__ultrafast = (() => {
     'dragAt',
     'download',
   ])
+  // How many leading arguments of each write are element refs. The rest act on whatever has
+  // focus or on coordinates, so their arguments are keys, text or numbers.
+  const REF_ARGS = {
+    click: 1,
+    fill: 1,
+    selectOption: 1,
+    check: 1,
+    uncheck: 1,
+    upload: 1,
+    download: 1,
+    drag: 2,
+  }
+  // Calls that can change the page but cannot be stopped short of acting, so a commit step
+  // being verified must not make them.
+  const UNTESTABLE = new Set([
+    'evaluateInPage',
+    'cdp',
+    'cdpJsonForPage',
+    'input',
+  ])
 
   function HandBack(kind, data) {
     this.kind = kind
@@ -55,17 +75,47 @@ globalThis.__ultrafast = (() => {
     }
   }
 
+  function untestable(name) {
+    return new HandBack('unsafe_commit', {
+      message: `the commit step calls ${name}, which acts even while the flow is being verified; act only through state.page's click, fill, press and similar methods`,
+    })
+  }
+
   function dryWrites(page, st) {
     return new Proxy(page, {
       get(target, prop) {
+        if (typeof prop === 'string' && UNTESTABLE.has(prop)) {
+          return () => {
+            throw untestable(`page.${prop}`)
+          }
+        }
         if (typeof prop === 'string' && WRITES.has(prop)) {
-          return async (ref) => {
-            if (typeof ref === 'string') await target.resolveRef(ref)
-            st.dry.push({
-              method: prop,
-              ref: typeof ref === 'string' ? ref : null,
-            })
+          return async (...args) => {
+            const refs = args
+              .slice(0, REF_ARGS[prop] || 0)
+              .filter((arg) => typeof arg === 'string')
+            for (const ref of refs) await target.resolveRef(ref)
+            st.dry.push({ method: prop, ref: refs[0] ?? null })
             return { dryRun: true }
+          }
+        }
+        return target[prop]
+      },
+    })
+  }
+
+  // The browser a commit step sees while it is verified: pages it reaches are dry too, and
+  // the browser-level calls that act directly are refused.
+  function dryBrowser(browser, st) {
+    return new Proxy(browser, {
+      get(target, prop) {
+        if (prop === 'page') return (id) => dryWrites(target.page(id), st)
+        if (
+          typeof prop === 'string' &&
+          (UNTESTABLE.has(prop) || prop === 'upload' || prop === 'download')
+        ) {
+          return () => {
+            throw untestable(`browser.${prop}`)
           }
         }
         return target[prop]
@@ -200,7 +250,9 @@ globalThis.__ultrafast = (() => {
             })
           }
           const page = state.page
+          const liveBrowser = ctx.browser
           state.page = dryWrites(page, st)
+          ctx.browser = dryBrowser(liveBrowser, st)
           try {
             await withinDeadline(step.fn(ctx), deadline, step.n)
           } catch (error) {
@@ -214,6 +266,7 @@ globalThis.__ultrafast = (() => {
             })
           } finally {
             state.page = page
+            ctx.browser = liveBrowser
           }
           if (st.dry.length === 0) {
             throw new HandBack('commit_outside_page', {
