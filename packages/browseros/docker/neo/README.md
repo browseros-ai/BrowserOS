@@ -317,7 +317,12 @@ outputs / 128 MiB, with at most 64 parts per output and 64 MiB per part.
 Small text results stay inline. Larger results, PDFs, completed downloads and
 explicit screenshot captures return an `output` descriptor containing an ID and
 named parts; automatic snapshots/diffs and files produced inside `run` share the
-outer call's ID. Screenshots also remain inline images. `result.json` contains the complete primary result
+outer call's ID. Direct screenshots remain inline images; nested scripts receive
+up to four inline captures / 8 MiB of encoded image data, with additional captures
+available through the output reference. One part slot is reserved for the primary
+result. If retaining a part fails, available attachments are still published and
+the reference includes warnings rather than requiring an action to be repeated.
+`result.json` contains the complete primary result
 as `{isError, structuredContent, text}`, including unabridged JSON values/logs.
 Use `read_output` with the same `session` and `outputId`; omit `part` to list parts. Text reads return
 `nextOffset` for the next bounded chunk. Images up to 2 MiB can be read inline;

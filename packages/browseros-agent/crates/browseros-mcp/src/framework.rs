@@ -539,9 +539,24 @@ pub async fn execute_tool<'a>(
                     .push(ContentBlock::image(image.data, image.mime_type));
             }
         }
+        let omitted = call_ctx.output_files.omitted_images().await;
+        if omitted > 0 {
+            result.content.push(ContentBlock::text(format!(
+                "{omitted} additional screenshots were saved; use read_output to retrieve them."
+            )));
+        }
         let primary = json!({ "isError": result.is_error, "structuredContent": result.structured_content, "text": result.content.iter().filter_map(|block| block.as_text().map(|text| &text.text)).collect::<Vec<_>>() });
         match call_ctx.output_files.finish(&primary).await {
             Ok(Some(output)) => {
+                for warning in &output.warnings {
+                    result.content.push(ContentBlock::text(warning));
+                }
+                if !output.warnings.is_empty() {
+                    merge_structured(
+                        &mut result.structured_content,
+                        json!({ "outputWriteFailed": true }),
+                    );
+                }
                 result.content.push(ContentBlock::text(format!("[Saved output: {}. Use read_output with outputId and part; omit part to list parts.]", output.id)));
                 merge_structured(&mut result.structured_content, json!({ "output": output }));
             }

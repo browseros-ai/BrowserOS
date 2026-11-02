@@ -89,6 +89,31 @@ async function bytesOf(
 
 export const outputCases: ContractCase[] = [
   {
+    name: 'outputs: full screenshot batches publish with bounded inline previews',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/media.html'))
+      const result = await ctx.mcp.callTool('run', {
+        code: `const p=browser.page(${page}); for(let i=0;i<32;i++) await p.screenshot({format:'png'}); return {captures:32}`,
+      })
+      const output = outputOf(result)
+      expect(
+        result.content.filter((block) => block.type === 'image').length,
+      ).toBeLessThanOrEqual(4)
+      expect(output.parts.length).toBe(64)
+      expect(
+        output.parts.filter((part) => part.mimeType === 'image/png').length,
+      ).toBe(32)
+      expect(result.structuredContent?.outputWriteFailed).toBe(true)
+      expect(
+        (await bytesOf(ctx, output.id, 'screenshot-32.png')).subarray(0, 8),
+      ).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+      expect(
+        JSON.parse((await bytesOf(ctx, output.id, 'result.json')).toString())
+          .structuredContent.value,
+      ).toEqual({ captures: 32 })
+    },
+  },
+  {
     name: 'outputs: expired live handles retain output through their canonical task',
     async run(ctx) {
       const server = await startRustServer(ctx.browser.cdpPort, {

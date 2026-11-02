@@ -7,10 +7,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    collections::HashMap,
     io,
     path::{Path, PathBuf},
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::{Arc, LazyLock, Mutex as StdMutex, Weak},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     fs,
@@ -25,9 +26,37 @@ const MAX_SESSION_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_PARTS: usize = 64;
 const MAX_OUTPUTS: usize = 128;
 const RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
-// A browser process owns one store root. Serializing publication keeps quota checks and
-// filesystem mutations atomic with respect to other calls, including reconnected clients.
-static WRITER: Mutex<()> = Mutex::const_new(());
+const CLEANUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const MAX_INLINE_IMAGES: usize = 4;
+const MAX_INLINE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Shared by a host's store clones. Admission scans once per call; subsequent parts
+/// update quotas in memory under this root's lock. Other roots never share the lock.
+#[derive(Default)]
+struct StorageState {
+    sessions: HashMap<PathBuf, (usize, u64)>,
+    last_cleanup: Option<Instant>,
+}
+
+// MCP services can be reconstructed for fresh connections. Intern their root's
+// admission state so those services still serialize quotas; weak entries retain
+// neither a finished host nor a temporary test store. No I/O holds this registry lock.
+type SharedStorage = Arc<Mutex<StorageState>>;
+static ROOTS: LazyLock<StdMutex<HashMap<PathBuf, Weak<Mutex<StorageState>>>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+fn shared_storage(root: &Path) -> SharedStorage {
+    let mut roots = ROOTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    roots.retain(|_, storage| storage.strong_count() > 0);
+    if let Some(storage) = roots.get(root).and_then(Weak::upgrade) {
+        return storage;
+    }
+    let storage = SharedStorage::default();
+    roots.insert(root.to_path_buf(), Arc::downgrade(&storage));
+    storage
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -45,6 +74,9 @@ pub struct OutputReference {
     pub id: String,
     pub expires_at: u64,
     pub parts: Vec<OutputPart>,
+    /// Attachments remain retrievable if retaining the primary result fails.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 pub struct OutputChunk {
@@ -64,6 +96,10 @@ struct Collected {
     parts: Vec<OutputPart>,
     images: Vec<InlineImage>,
     published: Option<OutputReference>,
+    initialized: bool,
+    inline_bytes: usize,
+    omitted_images: usize,
+    incomplete: bool,
 }
 
 /// A logical session's store, narrowed to one request's collection. Clones share that
@@ -75,17 +111,20 @@ pub struct OutputStore {
     id: String,
     retention: Duration,
     collected: Arc<Mutex<Collected>>,
+    storage: Arc<Mutex<StorageState>>,
 }
 
 impl OutputStore {
     #[must_use]
     pub fn new(root: PathBuf, session: &str) -> Self {
+        let storage = shared_storage(&root);
         Self {
             root: Arc::new(root),
             session: Arc::from(session),
             id: Uuid::new_v4().to_string(),
             retention: RETENTION,
             collected: Arc::default(),
+            storage,
         }
     }
 
@@ -134,6 +173,22 @@ impl OutputStore {
         extension: &str,
         bytes: &[u8],
     ) -> io::Result<PathBuf> {
+        let result = self.write_part_inner(name, extension, bytes).await;
+        if result.is_err() {
+            let mut collected = self.collected.lock().await;
+            if collected.published.is_none() {
+                collected.incomplete = true;
+            }
+        }
+        result
+    }
+
+    async fn write_part_inner(
+        &self,
+        name: &str,
+        extension: &str,
+        bytes: &[u8],
+    ) -> io::Result<PathBuf> {
         if !self.root.is_absolute() {
             return Err(io::Error::other(
                 "Tool output root must be an absolute, non-root directory",
@@ -144,55 +199,43 @@ impl OutputStore {
                 "Tool output exceeds the 64 MiB per-part limit",
             ));
         }
-        let _writer = WRITER.lock().await;
-        private_dir(&self.root).await?;
-        // Sweep abandoned sessions too: a client that never reconnects must not leave
-        // expired artifacts on the persistent volume forever. Active session folders
-        // are cheap to skip; their own expired outputs are checked below.
-        let mut sessions = fs::read_dir(&*self.root).await?;
-        while let Some(entry) = sessions.next_entry().await? {
-            if entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.starts_with("s-"))
-                && entry.file_type().await?.is_dir()
-                && entry
-                    .metadata()
-                    .await?
-                    .modified()
-                    .ok()
-                    .and_then(|modified| modified.elapsed().ok())
-                    .is_some_and(|age| age >= RETENTION)
-            {
-                self.prune_expired(&entry.path()).await?;
-                let _ = fs::remove_dir(entry.path()).await; // Remove only an empty session.
-            }
+        let mut storage = self.storage.lock().await;
+        let mut collected = self.collected.lock().await;
+        if collected.published.is_some() {
+            return Err(io::Error::other("Published output is immutable"));
+        }
+        let stem = segment(name);
+        let extension = segment(extension).to_ascii_lowercase();
+        let has_primary = collected
+            .parts
+            .iter()
+            .any(|part| part.name == "result.json");
+        // Attachments must leave one slot for response assembly. A batch at its
+        // advertised limit must still publish a manifest and a usable output ID.
+        let writing_primary = stem == "result" && extension == "json";
+        let reserved = usize::from(!(has_primary || writing_primary));
+        if collected.parts.len() >= MAX_PARTS - reserved {
+            return Err(io::Error::other("Tool output exceeds the 64-part limit"));
         }
         let session = self.session_dir();
-        private_dir(&session).await?;
-        self.prune_expired(&session).await?;
-        let (count, used) = session_usage(&session).await?;
+        if !collected.initialized || !storage.sessions.contains_key(&session) {
+            self.prepare_session(&mut storage, &session).await?;
+            collected.initialized = true;
+        }
+        let (count, used) = storage.sessions[&session];
         if count > MAX_OUTPUTS || used.saturating_add(bytes.len() as u64) > MAX_SESSION_BYTES {
             return Err(io::Error::other(
                 "Tool output session quota exceeded (128 outputs / 128 MiB)",
             ));
         }
         let directory = self.output_dir(&self.id)?;
-        if count == MAX_OUTPUTS && !fs::try_exists(&directory).await? {
+        let new_output = !fs::try_exists(&directory).await?;
+        if count == MAX_OUTPUTS && new_output {
             return Err(io::Error::other(
                 "Tool output session quota exceeded (128 outputs)",
             ));
         }
         private_dir(&directory).await?;
-        let mut collected = self.collected.lock().await;
-        if collected.published.is_some() {
-            return Err(io::Error::other("Published output is immutable"));
-        }
-        if collected.parts.len() >= MAX_PARTS {
-            return Err(io::Error::other("Tool output exceeds the 64-part limit"));
-        }
-        let stem = segment(name);
-        let extension = segment(extension).to_ascii_lowercase();
         let mut filename = format!("{stem}.{extension}");
         let mut number = 2;
         while collected.parts.iter().any(|part| part.name == filename) {
@@ -200,13 +243,60 @@ impl OutputStore {
             number += 1;
         }
         let path = directory.join(&filename);
-        write_new(&path, bytes).await?;
+        if let Err(error) = write_new(&path, bytes).await {
+            // A failed flush or permission change may leave a file behind. Rescan
+            // before another write rather than trusting an incomplete byte count.
+            storage.sessions.remove(&session);
+            return Err(error);
+        }
+        storage.sessions.insert(
+            session,
+            (count + usize::from(new_output), used + bytes.len() as u64),
+        );
         collected.parts.push(OutputPart {
             name: filename,
             mime_type: mime_type(&extension).to_string(),
             bytes: bytes.len() as u64,
         });
         Ok(path)
+    }
+
+    async fn prepare_session(&self, storage: &mut StorageState, session: &Path) -> io::Result<()> {
+        private_dir(&self.root).await?;
+        // Root cleanup is amortized across calls. Current-task expiry and quota
+        // admission run once per call, never once per screenshot/metadata part.
+        if storage
+            .last_cleanup
+            .is_none_or(|last| last.elapsed() >= CLEANUP_INTERVAL)
+        {
+            let mut sessions = fs::read_dir(&*self.root).await?;
+            while let Some(entry) = sessions.next_entry().await? {
+                if entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with("s-"))
+                    && entry.file_type().await?.is_dir()
+                    && entry
+                        .metadata()
+                        .await?
+                        .modified()
+                        .ok()
+                        .and_then(|modified| modified.elapsed().ok())
+                        .is_some_and(|age| age >= RETENTION)
+                {
+                    self.prune_expired(&entry.path()).await?;
+                    let _ = fs::remove_dir(entry.path()).await;
+                }
+            }
+            storage.sessions.clear();
+            storage.last_cleanup = Some(Instant::now());
+        }
+        private_dir(session).await?;
+        self.prune_expired(session).await?;
+        storage
+            .sessions
+            .insert(session.to_path_buf(), session_usage(session).await?);
+        Ok(())
     }
 
     /// Copies completed downloads into private storage. The browser's original file can
@@ -227,11 +317,23 @@ impl OutputStore {
     }
 
     pub async fn image(&self, data: &str, mime: &str, metadata: &Value) -> io::Result<()> {
-        // Delivery to the model remains possible even if artifact storage is full.
-        self.collected.lock().await.images.push(InlineImage {
-            data: data.to_string(),
-            mime_type: mime.to_string(),
-        });
+        // Nested scripts retain only a bounded vision preview in Rust memory.
+        // Further captures are still stored and advertised through the manifest.
+        let inline = {
+            let mut collected = self.collected.lock().await;
+            if collected.images.len() < MAX_INLINE_IMAGES
+                && collected.inline_bytes.saturating_add(data.len()) <= MAX_INLINE_IMAGE_BYTES
+            {
+                collected.inline_bytes += data.len();
+                collected.images.push(InlineImage {
+                    data: data.to_string(),
+                    mime_type: mime.to_string(),
+                });
+                true
+            } else {
+                false
+            }
+        };
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(data)
             .map_err(io::Error::other)?;
@@ -242,6 +344,9 @@ impl OutputStore {
             _ => return Err(io::Error::other("Unsupported screenshot MIME type")),
         };
         self.write_part("screenshot", extension, &bytes).await?;
+        if !inline {
+            self.collected.lock().await.omitted_images += 1;
+        }
         self.write_part(
             "screenshot-metadata",
             "json",
@@ -253,6 +358,10 @@ impl OutputStore {
 
     pub async fn images(&self) -> Vec<InlineImage> {
         self.collected.lock().await.images.clone()
+    }
+
+    pub async fn omitted_images(&self) -> usize {
+        self.collected.lock().await.omitted_images
     }
 
     /// Publishes only calls that produced stored content. `result.json` retains the primary
@@ -274,24 +383,44 @@ impl OutputStore {
         if empty {
             return Ok(None);
         }
-        if !has_primary {
-            self.write_part("result", "json", &serde_json::to_vec(primary)?)
-                .await?;
+        let mut warnings = Vec::new();
+        if self.collected.lock().await.incomplete {
+            warnings.push(
+                "Some output parts could not be retained; use read_output for the available parts."
+                    .to_string(),
+            );
         }
-        let _writer = WRITER.lock().await;
+        if !has_primary
+            && let Err(error) = self
+                .write_part("result", "json", &serde_json::to_vec(primary)?)
+                .await
+        {
+            // Quota or I/O failure must not hide attachments already saved by an
+            // action that cannot safely be replayed. Publish their available parts.
+            warnings.push(format!("Primary result could not be retained: {error}"));
+        }
+        let mut storage = self.storage.lock().await;
         let mut collected = self.collected.lock().await;
+        if let Some(output) = &collected.published {
+            return Ok(Some(output.clone()));
+        }
         let output = OutputReference {
             id: self.id.clone(),
             expires_at: now_ms()
                 .saturating_add(self.retention.as_millis().try_into().unwrap_or(u64::MAX)),
             parts: collected.parts.clone(),
+            warnings,
         };
         let directory = self.output_dir(&self.id)?;
         // A reader sees either no manifest or the complete immutable result, never an
         // intermediate list from a nested call still producing attachments.
         let temporary = directory.join("manifest.pending");
-        write_new(&temporary, &serde_json::to_vec(&output)?).await?;
+        let manifest = serde_json::to_vec(&output)?;
+        write_new(&temporary, &manifest).await?;
         fs::rename(temporary, directory.join("manifest.json")).await?;
+        if let Some((_, bytes)) = storage.sessions.get_mut(&self.session_dir()) {
+            *bytes = bytes.saturating_add(manifest.len() as u64);
+        }
         collected.published = Some(output.clone());
         Ok(Some(output))
     }

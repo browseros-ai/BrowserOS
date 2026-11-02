@@ -3,6 +3,137 @@ use serde_json::json;
 use std::time::Duration;
 
 #[tokio::test]
+async fn full_attachment_batches_keep_the_primary_slot_and_remain_retrievable() -> anyhow::Result<()>
+{
+    let directory = tempfile::tempdir()?;
+    let call = OutputStore::new(directory.path().join("outputs"), "session");
+    for index in 0..63 {
+        call.write_part("attachment", "txt", index.to_string().as_bytes())
+            .await?;
+    }
+    assert!(
+        call.write_part("overflow", "txt", b"overflow")
+            .await
+            .is_err()
+    );
+    let output = call
+        .finish(&json!({"done":true}))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("full batch was not published"))?;
+    assert_eq!(output.parts.len(), 64);
+    assert!(!output.warnings.is_empty());
+    assert_eq!(
+        call.read(&output.id, "attachment-63.txt", 0, 100)
+            .await?
+            .bytes,
+        b"62"
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(
+            &call.read(&output.id, "result.json", 0, 100).await?.bytes
+        )?,
+        json!({"done":true})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn primary_write_failure_still_publishes_completed_attachments() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let call = OutputStore::new(directory.path().join("outputs"), "session");
+    let path = call.write_part("capture", "png", b"capture bytes").await?;
+    // An occupied primary path injects an actual create_new failure without
+    // filling the developer's disk or weakening the store's production limits.
+    tokio::fs::write(path.with_file_name("result.json"), b"occupied").await?;
+    let output = call
+        .finish(&json!({"done":true}))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("attachments were hidden by primary failure"))?;
+    assert_eq!(output.parts.len(), 1);
+    assert!(
+        output
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Primary result"))
+    );
+    assert_eq!(
+        call.read_bytes(&output.id, "capture.png", 0, 100)
+            .await?
+            .bytes,
+        b"capture bytes"
+    );
+    assert!(call.read(&output.id, "result.json", 0, 100).await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn screenshot_previews_are_bounded_while_extra_captures_stay_readable() -> anyhow::Result<()>
+{
+    use base64::Engine;
+    let directory = tempfile::tempdir()?;
+    let call = OutputStore::new(directory.path().join("outputs"), "session");
+    for index in 0..6 {
+        let data = base64::engine::general_purpose::STANDARD.encode(format!("image {index}"));
+        call.image(&data, "image/png", &json!({"index":index}))
+            .await?;
+    }
+    assert_eq!(call.images().await.len(), 4);
+    assert_eq!(call.omitted_images().await, 2);
+    let output = call
+        .finish(&json!({"done":true}))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing screenshots"))?;
+    assert_eq!(
+        call.read_bytes(&output.id, "screenshot-6.png", 0, 100)
+            .await?
+            .bytes,
+        b"image 5"
+    );
+
+    // A single capture can exceed the aggregate preview allowance. It remains
+    // available as exact bytes without cloning another large Rust-owned string.
+    let large = call.begin_call();
+    let bytes = vec![0; 7 * 1024 * 1024];
+    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    large.image(&data, "image/png", &json!({})).await?;
+    assert!(large.images().await.is_empty());
+    assert_eq!(large.omitted_images().await, 1);
+    let output = large
+        .finish(&json!({"done":true}))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing large screenshot"))?;
+    assert_eq!(
+        output
+            .parts
+            .iter()
+            .find(|part| part.name == "screenshot.png")
+            .map(|part| part.bytes),
+        Some(bytes.len() as u64)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn fresh_services_share_quota_admission_for_the_last_output_slot() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("outputs");
+    let owner = OutputStore::new(root.clone(), "session");
+    for _ in 0..127 {
+        let call = owner.begin_call();
+        call.write_part("part", "txt", b"saved").await?;
+        call.finish(&json!({"done":true})).await?;
+    }
+    let first = OutputStore::new(root.clone(), "session");
+    let second = OutputStore::new(root, "session");
+    let (first, second) = tokio::join!(
+        first.write_part("part", "txt", b"one"),
+        second.write_part("part", "txt", b"two"),
+    );
+    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+    Ok(())
+}
+
+#[tokio::test]
 async fn saved_call_retains_typed_parts_across_reconnect_and_rejects_other_sessions()
 -> anyhow::Result<()> {
     let root = std::env::temp_dir().join(format!("neo-output-test-{}", uuid::Uuid::new_v4()));
