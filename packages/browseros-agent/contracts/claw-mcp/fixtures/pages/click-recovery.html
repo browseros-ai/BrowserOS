@@ -32,6 +32,17 @@
     target.addEventListener('pointerover', () => cover.style.display = 'block', { once: true });
   }
   if (mode === 'disabled') target.disabled = true;
+  if (mode === 'first-legend' || mode === 'fieldset-disabled') {
+    cover.remove();
+    const fieldset = document.createElement('fieldset');
+    fieldset.disabled = true;
+    const legend = document.createElement('legend');
+    legend.textContent = 'Fieldset legend';
+    fieldset.append(legend);
+    target.style.cssText = 'width:240px;height:100px';
+    (mode === 'first-legend' ? legend : fieldset).append(target);
+    document.body.append(fieldset);
+  }
   if (mode === 'large') {
     target.style.height = '3000px';
     document.body.style.height = '3200px';

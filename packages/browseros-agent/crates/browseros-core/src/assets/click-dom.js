@@ -3,12 +3,15 @@
 // biome-ignore lint/correctness/noUnusedVariables: Rust embeds this function as a CDP functionDeclaration.
 function browserosActivateDom() {
   if (!this.isConnected) return 'Element is detached; take a new snapshot.'
+  // Let the browser apply native inheritance, including the first-legend exception.
+  if (this.matches(':disabled'))
+    return 'Element is disabled or inert; DOM activation was not sent.'
   for (
     let node = this;
     node;
     node = node.parentElement || node.getRootNode().host
   ) {
-    if (node.matches(':disabled, [aria-disabled="true"], [inert]')) {
+    if (node.matches('[aria-disabled="true"], [inert]')) {
       return 'Element is disabled or inert; DOM activation was not sent.'
     }
   }

@@ -28,6 +28,62 @@ function click(
 export const clickRecoveryCases: ContractCase[] = (
   ['act', 'run'] as const
 ).flatMap((surface) => [
+  ...([undefined, 'dom'] as const).flatMap((method) => [
+    {
+      name: `${surface}: fieldset semantics ${method ?? 'pointer'} reaches an enabled first-legend control`,
+      async run(ctx: CaseContext) {
+        const page = await ctx.openPage(
+          ctx.fixture('/click-recovery.html?mode=first-legend'),
+        )
+        expect(
+          await evalValue(
+            ctx,
+            page,
+            'return document.getElementById("target").matches(":disabled")',
+          ),
+        ).toBe(false)
+        expectOk(
+          await click(
+            ctx,
+            page,
+            surface,
+            await fieldRef(ctx, page, 'Recovery target'),
+            method,
+          ),
+        )
+        expect(await evalValue(ctx, page, 'return window.events')).toEqual([
+          { trusted: method !== 'dom' },
+        ])
+      },
+    },
+    {
+      name: `${surface}: fieldset semantics ${method ?? 'pointer'} refuses a disabled control outside the legend`,
+      async run(ctx: CaseContext) {
+        const page = await ctx.openPage(
+          ctx.fixture('/click-recovery.html?mode=fieldset-disabled'),
+        )
+        expect(
+          await evalValue(
+            ctx,
+            page,
+            'return document.getElementById("target").matches(":disabled")',
+          ),
+        ).toBe(true)
+        expect(
+          expectError(
+            await click(
+              ctx,
+              page,
+              surface,
+              await fieldRef(ctx, page, 'Recovery target'),
+              method,
+            ),
+          ),
+        ).toContain('disabled')
+        expect(await evalValue(ctx, page, 'return window.events')).toEqual([])
+      },
+    },
+  ]),
   {
     name: `${surface}: click recovery review regression reaches nested closed shadow roots`,
     async run(ctx: CaseContext) {
