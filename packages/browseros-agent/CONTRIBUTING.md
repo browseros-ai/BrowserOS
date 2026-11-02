@@ -2,8 +2,6 @@
 
 The agent platform for [BrowserOS neo](../../README.md), the browser your agents drive. Start at the [root contributing guide](../../CONTRIBUTING.md) if you have not already, then come back here.
 
-Working on the other browser instead? See [CONTRIBUTING.BrowserOS.md](CONTRIBUTING.BrowserOS.md).
-
 ## What you will be working on
 
 BrowserOS neo is two pieces that run together.
@@ -27,7 +25,7 @@ The wire types are generated on both sides. [`packages/claw-api`](packages/claw-
 | **BrowserOS neo** | The supervisor launches the installed app | [Download](https://cdn.browseros.com/download/BrowserOS_neo.dmg) |
 | **Docker** | Only if you change the API contract. `codegen:claw-api` runs the generator in a pinned container | [Docker Desktop](https://www.docker.com/products/docker-desktop/) |
 
-The dev loop is macOS only today. The supervisor resolves the browser through a hard-coded `/Applications/...` path, so Linux and Windows contributors can install dependencies and run the checks, but cannot launch either product yet.
+The dev loop is macOS only today. The supervisor resolves the browser through a hard-coded `/Applications/...` path, so Linux and Windows contributors can install dependencies and run the checks, but cannot launch the browser yet.
 
 ## Setup
 
@@ -72,10 +70,6 @@ There are two variants and the difference matters more than the name suggests.
 
 `:new` is the safer default while you are getting oriented, though it is not entirely hands-off: the server process clears its own port immediately before launching, so a process that grabs that port in the gap after it was picked will still be killed. Both variants take a lock on the profile, so two watch runs can never supervise the same one.
 
-### Running the BrowserOS stack instead
-
-`dev:watch` and `dev:claw:watch` are exclusive, not additive. One command runs one product. To work on the other browser, see [CONTRIBUTING.BrowserOS.md](CONTRIBUTING.BrowserOS.md).
-
 ## Before you open a PR
 
 ```bash
@@ -102,8 +96,6 @@ bun run test:claw-api-contract
 | `bun run dev:claw-onboard` | The onboarding flow on its own |
 | `bun run dev:reset` | Wipe the dev profile and start clean |
 | `bun run dev:cleanup` | Stop dev processes and free the ports |
-| `bun run devtools` | AI SDK devtools against the server |
-| `bun run dev:manual` | Build the extension statically instead of hot reloading, for when you need to load it by hand |
 
 ## Where things live
 
