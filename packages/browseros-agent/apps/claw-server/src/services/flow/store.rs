@@ -104,8 +104,9 @@ impl FlowDoc {
         Ok(())
     }
 
-    /// Adds an example, keeping the original and the newest others within the cap. An input
-    /// already listed is not added twice.
+    /// Adds an example within the cap. The oldest handover input goes first, so the original
+    /// and the agent's varied examples that verification requires are kept. An input already
+    /// listed is not added twice.
     pub fn push_example(&mut self, example: Example) {
         if self
             .meta
@@ -117,11 +118,15 @@ impl FlowDoc {
         }
         self.meta.examples.push(example);
         while self.meta.examples.len() > MAX_EXAMPLES {
-            let Some(index) = self
-                .meta
-                .examples
+            let examples = &self.meta.examples;
+            let Some(index) = examples
                 .iter()
-                .position(|existing| existing.source != "original")
+                .position(|existing| existing.source == "handover")
+                .or_else(|| {
+                    examples
+                        .iter()
+                        .position(|existing| existing.source != "original")
+                })
             else {
                 break;
             };
@@ -321,6 +326,41 @@ mod tests {
         assert_eq!(parsed, doc);
         assert_eq!(parsed.commit_step(), Some(2));
         Ok(())
+    }
+
+    #[test]
+    fn handover_examples_never_push_out_the_varied_ones() {
+        let mut doc = sample();
+        for (query, source) in [("colgate", "agent"), ("dove", "agent")] {
+            doc.meta.examples.push(Example {
+                input: json!({ "query": query })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+                source: source.to_string(),
+                expect: "done".to_string(),
+            });
+        }
+        for i in 0..12 {
+            doc.push_example(Example {
+                input: json!({ "query": format!("h{i}") })
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default(),
+                source: "handover".to_string(),
+                expect: "either".to_string(),
+            });
+        }
+        let sources: Vec<&str> = doc
+            .meta
+            .examples
+            .iter()
+            .map(|example| example.source.as_str())
+            .collect();
+        assert_eq!(doc.meta.examples.len(), MAX_EXAMPLES);
+        assert_eq!(&sources[..3], ["original", "agent", "agent"]);
+        assert_eq!(doc.meta.examples[MAX_EXAMPLES - 1].input["query"], "h11");
+        assert_eq!(doc.meta.examples[3].input["query"], "h7");
     }
 
     #[test]
