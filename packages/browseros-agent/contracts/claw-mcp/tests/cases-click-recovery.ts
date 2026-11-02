@@ -29,6 +29,55 @@ export const clickRecoveryCases: ContractCase[] = (
   ['act', 'run'] as const
 ).flatMap((surface) => [
   {
+    name: `${surface}: click recovery review regression reaches nested closed shadow roots`,
+    async run(ctx: CaseContext) {
+      const page = await ctx.openPage(
+        ctx.fixture('/click-recovery.html?mode=nested-closed'),
+      )
+      expectOk(
+        await click(
+          ctx,
+          page,
+          surface,
+          await fieldRef(ctx, page, 'Recovery target'),
+        ),
+      )
+      expect(await evalValue(ctx, page, 'return window.events')).toEqual([
+        { trusted: true },
+      ])
+    },
+  },
+  ...(['scale(0.5)', 'rotate(65deg)'] as const).map((transform) => ({
+    name: `${surface}: click recovery review regression in a ${transform} same-process frame`,
+    async run(ctx: CaseContext) {
+      const lab = { ...ctx, mcp: await ctx.scopedMcp() }
+      const page = await lab.openPage(
+        lab.fixture('/frame-lab.html?case=single-same'),
+        lab.mcp,
+      )
+      await waitUntil(
+        async () =>
+          Boolean(await evalValue(lab, page, 'return window.frameLab.ready')),
+        'frame lab ready',
+      )
+      const ref = await fieldRef(lab, page, 'Click target single-same')
+      await evalValue(
+        lab,
+        page,
+        `const frame = document.querySelector('iframe'); frame.style.transformOrigin='0 0'; frame.style.marginLeft='150px'; frame.style.transform=${JSON.stringify(transform)}; return true`,
+      )
+      expectOk(await click(lab, page, surface, ref))
+      await waitUntil(async () => {
+        const events = await evalValue<Array<{ trusted: boolean }>>(
+          lab,
+          page,
+          'return window.frameLab.events',
+        )
+        return events.length === 1 && events[0].trusted
+      }, 'one trusted transformed-frame click')
+    },
+  })),
+  {
     name: `${surface}: click recovery clips an oversized target to the visible viewport`,
     async run(ctx: CaseContext) {
       const page = await ctx.openPage(

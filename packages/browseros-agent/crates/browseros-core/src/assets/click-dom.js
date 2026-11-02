@@ -1,3 +1,5 @@
+// fallow-ignore-file unused-file
+// Rust embeds this function with include_str!; JavaScript imports do not reach it.
 // biome-ignore lint/correctness/noUnusedVariables: Rust embeds this function as a CDP functionDeclaration.
 function browserosActivateDom() {
   if (!this.isConnected) return 'Element is detached; take a new snapshot.'
