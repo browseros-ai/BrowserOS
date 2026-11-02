@@ -712,9 +712,15 @@ fn keep_hand_written(generated: &str, existing: &str) -> String {
     let mut extra_keys = Vec::new();
     let mut keep_key = false;
     for line in front {
-        let starts_key = line.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
+        let starts_key =
+            line.starts_with(|c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '"' | '\''));
         if starts_key {
-            let key = line.split(':').next().unwrap_or("").trim();
+            let key = line
+                .split(':')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .trim_matches(['"', '\'']);
             keep_key = !GENERATED_KEYS.contains(&key);
         }
         if keep_key {
@@ -983,6 +989,14 @@ mod tests {
 
         let untouched = render_skill_markdown("neo-shop", "Add to cart", &steps, &notes);
         assert_eq!(keep_hand_written(&generated, &untouched), generated);
+
+        let quoted = "---\nname: neo-shop\ndescription: \"Add to cart\"\ntools: browseros-neo\n\"license\": MIT\n'version': 2\n\"tools\": other\n---\n\n## Steps\n1. Open the search.\n";
+        let body = keep_hand_written(&untouched, quoted);
+        assert!(
+            body.contains("\"license\": MIT\n'version': 2\n---"),
+            "{body}"
+        );
+        assert!(!body.contains("\"tools\": other"), "{body}");
     }
 
     #[test]
