@@ -4,7 +4,7 @@
 
 use super::{
     FlowExec, check_inputs,
-    compose::{Mode, SOFT_DEADLINE_MS},
+    compose::Mode,
     outcome::Outcome,
     store::{Effects, FlowDoc, MAX_STEP_BYTES},
 };
@@ -314,6 +314,7 @@ pub async fn verify(
     labels: &[String],
 ) -> Result<Pass, Failure> {
     static_check(doc, labels)?;
+    let run_budget = exec.run_policy().handback_timeout();
     let started = Instant::now();
     let first = doc.meta.examples[0].input.clone();
     match exec.exec(doc, &first, Mode::Parse, None).await {
@@ -377,13 +378,14 @@ pub async fn verify(
                 )));
             }
         }
-        if elapsed > Duration::from_millis(SOFT_DEADLINE_MS) {
+        if elapsed > run_budget {
             return Err(with_example(Failure::new(
                 Gate::Budget,
                 None,
                 format!(
-                    "the run took {} ms; keep each run under {SOFT_DEADLINE_MS} ms",
-                    elapsed.as_millis()
+                    "the run took {} ms; keep each run under {} ms",
+                    elapsed.as_millis(),
+                    run_budget.as_millis()
                 ),
             )));
         }

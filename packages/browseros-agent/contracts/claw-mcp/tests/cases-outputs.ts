@@ -145,7 +145,7 @@ export const outputCases: ContractCase[] = [
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/media.html'))
       const result = await ctx.mcp.callTool('run', {
-        // Keep native work well inside run's 30-second budget on software-rendered
+        // Keep native work well inside run's execution budget on software-rendered
         // Linux. The public Rust store tests exercise the separate 64-part boundary.
         code: `const p=browser.page(${page}); for(let i=0;i<6;i++) await p.screenshot({format:'png'}); return {captures:6}`,
       })

@@ -130,6 +130,35 @@ pub(crate) fn select_fixture_tab(tabs: &[Value], params: &Value) -> Result<Value
         })
 }
 
+#[tokio::test]
+async fn run_discovery_exposes_the_same_configurable_budget_as_execution() -> anyhow::Result<()> {
+    for (seconds, expected_ms) in [(60, 60000), (120, 120000)] {
+        let session = BrowserSession::new(
+            Arc::new(FakeConnection::new()),
+            BrowserSessionHooks::default(),
+        );
+        let mut options = service_options(session);
+        options.run_policy = Some(crate::RunPolicy::from_seconds(
+            std::num::NonZeroU32::new(seconds)
+                .ok_or_else(|| anyhow::anyhow!("invalid test budget"))?,
+        ));
+        let service = BrowserMcpService::new(options);
+        let run = service
+            .get_tool("run")
+            .ok_or_else(|| anyhow::anyhow!("missing run"))?;
+        assert_eq!(
+            run.input_schema["properties"]["timeout"]["default"],
+            expected_ms
+        );
+        assert_eq!(
+            run.input_schema["properties"]["timeout"]["maximum"],
+            expected_ms
+        );
+        assert!(!run.description.unwrap_or_default().contains("under 30s"));
+    }
+    Ok(())
+}
+
 pub(crate) fn service_options(session: Arc<BrowserSession>) -> BrowserMcpServiceOptions {
     BrowserMcpServiceOptions {
         native: session.native(),
@@ -141,6 +170,7 @@ pub(crate) fn service_options(session: Arc<BrowserSession>) -> BrowserMcpService
         instructions: None,
         defaults: BrowserToolDefaults::default(),
         output_files: None,
+        run_policy: None,
         include_structured_content: None,
         on_tool_execution_start: None,
         on_tool_execution_end: None,
