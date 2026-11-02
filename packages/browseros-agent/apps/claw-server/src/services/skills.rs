@@ -956,7 +956,10 @@ mod tests {
         let body = keep_hand_written(&generated, existing);
         assert!(body.starts_with("---\nname: neo-shop\n"), "{body}");
         assert!(body.contains("ultrafast: verified\nlicense: MIT\nmetadata:\n  owner: shop-team\n---\n\nUse the India store.\n\n## Run it fast\n"), "{body}");
-        assert!(body.ends_with("- The grid fills late.\n\n## Before you start\n- Sign in first.\n"), "{body}");
+        assert!(
+            body.ends_with("- The grid fills late.\n\n## Before you start\n- Sign in first.\n"),
+            "{body}"
+        );
         assert_eq!(prose_steps(&body), steps);
         assert_eq!(learned_notes(&body), notes);
 
@@ -968,7 +971,10 @@ mod tests {
         assert!(!plain.contains("ultrafast:"), "{plain}");
         assert!(!plain.contains("Run it fast"), "{plain}");
         assert!(plain.contains("license: MIT\n"), "{plain}");
-        assert!(plain.contains("## Before you start\n- Sign in first.\n"), "{plain}");
+        assert!(
+            plain.contains("## Before you start\n- Sign in first.\n"),
+            "{plain}"
+        );
         let again = keep_hand_written(
             &render_skill_markdown("neo-shop", "Add to cart", &steps, &notes),
             &plain,

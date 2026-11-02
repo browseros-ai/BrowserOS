@@ -77,8 +77,14 @@ mod tests {
     fn the_fingerprint_follows_what_the_steps_say() {
         let steps = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let send = fingerprint(&steps(&["Open the thread.", "Send the reply."]));
-        assert_eq!(send, fingerprint(&steps(&["Open the thread.", "Send the reply."])));
-        assert_ne!(send, fingerprint(&steps(&["Open the thread.", "Save it as a draft."])));
+        assert_eq!(
+            send,
+            fingerprint(&steps(&["Open the thread.", "Send the reply."]))
+        );
+        assert_ne!(
+            send,
+            fingerprint(&steps(&["Open the thread.", "Save it as a draft."]))
+        );
         assert_eq!(send.len(), 16);
     }
 

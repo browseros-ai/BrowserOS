@@ -312,7 +312,10 @@ async fn rewriting_a_step_switches_the_flow_off_even_when_the_count_holds() -> a
     let app = test_app().await?;
     let state = &app.state;
     create_skill(state, "neo-shop-add").await?;
-    let verified_against = vec!["Open the search".to_string(), "Add the first match".to_string()];
+    let verified_against = vec![
+        "Open the search".to_string(),
+        "Add the first match".to_string(),
+    ];
     let mut doc = two_step_flow();
     doc.meta.prose_hash = Some(flow::prose::fingerprint(&verified_against));
     state.skills.write_flow("neo-shop-add", &doc).await?;
@@ -328,7 +331,12 @@ async fn rewriting_a_step_switches_the_flow_off_even_when_the_count_holds() -> a
     )
     .await?;
     assert_eq!(detail["skill"]["ultrafast"]["status"], "verified");
-    assert!(detail["body"].as_str().unwrap_or_default().contains("## Run it fast"));
+    assert!(
+        detail["body"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("## Run it fast")
+    );
 
     let (_, detail) = put(
         &app.router,
