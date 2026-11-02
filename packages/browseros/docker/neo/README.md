@@ -347,8 +347,14 @@ result. If retaining a part fails, available attachments are still published and
 the reference includes warnings rather than requiring an action to be repeated.
 `result.json` contains the complete primary result
 as `{isError, structuredContent, text}`, including unabridged JSON values/logs.
+Inline text defaults are 30,000 UTF-8 bytes for `run` (about 10,000 estimated
+tokens), and 15,000 bytes for `read`, `grep` and `evaluate_in_page` (about 5,000).
+`run` and `evaluate_in_page` accept a per-call `maxChars` byte budget capped at
+150,000 bytes (about 50,000 estimated tokens). This inline ceiling is separate
+from `run`'s 2,000,000-byte return-value limit: larger accepted results are saved
+whole and returned as an inline preview plus an output reference.
 Use `read_output` with the same `session` and `outputId`; omit `part` to list parts. Text reads return
-`nextOffset` for the next bounded chunk. Images up to 2 MiB can be read inline;
+`nextOffset` for the next bounded chunk. Images up to 4 MiB can be read inline;
 `encoding="base64"` transfers exact binary chunks for importing/sending a file.
 Retrieval never repeats the browser action. These are temporary Neo artifacts;
 callers choose when to import them into their own persistent file store.

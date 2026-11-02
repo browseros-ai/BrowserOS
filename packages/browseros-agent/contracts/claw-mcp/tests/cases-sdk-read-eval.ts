@@ -8,14 +8,14 @@ import { evalValue, runValue } from './sdk-helpers'
 const cappedRuns = [
   {
     label: 'a large return value',
-    value: `${'R'.repeat(30_000)}SDK_CAP_VALUE_TAIL`,
+    value: `${'R'.repeat(33_000)}SDK_CAP_VALUE_TAIL`,
     logs: [],
   },
   {
-    // Neither part crosses 25K alone: the cap must count the return and logs together.
+    // Neither part crosses 30K alone: the cap must count the return and logs together.
     label: 'the combined return value and logs',
     value: `${'R'.repeat(20_000)}SDK_CAP_VALUE_TAIL`,
-    logs: [`${'L'.repeat(10_000)}SDK_CAP_LOG_TAIL`],
+    logs: [`${'L'.repeat(13_000)}SDK_CAP_LOG_TAIL`],
   },
 ]
 
@@ -39,10 +39,10 @@ export const sdkReadEvalCases: ContractCase[] = [
     const code = `${logs.map((line) => `console.log(${JSON.stringify(line)})`).join(';')}; return ${JSON.stringify(value)}`
     return [
       {
-        name: `run: caps ${label} at 25000 bytes and saves the full result`,
+        name: `run: caps ${label} at 30000 bytes and saves the full result`,
         async run(ctx: CaseContext) {
           const result = await ctx.mcp.callTool('run', { code })
-          expect(expectOk(result)).toContain('Result truncated at 25000 bytes')
+          expect(expectOk(result)).toContain('Result truncated at 30000 bytes')
           expect(result.structuredContent?.writtenToFile).toBe(true)
           expect(result.structuredContent).not.toHaveProperty('value')
           const path = result.structuredContent?.path
