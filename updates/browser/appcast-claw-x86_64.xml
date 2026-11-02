@@ -7,17 +7,17 @@
     <language>en</language>
 
     <item>
-      <title>BrowserOS neo - 0.51.2.3</title>
+      <title>BrowserOS neo - 0.52.1.1</title>
       <description sparkle:format="plain-text">
       </description>
-      <sparkle:version>10000.0.51.2.3</sparkle:version>
-      <sparkle:shortVersionString>0.51.2.3</sparkle:shortVersionString>
-      <pubDate>Fri, 23 Oct 2026 08:12:52 +0000</pubDate>
+      <sparkle:version>10000.0.52.1.1</sparkle:version>
+      <sparkle:shortVersionString>0.52.1.1</sparkle:shortVersionString>
+      <pubDate>Sun, 01 Nov 2026 03:38:23 +0000</pubDate>
       <link>https://www.browseros.com/</link>
       <enclosure
-        url="http://cdn.browseros.com/releases/browserclaw/0.51.2.3/macos/BrowserOS_neo_v0.51.2.3_x64.dmg"
-        sparkle:edSignature="oiDKKoN00DkdFng5QmPyTEzvskpqZ1ACu+fsq/dO+xSmQF/LwDkEXiasCpTTZ6tp9TPz5Vm7Gwtxq6hYi111CA=="
-        length="180953608"
+        url="https://cdn.browseros.com/releases/browserclaw/0.52.1.1/macos/BrowserOS_neo_v0.52.1.1_x64.dmg"
+        sparkle:edSignature="9E5NxTc+gUsThv+QrPKE0uV6ISl3hfb5BIcMsmgyJ55vHNJqC5+Xc3hdwUdkcdakfbnFCtUCQz02M4sUIvQFCA=="
+        length="184324442"
         type="application/octet-stream" />
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
