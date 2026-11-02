@@ -85,7 +85,7 @@ RUN userdel -r ubuntu \
 COPY openbox-rc.xml /etc/neo/openbox-rc.xml
 # Server behaviour knobs live in this file rather than in more environment
 # variables. The shipped copy only documents the defaults; deployments mount or
-# COPY their own over it (README).
+# COPY their own over it (README), including [run] wall_timeout_seconds (default 60).
 COPY neo.toml /etc/neo/neo.toml
 COPY novnc-index.html /usr/share/novnc/index.html
 # Load the clipboard bridge from vnc.html too: embedded viewers bypass index.html.

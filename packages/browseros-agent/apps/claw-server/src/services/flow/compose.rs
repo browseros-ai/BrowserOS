@@ -8,9 +8,6 @@ use serde_json::{Map, Value, json};
 /// Every flow script starts with this, so the run journal can tell flow runs from the agent's.
 pub const FLOW_SCRIPT_MARKER: &str = "/*__ultrafast__*/";
 const PRELUDE: &str = include_str!("prelude.js");
-/// Leaves room under the `run` tool's 30 s cap to snapshot the page and hand back.
-pub const SOFT_DEADLINE_MS: u64 = 25_000;
-pub const RUN_TIMEOUT_MS: u64 = 30_000;
 const VIEW_BYTES: usize = 8 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,18 +44,21 @@ pub fn compose(
     inputs: &Map<String, Value>,
     mode: Mode,
     stop_after: Option<u32>,
+    policy: browseros_mcp::RunPolicy,
 ) -> String {
     let steps: Vec<Value> = doc
         .steps
         .iter()
         .map(|step| json!({ "n": step.n, "src": step.src, "commit": step.commit }))
         .collect();
+    // Derive handback from the exact policy used by the underlying run dispatch.
+    // A deployment override must never leave a flow waiting past its hard deadline.
     let options = json!({
         "steps": steps,
         "inputs": inputs,
         "mode": mode.as_str(),
         "stopAfter": stop_after,
-        "deadlineMs": SOFT_DEADLINE_MS,
+        "deadlineMs": policy.handback_timeout().as_millis() as u64,
         "viewBytes": VIEW_BYTES,
     });
     format!("{FLOW_SCRIPT_MARKER}\n{PRELUDE}\nreturn await __ultrafast.run(browser, {options});\n")
@@ -92,7 +92,13 @@ mod tests {
             .as_object()
             .cloned()
             .unwrap_or_default();
-        let script = compose(&doc, &inputs, Mode::Verify, Some(1));
+        let script = compose(
+            &doc,
+            &inputs,
+            Mode::Verify,
+            Some(1),
+            browseros_mcp::RunPolicy::default(),
+        );
         assert!(is_flow_script(&script));
         let tail = script
             .rsplit_once("__ultrafast.run(browser, ")
@@ -103,6 +109,20 @@ mod tests {
         assert_eq!(options["inputs"]["q"], "a\"b\n`c`");
         assert_eq!(options["mode"], "verify");
         assert_eq!(options["stopAfter"], 1);
+        assert_eq!(options["deadlineMs"], 55000);
+        for (seconds, expected) in [(1, 500), (120, 115000)] {
+            let policy = browseros_mcp::RunPolicy::from_seconds(
+                std::num::NonZeroU32::new(seconds)
+                    .ok_or_else(|| anyhow::anyhow!("invalid test budget"))?,
+            );
+            let script = compose(&doc, &inputs, Mode::Live, None, policy);
+            let tail = script
+                .rsplit_once("__ultrafast.run(browser, ")
+                .map(|(_, tail)| tail.trim_end().trim_end_matches(");"))
+                .unwrap_or_default();
+            let options: Value = serde_json::from_str(tail)?;
+            assert_eq!(options["deadlineMs"], expected);
+        }
         Ok(())
     }
 }

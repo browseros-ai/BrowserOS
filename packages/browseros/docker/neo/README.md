@@ -130,6 +130,7 @@ Recreate the container after editing the file.
 |---|---|---|---|
 | `[tabs] grouping` | `"explicit"`: a page joins a group only when the agent passes `groupId`. `"auto"`: Neo keeps each task's pages in a `<client>/<task>` group it titles, collapses and closes. | `"explicit"` | `"auto"` |
 | `[tabs] close_after_minutes` | Positive whole minutes to keep finished sessions' tabs before automatic cleanup. Applies with either grouping mode. | `30` | `60` |
+| `[run] wall_timeout_seconds` | Positive whole seconds for a run's default and maximum execution budget, including browser calls and waits. | `60` | `60` |
 
 For example, to keep finished sessions' tabs for 90 minutes:
 
@@ -143,6 +144,28 @@ The grace period starts when a session ends. The separate session idle timeout r
 grace period; individual-tab cleanup skips active tabs and tabs owned by a live session.
 Cleanup runs once per minute by default. Existing `CLAW_SESSION_RETENTION_MS` overrides
 remain a fallback; a valid `close_after_minutes` in the file takes precedence.
+
+For longer browser scripts, configure the run budget in the same file:
+
+```toml
+[run]
+wall_timeout_seconds = 120
+```
+
+The `run` tool advertises the configured default and maximum in milliseconds.
+A call may request a shorter `timeout`; a value above the deployment limit is
+rejected before script execution. Saved flows use this same limit and hand back
+earlier to leave time for a page snapshot. Individual browser operations retain
+their own timeouts. Expiry stops the script; browser actions already sent are not
+rolled back, so inspect their outcome before retrying.
+
+This bounds script execution, not the complete HTTP response: admission and
+output publication can add time. Configure the MCP client's and any proxy's
+request timeout above the run budget (for example, 90 seconds for a 60-second
+run). The MCP TypeScript SDK defaults to a 60-second request timeout; increasing
+Neo's budget alone does not extend that client timeout. Recreate the container
+after editing this startup setting. Invalid values retain the default and emit
+a warning, following the behaviour-file rules above.
 
 The server logs the values it runs with at startup (`server behaviour`).
 

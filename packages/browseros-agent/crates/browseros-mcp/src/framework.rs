@@ -166,6 +166,8 @@ pub struct ToolCtx {
     /// tools hand back the whole value instead of an inline excerpt plus a file the script
     /// cannot open; what the script returns is capped on its way to the model instead.
     pub within_script: bool,
+    /// Process-fixed budget captured by this request and all its nested SDK calls.
+    pub run_policy: crate::RunPolicy,
 }
 
 impl ToolCtx {
@@ -180,7 +182,15 @@ impl ToolCtx {
             inner_call_hook: options.inner_call_hook,
             preloaded_helpers: options.preloaded_helpers,
             within_script: false,
+            run_policy: crate::RunPolicy::default(),
         }
+    }
+
+    /// Apply the host's already-resolved budget; the MCP crate never reads deployment files.
+    #[must_use]
+    pub fn with_run_policy(mut self, policy: crate::RunPolicy) -> Self {
+        self.run_policy = policy;
+        self
     }
 
     pub fn throw_if_cancelled(&self) -> ToolExecResult<()> {

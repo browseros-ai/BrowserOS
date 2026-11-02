@@ -9,6 +9,7 @@ pub mod framework;
 pub mod output_file;
 pub mod output_store;
 pub mod response;
+pub mod run_policy;
 pub mod service;
 mod settle;
 pub mod token_estimate;
@@ -23,6 +24,8 @@ mod targeting_tests;
 mod tests;
 #[cfg(test)]
 mod viewport_tests;
+
+pub use run_policy::RunPolicy;
 
 pub use framework::{
     AuditHints, BrowserToolDefaults, BrowserToolOptions, FeatureNote, InnerCallHook,

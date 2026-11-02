@@ -15,7 +15,7 @@ use crate::{
         flow::{
             self, FlowExec, FlowStatus,
             brief::{self, CallTrace, RunTrace},
-            compose::{self, Mode, RUN_TIMEOUT_MS},
+            compose::{self, Mode},
             journal as run_journal,
             lifecycle::{self, Cause, Event},
             outcome::{self, Outcome},
@@ -111,6 +111,10 @@ pub(super) struct SessionFlowExec<'s> {
 }
 
 impl FlowExec for SessionFlowExec<'_> {
+    fn run_policy(&self) -> browseros_mcp::RunPolicy {
+        self.service.state.config.behavior.run_policy
+    }
+
     fn exec<'a>(
         &'a self,
         doc: &'a FlowDoc,
@@ -119,7 +123,7 @@ impl FlowExec for SessionFlowExec<'_> {
         stop_after: Option<u32>,
     ) -> BoxFuture<'a, Outcome> {
         Box::pin(async move {
-            let code = compose::compose(doc, inputs, mode, stop_after);
+            let code = compose::compose(doc, inputs, mode, stop_after, self.run_policy());
             match self
                 .service
                 .internal_run(self.started, code, self.cancel.clone())
@@ -201,7 +205,7 @@ impl ClawMcpService {
         let call = ToolCall::new(
             self.catalog.clone(),
             tool_index,
-            json!({ "code": code, "timeout": RUN_TIMEOUT_MS }),
+            json!({ "code": code }),
             started.session.id().clone(),
             Some(identity),
             browser_session,
