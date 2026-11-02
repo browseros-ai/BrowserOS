@@ -3,6 +3,104 @@ use serde_json::json;
 use std::time::Duration;
 
 #[tokio::test]
+async fn concurrent_outputs_reserve_manifest_bytes_inside_the_session_limit() -> anyhow::Result<()>
+{
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("outputs");
+    let first = OutputStore::new(root.clone(), "session");
+    let bytes = vec![0; 64 * 1024 * 1024];
+    let path = first.write_part("first", "bin", &bytes).await?;
+    let second = OutputStore::new(root, "session");
+    second.write_part("peer", "txt", b"peer").await?;
+    // Leave just 64 payload bytes after both manifests' reservations. A fresh
+    // service's admission scan must preserve the first active reservation too.
+    first
+        .write_part(
+            "second",
+            "bin",
+            &bytes[..bytes.len() - 2 * 64 * 1024 - 4 - 64],
+        )
+        .await?;
+    assert!(first.write_part("overflow", "txt", &[0; 65]).await.is_err());
+    let output = first
+        .finish(&json!({"done":true}))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing bounded output"))?;
+    second.finish(&json!({"done":true})).await?;
+    assert!(first.describe(&output.id).await.is_ok());
+    let session = path
+        .parent()
+        .and_then(|path| path.parent())
+        .ok_or_else(|| anyhow::anyhow!("missing session directory"))?;
+    let mut outputs = tokio::fs::read_dir(session).await?;
+    let mut total = 0;
+    while let Some(output) = outputs.next_entry().await? {
+        let mut parts = tokio::fs::read_dir(output.path()).await?;
+        while let Some(part) = parts.next_entry().await? {
+            total += part.metadata().await?.len();
+        }
+    }
+    assert!(total <= 128 * 1024 * 1024, "session bytes: {total}");
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn root_cleanup_throttle_survives_the_last_service_being_dropped() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("outputs");
+    let abandoned = OutputStore::new(root.clone(), "abandoned").with_retention(Duration::ZERO);
+    let path = abandoned.write_part("part", "txt", b"expired").await?;
+    abandoned.finish(&json!({"done":true})).await?;
+    let session = path
+        .parent()
+        .and_then(|path| path.parent())
+        .ok_or_else(|| anyhow::anyhow!("missing session directory"))?;
+    std::fs::File::open(session)?
+        .set_times(std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH))?;
+    drop(abandoned);
+    let next = OutputStore::new(root, "active");
+    next.write_part("part", "txt", b"new").await?;
+    assert!(
+        path.exists(),
+        "a fresh service repeated root cleanup inside its five-minute interval"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn total_write_failure_is_distinct_from_an_ordinary_inline_call() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let occupied = directory.path().join("occupied");
+    tokio::fs::write(&occupied, b"file").await?;
+    let call = OutputStore::new(occupied, "session");
+    assert!(call.write_part("capture", "png", b"bytes").await.is_err());
+    assert!(call.finish(&json!({"done":true})).await.is_err());
+
+    let copied = OutputStore::new(directory.path().join("copy"), "session");
+    assert!(
+        copied
+            .copy_file("download", &directory.path().join("missing"))
+            .await
+            .is_err()
+    );
+    assert!(copied.finish(&json!({"done":true})).await.is_err());
+
+    let image = OutputStore::new(directory.path().join("image"), "session");
+    assert!(
+        image
+            .image("invalid base64", "image/png", &json!({}))
+            .await
+            .is_err()
+    );
+    assert!(image.finish(&json!({"done":true})).await.is_err());
+
+    let inline = OutputStore::new(directory.path().join("inline"), "session");
+    assert!(inline.finish(&json!({"done":true})).await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
 async fn full_attachment_batches_keep_the_primary_slot_and_remain_retrievable() -> anyhow::Result<()>
 {
     let directory = tempfile::tempdir()?;

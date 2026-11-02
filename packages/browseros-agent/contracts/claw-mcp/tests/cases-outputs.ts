@@ -89,6 +89,55 @@ async function bytesOf(
 
 export const outputCases: ContractCase[] = [
   {
+    name: 'outputs: total nested storage failure reports persistence loss without replaying the action',
+    async run(ctx) {
+      const server = await startRustServer(ctx.browser.cdpPort, {
+        env: { BROWSEROS_OUTPUT_DIR: '/dev/null/neo-output' },
+      })
+      const isolated = { ...ctx, server }
+      let page: number | undefined
+      let session: string | undefined
+      try {
+        await waitUntil(
+          async () =>
+            !(await statelessCall(isolated, 'tabs', { action: 'list' }))
+              .isError,
+          'isolated failure server to attach',
+        )
+        const opened = await statelessCall(isolated, 'tabs', {
+          action: 'new',
+          url: ctx.fixture('/media.html'),
+        })
+        expectOk(opened)
+        const handle = opened._meta?.['com.browseros.neo/session']
+        if (
+          typeof handle !== 'string' ||
+          typeof opened.structuredContent?.page !== 'number'
+        )
+          throw new Error('missing isolated page/session')
+        session = handle
+        page = opened.structuredContent.page
+        const result = await statelessCall(isolated, 'run', {
+          session,
+          code: `await browser.page(${page}).screenshot(); return {done:true}`,
+        })
+        expect(expectOk(result)).toContain('No output parts could be retained')
+        expect(result.structuredContent?.value).toEqual({ done: true })
+        expect(result.structuredContent?.outputWriteFailed).toBe(true)
+        expect(result.structuredContent).not.toHaveProperty('output')
+        expect(imageOf(result)).toBeDefined()
+      } finally {
+        if (page !== undefined && session)
+          await statelessCall(isolated, 'tabs', {
+            action: 'close',
+            page,
+            session,
+          }).catch(() => {})
+        await server.stop()
+      }
+    },
+  },
+  {
     name: 'outputs: full screenshot batches publish with bounded inline previews',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/media.html'))

@@ -10,7 +10,7 @@ use std::{
     collections::HashMap,
     io,
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock, Mutex as StdMutex, Weak},
+    sync::{Arc, LazyLock, Mutex as StdMutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -29,6 +29,7 @@ const RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const MAX_INLINE_IMAGES: usize = 4;
 const MAX_INLINE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+const MANIFEST_RESERVE: u64 = 64 * 1024;
 
 /// Shared by a host's store clones. Admission scans once per call; subsequent parts
 /// update quotas in memory under this root's lock. Other roots never share the lock.
@@ -38,23 +39,42 @@ struct StorageState {
     last_cleanup: Option<Instant>,
 }
 
-// MCP services can be reconstructed for fresh connections. Intern their root's
-// admission state so those services still serialize quotas; weak entries retain
-// neither a finished host nor a temporary test store. No I/O holds this registry lock.
+// Stateless requests can outlive every service instance between calls. Retain a
+// root's admission state across that gap so cleanup stays throttled, then evict
+// idle entries on later admissions. No I/O holds this registry lock.
 type SharedStorage = Arc<Mutex<StorageState>>;
-static ROOTS: LazyLock<StdMutex<HashMap<PathBuf, Weak<Mutex<StorageState>>>>> =
+struct RootEntry {
+    storage: SharedStorage,
+    last_used: Instant,
+}
+static ROOTS: LazyLock<StdMutex<HashMap<PathBuf, RootEntry>>> =
     LazyLock::new(|| StdMutex::new(HashMap::new()));
 
 fn shared_storage(root: &Path) -> SharedStorage {
     let mut roots = ROOTS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    roots.retain(|_, storage| storage.strong_count() > 0);
-    if let Some(storage) = roots.get(root).and_then(Weak::upgrade) {
-        return storage;
+    roots.retain(|_, entry| {
+        Arc::strong_count(&entry.storage) > 1
+            || entry.last_used.elapsed() < CLEANUP_INTERVAL
+            // A long-lived service may have swept just before it was dropped.
+            // Preserve that timestamp too; try_lock never blocks the registry.
+            || entry.storage.try_lock().is_ok_and(|state| {
+                state.last_cleanup.is_some_and(|last| last.elapsed() < CLEANUP_INTERVAL)
+            })
+    });
+    if let Some(entry) = roots.get_mut(root) {
+        entry.last_used = Instant::now();
+        return entry.storage.clone();
     }
     let storage = SharedStorage::default();
-    roots.insert(root.to_path_buf(), Arc::downgrade(&storage));
+    roots.insert(
+        root.to_path_buf(),
+        RootEntry {
+            storage: storage.clone(),
+            last_used: Instant::now(),
+        },
+    );
     storage
 }
 
@@ -100,6 +120,7 @@ struct Collected {
     inline_bytes: usize,
     omitted_images: usize,
     incomplete: bool,
+    manifest_reserved: bool,
 }
 
 /// A logical session's store, narrowed to one request's collection. Clones share that
@@ -173,7 +194,13 @@ impl OutputStore {
         extension: &str,
         bytes: &[u8],
     ) -> io::Result<PathBuf> {
-        let result = self.write_part_inner(name, extension, bytes).await;
+        self.record_write(self.write_part_inner(name, extension, bytes).await)
+            .await
+    }
+
+    // A script may discard an inner tool's status. Keep persistence failure at
+    // the outer-call boundary even when it happened before the first saved part.
+    async fn record_write<T>(&self, result: io::Result<T>) -> io::Result<T> {
         if result.is_err() {
             let mut collected = self.collected.lock().await;
             if collected.published.is_none() {
@@ -223,7 +250,19 @@ impl OutputStore {
             collected.initialized = true;
         }
         let (count, used) = storage.sessions[&session];
-        if count > MAX_OUTPUTS || used.saturating_add(bytes.len() as u64) > MAX_SESSION_BYTES {
+        // Every active output reserves bounded manifest capacity before accepting
+        // payload bytes. Publication can then expose partial results at the quota.
+        let reserve = if collected.manifest_reserved {
+            0
+        } else {
+            MANIFEST_RESERVE
+        };
+        if count > MAX_OUTPUTS
+            || used
+                .saturating_add(bytes.len() as u64)
+                .saturating_add(reserve)
+                > MAX_SESSION_BYTES
+        {
             return Err(io::Error::other(
                 "Tool output session quota exceeded (128 outputs / 128 MiB)",
             ));
@@ -236,6 +275,20 @@ impl OutputStore {
             ));
         }
         private_dir(&directory).await?;
+        if !collected.manifest_reserved {
+            // A real reservation survives another call's directory scan and a
+            // reconstructed service. It becomes the manifest at publication.
+            if let Err(error) = write_new(
+                &directory.join("manifest.pending"),
+                &vec![0; MANIFEST_RESERVE as usize],
+            )
+            .await
+            {
+                storage.sessions.remove(&session);
+                return Err(error);
+            }
+            collected.manifest_reserved = true;
+        }
         let mut filename = format!("{stem}.{extension}");
         let mut number = 2;
         while collected.parts.iter().any(|part| part.name == filename) {
@@ -251,7 +304,10 @@ impl OutputStore {
         }
         storage.sessions.insert(
             session,
-            (count + usize::from(new_output), used + bytes.len() as u64),
+            (
+                count + usize::from(new_output),
+                used + bytes.len() as u64 + reserve,
+            ),
         );
         collected.parts.push(OutputPart {
             name: filename,
@@ -302,6 +358,11 @@ impl OutputStore {
     /// Copies completed downloads into private storage. The browser's original file can
     /// subsequently move or change without altering the bytes an output ID represents.
     pub async fn copy_file(&self, name: &str, source: &Path) -> io::Result<PathBuf> {
+        self.record_write(self.copy_file_inner(name, source).await)
+            .await
+    }
+
+    async fn copy_file_inner(&self, name: &str, source: &Path) -> io::Result<PathBuf> {
         regular_file(source).await?;
         let mut bytes = Vec::new();
         fs::File::open(source)
@@ -317,6 +378,20 @@ impl OutputStore {
     }
 
     pub async fn image(&self, data: &str, mime: &str, metadata: &Value) -> io::Result<()> {
+        self.record_write(self.image_inner(data, mime, metadata).await)
+            .await
+    }
+
+    async fn image_inner(&self, data: &str, mime: &str, metadata: &Value) -> io::Result<()> {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(io::Error::other)?;
+        let extension = match mime {
+            "image/jpeg" => "jpg",
+            "image/png" => "png",
+            "image/webp" => "webp",
+            _ => return Err(io::Error::other("Unsupported screenshot MIME type")),
+        };
         // Nested scripts retain only a bounded vision preview in Rust memory.
         // Further captures are still stored and advertised through the manifest.
         let inline = {
@@ -333,15 +408,6 @@ impl OutputStore {
             } else {
                 false
             }
-        };
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(data)
-            .map_err(io::Error::other)?;
-        let extension = match mime {
-            "image/jpeg" => "jpg",
-            "image/png" => "png",
-            "image/webp" => "webp",
-            _ => return Err(io::Error::other("Unsupported screenshot MIME type")),
         };
         self.write_part("screenshot", extension, &bytes).await?;
         if !inline {
@@ -367,7 +433,7 @@ impl OutputStore {
     /// Publishes only calls that produced stored content. `result.json` retains the primary
     /// typed result; a large run may have written its complete value there before clipping.
     pub async fn finish(&self, primary: &Value) -> io::Result<Option<OutputReference>> {
-        let (empty, has_primary) = {
+        let (empty, has_primary, incomplete) = {
             let collected = self.collected.lock().await;
             if let Some(output) = &collected.published {
                 return Ok(Some(output.clone()));
@@ -378,9 +444,13 @@ impl OutputStore {
                     .parts
                     .iter()
                     .any(|part| part.name == "result.json"),
+                collected.incomplete,
             )
         };
         if empty {
+            if incomplete {
+                return Err(io::Error::other("No output parts could be retained"));
+            }
             return Ok(None);
         }
         let mut warnings = Vec::new();
@@ -416,10 +486,17 @@ impl OutputStore {
         // intermediate list from a nested call still producing attachments.
         let temporary = directory.join("manifest.pending");
         let manifest = serde_json::to_vec(&output)?;
-        write_new(&temporary, &manifest).await?;
+        if manifest.len() as u64 > MANIFEST_RESERVE {
+            return Err(io::Error::other(
+                "Tool output manifest exceeds its reserved capacity",
+            ));
+        }
+        write_manifest(&temporary, &manifest).await?;
         fs::rename(temporary, directory.join("manifest.json")).await?;
         if let Some((_, bytes)) = storage.sessions.get_mut(&self.session_dir()) {
-            *bytes = bytes.saturating_add(manifest.len() as u64);
+            *bytes = bytes
+                .saturating_sub(MANIFEST_RESERVE)
+                .saturating_add(manifest.len() as u64);
         }
         collected.published = Some(output.clone());
         Ok(Some(output))
@@ -653,6 +730,19 @@ async fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
     Ok(())
 }
+
+/// Replace reserved bytes before the atomic rename, so even publication's temporary
+/// file fits the admitted quota. Readers only open the final manifest name.
+async fn write_manifest(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    regular_file(path).await?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .await?;
+    file.write_all(bytes).await?;
+    file.flush().await
+}
 async fn session_usage(session: &Path) -> io::Result<(usize, u64)> {
     let (mut count, mut bytes) = (0, 0u64);
     let mut entries = fs::read_dir(session).await?;
@@ -669,7 +759,12 @@ async fn session_usage(session: &Path) -> io::Result<(usize, u64)> {
         let mut parts = fs::read_dir(entry.path()).await?;
         while let Some(part) = parts.next_entry().await? {
             if part.file_type().await?.is_file() {
-                bytes = bytes.saturating_add(part.metadata().await?.len());
+                let size = part.metadata().await?.len();
+                bytes = bytes.saturating_add(if part.file_name() == "manifest.pending" {
+                    size.max(MANIFEST_RESERVE)
+                } else {
+                    size
+                });
             }
         }
     }
