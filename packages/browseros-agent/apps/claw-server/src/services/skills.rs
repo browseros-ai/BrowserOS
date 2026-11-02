@@ -160,10 +160,39 @@ impl SkillService {
         self.repo.put_flow(row).await
     }
 
-    /// Saves a flow that just passed verification.
-    pub async fn write_flow(&self, name: &str, doc: &FlowDoc) -> std::io::Result<()> {
+    /// Saves a flow that just passed verification together with its status row, unless the
+    /// skill's steps were edited while it was verified. A repair also carries over handover
+    /// inputs added to the file meanwhile, so the next repair still has to handle them.
+    pub async fn publish_flow(
+        &self,
+        name: &str,
+        doc: &mut FlowDoc,
+        row: skill_flows::Model,
+        is_repair: bool,
+    ) -> AppResult<Publish> {
         let _guard = self.flow_writes.lock().await;
-        flow::store::write(&self.skill_dir(name), doc)
+        let model = self.require(name).await?;
+        let steps = flow::prose::prose_steps(&self.read_body(&model.body_path).await);
+        if doc
+            .meta
+            .prose_hash
+            .as_deref()
+            .is_some_and(|hash| hash != flow::prose::fingerprint(&steps))
+        {
+            return Ok(Publish::StepsChanged);
+        }
+        let dir = self.skill_dir(name);
+        if is_repair && let Ok(Some(current)) = flow::store::read(&dir) {
+            for example in current.meta.examples {
+                let input = serde_json::Value::Object(example.input.clone());
+                if example.source == "handover" && flow::check_inputs(doc, &input).is_ok() {
+                    doc.push_example(example);
+                }
+            }
+        }
+        flow::store::write(&dir, doc).with_path(flow::store::flow_path(&dir))?;
+        self.repo.put_flow(row).await?;
+        Ok(Publish::Saved)
     }
 
     /// Adds an example to the flow as it is on disk now, not to the copy a run started from.
@@ -235,6 +264,8 @@ impl SkillService {
             prose::{fingerprint, prose_steps},
             store,
         };
+        // Held throughout, so a flow being published cannot interleave with this check.
+        let _guard = self.flow_writes.lock().await;
         let Some(mut row) = self.repo.get_flow(name).await? else {
             return Ok(());
         };
@@ -765,6 +796,14 @@ fn keep_hand_written(generated: &str, existing: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+/// What happened to a flow that passed verification.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Publish {
+    Saved,
+    /// The skill's steps were edited while the flow was verified, so it was not saved.
+    StepsChanged,
 }
 
 /// Which shape SKILL.md takes, from the skill's flow status.

@@ -13,7 +13,7 @@ use claw_server::{
     ids::DispatchId,
     services::{
         flow::{self, FlowStatus},
-        skills::{CreateSkill, SkillOrigin},
+        skills::{CreateSkill, Publish, SkillOrigin},
     },
 };
 use serde_json::{Value, json};
@@ -278,13 +278,13 @@ async fn a_handover_example_lands_on_the_newest_flow() -> anyhow::Result<()> {
     create_skill(&app.state, "neo-shop-add").await?;
     // A run starts from version 1; a repair from another session saves version 2 meanwhile.
     let started_from = two_step_flow();
-    skills.write_flow("neo-shop-add", &started_from).await?;
+    flow::store::write(&skills.skill_dir("neo-shop-add"), &started_from)?;
     let mut repaired = started_from.clone();
     repaired.meta.flow_version = 2;
     repaired
         .patch_step(2, "async () => { return 'repaired' }")
         .map_err(anyhow::Error::msg)?;
-    skills.write_flow("neo-shop-add", &repaired).await?;
+    flow::store::write(&skills.skill_dir("neo-shop-add"), &repaired)?;
 
     let handover = |input: Value| flow::store::Example {
         input: input.as_object().cloned().unwrap_or_default(),
@@ -318,7 +318,7 @@ async fn rewriting_a_step_switches_the_flow_off_even_when_the_count_holds() -> a
     ];
     let mut doc = two_step_flow();
     doc.meta.prose_hash = Some(flow::prose::fingerprint(&verified_against));
-    state.skills.write_flow("neo-shop-add", &doc).await?;
+    flow::store::write(&state.skills.skill_dir("neo-shop-add"), &doc)?;
     state
         .skills
         .put_flow_row(flow::new_row("neo-shop-add", FlowStatus::Verified))
@@ -375,5 +375,116 @@ async fn a_raw_edit_keeps_its_own_sections_when_run_it_fast_comes_back() -> anyh
         body.contains("## Before you start\n- Sign in to the India store.\n"),
         "{body}"
     );
+    Ok(())
+}
+
+fn handover_example(query: &str) -> flow::store::Example {
+    flow::store::Example {
+        input: json!({ "query": query })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        source: "handover".to_string(),
+        expect: "done".to_string(),
+    }
+}
+
+#[tokio::test]
+async fn a_flow_verified_against_edited_steps_is_not_saved() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let skills = &app.state.skills;
+    create_skill(&app.state, "neo-shop-add").await?;
+    let mut doc = two_step_flow();
+    // Verification started from these steps; the skill now says "Open the search", "Add it".
+    doc.meta.prose_hash = Some(flow::prose::fingerprint(&[
+        "Open the search".to_string(),
+        "Send it to a friend".to_string(),
+    ]));
+    let published = skills
+        .publish_flow(
+            "neo-shop-add",
+            &mut doc,
+            flow::new_row("neo-shop-add", FlowStatus::Verified),
+            false,
+        )
+        .await?;
+    assert_eq!(published, Publish::StepsChanged);
+    assert!(flow::store::read(&skills.skill_dir("neo-shop-add"))?.is_none());
+    assert!(skills.flow_row("neo-shop-add").await?.is_none());
+
+    doc.meta.prose_hash = Some(flow::prose::fingerprint(&[
+        "Open the search".to_string(),
+        "Add it".to_string(),
+    ]));
+    let published = skills
+        .publish_flow(
+            "neo-shop-add",
+            &mut doc,
+            flow::new_row("neo-shop-add", FlowStatus::Verified),
+            false,
+        )
+        .await?;
+    assert_eq!(published, Publish::Saved);
+    assert!(flow::store::read(&skills.skill_dir("neo-shop-add"))?.is_some());
+    assert!(skills.flow_row("neo-shop-add").await?.is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_repair_keeps_handover_inputs_added_while_it_was_verified() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let skills = &app.state.skills;
+    create_skill(&app.state, "neo-shop-add").await?;
+    let dir = skills.skill_dir("neo-shop-add");
+    let mut on_disk = two_step_flow();
+    on_disk.meta.examples.push(handover_example("colgate"));
+    flow::store::write(&dir, &on_disk)?;
+    // The repair read the flow before the handover; meanwhile two more inputs were kept.
+    let mut repair = on_disk.clone();
+    repair
+        .patch_step(2, "async () => { return 'repaired' }")
+        .map_err(anyhow::Error::msg)?;
+    on_disk.meta.examples.push(handover_example("dove soap"));
+    on_disk.meta.examples.push(flow::store::Example {
+        input: json!({ "query": 7 })
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+        source: "handover".to_string(),
+        expect: "done".to_string(),
+    });
+    flow::store::write(&dir, &on_disk)?;
+
+    let published = skills
+        .publish_flow(
+            "neo-shop-add",
+            &mut repair.clone(),
+            flow::new_row("neo-shop-add", FlowStatus::Verified),
+            true,
+        )
+        .await?;
+    assert_eq!(published, Publish::Saved);
+    let saved = flow::store::read(&dir)?.ok_or_else(|| anyhow::anyhow!("no flow"))?;
+    assert!(saved.steps[1].src.contains("repaired"));
+    let queries: Vec<&Value> = saved
+        .meta
+        .examples
+        .iter()
+        .map(|example| &example.input["query"])
+        .collect();
+    assert_eq!(queries, [&json!("colgate"), &json!("dove soap")]);
+
+    // A brand-new flow starts from its own examples.
+    flow::store::write(&dir, &on_disk)?;
+    skills
+        .publish_flow(
+            "neo-shop-add",
+            &mut repair,
+            flow::new_row("neo-shop-add", FlowStatus::Verified),
+            false,
+        )
+        .await?;
+    let saved = flow::store::read(&dir)?.ok_or_else(|| anyhow::anyhow!("no flow"))?;
+    assert_eq!(saved.meta.examples.len(), 1);
     Ok(())
 }

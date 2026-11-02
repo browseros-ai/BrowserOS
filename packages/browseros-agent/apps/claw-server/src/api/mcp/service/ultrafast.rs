@@ -24,7 +24,7 @@ use crate::{
             triage, verify,
         },
         sessions::ClawTargetStore,
-        skills::{RunItFast, SkillMd, neo_prefixed},
+        skills::{Publish, RunItFast, SkillMd, neo_prefixed},
     },
 };
 use browseros_core::target::BrowserView;
@@ -829,9 +829,6 @@ impl ClawMcpService {
             Ok(pass) => {
                 let next = lifecycle::next(state, Event::FlowPassed);
                 doc.meta.flow_version = row.flow_version + 1;
-                if let Err(error) = self.state.skills.write_flow(name, &doc).await {
-                    return ToolResult::error(format!("saving the flow failed: {error}"));
-                }
                 let same_effects = row.effects.as_deref() == Some(doc.meta.effects.as_str());
                 row.write_approved = row.write_approved && same_effects;
                 row.status = next.status.as_str().to_string();
@@ -847,8 +844,21 @@ impl ClawMcpService {
                 row.verified_at = Some(now);
                 row.source_session_id = Some(session_id.to_string());
                 row.updated_at = now;
-                if let Err(error) = self.state.skills.put_flow_row(row.clone()).await {
-                    return ToolResult::error(error.to_string());
+                match self
+                    .state
+                    .skills
+                    .publish_flow(name, &mut doc, row.clone(), is_patch)
+                    .await
+                {
+                    Ok(Publish::Saved) => {}
+                    Ok(Publish::StepsChanged) => {
+                        return ToolResult::error(
+                            "ultrafast: the skill's steps were edited while this flow was being verified, so it was not saved. Read the skill again and call save_skill with a flow for its current steps.",
+                        );
+                    }
+                    Err(error) => {
+                        return ToolResult::error(format!("saving the flow failed: {error}"));
+                    }
                 }
                 if let Err(error) = self
                     .state
