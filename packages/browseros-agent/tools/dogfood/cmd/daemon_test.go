@@ -16,7 +16,7 @@ import (
 )
 
 func TestRunPathsLiveBesideConfig(t *testing.T) {
-	paths := newTargetRunPaths(filepath.Join("/tmp", "browseros-dogfood", "config.yaml"), config.TargetClaw)
+	paths := newRunPaths(filepath.Join("/tmp", "browseros-dogfood", "config.yaml"))
 	if paths.Lock != filepath.Join("/tmp", "browseros-dogfood", "claw", "run.lock") {
 		t.Fatalf("lock path got %q", paths.Lock)
 	}
@@ -29,14 +29,14 @@ func TestRunPathsLiveBesideConfig(t *testing.T) {
 }
 
 func TestDaemonArgsIncludeHeadlessWhenRequested(t *testing.T) {
-	got := daemonArgs(config.TargetClaw, true)
-	want := []string{"--claw", "daemon", "--headless"}
+	got := daemonArgs(true)
+	want := []string{"daemon", "--headless"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v want %#v", got, want)
 	}
 }
 
-func TestDaemonStatusIncludesBrowserOSDir(t *testing.T) {
+func TestDaemonStatusIncludesStateDir(t *testing.T) {
 	d := &dogfoodDaemon{
 		state:        "running",
 		startedAt:    time.Now(),
@@ -45,8 +45,8 @@ func TestDaemonStatusIncludesBrowserOSDir(t *testing.T) {
 
 	got := d.status()
 
-	if got.BrowserOSDir != "/tmp/browseros-dogfood" {
-		t.Fatalf("BrowserOS dir got %q", got.BrowserOSDir)
+	if got.StateDir != "/tmp/browseros-dogfood" {
+		t.Fatalf("state dir got %q", got.StateDir)
 	}
 }
 

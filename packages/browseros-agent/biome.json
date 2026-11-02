@@ -17,8 +17,7 @@
       "!contracts/claw-mcp/fixtures/pages",
       "!tools/captcha-testbed/fixtures/pages",
       "!crates/browseros-core/tests/data/captured",
-      "!crates/browseros-core/src/assets/agent-cursor.js",
-      "!apps/server/src/lib/db/migrations"
+      "!crates/browseros-core/src/assets/agent-cursor.js"
     ]
   },
   "formatter": {
@@ -60,17 +59,5 @@
         "organizeImports": "on"
       }
     }
-  },
-  "overrides": [
-    {
-      "includes": ["**/scripts/dev/inspect-ui.ts"],
-      "linter": {
-        "rules": {
-          "complexity": {
-            "noExcessiveCognitiveComplexity": "off"
-          }
-        }
-      }
-    }
-  ]
+  }
 }

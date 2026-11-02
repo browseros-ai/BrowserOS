@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"browseros-dev/proc"
 )
 
 func TestResolveDevTargetReadsDevelopmentEnvPorts(t *testing.T) {
@@ -22,13 +24,17 @@ func TestResolveDevTargetReadsDevelopmentEnvPorts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if target.Ports == nil || target.Ports.CDP != 9101 || target.Ports.Server != 9201 || target.Ports.Extension != 9301 {
+	if target.Ports == nil || target.Ports.CDP != 9101 || target.Ports.Server != defaultClawWatchServerPort || target.Ports.Extension != 9301 {
 		t.Fatalf("unexpected ports: %#v", target.Ports)
 	}
 	if target.BrowserOSDir != filepath.Join(home, ".browseros-dev") {
 		t.Fatalf("unexpected browseros dir: %s", target.BrowserOSDir)
 	}
-	if len(target.BrowserUserDataDirs) != 2 {
+	devProfile, err := proc.DefaultDevUserDataDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(target.BrowserUserDataDirs) != 1 || target.BrowserUserDataDirs[0] != devProfile {
 		t.Fatalf("unexpected browser user data dirs: %#v", target.BrowserUserDataDirs)
 	}
 }
@@ -48,7 +54,21 @@ func TestResolveDevTargetFallsBackToExampleEnvPorts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if target.Ports == nil || target.Ports.CDP != 9000 || target.Ports.Server != 9100 || target.Ports.Extension != 9300 {
+	if target.Ports == nil || target.Ports.CDP != 9000 || target.Ports.Server != defaultClawWatchServerPort || target.Ports.Extension != 9300 {
+		t.Fatalf("unexpected ports: %#v", target.Ports)
+	}
+}
+
+func TestResolveDevTargetHonorsExplicitPorts(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("BROWSEROS_DIR", "")
+
+	target, err := resolveResetTarget(t.TempDir(), resetTargetOptions{Target: "dev", Ports: "9001,9101,9301"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if target.Ports == nil || *target.Ports != (proc.Ports{CDP: 9001, Server: 9101, Extension: 9301}) {
 		t.Fatalf("unexpected ports: %#v", target.Ports)
 	}
 }
@@ -82,12 +102,13 @@ func TestResolveDogfoodTargetReadsDogfoodConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(`
-browseros_dir: /tmp/browseros-dogfood-state
-dev_user_data_dir: /tmp/browseros-dogfood-profile
-ports:
-  cdp: 9015
-  server: 9115
-  extension: 9315
+targets:
+  claw:
+    browseros_dir: /tmp/browseros-dogfood-state
+    dev_user_data_dir: /tmp/browseros-dogfood-profile
+    ports:
+      cdp: 49338
+      server: 9201
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -100,13 +121,17 @@ ports:
 	if target.BrowserOSDir != "/tmp/browseros-dogfood-state" {
 		t.Fatalf("unexpected browseros dir: %s", target.BrowserOSDir)
 	}
-	if target.Ports == nil || target.Ports.CDP != 9015 || target.Ports.Server != 9115 || target.Ports.Extension != 9315 {
+	if target.Ports == nil || *target.Ports != (proc.Ports{CDP: 49338, Server: 9201}) {
 		t.Fatalf("unexpected ports: %#v", target.Ports)
 	}
 	if len(target.BrowserUserDataDirs) != 1 || target.BrowserUserDataDirs[0] != "/tmp/browseros-dogfood-profile" {
 		t.Fatalf("unexpected browser user data dirs: %#v", target.BrowserUserDataDirs)
 	}
-	if target.Dogfood == nil || target.Dogfood.StatePath != filepath.Join(cfgDir, "state.json") {
+	runtimeDir := filepath.Join(cfgDir, "claw")
+	if target.Dogfood == nil ||
+		target.Dogfood.StatePath != filepath.Join(runtimeDir, "state.json") ||
+		target.Dogfood.LockPath != filepath.Join(runtimeDir, "run.lock") ||
+		target.Dogfood.SocketPath != filepath.Join(runtimeDir, "daemon.sock") {
 		t.Fatalf("unexpected dogfood runtime paths: %#v", target.Dogfood)
 	}
 }
@@ -130,13 +155,13 @@ func TestResolveDogfoodTargetAppliesDogfoodDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if target.BrowserOSDir != filepath.Join(home, ".browseros-dogfood") {
+	if target.BrowserOSDir != filepath.Join(home, ".browseros-claw-dogfood") {
 		t.Fatalf("unexpected browseros dir: %s", target.BrowserOSDir)
 	}
-	if target.Ports == nil || target.Ports.CDP != 9015 || target.Ports.Server != 9115 || target.Ports.Extension != 9315 {
+	if target.Ports == nil || *target.Ports != (proc.Ports{CDP: 49337, Server: 9200}) {
 		t.Fatalf("unexpected ports: %#v", target.Ports)
 	}
-	if len(target.BrowserUserDataDirs) != 1 || target.BrowserUserDataDirs[0] != filepath.Join(cfgDir, "profile") {
+	if len(target.BrowserUserDataDirs) != 1 || target.BrowserUserDataDirs[0] != filepath.Join(cfgDir, "claw", "profile") {
 		t.Fatalf("unexpected browser user data dirs: %#v", target.BrowserUserDataDirs)
 	}
 }

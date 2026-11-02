@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"browseros-dev/proc"
@@ -109,7 +111,11 @@ func runSafeCleanup(out io.Writer, target resetTarget, opts safeCleanupOptions) 
 		}
 		if target.Ports != nil {
 			ports := *target.Ports
-			fmt.Fprintf(out, "%s ports %d, %d, %d\n", labelStyle.Sprint("Clearing:"), ports.CDP, ports.Server, ports.Extension)
+			portLabels := []string{}
+			for _, port := range ports.Assigned() {
+				portLabels = append(portLabels, strconv.Itoa(port))
+			}
+			fmt.Fprintf(out, "%s ports %s\n", labelStyle.Sprint("Clearing:"), strings.Join(portLabels, ", "))
 			if err := proc.KillPortsAndWait(ports, 3*time.Second); err != nil {
 				return err
 			}

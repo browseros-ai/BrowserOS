@@ -19,7 +19,7 @@ var logsCmd = &cobra.Command{
 	Short:   "Print dogfood log files",
 	GroupID: groupInspect,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, cfg, err := loadSelectedTargetConfigWithoutValidation()
+		cfg, err := loadConfigWithoutValidation()
 		if err != nil {
 			return err
 		}

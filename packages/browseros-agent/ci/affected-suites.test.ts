@@ -27,28 +27,6 @@ describe('computeAffectedSuites', () => {
     ])
   })
 
-  it('maps an app-onboard change to only the app-onboard suite', () => {
-    expect(
-      suiteNames([pkg('@browseros/app-onboard', 'apps/app-onboard')]),
-    ).toEqual(['app-onboard'])
-  })
-
-  it('maps the server package to all seven server suites', () => {
-    expect(suiteNames([pkg('@browseros/server', 'apps/server')])).toEqual([
-      'server-agent',
-      'server-api',
-      'server-tools',
-      'server-browser',
-      'server-integration',
-      'server-lib',
-      'server-root',
-    ])
-  })
-
-  it('maps the app package to the agent suite', () => {
-    expect(suiteNames([pkg('@browseros/app', 'apps/app')])).toEqual(['agent'])
-  })
-
   it('tests that the cursor package selects its own and pointer integration suites', () => {
     const suites = computeAffectedSuites(
       [pkg('@browseros/agent-cursor', 'packages/agent-cursor')],
@@ -99,7 +77,7 @@ describe('computeAffectedSuites', () => {
 
   it('adds the build suite when scripts change', () => {
     expect(
-      suiteNames([], ['packages/browseros-agent/scripts/build/server.ts']),
+      suiteNames([], ['packages/browseros-agent/scripts/build/claw-server.ts']),
     ).toEqual(['build'])
   })
 
@@ -111,7 +89,6 @@ describe('computeAffectedSuites', () => {
       ),
     ).toEqual(['release'])
     for (const nightlyWorkflow of [
-      '.github/workflows/nightly-macos-browseros.yml',
       '.github/workflows/nightly-macos-browserclaw.yml',
       '.github/workflows/reusable-build-macos-nightly.yml',
     ]) {
@@ -183,7 +160,6 @@ describe('computeAffectedSuites', () => {
     const result = suiteNames(
       [
         pkg('@browseros/claw-app', 'apps/claw-app'),
-        pkg('@browseros/app', 'apps/app'),
         pkg('@browseros/browseros-mcp-rust', 'crates/browseros-mcp'),
       ],
       ['packages/browseros-agent/contracts/claw-api/openapi.yaml'],
@@ -191,7 +167,6 @@ describe('computeAffectedSuites', () => {
     // claw-mcp appears once even though both the rust crate and the contract
     // path request it, and the order follows the SUITES declaration.
     expect(result).toEqual([
-      'agent',
       'claw-app',
       'claw-server',
       'claw-server-quality',
@@ -203,11 +178,8 @@ describe('computeAffectedSuites', () => {
     // A change to @browseros/shared marks all packages affected (Turbo global
     // hash); the mapping should then request every suite.
     const allPackages: AffectedPackage[] = [
-      pkg('@browseros/server', 'apps/server'),
-      pkg('@browseros/app', 'apps/app'),
       pkg('@browseros/claw-app', 'apps/claw-app'),
       pkg('@browseros/claw-onboard', 'apps/claw-onboard'),
-      pkg('@browseros/app-onboard', 'apps/app-onboard'),
       pkg('@browseros/build-server-tools', 'packages/build-server-tools'),
       pkg('@browseros/claw-server', 'apps/claw-server'),
       pkg('@browseros/agent-cursor', 'packages/agent-cursor'),

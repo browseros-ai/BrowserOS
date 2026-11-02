@@ -27,7 +27,7 @@ describe('migrateLocalEnv', () => {
       R2_UPLOAD_PREFIX: 'retired-prefix',
     })
     await writeFixture(rootDir, 'apps/app/.env.development', {
-      VITE_ALPHA_FEATURES: 'false',
+      VITE_PUBLIC_POSTHOG_HOST: 'https://eu.i.posthog.com',
       UNKNOWN_LOCAL_KEY: 'drop-me',
     })
 
@@ -38,7 +38,9 @@ describe('migrateLocalEnv', () => {
       ['.env.development', '.env.production'],
     )
     expect(development).toContain('POSTHOG_API_KEY=server-key')
-    expect(development).toContain('VITE_ALPHA_FEATURES=false')
+    expect(development).toContain(
+      'VITE_PUBLIC_POSTHOG_HOST=https://eu.i.posthog.com',
+    )
     expect(result.dropped).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

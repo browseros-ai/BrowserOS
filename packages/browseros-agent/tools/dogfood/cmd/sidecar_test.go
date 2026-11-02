@@ -10,55 +10,40 @@ import (
 )
 
 func TestWriteDogfoodSidecarConfigUsesExplicitResourceDirectory(t *testing.T) {
-	for _, test := range []struct {
-		name         string
-		resourcesDir string
-	}{
-		{
-			name:         "BrowserOS",
-			resourcesDir: "/repo/packages/browseros-agent/resources",
-		},
-		{
-			name:         "BrowserClaw",
-			resourcesDir: "/repo/packages/browseros-agent/apps/claw-server/resources",
-		},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			cfg := config.Config{
-				DevUserDataDir: t.TempDir(),
-				BrowserOSDir:   "/tmp/browseros-dogfood",
-				Ports:          config.Ports{CDP: 9015, Server: 9115, Extension: 9315},
-			}
-			path := dogfoodSidecarConfigPath(cfg)
+	resourcesDir := "/repo/packages/browseros-agent/apps/claw-server/resources"
+	cfg := config.Config{
+		DevUserDataDir: t.TempDir(),
+		BrowserOSDir:   "/tmp/browseros-dogfood",
+		Ports:          config.Ports{CDP: 49337, Server: 9200},
+	}
+	path := dogfoodSidecarConfigPath(cfg)
 
-			if err := writeDogfoodSidecarConfig(path, cfg, test.resourcesDir); err != nil {
-				t.Fatal(err)
-			}
+	if err := writeDogfoodSidecarConfig(path, cfg, resourcesDir); err != nil {
+		t.Fatal(err)
+	}
 
-			data, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var got map[string]any
-			if err := json.Unmarshal(data, &got); err != nil {
-				t.Fatal(err)
-			}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
 
-			if path != filepath.Join(cfg.DevUserDataDir, "server-config.json") {
-				t.Fatalf("unexpected sidecar path: %s", path)
-			}
-			ports := got["ports"].(map[string]any)
-			if ports["server"] != float64(9115) || ports["cdp"] != float64(9015) || ports["proxy"] != float64(9115) {
-				t.Fatalf("unexpected ports: %#v", ports)
-			}
-			directories := got["directories"].(map[string]any)
-			if directories["resources"] != test.resourcesDir || directories["execution"] != "/tmp/browseros-dogfood" {
-				t.Fatalf("unexpected directories: %#v", directories)
-			}
-			flags := got["flags"].(map[string]any)
-			if devMode, ok := flags["devMode"]; !ok || devMode != false {
-				t.Fatalf("dogfood must pin devMode false: %#v", flags)
-			}
-		})
+	if path != filepath.Join(cfg.DevUserDataDir, "server-config.json") {
+		t.Fatalf("unexpected sidecar path: %s", path)
+	}
+	ports := got["ports"].(map[string]any)
+	if ports["server"] != float64(9200) || ports["cdp"] != float64(49337) || ports["proxy"] != float64(9200) {
+		t.Fatalf("unexpected ports: %#v", ports)
+	}
+	directories := got["directories"].(map[string]any)
+	if directories["resources"] != resourcesDir || directories["execution"] != "/tmp/browseros-dogfood" {
+		t.Fatalf("unexpected directories: %#v", directories)
+	}
+	flags := got["flags"].(map[string]any)
+	if devMode, ok := flags["devMode"]; !ok || devMode != false {
+		t.Fatalf("dogfood must pin devMode false: %#v", flags)
 	}
 }

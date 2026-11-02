@@ -13,14 +13,14 @@ import (
 
 func TestPrintInitNextStepsShowsInlineAndBackgroundStart(t *testing.T) {
 	var out bytes.Buffer
-	printInitNextSteps(&out, "/tmp/config.yaml", config.TargetClaw)
+	printInitNextSteps(&out, "/tmp/config.yaml")
 
 	got := out.String()
 	for _, want := range []string{
 		"Config written: /tmp/config.yaml",
 		"Start dogfood: BrowserOS neo",
-		"Inline:     browseros-dogfood --claw start",
-		"Background: browseros-dogfood --claw start-background",
+		"Inline:     browseros-dogfood start",
+		"Background: browseros-dogfood start-background",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in\n%s", want, got)
@@ -28,33 +28,37 @@ func TestPrintInitNextStepsShowsInlineAndBackgroundStart(t *testing.T) {
 	}
 }
 
-func TestLoadInitConfigPreservesExistingOtherTarget(t *testing.T) {
+func TestLoadInitConfigPreservesExistingSettings(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	cfg := config.Defaults(home)
-	if err := cfg.ApplyTarget(config.TargetBrowserOS); err != nil {
-		t.Fatal(err)
-	}
-	cfg.DevUserDataDir = "/custom-browseros-profile"
-	cfg.BrowserOSDir = "/custom-browseros-state"
+	cfg.DevUserDataDir = "/custom-claw-profile"
+	cfg.BrowserOSDir = "/custom-claw-state"
 	if err := config.Save(path, cfg); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := loadInitConfig(home, path, config.TargetClaw)
+	got, err := loadInitConfig(home, path)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if got.Target != config.TargetClaw {
-		t.Fatalf("target got %q want claw", got.Target)
+	if got.DevUserDataDir != "/custom-claw-profile" || got.BrowserOSDir != "/custom-claw-state" {
+		t.Fatalf("existing settings were not preserved: %+v", got)
 	}
-	browseros := got.Targets[string(config.TargetBrowserOS)]
-	if browseros.DevUserDataDir != "/custom-browseros-profile" || browseros.BrowserOSDir != "/custom-browseros-state" {
-		t.Fatalf("browseros target was not preserved: %+v", browseros)
+}
+
+func TestLoadInitConfigUsesDefaultsForFirstRun(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	got, err := loadInitConfig(home, filepath.Join(t.TempDir(), "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
 	}
+
 	if got.DevUserDataDir != filepath.Join(home, ".config/browseros-dogfood/claw/profile") {
-		t.Fatalf("active target profile got %q", got.DevUserDataDir)
+		t.Fatalf("default profile got %q", got.DevUserDataDir)
 	}
 }
 

@@ -1,7 +1,7 @@
 /**
  * Real-BrowserOS runtime for the claw-mcp contract suite, distilled
- * from `apps/server/tests/__helpers__/{browser,test-runtime}.ts` with
- * one deliberate change: there is NO default binary path. The suite is
+ * from the retired Bun server's browser test helpers with one
+ * deliberate change: there is NO default binary path. The suite is
  * opt-in — it runs only when `BROWSEROS_BINARY` is explicitly set and
  * skips cleanly everywhere else, so `bun run test` stays green on
  * machines and CI runners without a browser build.
