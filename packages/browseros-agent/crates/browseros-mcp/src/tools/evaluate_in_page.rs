@@ -4,7 +4,7 @@
 //! snapshotting and acting never run page script (see `browseros_core::page_js`).
 
 use crate::{
-    constants::INLINE_PAGE_CONTENT_MAX_CHARS,
+    constants::{INLINE_PAGE_CONTENT_MAX_CHARS, MAX_INLINE_OVERRIDE_BYTES},
     framework::{
         ToolCtx, ToolExecResult, ToolResult, clamp_timeout, error_result, parse_args,
         pending_dialog_result, text_result,
@@ -22,12 +22,6 @@ use std::time::Duration;
 const TOOL: &str = "evaluate_in_page";
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const MAX_TIMEOUT_MS: u64 = 30_000;
-
-/// Hard ceiling for the opt-in `maxChars`: a caller may pull up to this much of a
-/// large result inline instead of having it spilled to a local file. The default
-/// inline size stays small (`INLINE_PAGE_CONTENT_MAX_CHARS`) so ordinary results
-/// do not flood the model's context.
-const MAX_INLINE_OVERRIDE_CHARS: usize = 200_000;
 
 const DESCRIPTION: &str = "\
 Evaluate JavaScript in the page's own main world, where the page's scripts run and can watch it: hooks \
@@ -67,7 +61,7 @@ struct EvaluateArgs {
     #[serde(default)]
     settle: Option<bool>,
     /// Max size of the result kept inline, measured in UTF-8 bytes to match the
-    /// server's inline limit (default 5000, max 200000); a multibyte character
+    /// server's inline limit (default 15000, max 150000); a multibyte character
     /// counts as more than one byte. A result larger than this is truncated
     /// inline and its full value is retained as an output part; read_output retrieves
     /// it remotely, or raise this to receive more of the value inline.
@@ -329,11 +323,11 @@ pub(crate) fn safe_prefix(text: &str, max_chars: usize) -> String {
 }
 
 /// Resolves the inline size budget for a result: the caller's `maxChars` capped
-/// at `MAX_INLINE_OVERRIDE_CHARS`, or the small default when unset. A result
+/// at `MAX_INLINE_OVERRIDE_BYTES`, or the small default when unset. A result
 /// larger than this is truncated inline and its full text spilled to a file.
 fn resolve_inline_limit(max_chars: Option<u64>) -> usize {
     match max_chars {
-        Some(n) => (n as usize).min(MAX_INLINE_OVERRIDE_CHARS),
+        Some(n) => (n as usize).min(MAX_INLINE_OVERRIDE_BYTES),
         None => INLINE_PAGE_CONTENT_MAX_CHARS,
     }
 }
@@ -366,10 +360,7 @@ mod tests {
         // A caller can raise it, up to the hard ceiling.
         assert_eq!(resolve_inline_limit(Some(50_000)), 50_000);
         // Anything above the ceiling is clamped.
-        assert_eq!(
-            resolve_inline_limit(Some(10_000_000)),
-            MAX_INLINE_OVERRIDE_CHARS
-        );
+        assert_eq!(resolve_inline_limit(Some(10_000_000)), 150_000);
     }
 
     fn reading(count: u64, installed: bool) -> settle::ReadinessReading {

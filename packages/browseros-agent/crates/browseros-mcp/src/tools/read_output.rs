@@ -10,6 +10,10 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+// Bound a single image response separately from the larger saved-part limit.
+// Larger captures remain available unchanged through bounded base64 chunks.
+const MAX_INLINE_IMAGE_BYTES: u64 = 4 * 1024 * 1024;
+
 #[derive(Clone, Copy, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 enum Encoding {
@@ -30,7 +34,7 @@ struct ReadOutputArgs {
     /// Max bytes per chunk; default 16384, clamped to 4..=65536.
     limit: Option<usize>,
     /// Defaults to text for text/JSON, image for screenshots, base64 for other files.
-    /// Use base64 to transfer exact binary chunks to an importer. image is bounded to 2 MiB.
+    /// Use base64 to transfer exact binary chunks to an importer. image is bounded to 4 MiB.
     encoding: Option<Encoding>,
 }
 
@@ -75,12 +79,12 @@ async fn read(raw: Value, store: &OutputStore) -> ToolExecResult<ToolResult> {
     });
     if matches!(encoding, Encoding::Image) {
         if !part.mime_type.starts_with("image/")
-            || part.bytes > 2 * 1024 * 1024
+            || part.bytes > MAX_INLINE_IMAGE_BYTES
             || args.offset != 0
             || args.limit.is_some()
         {
             return Err(crate::framework::ToolError::message(
-                "Inline images require an image part up to 2 MiB and no offset/limit; use encoding=base64 for larger files",
+                "Inline images require an image part up to 4 MiB and no offset/limit; use encoding=base64 for larger files",
             ));
         }
         let mut bytes = Vec::with_capacity(part.bytes as usize);
