@@ -36,6 +36,13 @@ export const runBudgetCases: ContractCase[] = [
       )
       expect(timeoutOf(run).default).toBe(60000)
       expect(timeoutOf(run).maximum).toBe(60000)
+      // This real wait also crosses QuickJS's wall-clock interrupt, which virtual
+      // time alone cannot exercise. The raw MCP client's 120s deadline leaves room.
+      const completed = await ctx.mcp.callTool('run', {
+        code: "await sleep(31000); return 'completed'",
+      })
+      expectOk(completed)
+      expect(completed.structuredContent?.value).toBe('completed')
       expectError(
         await ctx.mcp.callTool('run', {
           code: "console.log('must not execute'); return 'must not execute'",
@@ -71,6 +78,12 @@ export const runBudgetCases: ContractCase[] = [
           )
           expect(timeoutOf(run).default).toBe(1000)
           expect(timeoutOf(run).maximum).toBe(1000)
+          const malformed = await mcp.callTool('run', {
+            code: "console.log('must not execute'); return 'must not execute'",
+            timeout: null,
+          })
+          expect(malformed.isError).toBe(true)
+          expect(JSON.stringify(malformed)).not.toContain('must not execute')
           expectOk(await mcp.callTool('run', { code: 'return 42' }))
           const expired = await mcp.callTool('run', {
             code: "console.log('started'); await sleep(1500); return 'late'",

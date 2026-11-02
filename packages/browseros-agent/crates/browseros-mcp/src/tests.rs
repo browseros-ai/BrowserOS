@@ -146,6 +146,7 @@ async fn run_discovery_exposes_the_same_configurable_budget_as_execution() -> an
         let run = service
             .get_tool("run")
             .ok_or_else(|| anyhow::anyhow!("missing run"))?;
+        assert_eq!(run.input_schema["properties"]["timeout"]["type"], "number");
         assert_eq!(
             run.input_schema["properties"]["timeout"]["default"],
             expected_ms

@@ -467,13 +467,22 @@ struct RunArgs {
     code: String,
     /// Wall-clock budget in milliseconds, including browser operations and waits.
     /// Omit for the configured default; a value above the deployment maximum is rejected.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_timeout")]
+    #[schemars(with = "f64")]
     timeout: Option<f64>,
     /// Max size of the result kept inline (return value plus logs), in UTF-8 bytes: default
     /// 25000, max 2000000. Larger results return a preview and an output ID; read_output
     /// retrieves the complete JSON value/logs. Raise this to keep more inline.
     #[serde(default, rename = "maxChars")]
     max_chars: Option<u64>,
+}
+
+// Absence selects the host default. A present null must remain an argument error,
+// rather than silently granting the default budget to a malformed action-bearing script.
+fn deserialize_timeout<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<f64>, D::Error> {
+    f64::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, serde::Serialize, JsonSchema)]
@@ -2952,6 +2961,20 @@ try {
                 "error": "run exceeded 10ms"
             }))
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_rejects_null_timeout_before_executing_the_script() -> anyhow::Result<()> {
+        let ctx = test_ctx();
+        let result = execute_tool(
+            &definition(),
+            json!({ "code": "console.log('executed'); return 'executed';", "timeout": null }),
+            &ctx,
+        )
+        .await?;
+        assert!(result.is_error);
+        assert!(!result_text(&result)?.contains("executed"));
         Ok(())
     }
 
