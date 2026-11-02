@@ -186,8 +186,8 @@ impl SkillService {
     }
 
     /// Re-renders SKILL.md from its current prose: with the "Run it fast" section while the
-    /// skill has a flow that runs, without it otherwise. A hand-written body with no numbered
-    /// steps is left alone.
+    /// skill has a flow that runs, without it otherwise. Sections and frontmatter keys it does
+    /// not generate are kept, and a hand-written body with no numbered steps is left alone.
     pub async fn rerender(&self, name: &str, mode: SkillMd<'_>) -> AppResult<()> {
         let _guard = self.mutate.lock().await;
         let model = self.require(name).await?;
@@ -208,6 +208,7 @@ impl SkillService {
             }
             SkillMd::Plain => render_skill_markdown(name, &model.description, &steps, &notes),
         };
+        let content = keep_hand_written(&content, &body);
         if content == body {
             return Ok(());
         }
@@ -677,6 +678,89 @@ fn normalized_skill_name(raw: &str) -> AppResult<String> {
     Ok(name)
 }
 
+/// The sections and frontmatter keys SKILL.md rendering writes. Anything else in the file was
+/// written by hand and survives a re-render.
+const GENERATED_SECTIONS: [&str; 4] = [
+    "## Run it fast",
+    "## Steps",
+    "## Learned from past runs",
+    "## Make it fast again",
+];
+const GENERATED_KEYS: [&str; 4] = ["name", "description", "tools", "ultrafast"];
+
+/// Splits a SKILL.md into its frontmatter lines (between the `---` fences) and the rest.
+fn split_frontmatter(body: &str) -> (Vec<&str>, Vec<&str>) {
+    let lines: Vec<&str> = body.lines().collect();
+    if lines.first().map(|line| line.trim_end()) != Some("---") {
+        return (Vec::new(), lines);
+    }
+    match lines
+        .iter()
+        .skip(1)
+        .position(|line| line.trim_end() == "---")
+    {
+        Some(end) => (lines[1..=end].to_vec(), lines[end + 2..].to_vec()),
+        None => (Vec::new(), lines),
+    }
+}
+
+/// Carries what a person added to `existing` into a freshly `generated` SKILL.md: frontmatter
+/// keys go before the closing fence, text above the first section stays on top, and sections
+/// rendering does not own follow the generated ones.
+fn keep_hand_written(generated: &str, existing: &str) -> String {
+    let (front, rest) = split_frontmatter(existing);
+    let mut extra_keys = Vec::new();
+    let mut keep_key = false;
+    for line in front {
+        let starts_key = line.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
+        if starts_key {
+            let key = line.split(':').next().unwrap_or("").trim();
+            keep_key = !GENERATED_KEYS.contains(&key);
+        }
+        if keep_key {
+            extra_keys.push(line);
+        }
+    }
+    let first_section = rest
+        .iter()
+        .position(|line| line.trim_start().starts_with("## "))
+        .unwrap_or(rest.len());
+    let preamble = rest[..first_section].join("\n").trim().to_string();
+    let mut extra_sections = Vec::new();
+    let mut keep_section = false;
+    for line in &rest[first_section..] {
+        if line.trim_start().starts_with("## ") {
+            keep_section = !GENERATED_SECTIONS.contains(&line.trim());
+        }
+        if keep_section {
+            extra_sections.push(*line);
+        }
+    }
+    if extra_keys.is_empty() && preamble.is_empty() && extra_sections.is_empty() {
+        return generated.to_string();
+    }
+    let (generated_front, generated_rest) = split_frontmatter(generated);
+    let mut out = String::from("---\n");
+    for line in generated_front.iter().chain(&extra_keys) {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str("---\n\n");
+    if !preamble.is_empty() {
+        out.push_str(&preamble);
+        out.push_str("\n\n");
+    }
+    out.push_str(generated_rest.join("\n").trim());
+    out.push('\n');
+    let sections = extra_sections.join("\n");
+    if !sections.trim().is_empty() {
+        out.push('\n');
+        out.push_str(sections.trim_end());
+        out.push('\n');
+    }
+    out
+}
+
 /// Which shape SKILL.md takes, from the skill's flow status.
 pub enum SkillMd<'a> {
     /// The flow runs: "Run it fast" first, the prose as the fallback.
@@ -821,7 +905,7 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        RunItFast, neo_prefixed, normalized_skill_name, render_skill_markdown,
+        RunItFast, keep_hand_written, neo_prefixed, normalized_skill_name, render_skill_markdown,
         render_ultrafast_markdown,
     };
     use crate::services::flow::prose::{learned_notes, prose_steps};
@@ -857,6 +941,42 @@ mod tests {
         // Steps and notes survive a round trip, so the skill can drop back to plain prose.
         assert_eq!(prose_steps(&body), steps);
         assert_eq!(learned_notes(&body), notes);
+    }
+
+    #[test]
+    fn a_re_render_keeps_what_was_written_by_hand() {
+        let steps = vec!["Open the search.".to_string(), "Add it.".to_string()];
+        let notes = vec!["The grid fills late.".to_string()];
+        let existing = "---\nname: neo-shop\ndescription: \"Add to cart\"\ntools: browseros-neo\nlicense: MIT\nmetadata:\n  owner: shop-team\n---\n\nUse the India store.\n\n## Steps\n1. Call the mark_skill_run tool with name: neo-shop so this run is recorded.\n2. Open the search.\n3. Add it.\n\n## Before you start\n- Sign in first.\n\n## Learned from past runs\n- The grid fills late.\n";
+        let fast = RunItFast {
+            status: "verified",
+            inputs: vec![("query".to_string(), "string".to_string())],
+        };
+        let generated = render_ultrafast_markdown("neo-shop", "Add to cart", &steps, &notes, &fast);
+        let body = keep_hand_written(&generated, existing);
+        assert!(body.starts_with("---\nname: neo-shop\n"), "{body}");
+        assert!(body.contains("ultrafast: verified\nlicense: MIT\nmetadata:\n  owner: shop-team\n---\n\nUse the India store.\n\n## Run it fast\n"), "{body}");
+        assert!(body.ends_with("- The grid fills late.\n\n## Before you start\n- Sign in first.\n"), "{body}");
+        assert_eq!(prose_steps(&body), steps);
+        assert_eq!(learned_notes(&body), notes);
+
+        // Dropping back to plain prose removes only what rendering owns, and is stable.
+        let plain = keep_hand_written(
+            &render_skill_markdown("neo-shop", "Add to cart", &steps, &notes),
+            &body,
+        );
+        assert!(!plain.contains("ultrafast:"), "{plain}");
+        assert!(!plain.contains("Run it fast"), "{plain}");
+        assert!(plain.contains("license: MIT\n"), "{plain}");
+        assert!(plain.contains("## Before you start\n- Sign in first.\n"), "{plain}");
+        let again = keep_hand_written(
+            &render_skill_markdown("neo-shop", "Add to cart", &steps, &notes),
+            &plain,
+        );
+        assert_eq!(again, plain);
+
+        let untouched = render_skill_markdown("neo-shop", "Add to cart", &steps, &notes);
+        assert_eq!(keep_hand_written(&generated, &untouched), generated);
     }
 
     #[test]

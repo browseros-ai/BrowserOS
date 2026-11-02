@@ -341,3 +341,31 @@ async fn rewriting_a_step_switches_the_flow_off_even_when_the_count_holds() -> a
     assert!(!body.contains("Run it fast"), "{body}");
     Ok(())
 }
+
+#[tokio::test]
+async fn a_raw_edit_keeps_its_own_sections_when_run_it_fast_comes_back() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let state = &app.state;
+    create_skill(state, "neo-shop-add").await?;
+    flow::store::write(&state.skills.skill_dir("neo-shop-add"), &two_step_flow())?;
+    state
+        .skills
+        .put_flow_row(flow::new_row("neo-shop-add", FlowStatus::Verified))
+        .await?;
+
+    let raw = "---\nname: neo-shop-add\ndescription: \"Add to cart\"\ntools: browseros-neo\n---\n\n## Steps\n1. Open the search\n2. Add the first match\n\n## Before you start\n- Sign in to the India store.\n";
+    let (status, detail) = put(
+        &app.router,
+        "/api/v1/skills/neo-shop-add",
+        json!({ "body": raw }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let body = detail["body"].as_str().unwrap_or_default();
+    assert!(body.contains("## Run it fast"), "{body}");
+    assert!(
+        body.contains("## Before you start\n- Sign in to the India store.\n"),
+        "{body}"
+    );
+    Ok(())
+}
