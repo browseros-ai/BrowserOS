@@ -1,6 +1,6 @@
 //! Reads immutable, session-owned outputs without reaching the browser or replaying actions.
 use crate::{
-    framework::{ToolCtx, ToolExecResult, ToolResult, parse_args, text_result},
+    framework::{ToolExecResult, ToolResult, parse_args, text_result},
     output_store::{MAX_READ_BYTES, OutputStore},
     trust_boundary::wrap_untrusted,
 };
@@ -35,7 +35,7 @@ struct ReadOutputArgs {
 }
 
 pub fn definition() -> crate::framework::ToolDef {
-    super::def::<ReadOutputArgs>(
+    super::output_def::<ReadOutputArgs>(
         "read_output",
         "Read a saved Neo tool result by outputId in the same logical session. Omit part to list parts; read text/JSON in bounded chunks using nextOffset. Screenshots return inline images; encoding=base64 returns exact file bytes for saving/sending. Outputs expire after 24 hours. Reading never repeats the browser action and accepts no filesystem paths.",
         Some(super::read_only_annotations()),
@@ -43,17 +43,13 @@ pub fn definition() -> crate::framework::ToolDef {
     )
 }
 
-fn handler<'a>(
-    raw: Value,
-    ctx: &'a ToolCtx,
-    _response: &'a mut crate::response::ToolResponse,
-) -> BoxFuture<'a, ToolExecResult<Option<ToolResult>>> {
-    Box::pin(async move { read(raw, &ctx.output_files).await.map(Some) })
+fn handler<'a>(raw: Value, store: &'a OutputStore) -> BoxFuture<'a, ToolExecResult<ToolResult>> {
+    Box::pin(read(raw, store))
 }
 
-/// Also used by hosts before browser admission: saved outputs remain readable while
-/// the browser is disconnected, provided the logical session is still authorized.
-pub async fn read(raw: Value, store: &OutputStore) -> ToolExecResult<ToolResult> {
+/// Saved outputs remain readable while the browser is disconnected. Hosts authorize
+/// the logical session before passing its narrowed store to the registered handler.
+async fn read(raw: Value, store: &OutputStore) -> ToolExecResult<ToolResult> {
     let args: ReadOutputArgs = parse_args(raw)?;
     let output = store.describe(&args.output_id).await?;
     let Some(name) = args.part else {
@@ -99,11 +95,16 @@ pub async fn read(raw: Value, store: &OutputStore) -> ToolExecResult<ToolResult>
                 None => break,
             }
         }
-        return Ok(ToolResult::image(
+        let metadata = json!({ "outputId": output.id, "part": name, "mimeType": part.mime_type, "bytes": part.bytes });
+        let mut result = ToolResult::image(
             base64::engine::general_purpose::STANDARD.encode(bytes),
             &part.mime_type,
-            json!({ "outputId": output.id, "part": name, "mimeType": part.mime_type, "bytes": part.bytes }),
-        ));
+            metadata.clone(),
+        );
+        result
+            .content
+            .push(rmcp::model::ContentBlock::text(metadata.to_string()));
+        return Ok(result);
     }
     let limit = args.limit.unwrap_or(16 * 1024);
     let chunk = if matches!(encoding, Encoding::Base64) {
@@ -119,19 +120,21 @@ pub async fn read(raw: Value, store: &OutputStore) -> ToolExecResult<ToolResult>
             let text = String::from_utf8(chunk.bytes).map_err(|_| {
                 crate::framework::ToolError::message("Binary output requires encoding=base64")
             })?;
+            // Text-only MCP hosts need the cursor too. Keep metadata separate from
+            // fenced page data so clients never have to interpret page prose as control.
+            let displayed = format!(
+                "Output chunk: {}\n{}",
+                structured,
+                wrap_untrusted(&text, "saved Neo output")
+            );
             structured["text"] = json!(text);
-            wrap_untrusted(&text, "saved Neo output")
+            displayed
         }
         Encoding::Base64 => {
             structured["data"] =
                 json!(base64::engine::general_purpose::STANDARD.encode(&chunk.bytes));
-            format!(
-                "Binary output chunk: {} bytes; base64 bytes are in structuredContent.data. nextOffset={}",
-                chunk.bytes.len(),
-                chunk
-                    .next_offset
-                    .map_or_else(|| "end".to_string(), |next| next.to_string())
-            )
+            // The same bounded payload is usable through either MCP result channel.
+            structured.to_string()
         }
         Encoding::Image => unreachable!(),
     };

@@ -1,6 +1,7 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>Large output fixture</title>
+<button id="change">Change all labels</button>
 <main id="content"></main>
 <script>
   // A deterministic accessibility tree large enough to exercise automatic snapshot spills.
@@ -11,4 +12,9 @@
     fragment.append(button)
   }
   document.querySelector('main').append(fragment)
+  document.querySelector('#change').addEventListener('click', () => {
+    document.querySelectorAll('main button').forEach((button, index) => {
+      button.textContent = `Updated fixture button ${index}: ${'changed fixture content '.repeat(5)}`
+    })
+  })
 </script>

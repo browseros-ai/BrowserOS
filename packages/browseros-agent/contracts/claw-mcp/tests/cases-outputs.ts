@@ -1,8 +1,9 @@
 /** Saved output contracts cross the real MCP wire; no host filesystem reads are used. */
 import { expect } from 'bun:test'
 import type { CaseContext, ContractCase } from './cases'
-import { expectError, expectOk } from './helpers'
+import { apiGet, expectError, expectOk, waitUntil } from './helpers'
 import { imageOf, type McpToolResult, readRpcResponse } from './mcp-client'
+import { startRustServer } from './rust-server'
 
 interface SavedOutput {
   id: string
@@ -87,6 +88,125 @@ async function bytesOf(
 }
 
 export const outputCases: ContractCase[] = [
+  {
+    name: 'outputs: expired live handles retain output through their canonical task',
+    async run(ctx) {
+      const server = await startRustServer(ctx.browser.cdpPort, {
+        env: {
+          CLAW_SESSION_IDLE_MS: '1000',
+          CLAW_SESSION_SWEEP_INTERVAL_MS: '100',
+        },
+      })
+      const isolated = { ...ctx, server }
+      try {
+        await waitUntil(
+          async () =>
+            !(await statelessCall(isolated, 'tabs', { action: 'list' }))
+              .isError,
+          'isolated server to attach',
+        )
+        const produced = await statelessCall(isolated, 'run', {
+          code: "return 'retained value '.repeat(3000)",
+        })
+        const output = outputOf(produced)
+        const session = produced._meta?.['com.browseros.neo/session']
+        if (typeof session !== 'string')
+          throw new Error('missing logical session')
+        await waitUntil(async () => {
+          const response = await apiGet(server, `/api/v1/sessions/${session}`)
+          if (!response.ok) return false
+          const detail = (await response.json()) as {
+            session?: { status?: string }
+            summary?: { status?: string }
+          }
+          const status = detail.session?.status ?? detail.summary?.status
+          return status !== undefined && status !== 'live'
+        }, 'original live session to expire')
+        const recovered = await statelessCall(isolated, 'read_output', {
+          session,
+          outputId: output.id,
+          part: 'result.json',
+          limit: 512,
+        })
+        expectOk(recovered)
+        expect(recovered._meta?.['com.browseros.neo/session']).not.toBe(session)
+        expect(recovered.structuredContent?.text).toContain('retained value ')
+      } finally {
+        await server.stop()
+      }
+    },
+  },
+  {
+    name: 'outputs: downloads are retrievable by a content-only client',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/links.html'))
+      const snapshot = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+      const ref = snapshot
+        .split('\n')
+        .find((line) => line.includes('Download report'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!ref) throw new Error('missing download link')
+      const output = outputOf(await ctx.mcp.callTool('download', { page, ref }))
+      const chunks: Buffer[] = []
+      let offset = 0
+      for (;;) {
+        const result = await ctx.mcp.callTool('read_output', {
+          outputId: output.id,
+          part: 'download.txt',
+          encoding: 'base64',
+          offset,
+          limit: 4,
+        })
+        expectOk(result)
+        // The host may append session hints as separate content blocks. A client
+        // without structuredContent still receives the reader's complete JSON block.
+        const payload = result.content.find(
+          (block) => block.type === 'text' && block.text?.startsWith('{'),
+        )?.text
+        if (!payload) throw new Error('missing content-only output chunk')
+        const chunk = JSON.parse(payload)
+        expect(typeof chunk.data).toBe('string')
+        chunks.push(Buffer.from(chunk.data, 'base64'))
+        if (chunk.eof) break
+        expect(chunk.nextOffset).toBeGreaterThan(offset)
+        offset = chunk.nextOffset
+      }
+      expect(Buffer.concat(chunks).toString()).toBe('fixture report contents\n')
+    },
+  },
+  {
+    name: 'outputs: automatic action diffs share the saved action result',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/output-large.html'))
+      const matches = expectOk(
+        await ctx.mcp.callTool('grep', { page, pattern: 'Change all labels' }),
+      )
+      const ref = matches.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!ref) throw new Error('missing change button')
+      const result = await ctx.mcp.callTool('act', {
+        page,
+        kind: 'click',
+        ref,
+        diff: 64,
+      })
+      const output = outputOf(result)
+      expect(result.structuredContent?.contexts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'diff',
+            data: expect.objectContaining({ writtenToFile: true }),
+          }),
+        ]),
+      )
+      expect((await bytesOf(ctx, output.id, 'diff.md')).toString()).toContain(
+        'Updated fixture button 1799',
+      )
+      const primary = JSON.parse(
+        (await bytesOf(ctx, output.id, 'result.json')).toString(),
+      )
+      expect(primary.structuredContent.kind).toBe('click')
+    },
+  },
   {
     name: 'outputs: stateless requests recover the same output through the logical session',
     async run(ctx) {

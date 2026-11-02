@@ -1389,7 +1389,7 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
     .await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["result"]["isError"], false, "tabs_new body: {body:?}");
-    assert!(body["result"].get("structuredContent").is_none());
+    assert_eq!(body["result"]["structuredContent"]["page"], 1);
     assert!(body["result"].get("_meta").is_none());
 
     let tabs_list = json!({
@@ -1408,7 +1408,10 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
     .await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list_body["result"]["isError"], false);
-    assert!(list_body["result"].get("structuredContent").is_none());
+    assert_eq!(
+        list_body["result"]["structuredContent"]["pages"][0]["page"],
+        1
+    );
     assert!(
         list_body["result"]["content"][0]["text"]
             .as_str()
@@ -1600,7 +1603,7 @@ async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    assert!(body["result"].get("structuredContent").is_none());
+    assert_eq!(body["result"]["structuredContent"]["page"], 1);
 
     let wait_call = json!({
         "jsonrpc": "2.0",

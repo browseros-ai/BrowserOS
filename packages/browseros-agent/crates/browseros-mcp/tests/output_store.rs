@@ -129,6 +129,7 @@ async fn private_outputs_refuse_symlink_substitution() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+#[cfg(unix)]
 async fn retention_preserves_unrelated_mount_directories_and_rejects_relative_roots()
 -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
@@ -159,5 +160,71 @@ async fn retention_preserves_unrelated_mount_directories_and_rejects_relative_ro
             .await
             .is_err()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn output_tool_runs_without_browser_dependencies_and_supports_content_only_clients()
+-> anyhow::Result<()> {
+    use browseros_mcp::{ToolExecution, execute_tool};
+    let directory = tempfile::tempdir()?;
+    let store = OutputStore::new(directory.path().join("outputs"), "session");
+    store
+        .write_part("document", "txt", "hello 🦀 world".as_bytes())
+        .await?;
+    let output = store
+        .finish(&json!({"ok":true}))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing output"))?;
+    let result = execute_tool(
+        &browseros_mcp::tools::read_output::definition(),
+        json!({"outputId": output.id, "part":"document.txt", "limit":8}),
+        ToolExecution::Outputs(&store),
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let text = result
+        .content
+        .first()
+        .and_then(|block| block.as_text())
+        .ok_or_else(|| anyhow::anyhow!("missing text"))?;
+    let metadata: serde_json::Value = serde_json::from_str(
+        text.text
+            .lines()
+            .next()
+            .and_then(|line| line.strip_prefix("Output chunk: "))
+            .ok_or_else(|| anyhow::anyhow!("missing cursor metadata"))?,
+    )?;
+    assert_eq!(metadata["nextOffset"], 6);
+    assert!(text.text.contains("hello "));
+    let binary = execute_tool(
+        &browseros_mcp::tools::read_output::definition(),
+        json!({"outputId": output.id,"part":"document.txt","encoding":"base64","limit":8}),
+        ToolExecution::Outputs(&store),
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let text = binary
+        .content
+        .first()
+        .and_then(|block| block.as_text())
+        .ok_or_else(|| anyhow::anyhow!("missing binary text"))?;
+    let displayed: serde_json::Value = serde_json::from_str(&text.text)?;
+    assert_eq!(
+        displayed,
+        binary
+            .structured_content
+            .ok_or_else(|| anyhow::anyhow!("missing binary metadata"))?
+    );
+    assert_eq!(displayed["data"], "aGVsbG8g8J8=");
+    assert!(matches!(
+        execute_tool(
+            &browseros_mcp::tools::snapshot::definition(),
+            json!({"page":1}),
+            ToolExecution::Outputs(&store)
+        )
+        .await,
+        Err(browseros_mcp::framework::ToolError::BrowserRequired)
+    ));
     Ok(())
 }

@@ -155,7 +155,7 @@ impl ToolCall {
             catalog,
             tool_index,
             raw_args,
-            output_files: output_files.for_session(session_id.as_str()),
+            output_files,
             session_id,
             identity,
             browser_session,
@@ -347,6 +347,10 @@ async fn dispatch_tool_call_with(
     effects: &[NamedToolEffect],
     observers: &[NamedToolObserver],
 ) -> Result<CallToolResult, McpError> {
+    // A transport or idle timeout may mint a successor session. The persisted task
+    // correlation, rather than that replaceable live ID, owns saved outputs.
+    let task = call.state.targets.canonical_task(&call.session_id).await;
+    call.output_files = call.output_files.for_session(task.as_str());
     if let Some(identity) = &call.identity
         && !identity
             .session
@@ -515,75 +519,69 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
     if call.client_cancel.is_cancelled() || call.cancel.is_cancelled() {
         return DispatchExecution::ProtocolCancelled;
     }
-    let result = if call.tool().name == "read_output" {
-        browseros_mcp::tools::read_output::read(call.raw_args.clone(), &call.output_files)
-            .await
-            .unwrap_or_else(|error| ToolResult::error(format!("read_output failed: {error}")))
-    } else {
-        match &call.view {
-            Some(view) => {
-                // The same captured view reaches direct primitives and tool-backed calls.
-                // The hook adds ownership labels and child audit rows, never scope authority.
-                let is_script = ARBITRARY_SCRIPT_TOOLS.contains(&call.tool().name);
-                let inner_call_hook: Option<Arc<dyn browseros_mcp::InnerCallHook>> =
-                    if is_script && call.identity.is_some() {
-                        Some(
-                            Arc::new(crate::api::mcp::script_hook::ScriptInnerCallHook::new(
-                                call.clone(),
-                            )) as Arc<dyn browseros_mcp::InnerCallHook>,
-                        )
-                    } else {
-                        None
-                    };
-                // Hot-load the helpers the agent's owned-tab hosts make relevant, so
-                // the script can call them by name. Cheap-gated when no helpers exist.
-                let preloaded_helpers = match &call.identity {
-                    Some(identity) if is_script => {
-                        crate::api::mcp::helper_runtime::preload_helpers(
-                            &call.state,
-                            &identity.ownership_key,
-                            view,
-                        )
-                        .await
-                    }
-                    _ => Vec::new(),
-                };
-                let ctx = ToolCtx::new(BrowserToolOptions {
-                    browser: view.clone().with_pointer(Pointer::default()),
-                    target: Some(call.target_store.clone()),
-                    defaults: BrowserToolDefaults {
-                        default_window_id: None,
-                        default_tab_group_id: call.default_tab_group_id.clone(),
-                    },
-                    cancel: call.cancel.clone(),
-                    output_files: call.output_files.clone(),
-                    inner_call_hook,
-                    preloaded_helpers,
-                });
-                // A tab group is destroyed when its last page is reparented. Explicit
-                // placement must share the detached grouper's conversation lock, so a
-                // callback cannot erase a group after we return its successful ID.
-                let execution = async {
-                    // `run` acquires per inner tool through ScriptInnerCallHook,
-                    // never for the whole script or for unrelated primitives.
-                    let _guard = call
-                        .acquire_group_operation_guard(call.tool().name, &call.raw_args)
-                        .await
-                        .map_err(|()| browseros_mcp::framework::ToolError::Cancelled)?;
-                    execute_tool(call.tool(), call.raw_args.clone(), &ctx).await
-                };
-                match execution.await {
-                    Ok(result) => result,
-                    Err(browseros_mcp::framework::ToolError::Cancelled) => {
-                        ToolResult::error(format!("{} failed: cancelled", call.tool().name))
-                    }
-                    Err(error) => {
-                        ToolResult::error(format!("{} failed: {error}", call.tool().name))
-                    }
-                }
+    let ctx = if let Some(view) = call
+        .view
+        .as_ref()
+        .filter(|_| call.tool().requires_browser())
+    {
+        // The captured view reaches every browser primitive. Output handlers declare
+        // no browser dependency and never construct a view or load page helpers.
+        let is_script = ARBITRARY_SCRIPT_TOOLS.contains(&call.tool().name);
+        let inner_call_hook: Option<Arc<dyn browseros_mcp::InnerCallHook>> =
+            if is_script && call.identity.is_some() {
+                Some(
+                    Arc::new(crate::api::mcp::script_hook::ScriptInnerCallHook::new(
+                        call.clone(),
+                    )) as Arc<dyn browseros_mcp::InnerCallHook>,
+                )
+            } else {
+                None
+            };
+        let preloaded_helpers = match &call.identity {
+            Some(identity) if is_script => {
+                crate::api::mcp::helper_runtime::preload_helpers(
+                    &call.state,
+                    &identity.ownership_key,
+                    view,
+                )
+                .await
             }
-            None => ToolResult::error(browser_unavailable_message(&call.state).await),
+            _ => Vec::new(),
+        };
+        Some(ToolCtx::new(BrowserToolOptions {
+            browser: view.clone().with_pointer(Pointer::default()),
+            target: Some(call.target_store.clone()),
+            defaults: BrowserToolDefaults {
+                default_window_id: None,
+                default_tab_group_id: call.default_tab_group_id.clone(),
+            },
+            cancel: call.cancel.clone(),
+            output_files: call.output_files.clone(),
+            inner_call_hook,
+            preloaded_helpers,
+        }))
+    } else {
+        None
+    };
+    let dependencies = ctx
+        .as_ref()
+        .map(browseros_mcp::ToolExecution::from)
+        .unwrap_or(browseros_mcp::ToolExecution::Outputs(&call.output_files));
+    let execution = async {
+        // Explicit grouping shares the detached grouper's conversation lock. `run`
+        // instead acquires per inner operation through its hook, never for the script.
+        let _guard = call
+            .acquire_group_operation_guard(call.tool().name, &call.raw_args)
+            .await
+            .map_err(|()| browseros_mcp::framework::ToolError::Cancelled)?;
+        execute_tool(call.tool(), call.raw_args.clone(), dependencies).await
+    };
+    let result = match execution.await {
+        Ok(result) => result,
+        Err(browseros_mcp::framework::ToolError::BrowserRequired) => {
+            ToolResult::error(browser_unavailable_message(&call.state).await)
         }
+        Err(error) => ToolResult::error(format!("{} failed: {error}", call.tool().name)),
     };
     let duration_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
     if call.dispatch_cancel.is_cancelled() {

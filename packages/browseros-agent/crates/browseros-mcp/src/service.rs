@@ -241,46 +241,49 @@ impl BrowserMcpService {
         };
         let started = Instant::now();
 
-        let (mut result, error_message) = if def.name == "read_output" {
-            match crate::tools::read_output::read(args, &self.output_files).await {
-                Ok(result) => (result, None),
-                Err(error) => (
-                    ToolResult::error(format!("read_output failed: {error}")),
-                    Some(error.to_string()),
-                ),
-            }
-        } else if let Some(browser_session) = self.browser_session().await {
-            let execution = match self
-                .tool_ctx(browser_session, def.metadata.manages_target, cancel)
+        let execution = async {
+            let ctx = if def.requires_browser() {
+                match self.browser_session().await {
+                    Some(session) => Some(
+                        self.tool_ctx(session, def.metadata.manages_target, cancel)
+                            .await?,
+                    ),
+                    None => None,
+                }
+            } else {
+                None
+            };
+            let dependencies = ctx
+                .as_ref()
+                .map(crate::framework::ToolExecution::from)
+                .unwrap_or(crate::framework::ToolExecution::Outputs(&self.output_files));
+            execute_tool(def, args, dependencies)
                 .await
-            {
-                Ok(ctx) => execute_tool(def, args, &ctx).await.map(|mut result| {
-                    // Outer results only; run's inner primitives never pass through here.
-                    if let Some(note) = unapplied_target_note(&ctx.browser) {
+                .map(|mut result| {
+                    if let Some(ctx) = &ctx
+                        && let Some(note) = unapplied_target_note(&ctx.browser)
+                    {
                         result.content.push(rmcp::model::ContentBlock::text(note));
                     }
                     result
-                }),
-                Err(err) => Err(err),
-            };
-            match execution {
-                Ok(result) => (result, None),
-                Err(ToolError::Cancelled) => {
-                    let message = "The operation was aborted.".to_string();
-                    (ToolResult::error(&message), Some(message))
-                }
-                Err(err) => {
-                    let message = format!("{} failed: {err}", def.name);
-                    (ToolResult::error(&message), Some(message))
-                }
-            }
-        } else {
-            (
+                })
+        };
+        let (mut result, error_message) = match execution.await {
+            Ok(result) => (result, None),
+            Err(ToolError::BrowserRequired) => (
                 ToolResult::error(
                     "browser not connected (retrying); try again once BrowserOS reconnects",
                 ),
                 None,
-            )
+            ),
+            Err(ToolError::Cancelled) => {
+                let message = "The operation was aborted.".to_string();
+                (ToolResult::error(&message), Some(message))
+            }
+            Err(error) => {
+                let message = format!("{} failed: {error}", def.name);
+                (ToolResult::error(&message), Some(message))
+            }
         };
 
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -300,7 +303,7 @@ impl BrowserMcpService {
                 .as_ref()
                 .and_then(|data| data.get("output"))
                 .is_none()
-            && def.name != "read_output"
+            && def.requires_browser()
         {
             result.structured_content = None;
         }

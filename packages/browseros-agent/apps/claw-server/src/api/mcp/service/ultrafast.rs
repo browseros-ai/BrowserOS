@@ -241,7 +241,12 @@ impl ClawMcpService {
                 .pointer("/output/id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "the flow's complete output could not be published".to_string())?;
-            let store = self.output_files.for_session(started.session.id().as_str());
+            let task = self
+                .state
+                .targets
+                .canonical_task(started.session.id())
+                .await;
+            let store = self.output_files.for_session(task.as_str());
             let mut bytes = Vec::new();
             let mut offset = 0;
             loop {

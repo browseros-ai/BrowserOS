@@ -2,7 +2,7 @@
 //! the manifest is published only after response assembly, including nested script calls.
 //! Storage lives independently of an MCP connection so reconnects cannot orphan references.
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::Engine;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -113,10 +113,14 @@ impl OutputStore {
     }
 
     fn session_dir(&self) -> PathBuf {
-        self.root.join(format!(
-            "s-{}",
-            URL_SAFE_NO_PAD.encode(self.session.as_bytes())
-        ))
+        // Lowercase hex stays injective on case-insensitive macOS/Windows filesystems.
+        let key: String = self
+            .session
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        self.root.join(format!("s-{key}"))
     }
 
     fn output_dir(&self, id: &str) -> io::Result<PathBuf> {

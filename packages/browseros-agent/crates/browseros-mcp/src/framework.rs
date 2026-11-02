@@ -16,11 +16,43 @@ use tokio_util::sync::CancellationToken;
 
 /// Compatibility name for callers supplying a logical session's output store.
 pub type OutputFileAccess = crate::output_store::OutputStore;
-pub type ToolHandler = for<'a> fn(
+pub type BrowserToolHandler = for<'a> fn(
     Value,
     &'a ToolCtx,
     &'a mut ToolResponse,
 ) -> BoxFuture<'a, ToolExecResult<Option<ToolResult>>>;
+pub type OutputToolHandler =
+    for<'a> fn(Value, &'a OutputFileAccess) -> BoxFuture<'a, ToolExecResult<ToolResult>>;
+
+/// The handler declares its real dependencies. Output readers cannot accidentally
+/// load a profile, require a browser connection, or start another output collection.
+#[derive(Clone, Copy)]
+pub enum ToolHandler {
+    Browser(BrowserToolHandler),
+    Output(OutputToolHandler),
+}
+
+/// Available execution dependencies at the host seam. Browser calls and nested SDK
+/// calls keep their captured ToolCtx; output-only execution carries no browser view.
+pub enum ToolExecution<'a> {
+    Browser(&'a ToolCtx),
+    Outputs(&'a OutputFileAccess),
+}
+
+impl<'a> From<&'a ToolCtx> for ToolExecution<'a> {
+    fn from(ctx: &'a ToolCtx) -> Self {
+        Self::Browser(ctx)
+    }
+}
+
+impl ToolExecution<'_> {
+    fn output_files(&self) -> &OutputFileAccess {
+        match self {
+            Self::Browser(ctx) => &ctx.output_files,
+            Self::Outputs(outputs) => outputs,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct BrowserToolDefaults {
@@ -293,6 +325,10 @@ pub struct FeatureNote {
 }
 
 impl ToolDef {
+    #[must_use]
+    pub fn requires_browser(&self) -> bool {
+        matches!(self.handler, ToolHandler::Browser(_))
+    }
     /// Whether discovery should offer this tool for the connected native. Hidden tools stay
     /// in the catalog (stable `get_tool` schemas for cached clients); `execute_tool` refuses
     /// them, so a list is a hint and the refusal is the authority.
@@ -423,6 +459,8 @@ pub type ToolExecResult<T> = Result<T, ToolError>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
+    #[error("tool requires a connected browser")]
+    BrowserRequired,
     #[error("cancelled")]
     Cancelled,
     #[error("invalid arguments")]
@@ -462,21 +500,24 @@ impl From<std::io::Error> for ToolError {
     }
 }
 
-pub async fn execute_tool(
+pub async fn execute_tool<'a>(
     def: &ToolDef,
     raw_args: Value,
-    ctx: &ToolCtx,
+    execution: impl Into<ToolExecution<'a>> + Send,
 ) -> ToolExecResult<ToolResult> {
-    // Output retrieval needs no live page, viewport lease or browser admission. It is
-    // bounded at its own interface and must never recursively create another output.
-    if def.name == "read_output" {
-        return tools::read_output::read(raw_args, &ctx.output_files).await;
-    }
+    let execution = execution.into();
+    let handler = match def.handler {
+        ToolHandler::Output(handler) => return handler(raw_args, execution.output_files()).await,
+        ToolHandler::Browser(handler) => handler,
+    };
+    let ToolExecution::Browser(ctx) = execution else {
+        return Err(ToolError::BrowserRequired);
+    };
     let mut call_ctx = ctx.clone();
     if !ctx.within_script {
         call_ctx.output_files = ctx.output_files.begin_call();
     }
-    let mut result = execute_tool_inner(def, raw_args, &call_ctx).await?;
+    let mut result = execute_tool_inner(def, handler, raw_args, &call_ctx).await?;
     if crate::tools::sensitive::is_sensitive_tool(def.name) {
         result.audit_hints = Some(AuditHints {
             redact_all_values: true,
@@ -523,6 +564,7 @@ pub async fn execute_tool(
 
 async fn execute_tool_inner(
     def: &ToolDef,
+    handler: BrowserToolHandler,
     raw_args: Value,
     ctx: &ToolCtx,
 ) -> ToolExecResult<ToolResult> {
@@ -578,7 +620,7 @@ async fn execute_tool_inner(
         _ => None,
     };
     let mut response = ToolResponse::new();
-    match (def.handler)(raw_args, ctx, &mut response).await {
+    match handler(raw_args, ctx, &mut response).await {
         Ok(Some(result)) => response.append_result(result),
         Ok(None) => {}
         Err(ToolError::InvalidArguments(issues)) => {
