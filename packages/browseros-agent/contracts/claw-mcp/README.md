@@ -46,9 +46,12 @@ Useful environment variables:
 | `CLAW_MCP_CAPTURE_DIR=<dir>` | Refresh raw CDP capture fixtures |
 
 The screenshot density cases declare `browserArgs` on their case definition.
-The runner restarts only its isolated browser/server when those arguments change,
-so `--force-device-scale-factor=2` applies to those cases alone. It restores the
-ordinary launch arguments before the remaining cases; browser-kill stays last.
+Cases can also override `headless`. The runner restarts only its isolated
+browser/server when either setting changes, so `--force-device-scale-factor=2`
+applies to density cases alone. On Linux, the repeated screenshot batch runs
+headed to match hosted Neo: new-headless Chromium can stall during repeated
+background captures. That case requires an X server; CI's browser wrapper starts
+Xvfb. Ordinary launch settings resume afterward; browser-kill stays last.
 
 The ungated fixture-server and MCP-client unit tests run under the normal Bun
 test suite.

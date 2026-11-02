@@ -139,6 +139,9 @@ export const outputCases: ContractCase[] = [
   },
   {
     name: 'outputs: nested screenshot previews are bounded and extra captures stay readable',
+    // Linux new-headless stalls on repeated background captures. Hosted Neo
+    // uses a headed X server; exercise that rendering path for this visual batch.
+    headless: process.platform === 'linux' ? false : undefined,
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/media.html'))
       const result = await ctx.mcp.callTool('run', {

@@ -43,6 +43,8 @@ export interface ContractCase {
   name: string
   /** Browser arguments scoped to this case; changing them restarts the isolated runtime. */
   browserArgs?: string[]
+  /** Override the suite's launch mode; visual batches can match hosted Neo's headed X server. */
+  headless?: boolean
   /** ~12 cases carry true: the <60s tier run by test:claw-mcp-smoke. */
   smoke?: boolean
   run(ctx: CaseContext): Promise<void>
