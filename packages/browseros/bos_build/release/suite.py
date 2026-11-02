@@ -56,6 +56,7 @@ _BROWSER_VERSION_RE = re.compile(
     r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?"
 )
 
+# The browseros entries stay so neo releases can parse legacy suite transactions such as #2534.
 SUITE_PRODUCTS = ("browseros", "browserclaw")
 SUITE_RELEASE_COMPONENTS = (
     "server",

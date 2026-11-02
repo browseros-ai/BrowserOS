@@ -179,10 +179,6 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
         ("build-browseros.yml", "publish-server-ota.yml"),
     ),  # macOS notarization app-specific password.
     SecretSpec(
-        "BROWSEROS_AGENT_V2_KEY",
-        ("release-extensions.yml",),
-    ),  # BrowserOS agent extension signing key.
-    SecretSpec(
         "BROWSEROS_CONTROLLER_KEY",
         ("release-extensions.yml",),
     ),  # BrowserOS controller extension signing key.
@@ -194,30 +190,6 @@ ALLOWLIST: tuple[SecretSpec, ...] = (
         "BROWSERCLAW_KEY",
         ("release-browserclaw.yml", "release-extensions.yml"),
     ),  # BrowserClaw extension signing key.
-    SecretSpec(
-        "VITE_PUBLIC_SENTRY_DSN",
-        ("release-extensions.yml",),
-    ),  # Extension build-time Sentry DSN.
-    SecretSpec(
-        "SENTRY_AUTH_TOKEN",
-        ("release-extensions.yml",),
-    ),  # Extension sourcemap upload auth.
-    SecretSpec(
-        "SENTRY_ORG",
-        ("release-extensions.yml",),
-    ),  # Extension sourcemap upload org.
-    SecretSpec(
-        "SENTRY_PROJECT",
-        ("release-extensions.yml",),
-    ),  # Extension sourcemap upload project.
-    SecretSpec(
-        "VITE_PUBLIC_POSTHOG_KEY",
-        ("release-extensions.yml",),
-    ),  # Extension build-time PostHog key.
-    SecretSpec(
-        "VITE_PUBLIC_POSTHOG_HOST",
-        ("release-extensions.yml",),
-    ),  # Extension build-time PostHog host.
     SecretSpec(
         "VITE_CLAW_POSTHOG_KEY",
         (

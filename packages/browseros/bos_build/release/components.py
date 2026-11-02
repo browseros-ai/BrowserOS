@@ -55,6 +55,8 @@ class AllocationRecord:
 
 
 COMPONENTS: Mapping[str, ComponentSpec] = {
+    # BrowserOS source is gone; its server, agent, and app-onboard components
+    # stay so release ledgers can parse legacy suite transactions such as #2534.
     "server": ComponentSpec(
         id="server",
         display_name="BrowserOS server",
@@ -106,6 +108,7 @@ COMPONENTS: Mapping[str, ComponentSpec] = {
         workspace_path="apps/claw-onboard",
         tag_prefix="claw-onboard/v",
     ),
+    # Kept to parse legacy suite transactions such as #2534.
     "app-onboard": ComponentSpec(
         id="app-onboard",
         display_name="BrowserOS onboarding",
@@ -119,6 +122,7 @@ COMPONENTS: Mapping[str, ComponentSpec] = {
 }
 
 _CANDIDATE_COMPONENTS = {
+    # Kept to parse legacy suite transactions such as #2534.
     "browseros": ("server", "agent"),
     "browserclaw": ("claw-server-rust", "browserclaw"),
 }

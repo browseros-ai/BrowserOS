@@ -17,6 +17,7 @@ class SourceResources:
 
 
 SOURCE_RESOURCES = {
+    # Kept so the suite can parse legacy suite transactions such as #2534.
     "browseros": SourceResources(
         product_id="browseros",
         server_component="server",

@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
 from ...core.products import (
-    BROWSEROS_AGENT_EXTENSION_ID,
     BROWSEROS_BUG_REPORTER_EXTENSION_ID,
     BROWSEROS_CONTROLLER_EXTENSION_ID,
     BROWSERCLAW_EXTENSION_ID,
@@ -68,30 +67,6 @@ class ExtensionSpec:
 
 
 EXTENSION_SPECS: Tuple[ExtensionSpec, ...] = (
-    ExtensionSpec(
-        name="agent",
-        source=InRepoSource(path="packages/browseros-agent"),
-        # bun ci (frozen lockfile) for in-repo builds: a release must not
-        # resolve fresh deps or mutate the working-tree lockfile.
-        pre_build="bun ci",
-        build="bun run build:agent",
-        dist_path="apps/app/dist/chrome-mv3",
-        manifest_path="apps/app/package.json",
-        extension_id=BROWSEROS_AGENT_EXTENSION_ID,
-        signing_key_env="BROWSEROS_AGENT_V2_KEY",
-        env=(
-            "VITE_PUBLIC_SENTRY_DSN",
-            "SENTRY_AUTH_TOKEN",
-            "SENTRY_ORG",
-            "SENTRY_PROJECT",
-            "VITE_PUBLIC_POSTHOG_KEY",
-            "VITE_PUBLIC_POSTHOG_HOST",
-            "VITE_PUBLIC_BROWSEROS_API",
-            "GRAPHQL_SCHEMA_PATH",
-            "NODE_ENV",
-        ),
-        env_dir="apps/app",
-    ),
     ExtensionSpec(
         name="controller",
         source=ExternalRepoSource(repo="browseros-ai/BrowserOS-agent", branch="main"),

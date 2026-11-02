@@ -39,7 +39,7 @@ describe('release-extensions workflow', () => {
     expect(dispatch).toMatch(/defer_finalize:[\s\S]*default: false/)
     expect(dispatch).toMatch(/publish_alpha_feed:[\s\S]*default: true/)
     expect(dispatch).toContain(
-      'Explicit version; agent and BrowserOS neo allocate one when omitted',
+      'Explicit version; BrowserOS neo allocates one when omitted',
     )
 
     const call = section('  workflow_call:', '\nconcurrency:')
@@ -48,7 +48,7 @@ describe('release-extensions workflow', () => {
     expect(call).toMatch(/defer_finalize:[\s\S]*default: false/)
     expect(call).toMatch(/publish_alpha_feed:[\s\S]*default: false/)
     expect(call).toContain(
-      'Explicit version; agent and BrowserOS neo allocate one when omitted',
+      'Explicit version; BrowserOS neo allocates one when omitted',
     )
     expect(call).toContain(`value: ${'$'}{{ jobs.prepare.outputs.version }}`)
     expect(call).toContain(`value: ${'$'}{{ jobs.prepare.outputs.tag }}`)
@@ -62,9 +62,7 @@ describe('release-extensions workflow', () => {
       '- name: Validate lifecycle inputs',
       '- name: Read allocated extension releases and tags',
     )
-    expect(validation).toContain(
-      '[ "$EXTENSION" != "agent" ] && [ "$EXTENSION" != "browserclaw" ]',
-    )
+    expect(validation).toContain('[ "$EXTENSION" != "browserclaw" ]')
     expect(validation).toContain('requires an explicit version')
   })
 
