@@ -62,6 +62,7 @@ import { labelCases } from './cases-labels'
 import { navigateSnapshotCases } from './cases-navigate-snapshot'
 import { outputCases } from './cases-outputs'
 import { readEvalCases } from './cases-read-eval'
+import { runBudgetCases } from './cases-run-budget'
 import { screenshotScaleCases } from './cases-screenshot-scale'
 import { sdkInputCases } from './cases-sdk-input'
 import { sdkNavigationCases } from './cases-sdk-navigation'
@@ -88,6 +89,7 @@ export const contractCases: ContractCase[] = [
   ...isolationCases,
   ...captureIoCases,
   ...outputCases,
+  ...runBudgetCases,
   ...sdkInputCases,
   ...sdkNavigationCases,
   ...sdkReadEvalCases,

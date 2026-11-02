@@ -215,7 +215,12 @@ impl ClawMcpService {
             .catalog
             .iter()
             .filter(|tool| tool.available(native))
-            .map(|tool| tool.to_mcp_tool(native))
+            .map(|tool| {
+                browseros_mcp::tools::run::with_policy(
+                    tool.to_mcp_tool(native),
+                    self.state.config.behavior.run_policy,
+                )
+            })
             .map(&decorate)
             .collect::<Vec<_>>();
         let mut local = vec![

@@ -548,18 +548,21 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
             }
             _ => Vec::new(),
         };
-        Some(ToolCtx::new(BrowserToolOptions {
-            browser: view.clone().with_pointer(Pointer::default()),
-            target: Some(call.target_store.clone()),
-            defaults: BrowserToolDefaults {
-                default_window_id: None,
-                default_tab_group_id: call.default_tab_group_id.clone(),
-            },
-            cancel: call.cancel.clone(),
-            output_files: call.output_files.clone(),
-            inner_call_hook,
-            preloaded_helpers,
-        }))
+        Some(
+            ToolCtx::new(BrowserToolOptions {
+                browser: view.clone().with_pointer(Pointer::default()),
+                target: Some(call.target_store.clone()),
+                defaults: BrowserToolDefaults {
+                    default_window_id: None,
+                    default_tab_group_id: call.default_tab_group_id.clone(),
+                },
+                cancel: call.cancel.clone(),
+                output_files: call.output_files.clone(),
+                inner_call_hook,
+                preloaded_helpers,
+            })
+            .with_run_policy(call.state.config.behavior.run_policy),
+        )
     } else {
         None
     };

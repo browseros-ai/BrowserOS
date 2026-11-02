@@ -103,6 +103,8 @@ pub struct BrowserMcpServiceOptions {
     pub native: NativeCapabilities,
     pub defaults: BrowserToolDefaults,
     pub output_files: Option<OutputFileAccess>,
+    /// Already-resolved host policy; omission uses the 60-second library default.
+    pub run_policy: Option<crate::RunPolicy>,
     /// `false` suppresses only legacy untyped structured content. Content declared
     /// by a tool's output schema is retained to preserve the advertised MCP contract.
     pub include_structured_content: Option<bool>,
@@ -122,6 +124,7 @@ pub struct BrowserMcpService {
     target: Arc<StaticTargetStore>,
     defaults: BrowserToolDefaults,
     output_files: OutputFileAccess,
+    run_policy: crate::RunPolicy,
     catalog: Vec<ToolDef>,
     include_structured_content: bool,
     on_tool_execution_start: Option<BrowserToolLifecycleCallback>,
@@ -168,6 +171,7 @@ impl BrowserMcpService {
             output_files: options
                 .output_files
                 .unwrap_or_else(create_browser_output_file_access),
+            run_policy: options.run_policy.unwrap_or_default(),
             catalog: catalog(),
             include_structured_content: options.include_structured_content.unwrap_or(true),
             on_tool_execution_start: options.on_tool_execution_start,
@@ -219,7 +223,8 @@ impl BrowserMcpService {
             output_files: self.output_files.clone(),
             inner_call_hook: None,
             preloaded_helpers: Vec::new(),
-        }))
+        })
+        .with_run_policy(self.run_policy))
     }
 
     async fn execute_registered_tool(
@@ -357,7 +362,9 @@ impl ServerHandler for BrowserMcpService {
             .catalog
             .iter()
             .filter(|tool| tool.available(self.native))
-            .map(|tool| tool.to_mcp_tool(self.native))
+            .map(|tool| {
+                crate::tools::run::with_policy(tool.to_mcp_tool(self.native), self.run_policy)
+            })
             .collect::<Vec<_>>();
         std::future::ready(Ok(ListToolsResult::with_all_items(tools)))
     }
@@ -365,8 +372,9 @@ impl ServerHandler for BrowserMcpService {
     fn get_tool(&self, name: &str) -> Option<Tool> {
         // Catalog-wide on purpose: cached clients keep a stable schema, and execute_tool
         // refuses hidden tools with an explanation instead of method-not-found.
-        self.find_tool(name)
-            .map(|tool| tool.to_mcp_tool(self.native))
+        self.find_tool(name).map(|tool| {
+            crate::tools::run::with_policy(tool.to_mcp_tool(self.native), self.run_policy)
+        })
     }
 
     async fn call_tool(
