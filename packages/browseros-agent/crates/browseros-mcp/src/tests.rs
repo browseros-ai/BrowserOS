@@ -778,6 +778,7 @@ fn catalog_order_is_stable() {
             "download",
             "upload",
             "read",
+            "read_output",
             "grep",
             "screenshot",
             "pdf",
@@ -812,6 +813,7 @@ fn catalog_page_metadata_matches_host_dispatch_contract() {
             ("download", true),
             ("upload", true),
             ("read", true),
+            ("read_output", false),
             ("grep", true),
             ("screenshot", true),
             ("pdf", true),
@@ -2993,3 +2995,54 @@ fn optional_enum_arguments_keep_their_variants_and_stay_optional() {
 mod credentials_tests;
 #[path = "payment_cards_tests.rs"]
 mod payment_cards_tests;
+
+#[tokio::test]
+async fn saved_run_keeps_full_json_and_forwards_nested_screenshot() -> anyhow::Result<()> {
+    let (mut ctx, _connection, page) = harness_ctx().await;
+    let directory = tempfile::tempdir()?;
+    ctx.output_files =
+        crate::output_store::OutputStore::new(directory.path().to_path_buf(), "task");
+    let result = execute_tool(&tool_by_name("run"), json!({ "code": format!("await browser.page({page}).screenshot(); console.log('captured'); return {{text:'x'.repeat(30000), count:7}};") }), &ctx).await.map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    assert!(!result.is_error, "{}", result_text(&result));
+    let images: Vec<_> = result
+        .content
+        .iter()
+        .filter_map(|block| block.as_image())
+        .collect();
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].data, "cG5n");
+    let output = result
+        .structured_content
+        .as_ref()
+        .and_then(|data| data.get("output"))
+        .ok_or_else(|| anyhow::anyhow!("missing saved output"))?;
+    let id = output["id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing ID"))?;
+    let primary = ctx.output_files.read(id, "result.json", 0, 65536).await?;
+    let primary: Value = serde_json::from_slice(&primary.bytes)?;
+    let primary = &primary["structuredContent"];
+    assert_eq!(primary["value"]["count"], 7);
+    assert_eq!(primary["value"]["text"].as_str().map(str::len), Some(30000));
+    assert_eq!(primary["logs"], json!(["captured"]));
+    let image = ctx
+        .output_files
+        .read(id, "screenshot.jpg", 0, 65536)
+        .await?;
+    assert_eq!(image.bytes, b"png");
+    let read = execute_tool(
+        &tool_by_name("read_output"),
+        json!({ "outputId": id, "part": "screenshot.jpg" }),
+        &ctx,
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    assert_eq!(
+        read.content
+            .first()
+            .and_then(|block| block.as_image())
+            .map(|image| image.data.as_str()),
+        Some("cG5n")
+    );
+    Ok(())
+}

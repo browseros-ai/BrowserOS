@@ -41,7 +41,7 @@ says so, so never pause afterwards to let the page catch up. For an effect \
 that is entirely asynchronous, such as a click whose result arrives over the network, pass \
 `settle: true` to wait for the page to go quiet regardless. \
 `timeout` (capped at 30000 ms) limits how long the script runs; time spent awaiting a promise does not count against it. For page work that waits, start it on the page and poll with short follow-up calls rather than one long evaluate. \
-A result larger than the inline limit is truncated and its full text is written to a local file whose path a remote MCP client cannot read; return only what you need, or raise `maxChars` to receive more of the value inline.";
+A result larger than the inline limit returns a preview and output.id; use read_output in the same session to retrieve the full result, or raise `maxChars` to keep more inline.";
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -69,8 +69,8 @@ struct EvaluateArgs {
     /// Max size of the result kept inline, measured in UTF-8 bytes to match the
     /// server's inline limit (default 5000, max 200000); a multibyte character
     /// counts as more than one byte. A result larger than this is truncated
-    /// inline and its full text is written to a local file, whose path a remote
-    /// MCP client cannot open; raise this to receive more of the value inline.
+    /// inline and its full value is retained as an output part; read_output retrieves
+    /// it remotely, or raise this to receive more of the value inline.
     #[serde(default)]
     max_chars: Option<u64>,
 }
@@ -163,9 +163,24 @@ async fn evaluate_in_page(raw: Value, ctx: &ToolCtx) -> ToolExecResult<Option<To
     };
     if text.len() > inline_limit {
         let excerpt = safe_prefix(&text, inline_limit);
-        let wrapped_text = wrap_untrusted(&text, &origin);
-        let content_length = wrapped_text.len();
-        match write_temp_tool_output_file(&ctx.output_files, tool, "txt", &wrapped_text).await {
+        let content_length = text.len();
+        // Keep the actual JSON value separate from its fenced display preview. A
+        // remote caller must not have to strip prose or reinterpret strings to decode it.
+        let mut complete = json!({ "page": args.page, "changed": moved, "settled": settled });
+        if let Some(value) = &value {
+            complete["value"] = value.clone();
+        } else {
+            complete["description"] = json!(text);
+        }
+        let complete = json!({ "isError": false, "structuredContent": complete, "text": [wrap_untrusted(&text, &origin)] });
+        match write_temp_tool_output_file(
+            &ctx.output_files,
+            "result",
+            "json",
+            &complete.to_string(),
+        )
+        .await
+        {
             Ok(path) => {
                 return Ok(Some(text_result(
                         [

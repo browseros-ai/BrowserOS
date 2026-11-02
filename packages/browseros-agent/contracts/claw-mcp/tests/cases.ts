@@ -43,6 +43,8 @@ export interface ContractCase {
   name: string
   /** Browser arguments scoped to this case; changing them restarts the isolated runtime. */
   browserArgs?: string[]
+  /** Override the suite's launch mode; visual batches can match hosted Neo's headed X server. */
+  headless?: boolean
   /** ~12 cases carry true: the <60s tier run by test:claw-mcp-smoke. */
   smoke?: boolean
   run(ctx: CaseContext): Promise<void>
@@ -57,6 +59,7 @@ import { frameRefCases } from './cases-frame-refs'
 import { isolationCases } from './cases-isolation'
 import { labelCases } from './cases-labels'
 import { navigateSnapshotCases } from './cases-navigate-snapshot'
+import { outputCases } from './cases-outputs'
 import { readEvalCases } from './cases-read-eval'
 import { screenshotScaleCases } from './cases-screenshot-scale'
 import { sdkInputCases } from './cases-sdk-input'
@@ -82,6 +85,7 @@ export const contractCases: ContractCase[] = [
   ...readEvalCases,
   ...isolationCases,
   ...captureIoCases,
+  ...outputCases,
   ...sdkInputCases,
   ...sdkNavigationCases,
   ...sdkReadEvalCases,

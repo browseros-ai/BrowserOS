@@ -48,9 +48,9 @@ export const sdkReadEvalCases: ContractCase[] = [
           const path = result.structuredContent?.path
           if (typeof path !== 'string')
             throw new Error('capped run omitted its spill path')
-          const full = await Bun.file(path).text()
-          expect(full).toContain(value)
-          for (const log of logs) expect(full).toContain(log)
+          const full = (await Bun.file(path).json()).structuredContent
+          expect(full.value).toEqual(value)
+          expect(full.logs).toEqual(logs)
         },
       },
       {

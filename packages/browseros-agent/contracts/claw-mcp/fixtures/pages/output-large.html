@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Large output fixture</title>
+<button id="change">Change all labels</button>
+<main id="content"></main>
+<script>
+  // A deterministic accessibility tree large enough to exercise automatic snapshot spills.
+  const fragment = document.createDocumentFragment()
+  for (let index = 0; index < 1800; index++) {
+    const button = document.createElement('button')
+    button.textContent = `Output fixture button ${index}: ${'readable fixture content '.repeat(5)}`
+    fragment.append(button)
+  }
+  document.querySelector('main').append(fragment)
+  document.querySelector('#change').addEventListener('click', () => {
+    document.querySelectorAll('main button').forEach((button, index) => {
+      button.textContent = `Updated fixture button ${index}: ${'changed fixture content '.repeat(5)}`
+    })
+  })
+</script>

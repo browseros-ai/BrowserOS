@@ -141,6 +141,12 @@ impl TargetBindings {
             .map(|record| record.current_session.clone())
     }
 
+    /// Durable logical-task identity shared by all successor handles. Outputs use this
+    /// key so idle expiry/restart can replace a live session without changing ownership.
+    pub(crate) async fn canonical_task(&self, session: &SessionId) -> SessionId {
+        self.records.lock().await.canonical(session).clone()
+    }
+
     pub async fn set(&self, session: &SessionId, intent: TargetIntent) -> AppResult<TargetBinding> {
         let mut records = self.records.lock().await;
         let mut next = records.clone();
@@ -389,7 +395,11 @@ mod tests {
         drop(bindings);
         let restarted = TargetBindings::load(store).await?;
         assert_eq!(restarted.get(&old).await, Some(fourth));
-        assert_eq!(restarted.current_session(&old).await, Some(successor));
+        assert_eq!(
+            restarted.current_session(&old).await,
+            Some(successor.clone())
+        );
+        assert_eq!(restarted.canonical_task(&successor).await, old);
         Ok(())
     }
 

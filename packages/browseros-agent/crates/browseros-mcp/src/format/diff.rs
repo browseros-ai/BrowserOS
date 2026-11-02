@@ -120,12 +120,12 @@ async fn format_diff_body(
             Ok(path) => {
                 let summary = if diff.url_changed {
                     format!(
-                        "URL changed; full current snapshot is {token_estimate} estimated tokens, over the {MAX_INLINE_DIFF_TOKENS}-token inline limit, saved to: {}\nRead the file for the full current snapshot.",
+                        "URL changed; full current snapshot is {token_estimate} estimated tokens, over the {MAX_INLINE_DIFF_TOKENS}-token inline limit, saved to: {}\nUse read_output for the full current snapshot.",
                         path.display()
                     )
                 } else {
                     format!(
-                        "Diff is {token_estimate} estimated tokens, over the {MAX_INLINE_DIFF_TOKENS}-token inline limit, saved to: {}\nRead the file for the full diff.",
+                        "Diff is {token_estimate} estimated tokens, over the {MAX_INLINE_DIFF_TOKENS}-token inline limit, saved to: {}\nUse read_output for the full diff.",
                         path.display()
                     )
                 };

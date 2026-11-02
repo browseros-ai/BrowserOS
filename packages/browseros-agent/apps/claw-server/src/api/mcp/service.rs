@@ -1250,22 +1250,29 @@ impl ServerHandler for ClawMcpService {
                 unreachable!("catalog tool was validated before session resolution");
             };
             let browser_session = self.state.browser.session().await;
-            let binding = self
-                .state
-                .targets
-                .binding_for_execution(started.session.id())
-                .await
-                .map_err(|error| McpError::invalid_request(error.to_string(), None))?;
-            // Profile management must not load the Default profile as a side effect of admission.
-            let manages_target = self.catalog[tool_index].metadata.manages_target;
-            let view = match &browser_session {
-                Some(browser) if manages_target => {
-                    Some(BrowserView::capture_for_management(browser.clone(), binding, None).await)
+            // Execution requirements come from the registered handler. Reading saved
+            // output must not load a profile or depend on the current browser binding.
+            let view = if self.catalog[tool_index].requires_browser() {
+                let binding = self
+                    .state
+                    .targets
+                    .binding_for_execution(started.session.id())
+                    .await
+                    .map_err(|error| McpError::invalid_request(error.to_string(), None))?;
+                let manages_target = self.catalog[tool_index].metadata.manages_target;
+                match &browser_session {
+                    Some(browser) if manages_target => Some(
+                        BrowserView::capture_for_management(browser.clone(), binding, None).await,
+                    ),
+                    Some(browser) => {
+                        Some(BrowserView::capture(browser.clone(), binding, None).await)
+                    }
+                    None => None,
                 }
-                Some(browser) => Some(BrowserView::capture(browser.clone(), binding, None).await),
-                None => None,
-            }
-            .map(|view| hosted::with_viewports(view, self.state.viewports.as_ref()));
+                .map(|view| hosted::with_viewports(view, self.state.viewports.as_ref()))
+            } else {
+                None
+            };
             let target_store: Arc<dyn TargetStore> = Arc::new(ClawTargetStore {
                 bindings: self.state.targets.clone(),
                 session: started.session.id().clone(),

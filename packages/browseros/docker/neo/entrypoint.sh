@@ -15,6 +15,8 @@ readonly NEO_DATA_DIR
 readonly PROFILE="$NEO_DATA_DIR/profile"
 # Downloads may be shared with an agent without exposing the private browser profile.
 readonly DOWNLOADS="${NEO_DOWNLOAD_DIR:-$NEO_DATA_DIR/downloads}"
+# MCP outputs are private, session-scoped artifacts, independent of download filenames.
+readonly OUTPUTS="${NEO_OUTPUT_DIR:-$NEO_DATA_DIR/tool-output}"
 # claw-server's database, recordings, skills and agent settings. It defaults to
 # ~/.browserclaw, which is not on the volume and would vanish with the container.
 readonly CLAW_DATA="$NEO_DATA_DIR/browserclaw"
@@ -57,6 +59,8 @@ die() { log "$*" >&2; exit 1; }
 
 [[ "$DOWNLOADS" = /* ]] || die "NEO_DOWNLOAD_DIR must be an absolute path"
 [ "$(realpath -m -- "$DOWNLOADS")" != / ] || die "NEO_DOWNLOAD_DIR must not be the filesystem root"
+[[ "$OUTPUTS" = /* ]] || die "NEO_OUTPUT_DIR must be an absolute path"
+[ "$(realpath -m -- "$OUTPUTS")" != / ] || die "NEO_OUTPUT_DIR must not be the filesystem root"
 
 # Validate before starting services so the browser and its server agree.
 case "$BROWSERCLAW_HOSTED_MODE" in
@@ -71,7 +75,8 @@ esac
 spawn_as_neo() {
   (exec setpriv --reuid=neo --regid=neo --init-groups \
     env HOME="$NEO_HOME" USER=neo DISPLAY=:1 XDG_RUNTIME_DIR="$XDG_DIR" LANG=C.UTF-8 \
-      BROWSERCLAW_DIR="$CLAW_DATA" BROWSERCLAW_HOSTED_MODE="$BROWSERCLAW_HOSTED_MODE" "$@") &
+      BROWSERCLAW_DIR="$CLAW_DATA" BROWSERCLAW_HOSTED_MODE="$BROWSERCLAW_HOSTED_MODE" \
+      BROWSEROS_OUTPUT_DIR="$OUTPUTS" "$@") &
 }
 
 # Bind-mounted host folders are owned by the host user; running Neo as that
@@ -103,11 +108,11 @@ merge_json() {
 }
 
 prepare_data() {
-  mkdir -p "$PROFILE" "$DOWNLOADS" "$CLAW_DATA" "$XDG_DIR"
+  mkdir -p "$PROFILE" "$DOWNLOADS" "$OUTPUTS" "$CLAW_DATA" "$XDG_DIR"
   # Derived images may share the parent mount with other users. Limit ownership
   # changes to Neo's root and data folders, and keep the cookies private there.
-  chown neo:neo "$NEO_DATA_DIR" "$PROFILE" "$DOWNLOADS" "$CLAW_DATA" "$XDG_DIR"
-  chmod 700 "$NEO_DATA_DIR" "$XDG_DIR"
+  chown neo:neo "$NEO_DATA_DIR" "$PROFILE" "$DOWNLOADS" "$OUTPUTS" "$CLAW_DATA" "$XDG_DIR"
+  chmod 700 "$NEO_DATA_DIR" "$OUTPUTS" "$XDG_DIR"
   ln -sfn "$DOWNLOADS" "$NEO_HOME/Downloads"
 
   # Neo's MCP proxy drops connections that are not from loopback unless this

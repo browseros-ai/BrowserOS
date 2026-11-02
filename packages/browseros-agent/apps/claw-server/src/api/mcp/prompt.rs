@@ -93,8 +93,11 @@ Core loop: snapshot -> act -> verify.
 
 Reading and output:
 - read extracts the page as markdown; grep searches it without a full dump.
-- Large results are saved to a file and the path returned — read that file
-  instead of re-fetching.
+- Large results and generated files return output.id and typed output.parts.
+  Use read_output with outputId in this same session; omit part to list parts,
+  then read a part in chunks using nextOffset. Never repeat an action to recover
+  its output. References expire after 24 hours. Screenshots remain inline images
+  and also have a retrievable part; base64 chunks transfer PDFs and other files.
 - screenshot is for visual checks only; pdf archives the page; download
   clicks a ref and saves to the browser's download folder, returning the file's
   path on this machine; upload selects local files using an input/button ref,

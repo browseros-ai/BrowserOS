@@ -46,9 +46,12 @@ Useful environment variables:
 | `CLAW_MCP_CAPTURE_DIR=<dir>` | Refresh raw CDP capture fixtures |
 
 The screenshot density cases declare `browserArgs` on their case definition.
-The runner restarts only its isolated browser/server when those arguments change,
-so `--force-device-scale-factor=2` applies to those cases alone. It restores the
-ordinary launch arguments before the remaining cases; browser-kill stays last.
+Cases can also override `headless`. The runner restarts only its isolated
+browser/server when either setting changes, so `--force-device-scale-factor=2`
+applies to density cases alone. On Linux, the repeated screenshot batch runs
+headed to match hosted Neo: new-headless Chromium can stall during repeated
+background captures. That case requires an X server; CI's browser wrapper starts
+Xvfb. Ordinary launch settings resume afterward; browser-kill stays last.
 
 The ungated fixture-server and MCP-client unit tests run under the normal Bun
 test suite.
@@ -79,8 +82,8 @@ The SDK fix contracts live in `cases-sdk-input.ts`, `cases-sdk-navigation.ts`,
 and HTTP 404 outcomes without adding server behavior. Existing `cases-fill.ts`
 already covers text, email, number, textarea and contenteditable regressions on
 both MCP and SDK paths. `insertText` has no granular MCP kind. SDK screenshots
-return metadata and annotations, so image dimensions are asserted through the
-granular screenshot image block; the SDK path checks its metadata and boxes.
+return metadata/annotations to the script and forward image blocks to the outer
+MCP result. Output cases verify that the same capture is remotely retrievable.
 
 ## Capture mode
 

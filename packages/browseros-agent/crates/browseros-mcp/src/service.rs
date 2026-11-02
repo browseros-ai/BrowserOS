@@ -43,6 +43,7 @@ Core loop: snapshot -> act -> verify.
 
 Reading and output:
 - read extracts the page as markdown; grep searches it without a full dump (over="ax" keeps refs on matches).
+- Large results/files return output.id and typed output.parts. Use read_output with outputId (omit part to list), then part/nextOffset for bounded reads. References expire after 24 hours; never repeat an action to recover output. Screenshots stay inline and have a saved part; encoding="base64" transfers exact binary chunks.
 - screenshot is for visual checks only; pdf saves the page as a document; download clicks a ref and saves to the browser's download folder, returning the file's path on this machine; upload selects local files using a file-input or upload-button ref; omit ref to finish a pending chooser.
 
 Reach for run first; the granular tools are the fallback. run (browser SDK script) composes the whole snapshot -> act -> verify loop, bulk extraction, and helper reuse in one call. Use a single granular tool (act, snapshot, navigate, read) directly only for a one-off step or when a run script cannot express it. evaluate_in_page runs a script inside the page, where the page can watch it: only when the user asks to run code in the page or the other tools cannot answer.
@@ -240,40 +241,50 @@ impl BrowserMcpService {
         };
         let started = Instant::now();
 
-        let (mut result, error_message) =
-            if let Some(browser_session) = self.browser_session().await {
-                let execution = match self
-                    .tool_ctx(browser_session, def.metadata.manages_target, cancel)
-                    .await
-                {
-                    Ok(ctx) => execute_tool(def, args, &ctx).await.map(|mut result| {
-                        // Outer results only; run's inner primitives never pass through here.
-                        if let Some(note) = unapplied_target_note(&ctx.browser) {
-                            result.content.push(rmcp::model::ContentBlock::text(note));
-                        }
-                        result
-                    }),
-                    Err(err) => Err(err),
-                };
-                match execution {
-                    Ok(result) => (result, None),
-                    Err(ToolError::Cancelled) => {
-                        let message = "The operation was aborted.".to_string();
-                        (ToolResult::error(&message), Some(message))
-                    }
-                    Err(err) => {
-                        let message = format!("{} failed: {err}", def.name);
-                        (ToolResult::error(&message), Some(message))
-                    }
+        let execution = async {
+            let ctx = if def.requires_browser() {
+                match self.browser_session().await {
+                    Some(session) => Some(
+                        self.tool_ctx(session, def.metadata.manages_target, cancel)
+                            .await?,
+                    ),
+                    None => None,
                 }
             } else {
-                (
-                    ToolResult::error(
-                        "browser not connected (retrying); try again once BrowserOS reconnects",
-                    ),
-                    None,
-                )
+                None
             };
+            let dependencies = ctx
+                .as_ref()
+                .map(crate::framework::ToolExecution::from)
+                .unwrap_or(crate::framework::ToolExecution::Outputs(&self.output_files));
+            execute_tool(def, args, dependencies)
+                .await
+                .map(|mut result| {
+                    if let Some(ctx) = &ctx
+                        && let Some(note) = unapplied_target_note(&ctx.browser)
+                    {
+                        result.content.push(rmcp::model::ContentBlock::text(note));
+                    }
+                    result
+                })
+        };
+        let (mut result, error_message) = match execution.await {
+            Ok(result) => (result, None),
+            Err(ToolError::BrowserRequired) => (
+                ToolResult::error(
+                    "browser not connected (retrying); try again once BrowserOS reconnects",
+                ),
+                None,
+            ),
+            Err(ToolError::Cancelled) => {
+                let message = "The operation was aborted.".to_string();
+                (ToolResult::error(&message), Some(message))
+            }
+            Err(error) => {
+                let message = format!("{} failed: {error}", def.name);
+                (ToolResult::error(&message), Some(message))
+            }
+        };
 
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         if let Some(callback) = &self.on_tool_executed {
@@ -285,7 +296,15 @@ impl BrowserMcpService {
                 source: self.source.clone(),
             });
         }
-        if !self.include_structured_content && def.output_schema.is_none() {
+        if !self.include_structured_content
+            && def.output_schema.is_none()
+            && result
+                .structured_content
+                .as_ref()
+                .and_then(|data| data.get("output"))
+                .is_none()
+            && def.requires_browser()
+        {
             result.structured_content = None;
         }
         result.into_call_tool_result()
