@@ -107,8 +107,10 @@ pub(super) async fn get_element_quads(
             .into_iter()
             .filter(|quad| quad.len() == 8 && quad.iter().all(|n| n.is_finite()))
             .map(|quad| {
-                quad.chunks_exact(2)
-                    .map(|xy| Point { x: xy[0], y: xy[1] })
+                quad.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|&[x, y]| Point { x, y })
                     .collect()
             })
             .collect();
