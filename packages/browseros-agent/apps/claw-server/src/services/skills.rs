@@ -4,7 +4,13 @@ use crate::{
         entities::{skill_flows, skill_runs, skills},
     },
     error::{AppError, AppResult, IoPath},
-    services::harness::HarnessService,
+    services::{
+        flow::{
+            self,
+            store::{Example, FlowDoc},
+        },
+        harness::HarnessService,
+    },
 };
 use harness_integrations::{AgentId, SkillSpec};
 use std::{
@@ -99,6 +105,9 @@ pub struct SkillService {
     /// consistent, and so a get-then-create decision cannot race a
     /// concurrent create of the same new name.
     mutate: Mutex<()>,
+    /// Serializes flow.md writes, so an example kept after a handover lands on the newest flow
+    /// instead of overwriting a repair saved while that run was going.
+    flow_writes: Mutex<()>,
 }
 
 impl SkillService {
@@ -109,6 +118,7 @@ impl SkillService {
             harness,
             skills_dir,
             mutate: Mutex::new(()),
+            flow_writes: Mutex::new(()),
         }
     }
 
@@ -148,6 +158,31 @@ impl SkillService {
 
     pub async fn put_flow_row(&self, row: skill_flows::Model) -> AppResult<()> {
         self.repo.put_flow(row).await
+    }
+
+    /// Saves a flow that just passed verification.
+    pub async fn write_flow(&self, name: &str, doc: &FlowDoc) -> std::io::Result<()> {
+        let _guard = self.flow_writes.lock().await;
+        flow::store::write(&self.skill_dir(name), doc)
+    }
+
+    /// Adds an example to the flow as it is on disk now, not to the copy a run started from.
+    /// An input the current flow would reject is dropped, so it cannot fail every later repair.
+    pub async fn add_flow_example(&self, name: &str, example: Example) -> std::io::Result<()> {
+        let _guard = self.flow_writes.lock().await;
+        let dir = self.skill_dir(name);
+        let Some(mut doc) = flow::store::read(&dir)? else {
+            return Ok(());
+        };
+        if flow::check_inputs(&doc, &serde_json::Value::Object(example.input.clone())).is_err() {
+            return Ok(());
+        }
+        let before = doc.meta.examples.clone();
+        doc.push_example(example);
+        if doc.meta.examples == before {
+            return Ok(());
+        }
+        flow::store::write(&dir, &doc)
     }
 
     /// Re-renders SKILL.md from its current prose: with the "Run it fast" section while the

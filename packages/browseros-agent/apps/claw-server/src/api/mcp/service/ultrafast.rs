@@ -372,7 +372,7 @@ impl ClawMcpService {
                     &RunMode::handed_back(i64::from(step), cause.as_str()),
                 )
                 .await;
-                self.remember_input(&name, &doc, &inputs, cause);
+                self.remember_input(&name, &inputs, cause).await;
                 self.apply_event(&name, Event::Handover(cause), Some(&doc))
                     .await;
                 let source = handover
@@ -808,7 +808,7 @@ impl ClawMcpService {
             Ok(pass) => {
                 let next = lifecycle::next(state, Event::FlowPassed);
                 doc.meta.flow_version = row.flow_version + 1;
-                if let Err(error) = store::write(&self.state.skills.skill_dir(name), &doc) {
+                if let Err(error) = self.state.skills.write_flow(name, &doc).await {
                     return ToolResult::error(format!("saving the flow failed: {error}"));
                 }
                 let same_effects = row.effects.as_deref() == Some(doc.meta.effects.as_str());
@@ -981,21 +981,18 @@ impl ClawMcpService {
     }
 
     /// Keeps an input that made the flow hand back, so every later repair must handle it.
-    fn remember_input(&self, name: &str, doc: &FlowDoc, inputs: &Map<String, Value>, cause: Cause) {
+    async fn remember_input(&self, name: &str, inputs: &Map<String, Value>, cause: Cause) {
         let expect = match cause {
             Cause::SiteChanged => "done",
             Cause::InputOnly => "either",
             Cause::Transient => return,
         };
-        let mut updated = doc.clone();
-        updated.push_example(store::Example {
+        let example = store::Example {
             input: inputs.clone(),
             source: "handover".to_string(),
             expect: expect.to_string(),
-        });
-        if updated.meta.examples != doc.meta.examples
-            && let Err(error) = store::write(&self.state.skills.skill_dir(name), &updated)
-        {
+        };
+        if let Err(error) = self.state.skills.add_flow_example(name, example).await {
             warn!(error = %error, "saving the handover example failed");
         }
     }

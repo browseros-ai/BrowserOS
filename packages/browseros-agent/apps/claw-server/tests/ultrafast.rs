@@ -269,3 +269,39 @@ async fn editing_steps_keeps_run_it_fast_only_while_they_line_up() -> anyhow::Re
     assert!(body.contains("1. Call the mark_skill_run tool"), "{body}");
     Ok(())
 }
+
+#[tokio::test]
+async fn a_handover_example_lands_on_the_newest_flow() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let skills = &app.state.skills;
+    create_skill(&app.state, "neo-shop-add").await?;
+    // A run starts from version 1; a repair from another session saves version 2 meanwhile.
+    let started_from = two_step_flow();
+    skills.write_flow("neo-shop-add", &started_from).await?;
+    let mut repaired = started_from.clone();
+    repaired.meta.flow_version = 2;
+    repaired
+        .patch_step(2, "async () => { return 'repaired' }")
+        .map_err(anyhow::Error::msg)?;
+    skills.write_flow("neo-shop-add", &repaired).await?;
+
+    let handover = |input: Value| flow::store::Example {
+        input: input.as_object().cloned().unwrap_or_default(),
+        source: "handover".to_string(),
+        expect: "done".to_string(),
+    };
+    skills
+        .add_flow_example("neo-shop-add", handover(json!({ "query": "dove soap" })))
+        .await?;
+    skills
+        .add_flow_example("neo-shop-add", handover(json!({ "query": 7 })))
+        .await?;
+
+    let on_disk = flow::store::read(&skills.skill_dir("neo-shop-add"))?
+        .ok_or_else(|| anyhow::anyhow!("the flow file is missing"))?;
+    assert_eq!(on_disk.meta.flow_version, 2);
+    assert!(on_disk.steps[1].src.contains("repaired"));
+    assert_eq!(on_disk.meta.examples.len(), 1);
+    assert_eq!(on_disk.meta.examples[0].input["query"], "dove soap");
+    Ok(())
+}
