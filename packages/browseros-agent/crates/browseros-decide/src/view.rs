@@ -1078,6 +1078,7 @@ mod tests {
                     document_id: None,
                     cursor_hits: None,
                     base_depth: 0,
+                    session: None,
                 },
             );
             PageView::from_snapshot("https://shop.example", "Shop", &snapshot.text, &refs)

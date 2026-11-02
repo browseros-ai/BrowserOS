@@ -1,4 +1,4 @@
-use crate::{FrameId, Ref};
+use crate::{FrameId, Ref, SessionId};
 use std::{
     collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
@@ -18,6 +18,10 @@ pub struct RefEntry {
     /// Recomputed per snapshot and used only to recover a ref whose backend node id went stale.
     pub nth: usize,
     pub frame_id: Option<FrameId>,
+    /// For a ref inside a child frame, the endpoint its node id was read through. Node ids are
+    /// only meaningful in that endpoint's document, so resolution refuses the ref once the frame
+    /// is answered through any other, even after a later walk records the frame there.
+    pub session: Option<SessionId>,
 }
 
 #[cfg(test)]
@@ -470,11 +474,21 @@ impl RefMap {
             name: node.name.to_string(),
             nth,
             frame_id: node.frame_id.cloned(),
+            session: None,
         };
         if !self.by_ref.contains_key(&ref_id) {
             self.order.push(ref_id.clone());
         }
         self.by_ref.insert(ref_id.clone(), entry);
+        ref_id
+    }
+
+    /// [`Self::mint`] for a node read through `session`; see [`RefEntry::session`].
+    pub fn mint_through(&mut self, node: MintRef<'_>, session: Option<&SessionId>) -> Ref {
+        let ref_id = self.mint(node);
+        if let Some(entry) = self.by_ref.get_mut(&ref_id) {
+            entry.session = session.cloned();
+        }
         ref_id
     }
 

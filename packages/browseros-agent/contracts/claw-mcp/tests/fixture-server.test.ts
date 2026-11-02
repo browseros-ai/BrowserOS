@@ -140,6 +140,7 @@ describe('fixture server', () => {
     const frameLab = await read('frame-lab.html')
     expect(frameLab).toInclude('window.frameLab')
     expect(frameLab).toInclude("'nested-mixed': ['B', 'A']")
+    expect(frameLab).toInclude("sandboxed: ['S']")
     expect(frameLab).toInclude('isTrusted')
   })
 })

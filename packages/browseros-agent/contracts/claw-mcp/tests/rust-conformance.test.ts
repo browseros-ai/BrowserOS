@@ -122,7 +122,11 @@ async function connectAttached(
   return mcp
 }
 
-/** The scoped server, or `undefined` when the browser has no native profile targeting. */
+/**
+ * The scoped server, or `undefined` when the browser has no native profile targeting: its
+ * capture then fails with `target_scope_unsupported_native`, as a BrowserOS-launched server
+ * would never be asked to on such a browser.
+ */
 async function startScoped(
   run: ServerRun,
 ): Promise<{ server: ContractServer; mcp: McpSession } | undefined> {
@@ -136,10 +140,6 @@ async function startScoped(
       probe.isError &&
       textOf(probe).includes('target_scope_unsupported_native')
     ) {
-      // A BrowserOS without profile targeting runs its server unbound as well.
-      console.warn(
-        'scoped server unavailable: this browser has no native profile targeting; scoped cases use the primary server',
-      )
       await mcp.close().catch(() => {})
       await server.stop().catch(() => {})
       return undefined
@@ -147,6 +147,22 @@ async function startScoped(
     return { server, mcp }
   } catch (error) {
     await server.stop().catch(() => {})
+    throw error
+  }
+}
+
+/**
+ * Starts the suite's runtime once to learn whether `scoped` cases can run on this browser.
+ * It runs before any cleanup hook is registered, so a failure reclaims what it started.
+ */
+async function detectProfileTargeting(): Promise<boolean> {
+  try {
+    const current = await ensureRun()
+    current.scoped ??= startScoped(current)
+    return (await current.scoped) !== undefined
+  } catch (error) {
+    await teardownRun()
+    await fixtures?.stop().catch(() => {})
     throw error
   }
 }
@@ -160,7 +176,11 @@ function makeContext(run: ServerRun): CaseContext {
     mcp: run.mcp,
     async scopedMcp() {
       run.scoped ??= startScoped(run)
-      return (await run.scoped)?.mcp ?? run.mcp
+      const scoped = await run.scoped
+      if (!scoped) {
+        throw new Error('this browser has no native profile targeting')
+      }
+      return scoped.mcp
     },
     scratchDir: run.scratchDir,
     async openSession(clientName = 'claw-contract-extra') {
@@ -209,13 +229,21 @@ async function teardownRun(): Promise<void> {
   await rm(current.scratchDir, { recursive: true, force: true })
 }
 
+// Known before any test is registered, so a scoped case that cannot run here is reported as
+// skipped rather than passing without its admission guards.
+const profileTargeting =
+  isSuiteEnabled() && activeCases.some((contractCase) => contractCase.scoped)
+    ? await detectProfileTargeting()
+    : false
+
 gate('Rust /mcp conformance', () => {
   afterAll(async () => {
     await teardownRun()
   })
 
   for (const contractCase of activeCases) {
-    test(
+    const register = contractCase.scoped && !profileTargeting ? test.skip : test
+    register(
       contractCase.name,
       async () => {
         const activeRun = await ensureRun(contractCase.browserArgs)
@@ -231,5 +259,7 @@ gate('Rust /mcp conformance', () => {
 })
 
 afterAll(async () => {
+  // The profile-targeting probe may start a runtime that no selected test then uses.
+  await teardownRun()
   await fixtures?.stop()
 })

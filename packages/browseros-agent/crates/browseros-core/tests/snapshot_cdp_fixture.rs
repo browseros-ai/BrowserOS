@@ -36,6 +36,7 @@ fn cdp_ax_tree_mints_refs_retained_by_interactive_mode() -> Result<(), serde_jso
         document_id: None,
         cursor_hits: None,
         base_depth: 0,
+        session: None,
     };
 
     let full = render_snapshot(&result.nodes, &mut render_options).text;

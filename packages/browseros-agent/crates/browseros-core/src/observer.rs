@@ -276,6 +276,17 @@ impl Observer {
                     .flatten(),
             )
             .await?;
+        // A child-frame ref's node id belongs to the document its capture read through one
+        // endpoint. Through any other it may name a node of another process.
+        if let Some(frame) = &entry.frame_id
+            && entry.session.as_ref() != target.session.session_id()
+        {
+            return Err(crate::TargetError::FrameNotInPage {
+                page: self.page_id.clone(),
+                frame: frame.clone(),
+            }
+            .into());
+        }
         if let Some(access) = &self.access {
             target.session = access
                 .frame_session(target.session, entry.frame_id.clone())
@@ -444,6 +455,9 @@ impl Observer {
                 document_id,
                 cursor_hits: Some(cursor_hits),
                 base_depth,
+                session: frame_id
+                    .as_ref()
+                    .and_then(|_| target.session.session_id().cloned()),
             };
             let rendered = render_snapshot(&nodes, &mut render_opts);
             let lines = if rendered.text.is_empty() {

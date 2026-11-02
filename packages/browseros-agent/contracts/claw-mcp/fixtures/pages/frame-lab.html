@@ -17,6 +17,8 @@
       // One document for every level. `?case=` picks a frame chain of sites, where A is
       // the root's host and B the other loopback name: 127.0.0.1 and localhost are
       // different sites, so a B frame (and an A frame inside one) is a real OOPIF.
+      // S is A in a sandboxed iframe: same origin, but Chromium isolates sandboxed frames, so
+      // it is an OOPIF too and its messages come from the opaque origin "null".
       // `scroll=1` puts each level's content below its own viewport. Clicks report
       // `event.isTrusted` up to the root as `window.frameLab`; the root can also send
       // detach/replace/reload commands down to any level's own child frame.
@@ -28,6 +30,7 @@
           'single-cross': ['B'],
           'nested-cross': ['B', 'B'],
           'nested-mixed': ['B', 'A'],
+          sandboxed: ['S'],
         }
         const params = new URLSearchParams(location.search)
         const caseId = params.get('case') in CASES ? params.get('case') : 'top'
@@ -37,7 +40,9 @@
         const rootOrigin = params.get('root') || location.origin
         const other = new URL(rootOrigin)
         other.hostname = other.hostname === 'localhost' ? '127.0.0.1' : 'localhost'
-        const originOf = (site) => (site === 'A' ? rootOrigin : other.origin)
+        const originOf = (site) => (site === 'B' ? other.origin : rootOrigin)
+        // Where messages to and from a child at `site` are addressed.
+        const messageOrigin = (site) => (site === 'S' ? 'null' : originOf(site))
         const parentOrigin = level === 1 ? rootOrigin : originOf(sites[level - 2])
         const docId = `${level}-${Math.random().toString(36).slice(2)}`
         const lab = level === 0 ? (window.frameLab = { caseId, ready: false, inView: false, events: [], done: [] }) : null
@@ -81,6 +86,7 @@
           const frame = document.createElement('iframe')
           frame.src = childUrl()
           frame.title = `${caseId} level ${level + 1}`
+          if (sites[level] === 'S') frame.setAttribute('sandbox', 'allow-scripts')
           frame.style.height = `${260 + (sites.length - level - 1) * 140}px`
           if (child) child.replaceWith(frame)
           else stage.append(frame)
@@ -108,7 +114,7 @@
           window.addEventListener('message', (event) => {
             const data = event.data
             if (!child || event.source !== child.contentWindow || data?.channel !== 'frame-lab') return
-            if (event.origin !== new URL(child.src).origin) return
+            if (event.origin !== messageOrigin(sites[level])) return
             if (data.kind === 'position') { lastPosition = data; relay() }
             else if (data.kind === 'event' || data.kind === 'done') up(data)
           })
@@ -137,13 +143,13 @@
             if (event.source !== parent || event.origin !== parentOrigin || data?.channel !== 'frame-lab') return
             if (data.kind !== 'command') return
             if (data.level === level) command(data.action)
-            else child?.contentWindow.postMessage(data, new URL(child.src).origin)
+            else child?.contentWindow.postMessage(data, sites[level] === 'S' ? '*' : originOf(sites[level]))
           })
         } else {
           // Sends `action` to the document at `level`, which applies it to its own child frame.
           lab.command = (target, action) => {
             if (target === 0) command(action)
-            else child?.contentWindow.postMessage({ channel: 'frame-lab', kind: 'command', level: target, action }, new URL(child.src).origin)
+            else child?.contentWindow.postMessage({ channel: 'frame-lab', kind: 'command', level: target, action }, sites[0] === 'S' ? '*' : originOf(sites[0]))
             return true
           }
           lab.reset = () => { lab.events = []; return true }

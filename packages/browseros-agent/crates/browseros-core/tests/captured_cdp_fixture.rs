@@ -59,6 +59,7 @@ fn mint_refs(nodes: &[AxNode]) -> usize {
         document_id: None,
         cursor_hits: None,
         base_depth: 0,
+        session: None,
     };
     let rendered = render_snapshot(nodes, &mut options).text;
     rendered.matches("[ref=e").count()

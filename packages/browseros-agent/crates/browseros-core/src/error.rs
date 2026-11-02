@@ -1,5 +1,5 @@
 use crate::{
-    BrowserProfileId, PageId, Ref, WindowId,
+    BrowserProfileId, FrameId, PageId, Ref, WindowId,
     capabilities::{BrowserOsVersion, NativeFeature},
     profiles::ProfileCandidate,
 };
@@ -129,6 +129,12 @@ pub enum TargetError {
     GroupOutOfScope(String),
     #[error("page_target_changed: {0}; retry the call")]
     PageTargetChanged(PageId),
+    /// A child frame could not be admitted as part of the page: its parent no longer reports
+    /// its owner, or it is not on the endpoint the ref's capture read it through.
+    #[error(
+        "frame_not_in_page: frame {frame} is no longer part of page {page}; take a new snapshot"
+    )]
+    FrameNotInPage { page: PageId, frame: FrameId },
     #[error("target_scope_unsupported: {method}")]
     CdpUnsupported { method: String },
     #[error("not_bound: select a browser target first")]
