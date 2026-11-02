@@ -29,13 +29,13 @@ live.
 | --- | --- |
 | Build on my machine | `browseros build --preset debug` |
 | See exactly what a build will run | `browseros build --preset release --show-plan` |
-| Release BrowserOS or BrowserClaw | `gh workflow run release-browseros.yml` |
+| Release BrowserClaw (BrowserOS neo) | `gh workflow run release-browserclaw.yml` |
 | Make a staged release live | `browseros release publish`, then `browseros release appcast --publish` |
 | Release an extension CRX to alpha | `gh workflow run release-extensions.yml` |
 | Preview or promote extension feeds | `gh workflow run release-extension-feeds.yml` |
 | Repair a tracked browser/server appcast | `gh workflow run repair-update-feed.yml` |
 | Publish the Neo Docker image | `gh workflow run release-docker.yml -f version=<version>` |
-| Grab today's signed mac build | Download the `nightly-browseros` / `nightly-browserclaw` prerelease |
+| Grab today's signed mac build | Download the `nightly-browserclaw` prerelease |
 | Check the patch stack | `browseros dev doctor` |
 
 ## Mental model
@@ -146,17 +146,15 @@ ephemeral runners — live in [`docs/build-cli.md`](docs/build-cli.md).
 
 ## Release a browser
 
-Full releases are dispatch-only. By default Neo builds Linux x64 and arm64;
-BrowserOS builds Linux x64. Both build signed Windows x64 and signed macOS
-arm64, x64, and universal. Dispatch from the default branch:
+Full releases are dispatch-only and ship BrowserOS neo. By default they build
+Linux x64 and arm64, signed Windows x64, and signed macOS arm64, x64, and
+universal. Dispatch from the default branch:
 
 ```bash
-gh workflow run release-browseros.yml --ref main
 gh workflow run release-browserclaw.yml --ref main
 ```
 
-BrowserOS has no platform, component, extension-channel, or signing inputs.
-BrowserOS neo accepts `platforms`, `macos_arch`, `linux_arch`, and `publication`, whose
+The workflow accepts `platforms`, `macos_arch`, `linux_arch`, and `publication`, whose
 defaults are the full release; `publication=draft-only` keeps both components
 private for test builds (see [`docs/release-ci.md`](docs/release-ci.md#dispatch)).
 Neo defaults to `linux_arch=all`; select `linux_arch=x64` or `arm64` to narrow
@@ -191,20 +189,19 @@ downgrade (`--allow-downgrade` overrides).
 cd packages/browseros
 
 # 1. See what CI staged.
-browseros release list --version <version> --product browseros
+browseros release list --version <version> --product browserclaw
 browseros release feeds status
 
 # 2. Copy versioned R2 objects to the live download/ aliases.
-browseros release publish --version <version> --product browseros
+browseros release publish --version <version> --product browserclaw
 
 # 3. Diff the appcast, then publish it.
-browseros release appcast --version <version> --product browseros
-browseros release appcast --version <version> --product browseros --publish
+browseros release appcast --version <version> --product browserclaw
+browseros release appcast --version <version> --product browserclaw --publish
 ```
 
-Swap in `--product browserclaw` for the other product. If you need to recreate
-the draft GitHub release by hand, that is
-`browseros release github create --version <version> --draft --product <id>`.
+If you need to recreate the draft GitHub release by hand, that is
+`browseros release github create --version <version> --draft --product browserclaw`.
 Server OTA publication stays separate from a full browser release. A bare
 standalone server workflow publishes its alpha appcast; production still
 requires an explicit `browseros ota server promote --product <id> --publish`.
@@ -214,12 +211,14 @@ Lane-by-lane detail, required secrets, runner cost, and troubleshooting:
 
 ## Release extensions
 
-Four extensions ship as signed CRXs: `agent`, `controller`, `bugreporter`,
-`browserclaw`. `agent` and `browserclaw` build from this repo; the other two are
-cloned from external repos. All four version independently of the browser.
+Three extensions ship as signed CRXs: `browserclaw`, `controller`, and
+`bugreporter`. `browserclaw` builds from this repo; the other two are cloned
+from external repos. All three version independently of the browser. The old
+BrowserOS `agent` extension no longer has source in this repo, so it is not
+released; its live feed entries carry over unchanged.
 
 The standalone workflow owns the default alpha lifecycle: for the in-repo
-`agent` and `browserclaw` extensions it allocates the next version when
+`browserclaw` extension it allocates the next version when
 `version` is omitted, builds and verifies the immutable CRX, publishes the
 GitHub release, merges the coherent tracked alpha snapshots through a
 short-lived pull request, and uploads those exact feed files to R2. External
@@ -256,8 +255,8 @@ gh workflow run release-extension-feeds.yml \
 ```
 
 Pins are optional; extensions not set carry over from the live manifests. The
-family nightly renders both in-repository extension pins together and publishes
-them only after its one tracked-state squash merge; the standalone extension
+nightly renders only its own product's extension pin and publishes it only
+after its tracked-state squash merge; the standalone extension
 workflow remains the independent automatic alpha entrypoint.
 With `publish=true`, the feed workflow merges each channel's exact generated
 snapshots into the default branch before it uploads those same files to R2. A
@@ -284,10 +283,10 @@ Locally there are two commands, and the difference matters:
 
 ```bash
 # Build, pack, sign, and upload the CRX only.
-browseros ext release --version 0.0.118 --name agent
+browseros ext release --version 0.1.10.0 --name browserclaw
 
 # Feeds only, no CRX build. Pin versions; anything unset carries over from live.
-browseros release extensions --channel alpha --set agent=0.0.118
+browseros release extensions --channel alpha --set browserclaw=0.1.10.0
 browseros release extensions --channel alpha --set browserclaw=0.1.4 --publish
 ```
 
@@ -303,9 +302,7 @@ its own package file:
 
 | Bundle | Version source | Workflow | Tag |
 | --- | --- | --- | --- |
-| BrowserOS agent server | `packages/browseros-agent/apps/server/package.json` | `release-server.yml` | `agent-server/v*` |
-| BrowserClaw server | `.../apps/claw-server/Cargo.toml` | `release-claw-server.yml` | `claw-server/v*` |
-| BrowserOS onboarding | `.../apps/app-onboard/package.json` | `release-app-onboard.yml` | `app-onboard/v*` |
+| BrowserClaw server | `packages/browseros-agent/apps/claw-server/Cargo.toml` | `release-claw-server.yml` | `claw-server/v*` |
 | BrowserClaw onboarding | `.../apps/claw-onboard/package.json` | `release-claw-onboard.yml` | `claw-onboard/v*` |
 
 BrowserClaw browser builds and server OTA both consume the server bundles
@@ -314,13 +311,13 @@ package is `claw-server`; release records still use the `claw-server-rust` ID.
 Packaging
 normalizes the binary name to `browseros-claw-server` for browser compatibility.
 
-One dispatch-only family workflow builds both signed macOS nightlies on the
-self-hosted Mac and publishes the `nightly-browseros` and
-`nightly-browserclaw` rolling prereleases. It freezes one source SHA, reserves
-one shared browser version in a draft transaction PR, prepares exact private
-component resources, and builds both products before public component
-finalization. Five tracked server/extension snapshots then reach `main` in one
-exact-head squash commit. See
+The dispatch-only `nightly-macos-browserclaw.yml` product transaction builds the
+signed macOS arm64 BrowserOS neo nightly on the self-hosted Mac and publishes
+the `nightly-browserclaw` rolling prerelease. It freezes one source SHA,
+reserves a browser version in a draft transaction PR, prepares exact private
+component resources, and builds the browser before public component
+finalization. Its tracked server/extension snapshots then reach `main` in one
+squash commit. See
 [`docs/nightly-macos-ci.md`](docs/nightly-macos-ci.md).
 
 ## Patches and products

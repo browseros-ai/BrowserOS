@@ -1,26 +1,27 @@
 # Browser release CI
 
-The full BrowserOS and BrowserOS neo workflows orchestrate the existing
-component release workflows before building the browser. Component workflows
+The BrowserOS neo full-release workflow, `release-browserclaw.yml`,
+orchestrates the existing component release workflows before building the
+browser. Component workflows
 own component versions and publication. Native browser lanes consume the
 normal published-resource manifests and `latest` aliases.
 
 Signed nightlies use independent product transactions through
-`nightly-macos-browseros.yml` and `nightly-macos-browserclaw.yml`. Each freezes its
-source and resource pins, builds one signed browser, and merges only its product
+`nightly-macos-browserclaw.yml`. Each transaction freezes its source and
+resource pins, builds one signed browser, and merges only its product
 state before publishing its immutable browser artifacts and rolling prerelease.
 The shared allocation and publication locks protect versions and sibling feed
 entries. Historical family transactions remain recoverable; see
 [nightly-macos-ci.md](nightly-macos-ci.md) for ownership and cutover details.
 
-The existing `release-browseros.yml` and `release-browserclaw.yml` full-release
-entrypoints retain their native lane orchestration. Nightly browser jobs build
+The existing `release-browserclaw.yml` full-release entrypoint retains its
+native lane orchestration. Nightly browser jobs build
 the exact reservation commit (the frozen source plus its deterministic version
 overlay); later state commits and squash merges are never browser build inputs.
 
 ## Full-release graph
 
-Both products use the same fixed sequence:
+The full release uses a fixed sequence:
 
 ```text
 dispatch from main
@@ -33,11 +34,10 @@ dispatch from main
      macOS universal ─┘
 ```
 
-BrowserOS calls `release-server.yml` and releases the `agent` extension.
-BrowserOS neo calls `release-claw-server.yml` and releases the `browserclaw`
-extension. Each reusable component workflow must finish successfully before
-the next stage starts. A failed component release prevents every native
-browser lane from starting.
+It calls `release-claw-server.yml` and releases the `browserclaw` extension.
+Each reusable component workflow must finish successfully before the next
+stage starts. A failed component release prevents every native browser lane
+from starting.
 
 The full workflow freezes the dispatch SHA and passes it to every component
 and browser build. Version reflection is intentionally separate: a component
@@ -59,11 +59,9 @@ while a native browser lane waits for a runner.
 A dispatch without inputs is a full release: it publishes the product's server
 and extension, updates alpha, builds signed Windows x64 and signed macOS
 universal, uploads browser deliverables, and creates a draft browser GitHub
-release. Neo builds both Linux x64 and arm64 by default; BrowserOS builds Linux
-x64. `release-browseros.yml` has no release-shape inputs.
+release. Neo builds both Linux x64 and arm64 by default.
 
 ```bash
-gh workflow run release-browseros.yml --ref main
 gh workflow run release-browserclaw.yml --ref main
 ```
 
@@ -125,9 +123,7 @@ The component workflows remain independently dispatchable and use main by
 default:
 
 ```bash
-gh workflow run release-server.yml --ref main
 gh workflow run release-claw-server.yml --ref main
-gh workflow run release-extensions.yml --ref main -f extension=agent
 gh workflow run release-extensions.yml --ref main -f extension=browserclaw
 ```
 
@@ -146,7 +142,6 @@ Production promotion remains explicit:
 
 ```bash
 cd packages/browseros
-uv run browseros ota server promote --product browseros --publish
 uv run browseros ota server promote --product browserclaw --publish
 ```
 
@@ -185,14 +180,14 @@ different rerun attempts are valid because GitHub keeps the run ID stable.
 
 ## Local published-resource build
 
-The full workflows use the standard published-resource path. The equivalent
+The full workflow uses the standard published-resource path. The equivalent
 local build is:
 
 ```bash
 cd /path/to/BrowserOS/packages/browseros
 uv run browseros build \
   --preset release \
-  --product browseros \
+  --product browserclaw \
   --arch x64 \
   --resource-mode published \
   --no-sign \
@@ -200,7 +195,7 @@ uv run browseros build \
   --chromium-src /path/to/chromium/src
 ```
 
-Use `--product browserclaw` for BrowserOS neo. Published mode resolves mutable
+Published mode resolves mutable
 component aliases, so publish the intended component releases before starting
 the browser build.
 
@@ -217,7 +212,7 @@ SOURCE_SHA="$(git rev-parse HEAD)"
 
 uv run browseros build \
   --preset release \
-  --product browseros \
+  --product browserclaw \
   --arch x64 \
   --resource-mode source \
   --source-sha "$SOURCE_SHA" \
@@ -226,8 +221,8 @@ uv run browseros build \
   --chromium-src /path/to/chromium/src
 ```
 
-Chrome, Bun, and the product's build-time secrets must be available. BrowserOS
-neo additionally needs the native Rust toolchain. Source mode does not bump
+Chrome, Bun, the native Rust toolchain, and the product's build-time secrets
+must be available. Source mode does not bump
 versions, commit, push, or open a PR.
 
 ## Publication boundary
@@ -238,21 +233,18 @@ browser appcast. Inspect the browser draft before promotion.
 
 | Workflow | Owned publication |
 | --- | --- |
-| `release-server.yml` | BrowserOS server release, versioned/`latest` resources, alpha OTA, version reflection |
 | `release-claw-server.yml` | BrowserOS neo server release, versioned/`latest` resources, alpha OTA, version reflection |
 | `release-claw-onboard.yml` | onboarding release and resources |
 | `release-extensions.yml` | extension CRX release, versioned object, alpha/bundled manifests, version reflection |
 | `release-extension-feeds.yml` | explicit extension manifest preview or publication |
-| `nightly-macos-browseros.yml` | BrowserOS nightly transaction, product alpha snapshots, and `nightly-browseros` |
 | `nightly-macos-browserclaw.yml` | BrowserOS neo nightly transaction, product alpha snapshots, and `nightly-browserclaw` |
-| `release-browseros.yml` | ordered BrowserOS component releases, native builds, browser draft |
 | `release-browserclaw.yml` | ordered BrowserOS neo component releases, native builds, browser draft |
+| `release-docker.yml` | Neo Docker image built from a released Linux browser version, see [docker-image.md](docker-image.md) |
 
 ## Required configuration
 
 Component publication and browser uploads use the `R2_*` secrets. BrowserOS
-server builds need `BROWSEROS_CONFIG_URL`, `POSTHOG_API_KEY`, and `SENTRY_DSN`;
-BrowserOS neo server builds need `CLAW_POSTHOG_KEY`. Extension builds need the
+neo server builds need `CLAW_POSTHOG_KEY`. Extension builds need the
 matching signing key and build-time secrets.
 
 Windows signing needs the eSigner secrets and `SPARKLE_PRIVATE_KEY`. macOS uses

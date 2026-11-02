@@ -295,14 +295,10 @@ class FeedPublisherCliTest(unittest.TestCase):
             "--repair-invalid-live", plain_output(invoke("extensions", "--help"))
         )
         repo_root = Path(__file__).resolve().parents[4]
-        for workflow in (
-            "release-browseros.yml",
-            "release-browserclaw.yml",
-        ):
-            self.assertNotIn(
-                "--repair-invalid-live",
-                (repo_root / ".github" / "workflows" / workflow).read_text(),
-            )
+        self.assertNotIn(
+            "--repair-invalid-live",
+            (repo_root / ".github" / "workflows" / "release-browserclaw.yml").read_text(),
+        )
 
 
 class CreateReleaseContextTest(unittest.TestCase):

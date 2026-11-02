@@ -251,7 +251,6 @@ gh workflow run release-windows.yml \
   -f upload_to_r2=false
 
 # Full releases publish components before building the native matrices.
-gh workflow run release-browseros.yml --ref main
 gh workflow run release-browserclaw.yml --ref main
 ```
 
