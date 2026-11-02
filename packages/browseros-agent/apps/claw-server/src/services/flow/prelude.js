@@ -58,38 +58,25 @@ globalThis.__ultrafast = (() => {
     })
   }
 
-  function tracked(browser, st) {
-    const remember = (page) => {
-      st.lastPage = page
-      if (!st.opened.includes(page)) st.opened.push(page)
-      return page
-    }
-    return {
-      ...browser,
-      open: async (...args) => remember(await browser.open(...args)),
-      page: (id) => {
-        const page = browser.page(id)
-        st.lastPage = page
-        return page
-      },
-    }
-  }
-
   function untestable(name) {
     return new HandBack('unsafe_commit', {
       message: `the commit step calls ${name}, which acts even while the flow is being verified; act only through state.page's click, fill, press and similar methods`,
     })
   }
 
-  function dryWrites(page, st) {
+  // Every page a step can reach comes through here. While a commit step is verified
+  // (st.dryRun), its writes are recorded instead of performed, however the step got hold of
+  // the page: a reopened page or one kept from an earlier step is guarded the same way.
+  function guarded(page, st) {
     return new Proxy(page, {
       get(target, prop) {
-        if (typeof prop === 'string' && UNTESTABLE.has(prop)) {
+        if (!st.dryRun || typeof prop !== 'string') return target[prop]
+        if (UNTESTABLE.has(prop)) {
           return () => {
             throw untestable(`page.${prop}`)
           }
         }
-        if (typeof prop === 'string' && WRITES.has(prop)) {
+        if (WRITES.has(prop)) {
           return async (...args) => {
             const refs = args
               .slice(0, REF_ARGS[prop] || 0)
@@ -104,13 +91,27 @@ globalThis.__ultrafast = (() => {
     })
   }
 
-  // The browser a commit step sees while it is verified: pages it reaches are dry too, and
-  // the browser-level calls that act directly are refused.
-  function dryBrowser(browser, st) {
-    return new Proxy(browser, {
+  function tracked(browser, st) {
+    const remember = (page) => {
+      st.lastPage = page
+      if (!st.opened.includes(page)) st.opened.push(page)
+      return page
+    }
+    const pages = {
+      ...browser,
+      open: async (...args) =>
+        remember(guarded(await browser.open(...args), st)),
+      page: (id) => {
+        const page = guarded(browser.page(id), st)
+        st.lastPage = page
+        return page
+      },
+    }
+    // Browser-level calls that act directly are refused while a commit step is verified.
+    return new Proxy(pages, {
       get(target, prop) {
-        if (prop === 'page') return (id) => dryWrites(target.page(id), st)
         if (
+          st.dryRun &&
           typeof prop === 'string' &&
           (UNTESTABLE.has(prop) || prop === 'upload' || prop === 'download')
         ) {
@@ -181,6 +182,7 @@ globalThis.__ultrafast = (() => {
       lastPage: null,
       opened: [],
       dry: [],
+      dryRun: false,
     }
     const started = Date.now()
     const deadline = started + o.deadlineMs
@@ -249,10 +251,7 @@ globalThis.__ultrafast = (() => {
               message: 'the commit step needs the working page in state.page',
             })
           }
-          const page = state.page
-          const liveBrowser = ctx.browser
-          state.page = dryWrites(page, st)
-          ctx.browser = dryBrowser(liveBrowser, st)
+          st.dryRun = true
           try {
             await withinDeadline(step.fn(ctx), deadline, step.n)
           } catch (error) {
@@ -265,8 +264,7 @@ globalThis.__ultrafast = (() => {
               message: message(error),
             })
           } finally {
-            state.page = page
-            ctx.browser = liveBrowser
+            st.dryRun = false
           }
           if (st.dry.length === 0) {
             throw new HandBack('commit_outside_page', {
