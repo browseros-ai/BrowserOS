@@ -7,6 +7,7 @@ pub mod constants;
 pub mod format;
 pub mod framework;
 pub mod output_file;
+pub mod output_store;
 pub mod response;
 pub mod service;
 mod settle;

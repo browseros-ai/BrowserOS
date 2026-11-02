@@ -1,0 +1,163 @@
+use browseros_mcp::output_store::OutputStore;
+use serde_json::json;
+use std::time::Duration;
+
+#[tokio::test]
+async fn saved_call_retains_typed_parts_across_reconnect_and_rejects_other_sessions()
+-> anyhow::Result<()> {
+    let root = std::env::temp_dir().join(format!("neo-output-test-{}", uuid::Uuid::new_v4()));
+    let call = OutputStore::new(root.clone(), "owner-session");
+    call.write_part("snapshot", "md", "hello 🦀 world".as_bytes())
+        .await?;
+    call.write_part("pdf", "pdf", b"%PDF-1.7\0\xff").await?;
+    let output = call
+        .finish(&json!({"value": [1, 2], "logs": ["done"]}))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing output"))?;
+    assert_eq!(output.parts.len(), 3);
+
+    let reconnected = OutputStore::new(root.clone(), "owner-session");
+    let text = reconnected.read(&output.id, "snapshot.md", 0, 8).await?;
+    assert_eq!(text.bytes, b"hello ");
+    assert_eq!(text.next_offset, Some(6));
+    let rest = reconnected.read(&output.id, "snapshot.md", 6, 64).await?;
+    assert_eq!(String::from_utf8(rest.bytes)?, "🦀 world");
+    assert!(rest.next_offset.is_none());
+    let pdf = reconnected.read(&output.id, "pdf.pdf", 0, 64).await?;
+    assert_eq!(pdf.bytes, b"%PDF-1.7\0\xff");
+    let primary = reconnected.read(&output.id, "result.json", 0, 1024).await?;
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&primary.bytes)?,
+        json!({"value": [1, 2], "logs": ["done"]})
+    );
+    assert!(
+        OutputStore::new(root.clone(), "other-session")
+            .describe(&output.id)
+            .await
+            .is_err()
+    );
+    assert!(
+        reconnected
+            .read(&output.id, "../result.json", 0, 100)
+            .await
+            .is_err()
+    );
+    assert!(reconnected.describe("../../escape").await.is_err());
+    tokio::fs::remove_dir_all(root).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn expired_outputs_are_unreadable_and_removed_on_the_next_publish() -> anyhow::Result<()> {
+    let root = std::env::temp_dir().join(format!("neo-output-test-{}", uuid::Uuid::new_v4()));
+    let call = OutputStore::new(root.clone(), "session").with_retention(Duration::ZERO);
+    let path = call.write_part("pdf", "pdf", b"pdf").await?;
+    let output = call
+        .finish(&json!({"ok":true}))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing output"))?;
+    assert!(call.describe(&output.id).await.is_err());
+    let next = OutputStore::new(root.clone(), "session");
+    next.write_part("pdf", "pdf", b"new").await?;
+    assert!(!path.exists());
+    tokio::fs::remove_dir_all(root).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn published_downloads_are_immutable_and_binary_transfer_ignores_text_extensions()
+-> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let source = directory.path().join("export.txt");
+    tokio::fs::write(&source, b"\xff\0original").await?;
+    let call = OutputStore::new(directory.path().join("outputs"), "session");
+    call.copy_file("download", &source).await?;
+    let output = call
+        .finish(&json!({"ok":true}))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing output"))?;
+    tokio::fs::write(&source, b"changed").await?;
+    assert_eq!(
+        call.read_bytes(&output.id, "download.txt", 0, 100)
+            .await?
+            .bytes,
+        b"\xff\0original"
+    );
+    assert!(call.write_part("late", "txt", b"late").await.is_err());
+    assert_eq!(
+        call.finish(&json!({"changed":true}))
+            .await?
+            .map(|output| output.id),
+        Some(output.id)
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn private_outputs_refuse_symlink_substitution() -> anyhow::Result<()> {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let directory = tempfile::tempdir()?;
+    let call = OutputStore::new(directory.path().join("outputs"), "session");
+    let path = call.write_part("document", "txt", b"original").await?;
+    let output = call
+        .finish(&json!({"ok":true}))
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing output"))?;
+    assert_eq!(
+        tokio::fs::metadata(&path).await?.permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        tokio::fs::metadata(
+            path.parent()
+                .ok_or_else(|| anyhow::anyhow!("missing parent"))?
+        )
+        .await?
+        .permissions()
+        .mode()
+            & 0o777,
+        0o700
+    );
+    let secret = directory.path().join("secret.txt");
+    // Same length as the original: size validation alone must not make this pass.
+    tokio::fs::write(&secret, b"secret!!").await?;
+    tokio::fs::remove_file(&path).await?;
+    symlink(secret, path)?;
+    assert!(call.read(&output.id, "document.txt", 0, 100).await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn retention_preserves_unrelated_mount_directories_and_rejects_relative_roots()
+-> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().join("outputs");
+    let call = OutputStore::new(root.clone(), "session");
+    let path = call.write_part("document", "txt", b"first").await?;
+    let owner_dir = path
+        .parent()
+        .and_then(|path| path.parent())
+        .ok_or_else(|| anyhow::anyhow!("missing session directory"))?;
+    let unrelated = owner_dir.join("keep-me");
+    tokio::fs::create_dir(&unrelated).await?;
+    tokio::fs::write(unrelated.join("notes.txt"), b"owner data").await?;
+    std::fs::File::open(&unrelated)?.set_times(
+        std::fs::FileTimes::new()
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(3 * 24 * 60 * 60)),
+    )?;
+    call.begin_call()
+        .write_part("document", "txt", b"next")
+        .await?;
+    assert_eq!(
+        tokio::fs::read(unrelated.join("notes.txt")).await?,
+        b"owner data"
+    );
+    assert!(
+        OutputStore::new(".".into(), "session")
+            .write_part("bad", "txt", b"bad")
+            .await
+            .is_err()
+    );
+    Ok(())
+}

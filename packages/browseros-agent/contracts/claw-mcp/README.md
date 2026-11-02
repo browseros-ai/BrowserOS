@@ -79,8 +79,8 @@ The SDK fix contracts live in `cases-sdk-input.ts`, `cases-sdk-navigation.ts`,
 and HTTP 404 outcomes without adding server behavior. Existing `cases-fill.ts`
 already covers text, email, number, textarea and contenteditable regressions on
 both MCP and SDK paths. `insertText` has no granular MCP kind. SDK screenshots
-return metadata and annotations, so image dimensions are asserted through the
-granular screenshot image block; the SDK path checks its metadata and boxes.
+return metadata/annotations to the script and forward image blocks to the outer
+MCP result. Output cases verify that the same capture is remotely retrievable.
 
 ## Capture mode
 

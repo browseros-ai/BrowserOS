@@ -89,7 +89,7 @@ Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers
   page.listHelpers() -> { host, helpers: [{ name, ageDays, candidate }] }; page.readHelper(name) -> source string
 Raw CDP: browser.cdp(method, params?, sessionId?) / page.cdp(method, paramsJson). Methods or parameters that need a newer BrowserOS return native_feature_unavailable without being sent.
 
-What a run returns to you, its return value plus its logs, is kept inline up to 25000 bytes (raise it with maxChars, up to 2000000). Past that you get a preview and a local file path a remote client cannot open, so return the answer, not the pages you read to find it.
+What a run returns to you, its return value plus its logs, is kept inline up to 25000 bytes (raise it with maxChars, up to 2000000). Past that you get a preview and output.id; use read_output in the same session to retrieve the complete JSON result and logs. Return only what the task needs to keep context small.
 
 Do the whole task in as few run calls as possible: loop over all the items in one call rather than one run per item. Parallelize independent work with Promise.all so N pages cost one wait cycle, not N. Keep steps on the same page sequential. The 30s cap binds this: batching reads of already-loaded pages is cheap, batching navigations is not, so keep it to about 5 fresh pages per call and split the rest into more calls. Efficient pattern:
   const pages = await Promise.all(urls.map(u => browser.open(u)));
@@ -474,8 +474,8 @@ struct RunArgs {
     #[serde(default = "default_timeout")]
     timeout: f64,
     /// Max size of the result kept inline (return value plus logs), in UTF-8 bytes: default
-    /// 25000, max 2000000. A larger result comes back as a preview, with the full text in a
-    /// local file a remote MCP client cannot open; return only what you need, or raise this.
+    /// 25000, max 2000000. Larger results return a preview and an output ID; read_output
+    /// retrieves the complete JSON value/logs. Raise this to keep more inline.
     #[serde(default, rename = "maxChars")]
     max_chars: Option<u64>,
 }
@@ -489,13 +489,15 @@ struct RunOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
     /// True when the result was over the inline limit: `value` and `logs` are then left out
-    /// and the full text is in the file at `path`.
+    /// and the complete JSON result is available through output.id and at `path`.
     #[serde(rename = "writtenToFile", skip_serializing_if = "Option::is_none")]
     written_to_file: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<String>,
     #[serde(rename = "contentLength", skip_serializing_if = "Option::is_none")]
     content_length: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<crate::output_store::OutputReference>,
 }
 
 pub fn definition() -> crate::framework::ToolDef {
@@ -641,7 +643,12 @@ impl RunOutcome {
         if text.len() <= inline_limit {
             return self.into_tool_result();
         }
-        let saved = write_temp_tool_output_file(&ctx.output_files, "run", "txt", &text).await;
+        // The saved primary result is typed JSON, independent of the display preview.
+        // Trusted callers can recover value/logs without parsing formatted prose.
+        let complete = json!({ "isError": !self.ok, "structuredContent": self.structured_value(), "text": [text] });
+        let saved =
+            write_temp_tool_output_file(&ctx.output_files, "result", "json", &complete.to_string())
+                .await;
         let advice = format!(
             "Return only what you need, or raise maxChars (up to {MAX_INLINE_RESULT_BYTES}) to receive more inline."
         );
@@ -678,11 +685,18 @@ impl RunOutcome {
 
     fn into_tool_result(self) -> ToolResult {
         let text = format_outcome(&self);
-        let structured = if self.ok {
+        let structured = self.structured_value();
+        let mut result = text_result(text, Some(structured));
+        result.is_error = !self.ok;
+        result
+    }
+
+    fn structured_value(&self) -> Value {
+        if self.ok {
             let mut object = Map::new();
             object.insert("ok".to_string(), json!(true));
-            if let Some(value) = self.value {
-                object.insert("value".to_string(), value);
+            if let Some(value) = &self.value {
+                object.insert("value".to_string(), value.clone());
             }
             object.insert("logs".to_string(), json!(self.logs));
             Value::Object(object)
@@ -692,10 +706,7 @@ impl RunOutcome {
                 "logs": self.logs,
                 "error": self.error,
             })
-        };
-        let mut result = text_result(text, Some(structured));
-        result.is_error = !self.ok;
-        result
+        }
     }
 }
 

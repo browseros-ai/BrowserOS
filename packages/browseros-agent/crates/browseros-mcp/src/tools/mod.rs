@@ -16,6 +16,7 @@ mod page_creation;
 pub mod payment_cards;
 pub mod pdf;
 pub mod read;
+pub mod read_output;
 pub mod run;
 pub mod screenshot;
 pub mod sensitive;
@@ -45,6 +46,7 @@ pub fn catalog() -> Vec<ToolDef> {
         download::definition(),
         upload::definition(),
         read::definition(),
+        read_output::definition(),
         grep::definition(),
         screenshot::definition(),
         pdf::definition(),

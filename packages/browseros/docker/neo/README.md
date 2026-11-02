@@ -304,9 +304,30 @@ Create `/workspace/files` on the VM first and ensure the configured `PUID`/`PGID
 
 To attach a file to a website, pass its container-visible path to `upload` with either a file-input ref or an upload-button ref. An intercepted chooser from another action returns `fileChooserOpen: true`; call `upload` with `file`/`files` and omit `ref` to finish selection. `files: []` clears the selection. The files must already exist in the VM/shared mount. Selecting them does not submit the website form or transfer a laptop attachment into the VM.
 
+MCP output files live under `$NEO_DATA_DIR/tool-output` by default. Set
+`NEO_OUTPUT_DIR` to a different absolute directory to place them on another mount;
+the entrypoint passes it to the server as `BROWSEROS_OUTPUT_DIR`. The layout is
+`tool-output/<session-key>/<output-id>/`, with typed parts and a `manifest.json`.
+Session keys are path-safe encodings of the logical Neo session, so reconnecting
+with the same session handle can retrieve the same output. Directories are private
+(0700), files are 0600, and references expire after 24 hours. Expired outputs are
+removed on the next publication in that session. Each session can retain up to 128
+outputs / 128 MiB, with at most 64 parts per output and 64 MiB per part.
+
+Small text results stay inline. Larger results, PDFs, completed downloads and
+explicit screenshot captures return an `output` descriptor containing an ID and
+named parts; automatic snapshots/diffs and files produced inside `run` share the
+outer call's ID. Screenshots also remain inline images. `result.json` contains the complete primary result
+as `{isError, structuredContent, text}`, including unabridged JSON values/logs.
+Use `read_output` with the same `session` and `outputId`; omit `part` to list parts. Text reads return
+`nextOffset` for the next bounded chunk. Images up to 2 MiB can be read inline;
+`encoding="base64"` transfers exact binary chunks for importing/sending a file.
+Retrieval never repeats the browser action. These are temporary Neo artifacts;
+callers choose when to import them into their own persistent file store.
+
 `NEO_DATA_DIR` changes the directory **inside the container**. For example, a
 derived image can set `NEO_DATA_DIR=/var/lib/mirror/browseros`; Neo then uses
-`profile`, `browserclaw`, and `downloads` below that directory. Mount that directory
+`profile`, `browserclaw`, `downloads`, and `tool-output` below that directory. Mount that directory
 or a persistent parent explicitly:
 
 ```sh

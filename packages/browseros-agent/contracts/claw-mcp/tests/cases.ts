@@ -57,6 +57,7 @@ import { frameRefCases } from './cases-frame-refs'
 import { isolationCases } from './cases-isolation'
 import { labelCases } from './cases-labels'
 import { navigateSnapshotCases } from './cases-navigate-snapshot'
+import { outputCases } from './cases-outputs'
 import { readEvalCases } from './cases-read-eval'
 import { screenshotScaleCases } from './cases-screenshot-scale'
 import { sdkInputCases } from './cases-sdk-input'
@@ -82,6 +83,7 @@ export const contractCases: ContractCase[] = [
   ...readEvalCases,
   ...isolationCases,
   ...captureIoCases,
+  ...outputCases,
   ...sdkInputCases,
   ...sdkNavigationCases,
   ...sdkReadEvalCases,

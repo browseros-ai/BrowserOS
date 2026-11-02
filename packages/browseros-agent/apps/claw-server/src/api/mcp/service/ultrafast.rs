@@ -217,7 +217,7 @@ impl ClawMcpService {
         let result: CallToolResult = dispatch_tool_call(call)
             .await
             .map_err(|error| error.to_string())?;
-        let structured = result.structured_content.clone().unwrap_or(Value::Null);
+        let mut structured = result.structured_content.clone().unwrap_or(Value::Null);
         if result.is_error.unwrap_or(false) {
             let message = structured
                 .get("error")
@@ -232,6 +232,40 @@ impl ClawMcpService {
                 })
                 .unwrap_or_else(|| "the flow's run call failed".to_string());
             return Err(message);
+        }
+        if structured.get("writtenToFile").and_then(Value::as_bool) == Some(true) {
+            // Internal flows consume the complete typed value, not the model's preview.
+            // Recover it from the same saved call rather than rerunning browser effects
+            // or silently turning an oversized successful return into null.
+            let id = structured
+                .pointer("/output/id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "the flow's complete output could not be published".to_string())?;
+            let store = self.output_files.for_session(started.session.id().as_str());
+            let mut bytes = Vec::new();
+            let mut offset = 0;
+            loop {
+                let chunk = store
+                    .read_bytes(
+                        id,
+                        "result.json",
+                        offset,
+                        browseros_mcp::output_store::MAX_READ_BYTES,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                bytes.extend(chunk.bytes);
+                match chunk.next_offset {
+                    Some(next) => offset = next,
+                    None => break,
+                }
+            }
+            let complete: Value =
+                serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+            structured = complete
+                .get("structuredContent")
+                .cloned()
+                .ok_or_else(|| "the flow's saved output has no typed result".to_string())?;
         }
         Ok(structured.get("value").cloned().unwrap_or(Value::Null))
     }

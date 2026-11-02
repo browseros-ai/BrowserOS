@@ -9,7 +9,7 @@ use tracing::warn;
 /// to give the same answer. Both defer to one helper for that reason.
 pub fn guard(call: &ToolCall) -> BoxFuture<'_, Option<ToolResult>> {
     Box::pin(async move {
-        if call.browser_session.is_some() {
+        if call.browser_session.is_some() || call.tool().name == "read_output" {
             return None;
         }
         let down_for = call.state.browser.link_status().await.down_for;

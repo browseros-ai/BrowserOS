@@ -71,6 +71,7 @@ async function sandboxEnv(root: string): Promise<Record<string, string>> {
     LOCALAPPDATA: join(home, 'AppData', 'Local'),
     BROWSERCLAW_DIR: join(root, 'browserclaw'),
     BROWSEROS_DIR: join(root, 'browseros'),
+    BROWSEROS_OUTPUT_DIR: join(root, 'browseros', 'tool-output'),
     CLAW_ANALYTICS_ENABLED: 'false',
   }
 }

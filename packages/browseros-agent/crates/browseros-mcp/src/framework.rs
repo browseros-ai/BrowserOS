@@ -10,11 +10,12 @@ use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool, ToolAnnotation
 use schemars::{JsonSchema, generate::SchemaSettings};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-pub type OutputFileAccess = Arc<Mutex<HashSet<PathBuf>>>;
+/// Compatibility name for callers supplying a logical session's output store.
+pub type OutputFileAccess = crate::output_store::OutputStore;
 pub type ToolHandler = for<'a> fn(
     Value,
     &'a ToolCtx,
@@ -466,13 +467,56 @@ pub async fn execute_tool(
     raw_args: Value,
     ctx: &ToolCtx,
 ) -> ToolExecResult<ToolResult> {
-    let mut result = execute_tool_inner(def, raw_args, ctx).await?;
+    // Output retrieval needs no live page, viewport lease or browser admission. It is
+    // bounded at its own interface and must never recursively create another output.
+    if def.name == "read_output" {
+        return tools::read_output::read(raw_args, &ctx.output_files).await;
+    }
+    let mut call_ctx = ctx.clone();
+    if !ctx.within_script {
+        call_ctx.output_files = ctx.output_files.begin_call();
+    }
+    let mut result = execute_tool_inner(def, raw_args, &call_ctx).await?;
     if crate::tools::sensitive::is_sensitive_tool(def.name) {
         result.audit_hints = Some(AuditHints {
             redact_all_values: true,
             skip_screenshot: true,
             ..result.audit_hints.unwrap_or_default()
         });
+    }
+    if !ctx.within_script {
+        // Nested calls keep typed parts and image captures in this request's collector.
+        // Forward actual images once, including captures a script did not return as JSON.
+        for image in call_ctx.output_files.images().await {
+            if !result.content.iter().any(|block| {
+                block
+                    .as_image()
+                    .is_some_and(|existing| existing.data == image.data)
+            }) {
+                result
+                    .content
+                    .push(ContentBlock::image(image.data, image.mime_type));
+            }
+        }
+        let primary = json!({ "isError": result.is_error, "structuredContent": result.structured_content, "text": result.content.iter().filter_map(|block| block.as_text().map(|text| &text.text)).collect::<Vec<_>>() });
+        match call_ctx.output_files.finish(&primary).await {
+            Ok(Some(output)) => {
+                result.content.push(ContentBlock::text(format!("[Saved output: {}. Use read_output with outputId and part; omit part to list parts.]", output.id)));
+                merge_structured(&mut result.structured_content, json!({ "output": output }));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                // The browser action may already have committed. Report incomplete output
+                // explicitly without relabelling a successful action as safe to retry.
+                result.content.push(ContentBlock::text(format!(
+                    "Could not publish complete saved output: {error}"
+                )));
+                merge_structured(
+                    &mut result.structured_content,
+                    json!({ "outputWriteFailed": true }),
+                );
+            }
+        }
     }
     Ok(result)
 }
