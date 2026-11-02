@@ -408,9 +408,7 @@ impl ClawMcpService {
                 }
                 handover_result(packet)
             }
-            Outcome::RunFailed(message) => ToolResult::error(format!(
-                "the flow could not run: {message}. Call mark_skill_run with name {name} and follow the skill's steps."
-            )),
+            Outcome::RunFailed(message) => ToolResult::error(run_failed_next(&doc, &name, &message)),
             other => ToolResult::error(format!("unexpected flow outcome in a live run: {other:?}")),
         }
     }
@@ -420,6 +418,22 @@ impl ClawMcpService {
             warn!(error = %error, "recording the ultrafast run failed");
         }
     }
+}
+
+/// What the agent does after a flow run failed without reporting how far it got. A write flow
+/// may have finished its write before the failure, so redoing every step could repeat it.
+fn run_failed_next(doc: &FlowDoc, name: &str, message: &str) -> String {
+    let mut text = format!("the flow could not run: {message}.");
+    if let Some(commit) = doc.commit_step().filter(|_| doc.meta.effects == Effects::Write) {
+        text.push_str(&format!(
+            " It stopped without reporting how far it got, so its write (step {commit}) may already have happened. Check the page or the site's own record first, and never repeat that write if it took effect. Then call mark_skill_run with name {name} and finish whatever steps are still undone."
+        ));
+    } else {
+        text.push_str(&format!(
+            " Call mark_skill_run with name {name} and follow the skill's steps."
+        ));
+    }
+    text
 }
 
 pub(super) fn handover_result(packet: Value) -> ToolResult {
@@ -1114,5 +1128,44 @@ impl ClawMcpService {
         } else {
             self.save_skill_tool.clone()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn flow(effects: Effects, commit: Option<u32>) -> FlowDoc {
+        FlowDoc {
+            meta: store::FlowMeta {
+                name: "neo-shop-add".to_string(),
+                flow_version: 1,
+                effects,
+                hosts: vec![],
+                inputs: Default::default(),
+                output: Default::default(),
+                examples: vec![],
+                source_session: None,
+            },
+            steps: (1..=4)
+                .map(|n| store::FlowStep {
+                    n,
+                    commit: Some(n) == commit,
+                    src: "async () => {}".to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_failed_write_flow_says_the_write_may_have_happened() {
+        let text = run_failed_next(&flow(Effects::Write, Some(3)), "neo-shop-add", "timed out");
+        assert!(text.contains("its write (step 3) may already have happened"), "{text}");
+        assert!(text.contains("never repeat that write"), "{text}");
+        assert!(!text.contains("follow the skill's steps"), "{text}");
+
+        let text = run_failed_next(&flow(Effects::Read, None), "neo-shop-add", "timed out");
+        assert!(text.contains("follow the skill's steps"), "{text}");
+        assert!(!text.contains("write"), "{text}");
     }
 }
