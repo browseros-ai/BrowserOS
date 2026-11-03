@@ -46,10 +46,10 @@ pub struct Plan {
     /// False when this build has no billing gateway, in which case every other plan route answers 404 billing_unavailable.
     #[serde(rename = "available")]
     pub available: bool,
-    /// The plan id, such as \"pro\". Null when status is none.
+    /// The plan id, such as \"ultrafast\". Null when status is none.
     #[serde(rename = "plan", deserialize_with = "Option::deserialize")]
     pub plan: Option<String>,
-    /// The plan's display name from the pricing list, such as \"neo Pro\".
+    /// The plan's display name from the pricing list, such as \"BrowserOS neo\".
     #[serde(rename = "planName", deserialize_with = "Option::deserialize")]
     pub plan_name: Option<String>,
     /// Feature flags the plan turns on. Empty when status is none or unpaid.
@@ -411,8 +411,8 @@ impl PlanRateLimitedError {
     }
 }
 
-/// PlanStatus : none: this computer has no plan. active: paid and renewing. ending: cancelled, Pro lasts until endsAt. paymentFailed: a payment failed and Pro lasts until graceUntil. unpaid: still billed but past the grace period, or paused, so features is empty while the key, the portal and cancel keep working.
-/// none: this computer has no plan. active: paid and renewing. ending: cancelled, Pro lasts until endsAt. paymentFailed: a payment failed and Pro lasts until graceUntil. unpaid: still billed but past the grace period, or paused, so features is empty while the key, the portal and cancel keep working.
+/// PlanStatus : none: this computer has no plan. active: paid and renewing. ending: cancelled, ultrafast lasts until endsAt. paymentFailed: a payment failed and ultrafast lasts until graceUntil. unpaid: still billed but past the grace period, or paused, so features is empty while the key, the portal and cancel keep working.
+/// none: this computer has no plan. active: paid and renewing. ending: cancelled, ultrafast lasts until endsAt. paymentFailed: a payment failed and ultrafast lasts until graceUntil. unpaid: still billed but past the grace period, or paused, so features is empty while the key, the portal and cancel keep working.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum PlanStatus {
     #[serde(rename = "none")]
