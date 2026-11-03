@@ -2107,6 +2107,8 @@ mod tests {
                     | "Accessibility.enable"
                     | "Runtime.runIfWaitingForDebugger"
                     | "Target.setAutoAttach"
+                    | "Page.setInterceptFileChooserDialog"
+                    | "Emulation.setFocusEmulationEnabled"
                     | "Page.reload" => Ok(json!({})),
                     "Browser.addTabsToGroup" => {
                         let group_id = params
@@ -2332,6 +2334,42 @@ mod tests {
             .await
             .map_err(|message| anyhow::anyhow!(message))?;
         assert_eq!(outcome, Some(7));
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ordinary_input_skips_chooser_handoff() -> anyhow::Result<()> {
+        let ctx = test_ctx();
+        // Agent-created pages retain interception. A fixture without it would skip the
+        // handoff even on the activating path and could falsely pass this regression.
+        let page = ctx
+            .browser
+            .new_page("about:blank", NewPageOptions::default())
+            .await?;
+        ctx.browser.page_session(page.page_id.clone()).await?;
+        let bridge = test_bridge(ctx);
+        let started = Instant::now();
+        bridge
+            .race_input(&page.page_id, true, async {
+                Ok::<_, browseros_core::CoreError>(())
+            })
+            .await
+            .map_err(|message| anyhow::anyhow!(message))?;
+        assert_eq!(started.elapsed(), Duration::from_millis(100));
+
+        // Exercise the same 100-input workload without wall-clock or native-input cost.
+        // The old unconditional handoff advances this clock by ten seconds.
+        let started = Instant::now();
+        for _ in 0..100 {
+            let value = bridge
+                .race_input(&page.page_id, false, async {
+                    Ok::<_, browseros_core::CoreError>(7_u32)
+                })
+                .await
+                .map_err(|message| anyhow::anyhow!(message))?;
+            assert_eq!(value, Some(7));
+        }
+        assert_eq!(started.elapsed(), Duration::ZERO);
         Ok(())
     }
 
