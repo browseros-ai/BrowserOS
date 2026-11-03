@@ -277,7 +277,7 @@ fn handler<'a>(
         if let Some((delivery, notice)) =
             super::click_feedback::fallback_feedback(input.dom_fallback_status())
         {
-            response.data(json!({"click": delivery}));
+            response.click_data(delivery);
             response.text(notice);
         }
         let filled = field_targets(ctx, &page_id, filled_refs(&args)).await;
@@ -313,7 +313,7 @@ fn handler<'a>(
         }
         response.data(json!({ "kind": args.kind.as_str() }));
         if matches!(args.kind, ActKind::Click) && input.dom_fallback_status().is_none() {
-            response.data(json!({ "click": { "status": "dispatched", "domFallback": false } }));
+            response.click_data(json!({ "status": "dispatched", "domFallback": false }));
         }
         if let Some(detail) = resolve_diff_detail(args.diff) {
             response.include_diff(args.page, true, detail, document_start);

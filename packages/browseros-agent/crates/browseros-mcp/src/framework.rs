@@ -664,12 +664,11 @@ async fn execute_tool_inner(
                         blocker_ref,
                         ..
                     } => {
-                        response.data(json!({ "click": { "status": "blocked", "sent": false,
-                            "blocker": { "description": blocker, "ref": blocker_ref } } }));
+                        response.click_data(json!({ "status": "blocked", "sent": false,
+                            "blocker": { "description": blocker, "ref": blocker_ref } }));
                     }
                     CoreError::ClickOutcomeUnknown(_) => {
-                        response
-                            .data(json!({ "click": { "status": "unknown", "retryable": false } }));
+                        response.click_data(json!({ "status": "unknown", "retryable": false }));
                     }
                     _ => {}
                 }
