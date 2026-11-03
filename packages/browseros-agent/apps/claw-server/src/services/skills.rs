@@ -1,10 +1,16 @@
 use crate::{
     db::{
         SkillsRepository,
-        entities::{skill_runs, skills},
+        entities::{skill_flows, skill_runs, skills},
     },
     error::{AppError, AppResult, IoPath},
-    services::harness::HarnessService,
+    services::{
+        flow::{
+            self,
+            store::{Example, FlowDoc},
+        },
+        harness::HarnessService,
+    },
 };
 use harness_integrations::{AgentId, SkillSpec};
 use std::{
@@ -99,6 +105,9 @@ pub struct SkillService {
     /// consistent, and so a get-then-create decision cannot race a
     /// concurrent create of the same new name.
     mutate: Mutex<()>,
+    /// Serializes flow.md writes, so an example kept after a handover lands on the newest flow
+    /// instead of overwriting a repair saved while that run was going.
+    flow_writes: Mutex<()>,
 }
 
 impl SkillService {
@@ -109,6 +118,7 @@ impl SkillService {
             harness,
             skills_dir,
             mutate: Mutex::new(()),
+            flow_writes: Mutex::new(()),
         }
     }
 
@@ -135,6 +145,175 @@ impl SkillService {
                 }
             })
             .collect())
+    }
+
+    /// The skill's ultrafast lifecycle row, if it ever entered the ultrafast path.
+    pub async fn flow_row(&self, name: &str) -> AppResult<Option<skill_flows::Model>> {
+        self.repo.get_flow(name).await
+    }
+
+    pub async fn flow_rows(&self) -> AppResult<Vec<skill_flows::Model>> {
+        self.repo.all_flows().await
+    }
+
+    pub async fn put_flow_row(&self, row: skill_flows::Model) -> AppResult<()> {
+        self.repo.put_flow(row).await
+    }
+
+    /// Saves a flow that just passed verification together with its status row, unless the
+    /// skill's steps were edited while it was verified. A repair also carries over handover
+    /// inputs added to the file meanwhile, so the next repair still has to handle them.
+    pub async fn publish_flow(
+        &self,
+        name: &str,
+        doc: &mut FlowDoc,
+        row: skill_flows::Model,
+        is_repair: bool,
+    ) -> AppResult<Publish> {
+        let _guard = self.flow_writes.lock().await;
+        let model = self.require(name).await?;
+        let steps = flow::prose::prose_steps(&self.read_body(&model.body_path).await);
+        if doc
+            .meta
+            .prose_hash
+            .as_deref()
+            .is_some_and(|hash| hash != flow::prose::fingerprint(&steps))
+        {
+            return Ok(Publish::StepsChanged);
+        }
+        let dir = self.skill_dir(name);
+        if is_repair && let Ok(Some(current)) = flow::store::read(&dir) {
+            for example in current.meta.examples {
+                let input = serde_json::Value::Object(example.input.clone());
+                if example.source == "handover" && flow::check_inputs(doc, &input).is_ok() {
+                    doc.push_example(example);
+                }
+            }
+        }
+        flow::store::write(&dir, doc).with_path(flow::store::flow_path(&dir))?;
+        self.repo.put_flow(row).await?;
+        Ok(Publish::Saved)
+    }
+
+    /// Adds an example to the flow as it is on disk now, not to the copy a run started from.
+    /// An input the current flow would reject is dropped, so it cannot fail every later repair.
+    pub async fn add_flow_example(&self, name: &str, example: Example) -> std::io::Result<()> {
+        let _guard = self.flow_writes.lock().await;
+        let dir = self.skill_dir(name);
+        let Some(mut doc) = flow::store::read(&dir)? else {
+            return Ok(());
+        };
+        if flow::check_inputs(&doc, &serde_json::Value::Object(example.input.clone())).is_err() {
+            return Ok(());
+        }
+        let before = doc.meta.examples.clone();
+        doc.push_example(example);
+        if doc.meta.examples == before {
+            return Ok(());
+        }
+        flow::store::write(&dir, &doc)
+    }
+
+    /// Re-renders SKILL.md from its current prose: with the "Run it fast" section while the
+    /// skill has a flow that runs, without it otherwise. Sections and frontmatter keys it does
+    /// not generate are kept, and a hand-written body with no numbered steps is left alone.
+    pub async fn rerender(&self, name: &str, mode: SkillMd<'_>) -> AppResult<()> {
+        let _guard = self.mutate.lock().await;
+        let model = self.require(name).await?;
+        let body = self.read_body(&model.body_path).await;
+        let steps = crate::services::flow::prose::prose_steps(&body);
+        if steps.is_empty() {
+            return Ok(());
+        }
+        let notes = crate::services::flow::prose::learned_notes(&body);
+        let content = match mode {
+            SkillMd::Fast(fast) => {
+                render_ultrafast_markdown(name, &model.description, &steps, &notes, fast)
+            }
+            SkillMd::Repair => {
+                let mut content = render_skill_markdown(name, &model.description, &steps, &notes);
+                content.push_str(&repair_section(name));
+                content
+            }
+            SkillMd::Plain => render_skill_markdown(name, &model.description, &steps, &notes),
+        };
+        let content = keep_hand_written(&content, &body);
+        if content == body {
+            return Ok(());
+        }
+        self.update_locked(
+            name,
+            UpdateSkill {
+                description: None,
+                site: None,
+                steps: None,
+                learned_notes: None,
+                body: Some(content),
+            },
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// After a hand edit, keeps a working flow consistent with the prose it is numbered
+    /// against: "Run it fast" comes back while the steps still say what they said when the flow
+    /// was verified, and the flow is switched off once they change.
+    pub async fn reconcile_flow_after_edit(&self, name: &str) -> AppResult<()> {
+        use crate::services::flow::{
+            FlowStatus,
+            prose::{fingerprint, prose_steps},
+            store,
+        };
+        // Held throughout, so a flow being published cannot interleave with this check.
+        let _guard = self.flow_writes.lock().await;
+        let Some(mut row) = self.repo.get_flow(name).await? else {
+            return Ok(());
+        };
+        let status = FlowStatus::parse(&row.status);
+        if !status.runs() {
+            return Ok(());
+        }
+        let model = self.require(name).await?;
+        let steps = prose_steps(&self.read_body(&model.body_path).await);
+        let doc = store::read(&self.skill_dir(name)).ok().flatten();
+        // A flow saved before fingerprints existed is matched on its step count alone.
+        let lines_up = |doc: &store::FlowDoc| {
+            doc.steps.len() == steps.len()
+                && doc
+                    .meta
+                    .prose_hash
+                    .as_deref()
+                    .is_none_or(|hash| hash == fingerprint(&steps))
+        };
+        match doc {
+            Some(doc) if lines_up(&doc) => {
+                let fast = RunItFast {
+                    status: status.as_str(),
+                    inputs: doc
+                        .meta
+                        .inputs
+                        .iter()
+                        .map(|(input, kind)| (input.clone(), kind.clone()))
+                        .collect(),
+                };
+                self.rerender(name, SkillMd::Fast(&fast)).await
+            }
+            _ => {
+                row.status = FlowStatus::Off.as_str().to_string();
+                row.status_reason = Some(
+                    "the steps were edited and no longer match the fast version; save the skill again to make it ultrafast".to_string(),
+                );
+                row.updated_at = now_ms();
+                self.repo.put_flow(row).await?;
+                self.rerender(name, SkillMd::Plain).await
+            }
+        }
+    }
+
+    /// The directory holding the skill's SKILL.md (and flow.md beside it).
+    #[must_use]
+    pub fn skill_dir(&self, name: &str) -> PathBuf {
+        self.skills_dir.join(name)
     }
 
     pub async fn get(&self, name: &str) -> AppResult<SkillDetailView> {
@@ -530,6 +709,165 @@ fn normalized_skill_name(raw: &str) -> AppResult<String> {
     Ok(name)
 }
 
+/// The sections and frontmatter keys SKILL.md rendering writes. Anything else in the file was
+/// written by hand and survives a re-render.
+const GENERATED_SECTIONS: [&str; 4] = [
+    "## Run it fast",
+    "## Steps",
+    "## Learned from past runs",
+    "## Make it fast again",
+];
+const GENERATED_KEYS: [&str; 4] = ["name", "description", "tools", "ultrafast"];
+
+/// Splits a SKILL.md into its frontmatter lines (between the `---` fences) and the rest.
+fn split_frontmatter(body: &str) -> (Vec<&str>, Vec<&str>) {
+    let lines: Vec<&str> = body.lines().collect();
+    if lines.first().map(|line| line.trim_end()) != Some("---") {
+        return (Vec::new(), lines);
+    }
+    match lines
+        .iter()
+        .skip(1)
+        .position(|line| line.trim_end() == "---")
+    {
+        Some(end) => (lines[1..=end].to_vec(), lines[end + 2..].to_vec()),
+        None => (Vec::new(), lines),
+    }
+}
+
+/// Carries what a person added to `existing` into a freshly `generated` SKILL.md: frontmatter
+/// keys go before the closing fence, text above the first section stays on top, and sections
+/// rendering does not own follow the generated ones.
+fn keep_hand_written(generated: &str, existing: &str) -> String {
+    let (front, rest) = split_frontmatter(existing);
+    let mut extra_keys = Vec::new();
+    let mut keep_key = false;
+    for line in front {
+        let starts_key =
+            line.starts_with(|c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '"' | '\''));
+        if starts_key {
+            let key = line
+                .split(':')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .trim_matches(['"', '\'']);
+            keep_key = !GENERATED_KEYS.contains(&key);
+        }
+        if keep_key {
+            extra_keys.push(line);
+        }
+    }
+    let first_section = rest
+        .iter()
+        .position(|line| line.trim_start().starts_with("## "))
+        .unwrap_or(rest.len());
+    let preamble = rest[..first_section].join("\n").trim().to_string();
+    let mut extra_sections = Vec::new();
+    let mut keep_section = false;
+    for line in &rest[first_section..] {
+        if line.trim_start().starts_with("## ") {
+            keep_section = !GENERATED_SECTIONS.contains(&line.trim());
+        }
+        if keep_section {
+            extra_sections.push(*line);
+        }
+    }
+    if extra_keys.is_empty() && preamble.is_empty() && extra_sections.is_empty() {
+        return generated.to_string();
+    }
+    let (generated_front, generated_rest) = split_frontmatter(generated);
+    let mut out = String::from("---\n");
+    for line in generated_front.iter().chain(&extra_keys) {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str("---\n\n");
+    if !preamble.is_empty() {
+        out.push_str(&preamble);
+        out.push_str("\n\n");
+    }
+    out.push_str(generated_rest.join("\n").trim());
+    out.push('\n');
+    let sections = extra_sections.join("\n");
+    if !sections.trim().is_empty() {
+        out.push('\n');
+        out.push_str(sections.trim_end());
+        out.push('\n');
+    }
+    out
+}
+
+/// What happened to a flow that passed verification.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Publish {
+    Saved,
+    /// The skill's steps were edited while the flow was verified, so it was not saved.
+    StepsChanged,
+}
+
+/// Which shape SKILL.md takes, from the skill's flow status.
+pub enum SkillMd<'a> {
+    /// The flow runs: "Run it fast" first, the prose as the fallback.
+    Fast(&'a RunItFast),
+    /// The flow is paused after site changes: the prose, plus how to repair it. It lives in
+    /// SKILL.md because an agent rightly acts on the skill the user saved, not on a tool reply.
+    Repair,
+    /// Plain prose, exactly as a skill without a flow.
+    Plain,
+}
+
+fn repair_section(name: &str) -> String {
+    format!(
+        "\n## Make it fast again\nThis skill's ultrafast flow is paused because the site changed. Do the task with the steps above and report the result first. Then repair the flow: the mark_skill_run reply lists its current step sources, so call the save_skill tool with name: {name} and patch [{{ step, fn }}, ...] holding every step that needs the change.\n"
+    )
+}
+
+/// What SKILL.md says about running a skill's flow.
+pub struct RunItFast {
+    pub status: &'static str,
+    /// Input name and type, in the order the flow declares them.
+    pub inputs: Vec<(String, String)>,
+}
+
+fn render_ultrafast_markdown(
+    name: &str,
+    description: &str,
+    steps: &[String],
+    learned_notes: &[String],
+    fast: &RunItFast,
+) -> String {
+    let description = serde_json::to_string(description).unwrap_or_else(|_| "\"\"".to_string());
+    let inputs = fast
+        .inputs
+        .iter()
+        .map(|(input, kind)| format!("{input}: {kind}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut out = format!(
+        "---\nname: {name}\ndescription: {description}\ntools: {SKILL_TOOLS}\nultrafast: {}\n---\n\n## Run it fast\n",
+        fast.status
+    );
+    out.push_str(&format!(
+        "Call the run_skill tool with name: {name} and inputs {{ {inputs} }}. It records the run.\n"
+    ));
+    out.push_str("- done: report its output.\n");
+    out.push_str("- needs_agent: continue from the step it names, on the page it gives you, with your normal tools. If effects.committed is true, never redo that write. If it includes a repair note, follow it after you report the result.\n");
+    out.push_str(&format!(
+        "- refused, or run_skill is not available: call the mark_skill_run tool with name: {name}, then follow the steps below.\n\n## Steps\n"
+    ));
+    for (index, step) in steps.iter().enumerate() {
+        out.push_str(&format!("{}. {}\n", index + 1, step));
+    }
+    if !learned_notes.is_empty() {
+        out.push_str("\n## Learned from past runs\n");
+        for note in learned_notes {
+            out.push_str(&format!("- {note}\n"));
+        }
+    }
+    out
+}
+
 fn render_skill_markdown(
     name: &str,
     description: &str,
@@ -611,7 +949,94 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{neo_prefixed, normalized_skill_name};
+    use super::{
+        RunItFast, keep_hand_written, neo_prefixed, normalized_skill_name, render_skill_markdown,
+        render_ultrafast_markdown,
+    };
+    use crate::services::flow::prose::{learned_notes, prose_steps};
+
+    #[test]
+    fn a_prose_skill_renders_exactly_as_before() {
+        let steps = vec!["Open the search.".to_string(), "Add it.".to_string()];
+        let notes = vec!["The grid fills late.".to_string()];
+        assert_eq!(
+            render_skill_markdown("neo-shop", "Add to cart", &steps, &notes),
+            "---\nname: neo-shop\ndescription: \"Add to cart\"\ntools: browseros-neo\n---\n\n## Steps\n1. Call the mark_skill_run tool with name: neo-shop so this run is recorded.\n2. Open the search.\n3. Add it.\n\n## Learned from past runs\n- The grid fills late.\n"
+        );
+    }
+
+    #[test]
+    fn an_ultrafast_skill_says_how_to_run_fast_and_keeps_its_steps() {
+        let steps = vec!["Open the search.".to_string(), "Add it.".to_string()];
+        let notes = vec!["The grid fills late.".to_string()];
+        let fast = RunItFast {
+            status: "verified",
+            inputs: vec![
+                ("query".to_string(), "string".to_string()),
+                ("match".to_string(), "string".to_string()),
+            ],
+        };
+        let body = render_ultrafast_markdown("neo-shop", "Add to cart", &steps, &notes, &fast);
+        assert!(body.contains("ultrafast: verified\n"));
+        assert!(body.contains(
+            "Call the run_skill tool with name: neo-shop and inputs { query: string, match: string }."
+        ));
+        assert!(body.contains("call the mark_skill_run tool with name: neo-shop, then follow"));
+        assert!(body.contains("## Steps\n1. Open the search.\n2. Add it.\n"));
+        // Steps and notes survive a round trip, so the skill can drop back to plain prose.
+        assert_eq!(prose_steps(&body), steps);
+        assert_eq!(learned_notes(&body), notes);
+    }
+
+    #[test]
+    fn a_re_render_keeps_what_was_written_by_hand() {
+        let steps = vec!["Open the search.".to_string(), "Add it.".to_string()];
+        let notes = vec!["The grid fills late.".to_string()];
+        let existing = "---\nname: neo-shop\ndescription: \"Add to cart\"\ntools: browseros-neo\nlicense: MIT\nmetadata:\n  owner: shop-team\n---\n\nUse the India store.\n\n## Steps\n1. Call the mark_skill_run tool with name: neo-shop so this run is recorded.\n2. Open the search.\n3. Add it.\n\n## Before you start\n- Sign in first.\n\n## Learned from past runs\n- The grid fills late.\n";
+        let fast = RunItFast {
+            status: "verified",
+            inputs: vec![("query".to_string(), "string".to_string())],
+        };
+        let generated = render_ultrafast_markdown("neo-shop", "Add to cart", &steps, &notes, &fast);
+        let body = keep_hand_written(&generated, existing);
+        assert!(body.starts_with("---\nname: neo-shop\n"), "{body}");
+        assert!(body.contains("ultrafast: verified\nlicense: MIT\nmetadata:\n  owner: shop-team\n---\n\nUse the India store.\n\n## Run it fast\n"), "{body}");
+        assert!(
+            body.ends_with("- The grid fills late.\n\n## Before you start\n- Sign in first.\n"),
+            "{body}"
+        );
+        assert_eq!(prose_steps(&body), steps);
+        assert_eq!(learned_notes(&body), notes);
+
+        // Dropping back to plain prose removes only what rendering owns, and is stable.
+        let plain = keep_hand_written(
+            &render_skill_markdown("neo-shop", "Add to cart", &steps, &notes),
+            &body,
+        );
+        assert!(!plain.contains("ultrafast:"), "{plain}");
+        assert!(!plain.contains("Run it fast"), "{plain}");
+        assert!(plain.contains("license: MIT\n"), "{plain}");
+        assert!(
+            plain.contains("## Before you start\n- Sign in first.\n"),
+            "{plain}"
+        );
+        let again = keep_hand_written(
+            &render_skill_markdown("neo-shop", "Add to cart", &steps, &notes),
+            &plain,
+        );
+        assert_eq!(again, plain);
+
+        let untouched = render_skill_markdown("neo-shop", "Add to cart", &steps, &notes);
+        assert_eq!(keep_hand_written(&generated, &untouched), generated);
+
+        let quoted = "---\nname: neo-shop\ndescription: \"Add to cart\"\ntools: browseros-neo\n\"license\": MIT\n'version': 2\n\"tools\": other\n---\n\n## Steps\n1. Open the search.\n";
+        let body = keep_hand_written(&untouched, quoted);
+        assert!(
+            body.contains("\"license\": MIT\n'version': 2\n---"),
+            "{body}"
+        );
+        assert!(!body.contains("\"tools\": other"), "{body}");
+    }
 
     #[test]
     fn neo_prefixed_is_idempotent() {

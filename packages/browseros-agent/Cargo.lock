@@ -392,6 +392,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_path_to_error",
+ "tempfile",
  "thiserror",
  "time",
  "tokio",
@@ -522,14 +523,13 @@ dependencies = [
 
 [[package]]
 name = "claw-server"
-version = "0.0.90"
+version = "0.0.93"
 dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
  "browseros-cdp",
  "browseros-core",
- "browseros-decide",
  "browseros-mcp",
  "bytes",
  "clap",
@@ -542,9 +542,11 @@ dependencies = [
  "posthog-rs",
  "pulldown-cmark",
  "rand 0.9.4",
+ "regex",
  "reqwest 0.12.28",
  "ress",
  "rmcp",
+ "rquickjs",
  "sea-orm",
  "sea-orm-migration",
  "sentry",

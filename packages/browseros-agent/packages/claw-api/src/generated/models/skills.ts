@@ -200,6 +200,12 @@ export interface Skill {
      * @memberof Skill
      */
     tokenSavings?: SkillTokenSavings;
+    /**
+     *
+     * @type {SkillUltrafast}
+     * @memberof Skill
+     */
+    ultrafast?: SkillUltrafast;
 }
 
 /**
@@ -276,6 +282,20 @@ export interface SkillDetail {
      * @memberof SkillDetail
      */
     tokenSavings: SkillTokenSavings;
+}
+
+/**
+ *
+ * @export
+ * @interface SkillFlowSource
+ */
+export interface SkillFlowSource {
+    /**
+     * The flow.md file as stored beside SKILL.md.
+     * @type {string}
+     * @memberof SkillFlowSource
+     */
+    source: string;
 }
 
 /**
@@ -371,11 +391,41 @@ export interface SkillRun {
     erroredTool?: string;
     /**
      *
+     * @type {SkillRunMode}
+     * @memberof SkillRun
+     */
+    mode?: SkillRunMode;
+    /**
+     * The step the flow handed back at, for a handed_back run.
+     * @type {number}
+     * @memberof SkillRun
+     */
+    handoverStep?: number;
+    /**
+     *
+     * @type {SkillRunHandoverCauseEnum}
+     * @memberof SkillRun
+     */
+    handoverCause?: SkillRunHandoverCauseEnum;
+    /**
+     *
      * @type {number}
      * @memberof SkillRun
      */
     createdAt: number;
 }
+
+
+/**
+ * @export
+ */
+export const SkillRunHandoverCauseEnum = {
+    SiteChanged: 'site_changed',
+    InputOnly: 'input_only',
+    Transient: 'transient',
+    Unknown: 'unknown'
+} as const;
+export type SkillRunHandoverCauseEnum = typeof SkillRunHandoverCauseEnum[keyof typeof SkillRunHandoverCauseEnum];
 
 /**
  *
@@ -396,6 +446,17 @@ export interface SkillRunList {
      */
     nextCursor?: number;
 }
+
+/**
+ * How the run was carried out. `handed_back` means the flow stopped and the agent finished the task.
+ * @export
+ */
+export const SkillRunMode = {
+    Ultrafast: 'ultrafast',
+    HandedBack: 'handed_back',
+    Agent: 'agent'
+} as const;
+export type SkillRunMode = typeof SkillRunMode[keyof typeof SkillRunMode];
 
 /**
  *
@@ -428,6 +489,86 @@ export interface SkillTokenSavings {
      */
     measuredRunCount: number;
 }
+
+/**
+ * The skill's ultrafast flow. Present only while ultrafast skills are enabled.
+ * @export
+ * @interface SkillUltrafast
+ */
+export interface SkillUltrafast {
+    /**
+     *
+     * @type {SkillUltrafastStatus}
+     * @memberof SkillUltrafast
+     */
+    status: SkillUltrafastStatus;
+    /**
+     * Why the flow is off or broken, in plain words.
+     * @type {string}
+     * @memberof SkillUltrafast
+     */
+    reason?: string;
+    /**
+     *
+     * @type {number}
+     * @memberof SkillUltrafast
+     */
+    flowVersion: number;
+    /**
+     *
+     * @type {SkillUltrafastEffectsEnum}
+     * @memberof SkillUltrafast
+     */
+    effects?: SkillUltrafastEffectsEnum;
+    /**
+     * Whether the user approved this write flow to run without asking.
+     * @type {boolean}
+     * @memberof SkillUltrafast
+     */
+    writeApproved: boolean;
+    /**
+     *
+     * @type {number}
+     * @memberof SkillUltrafast
+     */
+    p50Ms?: number;
+    /**
+     *
+     * @type {number}
+     * @memberof SkillUltrafast
+     */
+    verifiedAt?: number;
+    /**
+     *
+     * @type {number}
+     * @memberof SkillUltrafast
+     */
+    repairedAt?: number;
+}
+
+
+/**
+ * @export
+ */
+export const SkillUltrafastEffectsEnum = {
+    Read: 'read',
+    Write: 'write'
+} as const;
+export type SkillUltrafastEffectsEnum = typeof SkillUltrafastEffectsEnum[keyof typeof SkillUltrafastEffectsEnum];
+
+/**
+ * Where the skill's ultrafast flow stands. `none` means it has no flow and has not been offered one.
+ * @export
+ */
+export const SkillUltrafastStatus = {
+    None: 'none',
+    Pending: 'pending',
+    Verified: 'verified',
+    Degraded: 'degraded',
+    Broken: 'broken',
+    Off: 'off'
+} as const;
+export type SkillUltrafastStatus = typeof SkillUltrafastStatus[keyof typeof SkillUltrafastStatus];
 
 /**
  *

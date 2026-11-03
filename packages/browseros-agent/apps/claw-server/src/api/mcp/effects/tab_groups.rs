@@ -26,7 +26,7 @@ use tracing::warn;
 /// Whether this server groups pages the agent did not place itself.
 ///
 /// Explicit grouping is enforced here, at the two entry points every server-made group comes
-/// through: this effect (every dispatched call, pursue's moves included) and
+/// through: this effect (every dispatched call) and
 /// [`run_tab_group_work`], which the script hook also spawns. Nothing else records a session
 /// group, so with both closed the session never has one, and the rest falls away on its own:
 /// core gets no default group to open pages into, renames have no group to retitle, and

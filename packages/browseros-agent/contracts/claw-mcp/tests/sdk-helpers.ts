@@ -31,8 +31,8 @@ export async function evalValue(
 ): Promise<unknown> {
   const result = await ctx.mcp.callTool('evaluate_in_page', {
     page,
-    // The wire intentionally strips evaluate's structured metadata. Wrapping
-    // avoids confusing a raw string such as "75" with the JSON number 75.
+    // Wrapping preserves the fixture's type when checking the human-readable
+    // fenced text too (a raw string "75" must not become the JSON number 75).
     code: `const fixtureValue = await (async () => { ${code}\n })(); return { fixtureValue }`,
   })
   const text = expectOk(result, 'read fixture state')

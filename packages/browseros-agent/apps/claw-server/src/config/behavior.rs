@@ -9,7 +9,7 @@
 
 use super::ServerMode;
 use serde::Deserialize;
-use std::fmt;
+use std::{fmt, num::NonZeroU32, time::Duration};
 
 /// What a deployment can tune about how this server behaves, fixed for the process.
 ///
@@ -20,10 +20,16 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Behavior {
     pub tab_grouping: TabGrouping,
+    /// Grace after a session ends before its tabs and owned groups are cleaned up. Config
+    /// passes this resolved value to both cleanup paths as `session_retention`, which also
+    /// bounds the retained session state used to finish that cleanup.
+    pub tab_close_after: Duration,
     /// Whether BrowserOS's DOM-only page scripts run in its isolated JavaScript world, which the
     /// page cannot see or tamper with (`browseros_core::page_js`). Off runs every script in the
     /// page's own world, as before isolated worlds; it is the rollout's off switch.
     pub isolated_world: bool,
+    /// Hard/default script budget, shared by MCP discovery, execution and saved flows.
+    pub run_policy: browseros_mcp::RunPolicy,
 }
 
 impl Behavior {
@@ -34,7 +40,12 @@ impl Behavior {
                 ServerMode::Desktop => TabGrouping::Automatic,
                 ServerMode::Hosted => TabGrouping::Explicit,
             },
+            tab_close_after: Duration::from_secs(match mode {
+                ServerMode::Desktop => 60 * 60,
+                ServerMode::Hosted => 30 * 60,
+            }),
             isolated_world: true,
+            run_policy: browseros_mcp::RunPolicy::default(),
         }
     }
 }
@@ -107,10 +118,28 @@ struct Knob {
 /// Every key the behaviour file may set.
 const KNOBS: &[Knob] = &[
     Knob {
+        section: "run",
+        key: "wall_timeout_seconds",
+        apply: |behavior, value| {
+            let seconds: NonZeroU32 = value.try_into()?;
+            behavior.run_policy = browseros_mcp::RunPolicy::from_seconds(seconds);
+            Ok(())
+        },
+    },
+    Knob {
         section: "tabs",
         key: "grouping",
         apply: |behavior, value| {
             behavior.tab_grouping = named(value)?;
+            Ok(())
+        },
+    },
+    Knob {
+        section: "tabs",
+        key: "close_after_minutes",
+        apply: |behavior, value| {
+            let minutes: NonZeroU32 = value.try_into()?;
+            behavior.tab_close_after = Duration::from_secs(u64::from(minutes.get()) * 60);
             Ok(())
         },
     },
@@ -230,6 +259,7 @@ fn edit_distance(left: &str, right: &str) -> usize {
 mod tests {
     use super::{Behavior, Ignored, KNOBS, TabGrouping, read};
     use crate::config::ServerMode;
+    use std::time::Duration;
 
     fn hosted() -> Behavior {
         Behavior::defaults(ServerMode::Hosted)
@@ -240,6 +270,32 @@ mod tests {
             key: key.to_string(),
             reason: reason.to_string(),
         }
+    }
+
+    #[test]
+    fn run_wall_timeout_is_a_recognized_deployment_setting() -> Result<(), toml::de::Error> {
+        let applied = read("[run]\nwall_timeout_seconds = 120\n", hosted())?;
+        assert!(applied.ignored.is_empty(), "{:?}", applied.ignored);
+        assert_eq!(
+            applied.behavior.run_policy.wall_timeout(),
+            Duration::from_secs(120)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_run_budgets_warn_and_retain_the_mode_default() -> Result<(), toml::de::Error> {
+        for mode in [ServerMode::Desktop, ServerMode::Hosted] {
+            let defaults = Behavior::defaults(mode);
+            assert_eq!(defaults.run_policy.wall_timeout(), Duration::from_secs(60));
+            for raw in ["0", "-1", "1.5", "true", "\"120\"", "4294967296"] {
+                let applied = read(&format!("[run]\nwall_timeout_seconds = {raw}\n"), defaults)?;
+                assert_eq!(applied.behavior, defaults);
+                assert_eq!(applied.ignored.len(), 1);
+                assert_eq!(applied.ignored[0].key, "run.wall_timeout_seconds");
+            }
+        }
+        Ok(())
     }
 
     #[test]

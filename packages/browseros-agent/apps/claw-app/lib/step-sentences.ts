@@ -30,7 +30,6 @@ export const TOOL_TO_VERB: Record<string, ReplayVerb> = {
   wait: 'read',
   run: 'type',
   evaluate: 'type',
-  pursue: 'click',
   'pages.newPage': 'navigate',
   'nav.goto': 'navigate',
   'nav.back': 'navigate',
@@ -172,6 +171,13 @@ function clicksInPage(args: Args): boolean {
 
 function parseMeta(resultMeta: string | undefined | null): Args {
   return parseArgs(resultMeta)
+}
+
+/** A save_skill call: the first save, the flow that makes it ultrafast, or a repair. */
+function describeSkillSave(args: Args): string {
+  if (args.patch !== undefined) return 'Repaired a step of this skill'
+  if (args.flow !== undefined) return 'Made this skill ultrafast'
+  return 'Saved this as a skill'
 }
 
 function stringArg(args: Args, key: string): string | undefined {
@@ -327,10 +333,6 @@ export function describeStep(dispatch: ToolDispatchRow): string {
       return `Read ${onPage}`
     case 'evaluate':
       return clicksInPage(args) ? `Clicked on ${onPage}` : `Read ${onPage}`
-    case 'pursue': {
-      const goal = stringArg(args, 'goal')?.replace(/[.\s]+$/, '')
-      return goal ? `Set out to ${goal}` : `Worked on ${onPage}`
-    }
     case 'history':
       return 'Looked through your browsing history'
     // Behind-the-scenes calls, seen only when the person asks to show them.
@@ -376,7 +378,11 @@ export function describeStep(dispatch: ToolDispatchRow): string {
     case 'await_human_help':
       return 'Waited for you'
     case 'save_skill':
-      return 'Saved this as a skill'
+      return describeSkillSave(args)
+    case 'run_skill': {
+      const name = stringArg(args, 'name')
+      return name ? `Ran ${name} the fast way` : 'Ran a skill the fast way'
+    }
     case 'credentials':
       return `Used a saved sign-in on ${onPage}`
     default:

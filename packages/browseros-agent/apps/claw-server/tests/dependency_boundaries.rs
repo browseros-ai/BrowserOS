@@ -553,6 +553,8 @@ fn allowed_service_edge(source: &str, target: &str) -> bool {
             | ("replay", "recordings")
             | ("tab_cleanup", "browser")
             | ("skills", "harness")
+            // SKILL.md is rendered from the prose a skill's ultrafast flow is numbered against.
+            | ("skills", "flow")
     )
 }
 

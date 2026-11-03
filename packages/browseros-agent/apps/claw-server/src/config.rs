@@ -17,8 +17,6 @@ use std::{
 const DEFAULT_SERVER_PORT: u16 = 9200;
 const DEFAULT_CDP_PORT: u16 = 49337;
 const DEFAULT_SESSION_IDLE_MS: u64 = 30 * 60 * 1000;
-// Retain results so users can inspect agent-opened tabs and browser-side work can settle.
-const DEFAULT_SESSION_RETENTION_MS: u64 = 60 * 60 * 1000;
 const DEFAULT_SESSION_SWEEP_INTERVAL_MS: u64 = 60 * 1000;
 const DEFAULT_REPLAY_RETENTION_DAYS: u64 = 7;
 const BROWSERCLAW_DIR_NAME: &str = ".browserclaw";
@@ -76,6 +74,8 @@ pub struct Config {
     pub resources_dir: PathBuf,
     pub browserclaw_dir: PathBuf,
     pub session_idle: Duration,
+    /// The resolved `behavior.tab_close_after`, shared by retained-session/group cleanup
+    /// and durable individual-tab cleanup so neither can close tabs before the chosen grace.
     pub session_retention: Duration,
     pub session_sweep_interval: Duration,
     pub replay_retention_days: u64,
@@ -264,11 +264,7 @@ impl Config {
                 "CLAW_SESSION_IDLE_MS",
                 DEFAULT_SESSION_IDLE_MS,
             )),
-            session_retention: Duration::from_millis(read_positive_ms(
-                env,
-                "CLAW_SESSION_RETENTION_MS",
-                DEFAULT_SESSION_RETENTION_MS,
-            )),
+            session_retention: behavior.tab_close_after,
             session_sweep_interval: Duration::from_millis(read_positive_ms(
                 env,
                 "CLAW_SESSION_SWEEP_INTERVAL_MS",
@@ -348,7 +344,14 @@ fn resolve_mode(env: &ConfigEnv) -> anyhow::Result<ServerMode> {
 /// TOML fails startup, naming the file; toml's error carries the offending line. Anything else
 /// this build cannot apply comes back as ignored rather than failing (see [`behavior`]).
 fn resolve_behavior(env: &ConfigEnv, mode: ServerMode) -> anyhow::Result<behavior::Applied> {
-    let defaults = Behavior::defaults(mode);
+    let mut defaults = Behavior::defaults(mode);
+    // Preserve the legacy millisecond override as a fallback. The file is applied last so
+    // a deployment's tab policy has one effective value for both browser cleanup paths.
+    defaults.tab_close_after = Duration::from_millis(read_positive_ms(
+        env,
+        "CLAW_SESSION_RETENTION_MS",
+        defaults.tab_close_after.as_secs() * 1_000,
+    ));
     let Some(path) = env.get(BEHAVIOR_FILE_ENV).and_then(clean_string) else {
         return Ok(behavior::Applied {
             behavior: defaults,
@@ -412,15 +415,6 @@ fn clean_string(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    /// A blank or whitespace credential is no credential, which is what keeps a
-    /// half-set variable from advertising a tool that cannot run. Asserted as a
-    /// shape rather than through the environment, which no test here owns.
-    #[test]
-    fn the_offering_is_a_yes_or_a_no() {
-        assert!(super::PursueOffering::Offered.is_offered());
-        assert!(!super::PursueOffering::Absent.is_offered());
-    }
-
     use super::{
         BEHAVIOR_FILE_ENV, Behavior, Cli, CliAction, Config, ConfigEnv, HOSTED_MODE_ENV,
         NATIVE_VERSION_ENV, ServerMode, TabGrouping,
@@ -785,6 +779,94 @@ mod tests {
     }
 
     #[test]
+    fn tab_close_grace_defaults_to_30_minutes_when_hosted_and_one_hour_on_desktop()
+    -> anyhow::Result<()> {
+        for (mode, expected_seconds) in [("1", 1_800), ("0", 3_600)] {
+            let config = load_native("{}", &[(HOSTED_MODE_ENV, mode)])?;
+            assert_eq!(
+                config.session_retention,
+                Duration::from_secs(expected_seconds)
+            );
+            assert_eq!(config.session_idle, Duration::from_secs(1_800));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_behavior_file_sets_tab_close_grace_independently_of_grouping_and_idle_expiry()
+    -> anyhow::Result<()> {
+        for mode in ["0", "1"] {
+            for grouping in ["auto", "explicit"] {
+                for (minutes, expected_seconds) in [(1, 60), (30, 1_800), (90, 5_400)] {
+                    let config = load_with_behavior_file(
+                        mode,
+                        &format!(
+                            "[tabs]\ngrouping = {grouping:?}\nclose_after_minutes = {minutes}\n"
+                        ),
+                    )?;
+                    assert_eq!(
+                        config.session_retention,
+                        Duration::from_secs(expected_seconds),
+                        "mode={mode}, grouping={grouping}, minutes={minutes}"
+                    );
+                    assert_eq!(config.session_idle, Duration::from_secs(1_800));
+                    assert!(config.behavior_ignored.is_empty());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_tab_close_grace_is_reported_and_keeps_the_mode_default() -> anyhow::Result<()> {
+        for mode in ["0", "1"] {
+            let defaults = load_native("{}", &[(HOSTED_MODE_ENV, mode)])?;
+            for value in ["0", "-1", "1.5", "\"30\"", "true", "{}", "4_294_967_296"] {
+                let config = load_with_behavior_file(
+                    mode,
+                    &format!("[tabs]\ngrouping = \"auto\"\nclose_after_minutes = {value}\n"),
+                )?;
+                assert_eq!(
+                    config.session_retention, defaults.session_retention,
+                    "{value}"
+                );
+                assert_eq!(config.behavior.tab_grouping, TabGrouping::Automatic);
+                assert_eq!(config.behavior_ignored.len(), 1, "{value}");
+                assert_eq!(config.behavior_ignored[0].key, "tabs.close_after_minutes");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_file_tab_close_grace_overrides_the_legacy_environment_fallback() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let file = dir.path().join("neo.toml");
+        let file_path = file.to_string_lossy().to_string();
+        for (contents, expected_millis) in [
+            ("[tabs]\n", 1_500),
+            ("[tabs]\nclose_after_minutes = 2\n", 120_000),
+            ("[tabs]\nclose_after_minutes = 0\n", 1_500),
+        ] {
+            fs::write(&file, contents)?;
+            let config = load_native(
+                "{}",
+                &[
+                    (HOSTED_MODE_ENV, "1"),
+                    (BEHAVIOR_FILE_ENV, file_path.as_str()),
+                    ("CLAW_SESSION_RETENTION_MS", "1500"),
+                ],
+            )?;
+            assert_eq!(
+                config.session_retention,
+                Duration::from_millis(expected_millis),
+                "{contents}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn tab_grouping_defaults_to_automatic_on_desktop_and_explicit_when_hosted() -> anyhow::Result<()>
     {
         assert_eq!(
@@ -918,65 +1000,3 @@ mod tests {
         }
     }
 }
-
-// The decision loop is one environment variable away from being a different
-// product, and more than one layer needs the answer: the MCP catalogue, the
-// server instructions, run's own description and the managed skill all behave
-// differently when it is present. It sits with the other configuration because
-// the skill loader is a service and must not reach up into the API layer to ask.
-/// Where the decision model credential comes from.
-///
-/// Three states rather than two, because the environment case is real and a boolean cannot say
-/// it: the loop works, the page shows nothing, and the user pastes a token they did not need.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TokenSource {
-    /// Saved through the API. Takes precedence.
-    Settings,
-    /// `JEV_TOKEN` in the server's environment.
-    Environment,
-    /// Neither, so the pursue tool is not offered.
-    None,
-}
-
-impl TokenSource {
-    /// Whether a credential exists at all, by either route.
-    #[must_use]
-    pub fn is_present(self) -> bool {
-        self != Self::None
-    }
-}
-
-/// Whether the decision loop is offered by this server.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PursueOffering {
-    /// There is a credential, so the loop can run and is advertised.
-    Offered,
-    /// There is none. Everything behaves exactly as it did before the loop
-    /// existed, which is what every production install sees.
-    Absent,
-}
-
-impl PursueOffering {
-    /// Reads the answer off the credential's source.
-    ///
-    /// A token saved in the settings and `JEV_TOKEN` both offer the loop. Which of the two wins
-    /// is decided in the settings store, so that nothing here has to know there are two places
-    /// to look, and so the answer cannot differ between layers.
-    #[must_use]
-    pub fn of(source: TokenSource) -> Self {
-        if source.is_present() {
-            Self::Offered
-        } else {
-            Self::Absent
-        }
-    }
-
-    #[must_use]
-    pub fn is_offered(self) -> bool {
-        self == Self::Offered
-    }
-}
-
-// The credential itself is read from the settings store, which owns the precedence between a
-// saved token and JEV_TOKEN. A second reader of the environment here is how the two answers
-// drift apart, so there is not one.

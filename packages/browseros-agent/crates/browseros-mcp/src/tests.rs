@@ -130,6 +130,36 @@ pub(crate) fn select_fixture_tab(tabs: &[Value], params: &Value) -> Result<Value
         })
 }
 
+#[tokio::test]
+async fn run_discovery_exposes_the_same_configurable_budget_as_execution() -> anyhow::Result<()> {
+    for (seconds, expected_ms) in [(60, 60000), (120, 120000)] {
+        let session = BrowserSession::new(
+            Arc::new(FakeConnection::new()),
+            BrowserSessionHooks::default(),
+        );
+        let mut options = service_options(session);
+        options.run_policy = Some(crate::RunPolicy::from_seconds(
+            std::num::NonZeroU32::new(seconds)
+                .ok_or_else(|| anyhow::anyhow!("invalid test budget"))?,
+        ));
+        let service = BrowserMcpService::new(options);
+        let run = service
+            .get_tool("run")
+            .ok_or_else(|| anyhow::anyhow!("missing run"))?;
+        assert_eq!(run.input_schema["properties"]["timeout"]["type"], "number");
+        assert_eq!(
+            run.input_schema["properties"]["timeout"]["default"],
+            expected_ms
+        );
+        assert_eq!(
+            run.input_schema["properties"]["timeout"]["maximum"],
+            expected_ms
+        );
+        assert!(!run.description.unwrap_or_default().contains("under 30s"));
+    }
+    Ok(())
+}
+
 pub(crate) fn service_options(session: Arc<BrowserSession>) -> BrowserMcpServiceOptions {
     BrowserMcpServiceOptions {
         native: session.native(),
@@ -141,6 +171,7 @@ pub(crate) fn service_options(session: Arc<BrowserSession>) -> BrowserMcpService
         instructions: None,
         defaults: BrowserToolDefaults::default(),
         output_files: None,
+        run_policy: None,
         include_structured_content: None,
         on_tool_execution_start: None,
         on_tool_execution_end: None,
@@ -778,6 +809,7 @@ fn catalog_order_is_stable() {
             "download",
             "upload",
             "read",
+            "read_output",
             "grep",
             "screenshot",
             "pdf",
@@ -812,6 +844,7 @@ fn catalog_page_metadata_matches_host_dispatch_contract() {
             ("download", true),
             ("upload", true),
             ("read", true),
+            ("read_output", false),
             ("grep", true),
             ("screenshot", true),
             ("pdf", true),
@@ -2993,3 +3026,54 @@ fn optional_enum_arguments_keep_their_variants_and_stay_optional() {
 mod credentials_tests;
 #[path = "payment_cards_tests.rs"]
 mod payment_cards_tests;
+
+#[tokio::test]
+async fn saved_run_keeps_full_json_and_forwards_nested_screenshot() -> anyhow::Result<()> {
+    let (mut ctx, _connection, page) = harness_ctx().await;
+    let directory = tempfile::tempdir()?;
+    ctx.output_files =
+        crate::output_store::OutputStore::new(directory.path().to_path_buf(), "task");
+    let result = execute_tool(&tool_by_name("run"), json!({ "code": format!("await browser.page({page}).screenshot(); console.log('captured'); return {{text:'x'.repeat(30000), count:7}};") }), &ctx).await.map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    assert!(!result.is_error, "{}", result_text(&result));
+    let images: Vec<_> = result
+        .content
+        .iter()
+        .filter_map(|block| block.as_image())
+        .collect();
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].data, "cG5n");
+    let output = result
+        .structured_content
+        .as_ref()
+        .and_then(|data| data.get("output"))
+        .ok_or_else(|| anyhow::anyhow!("missing saved output"))?;
+    let id = output["id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing ID"))?;
+    let primary = ctx.output_files.read(id, "result.json", 0, 65536).await?;
+    let primary: Value = serde_json::from_slice(&primary.bytes)?;
+    let primary = &primary["structuredContent"];
+    assert_eq!(primary["value"]["count"], 7);
+    assert_eq!(primary["value"]["text"].as_str().map(str::len), Some(30000));
+    assert_eq!(primary["logs"], json!(["captured"]));
+    let image = ctx
+        .output_files
+        .read(id, "screenshot.jpg", 0, 65536)
+        .await?;
+    assert_eq!(image.bytes, b"png");
+    let read = execute_tool(
+        &tool_by_name("read_output"),
+        json!({ "outputId": id, "part": "screenshot.jpg" }),
+        &ctx,
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    assert_eq!(
+        read.content
+            .first()
+            .and_then(|block| block.as_image())
+            .map(|image| image.data.as_str()),
+        Some("cG5n")
+    );
+    Ok(())
+}

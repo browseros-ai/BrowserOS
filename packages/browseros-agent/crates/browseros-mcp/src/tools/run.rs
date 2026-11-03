@@ -1,5 +1,6 @@
 use super::evaluate_in_page::safe_prefix;
 use crate::{
+    constants::MAX_INLINE_OVERRIDE_BYTES,
     format::coverage::insert_coverage,
     framework::{
         HelperSource, InnerCallRecord, ToolCtx, ToolDef, ToolError, ToolExecResult, ToolResult,
@@ -29,23 +30,17 @@ use std::{
 };
 use tokio::time::{Instant, sleep, sleep_until};
 
-const DEFAULT_TIMEOUT_MS: f64 = 30_000.0;
-const MAX_TIMEOUT_MS: u64 = 30_000;
-const MIN_TIMEOUT_MS: u64 = 1;
 const RUN_MEMORY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 const RUN_STACK_SIZE_BYTES: usize = 512 * 1024;
 const MAX_LOG_ENTRIES: usize = 1_000;
 const MAX_LOG_BYTES: usize = 1_000_000;
 const MAX_RETURN_VALUE_BYTES: usize = 2_000_000;
 /// What a run hands back to the model inline: its return value plus its logs, in UTF-8 bytes.
-/// About 6k tokens, enough for a few pages of extracted text. The script itself reads pages
+/// About 10k estimated tokens. The script itself reads pages
 /// whole, so only its answer has to fit; a larger one comes back as a preview plus a file.
-const DEFAULT_INLINE_RESULT_BYTES: usize = 25_000;
-/// The most `maxChars` can raise the inline result to: the largest return value a run
-/// accepts, so a remote client that asks can still receive any result whole.
-const MAX_INLINE_RESULT_BYTES: usize = MAX_RETURN_VALUE_BYTES;
+const DEFAULT_INLINE_RESULT_BYTES: usize = 30_000;
 
-const DESCRIPTION: &str = r#"The primary way to drive the browser - prefer run for any task; the granular tools are the fallback. Do multi-step flows, pagination, bulk extraction, and repeated act/read loops - in ONE call: async JavaScript against the `browser` SDK in the server runtime. console.log is captured; return a value to read it back; exceptions come back as a result, not thrown. Every call is `await`-able. Each run is bounded to 30000 ms of wall time and cannot exceed it (larger `timeout` values are clamped): keep a single call under 30s. For longer or open-ended page-driven loops, do one bounded chunk per call, or start the work on the page and poll its result with short follow-up calls.
+const DESCRIPTION: &str = r#"The primary way to drive the browser - prefer run for any task; the granular tools are the fallback. Do multi-step flows, pagination, bulk extraction, and repeated act/read loops - in ONE call: async JavaScript against the `browser` SDK in the server runtime. console.log is captured; return a value to read it back; exceptions come back as a result, not thrown. Every call is `await`-able. Each run shares one wall-clock budget across execution, browser operations and waits. The timeout schema gives this server's default and maximum in milliseconds; callers may shorten it. A timeout above that maximum is rejected before script execution. For longer or open-ended page-driven loops, do one bounded chunk per call, or start the work on the page and poll its result with short follow-up calls.
 
 Runtime: a bare engine, not Node and not a page. You get `browser`, `console`, `setTimeout`/`clearTimeout`, and nothing else. (`sleep(ms)` exists for a deliberate pause and is almost never the right tool: opening, navigating and page-changing evaluates all return settled, so pausing after them only adds the time you picked.) There is no fetch, require, process, window, document or localStorage. Read pages with page.snapshot/read/grep, which run no script in the page. page.evaluateInPage runs your own script inside the page, where the page can watch it: only when the user asks to run code in the page or those cannot answer.
 
@@ -89,9 +84,9 @@ Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers
   page.listHelpers() -> { host, helpers: [{ name, ageDays, candidate }] }; page.readHelper(name) -> source string
 Raw CDP: browser.cdp(method, params?, sessionId?) / page.cdp(method, paramsJson). Methods or parameters that need a newer BrowserOS return native_feature_unavailable without being sent.
 
-What a run returns to you, its return value plus its logs, is kept inline up to 25000 bytes (raise it with maxChars, up to 2000000). Past that you get a preview and a local file path a remote client cannot open, so return the answer, not the pages you read to find it.
+What a run returns to you, its return value plus its logs, is kept inline up to 30000 UTF-8 bytes (raise it with maxChars, up to 150000). Past that you get a preview and output.id; use read_output in the same session to retrieve the complete JSON result and logs. The separate maximum return value is 2000000 bytes. Return only what the task needs to keep context small.
 
-Do the whole task in as few run calls as possible: loop over all the items in one call rather than one run per item. Parallelize independent work with Promise.all so N pages cost one wait cycle, not N. Keep steps on the same page sequential. The 30s cap binds this: batching reads of already-loaded pages is cheap, batching navigations is not, so keep it to about 5 fresh pages per call and split the rest into more calls. Efficient pattern:
+Do the whole task in as few run calls as possible: loop over all the items in one call rather than one run per item. Parallelize independent work with Promise.all so N pages cost one wait cycle, not N. Keep steps on the same page sequential. The run budget includes navigation and waiting: batching reads of already-loaded pages is cheap, batching navigations is not, so keep it to about 5 fresh pages per call and split the rest into more calls. Efficient pattern:
   const pages = await Promise.all(urls.map(u => browser.open(u)));
   await Promise.all(pages.map(p => p.waitForSelector('.result')));
   return await Promise.all(pages.map(p => p.read()));"#;
@@ -468,16 +463,24 @@ const BOOTSTRAP_JS: &str = r#"
 struct RunArgs {
     /// Async-capable JS body. Use top-level await; `return` a value.
     code: String,
-    /// Max run time in ms. Hard cap: 30000 (larger values are clamped to it). A
-    /// single run cannot exceed 30s; for longer or looping page-driven work,
-    /// split it across calls or start it and poll with short follow-up calls.
-    #[serde(default = "default_timeout")]
-    timeout: f64,
+    /// Wall-clock budget in milliseconds, including browser operations and waits.
+    /// Omit for the configured default; a value above the deployment maximum is rejected.
+    #[serde(default, deserialize_with = "deserialize_timeout")]
+    #[schemars(with = "f64")]
+    timeout: Option<f64>,
     /// Max size of the result kept inline (return value plus logs), in UTF-8 bytes: default
-    /// 25000, max 2000000. A larger result comes back as a preview, with the full text in a
-    /// local file a remote MCP client cannot open; return only what you need, or raise this.
+    /// 30000, max 150000. Larger results return a preview and an output ID; read_output
+    /// retrieves the complete JSON value/logs. Raise this to keep more inline.
     #[serde(default, rename = "maxChars")]
     max_chars: Option<u64>,
+}
+
+// Absence selects the host default. A present null must remain an argument error,
+// rather than silently granting the default budget to a malformed action-bearing script.
+fn deserialize_timeout<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<f64>, D::Error> {
+    f64::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, serde::Serialize, JsonSchema)]
@@ -489,13 +492,15 @@ struct RunOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
     /// True when the result was over the inline limit: `value` and `logs` are then left out
-    /// and the full text is in the file at `path`.
+    /// and the complete JSON result is available through output.id and at `path`.
     #[serde(rename = "writtenToFile", skip_serializing_if = "Option::is_none")]
     written_to_file: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<String>,
     #[serde(rename = "contentLength", skip_serializing_if = "Option::is_none")]
     content_length: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<crate::output_store::OutputReference>,
 }
 
 pub fn definition() -> crate::framework::ToolDef {
@@ -510,6 +515,29 @@ pub fn definition() -> crate::framework::ToolDef {
     }
 }
 
+/// Advertise the same resolved policy that the host passes into ToolCtx. This is discovery
+/// decoration only; resolve_timeout remains the authority even for clients with cached schemas.
+#[must_use]
+pub fn with_policy(mut tool: rmcp::model::Tool, policy: crate::RunPolicy) -> rmcp::model::Tool {
+    if tool.name != "run" {
+        return tool;
+    }
+    let maximum = policy.wall_timeout().as_millis() as u64;
+    let mut schema = tool.input_schema.as_ref().clone();
+    if let Some(timeout) = schema
+        .get_mut("properties")
+        .and_then(|p| p.get_mut("timeout"))
+        .and_then(Value::as_object_mut)
+    {
+        timeout.insert("default".to_string(), json!(maximum));
+        timeout.insert("maximum".to_string(), json!(maximum));
+        timeout.insert("exclusiveMinimum".to_string(), json!(0));
+        timeout.insert("description".to_string(), json!(format!("Wall-clock budget in milliseconds. Default and maximum: {maximum}. Includes browser operations and waits; larger values are rejected.")));
+    }
+    tool.input_schema = Arc::new(schema);
+    tool
+}
+
 fn handler<'a>(
     raw: Value,
     ctx: &'a ToolCtx,
@@ -522,7 +550,7 @@ fn handler<'a>(
             .map_or(DEFAULT_INLINE_RESULT_BYTES, |max_chars| {
                 usize::try_from(max_chars)
                     .unwrap_or(usize::MAX)
-                    .min(MAX_INLINE_RESULT_BYTES)
+                    .min(MAX_INLINE_OVERRIDE_BYTES)
             });
         let outcome = match execute_run(args, ctx).await {
             Ok(outcome) => outcome,
@@ -536,10 +564,6 @@ fn handler<'a>(
             outcome.into_capped_tool_result(inline_limit, ctx).await,
         ))
     })
-}
-
-fn default_timeout() -> f64 {
-    DEFAULT_TIMEOUT_MS
 }
 
 #[derive(Clone)]
@@ -641,9 +665,14 @@ impl RunOutcome {
         if text.len() <= inline_limit {
             return self.into_tool_result();
         }
-        let saved = write_temp_tool_output_file(&ctx.output_files, "run", "txt", &text).await;
+        // The saved primary result is typed JSON, independent of the display preview.
+        // Trusted callers can recover value/logs without parsing formatted prose.
+        let complete = json!({ "isError": !self.ok, "structuredContent": self.structured_value(), "text": [text] });
+        let saved =
+            write_temp_tool_output_file(&ctx.output_files, "result", "json", &complete.to_string())
+                .await;
         let advice = format!(
-            "Return only what you need, or raise maxChars (up to {MAX_INLINE_RESULT_BYTES}) to receive more inline."
+            "Return only what you need, or raise maxChars (up to {MAX_INLINE_OVERRIDE_BYTES}) to receive more inline."
         );
         let note = match &saved {
             Ok(path) => format!(
@@ -678,11 +707,18 @@ impl RunOutcome {
 
     fn into_tool_result(self) -> ToolResult {
         let text = format_outcome(&self);
-        let structured = if self.ok {
+        let structured = self.structured_value();
+        let mut result = text_result(text, Some(structured));
+        result.is_error = !self.ok;
+        result
+    }
+
+    fn structured_value(&self) -> Value {
+        if self.ok {
             let mut object = Map::new();
             object.insert("ok".to_string(), json!(true));
-            if let Some(value) = self.value {
-                object.insert("value".to_string(), value);
+            if let Some(value) = &self.value {
+                object.insert("value".to_string(), value.clone());
             }
             object.insert("logs".to_string(), json!(self.logs));
             Value::Object(object)
@@ -692,18 +728,18 @@ impl RunOutcome {
                 "logs": self.logs,
                 "error": self.error,
             })
-        };
-        let mut result = text_result(text, Some(structured));
-        result.is_error = !self.ok;
-        result
+        }
     }
 }
 
 async fn execute_run(args: RunArgs, ctx: &ToolCtx) -> Result<RunOutcome, RunError> {
     ctx.throw_if_cancelled().map_err(|_| RunError::Cancelled)?;
     let logs = Arc::new(Mutex::new(CapturedLogs::default()));
-    let timeout_ms = normalized_timeout_ms(args.timeout);
-    let duration = Duration::from_millis(timeout_ms);
+    let duration = ctx
+        .run_policy
+        .resolve_timeout(args.timeout)
+        .map_err(RunError::Engine)?;
+    let timeout_ms = duration.as_millis();
     let deadline = Instant::now() + duration;
     let timeout_message: Arc<str> = Arc::from(format!("run exceeded {timeout_ms}ms"));
     let control = RunControl {
@@ -909,8 +945,9 @@ fn install_globals<'js>(
     // Backs the JS setTimeout/sleep shims: the runtime is a bare rquickjs engine
     // with no timers, so bridge a fixed pause to a real async sleep. Capped to the
     // run budget; the run deadline still bounds total wall time.
+    let max_sleep_ms = bridge.ctx.run_policy.wall_timeout().as_millis() as f64;
     let sleep_bridge = move |_ctx: Ctx<'js>, ms: f64| async move {
-        let capped = ms.max(0.0).min(MAX_TIMEOUT_MS as f64) as u64;
+        let capped = ms.max(0.0).min(max_sleep_ms) as u64;
         tokio::time::sleep(Duration::from_millis(capped)).await;
     };
     let globals = ctx.globals();
@@ -1865,14 +1902,6 @@ fn format_outcome(outcome: &RunOutcome) -> String {
     sections.join("\n")
 }
 
-fn normalized_timeout_ms(timeout_ms: f64) -> u64 {
-    if !timeout_ms.is_finite() || timeout_ms <= 0.0 {
-        MIN_TIMEOUT_MS
-    } else {
-        timeout_ms.ceil().min(MAX_TIMEOUT_MS as f64) as u64
-    }
-}
-
 fn logs_snapshot(logs: &SharedLogs) -> Vec<String> {
     logs.lock()
         .map(|logs| logs.entries.clone())
@@ -2049,6 +2078,8 @@ mod tests {
                     | "Accessibility.enable"
                     | "Runtime.runIfWaitingForDebugger"
                     | "Target.setAutoAttach"
+                    | "Page.setInterceptFileChooserDialog"
+                    | "Emulation.setFocusEmulationEnabled"
                     | "Page.reload" => Ok(json!({})),
                     "Browser.addTabsToGroup" => {
                         let group_id = params
@@ -2274,6 +2305,42 @@ mod tests {
             .await
             .map_err(|message| anyhow::anyhow!(message))?;
         assert_eq!(outcome, Some(7));
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ordinary_input_skips_chooser_handoff() -> anyhow::Result<()> {
+        let ctx = test_ctx();
+        // Agent-created pages retain interception. A fixture without it would skip the
+        // handoff even on the activating path and could falsely pass this regression.
+        let page = ctx
+            .browser
+            .new_page("about:blank", NewPageOptions::default())
+            .await?;
+        ctx.browser.page_session(page.page_id.clone()).await?;
+        let bridge = test_bridge(ctx);
+        let started = Instant::now();
+        bridge
+            .race_input(&page.page_id, true, async {
+                Ok::<_, browseros_core::CoreError>(())
+            })
+            .await
+            .map_err(|message| anyhow::anyhow!(message))?;
+        assert_eq!(started.elapsed(), Duration::from_millis(100));
+
+        // Exercise the same 100-input workload without wall-clock or native-input cost.
+        // The old unconditional handoff advances this clock by ten seconds.
+        let started = Instant::now();
+        for _ in 0..100 {
+            let value = bridge
+                .race_input(&page.page_id, false, async {
+                    Ok::<_, browseros_core::CoreError>(7_u32)
+                })
+                .await
+                .map_err(|message| anyhow::anyhow!(message))?;
+            assert_eq!(value, Some(7));
+        }
+        assert_eq!(started.elapsed(), Duration::ZERO);
         Ok(())
     }
 
@@ -2810,6 +2877,82 @@ throw new Error('boom');
         Ok(())
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn run_default_allows_work_past_the_old_thirty_second_cap() -> anyhow::Result<()> {
+        let result = run_tool("await sleep(31000); return 'completed';", None).await?;
+        assert!(!result.is_error, "{:?}", result.structured_content);
+        assert_eq!(
+            result
+                .structured_content
+                .as_ref()
+                .map(|data| &data["value"]),
+            Some(&json!("completed"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn run_default_expires_after_sixty_seconds() -> anyhow::Result<()> {
+        let result = run_tool(
+            "console.log('started'); await sleep(60000); await sleep(1000);",
+            None,
+        )
+        .await?;
+        assert!(result.is_error);
+        assert_eq!(
+            result.structured_content,
+            Some(json!({ "ok": false, "logs": ["started"], "error": "run exceeded 60000ms" }))
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn run_configured_budget_controls_default_override_and_timer_bridge() -> anyhow::Result<()>
+    {
+        let mut ctx = test_ctx();
+        ctx.run_policy = crate::RunPolicy::from_seconds(
+            std::num::NonZeroU32::new(75).ok_or_else(|| anyhow::anyhow!("invalid test budget"))?,
+        );
+        for timeout in [None, Some(65000.0)] {
+            let started = Instant::now();
+            let result =
+                run_tool_with_ctx("await sleep(61000); return 'completed';", timeout, &ctx).await?;
+            assert!(!result.is_error, "{:?}", result.structured_content);
+            assert_eq!(
+                result
+                    .structured_content
+                    .as_ref()
+                    .map(|data| &data["value"]),
+                Some(&json!("completed"))
+            );
+            assert_eq!(started.elapsed(), Duration::from_secs(61));
+        }
+        ctx.run_policy = crate::RunPolicy::from_seconds(
+            std::num::NonZeroU32::new(1).ok_or_else(|| anyhow::anyhow!("invalid test budget"))?,
+        );
+        for (timeout, expected) in [
+            (None, "run exceeded 1000ms"),
+            (Some(100.0), "run exceeded 100ms"),
+        ] {
+            let result = run_tool_with_ctx(
+                "console.log('started'); await sleep(1500); return 'late';",
+                timeout,
+                &ctx,
+            )
+            .await?;
+            assert_eq!(
+                result.structured_content,
+                Some(json!({ "ok": false, "logs": ["started"], "error": expected }))
+            );
+        }
+        let result =
+            run_tool_with_ctx("console.log('should not run');", Some(1001.0), &ctx).await?;
+        assert!(result.is_error);
+        assert!(result_text(&result)?.contains("configured maximum of 1000ms"));
+        assert!(!result_text(&result)?.contains("should not run"));
+        Ok(())
+    }
+
     #[tokio::test]
     async fn run_reports_timeout_with_logs_so_far() -> anyhow::Result<()> {
         let result = run_tool(
@@ -2858,17 +3001,29 @@ try {
     }
 
     #[tokio::test]
-    async fn run_clamps_pathological_timeout_values() -> anyhow::Result<()> {
-        let result = run_tool("return 'ok'", Some(f64::MAX)).await?;
-        assert!(!result.is_error);
-        assert_eq!(
-            result.structured_content,
-            Some(json!({
-                "ok": true,
-                "value": "ok",
-                "logs": []
-            }))
-        );
+    async fn run_rejects_null_timeout_before_executing_the_script() -> anyhow::Result<()> {
+        let ctx = test_ctx();
+        let result = execute_tool(
+            &definition(),
+            json!({ "code": "console.log('executed'); return 'executed';", "timeout": null }),
+            &ctx,
+        )
+        .await?;
+        assert!(result.is_error);
+        assert!(!result_text(&result)?.contains("executed"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_rejects_invalid_timeout_before_executing_the_script() -> anyhow::Result<()> {
+        for timeout in [f64::MAX, 60001.0, 0.0, -1.0] {
+            let result =
+                run_tool("console.log('executed'); return 'executed';", Some(timeout)).await?;
+            assert!(result.is_error, "timeout={timeout}");
+            let text = result_text(&result)?;
+            assert!(text.contains("run timeout"), "{text}");
+            assert!(!text.contains("executed"), "{text}");
+        }
         Ok(())
     }
 
@@ -2894,12 +3049,27 @@ try {
     }
 
     #[tokio::test]
+    async fn run_default_keeps_a_result_between_the_old_and_new_budgets_inline()
+    -> anyhow::Result<()> {
+        let result = run_tool("return 'x'.repeat(29000);", None).await?;
+        assert!(!result.is_error);
+        let value = result
+            .structured_content
+            .as_ref()
+            .and_then(|data| data.get("value"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("29k result should remain inline"))?;
+        assert_eq!(value.len(), 29_000);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn run_result_over_the_inline_limit_comes_back_as_a_preview() -> anyhow::Result<()> {
-        let result = run_tool("return 'x'.repeat(30000);", None).await?;
+        let result = run_tool("return 'x'.repeat(31000);", None).await?;
         assert!(!result.is_error);
         let text = tool_result_text(&result);
-        assert!(text.contains("Result truncated at 25000 bytes"), "{text}");
-        assert!(text.len() < 26_000, "{}", text.len());
+        assert!(text.contains("Result truncated at 30000 bytes"), "{text}");
+        assert!(text.len() < 31_000, "{}", text.len());
         let structured = result
             .structured_content
             .as_ref()
@@ -2928,6 +3098,52 @@ try {
             .and_then(Value::as_str)
             .map(str::len);
         assert_eq!(value, Some(30_000));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_clamps_inline_overrides_without_lowering_the_saved_return_limit()
+    -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut ctx = test_ctx();
+        ctx.output_files =
+            crate::output_store::OutputStore::new(directory.path().join("outputs"), "budget");
+        let result = execute_tool(
+            &definition(),
+            json!({ "code": "return 'x'.repeat(200000);", "maxChars": 2000000 }),
+            &ctx,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        assert!(!result.is_error);
+        assert!(tool_result_text(&result).contains("Result truncated at 150000 bytes"));
+        let id = result
+            .structured_content
+            .as_ref()
+            .and_then(|data| data.pointer("/output/id"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing complete saved output"))?;
+        let mut bytes = Vec::new();
+        let mut offset = 0;
+        loop {
+            let chunk = ctx
+                .output_files
+                .read(id, "result.json", offset, 64 * 1024)
+                .await?;
+            bytes.extend(chunk.bytes);
+            match chunk.next_offset {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+        let saved: Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(
+            saved
+                .pointer("/structuredContent/value")
+                .and_then(Value::as_str)
+                .map(str::len),
+            Some(200_000)
+        );
         Ok(())
     }
 

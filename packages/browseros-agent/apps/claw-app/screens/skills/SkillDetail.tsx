@@ -5,14 +5,16 @@
  */
 
 import type { Skill, SkillRun } from '@browseros/claw-api'
-import { ChevronDown, FileText, TriangleAlert } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { skipToken } from '@tanstack/react-query'
+import { ChevronDown, FileText, TriangleAlert, Zap } from 'lucide-react'
+import { type ReactNode, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router'
 import { CodeBlock } from '@/components/agents/code-block'
 import { SessionStatusBadge } from '@/components/audit/SessionStatusBadge'
 import { AgentMark } from '@/components/harness/AgentMark'
 import { Page } from '@/components/layout/Page'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { Button } from '@/components/motion/button/base'
 import { Card } from '@/components/motion/card'
 import {
   Collapsible,
@@ -20,15 +22,22 @@ import {
   CollapsibleIndicator,
   CollapsibleTrigger,
 } from '@/components/motion/collapsible'
+import { AllowWritesDialog } from '@/components/skills/AllowWritesDialog'
 import { Phrase } from '@/components/skills/Phrase'
 import { RunSkillButton } from '@/components/skills/RunSkillButton'
 import { SiteBadge } from '@/components/skills/SiteBadge'
 import { SkillActions } from '@/components/skills/SkillActions'
+import { UltrafastBadge } from '@/components/skills/UltrafastBadge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useSkillFlow } from '@/modules/api/skills.hooks'
 import { taskDayAndTime } from '@/screens/audit/audit.helpers'
 import { useSkillDetailData } from './skill-detail.data'
 import {
+  healthLine,
+  needsWriteApproval,
   parseSkillBody,
+  runModeCounts,
+  runModeLabel,
   skillCommand,
   stuckWhile,
   usedLabel,
@@ -94,7 +103,8 @@ export function SkillDetail() {
                 onDeleted={() => navigate('/skills')}
               />
             </div>
-            <p className="text-[14px] text-ink-3">
+            <p className="flex flex-wrap items-center gap-2 text-[14px] text-ink-3">
+              <UltrafastBadge ultrafast={skill.ultrafast} />
               {usedLabel(skill.runCount, skill.lastRunAt, Date.now())}
             </p>
           </div>
@@ -139,6 +149,7 @@ export function SkillDetail() {
           </Section>
         </div>
         <div className="flex flex-col gap-5">
+          <UltrafastSection skill={skill} runs={runs} />
           <WorksIn skill={skill} />
           <RecentRuns runs={runs} />
         </div>
@@ -197,6 +208,101 @@ function WorksIn({ skill }: { skill: Skill }) {
   )
 }
 
+/** The skill's fast version: its state, how it has been running, and the write approval. */
+function UltrafastSection({ skill, runs }: { skill: Skill; runs: SkillRun[] }) {
+  const [allowing, setAllowing] = useState(false)
+  const ultrafast = skill.ultrafast
+  if (!ultrafast || ultrafast.status === 'none') return null
+  const counts = runModeCounts(runs)
+  const health = healthLine(ultrafast, Date.now())
+  const ranFast = counts.ultrafast + counts.handedBack > 0
+  return (
+    <Section title="Ultrafast">
+      <div className="flex flex-col gap-2.5 text-[14.5px] text-ink-2">
+        <UltrafastBadge
+          ultrafast={ultrafast}
+          size="md"
+          className="self-start"
+        />
+        <p>{ULTRAFAST_STATE[ultrafast.status]}</p>
+        {ultrafast.reason ? (
+          <p className="text-[13.5px] text-ink-3">{ultrafast.reason}</p>
+        ) : null}
+        {health ? <p className="text-[13.5px] text-ink-3">{health}</p> : null}
+        {ranFast ? (
+          <p className="text-[13.5px] text-ink-3">
+            {counts.ultrafast} ultrafast · {counts.handedBack} handed back ·{' '}
+            {counts.normal} the normal way
+          </p>
+        ) : null}
+        {needsWriteApproval(ultrafast) ? (
+          <div className="flex flex-col gap-2 rounded-xl bg-bg-sunken px-3.5 py-3">
+            <p className="text-[14px] text-ink-2">
+              This skill changes something on the site. Its first fast run needs
+              your OK.
+            </p>
+            <Button
+              size="sm"
+              className="self-start"
+              onClick={() => setAllowing(true)}
+            >
+              Allow writes
+            </Button>
+          </div>
+        ) : null}
+        {ultrafast.flowVersion > 0 ? <FlowFile name={skill.name} /> : null}
+      </div>
+      <AllowWritesDialog
+        name={skill.name}
+        description={skill.description}
+        open={allowing}
+        onOpenChange={setAllowing}
+      />
+    </Section>
+  )
+}
+
+const ULTRAFAST_STATE: Record<string, string> = {
+  verified:
+    'Your agent runs this skill in about a second. If the site changes, it stops and finishes the task the normal way.',
+  degraded:
+    'The site changed. Your agent finishes these runs the normal way and repairs the fast version as it goes.',
+  broken:
+    'The fast version kept failing, so it is paused. Your agent runs the skill the normal way and can make it fast again.',
+  pending: 'Your agent is turning this skill into a fast version.',
+  off: 'This skill runs the normal way.',
+}
+
+/** The flow file, fetched only once someone opens it. */
+function FlowFile({ name }: { name: string }) {
+  const [open, setOpen] = useState(false)
+  const flow = useSkillFlow({ variables: open ? { name } : skipToken })
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger className="flex items-center gap-1.5 font-semibold text-[13.5px] text-ink-2 outline-none hover:text-cyanotype-ink focus-visible:ring-2 focus-visible:ring-ring">
+        <span>See the fast version</span>
+        <CollapsibleIndicator>
+          <ChevronDown aria-hidden className="size-3.5" />
+        </CollapsibleIndicator>
+      </CollapsibleTrigger>
+      <CollapsibleContent contentClassName="pt-2.5">
+        {flow.isError ? (
+          <p className="text-[13.5px] text-ink-3">Couldn’t load it.</p>
+        ) : flow.isPending ? (
+          <Skeleton className="h-24 rounded-lg" />
+        ) : (
+          <CodeBlock
+            code={flow.data.source}
+            language="text"
+            maxHeight={320}
+            copyable
+          />
+        )}
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+
 function RecentRuns({ runs }: { runs: SkillRun[] }) {
   const now = Date.now()
   return (
@@ -217,6 +323,14 @@ function RecentRuns({ runs }: { runs: SkillRun[] }) {
                     label={run.agentId}
                     className="text-[13.5px] text-ink-3"
                   />
+                  {runModeLabel(run) ? (
+                    <span className="flex items-center gap-1 text-[13.5px] text-ink-3">
+                      {run.mode === 'ultrafast' ? (
+                        <Zap aria-hidden className="size-3 text-accent-ink" />
+                      ) : null}
+                      {runModeLabel(run)}
+                    </span>
+                  ) : null}
                   {run.clean ? null : (
                     <span className="text-[13.5px] text-ink-3">
                       {stuckWhile(run.erroredTool)}

@@ -21,13 +21,16 @@ import { McpSession, textOf } from './mcp-client'
 import { type ContractServer, startRustServer } from './rust-server'
 
 const gate = isSuiteEnabled() ? describe : describe.skip
-const activeCases =
+const onlyCases = process.env.CLAW_MCP_ONLY?.trim()
+const activeCases = (
   process.env.CLAW_MCP_SMOKE === '1'
     ? contractCases.filter((contractCase) => contractCase.smoke)
     : contractCases
+).filter((contractCase) => !onlyCases || contractCase.name.includes(onlyCases))
 
 interface ServerRun {
   browserArgs: string[]
+  headless: boolean
   server: ContractServer
   browser: BrowserHandle
   mcp: McpSession
@@ -50,20 +53,27 @@ async function ensureFixtures(): Promise<FixturePair> {
   return fixtures
 }
 
-async function ensureRun(browserArgs: string[] = []): Promise<ServerRun> {
-  // Density-sensitive captures need a real launch flag, not page emulation.
+async function ensureRun(
+  browserArgs: string[] = [],
+  headless = process.env.BROWSEROS_TEST_HEADLESS !== 'false',
+): Promise<ServerRun> {
+  // Density and headed-capture cases need real launch settings, not page emulation.
   // Replace only the suite-owned runtime when a case's launch contract changes;
   // ordinary cases keep their existing arguments and shared-session ordering.
-  if (run && JSON.stringify(run.browserArgs) !== JSON.stringify(browserArgs)) {
+  if (
+    run &&
+    (JSON.stringify(run.browserArgs) !== JSON.stringify(browserArgs) ||
+      run.headless !== headless)
+  ) {
     await teardownRun()
   }
   if (run) return run
 
   await ensureFixtures()
-  const browser = await launchBrowser(browserArgs)
+  const browser = await launchBrowser(browserArgs, headless)
   // Everything after the launch is wrapped so a failure (capture-mode,
   // server boot, browser attach, scratch-dir mint) never leaks the
-  // browser: nothing is stored in `runs` until the run is fully built,
+  // browser: nothing is stored in `run` until the run is fully built,
   // so afterAll's teardownRun could not otherwise reclaim it.
   let server: ContractServer | undefined
   try {
@@ -82,6 +92,7 @@ async function ensureRun(browserArgs: string[] = []): Promise<ServerRun> {
     const mcp = await connectAttached(server, 'claw-contract')
     run = {
       browserArgs,
+      headless,
       server,
       browser,
       mcp,
@@ -216,7 +227,10 @@ gate('Rust /mcp conformance', () => {
     test(
       contractCase.name,
       async () => {
-        const activeRun = await ensureRun(contractCase.browserArgs)
+        const activeRun = await ensureRun(
+          contractCase.browserArgs,
+          contractCase.headless,
+        )
         try {
           await contractCase.run(makeContext(activeRun))
         } finally {

@@ -27,7 +27,191 @@ impl MigratorTrait for Migrator {
             Box::new(m0018_add_feedback_invite::Migration),
             Box::new(m0019_add_feedback_invite_dismissal::Migration),
             Box::new(m0020_add_feedback_invite_snooze::Migration),
+            Box::new(m0021_add_skill_flows::Migration),
+            Box::new(m0022_add_mode_to_skill_runs::Migration),
         ]
+    }
+}
+
+mod m0022_add_mode_to_skill_runs {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0022_add_mode_to_skill_runs"
+        }
+    }
+
+    const TABLES: [&str; 2] = ["skill_runs", "skill_run_marks"];
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // The mark carries the mode until the session ends, then the run row keeps it.
+            for table in TABLES {
+                if !manager.has_column(table, "mode").await? {
+                    manager
+                        .alter_table(
+                            Table::alter()
+                                .table(Alias::new(table))
+                                .add_column(
+                                    ColumnDef::new(Alias::new("mode"))
+                                        .string()
+                                        .not_null()
+                                        .default("agent"),
+                                )
+                                .to_owned(),
+                        )
+                        .await?;
+                }
+                if !manager.has_column(table, "handover_step").await? {
+                    manager
+                        .alter_table(
+                            Table::alter()
+                                .table(Alias::new(table))
+                                .add_column(
+                                    ColumnDef::new(Alias::new("handover_step"))
+                                        .big_integer()
+                                        .null(),
+                                )
+                                .to_owned(),
+                        )
+                        .await?;
+                }
+                if !manager.has_column(table, "handover_cause").await? {
+                    manager
+                        .alter_table(
+                            Table::alter()
+                                .table(Alias::new(table))
+                                .add_column(
+                                    ColumnDef::new(Alias::new("handover_cause")).string().null(),
+                                )
+                                .to_owned(),
+                        )
+                        .await?;
+                }
+            }
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            for table in TABLES {
+                for column in ["handover_cause", "handover_step", "mode"] {
+                    manager
+                        .alter_table(
+                            Table::alter()
+                                .table(Alias::new(table))
+                                .drop_column(Alias::new(column))
+                                .to_owned(),
+                        )
+                        .await?;
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+mod m0021_add_skill_flows {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0021_add_skill_flows"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // One row per skill that has entered the ultrafast lifecycle. Kept apart from
+            // `skills` so a skill saved with the flag off never carries flow state.
+            manager
+                .create_table(
+                    Table::create()
+                        .table(SkillFlows::Table)
+                        .if_not_exists()
+                        .col(
+                            ColumnDef::new(SkillFlows::SkillName)
+                                .string()
+                                .not_null()
+                                .primary_key(),
+                        )
+                        .col(ColumnDef::new(SkillFlows::Status).string().not_null())
+                        .col(ColumnDef::new(SkillFlows::StatusReason).string().null())
+                        .col(
+                            ColumnDef::new(SkillFlows::FlowVersion)
+                                .big_integer()
+                                .not_null()
+                                .default(0),
+                        )
+                        .col(
+                            ColumnDef::new(SkillFlows::Attempts)
+                                .big_integer()
+                                .not_null()
+                                .default(0),
+                        )
+                        .col(
+                            ColumnDef::new(SkillFlows::SiteFailures)
+                                .big_integer()
+                                .not_null()
+                                .default(0),
+                        )
+                        .col(ColumnDef::new(SkillFlows::Effects).string().null())
+                        .col(
+                            ColumnDef::new(SkillFlows::WriteApproved)
+                                .boolean()
+                                .not_null()
+                                .default(false),
+                        )
+                        .col(ColumnDef::new(SkillFlows::P50Ms).big_integer().null())
+                        .col(ColumnDef::new(SkillFlows::SourceSessionId).string().null())
+                        .col(ColumnDef::new(SkillFlows::VerifiedAt).big_integer().null())
+                        .col(ColumnDef::new(SkillFlows::RepairedAt).big_integer().null())
+                        .col(
+                            ColumnDef::new(SkillFlows::UpdatedAt)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .drop_table(
+                    Table::drop()
+                        .table(SkillFlows::Table)
+                        .if_exists()
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[derive(DeriveIden)]
+    enum SkillFlows {
+        Table,
+        SkillName,
+        Status,
+        StatusReason,
+        FlowVersion,
+        Attempts,
+        SiteFailures,
+        Effects,
+        WriteApproved,
+        P50Ms,
+        SourceSessionId,
+        VerifiedAt,
+        RepairedAt,
+        UpdatedAt,
     }
 }
 

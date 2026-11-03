@@ -6,8 +6,9 @@
  * Pure formatters for the Skills list and page. No React, no side effects.
  */
 
-import type { Skill } from '@browseros/claw-api'
+import type { Skill, SkillRun, SkillUltrafast } from '@browseros/claw-api'
 import { HARNESSES, type Harness } from '@/components/harness/harness.types'
+import type { AnimatedBadgeStatus } from '@/components/motion/animated-badge'
 import { verbForTool } from '@/lib/step-sentences'
 import type { ReplayVerb } from '@/modules/api/replay.hooks'
 import { siteHost } from '@/modules/favicon/favicon.helpers'
@@ -153,4 +154,95 @@ export function stuckWhile(erroredTool: string | undefined): string {
   return erroredTool
     ? `Got stuck while ${STUCK_WHILE[verbForTool(erroredTool)]}.`
     : 'Got stuck before it finished.'
+}
+
+export interface UltrafastBadgeMeta {
+  label: string
+  tone: AnimatedBadgeStatus
+}
+
+/** How a skill's ultrafast state reads on a badge, or nothing for a plain skill. */
+export function ultrafastBadge(
+  ultrafast: SkillUltrafast | undefined,
+): UltrafastBadgeMeta | null {
+  switch (ultrafast?.status) {
+    case 'verified':
+      return { label: 'Ultrafast', tone: 'success' }
+    case 'degraded':
+      return { label: 'Ultrafast · needs a repair', tone: 'warning' }
+    case 'broken':
+      return { label: 'Ultrafast paused', tone: 'danger' }
+    case 'pending':
+      return { label: 'Becoming ultrafast', tone: 'info' }
+    case 'off':
+      return { label: 'Runs the normal way', tone: 'neutral' }
+    default:
+      return null
+  }
+}
+
+/** "about 1.2 s a run" from a median in milliseconds. */
+export function runSpeed(p50Ms: number): string {
+  const seconds = Math.max(0.1, Math.round(p50Ms / 100) / 10)
+  return `about ${seconds} s a run`
+}
+
+/** "Checked today · repaired yesterday · about 1.2 s a run". */
+export function healthLine(ultrafast: SkillUltrafast, now: number): string {
+  const parts: string[] = []
+  if (ultrafast.verifiedAt !== undefined) {
+    parts.push(`Checked ${lastUsedLabel(ultrafast.verifiedAt, now)}`)
+  }
+  if (ultrafast.repairedAt !== undefined) {
+    parts.push(`repaired ${lastUsedLabel(ultrafast.repairedAt, now)}`)
+  }
+  if (ultrafast.p50Ms !== undefined) parts.push(runSpeed(ultrafast.p50Ms))
+  return parts.join(' · ')
+}
+
+const HANDOVER_CAUSE: Record<string, string> = {
+  site_changed: 'the site changed',
+  input_only: 'this input did not match',
+  transient: 'the page was slow or asked for a check',
+}
+
+/** How a run was carried out, or nothing for a run done the normal way. */
+export function runModeLabel(
+  run: Pick<SkillRun, 'mode' | 'handoverStep' | 'handoverCause'>,
+): string | null {
+  if (run.mode === 'ultrafast') return 'Ultrafast'
+  if (run.mode !== 'handed_back') return null
+  const step = run.handoverStep ? ` at step ${run.handoverStep}` : ''
+  const cause = run.handoverCause
+    ? HANDOVER_CAUSE[run.handoverCause]
+    : undefined
+  return `Took over${step}${cause ? `: ${cause}` : ''}`
+}
+
+/** How many runs went each way, for the skill page. */
+export function runModeCounts(runs: Pick<SkillRun, 'mode'>[]): {
+  ultrafast: number
+  handedBack: number
+  normal: number
+} {
+  return runs.reduce(
+    (counts, run) => {
+      if (run.mode === 'ultrafast') counts.ultrafast += 1
+      else if (run.mode === 'handed_back') counts.handedBack += 1
+      else counts.normal += 1
+      return counts
+    },
+    { ultrafast: 0, handedBack: 0, normal: 0 },
+  )
+}
+
+/** Whether the skill page should offer the one-time write approval. */
+export function needsWriteApproval(
+  ultrafast: SkillUltrafast | undefined,
+): boolean {
+  return (
+    ultrafast?.effects === 'write' &&
+    !ultrafast.writeApproved &&
+    (ultrafast.status === 'verified' || ultrafast.status === 'degraded')
+  )
 }

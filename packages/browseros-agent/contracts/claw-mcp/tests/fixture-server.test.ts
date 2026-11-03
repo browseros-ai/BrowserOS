@@ -26,6 +26,7 @@ const EXPECTED_PAGES = [
   'labels.html',
   'links.html',
   'media.html',
+  'output-large.html',
   'overlay.html',
   'script-isolation.html',
   'scroll.html',

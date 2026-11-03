@@ -15,7 +15,7 @@ use super::{
     naming::{SESSION_NAME_INPUT_MAX_LEN, normalize_small_name},
     service::{
         AWAIT_HELP_TOOL_NAME, MARK_SKILL_RUN_TOOL_NAME, NAME_SESSION_TOOL_NAME,
-        REQUEST_HELP_TOOL_NAME, SAVE_SKILL_TOOL_NAME,
+        REQUEST_HELP_TOOL_NAME, RUN_SKILL_TOOL_NAME, SAVE_SKILL_TOOL_NAME,
     },
 };
 use crate::config::ServerMode;
@@ -87,7 +87,9 @@ pub fn refusal(mode: ServerMode, tool: &str) -> Option<&'static str> {
     }
     match tool {
         NAME_SESSION_TOOL_NAME => Some(NAME_SESSION_REFUSAL),
-        SAVE_SKILL_TOOL_NAME | MARK_SKILL_RUN_TOOL_NAME => Some(SKILLS_REFUSAL),
+        SAVE_SKILL_TOOL_NAME | MARK_SKILL_RUN_TOOL_NAME | RUN_SKILL_TOOL_NAME => {
+            Some(SKILLS_REFUSAL)
+        }
         REQUEST_HELP_TOOL_NAME | AWAIT_HELP_TOOL_NAME => Some(HUMAN_HELP_REFUSAL),
         _ => None,
     }
@@ -168,7 +170,7 @@ mod tests {
 
     #[test]
     fn desktop_refuses_nothing() {
-        for tool in HIDDEN.into_iter().chain(["tabs", "run", "pursue"]) {
+        for tool in HIDDEN.into_iter().chain(["tabs", "run"]) {
             assert_eq!(refusal(ServerMode::Desktop, tool), None, "{tool}");
         }
     }
@@ -178,8 +180,7 @@ mod tests {
         for tool in HIDDEN {
             assert!(refusal(ServerMode::Hosted, tool).is_some(), "{tool}");
         }
-        // pursue keeps its own gate, the decision-model credential.
-        for tool in ["tabs", "run", "act", "pursue"] {
+        for tool in ["tabs", "run", "act"] {
             assert_eq!(refusal(ServerMode::Hosted, tool), None, "{tool}");
         }
     }

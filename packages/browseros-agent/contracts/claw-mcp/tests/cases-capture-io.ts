@@ -468,26 +468,42 @@ export const captureIoCases: ContractCase[] = [
     },
   },
   {
-    name: 'run: ordinary hovers do not pay a chooser delay',
+    name: 'run: ordinary input batches complete without chooser interruption',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/upload.html'))
+      expectOk(
+        await ctx.mcp.callTool('evaluate_in_page', {
+          page,
+          code: 'const select = document.createElement("select"); select.id = "batch-choice"; select.setAttribute("aria-label", "Batch choice"); select.innerHTML = "<option value=one>One</option><option value=two>Two</option>"; document.body.appendChild(select);',
+        }),
+      )
       const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
-      const ref = snap
+      const hoverRef = snap
         .split('\n')
         .find((line) => line.includes('Attach document'))
         ?.match(/\[ref=(e\d+)\]/)?.[1]
-      if (!ref) throw new Error('no hover target')
+      const selectRef = snap
+        .split('\n')
+        .find((line) => line.includes('Batch choice'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!hoverRef || !selectRef) throw new Error('no ordinary input targets')
       const result = expectOk(
         await ctx.mcp.callTool('run', {
-          // The old 100ms wait alone costs ten seconds for this batch. Leave several
-          // seconds for real CDP work while staying below that unavoidable old minimum.
-          timeout: 9500,
-          code: `const p = browser.page(${page}); for (let i = 0; i < 100; i++) await p.hover(${JSON.stringify(ref)}); return 'hover-batch-complete';`,
+          // The virtual-time ordinary_input_skips_chooser_handoff test checks latency.
+          // This case checks native pointer/selection sequencing with the normal
+          // published run budget. Progress logs identify a stalled native operation.
+          code: `const p = browser.page(${page}); const started = Date.now(); for (let i = 0; i < 5; i++) { console.log('hover-start', i, Date.now() - started); await p.hover(${JSON.stringify(hoverRef)}); console.log('hover-done', i, Date.now() - started); console.log('select-start', i, Date.now() - started); await p.selectOption(${JSON.stringify(selectRef)}, i % 2 ? 'one' : 'two'); console.log('select-done', i, Date.now() - started); } return 'input-batch-complete';`,
         }),
         'ordinary input batch',
       )
-      if (!result.includes('hover-batch-complete'))
+      if (!result.includes('input-batch-complete'))
         throw new Error(`ordinary input batch exceeded its budget: ${result}`)
+      expectOk(
+        await ctx.mcp.callTool('evaluate_in_page', {
+          page,
+          code: 'const value = document.getElementById("batch-choice").value; if (value !== "two") throw new Error("Selection batch did not complete"); return value;',
+        }),
+      )
     },
   },
   {

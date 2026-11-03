@@ -65,6 +65,42 @@ class StartNeoTest(unittest.TestCase):
         self.assertEqual(calls, ["forget_zoom_levels", "spawn_as_neo"])
 
 
+class OutputDirectoryTest(unittest.TestCase):
+    def test_output_directory_follows_data_dir_unless_overridden(self):
+        declaration = re.search(r"^readonly OUTPUTS=.*$", SCRIPT, re.MULTILINE)
+        self.assertIsNotNone(declaration)
+        for override, expected in [
+            ("", "/var/lib/mirror/neo/tool-output"),
+            ("/shared/output files", "/shared/output files"),
+        ]:
+            result = run_bash(
+                "NEO_DATA_DIR=/var/lib/mirror/neo\n"
+                f"NEO_OUTPUT_DIR={shlex.quote(override)}\n"
+                + declaration.group(0) + '\nprintf "%s" "$OUTPUTS"\n'
+            )
+            self.assertEqual(result.stdout, expected)
+
+    def test_child_process_receives_the_configured_private_output_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            argv = Path(directory) / "argv"
+            stub = Path(directory) / "setpriv"
+            stub.write_text(
+                "#!/bin/bash\n"
+                f"printf '%s\\n' \"$@\" > {shlex.quote(str(argv))}\n"
+            )
+            stub.chmod(0o755)
+            output = "/workspace/neo data/tool-output"
+            run_bash(
+                f"PATH={shlex.quote(directory)}:$PATH\n"
+                "NEO_HOME=/home/neo XDG_DIR=/tmp/neo-xdg CLAW_DATA=/data/browserclaw\n"
+                "BROWSERCLAW_HOSTED_MODE=1\n"
+                f"OUTPUTS={shlex.quote(output)}\n"
+                + shell_function("spawn_as_neo")
+                + "spawn_as_neo browserclaw\nwait\n"
+            )
+            self.assertIn(f"BROWSEROS_OUTPUT_DIR={output}", argv.read_text().splitlines())
+
+
 @unittest.skipUnless(shutil.which("jq"), "needs jq, as the image has")
 class ApplyPoliciesTest(unittest.TestCase):
     def apply(
