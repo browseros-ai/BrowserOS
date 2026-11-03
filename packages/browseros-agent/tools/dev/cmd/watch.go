@@ -465,7 +465,9 @@ func clawServerProcConfig(root string, env []string, p proc.Ports, userDataDir s
 		Dir:     root,
 		Env:     clawServerCargoEnv(root, env),
 		Restart: true,
-		Cmd:     []string{"cargo", "run", "-p", "claw-server", "--", "--config", sidecarPath},
+		// billing-staging points the dev server at the staging billing gateway on fly.io, so neo
+		// sells and verifies ultrafast against the staging Stripe sandbox.
+		Cmd: []string{"cargo", "run", "-p", "claw-server", "--features", "billing-staging", "--", "--config", sidecarPath},
 		BeforeStart: func() error {
 			if err := proc.WriteSidecarConfig(sidecarPath, proc.SidecarConfigOptions{
 				Ports:         p,

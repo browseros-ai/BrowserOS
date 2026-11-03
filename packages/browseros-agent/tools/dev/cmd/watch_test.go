@@ -238,7 +238,7 @@ func TestClawRustServerProcConfigPassesSidecarAndDevEnv(t *testing.T) {
 		return nil
 	})
 
-	wantCmd := []string{"cargo", "run", "-p", "claw-server", "--", "--config", sidecarPath}
+	wantCmd := []string{"cargo", "run", "-p", "claw-server", "--features", "billing-staging", "--", "--config", sidecarPath}
 	if !reflect.DeepEqual(cfg.Cmd, wantCmd) {
 		t.Fatalf("expected rust server command %#v, got %#v", wantCmd, cfg.Cmd)
 	}
