@@ -1101,6 +1101,14 @@ async fn a_web_page_cannot_reach_the_plan_routes() -> anyhow::Result<()> {
     )
     .await?;
     assert_eq!(app.status, StatusCode::OK);
+    let app_get = Request::builder()
+        .uri("/api/v1/plan")
+        .header(header::HOST, "localhost")
+        .header("sec-fetch-site", "none")
+        .header("sec-fetch-mode", "cors")
+        .body(Body::empty())?;
+    let response = a.router.clone().oneshot(app_get).await?;
+    assert_eq!(response.status(), StatusCode::OK);
     let page = Request::builder()
         .uri("/api/v1/plan")
         .header(header::HOST, "localhost")

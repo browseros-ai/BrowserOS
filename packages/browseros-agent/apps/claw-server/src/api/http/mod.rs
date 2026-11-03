@@ -328,13 +328,19 @@ async fn extension_update_ready(
 /// claw-app, or a native client (no `Origin` and no `Sec-Fetch-Site`). Every other web page is
 /// refused: responses here carry `Access-Control-Allow-Origin: *`, and a WebSocket has no CORS at
 /// all, so the origin check is the only thing keeping a site from these endpoints.
+///
+/// Chrome sends no `Origin` on a GET from an extension page that holds host permission, only
+/// `Sec-Fetch-Site: none`. A web page cannot set that header, and its requests here say
+/// `cross-site`.
 fn trusted_extension_origin(headers: &axum::http::HeaderMap) -> bool {
     match headers
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok())
     {
         Some(BROWSERCLAW_EXTENSION_ORIGIN) => true,
-        None => !headers.contains_key("sec-fetch-site"),
+        None => headers
+            .get("sec-fetch-site")
+            .is_none_or(|value| value.as_bytes() == b"none"),
         Some(_) => false,
     }
 }
