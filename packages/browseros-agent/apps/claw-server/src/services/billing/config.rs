@@ -16,9 +16,14 @@ const LOCAL_GATEWAY: &str = "http://localhost:8787";
 /// The public half of the local billing gateway's dev-only signing key (raw 32 bytes, base64url).
 const DEV_KEYS: &[(&str, &str)] = &[("dev-1", "tHSf_0xpRZQb_Zelg55jNqn1GmyWbV6cm2ZSi248AUk")];
 
-/// The staging gateway, for builds with the `billing-staging` feature. Billing stays off in such
-/// a build while this is `None`.
-const STAGING_GATEWAY: Option<Gateway> = None;
+/// The staging gateway on fly.io, for builds with the `billing-staging` feature.
+const STAGING_GATEWAY: Option<Gateway> = Some((
+    "https://neo-billing-staging.fly.dev",
+    &[(
+        "staging-2026-10",
+        "FMJahZNybppPIcgi62EYlPk7JzbBCxgfLZ9OSxFuiwI",
+    )],
+));
 
 /// The production gateway. `None` until launch, so release builds are Free.
 const RELEASE_GATEWAY: Option<Gateway> = None;
@@ -99,9 +104,32 @@ mod tests {
 
     #[test]
     fn every_compiled_in_key_parses() {
-        for (kid, key) in DEV_KEYS {
-            assert!(parse_public_key(key).is_some(), "{kid}");
+        let compiled = [
+            Some((LOCAL_GATEWAY, DEV_KEYS)),
+            STAGING_GATEWAY,
+            RELEASE_GATEWAY,
+        ];
+        for (gateway, keys) in compiled.into_iter().flatten() {
+            assert!(Url::parse(gateway).is_ok(), "{gateway}");
+            for (kid, key) in keys {
+                assert!(parse_public_key(key).is_some(), "{kid}");
+            }
         }
+    }
+
+    #[cfg(feature = "billing-staging")]
+    #[test]
+    fn a_staging_build_uses_the_staging_gateway_and_trusts_only_its_key() {
+        let Some(config) = BillingConfig::for_build(false) else {
+            panic!("a staging build has billing");
+        };
+        assert_eq!(
+            config.gateway.as_str(),
+            "https://neo-billing-staging.fly.dev/"
+        );
+        assert!(config.release);
+        assert!(config.trusted_key("staging-2026-10").is_some());
+        assert!(config.trusted_key("dev-1").is_none());
     }
 
     #[cfg(not(feature = "billing-staging"))]
