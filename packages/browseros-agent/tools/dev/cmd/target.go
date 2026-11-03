@@ -90,6 +90,12 @@ func resolveDevTarget(root string, opts resetTargetOptions) (resetTarget, error)
 	if err != nil {
 		return resetTarget{}, err
 	}
+	// Watch ownership metadata has one shared home location even when the
+	// BrowserOS product state is redirected through BROWSEROS_DIR or a flag.
+	watchRunStateDir, err := proc.DefaultWatchRunBaseDir()
+	if err != nil {
+		return resetTarget{}, err
+	}
 	return resetTarget{
 		Name:                targetDev,
 		Title:               "BrowserOS dev reset",
@@ -98,7 +104,7 @@ func resolveDevTarget(root string, opts resetTargetOptions) (resetTarget, error)
 		Ports:               &ports,
 		BrowserUserDataDirs: []string{"/tmp/browseros-dev", devProfile},
 		TempPrefixes:        []string{"browseros-test-", "browseros-dev-", clawWatchTempStatePrefix},
-		WatchRunStateDir:    filepath.Join(browserosDir, "runs"),
+		WatchRunStateDir:    watchRunStateDir,
 		DeleteRootLabel:     "Delete dev profile?",
 		DeleteRootBody:      "It removes BrowserOS dev data plus VM state.",
 	}, nil

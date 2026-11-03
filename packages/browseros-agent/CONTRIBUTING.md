@@ -77,7 +77,7 @@ Plain watch reuses Claw settings and session history across worktrees. To select
 BROWSERCLAW_DIR=~/.browserclaw-copy-prod bun run dev:claw:watch
 ```
 
-The supervisor logs the selected browser profile and Claw state directory at startup. `dev:cleanup` removes temporary directories, including those created by `:new`, and preserves `~/.browserclaw-dev` and other state outside the temp directories. Existing state nested inside an older browser profile is left in place; point `BROWSERCLAW_DIR` at it to resume it.
+The supervisor logs the selected browser profile and Claw state directory at startup. `dev:cleanup` removes temporary directories, including those created by `:new`, and preserves `~/.browserclaw-dev` and other state outside the temp directories. `--only-temps` also stops watch owners before deleting their directories; it skips explicit port cleanup. Existing state nested inside an older browser profile is left in place; point `BROWSERCLAW_DIR` at it to resume it.
 
 ## Before you open a PR
 
