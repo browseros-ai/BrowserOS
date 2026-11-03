@@ -92,7 +92,7 @@ func TestBuildWatchEnvSelectsBrowserOSProduct(t *testing.T) {
 		CDP:       9012,
 		Server:    9123,
 		Extension: 9321,
-	}, "/tmp/browseros-dev", false)
+	}, "/tmp/browseros-dev", false, false)
 	if err != nil {
 		t.Fatalf("buildWatchEnv returned error: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestBuildWatchEnvSelectsBrowserClawProduct(t *testing.T) {
 		CDP:       9012,
 		Server:    9123,
 		Extension: 9321,
-	}, "/tmp/browseros-dev", true, browser.BinaryResolution{
+	}, "/tmp/browseros-dev", true, false, browser.BinaryResolution{
 		Product:       browser.ProductBrowserClaw,
 		Path:          browser.BrowserClawBinaryPath,
 		PreferredPath: browser.BrowserClawBinaryPath,
@@ -130,7 +130,7 @@ func TestBuildWatchEnvSelectsBrowserClawProduct(t *testing.T) {
 		"BROWSEROS_BINARY=/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo",
 		"BROWSEROS_CLAW_CDP_PORT=9012",
 		"VITE_BROWSEROS_CLAW_API_URL=http://127.0.0.1:9123",
-		"BROWSERCLAW_DIR=" + filepath.Join("/tmp/browseros-dev", "browserclaw"),
+		"BROWSERCLAW_DIR=" + filepath.Join(home, ".browserclaw-dev"),
 	} {
 		if !hasEnvEntry(env, want) {
 			t.Fatalf("expected env to contain %q, got %#v", want, env)
@@ -163,7 +163,7 @@ func TestBuildWatchEnvUsesFallbackBrowserBinaryForClaw(t *testing.T) {
 	env, err := buildWatchEnvWithBinaryResolution(proc.Ports{
 		CDP:    9012,
 		Server: 9123,
-	}, "/tmp/browseros-dev", true, browser.BinaryResolution{
+	}, "/tmp/browseros-dev", true, false, browser.BinaryResolution{
 		Product:       browser.ProductBrowserClaw,
 		Path:          browser.BrowserOSBinaryPath,
 		PreferredPath: browser.BrowserClawBinaryPath,
@@ -181,7 +181,7 @@ func TestBuildWatchEnvUsesFallbackBrowserBinaryForClaw(t *testing.T) {
 func TestBuildWatchEnvHonorsAndNormalizesProductStateOverrides(t *testing.T) {
 	browserosRoot := filepath.Join(t.TempDir(), "browseros-state")
 	t.Setenv("BROWSEROS_DIR", browserosRoot)
-	browserosEnv, err := buildWatchEnv(proc.Ports{CDP: 9012, Server: 9123}, "/tmp/profile", false)
+	browserosEnv, err := buildWatchEnv(proc.Ports{CDP: 9012, Server: 9123}, "/tmp/profile", false, false)
 	if err != nil {
 		t.Fatalf("buildWatchEnv returned error: %v", err)
 	}
@@ -195,6 +195,7 @@ func TestBuildWatchEnvHonorsAndNormalizesProductStateOverrides(t *testing.T) {
 		proc.Ports{CDP: 9012, Server: 9123},
 		"/tmp/profile",
 		true,
+		false,
 		browser.BinaryResolution{Path: browser.BrowserClawBinaryPath},
 	)
 	if err != nil {
@@ -228,7 +229,7 @@ func TestClawRustServerProcConfigPassesSidecarAndDevEnv(t *testing.T) {
 		Server:    9123,
 		Extension: 9321,
 	}
-	env, err := buildWatchEnv(ports, userDataDir, true)
+	env, err := buildWatchEnv(ports, userDataDir, true, false)
 	if err != nil {
 		t.Fatalf("buildWatchEnv returned error: %v", err)
 	}

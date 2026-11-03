@@ -41,7 +41,7 @@ func init() {
 	cleanupCmd.Flags().StringVar(&cleanupPortsValue, "ports", "", "Override ports as cdp,server,extension")
 	cleanupCmd.Flags().StringVar(&cleanupBrowserUserDataDir, "browser-user-data-dir", "", "Override BrowserOS user-data dir to stop")
 	cleanupCmd.Flags().BoolVar(&cleanupOnlyPorts, "only-ports", false, "Only kill port processes")
-	cleanupCmd.Flags().BoolVar(&cleanupOnlyTemps, "only-temps", false, "Only remove temp directories")
+	cleanupCmd.Flags().BoolVar(&cleanupOnlyTemps, "only-temps", false, "Only remove temp directories (stop watch owners first)")
 	cleanupCmd.Flags().BoolVar(&cleanupQuick, "quick", false, "Run safe cleanup only")
 	cleanupCmd.Flags().BoolVar(&cleanupYes, "yes", false, "Answer yes to the safe cleanup prompt")
 	rootCmd.AddCommand(cleanupCmd)
@@ -88,16 +88,19 @@ func runCleanup(cmd *cobra.Command, args []string) error {
 
 // runSafeCleanup is shared by cleanup and reset before any destructive repair steps.
 func runSafeCleanup(out io.Writer, target resetTarget, opts safeCleanupOptions) error {
-	if opts.ports {
-		if target.WatchRunStateDir != "" {
-			stopped, err := proc.StopAllWatchProcessesInDir(target.WatchRunStateDir, 3*time.Second)
-			if err != nil {
-				return err
-			}
-			if stopped > 0 {
-				fmt.Fprintf(out, "%s stopped %d old %s watch process group(s)\n", successStyle.Sprint("Stopped:"), stopped, target.Name)
-			}
+	// Temp-only cleanup must also drain watch owners: temporary Claw roots
+	// contain live databases, and browser profiles can still have writers too.
+	// A shutdown timeout returns before deleting anything or clearing ports.
+	if (opts.ports || opts.temps) && target.WatchRunStateDir != "" {
+		stopped, err := proc.StopAllWatchProcessesInDir(target.WatchRunStateDir, watchShutdownTimeout)
+		if err != nil {
+			return err
 		}
+		if stopped > 0 {
+			fmt.Fprintf(out, "%s stopped %d old %s watch process group(s)\n", successStyle.Sprint("Stopped:"), stopped, target.Name)
+		}
+	}
+	if opts.ports {
 		if len(target.BrowserUserDataDirs) > 0 {
 			killedBrowsers, err := proc.KillBrowserProcessesForUserDataDirs(target.BrowserUserDataDirs, 3*time.Second)
 			if err != nil {
