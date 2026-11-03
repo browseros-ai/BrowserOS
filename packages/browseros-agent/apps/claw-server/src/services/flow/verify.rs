@@ -35,6 +35,10 @@ static GENERATED_CLASS: LazyLock<Option<Regex>> = LazyLock::new(|| {
 });
 static WRITE_CALL: LazyLock<Option<Regex>> =
     LazyLock::new(|| Regex::new(&format!(r"([\w.$\]\[]+)\s*\.\s*(?:{WRITE_METHODS})\s*\(")).ok());
+/// Calls that act on the page with no way to stop short of the write, so verification cannot
+/// test a commit step that makes them.
+static UNTESTABLE_CALL: LazyLock<Option<Regex>> =
+    LazyLock::new(|| Regex::new(r"\.\s*(evaluateInPage|cdp|cdpJsonForPage)\s*\(").ok());
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Gate {
@@ -261,6 +265,16 @@ fn check_step(n: u32, src: &str, commit: bool) -> Result<(), Failure> {
         }
     }
     if commit {
+        if let Some(found) = UNTESTABLE_CALL
+            .as_ref()
+            .and_then(|re| re.captures(src))
+            .and_then(|captures| captures.get(1))
+        {
+            return fail(format!(
+                "the commit step calls {}, which would act even while the flow is verified; act only through state.page's click, fill, press and similar methods",
+                found.as_str()
+            ));
+        }
         for captures in WRITE_CALL
             .as_ref()
             .into_iter()
@@ -449,6 +463,7 @@ mod tests {
                     example("dove", "agent"),
                 ],
                 source_session: None,
+                prose_hash: None,
             },
             steps: steps
                 .into_iter()
@@ -557,6 +572,28 @@ mod tests {
             ],
         );
         assert!(static_message(&outside, 2).contains("only through state.page"));
+        let evaluated = doc(
+            Effects::Write,
+            vec![
+                (OPEN, false),
+                (
+                    "async ({ state }) => { await state.page.evaluateInPage(() => document.forms[0].submit()) }",
+                    true,
+                ),
+            ],
+        );
+        assert!(static_message(&evaluated, 2).contains("calls evaluateInPage"));
+        let keyboard = doc(
+            Effects::Write,
+            vec![
+                (OPEN, false),
+                (
+                    "async ({ state }) => { await state.page.press('Enter') }",
+                    true,
+                ),
+            ],
+        );
+        assert!(static_check(&keyboard, &labels(2)).is_ok());
         let two_commits = doc(Effects::Write, vec![(OPEN, true), (CLICK, true)]);
         assert!(static_message(&two_commits, 2).contains("exactly one step"));
         let missing = doc(Effects::Read, vec![(OPEN, false)]);
