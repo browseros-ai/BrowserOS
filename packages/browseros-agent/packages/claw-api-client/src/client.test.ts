@@ -417,7 +417,7 @@ describe('ClawApiClient', () => {
     })
 
     const error = await client
-      .startPlanCheckout({ plan: 'pro', interval: 'month' })
+      .startPlanCheckout({ plan: 'ultrafast', interval: 'month' })
       .catch((caught: unknown) => caught)
 
     expect(error).toBeInstanceOf(ApiResponseError)
@@ -435,8 +435,8 @@ describe('ClawApiClient', () => {
   it('sends plan requests to their exact routes', async () => {
     const plan: Plan = {
       available: true,
-      plan: 'pro',
-      planName: 'neo Pro',
+      plan: 'ultrafast',
+      planName: 'BrowserOS neo',
       features: ['claw.ultrafast'],
       status: 'ending',
       periodEnd: 1_795_737_600_000,

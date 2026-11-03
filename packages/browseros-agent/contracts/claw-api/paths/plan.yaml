@@ -274,7 +274,7 @@ cancel:
   post:
     operationId: cancelPlan
     summary: Cancel the plan at the end of the period.
-    description: Pro stays on until the period ends. Works from any computer on the key.
+    description: ultrafast stays on until the period ends. Works from any computer on the key.
     requestBody:
       required: true
       content:

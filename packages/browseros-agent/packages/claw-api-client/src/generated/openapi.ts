@@ -803,7 +803,7 @@ export interface paths {
     put?: never
     /**
      * Cancel the plan at the end of the period.
-     * @description Pro stays on until the period ends. Works from any computer on the key.
+     * @description ultrafast stays on until the period ends. Works from any computer on the key.
      */
     post: operations['cancelPlan']
     delete?: never
@@ -1502,7 +1502,7 @@ export interface components {
       body: string
     }
     /**
-     * @description none: this computer has no plan. active: paid and renewing. ending: cancelled, Pro lasts until endsAt. paymentFailed: a payment failed and Pro lasts until graceUntil. unpaid: still billed but past the grace period, or paused, so features is empty while the key, the portal and cancel keep working.
+     * @description none: this computer has no plan. active: paid and renewing. ending: cancelled, ultrafast lasts until endsAt. paymentFailed: a payment failed and ultrafast lasts until graceUntil. unpaid: still billed but past the grace period, or paused, so features is empty while the key, the portal and cancel keep working.
      * @enum {string}
      */
     PlanStatus: 'none' | 'active' | 'ending' | 'paymentFailed' | 'unpaid'
@@ -1510,9 +1510,9 @@ export interface components {
     Plan: {
       /** @description False when this build has no billing gateway, in which case every other plan route answers 404 billing_unavailable. */
       available: boolean
-      /** @description The plan id, such as "pro". Null when status is none. */
+      /** @description The plan id, such as "ultrafast". Null when status is none. */
       plan: string | null
-      /** @description The plan's display name from the pricing list, such as "neo Pro". */
+      /** @description The plan's display name from the pricing list, such as "BrowserOS neo". */
       planName: string | null
       /** @description Feature flags the plan turns on. Empty when status is none or unpaid. */
       features: string[]

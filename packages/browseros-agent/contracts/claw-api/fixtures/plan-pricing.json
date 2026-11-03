@@ -1,8 +1,8 @@
 {
   "plans": [
     {
-      "plan": "pro",
-      "name": "neo Pro",
+      "plan": "ultrafast",
+      "name": "BrowserOS neo",
       "description": "Faster agents in neo.",
       "features": ["claw.ultrafast"],
       "prices": [

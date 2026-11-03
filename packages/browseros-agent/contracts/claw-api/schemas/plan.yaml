@@ -2,8 +2,8 @@ PlanStatus:
   type: string
   enum: [none, active, ending, paymentFailed, unpaid]
   description: >-
-    none: this computer has no plan. active: paid and renewing. ending: cancelled, Pro lasts
-    until endsAt. paymentFailed: a payment failed and Pro lasts until graceUntil. unpaid: still
+    none: this computer has no plan. active: paid and renewing. ending: cancelled, ultrafast lasts
+    until endsAt. paymentFailed: a payment failed and ultrafast lasts until graceUntil. unpaid: still
     billed but past the grace period, or paused, so features is empty while the key, the
     portal and cancel keep working.
 Plan:
@@ -21,11 +21,11 @@ Plan:
     plan:
       type: string
       nullable: true
-      description: The plan id, such as "pro". Null when status is none.
+      description: The plan id, such as "ultrafast". Null when status is none.
     planName:
       type: string
       nullable: true
-      description: The plan's display name from the pricing list, such as "neo Pro".
+      description: The plan's display name from the pricing list, such as "BrowserOS neo".
     features:
       type: array
       description: Feature flags the plan turns on. Empty when status is none or unpaid.

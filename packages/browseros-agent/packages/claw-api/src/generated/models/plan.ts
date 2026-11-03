@@ -59,13 +59,13 @@ export interface Plan {
      */
     available: boolean;
     /**
-     * The plan id, such as "pro". Null when status is none.
+     * The plan id, such as "ultrafast". Null when status is none.
      * @type {string}
      * @memberof Plan
      */
     plan: string | null;
     /**
-     * The plan's display name from the pricing list, such as "neo Pro".
+     * The plan's display name from the pricing list, such as "BrowserOS neo".
      * @type {string}
      * @memberof Plan
      */
@@ -410,7 +410,7 @@ export interface PlanRateLimitedError {
 }
 
 /**
- * none: this computer has no plan. active: paid and renewing. ending: cancelled, Pro lasts until endsAt. paymentFailed: a payment failed and Pro lasts until graceUntil. unpaid: still billed but past the grace period, or paused, so features is empty while the key, the portal and cancel keep working.
+ * none: this computer has no plan. active: paid and renewing. ending: cancelled, ultrafast lasts until endsAt. paymentFailed: a payment failed and ultrafast lasts until graceUntil. unpaid: still billed but past the grace period, or paused, so features is empty while the key, the portal and cancel keep working.
  * @export
  */
 export const PlanStatus = {
