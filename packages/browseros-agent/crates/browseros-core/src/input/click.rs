@@ -7,7 +7,10 @@ use crate::pointer::PointerAction;
 use crate::{CoreError, PageJs, ProtocolSession};
 use serde::Deserialize;
 use serde_json::json;
-use std::{sync::LazyLock, time::Duration};
+use std::{
+    sync::{LazyLock, atomic::Ordering},
+    time::Duration,
+};
 use tokio::time::Instant;
 
 const RECOVERY_BUDGET: Duration = Duration::from_millis(1500);
@@ -158,16 +161,21 @@ impl Input {
         }
         // This is the sole DOM dispatch. call_once forbids stale-context replay,
         // and no error after this handoff returns to native preparation.
+        // Record before awaiting: a handler can open a modal and prevent the ack,
+        // causing the adapter to drop this future while it reports that modal.
+        let previous = self.dom_fallback.swap(1, Ordering::Relaxed);
         let activation: Activation = PageJs::isolated(session)
             .call_once(target.backend_node_id, &DOM_JS, &[])
             .await
-            .map_err(|error| CoreError::ClickOutcomeUnknown(error.to_string()))?;
+            .map_err(|error| CoreError::ClickOutcomeUnknown(format!("DOM fallback: {error}")))?;
         if let Some(reason) = activation.refused {
+            self.dom_fallback.store(previous, Ordering::Relaxed);
             return Err(CoreError::ClickFallbackUnavailable {
                 native: Box::new(native),
                 reason,
             });
         }
+        self.dom_fallback.store(2, Ordering::Relaxed);
         Ok(None)
     }
 

@@ -338,6 +338,114 @@ export const clickRecoveryCases: ContractCase[] = (
       ])
     },
   },
+  ...(['confirm', 'chooser'] as const).map((interaction) => ({
+    name: `${surface}: click recovery reports fallback when a ${interaction} interrupts acknowledgement`,
+    async run(ctx: CaseContext) {
+      const page = await ctx.openPage(ctx.fixture('/click-recovery.html'))
+      const ref = await fieldRef(ctx, page, 'Recovery target')
+      await evalValue(
+        ctx,
+        page,
+        interaction === 'confirm'
+          ? `document.getElementById('target').onclick=()=>confirm('Fallback confirmation'); return true`
+          : `const file=document.body.appendChild(document.createElement('input')); file.type='file'; file.style.display='none'; document.getElementById('target').onclick=()=>file.click(); return true`,
+      )
+      try {
+        const result = await click(ctx, page, surface, ref)
+        // act intentionally marks a pending JavaScript dialog as an error;
+        // delivery feedback must survive that existing response contract.
+        if (surface === 'act' && interaction === 'confirm') expectError(result)
+        else expectOk(result)
+        expect(textOf(result)).toContain('DOM fallback')
+        const value = (
+          surface === 'act'
+            ? result.structuredContent
+            : result.structuredContent?.value
+        ) as
+          | {
+              click?: {
+                status?: string
+                domFallback?: boolean
+                retryable?: boolean
+              }
+              dialogOpen?: boolean
+              fileChooserOpen?: boolean
+            }
+          | undefined
+        expect(value?.click?.domFallback).toBe(true)
+        if (interaction === 'confirm')
+          expect(value?.click?.status).toBe('unknown')
+        expect(['unknown', 'dispatched']).toContain(value?.click?.status)
+        if (value?.click?.status === 'unknown')
+          expect(value.click.retryable).toBe(false)
+        if (surface === 'run')
+          expect(
+            interaction === 'confirm'
+              ? value?.dialogOpen
+              : value?.fileChooserOpen,
+          ).toBe(true)
+      } finally {
+        expectOk(
+          await ctx.mcp.callTool(
+            interaction === 'confirm' ? 'act' : 'upload',
+            interaction === 'confirm'
+              ? { page, kind: 'dialog_dismiss' }
+              : { page, files: [] },
+          ),
+        )
+      }
+      expect(await evalValue(ctx, page, 'return window.events')).toEqual([
+        { trusted: false },
+      ])
+    },
+  })),
+  ...(surface === 'run'
+    ? [
+        {
+          name: 'run-legacy: click recovery reports its automatic fallback',
+          async run(ctx: CaseContext) {
+            const page = await ctx.openPage(ctx.fixture('/click-recovery.html'))
+            const ref = await fieldRef(ctx, page, 'Recovery target')
+            const result = await ctx.mcp.callTool('run', {
+              code: `return await browser.input(${page}).click(${JSON.stringify(ref)})`,
+            })
+            expectOk(result)
+            expect(textOf(result)).toContain('DOM fallback')
+            expect(await evalValue(ctx, page, 'return window.events')).toEqual([
+              { trusted: false },
+            ])
+          },
+        },
+      ]
+    : []),
+  ...(['inert', 'aria-hidden'] as const).map((inactive) => ({
+    name: `${surface}: click recovery reaches an active dialog beside an ${inactive} older modal`,
+    async run(ctx: CaseContext) {
+      const page = await ctx.openPage(
+        ctx.fixture('/click-recovery.html?mode=clear'),
+      )
+      const ref = await fieldRef(ctx, page, 'Recovery target')
+      await evalValue(
+        ctx,
+        page,
+        `
+        const lower=document.body.appendChild(document.createElement('div'));
+        lower.setAttribute('role','dialog'); lower.setAttribute('aria-modal','true');
+        lower.setAttribute(${JSON.stringify(inactive)}, ${JSON.stringify(inactive === 'inert' ? '' : 'true')});
+        lower.textContent='Older inactive dialog';
+        const active=document.body.appendChild(document.createElement('div'));
+        active.setAttribute('role','dialog'); active.setAttribute('aria-modal','true');
+        active.append(document.getElementById('target')); return true;
+      `,
+      )
+      const result = await click(ctx, page, surface, ref)
+      expectOk(result)
+      expect(textOf(result)).not.toContain('DOM fallback')
+      expect(await evalValue(ctx, page, 'return window.events')).toEqual([
+        { trusted: true },
+      ])
+    },
+  })),
   ...(['inert', 'modal', 'closed-modal', 'aria-modal'] as const).map(
     (mode) => ({
       name: `${surface}: click recovery refuses ${mode} background controls`,

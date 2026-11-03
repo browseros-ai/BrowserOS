@@ -156,7 +156,7 @@ const BOOTSTRAP_JS: &str = r#"
   async function clickRef(input, ref, extra) {
     if (extra.length) throw new Error('click(ref) does not accept options; recovery is automatic.');
     const result = await input('click', [asRef(ref, 'click')]);
-    if (result?.domFallback) __browserosConsole.log(`Click ${ref}: DOM fallback dispatched once; verify application state.`);
+    if (result?.domFallback) __browserosConsole.log(`Click ${ref}: ${result.notice}`);
     return result;
   }
 
@@ -1255,19 +1255,34 @@ impl BrowserBridge {
                     .control
                     .race(self.ctx.browser.input(page_id.clone()))
                     .await?;
-                match self
+                let outcome = self
                     .race_input(
                         &page_id,
                         true,
                         input.click(&Ref(ref_id), ClickOptions::default()),
                     )
-                    .await?
+                    .await?;
+                let value = match outcome {
+                    Some(_) => BrowserCallValue::Undefined,
+                    None => self.interaction_open_value(&page_id).await?,
+                };
+                if let Some((delivery, notice)) =
+                    super::click_feedback::fallback_feedback(input.dom_fallback_status())
                 {
-                    Some(Some(_)) => Ok(BrowserCallValue::Undefined),
-                    Some(None) => Ok(BrowserCallValue::Json(json!({ "domFallback": true }))),
-                    None => self.interaction_open_value(&page_id).await,
+                    // Interaction responses are objects; preserve the dialog or
+                    // chooser alongside delivery instead of replacing either.
+                    let mut value = match value {
+                        BrowserCallValue::Json(value) => value,
+                        BrowserCallValue::Undefined => json!({}),
+                    };
+                    value["click"] = delivery;
+                    value["domFallback"] = json!(true);
+                    value["notice"] = json!(notice);
+                    return Ok(BrowserCallValue::Json(value));
                 }
+                Ok(value)
             }
+
             "input.fill" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
                 let value = string_arg(&args, 2, "value")?;

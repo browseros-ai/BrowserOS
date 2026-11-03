@@ -20,7 +20,18 @@ use mouse::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, Ordering},
+};
+
+/// Delivery state survives cancellation of the click future by a dialog/picker
+/// race. Started means the one-shot handoff began; delivery is still uncertain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DomFallbackStatus {
+    Started,
+    Dispatched,
+}
 
 pub use keyboard::{
     KeyInfo, clear_field, get_key_info, insert_text, modifier_bitmask, normalize_key, press_combo,
@@ -68,6 +79,9 @@ pub struct Input {
     /// A zoomed mobile preview (see `crate::viewport`) takes main-frame pointer coordinates in
     /// its scaled on-screen space; everything else here is in CSS pixels.
     pointer_scale: f64,
+    /// Observe delivery after a raced future is dropped. This flag publishes no
+    /// other data, so relaxed atomic access suffices across executor threads.
+    dom_fallback: AtomicU8,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +124,17 @@ impl Input {
             access: None,
             pointer: None,
             pointer_scale: 1.0,
+            dom_fallback: AtomicU8::new(0),
+        }
+    }
+
+    /// Includes the handoff even when a modal interrupts its acknowledgement.
+    /// Native clicks leave a previous fallback notice intact within this Input.
+    pub fn dom_fallback_status(&self) -> Option<DomFallbackStatus> {
+        match self.dom_fallback.load(Ordering::Relaxed) {
+            1 => Some(DomFallbackStatus::Started),
+            2 => Some(DomFallbackStatus::Dispatched),
+            _ => None,
         }
     }
 
@@ -721,7 +746,9 @@ const SELECT_OPTION_FN: &str = "function(val){\
 
 #[cfg(test)]
 mod tests {
-    use super::{ClickOptions, Input, Point, PublicMouseButton, ScrollDirection};
+    use super::{
+        ClickOptions, DomFallbackStatus, Input, Point, PublicMouseButton, ScrollDirection,
+    };
     use crate::{
         BrowserSession, BrowserSessionHooks, CoreError, Ref,
         connection::CdpConnection,
@@ -2106,6 +2133,10 @@ mod tests {
             let input = input.with_pointer(Some(Pointer::default()));
             connection.take_calls()?;
             assert_eq!(input.click(&ref_id, ClickOptions::default()).await?, None);
+            assert_eq!(
+                input.dom_fallback_status(),
+                Some(DomFallbackStatus::Dispatched)
+            );
             let calls = connection.take_calls()?;
             assert_eq!(press_count(&calls), 0);
             assert_eq!(pointer_calls(&calls).count(), usize::from(after_move));
@@ -2482,6 +2513,10 @@ mod tests {
             let calls = connection.take_calls()?;
             assert_eq!(press_count(&calls), 0);
             assert_eq!(dom_activation_count(&calls), usize::from(fail_ack));
+            assert_eq!(
+                input.dom_fallback_status(),
+                fail_ack.then_some(DomFallbackStatus::Started)
+            );
         }
         Ok(())
     }
@@ -2508,6 +2543,7 @@ mod tests {
                 let calls = connection.take_calls()?;
                 assert_eq!(press_count(&calls), 1, "{failed_ack}, entry {entry}");
                 assert_eq!(dom_activation_count(&calls), 0);
+                assert_eq!(input.dom_fallback_status(), None);
             }
         }
         Ok(())

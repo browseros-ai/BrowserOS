@@ -191,13 +191,12 @@ struct ActArgs {
     sensitive: Option<bool>,
 }
 
-/// Effects collected across the dialog race: audit redaction must survive an
-/// interrupted action, and click delivery must describe the path actually used.
+/// Audit redaction survives a dialog race even when a partially entered field
+/// interrupts the action before it returns.
 #[derive(Default)]
-struct ActEffects {
+struct ActSensitivity {
     refs: Vec<String>,
     redact_all: bool,
-    dom_fallback: bool,
 }
 
 pub fn definition() -> crate::framework::ToolDef {
@@ -222,15 +221,15 @@ fn handler<'a>(
         // the input's own reply does.
         let document_start = ctx.browser.signals().document_mark(&page_id);
         let input = ctx.browser.input(page_id.clone()).await?;
-        let mut effects = ActEffects::default();
+        let mut sensitivity = ActSensitivity::default();
         // Honor an explicit sensitive flag before the action runs: a value must
         // still be redacted if the action later errors out (for example a stale ref
         // on a sibling field) after this field was already filled.
         if args.sensitive.unwrap_or(false) {
-            effects.redact_all = true;
+            sensitivity.redact_all = true;
         }
         let outcome: ToolExecResult<Option<ToolResult>> = if args.kind.is_dialog() {
-            let result = run_kind(&args, &input, &mut effects).await;
+            let result = run_kind(&args, &input, &mut sensitivity).await;
             if matches!(result, Ok(None)) {
                 ctx.browser.signals().clear_dialog(&page_id);
             }
@@ -250,7 +249,7 @@ fn handler<'a>(
             };
             tokio::select! {
                 biased;
-                result = run_kind(&args, &input, &mut effects) => result,
+                result = run_kind(&args, &input, &mut sensitivity) => result,
                 () = dialog => {
                     Ok(Some(pending_dialog_result(ctx, page_id.clone()).unwrap_or_else(
                         || {
@@ -266,12 +265,20 @@ fn handler<'a>(
         // Attach redaction hints before propagating any error or early return, so a
         // secret entered into the page before a failure is still kept out of the
         // ledger and its screenshot is skipped.
-        if effects.redact_all || !effects.refs.is_empty() {
+        if sensitivity.redact_all || !sensitivity.refs.is_empty() {
             response.set_audit_hints(AuditHints {
-                sensitive_refs: std::mem::take(&mut effects.refs),
-                redact_all_values: effects.redact_all,
+                sensitive_refs: std::mem::take(&mut sensitivity.refs),
+                redact_all_values: sensitivity.redact_all,
                 skip_screenshot: true,
             });
+        }
+        // The core records its handoff before awaiting the browser. Attach this
+        // before all early returns, including dialogs, choosers and failed acks.
+        if let Some((delivery, notice)) =
+            super::click_feedback::fallback_feedback(input.dom_fallback_status())
+        {
+            response.data(json!({"click": delivery}));
+            response.text(notice);
         }
         let filled = field_targets(ctx, &page_id, filled_refs(&args)).await;
         match outcome {
@@ -305,10 +312,8 @@ fn handler<'a>(
             return Ok(Some(chooser));
         }
         response.data(json!({ "kind": args.kind.as_str() }));
-        if matches!(args.kind, ActKind::Click) {
-            response.data(
-                json!({ "click": { "status": "dispatched", "domFallback": effects.dom_fallback } }),
-            );
+        if matches!(args.kind, ActKind::Click) && input.dom_fallback_status().is_none() {
+            response.data(json!({ "click": { "status": "dispatched", "domFallback": false } }));
         }
         if let Some(detail) = resolve_diff_detail(args.diff) {
             response.include_diff(args.page, true, detail, document_start);
@@ -318,11 +323,7 @@ fn handler<'a>(
         }
         response.include_console_summary(args.page, console_start);
         Ok(Some(text_result(
-            if effects.dom_fallback {
-                "ok (click); DOM fallback dispatched once; verify application state.".to_string()
-            } else {
-                format!("ok ({})", args.kind.as_str())
-            },
+            format!("ok ({})", args.kind.as_str()),
             None,
         )))
     })
@@ -368,17 +369,16 @@ fn filled_refs(args: &ActArgs) -> Vec<Ref> {
 async fn run_kind(
     args: &ActArgs,
     input: &browseros_core::input::Input,
-    effects: &mut ActEffects,
+    sensitivity: &mut ActSensitivity,
 ) -> ToolExecResult<Option<ToolResult>> {
     match args.kind {
         ActKind::Click => {
             let Some(ref_id) = args.r#ref.as_deref() else {
                 return Ok(Some(error_result("act click: ref is required.")));
             };
-            effects.dom_fallback = input
+            input
                 .click(&Ref(ref_id.to_string()), click_options(args))
-                .await?
-                .is_none();
+                .await?;
         }
         ActKind::ClickAt => {
             let Some(point) = point_from_args(args, "click_at")? else {
@@ -395,7 +395,7 @@ async fn run_kind(
             // Classify the focused target before typing, so a secret is caught even
             // if the keystrokes navigate or detach the field.
             if input.focused_field_is_sensitive().await {
-                effects.redact_all = true;
+                sensitivity.redact_all = true;
             }
             input.type_text(text).await?;
         }
@@ -407,7 +407,7 @@ async fn run_kind(
                 return Ok(Some(error_result("act type_at: text is required.")));
             };
             if input.point_field_is_sensitive(point.x, point.y).await {
-                effects.redact_all = true;
+                sensitivity.redact_all = true;
             }
             input
                 .type_at(point.x, point.y, text, args.clear.unwrap_or(false))
@@ -420,7 +420,7 @@ async fn run_kind(
                         .ref_field_is_sensitive(&Ref(field.r#ref.clone()))
                         .await
                     {
-                        effects.refs.push(field.r#ref.clone());
+                        sensitivity.refs.push(field.r#ref.clone());
                     }
                     input
                         .fill(
@@ -434,7 +434,7 @@ async fn run_kind(
                 (args.r#ref.as_deref(), args.value.as_deref())
             {
                 if input.ref_field_is_sensitive(&Ref(ref_id.to_string())).await {
-                    effects.refs.push(ref_id.to_string());
+                    sensitivity.refs.push(ref_id.to_string());
                 }
                 input
                     .fill(&Ref(ref_id.to_string()), value, args.clear.unwrap_or(true))
