@@ -12,7 +12,7 @@ const DATE = new Date(2026, 10, 27, 12).getTime()
 const planOf = (overrides: Partial<Plan> = {}): Plan => ({
   available: true,
   plan: 'ultrafast',
-  planName: 'BrowserOS neo',
+  planName: 'ultrafast',
   features: [],
   status: 'none',
   periodEnd: DATE,

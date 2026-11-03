@@ -436,7 +436,7 @@ describe('ClawApiClient', () => {
     const plan: Plan = {
       available: true,
       plan: 'ultrafast',
-      planName: 'BrowserOS neo',
+      planName: 'ultrafast',
       features: ['claw.ultrafast'],
       status: 'ending',
       periodEnd: 1_795_737_600_000,

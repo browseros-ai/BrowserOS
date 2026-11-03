@@ -67,7 +67,7 @@ const planOf = (overrides: Partial<Plan> = {}): Plan => ({
 
 const PRO = planOf({
   plan: 'ultrafast',
-  planName: 'BrowserOS neo',
+  planName: 'ultrafast',
   features: ['claw.ultrafast'],
   status: 'active',
   periodEnd: PERIOD_END,
@@ -78,7 +78,7 @@ const PRICING: PlanPricing = {
   plans: [
     {
       plan: 'ultrafast',
-      name: 'BrowserOS neo',
+      name: 'ultrafast',
       description: null,
       features: ['claw.ultrafast'],
       prices: [

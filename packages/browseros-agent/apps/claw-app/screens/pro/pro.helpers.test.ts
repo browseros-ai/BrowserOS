@@ -47,7 +47,7 @@ function pricingOf(
     plans: [
       {
         plan: 'ultrafast',
-        name: 'BrowserOS neo',
+        name: 'ultrafast',
         description: null,
         features: [],
         prices,

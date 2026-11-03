@@ -49,7 +49,7 @@ pub struct Plan {
     /// The plan id, such as \"ultrafast\". Null when status is none.
     #[serde(rename = "plan", deserialize_with = "Option::deserialize")]
     pub plan: Option<String>,
-    /// The plan's display name from the pricing list, such as \"BrowserOS neo\".
+    /// The plan's display name from the pricing list, such as \"ultrafast\".
     #[serde(rename = "planName", deserialize_with = "Option::deserialize")]
     pub plan_name: Option<String>,
     /// Feature flags the plan turns on. Empty when status is none or unpaid.

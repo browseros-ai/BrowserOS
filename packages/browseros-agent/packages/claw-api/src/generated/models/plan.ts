@@ -65,7 +65,7 @@ export interface Plan {
      */
     plan: string | null;
     /**
-     * The plan's display name from the pricing list, such as "BrowserOS neo".
+     * The plan's display name from the pricing list, such as "ultrafast".
      * @type {string}
      * @memberof Plan
      */

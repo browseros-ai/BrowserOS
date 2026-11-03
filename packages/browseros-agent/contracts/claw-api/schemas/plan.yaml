@@ -25,7 +25,7 @@ Plan:
     planName:
       type: string
       nullable: true
-      description: The plan's display name from the pricing list, such as "BrowserOS neo".
+      description: The plan's display name from the pricing list, such as "ultrafast".
     features:
       type: array
       description: Feature flags the plan turns on. Empty when status is none or unpaid.

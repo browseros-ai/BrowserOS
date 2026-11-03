@@ -256,7 +256,7 @@ async fn pricing_is_cached_and_drops_periods_it_cannot_show() -> anyhow::Result<
     assert_eq!(logged[0].query.as_deref(), Some("app=claw"));
     assert_eq!(logged[0].authorization, None);
     assert_eq!(first.body["plans"][0]["plan"], "ultrafast");
-    assert_eq!(first.body["plans"][0]["name"], "BrowserOS neo");
+    assert_eq!(first.body["plans"][0]["name"], "ultrafast");
     assert_eq!(
         first.body["plans"][0]["prices"],
         json!([
@@ -349,7 +349,7 @@ async fn buying_registers_this_computer_and_the_poll_saves_the_licence() -> anyh
     assert_eq!(complete.body["status"], "complete");
     assert_eq!(complete.body["plan"]["status"], "active");
     assert_eq!(complete.body["plan"]["onKey"], true);
-    assert_eq!(complete.body["plan"]["planName"], "BrowserOS neo");
+    assert_eq!(complete.body["plan"]["planName"], "ultrafast");
     assert_eq!(complete.body["plan"]["features"], json!(["claw.ultrafast"]));
     assert!(!complete.raw.contains("NEO-"));
 

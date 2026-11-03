@@ -11,7 +11,7 @@ const PRICING: PlanPricing = {
   plans: [
     {
       plan: 'ultrafast',
-      name: 'BrowserOS neo',
+      name: 'ultrafast',
       description: null,
       features: ['claw.ultrafast'],
       prices: [

@@ -331,7 +331,7 @@ fn serve(
                 StatusCode::OK,
                 json!({"app": "claw", "plans": [{
                     "plan": "ultrafast",
-                    "name": "BrowserOS neo",
+                    "name": "ultrafast",
                     "description": null,
                     "features": ["claw.ultrafast"],
                     "prices": [

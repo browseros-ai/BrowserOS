@@ -1512,7 +1512,7 @@ export interface components {
       available: boolean
       /** @description The plan id, such as "ultrafast". Null when status is none. */
       plan: string | null
-      /** @description The plan's display name from the pricing list, such as "BrowserOS neo". */
+      /** @description The plan's display name from the pricing list, such as "ultrafast". */
       planName: string | null
       /** @description Feature flags the plan turns on. Empty when status is none or unpaid. */
       features: string[]

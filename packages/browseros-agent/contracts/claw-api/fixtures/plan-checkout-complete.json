@@ -3,7 +3,7 @@
   "plan": {
     "available": true,
     "plan": "ultrafast",
-    "planName": "BrowserOS neo",
+    "planName": "ultrafast",
     "features": ["claw.ultrafast"],
     "status": "active",
     "periodEnd": 1795737600000,
