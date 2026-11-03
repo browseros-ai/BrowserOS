@@ -281,6 +281,19 @@ fn the_run_budget_is_read_from_the_tool_schema() {
     // the request then goes as asked so the server's own answer is the answer.
     let silent = serde_json::json!({ "name": "run", "inputSchema": { "properties": {} } });
     assert_eq!(claw_server::cli::script::budget_from_schema(&silent), None);
+
+    // `maximum` is what the MCP contract pins, so it wins over the prose.
+    let both = serde_json::json!({
+        "name": "run",
+        "inputSchema": { "properties": { "timeout": {
+            "default": 60000, "maximum": 60000,
+            "description": "Wall-clock budget in milliseconds. Default and maximum: 999."
+        }}}
+    });
+    assert_eq!(
+        claw_server::cli::script::budget_from_schema(&both),
+        Some(60_000)
+    );
 }
 
 #[test]

@@ -68,6 +68,11 @@ of output, against 2,356 ms and 4,410 bytes done one verb at a time.
 
 ### The thirty second cap
 
+A result too large to inline is saved whole and given an id. Read it back with
+`browseros output <id>` (omit `--part` to list the parts) rather than re-running
+the call. The server's advisory calls this `read_output`; the command is
+`browseros output`.
+
 A run is hard capped by the server's wall-clock budget (60 seconds by default,
 set per deployment) and a larger `--script-timeout`
 is clamped rather than honored. Three things follow:

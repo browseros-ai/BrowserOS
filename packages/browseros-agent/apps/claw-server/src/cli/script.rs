@@ -109,9 +109,14 @@ pub fn cap_advice(budget_ms: Option<u64>) -> String {
 /// spending a call.
 #[must_use]
 pub fn budget_from_schema(run_tool: &Value) -> Option<u64> {
-    let description = run_tool
-        .pointer("/inputSchema/properties/timeout/description")
-        .and_then(Value::as_str)?;
+    let timeout = run_tool.pointer("/inputSchema/properties/timeout")?;
+    // `maximum` is the authoritative field and what the MCP contract pins. The
+    // prose fallback below covers a server that states the figure without
+    // constraining it, and parsing that is still better than assuming one.
+    if let Some(maximum) = timeout.get("maximum").and_then(Value::as_u64) {
+        return Some(maximum);
+    }
+    let description = timeout.get("description").and_then(Value::as_str)?;
     let rest = description.split("maximum:").nth(1)?;
     let digits: String = rest
         .trim_start()

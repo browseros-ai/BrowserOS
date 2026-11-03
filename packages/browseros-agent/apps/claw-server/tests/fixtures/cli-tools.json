@@ -21,8 +21,10 @@
     "pdf",
     "wait",
     "windows",
-    "evaluate",
-    "run"
+    "evaluate_in_page",
+    "run",
+    "read_output",
+    "run_skill"
   ],
   "server": [
     "name_session",

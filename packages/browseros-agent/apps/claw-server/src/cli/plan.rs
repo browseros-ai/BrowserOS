@@ -9,6 +9,10 @@
 use serde_json::{Map, Value, json};
 
 use crate::cli::exit::Failure;
+
+/// `evaluate_in_page`'s own hard ceiling, which it clamps to rather than
+/// rejecting. Separate from `run`'s budget, which a deployment configures.
+const EVAL_TIMEOUT_CAP_MS: f64 = 30_000.0;
 use crate::cli::grammar::{
     CardsCmd, Command, CredentialsCmd, DialogCmd, DiffFlag, GroupCmd, HelpCmd, HelpersCmd,
     ProfileCmd, SessionCmd, SkillCmd, SkillsCmd, TabCmd, TargetCmd, WindowCmd,
@@ -712,17 +716,22 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
                 ));
             }
             let body = script_body(external, code.as_deref(), "eval")?;
-            let mut plan = ToolPlan::new("evaluate")
+            let mut plan = ToolPlan::new("evaluate_in_page")
                 .page()
                 .arg("code", json!(body))
                 .arg("settle", flag(*settle))
                 .arg("maxChars", max_chars.map_or(Value::Null, Value::from));
-            // The ceiling is the server's, read from the run tool's schema at
-            // dispatch, because it is configurable per deployment and a value
-            // above it is rejected rather than clamped.
+            // Unlike `run`, this tool's ceiling is fixed at 30000 and it clamps
+            // rather than rejecting, so saying so here costs nothing and needs
+            // no discovery.
             if let Some(requested) = script_timeout {
-                plan.requested_timeout = Some(*requested);
-                plan = plan.arg("timeout", Value::from(*requested));
+                let clamped = requested.min(EVAL_TIMEOUT_CAP_MS);
+                if *requested > EVAL_TIMEOUT_CAP_MS {
+                    plan.notices.push(format!(
+                        "[eval --script-timeout {requested} ms clamped to 30000, this tool's hard cap. For longer work, start it on the page and poll with short calls.]"
+                    ));
+                }
+                plan = plan.arg("timeout", Value::from(clamped));
             }
             Plan::tool(plan)
         }
@@ -777,6 +786,37 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
         Command::Skill(SkillCmd::Ran { name }) => {
             Plan::tool(ToolPlan::new("mark_skill_run").arg("name", json!(name)))
         }
+        Command::Skill(SkillCmd::Run { name, inputs }) => {
+            let raw: Option<&str> = match inputs.as_deref() {
+                Some("-") => Some(external.ok_or_else(|| {
+                    Failure::usage("skill run --inputs - expects the JSON on stdin.")
+                })?),
+                other => other,
+            };
+            let parsed = match raw {
+                Some(raw) => serde_json::from_str::<Value>(raw).map_err(|error| {
+                    Failure::usage(format!("skill run --inputs is not valid JSON: {error}"))
+                })?,
+                None => Value::Null,
+            };
+            Plan::tool(
+                ToolPlan::new("run_skill")
+                    .arg("name", json!(name))
+                    .arg("inputs", parsed),
+            )
+        }
+        Command::Output {
+            id,
+            part,
+            offset,
+            limit,
+        } => Plan::tool(
+            ToolPlan::new("read_output")
+                .arg("outputId", json!(id))
+                .arg("part", opt(part))
+                .arg("offset", offset.map_or(Value::Null, Value::from))
+                .arg("limit", limit.map_or(Value::Null, Value::from)),
+        ),
         Command::Help(HelpCmd::Request {
             reason,
             details,

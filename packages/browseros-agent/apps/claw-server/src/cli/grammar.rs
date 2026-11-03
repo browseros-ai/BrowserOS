@@ -121,6 +121,25 @@ pub enum Command {
     /// The profile this task is bound to, where the native supports it.
     #[command(subcommand)]
     Target(TargetCmd),
+    /// Read back a saved tool output that was too large to inline.
+    ///
+    /// A call that produces more than the inline budget saves it and names an
+    /// id; this reads it, in chunks, without re-running the call.
+    Output {
+        /// The output id from the call that saved it.
+        id: String,
+        /// One part of a multi-part output, as named in its listing. Omit to
+        /// list the parts.
+        #[arg(long)]
+        part: Option<String>,
+        /// Byte offset to resume from, using the previous response's
+        /// `nextOffset`.
+        #[arg(long)]
+        offset: Option<u64>,
+        /// Bytes per chunk, 4 to 65536.
+        #[arg(long)]
+        limit: Option<u64>,
+    },
     /// Saved passwords in the browser's own store, by reference only.
     #[command(subcommand)]
     Credentials(CredentialsCmd),
@@ -584,6 +603,17 @@ pub enum SkillCmd {
     },
     Ran {
         name: String,
+    },
+    /// Run a saved skill's verified flow, where the server offers it.
+    ///
+    /// Offered only in ultrafast mode, so a server without it says so rather
+    /// than the command failing with a bare tool error.
+    Run {
+        name: String,
+        /// The flow's inputs as JSON, or `-` to read them from stdin. The
+        /// skill's own "Run it fast" section lists what it takes.
+        #[arg(long)]
+        inputs: Option<String>,
     },
 }
 

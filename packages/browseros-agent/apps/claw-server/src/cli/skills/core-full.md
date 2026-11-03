@@ -207,6 +207,28 @@ Helpers are saved per host and are hot-loaded as `helpers.<name>(browser, page)`
 where page is the id number. They are only callable inside `run`, even though
 the roster is advertised in other tools' output.
 
+### Large results, and saved flows
+
+A call whose result exceeds the server's inline budget saves the whole thing
+and names an output id. Read it back without re-running the call:
+
+```bash
+browseros output <id>                  # list the parts
+browseros output <id> --part result    # one part
+browseros output <id> --part result --offset 16384 --limit 65536
+```
+
+The server's own advisory for this names the `read_output` tool, because it is
+written for MCP callers. `browseros output` is the same thing.
+
+```bash
+browseros skill run <name> --inputs '{"query":"ram"}'
+browseros skill run <name> --inputs -          # JSON on stdin
+```
+
+`skill run` executes a saved skill's verified flow and is offered only where
+the server runs them; `browseros status` says whether it is.
+
 ### Saved passwords and cards, by reference only
 
 ```bash

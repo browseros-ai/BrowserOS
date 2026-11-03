@@ -73,6 +73,26 @@ async fn run_tool(
         .into());
     }
 
+    // A tool that is neither offered nor one of the known-optional ones means
+    // the catalogue moved under us: a rename upstream, or a server too old or
+    // too new for this binary. Saying which tool is missing turns an opaque
+    // `tools/call` failure into something the caller can act on. Found when
+    // `evaluate` became `evaluate_in_page` and `eval` failed with nothing but
+    // the method name.
+    if !session.state().tools.is_empty() && !session.state().offers(plan.tool) {
+        return Err(Failure::tool(format!(
+            "this server has no `{}` tool, so `browseros {}` cannot run.\n  The server is {}; this CLI may be older or newer than it.\n  Run `browseros status` to see what it offers.",
+            plan.tool,
+            label,
+            session
+                .state()
+                .server_version
+                .as_deref()
+                .unwrap_or("an unknown version"),
+        ))
+        .into());
+    }
+
     let page = if plan.needs_page {
         let page = globals
             .page
@@ -146,22 +166,37 @@ async fn run_tool(
         session.persist(|state| state.page_url = Some(url.clone()))?;
     }
 
-    // The server creates the task's tab group when the first tab is opened and
-    // does not name it in that reply, so learn it from one listing. Once
-    // recorded this never runs again: it is the durable half of the session
-    // identity, and without it `session end --close-tabs` has nothing to close
-    // and a restart cannot re-claim the group.
-    if plan.with_group
-        && !output.is_error
-        && session.state().group_id.is_none()
-        && let Some(opened) = render::page_from(&output)
-    {
-        let listed = session
-            .call("tabs", json!({ "action": "list" }), false)
-            .await
-            .ok();
-        if let Some(group) = listed.as_ref().and_then(|l| render::group_of(l, opened)) {
-            session.persist(|state| state.group_id = Some(group.clone()))?;
+    // The task's tab group is the durable half of the session identity: the
+    // transport id dies with the server, a known group can be re-claimed, and
+    // without it `session end --close-tabs` has nothing to close. The server
+    // creates it and never names it in a reply, so it has to be read out of a
+    // listing.
+    //
+    // Two chances to catch it, because neither alone is enough. A listing the
+    // caller already asked for costs nothing and always sees the group, but a
+    // session that only opens and clicks never asks for one. A listing taken
+    // right after the open does not always see it: a tab now opens on
+    // about:blank and navigates afterwards, so the group can land after the
+    // reply. Together they cost one extra round trip per session at most, and
+    // the next command heals what the first attempt missed.
+    if session.state().group_id.is_none() && !output.is_error {
+        let mine = session.state().page;
+        if plan.tool == "tabs" && plan.args.get("action").and_then(Value::as_str) == Some("list") {
+            if let Some(page) = mine
+                && let Some(group) = render::group_of(&output, page)
+            {
+                session.persist(|state| state.group_id = Some(group.clone()))?;
+            }
+        } else if plan.with_group
+            && let Some(opened) = render::page_from(&output)
+        {
+            let listed = session
+                .call("tabs", json!({ "action": "list" }), false)
+                .await
+                .ok();
+            if let Some(group) = listed.as_ref().and_then(|l| render::group_of(l, opened)) {
+                session.persist(|state| state.group_id = Some(group.clone()))?;
+            }
         }
     }
 
@@ -653,6 +688,7 @@ fn command_label(command: &Command) -> &'static str {
         Command::Window(_) => "window",
         Command::Profile(_) => "profile",
         Command::Target(_) => "target",
+        Command::Output { .. } => "output",
         Command::Credentials(_) => "credentials",
         Command::Cards(_) => "cards",
         Command::Snapshot { .. } => "snapshot",

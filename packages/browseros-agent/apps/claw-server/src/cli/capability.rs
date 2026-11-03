@@ -47,6 +47,11 @@ pub const OPTIONAL: &[Optional] = &[
         absent_because: "a hosted server cannot link skills into an agent beside it",
     },
     Optional {
+        command: "skill run",
+        tool: "run_skill",
+        absent_because: "this server does not run saved flows (ultrafast mode is off)",
+    },
+    Optional {
         command: "credentials",
         tool: "credentials",
         absent_because: "this BrowserOS build does not expose its password store",
