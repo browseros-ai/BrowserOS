@@ -97,7 +97,7 @@ func resolveDevTarget(root string, opts resetTargetOptions) (resetTarget, error)
 		LimaHome:            filepath.Join(browserosDir, "lima"),
 		Ports:               &ports,
 		BrowserUserDataDirs: []string{"/tmp/browseros-dev", devProfile},
-		TempPrefixes:        []string{"browseros-test-", "browseros-dev-"},
+		TempPrefixes:        []string{"browseros-test-", "browseros-dev-", clawWatchTempStatePrefix},
 		WatchRunStateDir:    filepath.Join(browserosDir, "runs"),
 		DeleteRootLabel:     "Delete dev profile?",
 		DeleteRootBody:      "It removes BrowserOS dev data plus VM state.",
