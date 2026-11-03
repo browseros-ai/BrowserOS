@@ -69,7 +69,7 @@ There are two variants and the difference matters more than the name suggests.
 | On start | **Kills anything holding those ports, and any browser already using that profile** | Only its own server port, cleared just before launch |
 | Reach for it when | You want your logins and settings to survive a restart | Running more than one at once, testing first-run behaviour, or not wanting to disturb a running instance |
 
-`:new` is the safer default while you are getting oriented, though it is not entirely hands-off: the server process clears its own port immediately before launching, so a process that grabs that port in the gap after it was picked will still be killed. Both variants lock the browser profile and the Claw state directory. Starting another watch with the same Claw state directory stops its previous watcher, even across worktrees.
+`:new` is the safer default while you are getting oriented, though it is not entirely hands-off: the server process clears its own port immediately before launching, so a process that grabs that port in the gap after it was picked will still be killed. Both variants lock the browser profile and the Claw state directory. Starting another watch with the same Claw state directory waits for its previous watcher to stop its children, even across worktrees. A shutdown timeout returns an error rather than reopening the same database during cleanup.
 
 Plain watch reuses Claw settings and session history across worktrees. To select another Claw state directory, set `BROWSERCLAW_DIR`; it takes precedence for both commands:
 

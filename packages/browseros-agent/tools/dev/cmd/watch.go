@@ -39,7 +39,10 @@ const (
 	defaultClawWatchServerPort = 9200
 	defaultClawWatchStateDir   = ".browserclaw-dev"
 	clawWatchTempStatePrefix   = "browserclaw-dev-"
-	rustClawWatchPollInterval  = time.Second
+	// Three managed child groups can each take up to eight seconds to stop.
+	// Leave room for that cleanup before a replacement watcher gives up.
+	watchShutdownTimeout      = 30 * time.Second
+	rustClawWatchPollInterval = time.Second
 )
 
 func init() {
@@ -79,6 +82,13 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	stateLockDir := stateDir
+	if watchClaw {
+		stateLockDir, err = resolveClawWatchStateLockDir(stateDir)
+		if err != nil {
+			return err
+		}
+	}
 	var runLock, stateLock *proc.WatchRunLock
 	defer func() {
 		// The ownership locks outlive all managed children, including shutdown.
@@ -95,7 +105,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 			Mode:    watchRunLockMode,
 			Profile: userDataDir,
 			Ports:   ports,
-		}, 3*time.Second)
+		}, watchShutdownTimeout)
 		if err != nil {
 			return err
 		}
@@ -109,9 +119,9 @@ func runWatch(cmd *cobra.Command, args []string) error {
 			// must exit first, or it could respawn children on those same ports.
 			lock, stopped, err = proc.AcquireWatchRunLock(proc.WatchRunIdentity{
 				Mode:    clawWatchStateLockMode,
-				Profile: stateDir,
+				Profile: stateLockDir,
 				Ports:   ports,
-			}, 3*time.Second)
+			}, watchShutdownTimeout)
 			if err != nil {
 				return err
 			}
@@ -320,6 +330,20 @@ func resolveWatchProductStateDir(claw bool, fresh bool) (string, string, error) 
 		return "", "", fmt.Errorf("resolve %s default: %w", key, err)
 	}
 	return key, filepath.Join(home, dirName), nil
+}
+
+// resolveClawWatchStateLockDir gives filesystem aliases one ownership identity.
+// Create the selected root first so symlinks can be resolved even on its first
+// run; /tmp/state and /private/tmp/state must never open the database concurrently.
+func resolveClawWatchStateLockDir(stateDir string) (string, error) {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return "", fmt.Errorf("creating Claw state dir: %w", err)
+	}
+	dir, err := filepath.EvalSymlinks(stateDir)
+	if err != nil {
+		return "", fmt.Errorf("resolving Claw state dir for ownership: %w", err)
+	}
+	return dir, nil
 }
 
 // envValue returns the last value assigned to key in an environ-style slice.

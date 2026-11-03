@@ -105,6 +105,27 @@ func TestNewBrowserOSWatchKeepsItsExistingStateRoot(t *testing.T) {
 	}
 }
 
+func TestClawWatchDirectoryAliasesShareStateOwnership(t *testing.T) {
+	parent := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "state-alias")
+	if err := os.Symlink(parent, alias); err != nil {
+		t.Fatal(err)
+	}
+	// Neither selected root exists yet; ownership must still resolve through
+	// the aliased parent instead of creating two locks on the first run.
+	first, err := resolveClawWatchStateLockDir(filepath.Join(alias, "new-state", "nested"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := resolveClawWatchStateLockDir(filepath.Join(parent, "new-state", "nested"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatalf("one state directory selected two ownership identities: %s, %s", first, second)
+	}
+}
+
 func TestDevCleanupRemovesTemporaryClawStateAndPreservesSavedState(t *testing.T) {
 	home := t.TempDir()
 	tempRoot := t.TempDir()
