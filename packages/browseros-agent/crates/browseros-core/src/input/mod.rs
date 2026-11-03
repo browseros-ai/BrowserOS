@@ -27,11 +27,19 @@ use std::sync::{
 
 /// Delivery state survives cancellation of the click future by a dialog/picker
 /// race. Started means the one-shot handoff began; delivery is still uncertain.
+/// A dispatched press is trusted when BrowserOS pressed the element natively,
+/// and inert when the page had made it inert, usually behind an open dialog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DomFallbackStatus {
     Started,
-    Dispatched,
+    Dispatched { trusted: bool, inert: bool },
 }
+
+/// `Input::dom_fallback` states: started, or dispatched with flag bits.
+const FALLBACK_STARTED: u8 = 1;
+const FALLBACK_DISPATCHED: u8 = 2;
+const FALLBACK_TRUSTED: u8 = 4;
+const FALLBACK_INERT: u8 = 8;
 
 pub use keyboard::{
     KeyInfo, clear_field, get_key_info, insert_text, modifier_bitmask, normalize_key, press_combo,
@@ -132,9 +140,12 @@ impl Input {
     /// Native clicks leave a previous fallback notice intact within this Input.
     pub fn dom_fallback_status(&self) -> Option<DomFallbackStatus> {
         match self.dom_fallback.load(Ordering::Relaxed) {
-            1 => Some(DomFallbackStatus::Started),
-            2 => Some(DomFallbackStatus::Dispatched),
-            _ => None,
+            0 => None,
+            FALLBACK_STARTED => Some(DomFallbackStatus::Started),
+            state => Some(DomFallbackStatus::Dispatched {
+                trusted: state & FALLBACK_TRUSTED != 0,
+                inert: state & FALLBACK_INERT != 0,
+            }),
         }
     }
 
@@ -780,13 +791,25 @@ mod tests {
         Pending,
     }
 
+    /// How the browser answers `DOM.click`.
+    #[derive(Clone, Copy)]
+    enum NativePress {
+        Pressed {
+            inert: bool,
+        },
+        Refused(&'static str),
+        /// A BrowserOS build from before `DOM.click`.
+        Missing,
+        /// Sent, but the acknowledgement never came back.
+        Lost,
+    }
+
     struct HarnessState {
         hit_test: HitTestResponse,
         hit_test_calls: usize,
         mouse_events: usize,
         fail_mouse_ack: Option<&'static str>,
-        ax_ignored_reason: Option<&'static str>,
-        fail_eligibility: bool,
+        native_press: NativePress,
         fail_dom_ack: bool,
         mouse_calls: Vec<(Value, Instant)>,
         page_scrolls: usize,
@@ -1008,13 +1031,24 @@ mod tests {
                         }
                         Ok(json!({ "result": { "value": [] } }))
                     }
-                    "Accessibility.getPartialAXTree" => {
-                        let state = self.state.lock().map_err(|_| CdpError::ConnectionLost)?;
-                        if state.fail_eligibility {
-                            return Err(CdpError::ConnectionLost);
+                    "DOM.click" => {
+                        let press = self
+                            .state
+                            .lock()
+                            .map_err(|_| CdpError::ConnectionLost)?
+                            .native_press;
+                        match press {
+                            NativePress::Pressed { inert } => Ok(json!({ "inert": inert })),
+                            NativePress::Refused(code) => Ok(json!({ "refused": code })),
+                            NativePress::Missing => Err(CdpError::Protocol {
+                                code: -32601,
+                                message: "'DOM.click' wasn't found".into(),
+                            }),
+                            NativePress::Lost => Err(CdpError::Protocol {
+                                code: -32000,
+                                message: "Inspected target navigated or closed".into(),
+                            }),
                         }
-                        Ok(json!({"nodes":[{"backendDOMNodeId":params["backendNodeId"],
-                            "ignoredReasons":state.ax_ignored_reason.map(|name| json!({"name":name})).into_iter().collect::<Vec<_>>() }]}))
                     }
                     "DOM.resolveNode" => Ok(json!({ "object": { "objectId": "target-object" } })),
                     "DOM.getNodeForLocation" => {
@@ -1271,8 +1305,7 @@ mod tests {
                 hit_test_calls: 0,
                 mouse_events: 0,
                 fail_mouse_ack: None,
-                ax_ignored_reason: None,
-                fail_eligibility: false,
+                native_press: NativePress::Pressed { inert: false },
                 fail_dom_ack: false,
                 mouse_calls: Vec::new(),
                 page_scrolls: 0,
@@ -1813,9 +1846,10 @@ mod tests {
             );
             assert_eq!(pointer_calls(&calls).count(), 1);
             assert_eq!(
-                dom_activation_count(&calls),
+                native_press_count(&calls),
                 usize::from(matches!(action, PointerInput::Click))
             );
+            assert_eq!(dom_activation_count(&calls), 0);
         }
         Ok(())
     }
@@ -2135,20 +2169,16 @@ mod tests {
             assert_eq!(input.click(&ref_id, ClickOptions::default()).await?, None);
             assert_eq!(
                 input.dom_fallback_status(),
-                Some(DomFallbackStatus::Dispatched)
+                Some(DomFallbackStatus::Dispatched {
+                    trusted: true,
+                    inert: false
+                })
             );
             let calls = connection.take_calls()?;
             assert_eq!(press_count(&calls), 0);
             assert_eq!(pointer_calls(&calls).count(), usize::from(after_move));
-            assert_eq!(
-                calls
-                    .iter()
-                    .filter(|call| call.params["functionDeclaration"]
-                        .as_str()
-                        .is_some_and(|script| script.contains("browserosActivateDom")))
-                    .count(),
-                1
-            );
+            assert_eq!(native_press_count(&calls), 1);
+            assert_eq!(dom_activation_count(&calls), 0);
         }
         Ok(())
     }
@@ -2477,47 +2507,101 @@ mod tests {
             .count()
     }
 
+    fn native_press_count(calls: &[TestCall]) -> usize {
+        calls
+            .iter()
+            .filter(|call| call.method == "DOM.click")
+            .count()
+    }
+
     #[tokio::test(start_paused = true)]
-    async fn dom_fallback_requires_eligibility_and_never_replays_a_lost_ack()
-    -> Result<(), CoreError> {
-        for refused in [
-            "activeModalDialog",
-            "activeAriaModalDialog",
-            "inertElement",
-            "inertSubtree",
-        ] {
+    async fn fallback_press_goes_through_cover_and_never_replays() -> Result<(), CoreError> {
+        // The native press reaches a covered target, an inert one behind a dialog included.
+        for inert in [false, true] {
             let (connection, input, ref_id) =
                 input_harness(HitTestResponse::Blocked("div#overlay")).await?;
-            connection.configure(|state| state.ax_ignored_reason = Some(refused))?;
-            assert!(input.click(&ref_id, ClickOptions::default()).await.is_err());
+            connection.configure(|state| state.native_press = NativePress::Pressed { inert })?;
+            assert_eq!(input.click(&ref_id, ClickOptions::default()).await?, None);
             let calls = connection.take_calls()?;
             assert_eq!(press_count(&calls), 0);
+            assert_eq!(native_press_count(&calls), 1);
             assert_eq!(dom_activation_count(&calls), 0);
+            assert_eq!(
+                input.dom_fallback_status(),
+                Some(DomFallbackStatus::Dispatched {
+                    trusted: true,
+                    inert
+                })
+            );
         }
+
+        // A refusal sends nothing more and keeps the native obstruction.
+        let (connection, input, ref_id) =
+            input_harness(HitTestResponse::Blocked("div#overlay")).await?;
+        connection.configure(|state| state.native_press = NativePress::Refused("notVisible"))?;
+        let result = input.click(&ref_id, ClickOptions::default()).await;
+        assert!(matches!(
+            result,
+            Err(CoreError::ClickFallbackUnavailable { ref native, ref reason })
+                if matches!(**native, CoreError::ElementCovered { .. })
+                    && reason.contains("not visible")
+        ));
+        let calls = connection.take_calls()?;
+        assert_eq!(native_press_count(&calls), 1);
+        assert_eq!(dom_activation_count(&calls), 0);
+        assert_eq!(input.dom_fallback_status(), None);
+
+        // A build without DOM.click gets one untrusted script click, with a user
+        // gesture so its handler can open popups and pickers.
         for fail_ack in [false, true] {
             let (connection, input, ref_id) =
                 input_harness(HitTestResponse::Blocked("div#overlay")).await?;
             connection.configure(|state| {
-                state.fail_eligibility = !fail_ack;
+                state.native_press = NativePress::Missing;
                 state.fail_dom_ack = fail_ack;
             })?;
             let result = input.click(&ref_id, ClickOptions::default()).await;
             if fail_ack {
                 assert!(matches!(result, Err(CoreError::ClickOutcomeUnknown(_))));
             } else {
-                assert!(matches!(
-                    result,
-                    Err(CoreError::ClickFallbackUnavailable { .. })
-                ));
+                assert_eq!(result?, None);
             }
             let calls = connection.take_calls()?;
-            assert_eq!(press_count(&calls), 0);
-            assert_eq!(dom_activation_count(&calls), usize::from(fail_ack));
+            assert_eq!(native_press_count(&calls), 1);
+            assert_eq!(dom_activation_count(&calls), 1);
+            assert!(calls.iter().any(|call| {
+                call.params["functionDeclaration"]
+                    .as_str()
+                    .is_some_and(|script| script.contains("browserosActivateDom"))
+                    && call.params["userGesture"] == true
+            }));
             assert_eq!(
                 input.dom_fallback_status(),
-                fail_ack.then_some(DomFallbackStatus::Started)
+                Some(if fail_ack {
+                    DomFallbackStatus::Started
+                } else {
+                    DomFallbackStatus::Dispatched {
+                        trusted: false,
+                        inert: false,
+                    }
+                })
             );
         }
+
+        // A lost native acknowledgement is never followed by the script or a repeat.
+        let (connection, input, ref_id) =
+            input_harness(HitTestResponse::Blocked("div#overlay")).await?;
+        connection.configure(|state| state.native_press = NativePress::Lost)?;
+        let result = input.click(&ref_id, ClickOptions::default()).await;
+        assert!(matches!(result, Err(CoreError::ClickOutcomeUnknown(_))));
+        let calls = connection.take_calls()?;
+        assert_eq!(press_count(&calls), 0);
+        assert_eq!(native_press_count(&calls), 1);
+        assert_eq!(dom_activation_count(&calls), 0);
+        assert_eq!(
+            input.dom_fallback_status(),
+            Some(DomFallbackStatus::Started)
+        );
         Ok(())
     }
 
@@ -2542,6 +2626,7 @@ mod tests {
                 assert!(matches!(result, Err(CoreError::ClickOutcomeUnknown(_))));
                 let calls = connection.take_calls()?;
                 assert_eq!(press_count(&calls), 1, "{failed_ack}, entry {entry}");
+                assert_eq!(native_press_count(&calls), 0);
                 assert_eq!(dom_activation_count(&calls), 0);
                 assert_eq!(input.dom_fallback_status(), None);
             }
@@ -2637,7 +2722,7 @@ mod tests {
         assert!(connection.select_semantics_preserved());
 
         assert_eq!(input.click(&ref_id, ClickOptions::default()).await?, None);
-        assert_eq!(dom_activation_count(&connection.take_calls()?), 1);
+        assert_eq!(native_press_count(&connection.take_calls()?), 1);
         assert!(connection.hit_test_calls() >= 2);
         assert_eq!(connection.mouse_events(), 0);
         Ok(())

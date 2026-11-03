@@ -2,9 +2,13 @@
 //! repeat on the resolved node; dispatch ends recovery, regardless of the acknowledgement.
 
 use super::mouse::MouseButton;
-use super::{ClickOptions, Input, InputTarget, Point, geometry};
+use super::{
+    ClickOptions, FALLBACK_DISPATCHED, FALLBACK_INERT, FALLBACK_STARTED, FALLBACK_TRUSTED, Input,
+    InputTarget, Point, geometry,
+};
 use crate::pointer::PointerAction;
 use crate::{CoreError, PageJs, ProtocolSession};
+use browseros_cdp::CdpError;
 use serde::Deserialize;
 use serde_json::json;
 use std::{
@@ -18,44 +22,25 @@ const PROBE_INTERVAL: Duration = Duration::from_millis(50);
 const ELIGIBILITY_JS: &str = include_str!("../assets/click-eligibility.js");
 static PROBE_JS: LazyLock<String> =
     LazyLock::new(|| guarded_script(include_str!("../assets/click-probe.js")));
-static DOM_JS: LazyLock<String> =
-    LazyLock::new(|| guarded_script(include_str!("../assets/click-dom.js")));
+const DOM_JS: &str = include_str!("../assets/click-dom.js");
 
-/// Repeat the same eligibility guard inside the final activation call, so page
-/// changes during preparation cannot bypass disabled/inert/ARIA-modal checks.
+/// Run the eligibility guard inside every probe, so a target that became
+/// detached or disabled during preparation is refused before input is sent.
 fn guarded_script(body: &str) -> String {
     format!(
         "function(...args){{const refused = ({ELIGIBILITY_JS}).call(this); if(refused) return {{refused}}; return ({body}).apply(this,args);}}"
     )
 }
 
+/// A fallback press. `refused` and `inert` come from `DOM.click` or its script
+/// stand-in; only the native press sends trusted events.
 #[derive(Deserialize)]
-struct Activation {
+struct Press {
     refused: Option<String>,
-}
-
-/// Native AX reasons include implicit inertness behind top-layer modal dialogs,
-/// even when the dialog lives inside an inaccessible closed shadow root.
-#[derive(Deserialize)]
-struct AxEligibility {
-    nodes: Vec<AxEligibilityNode>,
-}
-
-#[derive(Deserialize)]
-struct AxEligibilityNode {
-    #[serde(rename = "backendDOMNodeId")]
-    backend_node_id: Option<i64>,
-    #[serde(default, rename = "ignoredReasons")]
-    ignored_reasons: Vec<AxProperty>,
     #[serde(default)]
-    properties: Vec<AxProperty>,
-}
-
-#[derive(Deserialize)]
-struct AxProperty {
-    name: String,
-    #[serde(default)]
-    value: serde_json::Value,
+    inert: bool,
+    #[serde(skip)]
+    trusted: bool,
 }
 
 /// Size of the session viewport, used only to project an OOPIF point into its parent.
@@ -140,99 +125,70 @@ impl Input {
         opts: &ClickOptions,
         native: CoreError,
     ) -> Result<Option<Point>, CoreError> {
-        let refused = if opts
+        if opts
             .button
             .is_some_and(|button| button != MouseButton::Left)
             || opts.click_count.is_some_and(|count| count != 1)
         {
-            Some("DOM fallback cannot reproduce a right, middle or repeated click.".to_string())
-        } else {
-            // Eligibility must be established on the captured endpoint and its
-            // admitted parent chain. A failed query never authorizes activation.
-            self.dom_fallback_refusal(session, target.backend_node_id)
-                .await
-                .unwrap_or_else(|error| Some(error.to_string()))
-        };
-        if let Some(reason) = refused {
             return Err(CoreError::ClickFallbackUnavailable {
                 native: Box::new(native),
-                reason,
+                reason: "DOM fallback cannot reproduce a right, middle or repeated click.".into(),
             });
         }
-        // This is the sole DOM dispatch. call_once forbids stale-context replay,
-        // and no error after this handoff returns to native preparation.
-        // Record before awaiting: a handler can open a modal and prevent the ack,
-        // causing the adapter to drop this future while it reports that modal.
-        let previous = self.dom_fallback.swap(1, Ordering::Relaxed);
-        let activation: Activation = PageJs::isolated(session)
-            .call_once(target.backend_node_id, &DOM_JS, &[])
-            .await
-            .map_err(|error| CoreError::ClickOutcomeUnknown(format!("DOM fallback: {error}")))?;
-        if let Some(reason) = activation.refused {
+        // This is the sole fallback dispatch, and no error after this handoff
+        // returns to native preparation. Record before awaiting: a handler can
+        // open a JavaScript dialog and hold the ack, causing the adapter to drop
+        // this future while it reports that dialog.
+        let previous = self.dom_fallback.swap(FALLBACK_STARTED, Ordering::Relaxed);
+        let press = self.press_node(session, target.backend_node_id).await?;
+        if let Some(refused) = press.refused {
             self.dom_fallback.store(previous, Ordering::Relaxed);
             return Err(CoreError::ClickFallbackUnavailable {
                 native: Box::new(native),
-                reason,
+                reason: refusal_reason(&refused),
             });
         }
-        self.dom_fallback.store(2, Ordering::Relaxed);
+        let mut state = FALLBACK_DISPATCHED;
+        if press.trusted {
+            state |= FALLBACK_TRUSTED;
+        }
+        if press.inert {
+            state |= FALLBACK_INERT;
+        }
+        self.dom_fallback.store(state, Ordering::Relaxed);
         Ok(None)
     }
 
-    async fn dom_fallback_refusal(
+    /// Presses the node itself, so whatever covers it, a dialog included, does
+    /// not intercept the click. BrowserOS's `DOM.click` sends the trusted press
+    /// assistive technology gets, with user activation. Builds without it reject
+    /// the method before running anything and get the DOM's own `click()`
+    /// instead. Each is sent at most once: `call_once` forbids stale-context
+    /// replay, and any other failure leaves the outcome unknown.
+    async fn press_node(
         &self,
         session: &ProtocolSession,
         backend_node_id: i64,
-    ) -> Result<Option<String>, CoreError> {
-        let mut endpoint = session.clone();
-        let mut node_id = backend_node_id;
-        for _ in 0..16 {
-            let ax: AxEligibility = endpoint
-                .send(
-                    "Accessibility.getPartialAXTree",
-                    json!({"backendNodeId": node_id, "fetchRelatives": false}),
-                )
-                .await?;
-            let node = ax
-                .nodes
-                .iter()
-                .find(|node| node.backend_node_id == Some(node_id))
-                .ok_or_else(|| {
-                    CoreError::Message("Could not establish click eligibility.".into())
-                })?;
-            if node.ignored_reasons.iter().any(|reason| {
-                matches!(
-                    reason.name.as_str(),
-                    "activeModalDialog" | "activeAriaModalDialog" | "inertElement" | "inertSubtree"
-                )
-            }) {
-                return Ok(Some(
-                    "Element is inert or outside the active modal; handle the modal first.".into(),
-                ));
+    ) -> Result<Press, CoreError> {
+        let unknown =
+            |error: CoreError| CoreError::ClickOutcomeUnknown(format!("DOM fallback: {error}"));
+        match session
+            .send::<_, Press>("DOM.click", json!({ "backendNodeId": backend_node_id }))
+            .await
+        {
+            Ok(press) => Ok(Press {
+                trusted: true,
+                ..press
+            }),
+            Err(CoreError::Cdp(CdpError::Protocol { code: -32601, .. })) => {
+                PageJs::isolated(session)
+                    .user_gesture()
+                    .call_once(backend_node_id, DOM_JS, &[])
+                    .await
+                    .map_err(unknown)
             }
-            if node.properties.iter().any(|property| {
-                property.name == "disabled"
-                    && property
-                        .value
-                        .get("value")
-                        .and_then(serde_json::Value::as_bool)
-                        == Some(true)
-            }) {
-                return Ok(Some("Element is disabled or inert.".into()));
-            }
-            let refused: Option<String> = PageJs::isolated(&endpoint)
-                .call(node_id, ELIGIBILITY_JS, &[])
-                .await?;
-            if refused.is_some() {
-                return Ok(refused);
-            }
-            let Some((parent, owner)) = self.observer.click_parent(&endpoint).await? else {
-                return Ok(None);
-            };
-            endpoint = parent;
-            node_id = owner;
+            Err(error) => Err(unknown(error)),
         }
-        Ok(Some("Click frame nesting is too deep.".into()))
     }
 
     /// Wait for two matching observations, within one budget shared with pointer
@@ -412,6 +368,19 @@ impl Input {
             CoreError::ClickPointUnavailable("Element has no stable, uncovered click point; take a new snapshot. No click was sent.".to_string())
         }
     }
+}
+
+/// Agent-facing wording for a `DOM.click` refusal code. The script stand-in
+/// returns the same codes, plus `unsupported` for nodes without `click()`.
+fn refusal_reason(refused: &str) -> String {
+    match refused {
+        "detached" => "Element is detached; take a new snapshot.",
+        "notVisible" => "Element is not visible; take a new snapshot.",
+        "disabled" => "Element is disabled.",
+        "unsupported" => "Element does not support DOM activation.",
+        other => other,
+    }
+    .to_string()
 }
 
 fn same_point(a: Point, b: Point) -> bool {

@@ -1,4 +1,7 @@
-/** Both APIs prefer native input and share the guarded, one-shot DOM fallback. */
+/**
+ * Both APIs prefer native input and share a one-shot fallback press, which
+ * reaches a covered target through whatever covers it, dialogs included.
+ */
 import { expect } from 'bun:test'
 import type { CaseContext, ContractCase } from './cases'
 import { fieldRef } from './cases-fill'
@@ -17,6 +20,23 @@ function click(ctx: CaseContext, page: number, surface: Surface, ref: string) {
     : ctx.mcp.callTool('run', {
         code: `return await browser.page(${page}).click(${JSON.stringify(ref)})`,
       })
+}
+
+/**
+ * BrowserOS builds with DOM.click press natively, with trusted events; older
+ * builds fall back to the page's own untrusted click(). The probe goes to the
+ * page's own session, and node 0 never exists, so it presses nothing.
+ */
+async function hasNativePress(
+  ctx: CaseContext,
+  page: number,
+): Promise<boolean> {
+  const result = await ctx.mcp.callTool('run', {
+    code: `try { return (await browser.page(${page}).cdp('DOM.click', JSON.stringify({ backendNodeId: 0 }))).refused === 'detached' }
+      catch { return false }`,
+  })
+  expectOk(result)
+  return result.structuredContent?.value === true
 }
 
 export const clickRecoveryCases: ContractCase[] = (
@@ -38,16 +58,11 @@ export const clickRecoveryCases: ContractCase[] = (
             'return document.getElementById("target").matches(":disabled")',
           ),
         ).toBe(false)
-        expectOk(
-          await click(
-            ctx,
-            page,
-            surface,
-            await fieldRef(ctx, page, 'Recovery target'),
-          ),
-        )
+        const ref = await fieldRef(ctx, page, 'Recovery target')
+        const native = await hasNativePress(ctx, page)
+        expectOk(await click(ctx, page, surface, ref))
         expect(await evalValue(ctx, page, 'return window.events')).toEqual([
-          { trusted: delivery === 'native' },
+          { trusted: delivery === 'native' || native },
         ])
       },
     },
@@ -216,64 +231,105 @@ export const clickRecoveryCases: ContractCase[] = (
     },
   },
   {
-    name: `${surface}: click recovery returns a usable blocker ref when DOM fallback is unsupported`,
+    name: `${surface}: click recovery presses a covered SVG target where BrowserOS can`,
     async run(ctx: CaseContext) {
       const page = await ctx.openPage(
         ctx.fixture('/click-recovery.html?mode=unsupported'),
       )
       const ref = await fieldRef(ctx, page, 'Recovery target')
-      const text = expectError(await click(ctx, page, surface, ref))
-      // The blocker need not have an interactive AX role. Its ref must still resolve.
-      const blocker = text.match(/blocker ref[=: ]+(e\d+)/i)?.[1]
-      expect(blocker).toBeDefined()
-      expect(blocker).not.toBe(ref)
-      expect(await evalValue(ctx, page, 'return window.events')).toEqual([])
-      const resolved = await ctx.mcp.callTool('run', {
-        code: `const node = await browser.page(${page}).resolveRef(${JSON.stringify(blocker)});
-          return (await browser.cdp('DOM.describeNode', { backendNodeId: node.backendNodeId }, node.sessionId)).node.attributes`,
-      })
-      expectOk(resolved)
-      expect(resolved.structuredContent?.value).toContain('cover')
-      expectOk(
-        await click(
-          ctx,
-          page,
-          surface,
-          await fieldRef(ctx, page, 'Dismiss obstruction'),
-        ),
-      )
-      expectOk(
-        await click(
-          ctx,
-          page,
-          surface,
-          await fieldRef(ctx, page, 'Recovery target'),
-        ),
-      )
-      expect(await evalValue(ctx, page, 'return window.events')).toEqual([
-        { trusted: true },
-      ])
+      const native = await hasNativePress(ctx, page)
+      const result = await click(ctx, page, surface, ref)
+      if (native) {
+        expectOk(result)
+        expect(textOf(result)).toContain('DOM fallback')
+        expect(await evalValue(ctx, page, 'return window.events')).toEqual([
+          { trusted: true },
+        ])
+      } else {
+        // The page's own click() exists only on HTML elements.
+        expect(expectError(result)).toContain('does not support DOM activation')
+        expect(await evalValue(ctx, page, 'return window.events')).toEqual([])
+      }
     },
   },
+  // run's click(ref) takes no options, so only act can ask for a click the
+  // fallback press cannot reproduce.
+  ...(surface === 'act'
+    ? [
+        {
+          name: `${surface}: click recovery returns a usable blocker ref when the fallback cannot press`,
+          async run(ctx: CaseContext) {
+            const page = await ctx.openPage(
+              ctx.fixture('/click-recovery.html?mode=unsupported'),
+            )
+            const ref = await fieldRef(ctx, page, 'Recovery target')
+            const text = expectError(
+              await ctx.mcp.callTool('act', {
+                page,
+                kind: 'click',
+                ref,
+                clickCount: 2,
+                diff: 'none',
+              }),
+            )
+            // The blocker need not have an interactive AX role. Its ref must still resolve.
+            const blocker = text.match(/blocker ref[=: ]+(e\d+)/i)?.[1]
+            expect(blocker).toBeDefined()
+            expect(blocker).not.toBe(ref)
+            expect(await evalValue(ctx, page, 'return window.events')).toEqual(
+              [],
+            )
+            const resolved = await ctx.mcp.callTool('run', {
+              code: `const node = await browser.page(${page}).resolveRef(${JSON.stringify(blocker)});
+          return (await browser.cdp('DOM.describeNode', { backendNodeId: node.backendNodeId }, node.sessionId)).node.attributes`,
+            })
+            expectOk(resolved)
+            expect(resolved.structuredContent?.value).toContain('cover')
+            expectOk(
+              await click(
+                ctx,
+                page,
+                surface,
+                await fieldRef(ctx, page, 'Dismiss obstruction'),
+              ),
+            )
+            expectOk(
+              await click(
+                ctx,
+                page,
+                surface,
+                await fieldRef(ctx, page, 'Recovery target'),
+              ),
+            )
+            expect(await evalValue(ctx, page, 'return window.events')).toEqual([
+              { trusted: true },
+            ])
+          },
+        },
+      ]
+    : []),
   {
     name: `${surface}: click recovery automatically uses one isolated DOM fallback after native preparation`,
     async run(ctx: CaseContext) {
       const page = await ctx.openPage(ctx.fixture('/click-recovery.html'))
-      const result = await click(
-        ctx,
-        page,
-        surface,
-        await fieldRef(ctx, page, 'Recovery target'),
-      )
+      const ref = await fieldRef(ctx, page, 'Recovery target')
+      const native = await hasNativePress(ctx, page)
+      const result = await click(ctx, page, surface, ref)
       expectOk(result)
       expect(textOf(result)).toContain('DOM fallback')
-      if (surface === 'act')
-        expect(result.structuredContent?.click).toEqual({
-          status: 'dispatched',
-          domFallback: true,
-        })
+      const feedback = {
+        status: 'dispatched',
+        domFallback: true,
+        trusted: native,
+        inert: false,
+      }
+      expect(
+        surface === 'act'
+          ? result.structuredContent?.click
+          : (result.structuredContent?.value as { click?: unknown })?.click,
+      ).toEqual(feedback)
       expect(await evalValue(ctx, page, 'return window.events')).toEqual([
-        { trusted: false },
+        { trusted: native },
       ])
       expect(
         await evalValue(ctx, page, 'return window.pageWorldClickCalls'),
@@ -306,16 +362,13 @@ export const clickRecoveryCases: ContractCase[] = (
       const page = await ctx.openPage(
         ctx.fixture('/click-recovery.html?mode=hover'),
       )
-      const result = await click(
-        ctx,
-        page,
-        surface,
-        await fieldRef(ctx, page, 'Recovery target'),
-      )
+      const ref = await fieldRef(ctx, page, 'Recovery target')
+      const native = await hasNativePress(ctx, page)
+      const result = await click(ctx, page, surface, ref)
       expectOk(result)
       expect(textOf(result)).toContain('DOM fallback')
       expect(await evalValue(ctx, page, 'return window.events')).toEqual([
-        { trusted: false },
+        { trusted: native },
       ])
     },
   },
@@ -343,6 +396,7 @@ export const clickRecoveryCases: ContractCase[] = (
     async run(ctx: CaseContext) {
       const page = await ctx.openPage(ctx.fixture('/click-recovery.html'))
       const ref = await fieldRef(ctx, page, 'Recovery target')
+      const native = await hasNativePress(ctx, page)
       await evalValue(
         ctx,
         page,
@@ -395,7 +449,7 @@ export const clickRecoveryCases: ContractCase[] = (
         )
       }
       expect(await evalValue(ctx, page, 'return window.events')).toEqual([
-        { trusted: false },
+        { trusted: native },
       ])
     },
   })),
@@ -406,13 +460,14 @@ export const clickRecoveryCases: ContractCase[] = (
           async run(ctx: CaseContext) {
             const page = await ctx.openPage(ctx.fixture('/click-recovery.html'))
             const ref = await fieldRef(ctx, page, 'Recovery target')
+            const native = await hasNativePress(ctx, page)
             const result = await ctx.mcp.callTool('run', {
               code: `return await browser.input(${page}).click(${JSON.stringify(ref)})`,
             })
             expectOk(result)
             expect(textOf(result)).toContain('DOM fallback')
             expect(await evalValue(ctx, page, 'return window.events')).toEqual([
-              { trusted: false },
+              { trusted: native },
             ])
           },
         },
@@ -448,10 +503,11 @@ export const clickRecoveryCases: ContractCase[] = (
   })),
   ...(['inert', 'modal', 'closed-modal', 'aria-modal'] as const).map(
     (mode) => ({
-      name: `${surface}: click recovery refuses ${mode} background controls`,
+      name: `${surface}: click recovery presses ${mode} background controls`,
       async run(ctx: CaseContext) {
         const page = await ctx.openPage(ctx.fixture('/click-recovery.html'))
         const ref = await fieldRef(ctx, page, 'Recovery target')
+        const native = await hasNativePress(ctx, page)
         const setup = {
           inert: `document.getElementById('target').inert=true`,
           modal: `const dialog=document.body.appendChild(document.createElement('dialog')); dialog.innerHTML='<button>Modal action</button>'; dialog.showModal()`,
@@ -459,18 +515,46 @@ export const clickRecoveryCases: ContractCase[] = (
           'aria-modal': `const modal=document.body.appendChild(document.createElement('div')); modal.setAttribute('role','dialog'); modal.setAttribute('aria-modal','true'); modal.innerHTML='<button>Modal action</button>'`,
         }[mode]
         await evalValue(ctx, page, `${setup}; return true`)
-        expect(expectError(await click(ctx, page, surface, ref))).toMatch(
-          /inert|modal/,
-        )
-        expect(await evalValue(ctx, page, 'return window.events')).toEqual([])
+        const result = await click(ctx, page, surface, ref)
+        expectOk(result)
+        expect(textOf(result)).toContain('DOM fallback')
+        // Only the native press can tell; an ARIA-only modal leaves the page interactive.
+        if (surface === 'act')
+          expect(
+            (result.structuredContent?.click as { inert?: boolean } | undefined)
+              ?.inert,
+          ).toBe(native && mode !== 'aria-modal')
+        expect(await evalValue(ctx, page, 'return window.events')).toEqual([
+          { trusted: native },
+        ])
         expect(
           await evalValue(ctx, page, 'return window.pageWorldClickCalls'),
         ).toBe(0)
       },
     }),
   ),
+  // The press focuses first; a focus handler that hides the target must still
+  // stop the click, on either press.
+  ...(['display', 'visibility'] as const).map((property) => ({
+    name: `${surface}: click recovery refuses a target its focus handler hides (${property})`,
+    async run(ctx: CaseContext) {
+      const page = await ctx.openPage(ctx.fixture('/click-recovery.html'))
+      const ref = await fieldRef(ctx, page, 'Recovery target')
+      await evalValue(
+        ctx,
+        page,
+        `const target = document.getElementById('target');
+        target.addEventListener('focus', () => { target.style.${property} = ${JSON.stringify(property === 'display' ? 'none' : 'hidden')} });
+        return true`,
+      )
+      expect(expectError(await click(ctx, page, surface, ref))).toContain(
+        'not visible',
+      )
+      expect(await evalValue(ctx, page, 'return window.events')).toEqual([])
+    },
+  })),
   {
-    name: `${surface}: click recovery falls back when pinned geometry disappears`,
+    name: `${surface}: click recovery refuses a target that is no longer visible`,
     async run(ctx: CaseContext) {
       const page = await ctx.openPage(
         ctx.fixture('/click-recovery.html?mode=clear'),
@@ -481,12 +565,10 @@ export const clickRecoveryCases: ContractCase[] = (
         page,
         `document.getElementById('target').style.display='none'; return true`,
       )
-      const result = await click(ctx, page, surface, ref)
-      expectOk(result)
-      expect(textOf(result)).toContain('DOM fallback')
-      expect(await evalValue(ctx, page, 'return window.events')).toEqual([
-        { trusted: false },
-      ])
+      expect(expectError(await click(ctx, page, surface, ref))).toContain(
+        'not visible',
+      )
+      expect(await evalValue(ctx, page, 'return window.events')).toEqual([])
     },
   },
   {
@@ -519,7 +601,7 @@ export const clickRecoveryCases: ContractCase[] = (
   },
   ...(['single-same', 'single-cross', 'nested-mixed'] as const).map(
     (frameCase) => ({
-      name: `${surface}: click recovery refuses a parent modal above ${frameCase}`,
+      name: `${surface}: click recovery presses through a parent modal above ${frameCase}`,
       async run(ctx: CaseContext) {
         const lab = { ...ctx, mcp: await ctx.scopedMcp() }
         const page = await lab.openPage(
@@ -532,17 +614,26 @@ export const clickRecoveryCases: ContractCase[] = (
           'frame lab ready',
         )
         const ref = await fieldRef(lab, page, `Click target ${frameCase}`)
+        const native = await hasNativePress(lab, page)
         await evalValue(
           lab,
           page,
           `const dialog=document.body.appendChild(document.createElement('dialog')); dialog.innerHTML='<button>Modal action</button>'; dialog.showModal(); return true`,
         )
-        expect(expectError(await click(lab, page, surface, ref))).toMatch(
-          /inert|modal/,
+        const result = await click(lab, page, surface, ref)
+        expectOk(result)
+        expect(textOf(result)).toContain('DOM fallback')
+        if (surface === 'act')
+          expect(
+            (result.structuredContent?.click as { inert?: boolean } | undefined)
+              ?.inert,
+          ).toBe(native)
+        const events = await evalValue<Array<{ trusted: boolean }>>(
+          lab,
+          page,
+          'return window.frameLab.events',
         )
-        expect(
-          await evalValue(lab, page, 'return window.frameLab.events'),
-        ).toEqual([])
+        expect(events.map((event) => event.trusted)).toEqual([native])
       },
     }),
   ),
@@ -561,6 +652,7 @@ export const clickRecoveryCases: ContractCase[] = (
           'frame lab ready',
         )
         const ref = await fieldRef(lab, page, `Click target ${frameCase}`)
+        const native = await hasNativePress(lab, page)
         await evalValue(
           lab,
           page,
@@ -574,7 +666,7 @@ export const clickRecoveryCases: ContractCase[] = (
           page,
           'return window.frameLab.events',
         )
-        expect(fallbackEvents.map((event) => event.trusted)).toEqual([false])
+        expect(fallbackEvents.map((event) => event.trusted)).toEqual([native])
         await evalValue(
           lab,
           page,
@@ -587,7 +679,11 @@ export const clickRecoveryCases: ContractCase[] = (
             page,
             'return window.frameLab.events',
           )
-          return events.length === 2 && !events[0].trusted && events[1].trusted
+          return (
+            events.length === 2 &&
+            events[0].trusted === native &&
+            events[1].trusted
+          )
         }, 'fallback followed by one trusted frame click')
       },
     }),

@@ -15,13 +15,17 @@ audit records, cancellation, browser-down guidance, and transport hygiene.
 
 `cases-click-recovery.ts` checks ordinary native clicks through both `act` and
 `run`: partial/transient coverage, sticky headers, hover-triggered coverage, and
-parent overlays above same-site and cross-site frames. Eligible single left
-clicks use one internal, isolated DOM fallback only after native preparation
-fails, and report that delivery path. Disabled, inert and modal-background
-controls remain untouched. Failed fallback retains the native blocker's usable
-ref and explains the refusal. No public method selector can force DOM activation.
-The Rust input tests inject lost mouse and DOM acknowledgements to ensure a click
-is never replayed after dispatch becomes uncertain.
+parent overlays above same-site and cross-site frames. Single left clicks fall
+back to one press of the element itself only after native preparation fails,
+and report that delivery path. The press reaches a target under any cover,
+including dialogs, `inert` subtrees and parent-frame modals. BrowserOS builds
+with `DOM.click` send it as a trusted press and report when the target was
+inert; older builds use the page's own untrusted `click()`. The cases probe
+which one the browser has. Disabled and no-longer-visible targets are refused
+untouched, and a click the press cannot reproduce keeps the native blocker's
+usable ref. No public method selector can force DOM activation. The Rust input
+tests inject lost mouse and press acknowledgements to ensure a click is never
+replayed after dispatch becomes uncertain.
 
 Each case asserts Rust behavior directly. The retired TypeScript server and its
 historical behavior are not test dependencies.
