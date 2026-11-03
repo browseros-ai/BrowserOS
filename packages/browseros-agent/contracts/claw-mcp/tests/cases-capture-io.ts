@@ -490,10 +490,9 @@ export const captureIoCases: ContractCase[] = [
       const result = expectOk(
         await ctx.mcp.callTool('run', {
           // The virtual-time ordinary_input_skips_chooser_handoff test checks latency.
-          // This browser case covers real pointer/selection sequencing with enough
-          // time for native UI and CDP work on a loaded runner.
-          timeout: 9500,
-          code: `const p = browser.page(${page}); for (let i = 0; i < 5; i++) { await p.hover(${JSON.stringify(hoverRef)}); await p.selectOption(${JSON.stringify(selectRef)}, i % 2 ? 'one' : 'two'); } return 'input-batch-complete';`,
+          // This case checks native pointer/selection sequencing with the normal
+          // published run budget. Progress logs identify a stalled native operation.
+          code: `const p = browser.page(${page}); const started = Date.now(); for (let i = 0; i < 5; i++) { console.log('hover-start', i, Date.now() - started); await p.hover(${JSON.stringify(hoverRef)}); console.log('hover-done', i, Date.now() - started); console.log('select-start', i, Date.now() - started); await p.selectOption(${JSON.stringify(selectRef)}, i % 2 ? 'one' : 'two'); console.log('select-done', i, Date.now() - started); } return 'input-batch-complete';`,
         }),
         'ordinary input batch',
       )
