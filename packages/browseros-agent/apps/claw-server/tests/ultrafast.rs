@@ -191,8 +191,22 @@ async fn ultrafast_state_is_reported_on_skills() -> anyhow::Result<()> {
     assert_eq!(ultrafast["status"], "verified");
     assert_eq!(ultrafast["flowVersion"], 2);
     assert_eq!(ultrafast["effects"], "write");
-    assert_eq!(ultrafast["writeApproved"], flow::WRITES_ALLOWED_BY_DEFAULT);
+    assert_eq!(ultrafast["writeApproved"], false);
     assert_eq!(ultrafast["p50Ms"], 1_200);
+
+    let (status, approved) = post_empty(
+        &app.router,
+        "/api/v1/skills/neo-shop-add/ultrafast/approve-write",
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        approved["ultrafast"]["writeApproved"], true,
+        "writeApproved must be true after approve_write: {approved}"
+    );
+
+    let (_, list_after) = get(&app.router, "/api/v1/skills").await?;
+    assert_eq!(list_after["items"][0]["ultrafast"]["writeApproved"], true);
 
     state.skills.delete("neo-shop-add").await?;
     assert!(state.skills.flow_row("neo-shop-add").await?.is_none());
@@ -210,6 +224,23 @@ async fn put(router: &Router, uri: &str, body: Value) -> anyhow::Result<(StatusC
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await?;
     Ok((status, serde_json::from_slice(&bytes)?))
+}
+
+async fn post_empty(router: &Router, uri: &str) -> anyhow::Result<(StatusCode, Value)> {
+    let request = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::HOST, "localhost")
+        .body(Body::empty())?;
+    let response = router.clone().oneshot(request).await?;
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await?;
+    let value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes)?
+    };
+    Ok((status, value))
 }
 
 fn two_step_flow() -> flow::store::FlowDoc {
