@@ -68,7 +68,8 @@ of output, against 2,356 ms and 4,410 bytes done one verb at a time.
 
 ### The thirty second cap
 
-A run is hard capped at 30 seconds of wall time and a larger `--script-timeout`
+A run is hard capped by the server's wall-clock budget (60 seconds by default,
+set per deployment) and a larger `--script-timeout`
 is clamped rather than honored. Three things follow:
 
 - Keep one call bounded. Batching reads of loaded pages is cheap; batching fresh
@@ -197,7 +198,7 @@ exit 0   success
 exit 1   the tool ran and reported a failure (element gone, navigation refused)
 exit 2   usage error (bad flag, unknown command, malformed ref, out-of-range value)
 exit 3   no browser (nothing answering, or the link is down)
-exit 4   timeout, including the run 30s cap
+exit 4   timeout, including a run killed at the server's wall-clock cap
 exit 5   a human pressed Stop in the cockpit. Do not retry this one.
 exit 130 interrupted
 ```

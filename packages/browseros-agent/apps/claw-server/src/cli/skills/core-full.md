@@ -257,7 +257,7 @@ typed into the page and recorded with the call like any other argument.
 1    the tool ran and reported a failure, including a refusal this server makes
 2    usage error: bad flag, unknown command, malformed ref, out-of-range value
 3    no browser: nothing answering any endpoint, or the browser link is down
-4    timeout, including a run killed at the 30 second cap
+4    timeout, including a run killed at the server's wall-clock cap
 5    a human pressed Stop in the cockpit. Do not retry.
 130  interrupted. The CLI tells the server to stop the call before exiting.
 ```

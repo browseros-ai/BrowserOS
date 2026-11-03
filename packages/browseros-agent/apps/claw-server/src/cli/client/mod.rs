@@ -199,24 +199,31 @@ impl Session {
             .transport
             .post(&transport::list_message(next_id()), session_id.as_deref())
             .await?;
-        let names = reply
+        let listed = reply
             .body
             .as_ref()
             .and_then(|body| body.pointer("/result/tools"))
             .and_then(Value::as_array)
-            .map(|tools| {
-                tools
-                    .iter()
-                    .filter_map(|tool| tool.get("name").and_then(Value::as_str))
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            })
+            .cloned()
             .unwrap_or_default();
+        let names = listed
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        // The run budget is configurable per deployment and stated in the run
+        // tool's own schema, so read it while the listing is already in hand
+        // rather than carrying a constant that a deployment can contradict.
+        let budget = listed
+            .iter()
+            .find(|tool| tool.get("name").and_then(Value::as_str) == Some("run"))
+            .and_then(crate::cli::script::budget_from_schema);
         if !names.is_empty() {
             let cached = names.clone();
             self.persist(|state| {
                 state.tools = cached;
                 state.server_version = Some(version);
+                state.run_budget_ms = budget;
             })?;
         }
         Ok(names)

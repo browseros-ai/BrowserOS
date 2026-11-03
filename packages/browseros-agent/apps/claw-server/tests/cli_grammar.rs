@@ -240,20 +240,60 @@ fn values_the_server_would_reject_are_refused_locally() {
     );
 }
 
+/// The plan carries the caller's timeout verbatim and records the ask.
+///
+/// The ceiling is the deployment's, configurable through `[run]
+/// wall_timeout_seconds`, so the plan cannot name a number: it is applied at
+/// dispatch against the budget read from the run tool's schema.
 #[test]
-fn a_run_timeout_over_the_cap_is_clamped_with_a_notice_rather_than_refused() {
+fn a_run_timeout_is_carried_verbatim_and_the_ask_is_recorded() {
     let cli = Cli::try_parse_from(["browseros", "run", "x", "--script-timeout", "120000"])
         .unwrap_or_else(|error| panic!("{error}"));
     let Ok(Plan::Tool(plan)) = claw_server::cli::plan::build(&cli.command, None) else {
         panic!("run should plan a tool call");
     };
-    assert_eq!(plan.args["timeout"], 30000.0);
+    assert_eq!(plan.args["timeout"], 120000.0);
+    assert_eq!(plan.requested_timeout, Some(120000.0));
+    // No invented ceiling in the notices.
     assert!(
-        plan.notices
-            .iter()
-            .any(|note| note.contains("clamped to 30000")),
+        !plan.notices.iter().any(|note| note.contains("30000")),
         "{:?}",
         plan.notices
+    );
+}
+
+/// The budget comes from the run tool's own schema, because a deployment can
+/// set it and an over-budget timeout is rejected rather than clamped.
+#[test]
+fn the_run_budget_is_read_from_the_tool_schema() {
+    let run = serde_json::json!({
+        "name": "run",
+        "inputSchema": { "properties": { "timeout": {
+            "description": "Wall-clock budget in milliseconds. Default and maximum: 60000. Includes browser operations and waits; larger values are rejected."
+        }}}
+    });
+    assert_eq!(
+        claw_server::cli::script::budget_from_schema(&run),
+        Some(60_000)
+    );
+
+    // A schema that does not state one yields nothing rather than a guess, and
+    // the request then goes as asked so the server's own answer is the answer.
+    let silent = serde_json::json!({ "name": "run", "inputSchema": { "properties": {} } });
+    assert_eq!(claw_server::cli::script::budget_from_schema(&silent), None);
+}
+
+#[test]
+fn the_cap_advice_names_the_budget_it_was_told_about() {
+    assert!(claw_server::cli::script::cap_advice(Some(60_000)).contains("60s wall-clock cap"));
+    assert!(claw_server::cli::script::cap_advice(Some(30_000)).contains("30s wall-clock cap"));
+    // With no budget cached it still warns, without naming a number it is
+    // guessing at.
+    let unknown = claw_server::cli::script::cap_advice(None);
+    assert!(unknown.contains("wall-clock cap"), "{unknown}");
+    assert!(
+        !unknown.contains("30s") && !unknown.contains("60s"),
+        "{unknown}"
     );
 }
 

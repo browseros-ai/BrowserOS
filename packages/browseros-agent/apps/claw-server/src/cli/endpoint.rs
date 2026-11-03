@@ -204,18 +204,36 @@ mod tests {
         assert_eq!(count, 1, "{list:?}");
     }
 
+    /// The cached endpoint is what the last successful command used, so it is
+    /// tried before anything discovered or assumed.
+    ///
+    /// Written against whatever runtime files the machine happens to have: the
+    /// default candidate deduplicates away when a real `runtime.json` already
+    /// names the same url, so asserting on its presence made this test depend
+    /// on the developer's own browser install.
     #[test]
-    fn the_cached_endpoint_is_tried_before_any_runtime_file() {
+    fn the_cached_endpoint_is_tried_before_anything_discovered_or_assumed() {
+        // A port no runtime file will claim, so the cached entry is distinct.
         let list = candidates(None, Some("http://127.0.0.1:4321"));
         let cached = list
             .iter()
             .position(|c| c.origin == Origin::Cached)
-            .unwrap_or(usize::MAX);
-        let default = list
-            .iter()
-            .position(|c| c.origin == Origin::Default)
-            .unwrap_or(0);
-        assert!(cached < default, "{list:?}");
+            .unwrap_or_else(|| panic!("the cached endpoint should be a candidate: {list:?}"));
+        let discovered = [
+            Origin::DirOverride,
+            Origin::Release,
+            Origin::Dev,
+            Origin::Default,
+        ];
+        for (index, candidate) in list.iter().enumerate() {
+            if discovered.contains(&candidate.origin) {
+                assert!(
+                    cached < index,
+                    "cached must precede {:?}: {list:?}",
+                    candidate.origin
+                );
+            }
+        }
     }
 
     #[test]

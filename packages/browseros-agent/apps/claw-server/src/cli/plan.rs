@@ -42,6 +42,9 @@ pub struct ToolPlan {
     /// Copy the file the tool wrote to this path. The server writes into its
     /// own output directory; a caller who named a destination meant it.
     pub copy_to: Option<String>,
+    /// A `--script-timeout` the caller asked for, before the server's budget
+    /// is known. Clamped at dispatch against the schema's maximum.
+    pub requested_timeout: Option<f64>,
     /// Lines for stderr, decided here so they can be asserted in a test.
     pub notices: Vec<String>,
 }
@@ -685,14 +688,12 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
             let body = script_body(external, code.as_deref(), "run")?;
             let mut plan = ToolPlan::new("run").arg("code", json!(body));
             plan.wrap_page = !no_page;
+            // The ceiling is the server's, read from the run tool's schema at
+            // dispatch, because it is configurable per deployment and a value
+            // above it is rejected rather than clamped.
             if let Some(requested) = script_timeout {
-                let clamped = requested.min(30_000.0);
-                if *requested > 30_000.0 {
-                    plan.notices.push(format!(
-                        "[run --script-timeout {requested} ms clamped to 30000: the server's cap is hard and a larger value is clamped, not honored]"
-                    ));
-                }
-                plan = plan.arg("timeout", Value::from(clamped));
+                plan.requested_timeout = Some(*requested);
+                plan = plan.arg("timeout", Value::from(*requested));
             }
             Plan::tool(plan)
         }
@@ -716,14 +717,12 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
                 .arg("code", json!(body))
                 .arg("settle", flag(*settle))
                 .arg("maxChars", max_chars.map_or(Value::Null, Value::from));
+            // The ceiling is the server's, read from the run tool's schema at
+            // dispatch, because it is configurable per deployment and a value
+            // above it is rejected rather than clamped.
             if let Some(requested) = script_timeout {
-                let clamped = requested.min(30_000.0);
-                if *requested > 30_000.0 {
-                    plan.notices.push(format!(
-                        "[eval --script-timeout {requested} ms clamped to 30000: the server's cap is hard]"
-                    ));
-                }
-                plan = plan.arg("timeout", Value::from(clamped));
+                plan.requested_timeout = Some(*requested);
+                plan = plan.arg("timeout", Value::from(*requested));
             }
             Plan::tool(plan)
         }

@@ -46,6 +46,10 @@ pub struct State {
     /// conditional in five independent ways, so a static table would promise
     /// commands that get refused.
     pub tools: Vec<String>,
+    /// The server's run wall-clock budget in ms, from the run tool's schema.
+    /// Configurable per deployment, so it is discovered, never assumed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_budget_ms: Option<u64>,
     /// The scope's human-readable path, for `session list`.
     pub scope_path: Option<String>,
     pub started_at: Option<String>,
@@ -59,6 +63,7 @@ impl State {
             self.page = None;
             self.page_url = None;
             self.tools.clear();
+            self.run_budget_ms = None;
             self.server_version = None;
             self.endpoint = Some(endpoint.to_string());
         }

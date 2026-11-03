@@ -104,6 +104,21 @@ async fn run_tool(
             .or_insert(Value::String(group));
     }
 
+    // The server rejects a timeout above its budget rather than clamping it,
+    // so shorten it here and say so. The budget is the deployment's, read from
+    // the run tool's schema; with none cached, the request goes as asked and
+    // the server's own rejection is the authoritative answer.
+    if let Some(requested) = plan.requested_timeout
+        && let Some(budget) = session.state().run_budget_ms
+        && requested > budget as f64
+    {
+        plan.args
+            .insert("timeout".to_string(), Value::from(budget as f64));
+        io::note(&format!(
+            "[--script-timeout {requested} ms shortened to this server's {budget} ms budget, which it would otherwise reject]"
+        ));
+    }
+
     let started = Instant::now();
     let arguments = Value::Object(plan.args.clone());
     let output = session
@@ -186,7 +201,7 @@ async fn run_tool(
         } else if let Some(logs) = script::surviving_logs(&output) {
             io::out(&logs);
         }
-        io::note(script::CAP_ADVICE);
+        io::note(&script::cap_advice(session.state().run_budget_ms));
         return Ok(Code::Timeout);
     }
 

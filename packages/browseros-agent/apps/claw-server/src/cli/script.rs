@@ -90,7 +90,36 @@ pub fn surviving_logs(output: &ToolOutput) -> Option<String> {
 /// no-op: side effects from before the kill persist, verified against a live
 /// server, so an agent that assumes otherwise acts on a page in a state it did
 /// not expect.
-pub const CAP_ADVICE: &str = "[run hit the 30s wall-clock cap (not your --script-timeout; the server clamps).\n Anything the script already did is still done, so the browser may be mid-flow.\n Check with: browseros snapshot\n Split the work into bounded chunks rather than raising the timeout.]";
+#[must_use]
+pub fn cap_advice(budget_ms: Option<u64>) -> String {
+    let cap = match budget_ms {
+        Some(ms) => format!("{}s", ms / 1000),
+        None => "wall-clock".to_string(),
+    };
+    format!(
+        "[run hit the {cap} wall-clock cap (not your --script-timeout; the server's budget wins).\n Anything the script already did is still done, so the browser may be mid-flow.\n Check with: browseros snapshot\n Split the work into bounded chunks rather than raising the timeout.]"
+    )
+}
+
+/// The server's run budget, read from the `run` tool's own schema.
+///
+/// The budget is configurable per deployment (`[run] wall_timeout_seconds`),
+/// so the CLI must not carry a number of its own. The tool's `timeout`
+/// property states it, which is the only place a client can learn it without
+/// spending a call.
+#[must_use]
+pub fn budget_from_schema(run_tool: &Value) -> Option<u64> {
+    let description = run_tool
+        .pointer("/inputSchema/properties/timeout/description")
+        .and_then(Value::as_str)?;
+    let rest = description.split("maximum:").nth(1)?;
+    let digits: String = rest
+        .trim_start()
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok()
+}
 
 #[cfg(test)]
 mod tests {
