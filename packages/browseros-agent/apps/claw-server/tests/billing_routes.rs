@@ -160,13 +160,13 @@ async fn call(
     })
 }
 
-/// Buys Pro on `computer` through the fake checkout.
+/// Buys ultrafast on `computer` through the fake checkout.
 async fn buy(computer: &Computer, gateway: &FakeGateway) -> anyhow::Result<Value> {
     let started = computer
         .call(
             "POST",
             "/api/v1/plan/checkout",
-            Some(json!({"plan": "pro", "interval": "month"})),
+            Some(json!({"plan": "ultrafast", "interval": "month"})),
         )
         .await?;
     assert_eq!(started.status, StatusCode::CREATED, "{}", started.raw);
@@ -255,8 +255,8 @@ async fn pricing_is_cached_and_drops_periods_it_cannot_show() -> anyhow::Result<
     let logged = gateway.requests();
     assert_eq!(logged[0].query.as_deref(), Some("app=claw"));
     assert_eq!(logged[0].authorization, None);
-    assert_eq!(first.body["plans"][0]["plan"], "pro");
-    assert_eq!(first.body["plans"][0]["name"], "neo Pro");
+    assert_eq!(first.body["plans"][0]["plan"], "ultrafast");
+    assert_eq!(first.body["plans"][0]["name"], "BrowserOS neo");
     assert_eq!(
         first.body["plans"][0]["prices"],
         json!([
@@ -290,7 +290,7 @@ async fn a_gateway_that_is_down_or_unreachable_answers_503() -> anyhow::Result<(
         .call(
             "POST",
             "/api/v1/plan/checkout",
-            Some(json!({"plan": "pro", "interval": "month"})),
+            Some(json!({"plan": "ultrafast", "interval": "month"})),
         )
         .await?;
     assert_eq!(checkout.status, StatusCode::SERVICE_UNAVAILABLE);
@@ -306,7 +306,7 @@ async fn buying_registers_this_computer_and_the_poll_saves_the_licence() -> anyh
         .call(
             "POST",
             "/api/v1/plan/checkout",
-            Some(json!({"plan": "pro", "interval": "year"})),
+            Some(json!({"plan": "ultrafast", "interval": "year"})),
         )
         .await?;
     assert_eq!(started.status, StatusCode::CREATED, "{}", started.raw);
@@ -324,7 +324,7 @@ async fn buying_registers_this_computer_and_the_poll_saves_the_licence() -> anyh
     let label = registration["label"].as_str().unwrap_or_default();
     assert!(!label.is_empty() && label.encode_utf16().count() <= 40);
     let checkout: Value = serde_json::from_str(&logged[1].body)?;
-    assert_eq!(checkout, json!({"plan": "pro", "interval": "year"}));
+    assert_eq!(checkout, json!({"plan": "ultrafast", "interval": "year"}));
     assert!(
         logged[1]
             .authorization
@@ -349,7 +349,7 @@ async fn buying_registers_this_computer_and_the_poll_saves_the_licence() -> anyh
     assert_eq!(complete.body["status"], "complete");
     assert_eq!(complete.body["plan"]["status"], "active");
     assert_eq!(complete.body["plan"]["onKey"], true);
-    assert_eq!(complete.body["plan"]["planName"], "neo Pro");
+    assert_eq!(complete.body["plan"]["planName"], "BrowserOS neo");
     assert_eq!(complete.body["plan"]["features"], json!(["claw.ultrafast"]));
     assert!(!complete.raw.contains("NEO-"));
 
@@ -393,7 +393,7 @@ async fn checkout_refusals_keep_the_gateways_message() -> anyhow::Result<()> {
         .call(
             "POST",
             "/api/v1/plan/checkout",
-            Some(json!({"plan": "pro", "interval": "month"})),
+            Some(json!({"plan": "ultrafast", "interval": "month"})),
         )
         .await?;
     assert_eq!(again.status, StatusCode::CONFLICT);
@@ -432,7 +432,7 @@ async fn checkout_refusals_keep_the_gateways_message() -> anyhow::Result<()> {
         .call(
             "POST",
             "/api/v1/plan/checkout",
-            Some(json!({"plan": "pro", "interval": "month"})),
+            Some(json!({"plan": "ultrafast", "interval": "month"})),
         )
         .await?;
     assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
@@ -450,7 +450,7 @@ async fn checkout_refusals_keep_the_gateways_message() -> anyhow::Result<()> {
         .call(
             "POST",
             "/api/v1/plan/checkout",
-            Some(json!({"plan": "pro"})),
+            Some(json!({"plan": "ultrafast"})),
         )
         .await?;
     assert_eq!(malformed.status, StatusCode::BAD_REQUEST);
@@ -545,7 +545,7 @@ async fn activation_refusals() -> anyhow::Result<()> {
     gateway.script(
         "POST /v1/keys/activate",
         409,
-        json!({"code": "alreadySubscribed", "message": "This computer already has its own neo Pro plan. Contact BrowserOS support to combine them."}),
+        json!({"code": "alreadySubscribed", "message": "This computer already has its own ultrafast plan. Contact BrowserOS support to combine them."}),
         None,
     );
     let subscribed = a.activate(KEY).await?;
@@ -1036,7 +1036,7 @@ async fn without_a_gateway_every_route_but_the_plan_is_unavailable() -> anyhow::
         (
             "POST",
             "/api/v1/plan/checkout".to_string(),
-            Some(json!({"plan": "pro", "interval": "month"})),
+            Some(json!({"plan": "ultrafast", "interval": "month"})),
         ),
         ("GET", format!("/api/v1/plan/checkout/{id}"), None),
         ("GET", "/api/v1/plan/key".to_string(), None),

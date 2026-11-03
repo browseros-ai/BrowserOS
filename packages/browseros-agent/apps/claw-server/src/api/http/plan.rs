@@ -1,4 +1,4 @@
-//! neo Pro: `/api/v1/plan*`, over `services/billing`.
+//! ultrafast: `/api/v1/plan*`, over `services/billing`.
 //!
 //! Every route here is behind the extension-origin gate in `request_context`, since these can
 //! buy, cancel, reset a key and remove computers. `GET /api/v1/plan` never fails; with no
@@ -245,7 +245,7 @@ fn fail(request_id: &RequestId, source: BillingError) -> Response {
                 request_id,
                 StatusCode::NOT_FOUND,
                 "billing_unavailable",
-                "neo Pro isn't available in this version of BrowserOS neo.",
+                "ultrafast isn't available in this version of BrowserOS neo.",
             )
             .into_response();
         }

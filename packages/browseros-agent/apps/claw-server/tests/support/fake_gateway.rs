@@ -330,8 +330,8 @@ fn serve(
             return reply(
                 StatusCode::OK,
                 json!({"app": "claw", "plans": [{
-                    "plan": "pro",
-                    "name": "neo Pro",
+                    "plan": "ultrafast",
+                    "name": "BrowserOS neo",
                     "description": null,
                     "features": ["claw.ultrafast"],
                     "prices": [
@@ -428,7 +428,7 @@ fn serve(
                     json!({"code": "alreadySubscribed", "message": "This computer already has a plan. Change it from billing settings."}),
                 );
             }
-            if body["plan"] != "pro" {
+            if body["plan"] != "ultrafast" {
                 return reply(
                     StatusCode::BAD_REQUEST,
                     json!({"code": "unknownPlan", "message": "That plan or billing period is not on sale."}),
@@ -611,7 +611,7 @@ fn licence_for(state: &FakeState, install_id: &str) -> Value {
         "kid": TEST_KID,
         "installId": install_id,
         "app": "claw",
-        "plan": plan.map(|_| "pro"),
+        "plan": plan.map(|_| "ultrafast"),
         "features": match plan {
             Some(plan) if plan.status != "unpaid" => vec!["claw.ultrafast"],
             _ => Vec::new(),

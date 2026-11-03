@@ -69,7 +69,7 @@ pub struct AppState {
     pub help: Arc<crate::services::help::HelpRegistry>,
     pub claude_desktop: Arc<crate::services::claude_desktop::ClaudeDesktop>,
     pub extension_updates: Arc<crate::services::extension_updates::ExtensionUpdates>,
-    /// neo Pro. Without a billing gateway in this build it reads as no plan and refuses the rest.
+    /// ultrafast. Without a billing gateway in this build it reads as no plan and refuses the rest.
     pub billing: Arc<crate::services::billing::Billing>,
     pub shutdown: ShutdownHandle,
     /// How the data this server opened compares to the schema this build knows, published on

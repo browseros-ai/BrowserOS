@@ -279,7 +279,7 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
     .await
 }
 
-/// The neo Pro routes can buy, cancel, reset a key and remove computers, and their answers name
+/// The ultrafast routes can buy, cancel, reset a key and remove computers, and their answers name
 /// the computers on the key, so no web page may reach them.
 fn is_plan_path(path: &str) -> bool {
     path == "/api/v1/plan" || path.starts_with("/api/v1/plan/")

@@ -1,4 +1,4 @@
-//! neo Pro billing: this computer's plan, from a licence the billing gateway signs.
+//! ultrafast billing: this computer's plan, from a licence the billing gateway signs.
 //!
 //! claw-server is the only part of neo that talks to the gateway. It keeps the install secret
 //! and the last verified licence, never the licence key: a pasted key is passed to the gateway
@@ -598,7 +598,7 @@ impl Inner {
         }
     }
 
-    /// A licence with no plan cannot say whether this computer is still on a key whose Pro
+    /// A licence with no plan cannot say whether this computer is still on a key whose ultrafast
     /// ended or was taken off it, so ask, but only when it was on one.
     async fn confirm_still_on_key(&self, install: &Install) {
         let ask = {

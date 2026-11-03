@@ -31,7 +31,7 @@ fn payload() -> Value {
         "kid": TEST_KID,
         "installId": INSTALL,
         "app": "claw",
-        "plan": "pro",
+        "plan": "ultrafast",
         "features": ["claw.ultrafast"],
         "status": "active",
         "periodEnd": NOW + 30 * 24 * HOUR_MS,
@@ -77,7 +77,7 @@ fn check(
 fn a_good_licence_reads_its_plan() -> anyhow::Result<()> {
     let licence = check(&signed(&payload())).map_err(|error| anyhow::anyhow!("{error}"))?;
     assert_eq!(licence.status, Status::Active);
-    assert_eq!(licence.plan.as_deref(), Some("pro"));
+    assert_eq!(licence.plan.as_deref(), Some("ultrafast"));
     assert_eq!(licence.features, ["claw.ultrafast"]);
     assert_eq!(licence.issued_at, NOW);
     assert_eq!(licence.expires_at, NOW + 72 * HOUR_MS);
@@ -204,7 +204,7 @@ fn unpaid_and_none_unlock_nothing() -> anyhow::Result<()> {
     let unpaid = check(&signed(&with("status", json!("unpaid"))))
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     assert_eq!(unpaid.status, Status::Unpaid);
-    assert_eq!(unpaid.plan.as_deref(), Some("pro"));
+    assert_eq!(unpaid.plan.as_deref(), Some("ultrafast"));
     assert!(unpaid.features.is_empty());
 
     let unknown = check(&signed(&with("status", json!("trialing"))))
