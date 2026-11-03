@@ -13,8 +13,8 @@ use crate::{
     trust_boundary::wrap_untrusted,
 };
 use browseros_core::{
-    ConsoleEntry, DocumentMark, FrameId, PageId, Ref, observer::SnapshotResult, pointer,
-    settle::SettleOutcome,
+    ConsoleEntry, ConsoleMark, DocumentMark, FrameId, PageId, Ref, observer::SnapshotResult,
+    pointer, settle::SettleOutcome,
 };
 use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
@@ -60,7 +60,7 @@ pub struct FieldTarget {
 #[derive(Debug, Clone)]
 struct ConsoleSummary {
     page: u32,
-    since: u64,
+    since: ConsoleMark,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -181,7 +181,7 @@ impl ToolResponse {
         self.post_actions.push(PostAction::Screenshot { page });
     }
 
-    pub fn include_console_summary(&mut self, page: u32, since: u64) {
+    pub fn include_console_summary(&mut self, page: u32, since: ConsoleMark) {
         self.console_summaries.push(ConsoleSummary { page, since });
     }
 
@@ -225,7 +225,23 @@ impl ToolResponse {
         }
 
         for summary in self.console_summaries.clone() {
-            if ctx.browser.page(PageId(summary.page)).await.is_ok() {
+            let page_id = PageId(summary.page);
+            if ctx.browser.page(page_id.clone()).await.is_ok() {
+                match ctx.browser.page_session(page_id.clone()).await {
+                    Ok(page) => {
+                        if let Err(err) = ctx
+                            .browser
+                            .signals()
+                            .harvest_console(&page_id, &page.session)
+                            .await
+                        {
+                            tracing::debug!("console harvest failed for page {}: {err}", page_id.0);
+                        }
+                    }
+                    Err(err) => {
+                        tracing::debug!("console harvest skipped for page {}: {err}", page_id.0);
+                    }
+                }
                 self.append_console_summary(ctx, summary);
             }
         }
