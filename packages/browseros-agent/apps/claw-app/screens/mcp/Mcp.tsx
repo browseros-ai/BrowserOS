@@ -9,6 +9,7 @@ import type { ConnectionState } from '@/modules/api/connections.hooks'
 import { ClaudeDesktopCard } from './ClaudeDesktopCard'
 import { ConnectionRow } from './ConnectionRow'
 import { ManualSetupCard } from './ManualSetupCard'
+import { McpAddressCard } from './McpAddressCard'
 import { type ConnectedAgentsData, useConnectedAgentsData } from './mcp.data'
 
 /** Which AI agents can use neo, and the one step to connect each. */
@@ -21,6 +22,8 @@ export function Mcp() {
         title="Connected agents"
         lede="These AI agents can use neo to browse for you. Connect one, then restart it once so it can see neo."
       />
+
+      <McpAddressCard endpointUrl={data.endpointUrl} />
 
       <RowsCard>
         <ClaudeDesktopCard />
@@ -141,12 +144,12 @@ function AgentRows({
 function RowsSkeleton() {
   return ['s1', 's2', 's3'].map((id) => (
     <li key={id} className="flex items-center gap-4 px-[18px] py-4">
-      <Skeleton className="size-11 rounded-xl" />
+      <Skeleton className="size-11 rounded-md" />
       <div className="flex flex-1 flex-col gap-2">
         <Skeleton className="h-4 w-32" />
         <Skeleton className="h-3.5 w-24" />
       </div>
-      <Skeleton className="h-8 w-24 rounded-full" />
+      <Skeleton className="h-8 w-24 rounded-md" />
     </li>
   ))
 }

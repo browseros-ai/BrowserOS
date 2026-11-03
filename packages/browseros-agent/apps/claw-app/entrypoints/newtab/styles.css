@@ -195,20 +195,27 @@
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
-  /* Explicit radius ramp from stylecn/wiz (PR #16). --radius-4xl is a
-     full pill so primary CTAs render as the Wiz signature pill button. */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
+  /* The radius scale, one role per step. sm 6: the 22px site chip and the
+     21px phrase chip, where 8 would read as a pill. md 8: text buttons,
+     selected tabs, tiles, thumbnails, preview frames, favicon and icon
+     tiles, text badges, tooltips and nav or row highlights. lg 10: inputs,
+     textareas, selects and the replay scrubber. xl 12: cards, dialogs,
+     popovers, menus and toasts. 2xl and 3xl collapse to 12 so the Card,
+     dialogs and vendored components written against the older, curvier ramp
+     follow without a per-file sweep. Tab list tracks
+     (motion/tabs.tsx) are their 8px selected tab plus the 4px inset, so the
+     two corners stay concentric. rounded-full is only for circles: avatars,
+     dots, switches and round icon buttons. Motion layout animations need
+     their corner inline (action-swap buttons, tab indicators, the select, the
+     centered modal's clip, popover-morph), and the takeover bar's CSS is
+     injected into pages, so those literals move with this scale by hand. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
   --radius-xl: 12px;
-  --radius-2xl: 16px;
-  --radius-3xl: 20px;
+  --radius-2xl: 12px;
+  --radius-3xl: 12px;
   --radius-4xl: 9999px;
-  /* The corner radius the material-design pass standardises on. Sits
-     between --radius-lg and --radius-xl rather than replacing either, so
-     screens can adopt it one at a time instead of the ramp shifting under
-     every existing component at once. */
-  --radius-9: 9px;
 }
 
 /* Keyframes lifted from the design prototype's \3c style> block */
@@ -394,8 +401,8 @@ body {
   --sidebar-border: #cbd5e1;
   --sidebar-ring: #0254ec;
 
-  /* Radius ramp explicit values from PR #16. --radius-4xl is a full pill
-     for buttons, which is the Wiz signature CTA shape. */
+  /* shadcn's base radius, read only by vendored calc() offsets. Every
+     rounded-* class comes from the explicit ramp in @theme instead. */
   --radius: 0.75rem;
 
   /* Shadow colours for the indirection set up in @theme inline. These four

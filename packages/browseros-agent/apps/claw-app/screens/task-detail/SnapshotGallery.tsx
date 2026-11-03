@@ -194,7 +194,7 @@ export function SnapshotGallery({
               <ImageViewerThumbnail
                 key={snapshot.image.id}
                 imageId={snapshot.image.id}
-                className="flex shrink-0 basis-[260px] snap-start flex-col overflow-hidden rounded-xl border border-border-2 bg-card text-left shadow-card"
+                className="flex shrink-0 basis-[260px] snap-start flex-col overflow-hidden rounded-md border border-border-2 bg-card text-left shadow-card"
                 imageClassName="aspect-[16/10] object-cover object-top-left"
               >
                 <span className="flex flex-col gap-0.5 px-3 py-2.5">

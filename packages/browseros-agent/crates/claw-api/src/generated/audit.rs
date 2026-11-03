@@ -12,6 +12,45 @@ use crate::models;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AuditAgent {
+    /// The agent's slug, the value the session list's `slug` filter takes.
+    #[serde(rename = "slug")]
+    pub slug: String,
+    /// The display label from the agent's most recent task.
+    #[serde(rename = "label")]
+    pub label: String,
+    #[serde(rename = "taskCount")]
+    pub task_count: i64,
+    /// Start of the agent's most recent task, in epoch milliseconds.
+    #[serde(rename = "lastStartedAt")]
+    pub last_started_at: i64,
+}
+
+impl AuditAgent {
+    pub fn new(slug: String, label: String, task_count: i64, last_started_at: i64) -> AuditAgent {
+        AuditAgent {
+            slug,
+            label,
+            task_count,
+            last_started_at,
+        }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AuditAgentList {
+    /// Ordered by task count, then by the most recent task.
+    #[serde(rename = "items")]
+    pub items: Vec<models::AuditAgent>,
+}
+
+impl AuditAgentList {
+    pub fn new(items: Vec<models::AuditAgent>) -> AuditAgentList {
+        AuditAgentList { items }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AuditCleanupResult {
     #[serde(rename = "sessionsDeleted")]
     pub sessions_deleted: i64,

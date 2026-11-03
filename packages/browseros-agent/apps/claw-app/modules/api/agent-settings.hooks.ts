@@ -10,7 +10,6 @@
 
 import type {
   AgentSettings,
-  SaveJevTokenRequest,
   UpdateAgentSettingsRequest,
 } from '@browseros/claw-api'
 import { createMutation, createQuery } from 'react-query-kit'
@@ -28,29 +27,6 @@ export const useUpdateAgentSettings = createMutation<
   mutationFn: async (body) => (await apiClient()).updateAgentSettings(body),
   // A refetch that read the old value can answer after the save. Cancel it
   // before the caller publishes the saved value to the cache.
-  onSuccess: async (_saved, _body, _result, { client }) => {
-    await client.cancelQueries({ queryKey: useAgentSettings.getKey() })
-  },
-})
-
-/**
- * Stores the decision model credential, which is what offers the pursue tool.
- * Its own mutation rather than a field on the settings save, so saving a switch
- * can never clear a credential. No response ever carries the token back.
- */
-export const useSaveJevToken = createMutation<
-  AgentSettings,
-  SaveJevTokenRequest
->({
-  mutationFn: async (body) => (await apiClient()).saveJevToken(body),
-  onSuccess: async (_saved, _body, _result, { client }) => {
-    await client.cancelQueries({ queryKey: useAgentSettings.getKey() })
-  },
-})
-
-/** Forgets the stored credential. JEV_TOKEN, if the server has one, applies again. */
-export const useRemoveJevToken = createMutation<AgentSettings, void>({
-  mutationFn: async () => (await apiClient()).removeJevToken(),
   onSuccess: async (_saved, _body, _result, { client }) => {
     await client.cancelQueries({ queryKey: useAgentSettings.getKey() })
   },

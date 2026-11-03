@@ -14,7 +14,7 @@ export function SiteBadge({
     <span
       aria-hidden
       className={cn(
-        'grid size-10 shrink-0 place-items-center rounded-[10px] border border-border-2 bg-bg-sunken text-ink-3',
+        'grid size-10 shrink-0 place-items-center rounded-md border border-border-2 bg-bg-sunken text-ink-3',
         className,
       )}
     >

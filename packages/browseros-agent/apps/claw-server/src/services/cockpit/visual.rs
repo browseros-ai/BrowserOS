@@ -260,7 +260,7 @@ impl SessionVisualService {
             return Ok(None);
         };
         // A JavaScript dialog stalls the renderer: the capture would only wait on it while
-        // holding the page's window.
+        // holding the page.
         if browser
             .page_signals
             .pending_dialog(&PageId(candidate.page_id))

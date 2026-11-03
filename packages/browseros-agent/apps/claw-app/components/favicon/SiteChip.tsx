@@ -8,9 +8,9 @@ import { cn } from '@/lib/utils'
 import { Favicon } from './Favicon'
 
 const SIZES = {
-  sm: { chip: 'size-[22px] rounded-[7px]', icon: 'size-3.5 rounded-[3px]' },
-  md: { chip: 'size-7 rounded-lg', icon: 'size-4' },
-  lg: { chip: 'size-9 rounded-[10px]', icon: 'size-5' },
+  sm: { chip: 'size-[22px] rounded-sm', icon: 'size-3.5 rounded-[3px]' },
+  md: { chip: 'size-7 rounded-md', icon: 'size-4' },
+  lg: { chip: 'size-9 rounded-md', icon: 'size-5' },
 } as const
 
 /**

@@ -30,37 +30,6 @@ export interface AgentSettings {
      * @memberof AgentSettings
      */
     taskCleanupTipEnabled: boolean;
-    /**
-     *
-     * @type {JevTokenSource}
-     * @memberof AgentSettings
-     */
-    jevTokenSource: JevTokenSource;
-}
-
-/**
- * Where the decision model credential comes from, which decides whether the pursue tool is offered at all. "settings" is a token saved through this API, which takes precedence. "environment" is JEV_TOKEN in the server's environment. "none" means pursue is not offered. The token itself is never returned.
- * @export
- */
-export const JevTokenSource = {
-    Settings: 'settings',
-    Environment: 'environment',
-    None: 'none'
-} as const;
-export type JevTokenSource = typeof JevTokenSource[keyof typeof JevTokenSource];
-
-/**
- *
- * @export
- * @interface SaveJevTokenRequest
- */
-export interface SaveJevTokenRequest {
-    /**
-     * The decision model credential. Write only: no endpoint returns it. Saving one takes precedence over JEV_TOKEN in the server's environment.
-     * @type {string}
-     * @memberof SaveJevTokenRequest
-     */
-    token: string;
 }
 
 /**

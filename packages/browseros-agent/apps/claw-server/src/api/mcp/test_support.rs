@@ -203,7 +203,7 @@ impl ProfileConnection {
         expected_epoch: Option<u64>,
         method: &'a str,
         params: Value,
-        _session: Option<&'a browseros_core::SessionId>,
+        session: Option<&'a browseros_core::SessionId>,
     ) -> futures_util::future::BoxFuture<'a, Result<Value, browseros_cdp::CdpError>> {
         Box::pin(async move {
             use serde_json::json;
@@ -390,10 +390,26 @@ impl ProfileConnection {
                     Ok(json!({}))
                 }
                 "Target.detachFromTarget" => Ok(json!({})),
+                // A new tab opens on about:blank and is then navigated; the navigation commits
+                // the requested URL on the tab whose session sent it.
+                "Page.navigate" => {
+                    let target = session
+                        .and_then(|session| session.as_str().strip_prefix("S-"))
+                        .map(|target| target.trim_matches('"').to_string());
+                    let mut tabs = self.tabs.lock().unwrap_or_else(|p| p.into_inner());
+                    if let Some(tab) = tabs
+                        .iter_mut()
+                        .find(|tab| target.as_deref() == tab["targetId"].as_str())
+                    {
+                        tab["url"] = params["url"].clone();
+                    }
+                    Ok(json!({"frameId":"F","loaderId":"L"}))
+                }
                 "Target.attachToTarget" => {
                     Ok(json!({"sessionId":format!("S-{}", params["targetId"])}))
                 }
                 "Page.enable"
+                | "Page.setInterceptFileChooserDialog"
                 | "DOM.enable"
                 | "Runtime.enable"
                 | "Accessibility.enable"

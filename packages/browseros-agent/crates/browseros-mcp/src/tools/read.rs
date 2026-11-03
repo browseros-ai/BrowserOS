@@ -111,7 +111,7 @@ fn handler<'a>(
             .and_then(|value| value.as_str().map(ToString::to_string))
             .or(result.description)
             .unwrap_or_default();
-        if text.len() <= INLINE_PAGE_CONTENT_MAX_CHARS {
+        if ctx.within_script || text.len() <= INLINE_PAGE_CONTENT_MAX_CHARS {
             return Ok(Some(text_result(
                 wrap_untrusted(if text.is_empty() { "(empty)" } else { &text }, &origin),
                 Some(json!({

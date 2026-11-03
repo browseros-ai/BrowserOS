@@ -19,9 +19,25 @@
 #               titles, collapses and closes. The desktop app's behaviour.
 # grouping = "explicit"
 
+# How long to keep finished sessions' tabs before automatic cleanup, in positive
+# whole minutes. Starts when the session ends, including after idle expiry; it
+# does not count from when a tab opens. The desktop default is 60 minutes.
+# Applies with either grouping mode. Automatic groups use the same grace period;
+# individual-tab cleanup skips tabs that are active or still have a live owner.
+# close_after_minutes = 30
+
 # [scripts]
 # Whether BrowserOS's own page scripts that only touch the DOM (settle probes,
 # the agent pointer, element geometry, screenshot overlays) run in an isolated
 # JavaScript world the page cannot see. false runs them in the page's own
 # world. Needs a claw-server newer than 0.0.84.
 # isolated_world = true
+
+# [run]
+# Default and maximum wall-clock budget for one run, in positive whole seconds.
+# Includes JavaScript execution, browser calls and waits. A caller's timeout (ms)
+# may shorten this budget; a larger value is rejected before the script starts.
+# Saved flows use the same budget with time reserved for their handback.
+# Restart Neo after changing this. The MCP client/proxy timeout must allow extra
+# time for request admission and output publication (for example, 90s for 60s).
+# wall_timeout_seconds = 60

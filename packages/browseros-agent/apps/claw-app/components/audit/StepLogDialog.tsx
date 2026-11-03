@@ -79,7 +79,7 @@ export function StepLogDialog({ session, dispatches }: StepLogDialogProps) {
         showCloseButton
         // Portaled outside the task page's ph-no-capture wrapper, so it blocks
         // its own private content from session recordings.
-        className="ph-no-capture max-w-[920px] rounded-[22px] border-border-2 bg-card"
+        className="ph-no-capture max-w-[920px] border-border-2 bg-card"
       >
         <div className="flex max-h-[min(820px,calc(100dvh-64px))] flex-col">
           <header className="flex flex-col gap-1 px-6 pt-6 pr-16 pb-4">
@@ -185,9 +185,9 @@ function LogRow({
     <Collapsible
       open={open}
       onOpenChange={onOpenChange}
-      className={cn('rounded-xl', open && 'bg-bg-canvas')}
+      className={cn('rounded-md', open && 'bg-bg-canvas')}
     >
-      <CollapsibleTrigger className="grid w-full grid-cols-[64px_minmax(0,auto)_minmax(0,1fr)_auto_16px] items-center gap-3 rounded-xl px-3 py-2.5 text-left outline-none hover:bg-bg-canvas focus-visible:ring-2 focus-visible:ring-ring">
+      <CollapsibleTrigger className="grid w-full grid-cols-[64px_minmax(0,auto)_minmax(0,1fr)_auto_16px] items-center gap-3 rounded-md px-3 py-2.5 text-left outline-none hover:bg-bg-canvas focus-visible:ring-2 focus-visible:ring-ring">
         <span className="font-mono text-[12.5px] text-ink-3 tabular-nums">
           {preciseOffset(row.createdAt, startedAt)}
         </span>

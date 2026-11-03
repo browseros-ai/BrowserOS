@@ -9,7 +9,7 @@ use crate::{
 };
 use futures_util::future::BoxFuture;
 
-/// The only tool this reports on. `evaluate` shares the sandbox and the scrubber but runs
+/// The only tool this reports on. `evaluate_in_page` shares the sandbox and the scrubber but runs
 /// at a far lower error rate, and would draw down the same daily budget.
 const REPORTED_TOOL: &str = "run";
 

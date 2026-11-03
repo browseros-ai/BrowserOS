@@ -137,8 +137,15 @@ if (typeof window.turnstile !== 'undefined' && !widgets.some(w => w.kind === 'tu
 for (const [present, kind] of [[typeof window.initGeetest === 'function', 'geetest'], [typeof window.AwsWafCaptcha !== 'undefined', 'aws_waf'], [typeof window.ArkoseEnforcement !== 'undefined', 'arkose']])
     if (present && !widgets.some(w => w.kind === kind)) add(null, kind, 'widget_only');
 for (const w of widgets.filter(w => w.kind === 'aws_waf')) w.sitekey ||= window.gokuProps?.key || window.apiKey || null;
-if (/^Just a moment/i.test(document.title) || all('#challenge-form').length || window._cf_chl_opt || location.pathname.startsWith('/cdn-cgi/challenge-platform/'))
-    add(null, 'cloudflare_challenge', 'active');
+// A Cloudflare wall loads the page's own challenge script. Bot management's background script
+// (/cdn-cgi/challenge-platform/scripts/precursor/) sets _cf_chl_opt on ordinary pages too.
+const challengeScript = all('script[src]').some(e => {
+    try { const u = new URL(e.src); return u.origin === location.origin && /^\/cdn-cgi\/challenge-platform\/h\/[^/]+\/orchestrate\/(chl_page|jsch|managed|captcha)\//.test(u.pathname); }
+    catch { return false; }
+});
+const wall = /^Just a moment/i.test(document.title) || all('#challenge-form').length > 0 || challengeScript
+    || location.pathname.startsWith('/cdn-cgi/challenge-platform/');
+if (wall || window._cf_chl_opt) add(null, 'cloudflare_challenge', 'active').marker = !wall;
 "#;
 
 fn script(main: bool) -> String {
@@ -177,6 +184,10 @@ struct Widget {
     frame_url: Option<String>,
     #[serde(default)]
     inferred: bool,
+    /// A Cloudflare challenge seen only through bot management's `_cf_chl_opt`, which ordinary
+    /// pages carry too. It stands for a challenge only when the page shows nothing else.
+    #[serde(default)]
+    marker: bool,
 }
 
 impl Widget {
@@ -198,6 +209,7 @@ impl Widget {
             },
             frame_url: None,
             inferred: true,
+            marker: false,
         }
     }
 
@@ -418,9 +430,10 @@ async fn scan(
             widgets.push(widget);
         }
     }
+    // Cloudflare is challenging the page as a whole: its Turnstile is that wall's own checkbox.
     let full_page = widgets
         .iter()
-        .any(|w| w.challenge.kind == CaptchaKind::CloudflareChallenge);
+        .any(|w| w.challenge.kind == CaptchaKind::CloudflareChallenge && !w.marker);
     if full_page {
         widgets.retain(|w| w.challenge.kind != CaptchaKind::Turnstile);
     }
@@ -579,7 +592,17 @@ async fn scan(
                 || (frames.first() == Some(frame) && top_url.as_deref() == Some(&frame.url))
         })
         .map(|(frame, _)| frame.frame_id.as_str());
-    let widgets = fold_vendor_widgets(widgets, &frames, &parents, top, &visibility, &mut complete);
+    let mut widgets =
+        fold_vendor_widgets(widgets, &frames, &parents, top, &visibility, &mut complete);
+    // Only now are the widgets in frames and closed shadow roots known, so only here can the
+    // marker yield to a CAPTCHA the page actually shows. A provider script that is only loaded
+    // (`widget_only`) shows nothing, so the marker's challenge stands beside it.
+    if widgets
+        .iter()
+        .any(|w| !w.marker && w.challenge.state != ChallengeState::WidgetOnly)
+    {
+        widgets.retain(|w| !w.marker);
+    }
     Ok((widgets, complete))
 }
 
@@ -690,6 +713,7 @@ fn fold_vendor_widgets(
                     challenge: widget.challenge.clone(),
                     frame_url: widget.frame_url.clone(),
                     inferred: true,
+                    marker: widget.marker,
                 });
             }
         }
@@ -1671,6 +1695,82 @@ mod tests {
         Ok(())
     }
 
+    /// What the main scan reports for a page carrying only Cloudflare bot management's
+    /// `_cf_chl_opt`, which ordinary pages such as dash.cloudflare.com/login and luma.com set.
+    fn cloudflare_marker() -> Value {
+        let mut marker = widget("cloudflare_challenge", "active");
+        marker["marker"] = json!(true);
+        marker
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_turnstile_beside_cloudflares_marker_is_the_challenge()
+    -> Result<(), PageError> {
+        let mut page = FakePage::new(json!([cloudflare_marker(), widget("turnstile", "active")]));
+        page.frames.push(frame(
+            "cf",
+            "https://challenges.cloudflare.com/turnstile?sitekey=key",
+        ));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1, "{:?}", result.challenges);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::Turnstile);
+        assert_eq!(
+            result.challenges[0]
+                .frame
+                .as_ref()
+                .map(|f| f.frame_id.as_str()),
+            Some("cf")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_turnstile_frame_beside_cloudflares_marker_is_the_challenge()
+    -> Result<(), PageError> {
+        // dash.cloudflare.com/login: no .cf-turnstile element, only the widget's frame.
+        let mut page = FakePage::new(json!([cloudflare_marker()]));
+        page.frames.push(frame(
+            "cf",
+            "https://challenges.cloudflare.com/turnstile?sitekey=key",
+        ));
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1, "{:?}", result.challenges);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::Turnstile);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_loaded_captcha_script_does_not_outrank_cloudflares_marker()
+    -> Result<(), PageError> {
+        // dash.cloudflare.com/login loads the Turnstile SDK for an invisible widget, and a page
+        // may load reCAPTCHA v3: neither shows anything, so the marker's challenge stands.
+        for script in ["turnstile", "recaptcha_v3"] {
+            let result = scan(&FakePage::new(json!([
+                cloudflare_marker(),
+                widget(script, "widget_only")
+            ])))
+            .await?;
+            assert!(
+                result
+                    .challenges
+                    .iter()
+                    .any(|c| c.kind == CaptchaKind::CloudflareChallenge),
+                "{script}: {:?}",
+                result.challenges
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_cloudflares_marker_alone_still_reports_a_challenge() -> Result<(), PageError>
+    {
+        let result = scan(&FakePage::new(json!([cloudflare_marker()]))).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].kind, CaptchaKind::CloudflareChallenge);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn tests_that_lookalike_hosts_are_not_provider_frames() -> Result<(), PageError> {
         let mut page = FakePage::new(json!([]));
@@ -1775,6 +1875,14 @@ mod tests {
                 Some((CaptchaKind::Turnstile, ChallengeState::Passed)),
             ),
             (
+                "turnstile-cf-marker.html",
+                Some((CaptchaKind::Turnstile, ChallengeState::Active)),
+            ),
+            (
+                "cloudflare-wall.html",
+                Some((CaptchaKind::CloudflareChallenge, ChallengeState::Active)),
+            ),
+            (
                 "hcaptcha.html",
                 Some((CaptchaKind::Hcaptcha, ChallengeState::Active)),
             ),
@@ -1803,10 +1911,12 @@ mod tests {
                 let matches = match expected {
                     None => result.outcome == ScanOutcome::None && result.challenges.is_empty(),
                     Some((kind, state)) => {
+                        // A challenge page is the whole document, not a frame.
                         result.challenges.len() == 1
                             && result.challenges[0].kind == kind
                             && result.challenges[0].state == state
-                            && result.challenges[0].frame.is_some()
+                            && (result.challenges[0].frame.is_some()
+                                || kind == CaptchaKind::CloudflareChallenge)
                     }
                 };
                 if result.complete && matches {

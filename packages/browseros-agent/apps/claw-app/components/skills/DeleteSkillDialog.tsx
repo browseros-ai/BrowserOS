@@ -48,7 +48,7 @@ export function DeleteSkillDialog({
       <CenterMorphModalContent
         ariaLabel="Delete this skill?"
         showCloseButton={false}
-        className="max-w-[440px] rounded-[22px] border-border-2 bg-card"
+        className="max-w-[440px] border-border-2 bg-card"
       >
         <div className="flex flex-col gap-5 p-6">
           <div className="flex flex-col gap-2">

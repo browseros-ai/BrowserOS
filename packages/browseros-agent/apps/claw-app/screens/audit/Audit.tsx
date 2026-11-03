@@ -172,7 +172,7 @@ function RowsSkeleton({ count }: { count: number }) {
               key={id}
               className="grid grid-cols-[72px_minmax(0,1fr)] items-center gap-4 px-4 py-3.5 sm:grid-cols-[112px_minmax(0,1fr)] sm:px-[18px]"
             >
-              <Skeleton className="aspect-[16/10] rounded-[10px]" />
+              <Skeleton className="aspect-[16/10] rounded-md" />
               <div className="flex flex-col gap-2">
                 <Skeleton className="h-4 w-2/3" />
                 <Skeleton className="h-3.5 w-11/12" />

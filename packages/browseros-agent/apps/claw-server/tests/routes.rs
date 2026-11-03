@@ -521,12 +521,7 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    // `pursue` is advertised only where the server has a credential for the
-    // decision model, so the expected list depends on the environment the test
-    // runs in rather than on the code. Asserted the way the server decides it,
-    // so the test passes on a machine that has the credential and on one that
-    // does not.
-    let mut expected = vec![
+    let expected = vec![
         "browser_profiles",
         "browser_target",
         "tabs",
@@ -539,30 +534,21 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
         "download",
         "upload",
         "read",
+        "read_output",
         "grep",
         "screenshot",
         "pdf",
         "wait",
         "windows",
-        "evaluate",
+        "evaluate_in_page",
         "run",
         "name_session",
         "save_skill",
         "mark_skill_run",
+        "run_skill",
         "request_human_help",
         "await_human_help",
     ];
-    if std::env::var("JEV_TOKEN")
-        .ok()
-        .is_some_and(|token| !token.trim().is_empty())
-    {
-        // Before the help tools, which is where the server pushes it.
-        let after = expected
-            .iter()
-            .position(|name| *name == "request_human_help")
-            .unwrap_or(expected.len());
-        expected.insert(after, "pursue");
-    }
     assert_eq!(listed, expected);
 
     let blocked = json!({
@@ -971,6 +957,91 @@ async fn mcp_declared_product_survives_profile_resolution_and_reuse() -> anyhow:
     Ok(())
 }
 
+/// Claude Code hands the model only `structuredContent` for a tool that declares an
+/// outputSchema, so the handle line in `content` never reached it: an agent opening with
+/// `run` calls sent no `session`, and each call started another empty cockpit session.
+#[tokio::test]
+async fn mcp_stateless_structured_results_carry_the_session_handle() -> anyhow::Result<()> {
+    let mock = MockCdp::start().await?;
+    let app = mock_native_app(&mock).await?;
+    app.state.browser.connect_once_for_testing().await?;
+    wait_for_cdp_connected(&app).await?;
+    let listed =
+        stateless_mcp_request(&app.router, "tools/list", json!({}), Some("claude-code")).await?;
+    let tools = listed["result"]["tools"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing tools: {listed}"))?;
+    let with_output: Vec<&Value> = tools
+        .iter()
+        .filter(|tool| tool["outputSchema"].is_object())
+        .collect();
+    assert!(
+        with_output.iter().any(|tool| tool["name"] == "run"),
+        "{listed}"
+    );
+    for tool in with_output {
+        assert_eq!(
+            tool["outputSchema"]["properties"]["session"]["type"], "string",
+            "{tool}"
+        );
+    }
+
+    let first = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({ "name": "run", "arguments": { "code": "return 1" } }),
+        Some("claude-code"),
+    )
+    .await?;
+    let handle = first["result"]["_meta"]["com.browseros.neo/session"].clone();
+    assert!(handle.is_string(), "{first}");
+    assert_eq!(handle.as_str().map(str::len), Some(8), "{first}");
+    let structured = &first["result"]["structuredContent"];
+    assert_eq!(structured["session"], handle, "{first}");
+    assert_eq!(structured["value"], 1, "{first}");
+    assert!(
+        first["result"]["content"]
+            .to_string()
+            .contains("Pass this exact value"),
+        "{first}"
+    );
+
+    // What the model saw is enough to stay in the same session.
+    let second = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({
+            "name": "run",
+            "arguments": { "code": "return 2", "session": structured["session"] }
+        }),
+        Some("claude-code"),
+    )
+    .await?;
+    assert_eq!(
+        second["result"]["_meta"]["com.browseros.neo/session"], handle,
+        "{second}"
+    );
+    assert_eq!(second["result"]["structuredContent"]["session"], handle);
+    assert_eq!(second["result"]["structuredContent"]["value"], 2);
+    let compact = format!(
+        "[browseros-neo session: {}]",
+        handle.as_str().unwrap_or_default()
+    );
+    assert!(
+        second["result"]["content"]
+            .as_array()
+            .is_some_and(|blocks| blocks.iter().any(|block| block["text"] == compact)),
+        "{second}"
+    );
+    assert!(
+        !second["result"]["content"]
+            .to_string()
+            .contains("Pass this exact value"),
+        "{second}"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn mcp_stateless_tool_schema_has_one_optional_product_fallback() -> anyhow::Result<()> {
     let app = test_app().await?;
@@ -1238,6 +1309,15 @@ async fn mcp_session_naming_appends_five_tips_without_elicitation() -> anyhow::R
     let app = mock_native_app(&mock).await?;
     app.state.browser.connect_once_for_testing().await?;
     wait_for_cdp_connected(&app).await?;
+    // The cleanup tip would otherwise be the last block.
+    let (status, _) = request_json(
+        &app.router,
+        "PUT",
+        "/api/v1/settings/agent",
+        Some(json!({ "taskCleanupTipEnabled": false })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
     let initialize = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -1335,7 +1415,7 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
     .await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["result"]["isError"], false, "tabs_new body: {body:?}");
-    assert!(body["result"].get("structuredContent").is_none());
+    assert_eq!(body["result"]["structuredContent"]["page"], 1);
     assert!(body["result"].get("_meta").is_none());
 
     let tabs_list = json!({
@@ -1354,7 +1434,10 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
     .await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list_body["result"]["isError"], false);
-    assert!(list_body["result"].get("structuredContent").is_none());
+    assert_eq!(
+        list_body["result"]["structuredContent"]["pages"][0]["page"],
+        1
+    );
     assert!(
         list_body["result"]["content"][0]["text"]
             .as_str()
@@ -1546,7 +1629,7 @@ async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    assert!(body["result"].get("structuredContent").is_none());
+    assert_eq!(body["result"]["structuredContent"]["page"], 1);
 
     let wait_call = json!({
         "jsonrpc": "2.0",
@@ -2529,7 +2612,8 @@ async fn handle_mock_ws(
             .get("sessionId")
             .and_then(Value::as_str)
             .map(str::to_string);
-        let result = handle_mock_cdp_method(method, params.clone(), tabs.clone()).await;
+        let result =
+            handle_mock_cdp_method(method, params.clone(), session.as_deref(), tabs.clone()).await;
         if method == "Page.captureScreenshot" {
             captures
                 .lock()
@@ -2550,9 +2634,28 @@ async fn handle_mock_ws(
 async fn handle_mock_cdp_method(
     method: &str,
     params: Value,
+    session: Option<&str>,
     tabs: Arc<tokio::sync::Mutex<Vec<MockTab>>>,
 ) -> Result<Value, String> {
     match method {
+        // A new tab opens on about:blank and is then navigated; the navigation commits the
+        // requested URL on the tab whose session sent it.
+        "Page.navigate" => {
+            let target = session.and_then(|session| session.strip_prefix("session-"));
+            let url = params
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if let Some(tab) = tabs
+                .lock()
+                .await
+                .iter_mut()
+                .find(|tab| Some(tab.target_id.as_str()) == target)
+            {
+                tab.url = url.to_string();
+            }
+            Ok(json!({ "frameId": "frame", "loaderId": "loader" }))
+        }
         "Browser.getVersion" => Ok(json!({ "product": "BrowserOS Mock" })),
         "Browser.getTabs" => {
             let tabs = tabs.lock().await;

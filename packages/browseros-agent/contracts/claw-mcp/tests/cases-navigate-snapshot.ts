@@ -9,7 +9,7 @@ import type { CaseContext, ContractCase } from './cases'
 import { errorClass, expectError, expectOk, waitUntil } from './helpers'
 
 /**
- * The server runs evaluate code as an async function BODY, so bare
+ * The server runs evaluate_in_page code as an async function BODY, so bare
  * expressions come back `undefined` — callers must pass `return …`.
  */
 async function evaluateText(
@@ -18,8 +18,8 @@ async function evaluateText(
   code: string,
 ): Promise<string> {
   return expectOk(
-    await ctx.mcp.callTool('evaluate', { page, code }),
-    `evaluate ${code}`,
+    await ctx.mcp.callTool('evaluate_in_page', { page, code }),
+    `evaluate_in_page ${code}`,
   )
 }
 

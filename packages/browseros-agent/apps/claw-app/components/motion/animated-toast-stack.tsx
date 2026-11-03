@@ -475,7 +475,7 @@ const ToastItem = memo(function ToastItem({
                   type="button"
                   onClick={() => toast.action?.onClick(toast)}
                   className={cn(
-                    "mt-2 inline-flex h-7 items-center rounded-full bg-muted/80 px-3 text-xs font-medium text-foreground transition-colors hover:bg-muted",
+                    "mt-2 inline-flex h-7 items-center rounded-md bg-muted/80 px-3 text-xs font-medium text-foreground transition-colors hover:bg-muted",
                     classNames?.action,
                   )}
                 >

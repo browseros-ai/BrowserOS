@@ -7,6 +7,9 @@ Azure BYOC runners:
 - `.github/workflows/release-windows.yml`
 - `.github/workflows/build-browseros.yml`
 
+`.github/workflows/release-docker.yml` also builds its claw-server binaries on the
+Linux x64 runner, with its own queue watchdog.
+
 The full product workflows call the Linux and Windows wrappers, which delegate
 one native lane to the reusable `build-browseros.yml` workflow. That workflow
 owns the WarpBuild checkout, cache, sync, one `bos_build` invocation, browser

@@ -25,6 +25,7 @@ const FRAME_REF_LABELS = [
   'Frame A action ready',
   'Frame A cursor ready',
   'Grandchild action ready',
+  'Grandchild cursor ready',
   'Frame B action ready',
   'Frame B cursor ready',
 ] as const
@@ -34,17 +35,16 @@ const FRAME_TEXT_ORDER = [
   'Frame A action ready',
   'Frame A cursor ready',
   'Grandchild action ready',
+  'Grandchild cursor ready',
   'Frame B action ready',
   'Frame B cursor ready',
 ] as const
 
 interface CursorProbeState {
   candidateCount: number
-  activeMarkerNamespaces: number
-  distinctMarkerNamespaces: number
-  maxActiveMarkerNamespaces: number
+  /** DOM mutations since the last reset. */
+  mutations: number
   sentinelPresent: boolean
-  vanishingCandidatePresent: boolean
 }
 
 interface FrameProbeState {
@@ -103,8 +103,8 @@ async function evaluateText(
   code: string,
 ): Promise<string> {
   return expectOk(
-    await ctx.mcp.callTool('evaluate', { page, code }),
-    `evaluate ${code}`,
+    await ctx.mcp.callTool('evaluate_in_page', { page, code }),
+    `evaluate_in_page ${code}`,
   )
 }
 
@@ -231,38 +231,24 @@ async function waitForCursorFixture(
   }, 'the cursor concurrency fixture to be ready')
 }
 
-async function armVanishingCandidate(
-  ctx: CaseContext,
-  page: number,
-): Promise<void> {
+async function resetCursorProbe(ctx: CaseContext, page: number): Promise<void> {
   await evaluateText(
     ctx,
     page,
-    'window.snapshotCursorFixture.armVanishingCandidate(); return "armed"',
+    'window.snapshotCursorFixture.resetProbe(); return "reset"',
   )
-  await waitUntil(async () => {
-    const state = await cursorProbeState(ctx, page)
-    return state.vanishingCandidatePresent
-  }, 'the vanishing cursor candidate to be armed')
 }
 
-async function requireCleanCursorProbe(
+/** A snapshot reads the page without writing to it, page-owned look-alike markers included. */
+async function requireUntouchedDom(
   ctx: CaseContext,
   page: number,
-): Promise<CursorProbeState> {
-  let state: CursorProbeState | undefined
-  await waitUntil(async () => {
-    state = await cursorProbeState(ctx, page)
-    return (
-      state.activeMarkerNamespaces === 0 && !state.vanishingCandidatePresent
-    )
-  }, 'cursor markers to be cleaned and the vanishing candidate to disappear')
-  if (!state?.sentinelPresent) {
-    throw new Error(
-      `snapshot cleanup removed the page-owned marker: ${JSON.stringify(state)}`,
-    )
+  context: string,
+): Promise<void> {
+  const state = await cursorProbeState(ctx, page)
+  if (state.mutations !== 0 || !state.sentinelPresent) {
+    throw new Error(`${context} wrote to the page: ${JSON.stringify(state)}`)
   }
-  return state
 }
 
 export const snapshotConcurrencyCases: ContractCase[] = [
@@ -273,7 +259,7 @@ export const snapshotConcurrencyCases: ContractCase[] = [
         ctx.fixture('/snapshot-cursor-concurrency.html'),
       )
       await waitForCursorFixture(ctx, page)
-      await armVanishingCandidate(ctx, page)
+      await resetCursorProbe(ctx, page)
 
       const snapshot = expectOk(
         await ctx.mcp.callTool('snapshot', { page }),
@@ -288,18 +274,7 @@ export const snapshotConcurrencyCases: ContractCase[] = [
           `zero-sized cursor candidate received a ref: ${zeroSizedLine}`,
         )
       }
-      const vanishingLine = snapshotLine(snapshot, 'Vanishing cursor target')
-      if (vanishingLine?.includes('[ref=')) {
-        throw new Error(
-          `vanished cursor candidate received a ref: ${vanishingLine}`,
-        )
-      }
-      const state = await requireCleanCursorProbe(ctx, page)
-      if (state.distinctMarkerNamespaces === 0) {
-        throw new Error(
-          `fixture did not observe a snapshot marker namespace: ${JSON.stringify(state)}`,
-        )
-      }
+      await requireUntouchedDom(ctx, page, 'cursor concurrency snapshot')
     },
   },
   {
@@ -363,7 +338,12 @@ export const snapshotConcurrencyCases: ContractCase[] = [
           ).includes('typed through cursor ref'),
         'contenteditable cursor ref to receive text',
       )
-      await requireCleanCursorProbe(ctx, page)
+      const state = await cursorProbeState(ctx, page)
+      if (!state.sentinelPresent) {
+        throw new Error(
+          `acting through cursor refs removed the page-owned marker: ${JSON.stringify(state)}`,
+        )
+      }
     },
   },
   {
@@ -462,7 +442,11 @@ export const snapshotConcurrencyCases: ContractCase[] = [
       const snapshot = await waitForSnapshotLabels(ctx, page, [
         'Frame B action ready',
         'Deep frame action ready',
+        'Deep frame cursor ready',
       ])
+      // A pointer-only element has no accessibility role of its own: its ref comes from the DOM
+      // capture on the nested frame's own session, not its parent's.
+      refFor(snapshot, 'Deep frame cursor ready')
 
       expectOk(
         await ctx.mcp.callTool('act', {
@@ -505,12 +489,7 @@ export const snapshotConcurrencyCases: ContractCase[] = [
         ctx.fixture('/snapshot-cursor-concurrency.html'),
       )
       await waitForCursorFixture(ctx, page)
-      await requireCleanCursorProbe(ctx, page)
-      await evaluateText(
-        ctx,
-        page,
-        'window.snapshotCursorFixture.resetProbe(); return "reset"',
-      )
+      await resetCursorProbe(ctx, page)
 
       const snapshots = await Promise.all(
         Array.from({ length: 4 }, async () =>
@@ -529,12 +508,7 @@ export const snapshotConcurrencyCases: ContractCase[] = [
         )
       }
 
-      const overlapState = await requireCleanCursorProbe(ctx, page)
-      if (overlapState.maxActiveMarkerNamespaces < 2) {
-        throw new Error(
-          `cursor captures were serialized instead of overlapping: ${JSON.stringify(overlapState)}`,
-        )
-      }
+      await requireUntouchedDom(ctx, page, 'overlapping cursor snapshots')
 
       const final = expectOk(
         await ctx.mcp.callTool('snapshot', { page }),
@@ -545,7 +519,7 @@ export const snapshotConcurrencyCases: ContractCase[] = [
         expectedRefs,
         'final cursor snapshot after overlap',
       )
-      await requireCleanCursorProbe(ctx, page)
+      await requireUntouchedDom(ctx, page, 'final cursor snapshot')
     },
   },
   {

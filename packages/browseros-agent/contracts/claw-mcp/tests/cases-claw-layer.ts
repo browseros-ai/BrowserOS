@@ -282,7 +282,7 @@ export const clawLayerCases: ContractCase[] = [
       })
       const page = Number(textOf(opened).match(/opened page (\d+)/)?.[1])
       // A deliberately over-length argument to exercise the 4096 clamp.
-      await session.callTool('evaluate', {
+      await session.callTool('evaluate_in_page', {
         page,
         code: `return "${'q'.repeat(6000)}"`,
       })
@@ -290,14 +290,14 @@ export const clawLayerCases: ContractCase[] = [
       let audit = await auditSession(ctx, sessionId)
       await waitUntil(async () => {
         audit = await auditSession(ctx, sessionId)
-        return audit.dispatches.some((d) => d.toolName === 'evaluate')
+        return audit.dispatches.some((d) => d.toolName === 'evaluate_in_page')
       }, 'the audit log to record the dispatches')
       const tools = audit.dispatches.map((d) => d.toolName)
-      if (!tools.includes('tabs') || !tools.includes('evaluate')) {
+      if (!tools.includes('tabs') || !tools.includes('evaluate_in_page')) {
         throw new Error(`audit missing expected tool names: ${tools.join(',')}`)
       }
       const evalDispatch = audit.dispatches.find(
-        (d) => d.toolName === 'evaluate',
+        (d) => d.toolName === 'evaluate_in_page',
       )
       const argsJson = evalDispatch?.argsJson as string | undefined
       if (argsJson?.length !== 4096 || !argsJson.endsWith('~')) {

@@ -5,8 +5,7 @@
     <title>Snapshot cursor concurrency fixture</title>
     <style>
       .cursor-candidate,
-      #pointer-only,
-      #vanishing-candidate {
+      #pointer-only {
         cursor: pointer;
       }
       #editable-target {
@@ -71,53 +70,18 @@
     <output id="cursor-action-result">Cursor action untouched</output>
 
     <script>
-      const internalMarkerPrefix = 'data-__bcid-'
+      // A snapshot reads the page without writing to it. Every DOM mutation after a reset is
+      // counted, and the page-owned attribute that looks like an old snapshot marker must stay.
       const pageOwnedMarker = 'data-__bcid-page-owned'
-      const seenMarkerNamespaces = new Set()
-      let maxActiveMarkerNamespaces = 0
-
-      function activeMarkerNamespaces() {
-        const active = new Set()
-        for (const element of document.querySelectorAll('*')) {
-          for (const name of element.getAttributeNames()) {
-            if (
-              name.startsWith(internalMarkerPrefix) &&
-              name !== pageOwnedMarker
-            ) {
-              active.add(name)
-            }
-          }
-        }
-        return active
-      }
-
-      function sampleMarkers() {
-        const active = activeMarkerNamespaces()
-        for (const name of active) seenMarkerNamespaces.add(name)
-        maxActiveMarkerNamespaces = Math.max(
-          maxActiveMarkerNamespaces,
-          active.size,
-        )
-        return active
-      }
-
-      const markerObserver = new MutationObserver((records) => {
-        for (const record of records) {
-          if (
-            record.type === 'attributes' &&
-            record.target.id === 'vanishing-candidate' &&
-            record.attributeName?.startsWith(internalMarkerPrefix)
-          ) {
-            record.target.remove()
-          }
-        }
-        sampleMarkers()
-      })
-      markerObserver.observe(document.documentElement, {
+      let mutations = 0
+      new MutationObserver((records) => {
+        mutations += records.length
+      }).observe(document.documentElement, {
         attributes: true,
+        childList: true,
+        characterData: true,
         subtree: true,
       })
-
       const generatedBatch = document.getElementById('generated-batch')
       for (let index = 0; index < 64; index += 1) {
         const candidate = document.createElement('div')
@@ -139,34 +103,17 @@
 
       window.snapshotCursorFixture = {
         ready: true,
-        armVanishingCandidate() {
-          if (document.getElementById('vanishing-candidate')) return
-          const candidate = document.createElement('div')
-          candidate.id = 'vanishing-candidate'
-          candidate.setAttribute('role', 'group')
-          candidate.setAttribute('aria-label', 'Vanishing cursor target')
-          candidate.textContent = 'Vanishing cursor target'
-          generatedBatch.children[16].before(candidate)
-        },
         resetProbe() {
-          seenMarkerNamespaces.clear()
-          maxActiveMarkerNamespaces = 0
-          sampleMarkers()
+          mutations = 0
         },
         state() {
-          const active = sampleMarkers()
           const sentinel = document.getElementById('page-owned-marker')
           return {
             candidateCount:
               document.querySelectorAll('.cursor-candidate').length,
-            activeMarkerNamespaces: active.size,
-            distinctMarkerNamespaces: seenMarkerNamespaces.size,
-            maxActiveMarkerNamespaces,
+            mutations,
             sentinelPresent:
               sentinel?.getAttribute(pageOwnedMarker) === 'fixture-owned',
-            vanishingCandidatePresent: Boolean(
-              document.getElementById('vanishing-candidate'),
-            ),
           }
         },
       }

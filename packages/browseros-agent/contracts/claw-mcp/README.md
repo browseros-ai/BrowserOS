@@ -8,7 +8,7 @@ catch mismatches between CDP payloads and the accessibility/ref pipeline.
 ## Coverage
 
 The suite covers every MCP tool and major failure path: `tabs`, `tab_groups`,
-`windows`, `navigate`, `snapshot`, `diff`, `act`, `grep`, `read`, `evaluate`,
+`windows`, `navigate`, `snapshot`, `diff`, `act`, `grep`, `read`, `evaluate_in_page`,
 `run`, `screenshot`, `pdf`, `wait`, `upload`, `download`, and `name_session`.
 It also checks ownership isolation, untrusted-content fencing, auto-context,
 audit records, cancellation, browser-down guidance, and transport hygiene.
@@ -39,10 +39,19 @@ Useful environment variables:
 | --- | --- |
 | `BROWSEROS_BINARY` | BrowserOS or BrowserOS neo executable to test |
 | `CLAW_MCP_SMOKE=1` | Run only smoke cases; set by `--smoke` |
+| `CLAW_MCP_ONLY=<text>` | Run only cases whose name contains the text, e.g. `ultrafast:` |
 | `BROWSEROS_TEST_HEADLESS=false` | Run headed for debugging |
 | `BROWSEROS_TEST_EXTRA_ARGS` | Add browser process arguments |
 | `BROWSEROS_TEST_DEBUG=true` | Stream browser output |
 | `CLAW_MCP_CAPTURE_DIR=<dir>` | Refresh raw CDP capture fixtures |
+
+The screenshot density cases declare `browserArgs` on their case definition.
+Cases can also override `headless`. The runner restarts only its isolated
+browser/server when either setting changes, so `--force-device-scale-factor=2`
+applies to density cases alone. On Linux, the repeated screenshot batch runs
+headed to match hosted Neo: new-headless Chromium can stall during repeated
+background captures. That case requires an X server; CI's browser wrapper starts
+Xvfb. Ordinary launch settings resume afterward; browser-kill stays last.
 
 The ungated fixture-server and MCP-client unit tests run under the normal Bun
 test suite.
@@ -66,6 +75,15 @@ contracts/claw-mcp/
 Add it to the relevant `cases-<group>.ts`, assert the expected behavior in the
 case, and use `waitUntil` for asynchronous state. Pages opened with
 `ctx.openPage` are cleaned automatically. Keep the browser-kill case last.
+
+The SDK fix contracts live in `cases-sdk-input.ts`, `cases-sdk-navigation.ts`,
+`cases-sdk-read-eval.ts`, and `cases-screenshot-scale.ts`. They share deterministic
+`sdk-*.html` fixtures; existing attachment and missing-path routes supply download
+and HTTP 404 outcomes without adding server behavior. Existing `cases-fill.ts`
+already covers text, email, number, textarea and contenteditable regressions on
+both MCP and SDK paths. `insertText` has no granular MCP kind. SDK screenshots
+return metadata/annotations to the script and forward image blocks to the outer
+MCP result. Output cases verify that the same capture is remotely retrievable.
 
 ## Capture mode
 

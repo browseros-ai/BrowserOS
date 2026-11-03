@@ -13,7 +13,10 @@ set -euo pipefail
 : "${NEO_DATA_DIR:=/data}"
 readonly NEO_DATA_DIR
 readonly PROFILE="$NEO_DATA_DIR/profile"
-readonly DOWNLOADS="$NEO_DATA_DIR/downloads"
+# Downloads may be shared with an agent without exposing the private browser profile.
+readonly DOWNLOADS="${NEO_DOWNLOAD_DIR:-$NEO_DATA_DIR/downloads}"
+# MCP outputs are private, session-scoped artifacts, independent of download filenames.
+readonly OUTPUTS="${NEO_OUTPUT_DIR:-$NEO_DATA_DIR/tool-output}"
 # claw-server's database, recordings, skills and agent settings. It defaults to
 # ~/.browserclaw, which is not on the volume and would vanish with the container.
 readonly CLAW_DATA="$NEO_DATA_DIR/browserclaw"
@@ -28,6 +31,7 @@ readonly CDP_PORT=9110
 readonly SERVER_PORT=9210
 
 : "${NEO_SCREEN:=1600x1000}" "${NEO_SANDBOX:=false}" "${NEO_ARGS:=}"
+: "${NEO_SOFTWARE_GRAPHICS:=true}"
 # Agents drive Neo over MCP, which needs none of the bundled BrowserOS
 # extensions, so they are off unless a deployment wants their UI or rrweb page
 # recordings back (README).
@@ -53,6 +57,11 @@ die() { log "$*" >&2; exit 1; }
 [[ "$NEO_DATA_DIR" = /* ]] || die "NEO_DATA_DIR must be an absolute path"
 [ "$(realpath -m -- "$NEO_DATA_DIR")" != / ] || die "NEO_DATA_DIR must not be the filesystem root"
 
+[[ "$DOWNLOADS" = /* ]] || die "NEO_DOWNLOAD_DIR must be an absolute path"
+[ "$(realpath -m -- "$DOWNLOADS")" != / ] || die "NEO_DOWNLOAD_DIR must not be the filesystem root"
+[[ "$OUTPUTS" = /* ]] || die "NEO_OUTPUT_DIR must be an absolute path"
+[ "$(realpath -m -- "$OUTPUTS")" != / ] || die "NEO_OUTPUT_DIR must not be the filesystem root"
+
 # Validate before starting services so the browser and its server agree.
 case "$BROWSERCLAW_HOSTED_MODE" in
   0 | 1) ;;
@@ -66,7 +75,8 @@ esac
 spawn_as_neo() {
   (exec setpriv --reuid=neo --regid=neo --init-groups \
     env HOME="$NEO_HOME" USER=neo DISPLAY=:1 XDG_RUNTIME_DIR="$XDG_DIR" LANG=C.UTF-8 \
-      BROWSERCLAW_DIR="$CLAW_DATA" BROWSERCLAW_HOSTED_MODE="$BROWSERCLAW_HOSTED_MODE" "$@") &
+      BROWSERCLAW_DIR="$CLAW_DATA" BROWSERCLAW_HOSTED_MODE="$BROWSERCLAW_HOSTED_MODE" \
+      BROWSEROS_OUTPUT_DIR="$OUTPUTS" "$@") &
 }
 
 # Bind-mounted host folders are owned by the host user; running Neo as that
@@ -98,11 +108,11 @@ merge_json() {
 }
 
 prepare_data() {
-  mkdir -p "$PROFILE" "$DOWNLOADS" "$CLAW_DATA" "$XDG_DIR"
+  mkdir -p "$PROFILE" "$DOWNLOADS" "$OUTPUTS" "$CLAW_DATA" "$XDG_DIR"
   # Derived images may share the parent mount with other users. Limit ownership
   # changes to Neo's root and data folders, and keep the cookies private there.
-  chown neo:neo "$NEO_DATA_DIR" "$PROFILE" "$DOWNLOADS" "$CLAW_DATA" "$XDG_DIR"
-  chmod 700 "$NEO_DATA_DIR" "$XDG_DIR"
+  chown neo:neo "$NEO_DATA_DIR" "$PROFILE" "$DOWNLOADS" "$OUTPUTS" "$CLAW_DATA" "$XDG_DIR"
+  chmod 700 "$NEO_DATA_DIR" "$OUTPUTS" "$XDG_DIR"
   ln -sfn "$DOWNLOADS" "$NEO_HOME/Downloads"
 
   # Neo's MCP proxy drops connections that are not from loopback unless this
@@ -122,6 +132,18 @@ prepare_data() {
   # application data; the browser/server processes have not started yet.
   rm -f "$PROFILE/.browseros/current_version" \
     "$PROFILE/.browseros/BrowserClawServer/current_version"
+}
+
+# Viewers can't zoom Neo (see start_neo), but the menu's zoom buttons still
+# work, so pages zoomed before, per site or through a changed default, go back
+# to 100%. start_neo runs it before every launch, while Neo is stopped, so a
+# level saved before Neo closed is gone when it comes back. Only zoom levels are dropped, and a profile whose preferences
+# cannot be read keeps them and still starts.
+forget_zoom_levels() {
+  local prefs="$PROFILE/Default/Preferences"
+  [ -s "$prefs" ] || return 0
+  merge_json "$prefs" 'del(.partition.per_host_zoom_levels, .partition.default_zoom_level)' \
+    || log "Could not clear saved zoom levels in $prefs"
 }
 
 start_display() {
@@ -162,13 +184,17 @@ if is_true "$NEO_DISABLE_BROWSEROS_EXTENSIONS"; then
 fi
 
 # Containers and microVMs rarely have a GPU, so Chromium draws with Mesa's
-# llvmpipe, which runs on the CPU. Chromium's software-rendering list turns
-# every GPU feature off for llvmpipe, which leaves pages with no WebGL at all.
-# --ignore-gpu-blocklist skips that list so WebGL runs on llvmpipe. Skipping it
-# would also move compositing, painting and video onto llvmpipe;
-# --disable-gpu-compositing keeps those on Chromium's software path, as before.
-# WebGPU stays off: Chromium offers pages no WebGPU adapter without a GPU.
-gpu_flags=(--ignore-gpu-blocklist --disable-gpu-compositing)
+# llvmpipe on the CPU, and its software-rendering list turns WebGL off there.
+# --ignore-gpu-blocklist lets WebGL1/2 run on llvmpipe; --disable-gpu-compositing
+# keeps compositing, painting and video on Chromium's software path, which
+# skipping the blocklist would otherwise move onto llvmpipe too. No WebGPU:
+# --enable-unsafe-webgpu relaxes WebGPU's safety rules for every site, and
+# BrowserOS drops its hosted GPU identity under it, so pages would see llvmpipe
+# and SwiftShader. Testers can add it through NEO_ARGS (README "Graphics").
+gpu_flags=()
+if is_true "$NEO_SOFTWARE_GRAPHICS"; then
+  gpu_flags=(--ignore-gpu-blocklist --disable-gpu-compositing)
+fi
 
 # The viewer is for watching agents and for a person taking over a login, code
 # or payment, so Neo hides the browser controls neither needs (README lists the
@@ -190,13 +216,33 @@ readonly HIDDEN_BROWSEROS_FEATURES=VerticalTabs,HomeButton,SplitTabButton,TabSea
 # only with Chromium's fixed --password-store=basic key. Turning payment
 # autofill off stops Chromium offering to save a submitted card; supplied fills
 # still work.
+#
+# In hosted mode nobody sits at the browser to answer "Save password?",
+# "Update password?", "Save address?" or a leaked-password warning, and the
+# bubbles cover the viewer, so those are all off. Leak checks have their own
+# policy because Chromium runs them on a submitted login even with saving off.
+# Logins then follow the card model: agents fill ones the deployment supplies
+# (credentials fill with a username and password). Chromium gates its prompts
+# and the Passwords DevTools domain's `add` on the same setting, so
+# `credentials add` is refused in this mode too; logins already in the profile
+# still fill.
 apply_policies() {
   local managed=/etc/chromium/policies/managed
   mkdir -p "$managed"
   echo '{"AutofillCreditCardEnabled": false}' > "$managed/neo-payments.json"
-  rm -f "$managed/neo-docker.json"
+  # A reused profile can remember another download folder or Save As prompting. Policy
+  # fixes the deployment's folder for every profile while Chrome still owns naming and
+  # its download history; CDP only observes the final path, never redirects each click.
+  jq -n --arg directory "$DOWNLOADS" \
+    '{DownloadDirectory: $directory, PromptForDownloadLocation: false}' \
+    > "$managed/neo-downloads.json"
+  rm -f "$managed/neo-docker.json" "$managed/neo-hosted.json"
   if [ "${#sandbox_flags[@]}" -gt 0 ]; then
     echo '{"CommandLineFlagSecurityWarningsEnabled": false}' > "$managed/neo-docker.json"
+  fi
+  if [ "$BROWSERCLAW_HOSTED_MODE" = 1 ]; then
+    echo '{"PasswordManagerEnabled": false, "PasswordLeakDetectionEnabled": false, "AutofillAddressEnabled": false}' \
+      > "$managed/neo-hosted.json"
   fi
 }
 
@@ -219,7 +265,13 @@ apply_minimal_ui() {
   chown -R neo:neo "$NEO_HOME/.config"
 }
 
+# Viewers can't zoom Neo: the page a viewer pinches is the page agents work in,
+# so viewers zoom their own browser instead (README "Zoom"). --disable-pinch
+# stops touch pinch, and openbox-rc.xml takes the zoom keys and Ctrl + mouse
+# wheel (noVNC's pinch) before they reach the browser. setViewport's zoom is
+# DevTools emulation, not browser zoom, and still works.
 start_neo() {
+  forget_zoom_levels
   # Releases verify the packaged/overlaid server, so pin it for the image's
   # lifetime. Keep this outside NEO_ARGS, which Compose/callers may replace.
   # NEO_ARGS goes last so a caller's value for a repeated switch wins.
@@ -238,6 +290,7 @@ start_neo() {
     --disable-browseros-server-updater \
     --hide-crash-restore-bubble \
     --start-maximized \
+    --disable-pinch \
     --disable-browseros-features="$HIDDEN_BROWSEROS_FEATURES" \
     $NEO_ARGS
   neo_pid=$!

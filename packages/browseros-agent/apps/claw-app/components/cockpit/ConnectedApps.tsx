@@ -68,7 +68,6 @@ export function ConnectedApps({ harnesses }: ConnectedAppsProps) {
           side="bottom"
           align="start"
           sideOffset={12}
-          radius={14}
           className="w-[252px] border border-border-2 bg-card p-2"
         >
           <div className="flex items-baseline justify-between px-2.5 pt-1.5 pb-2 font-semibold text-[13px] text-cyanotype-ink leading-[18px]">
@@ -79,7 +78,7 @@ export function ConnectedApps({ harnesses }: ConnectedAppsProps) {
             {harnesses.map((harness) => (
               <li
                 key={harness}
-                className="flex h-9 items-center gap-2.5 rounded-[9px] px-2.5 font-medium text-[14px] text-cyanotype-ink leading-5"
+                className="flex h-9 items-center gap-2.5 rounded-md px-2.5 font-medium text-[14px] text-cyanotype-ink leading-5"
               >
                 <span className="flex size-5 shrink-0 items-center justify-center">
                   <HarnessIcon harness={harness} className="size-4" />

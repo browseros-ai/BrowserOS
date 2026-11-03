@@ -27,6 +27,7 @@ mod live;
 mod previews;
 mod recordings;
 mod replay;
+mod screencasts;
 mod screenshots;
 mod sessions;
 mod settings;
@@ -56,6 +57,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/v1/audit/storage", get(audit::storage))
         .route("/api/v1/audit/retention", put(audit::set_retention))
         .route("/api/v1/audit/cleanup", post(audit::cleanup))
+        .route("/api/v1/audit/agents", get(audit::agents))
         .route(
             "/api/v1/settings/telemetry",
             get(settings::telemetry).put(settings::update_telemetry),
@@ -64,11 +66,8 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/api/v1/settings/agent",
             get(settings::agent).put(settings::update_agent),
         )
-        .route(
-            "/api/v1/settings/agent/jev-token",
-            put(settings::save_jev_token).delete(settings::remove_jev_token),
-        )
         .route("/api/v1/help/events", get(help_events::events))
+        .route("/api/v1/screencasts", get(screencasts::screencasts))
         .route("/api/v1/sessions", get(sessions::list))
         .route("/api/v1/sessions/{session_id}", get(sessions::get))
         .route(
@@ -127,6 +126,11 @@ pub fn router(state: AppState) -> Router<AppState> {
             get(skills::get).put(skills::update).delete(skills::delete),
         )
         .route("/api/v1/skills/{name}/runs", get(skills::list_runs))
+        .route("/api/v1/skills/{name}/flow", get(skills::flow))
+        .route(
+            "/api/v1/skills/{name}/ultrafast/approve-write",
+            post(skills::approve_write),
+        )
         .nest_service(
             "/mcp",
             Router::new()
@@ -201,7 +205,8 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
     let reject_origin = (path == "/api/v1/recordings/events"
         && !trusted_recording_origin(req.headers()))
-        || (path == "/api/v1/extension/update-ready" && !trusted_update_origin(req.headers()));
+        || ((path == "/api/v1/extension/update-ready" || path == "/api/v1/screencasts")
+            && !trusted_extension_origin(req.headers()));
     let span = info_span!("http_request", request_id = %request_id.0, %method, %path);
     async move {
         let start = Instant::now();
@@ -292,7 +297,10 @@ async fn extension_update_ready(
     StatusCode::NO_CONTENT
 }
 
-fn trusted_update_origin(headers: &axum::http::HeaderMap) -> bool {
+/// claw-app, or a native client (no `Origin` and no `Sec-Fetch-Site`). Every other web page is
+/// refused: responses here carry `Access-Control-Allow-Origin: *`, and a WebSocket has no CORS at
+/// all, so the origin check is the only thing keeping a site from these endpoints.
+fn trusted_extension_origin(headers: &axum::http::HeaderMap) -> bool {
     match headers
         .get(header::ORIGIN)
         .and_then(|value| value.to_str().ok())

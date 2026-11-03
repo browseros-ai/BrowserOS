@@ -1,6 +1,6 @@
 [package]
 name = "claw-server"
-version = "0.0.84"
+version = "0.0.93"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -25,13 +25,12 @@ os_info = "3.15.0"
 harness-integrations.workspace = true
 browseros-cdp.workspace = true
 browseros-core.workspace = true
-browseros-decide.workspace = true
 browseros-mcp.workspace = true
 claw-api.workspace = true
 hosted-api.workspace = true
 
 anyhow.workspace = true
-axum.workspace = true
+axum = { workspace = true, features = ["ws"] }
 base64.workspace = true
 bytes.workspace = true
 clap.workspace = true
@@ -42,6 +41,7 @@ sentry.workspace = true
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
 reqwest.workspace = true
+regex.workspace = true
 rmcp.workspace = true
 rand.workspace = true
 serde.workspace = true
@@ -65,6 +65,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 syn = { version = "2", features = ["full", "visit"] }
+rquickjs.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite.workspace = true
 

@@ -10,7 +10,8 @@ import {
   AnimatedBadge,
   type AnimatedBadgeSize,
 } from '@/components/motion/animated-badge'
-import { SESSION_STATUS_BADGE } from '@/lib/status'
+import { sessionStatusBadge } from '@/lib/status'
+import { useLiveSessionState } from '@/modules/api/audit.hooks'
 
 const ICON_SIZE: Record<AnimatedBadgeSize, string> = {
   sm: 'size-3',
@@ -20,14 +21,20 @@ const ICON_SIZE: Record<AnimatedBadgeSize, string> = {
 /** A task's status in plain words, with an icon that says the same thing. */
 export function SessionStatusBadge({
   status,
+  sessionId,
   size = 'sm',
   className,
 }: {
   status: SessionStatus
+  /** The task's session, so a live one that has gone quiet reads Idle rather than Working. */
+  sessionId?: string
   size?: AnimatedBadgeSize
   className?: string
 }) {
-  const meta = SESSION_STATUS_BADGE[status]
+  const liveState = useLiveSessionState(
+    status === 'live' ? sessionId : undefined,
+  )
+  const meta = sessionStatusBadge(status, liveState)
   const iconClass = ICON_SIZE[size]
   // Working keeps beUI's own loading spinner.
   const icon =

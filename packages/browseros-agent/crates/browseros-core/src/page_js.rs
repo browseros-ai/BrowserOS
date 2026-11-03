@@ -7,7 +7,8 @@
 //!   shares the page's DOM but not its JavaScript, so the page cannot see their globals or patch
 //!   the built-ins they call.
 //! - [`PageJs::page_world`] is for scripts that need the page's own JavaScript: the agent's
-//!   `evaluate`, site globals, handlers the page assigned. They always run in the page's main world.
+//!   `evaluate_in_page`, site globals, handlers the page assigned. They always run in the page's
+//!   main world.
 //!
 //! An isolated script must behave the same in either world. With the rollout switch
 //! ([`set_isolated_world_enabled`]) off every script runs in the page world, and with it on a
@@ -41,10 +42,6 @@ use std::{
 /// An empty name would create a fresh world on every call.
 const WORLD_NAME: &str = "browseros";
 
-fn no_isolated_world() -> CoreError {
-    CoreError::Message("the page has no isolated world for BrowserOS's check".to_string())
-}
-
 /// Returned by a guarded isolated call whose node is not in the document of the world it was
 /// resolved into. The call is then repeated in the page world. See [`guard_document`].
 const OTHER_DOCUMENT: &str = "__browserosOtherDocument";
@@ -73,28 +70,6 @@ pub fn isolated_world_enabled() -> bool {
 pub struct RemoteValue {
     pub value: Option<Value>,
     pub description: Option<String>,
-    #[serde(default)]
-    pub(crate) object_id: Option<String>,
-}
-
-/// How a crate-internal call wants its result: serialized, or as a remote handle in an object
-/// group the caller releases.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum Returns<'a> {
-    Value,
-    Handle { object_group: &'a str },
-}
-
-impl Returns<'_> {
-    fn apply(self, params: &mut Value) {
-        match self {
-            Self::Value => params["returnByValue"] = json!(true),
-            Self::Handle { object_group } => {
-                params["returnByValue"] = json!(false);
-                params["objectGroup"] = json!(object_group);
-            }
-        }
-    }
 }
 
 /// Runs JavaScript in one page session. Cheap to build per call; see the module docs for the
@@ -180,7 +155,28 @@ impl<'a> PageJs<'a> {
     /// [`eval`](Self::eval) for callers that report results: keeps CDP's description of values
     /// that do not serialize.
     pub async fn eval_value(self, expression: &str) -> Result<RemoteValue, CoreError> {
-        self.eval_returning(expression, Returns::Value).await
+        if self.isolated
+            && let Some(result) = self
+                .with_isolated_context(|context| self.evaluate(Some(context), expression))
+                .await
+        {
+            return result;
+        }
+        if self.strict {
+            return Err(CoreError::IsolatedWorldUnavailable);
+        }
+        match self.frame {
+            Some(frame) if self.top_frame().await? != *frame => {
+                // A child frame's main-world context has no id we can name, but its document's
+                // wrapper does belong to it: a function called on the document runs there.
+                let document = self.frame_document(frame).await?;
+                let function = format!("function(){{return (\n{expression}\n);}}");
+                self.call_node(None, document, &function, &[])
+                    .await?
+                    .ok_or_else(element_not_found)
+            }
+            _ => self.evaluate(None, expression).await,
+        }
     }
 
     /// Calls `function` with the node as `this` and `args` as its arguments, awaiting a returned
@@ -198,13 +194,7 @@ impl<'a> PageJs<'a> {
             let function = guarded.as_str();
             let attempt = self
                 .with_isolated_context(|context| {
-                    self.call_node(
-                        Some(context),
-                        backend_node_id,
-                        function,
-                        args,
-                        Returns::Value,
-                    )
+                    self.call_node(Some(context), backend_node_id, function, args)
                 })
                 .await;
             match attempt {
@@ -212,61 +202,33 @@ impl<'a> PageJs<'a> {
                     return decode(remote.value);
                 }
                 Some(Err(error)) => return Err(error),
-                Some(Ok(_)) | None if self.strict => return Err(no_isolated_world()),
+                Some(Ok(_)) | None if self.strict => {
+                    return Err(CoreError::IsolatedWorldUnavailable);
+                }
                 Some(Ok(_)) | None => {}
             }
         }
         let remote = self
-            .call_node(None, backend_node_id, function, args, Returns::Value)
+            .call_node(None, backend_node_id, function, args)
             .await?
             .ok_or_else(element_not_found)?;
         decode(remote.value)
     }
 
-    pub(crate) async fn eval_returning(
-        self,
-        expression: &str,
-        returns: Returns<'_>,
-    ) -> Result<RemoteValue, CoreError> {
-        if self.isolated
-            && let Some(result) = self
-                .with_isolated_context(|context| self.evaluate(Some(context), expression, returns))
-                .await
-        {
-            return result;
-        }
-        if self.strict {
-            return Err(no_isolated_world());
-        }
-        match self.frame {
-            Some(frame) if self.top_frame().await? != *frame => {
-                // A child frame's main-world context has no id we can name, but its document's
-                // wrapper does belong to it: a function called on the document runs there.
-                let document = self.frame_document(frame).await?;
-                let function = format!("function(){{return (\n{expression}\n);}}");
-                self.call_node(None, document, &function, &[], returns)
-                    .await?
-                    .ok_or_else(element_not_found)
-            }
-            _ => self.evaluate(None, expression, returns).await,
-        }
-    }
-
-    /// Calls `function` on an object the caller already holds. It runs in the world that object
+    /// Calls `function` on an object this call already holds. It runs in the world that object
     /// belongs to, whichever constructor built this `PageJs`.
-    pub(crate) async fn call_on_object(
-        self,
+    async fn call_on_object(
+        &self,
         object_id: &str,
         function: &str,
         args: &[Value],
-        returns: Returns<'_>,
     ) -> Result<RemoteValue, CoreError> {
         let mut params = json!({
             "functionDeclaration": function,
             "objectId": object_id,
             "awaitPromise": true,
+            "returnByValue": true,
         });
-        returns.apply(&mut params);
         if !args.is_empty() {
             params["arguments"] = args.iter().map(|value| json!({ "value": value })).collect();
         }
@@ -281,10 +243,12 @@ impl<'a> PageJs<'a> {
         &self,
         context: Option<i64>,
         expression: &str,
-        returns: Returns<'_>,
     ) -> Result<RemoteValue, CoreError> {
-        let mut params = json!({ "expression": expression, "awaitPromise": true });
-        returns.apply(&mut params);
+        let mut params = json!({
+            "expression": expression,
+            "awaitPromise": true,
+            "returnByValue": true,
+        });
         if let Some(context) = context {
             params["contextId"] = json!(context);
         }
@@ -306,7 +270,6 @@ impl<'a> PageJs<'a> {
         backend_node_id: i64,
         function: &str,
         args: &[Value],
-        returns: Returns<'_>,
     ) -> Result<Option<RemoteValue>, CoreError> {
         let mut params = json!({ "backendNodeId": backend_node_id });
         if let Some(context) = context {
@@ -320,9 +283,7 @@ impl<'a> PageJs<'a> {
             session: self.session,
             object_id: Some(object_id),
         };
-        let result = self
-            .call_on_object(wrapper.id(), function, args, returns)
-            .await;
+        let result = self.call_on_object(wrapper.id(), function, args).await;
         wrapper.release().await;
         result.map(Some)
     }
@@ -541,7 +502,13 @@ struct ExceptionObject {
 
 #[derive(Deserialize)]
 struct Resolved {
-    object: Option<RemoteValue>,
+    object: Option<ResolvedObject>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResolvedObject {
+    object_id: Option<String>,
 }
 
 #[derive(Deserialize)]

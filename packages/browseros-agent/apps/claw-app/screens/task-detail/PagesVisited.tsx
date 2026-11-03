@@ -24,7 +24,7 @@ export function PagesVisited({ pages }: { pages: VisitedPage[] }) {
             key={page.url}
             className="flex items-center gap-3.5 px-4 py-3 sm:px-[18px]"
           >
-            <SiteBadge site={page.url} className="size-8 rounded-lg" />
+            <SiteBadge site={page.url} className="size-8" />
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="truncate font-semibold text-[15px] text-cyanotype-ink">
                 {page.title}

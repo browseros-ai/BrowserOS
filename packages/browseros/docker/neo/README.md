@@ -6,6 +6,13 @@ Run BrowserOS neo in a container and use it from your machine:
 - **Connect any agent** to Neo's MCP server and watch it work live in that tab.
 - **Keep your profile** (logins, history, downloads) in a folder you choose.
 
+The viewer shares text through your normal copy, cut and paste shortcuts (Command
+on Mac, Ctrl elsewhere), including Unicode and multiple lines. Copying requires a
+selection in the remote app; opening the viewer never replaces your clipboard.
+If clipboard access is denied or a copy cannot be confirmed, the Clipboard panel
+opens for manual transfer; click or tap the remote screen to dismiss it. Images
+and files are not transferred through this text clipboard.
+
 One image runs natively on Apple silicon Macs, arm64 Linux and x86-64 Linux.
 
 ## Quick start
@@ -57,6 +64,7 @@ NEO_VNC_PORT=7080 NEO_MCP_PORT=7010 NEO_DATA=/mnt/neo docker compose up -d --wai
 | Hosted mode (see below) | `-e BROWSERCLAW_HOSTED_MODE=0` | `BROWSERCLAW_HOSTED_MODE` | `1` |
 | Server behaviour (see [Behaviour file](#behaviour-file)) | `-v ./neo.toml:/etc/neo/neo.toml:ro` | the `neo.toml` volume in `compose.yaml` | the image's `/etc/neo/neo.toml` |
 | Chromium sandbox (see [Security](#security)) | `-e NEO_SANDBOX=true` | `NEO_SANDBOX` | `false` |
+| Software graphics (see [Graphics](#graphics)) | `-e NEO_SOFTWARE_GRAPHICS=false` | `NEO_SOFTWARE_GRAPHICS` | `true` |
 | Bundled BrowserOS extensions off (see [Bundled extensions](#bundled-extensions)) | `-e NEO_DISABLE_BROWSEROS_EXTENSIONS=false` | `NEO_DISABLE_BROWSEROS_EXTENSIONS` | `true` |
 | Extra Neo command-line flags (see [Browser frame](#browser-frame)) | `-e NEO_ARGS="--lang=de"` | `NEO_ARGS` | empty |
 
@@ -67,6 +75,7 @@ on one source commit, use its `<version>-<commit>` tag (e.g. `0.52.0.1-169e41f`)
 replaces it. To pin exact image contents, use the digest.
 The server updater is disabled so the server stays at the version verified with
 the image. Pull a newer image and recreate the container to update it.
+The server's product analytics are off (`CLAW_ANALYTICS_ENABLED=0`).
 
 `BROWSERCLAW_HOSTED_MODE=1` gives agents the browser tools only. Skills (`save_skill`,
 `mark_skill_run`) and human help (`request_human_help`, `await_human_help`) are hidden, since
@@ -77,7 +86,15 @@ Neo also leaves tab layout to your agent: a page joins a tab group only when the
 [behaviour file](#behaviour-file) can turn per-task groups back on. From Neo 0.51.2.5, the
 browser in hosted mode names itself Google Chrome to websites that read its brand (User-Agent
 Client Hints).
-`BROWSERCLAW_HOSTED_MODE=0` restores the desktop tools and hides `solve_captcha`.
+Hosted mode doesn't offer to save or update passwords or addresses, or warn about leaked
+passwords, since nobody is at the viewer to answer the prompts. Managed policies turn off
+Chromium's password saving (`PasswordManagerEnabled`), leak checks
+(`PasswordLeakDetectionEnabled`) and address autofill (`AutofillAddressEnabled`). Agents fill a
+login your backend supplies with `credentials fill` and a username and password, as they fill
+cards with `payment_cards`. `credentials add` fails with `operation_not_allowed`; logins
+already in the profile still fill.
+`BROWSERCLAW_HOSTED_MODE=0` restores the desktop tools and the save prompts, and hides
+`solve_captcha`.
 Only exact `0` and `1` are accepted. After changing the flag, run
 `docker compose up -d --wait` to recreate the container with its new environment.
 With `docker run`, recreate it with the new flag and the existing data volume.
@@ -112,6 +129,43 @@ Recreate the container after editing the file.
 | Key | Values | Hosted default | Desktop default |
 |---|---|---|---|
 | `[tabs] grouping` | `"explicit"`: a page joins a group only when the agent passes `groupId`. `"auto"`: Neo keeps each task's pages in a `<client>/<task>` group it titles, collapses and closes. | `"explicit"` | `"auto"` |
+| `[tabs] close_after_minutes` | Positive whole minutes to keep finished sessions' tabs before automatic cleanup. Applies with either grouping mode. | `30` | `60` |
+| `[run] wall_timeout_seconds` | Positive whole seconds for a run's default and maximum execution budget, including browser calls and waits. | `60` | `60` |
+
+For example, to keep finished sessions' tabs for 90 minutes:
+
+```toml
+[tabs]
+close_after_minutes = 90
+```
+
+The grace period starts when a session ends. The separate session idle timeout remains
+30 minutes by default. Both automatic group cleanup and individual-tab cleanup use this
+grace period; individual-tab cleanup skips active tabs and tabs owned by a live session.
+Cleanup runs once per minute by default. Existing `CLAW_SESSION_RETENTION_MS` overrides
+remain a fallback; a valid `close_after_minutes` in the file takes precedence.
+
+For longer browser scripts, configure the run budget in the same file:
+
+```toml
+[run]
+wall_timeout_seconds = 120
+```
+
+The `run` tool advertises the configured default and maximum in milliseconds.
+A call may request a shorter `timeout`; a value above the deployment limit is
+rejected before script execution. Saved flows use this same limit and hand back
+earlier to leave time for a page snapshot. Individual browser operations retain
+their own timeouts. Expiry stops the script; browser actions already sent are not
+rolled back, so inspect their outcome before retrying.
+
+This bounds script execution, not the complete HTTP response: admission and
+output publication can add time. Configure the MCP client's and any proxy's
+request timeout above the run budget (for example, 90 seconds for a 60-second
+run). The MCP TypeScript SDK defaults to a 60-second request timeout; increasing
+Neo's budget alone does not extend that client timeout. Recreate the container
+after editing this startup setting. Invalid values retain the default and emit
+a warning, following the behaviour-file rules above.
 
 The server logs the values it runs with at startup (`server behaviour`).
 
@@ -146,6 +200,30 @@ docker run ... -e NEO_ARGS="--disable-browseros-features=VerticalTabs,HomeButton
 The bookmarks bar and the window buttons have no names. Every container start turns the bar
 off with a managed policy and gives the window an empty GTK button layout.
 
+In hosted mode (`BROWSERCLAW_HOSTED_MODE=1`, the image default) the browser also skips Chromium's
+"To exit full screen, press and hold Esc" notice when it goes full screen itself, as an owner's
+phone view does (F11). A page that goes full screen keeps its notice. Browsers built before this
+change show the notice.
+
+### Zoom
+
+Viewers can't zoom Neo: the page in the viewer is the page your agent works in. To see it bigger,
+zoom your own browser or device.
+
+- Neo starts with `--disable-pinch`, which stops touch pinch.
+- The window manager takes the zoom keys (Ctrl + `=`, `-` or `0`, on the keypad too) and
+  Ctrl + mouse wheel, which is how noVNC sends a two-finger pinch, so the browser never sees them.
+  Pages don't get them either, so maps and drawing tools zoom with their own buttons. It never
+  sees an agent's DevTools input, and the menu's zoom buttons still work.
+- Each time Neo starts, including after someone closed it, it forgets zoom levels the profile
+  saved, per site or as a changed default.
+- `--disable-pinch` also drops pinch gestures an agent sends over DevTools
+  (`Input.synthesizePinchGesture`).
+- `setViewport`'s `zoom` scales its mobile preview through DevTools emulation, not browser zoom,
+  and still works, as does F11 fullscreen.
+- In `setViewport`'s mobile mode the mouse acts as a finger, as in DevTools' device mode: a drag
+  scrolls or draws as a touch would, and a double tap does not zoom.
+
 ### Bundled extensions
 
 Neo runs without the bundled BrowserOS extensions, since agents drive it over MCP. MCP browser
@@ -168,11 +246,35 @@ install them again when re-enabled.
 ### Graphics
 
 Containers and microVMs rarely have a GPU, so Neo draws with Mesa's llvmpipe, which runs on the
-CPU. Chromium turns WebGL off on llvmpipe by default, so the entrypoint starts Neo with
-`--ignore-gpu-blocklist`: pages get WebGL1 and WebGL2, drawn by the CPU, so 3D-heavy pages cost
-more CPU than on a desktop. It also passes `--disable-gpu-compositing`, which keeps compositing,
-page painting and video on Chromium's own software path, as in earlier images. WebGPU stays
-unavailable: Chromium offers pages no WebGPU adapter without a GPU.
+CPU. One setting decides what pages can use:
+
+- `NEO_SOFTWARE_GRAPHICS=true` (the default) adds `--ignore-gpu-blocklist
+  --disable-gpu-compositing`. Pages get WebGL1 and WebGL2, drawn by the CPU, so 3D-heavy pages
+  cost much more CPU than on a desktop with a GPU. Compositing, page painting and video stay on
+  Chromium's own software path, as in earlier images. In hosted mode, WebGL reports a desktop
+  GPU rather than llvmpipe.
+- `NEO_SOFTWARE_GRAPHICS=false` adds neither, so Chromium keeps its defaults: no WebGL on
+  llvmpipe. Use it on a host with a supported GPU, or when CPU matters more than WebGL.
+
+Like the other true/false settings, it accepts `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`.
+Flags in `NEO_ARGS` add to these and cannot remove them, so use the setting to opt out. Installed
+desktop browsers are unchanged.
+
+WebGPU stays unavailable: Chromium offers pages no WebGPU adapter without a GPU. To test WebGPU
+anyway, add `--enable-unsafe-webgpu` to `NEO_ARGS`. Pages then get Chromium's SwiftShader
+fallback, but the flag relaxes Chromium's WebGPU safety rules for every site, BrowserOS reports
+the real software GPU (llvmpipe and SwiftShader) instead of the hosted GPU identity, and with
+`NEO_SANDBOX=true` the viewer shows Chromium's unsupported-flag warning. Don't use it for normal
+browsing.
+
+The smoke check renders a triangle with both WebGL versions and reads it back. In hosted mode it
+also checks that WebGL reports the hosted GPU identity rather than a software renderer.
+
+From Neo 0.51.2.6, hosted mode also suppresses Runtime console and asynchronous
+exception notifications to prevent inspector error formatting from invoking page
+callbacks. Native MCP console reads therefore omit those messages. Execution
+contexts, evaluation, synchronous evaluation errors, and bindings remain available;
+`BROWSERCLAW_HOSTED_MODE=0` restores normal inspector notifications.
 
 ## Read what your agent did
 
@@ -208,9 +310,58 @@ Everything Neo keeps lives under `/data` by default:
 /data/downloads    Neo's Downloads folder
 ```
 
+Downloads use `$NEO_DATA_DIR/downloads` by default. `NEO_DOWNLOAD_DIR` can point to a separate absolute directory inside the container, so an agent can share downloaded files without sharing Neo's profile. Startup fixes this directory and disables Save As prompting for every browser profile, including reused ones. Chrome still chooses collision-free filenames; MCP reports the completed file's actual path over CDP without bundled extensions.
+
+For a VM folder mounted at the same path in the agent and Neo:
+
+```sh
+docker run --rm --shm-size=1g \
+  -p 127.0.0.1:6080:6080 -p 127.0.0.1:9010:9010 \
+  -v "$HOME/neo-data:/data" \
+  --mount type=bind,src=/workspace/files,dst=/workspace/files \
+  -e NEO_DOWNLOAD_DIR=/workspace/files/downloads \
+  ghcr.io/browseros-ai/neo:latest
+```
+
+Create `/workspace/files` on the VM first and ensure the configured `PUID`/`PGID` can access it. Neo creates and owns the download directory itself; it does not change a shared parent's ownership. Compose accepts `NEO_DOWNLOAD_DIR` too; an external folder needs a corresponding mount in your Compose override.
+
+To attach a file to a website, pass its container-visible path to `upload` with either a file-input ref or an upload-button ref. An intercepted chooser from another action returns `fileChooserOpen: true`; call `upload` with `file`/`files` and omit `ref` to finish selection. `files: []` clears the selection. The files must already exist in the VM/shared mount. Selecting them does not submit the website form or transfer a laptop attachment into the VM.
+
+MCP output files live under `$NEO_DATA_DIR/tool-output` by default. Set
+`NEO_OUTPUT_DIR` to a different absolute directory to place them on another mount;
+the entrypoint passes it to the server as `BROWSEROS_OUTPUT_DIR`. The layout is
+`tool-output/<session-key>/<output-id>/`, with typed parts and a `manifest.json`.
+Session keys are path-safe encodings of the logical Neo session, so reconnecting
+with the same session handle can retrieve the same output. Directories are private
+(0700), files are 0600, and references expire after 24 hours. Expired outputs are
+removed on the next publication in that session. Each session can retain up to 128
+outputs / 128 MiB, with at most 64 parts per output and 64 MiB per part.
+
+Small text results stay inline. Larger results, PDFs, completed downloads and
+explicit screenshot captures return an `output` descriptor containing an ID and
+named parts; automatic snapshots/diffs and files produced inside `run` share the
+outer call's ID. Direct screenshots remain inline images; nested scripts receive
+up to four inline captures / 8 MiB of encoded image data, with additional captures
+available through the output reference. One part slot is reserved for the primary
+result. If retaining a part fails, available attachments are still published and
+the reference includes warnings rather than requiring an action to be repeated.
+`result.json` contains the complete primary result
+as `{isError, structuredContent, text}`, including unabridged JSON values/logs.
+Inline text defaults are 30,000 UTF-8 bytes for `run` (about 10,000 estimated
+tokens), and 15,000 bytes for `read`, `grep` and `evaluate_in_page` (about 5,000).
+`run` and `evaluate_in_page` accept a per-call `maxChars` byte budget capped at
+150,000 bytes (about 50,000 estimated tokens). This inline ceiling is separate
+from `run`'s 2,000,000-byte return-value limit: larger accepted results are saved
+whole and returned as an inline preview plus an output reference.
+Use `read_output` with the same `session` and `outputId`; omit `part` to list parts. Text reads return
+`nextOffset` for the next bounded chunk. Images up to 4 MiB can be read inline;
+`encoding="base64"` transfers exact binary chunks for importing/sending a file.
+Retrieval never repeats the browser action. These are temporary Neo artifacts;
+callers choose when to import them into their own persistent file store.
+
 `NEO_DATA_DIR` changes the directory **inside the container**. For example, a
 derived image can set `NEO_DATA_DIR=/var/lib/mirror/browseros`; Neo then uses
-`profile`, `browserclaw`, and `downloads` below that directory. Mount that directory
+`profile`, `browserclaw`, `downloads`, and `tool-output` below that directory. Mount that directory
 or a persistent parent explicitly:
 
 ```sh
@@ -241,6 +392,9 @@ default `docker run` example already provide one at `/data`; neither changes.
 - **Cards stay out of the profile.** A managed policy turns payment autofill off, so Neo never
   offers to save a card. Agents fill cards from your own secure storage through the
   `payment_cards` tool, which fills a supplied card without saving it.
+- **Hosted mode saves no new logins.** Neo never offers to save a password there and
+  `credentials add` is refused (see [Settings](#settings)). Logins saved before, or with
+  hosted mode off, still fill.
 
 ## Security
 
@@ -270,11 +424,18 @@ AppArmor, so they may also need `--security-opt apparmor=unconfined`. In compose
 
 [`smoke.py`](smoke.py) checks a running container from your machine: the viewer, MCP from
 outside the container, the human-help setting, an agent opening a tab, the blank new tab page,
-and WebGL drawing (see [Graphics](#graphics)).
+and WebGL1/2 rendering with the hosted GPU identity (see [Graphics](#graphics)).
 
 ```sh
 python3 smoke.py                          # default ports
 python3 smoke.py --vnc-port 7080 --mcp-port 7010
+```
+
+[`check_zoom.py`](check_zoom.py) runs inside the container. It sends a pinch and the zoom keys
+the way the viewer does and fails if the page zooms (see [Zoom](#zoom)):
+
+```sh
+docker exec -i neo python3 - < check_zoom.py
 ```
 
 ## Build it yourself
@@ -293,6 +454,10 @@ folder and pass that folder as the `neo-deb` build context:
 ```sh
 docker build --no-cache-filter neo --build-context neo-deb=/path/to/folder -t neo .
 ```
+
+To run this checkout's claw-server in the image while developing it, use
+[`dev.sh`](dev.sh): `./dev.sh up` builds and starts it with the viewer on 16080 and MCP on
+19010, and its header explains how to test it through Neo's MCP tools.
 
 Maintainers build and publish the image with `browseros release docker`; see
 [`bos_build/docs/docker-image.md`](../../bos_build/docs/docker-image.md).

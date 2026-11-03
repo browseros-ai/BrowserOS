@@ -2,7 +2,7 @@
 //! table for the session's tabs.
 
 use super::{
-    CaptureError, CaptureHub, CaptureTab, Quality, SessionView,
+    CaptureError, CaptureHub, CaptureTab, Frame, Quality, SessionView, Watch, Watcher,
     tab_capture::STOP_GRACE,
     testing::{ScriptedCdp, ScriptedTransport, StaticSessionTabs},
 };
@@ -116,7 +116,7 @@ async fn screencast_streams_the_current_tab_with_the_presets_settings() {
     assert_eq!(start[0].session.as_deref(), Some("capture-1"));
     assert_eq!(
         start[0].params,
-        json!({ "format": "jpeg", "quality": 50, "maxWidth": 480, "maxHeight": 300, "maxFramesInFlight": 1 })
+        json!({ "format": "jpeg", "quality": 50, "maxWidth": 640, "maxHeight": 400, "maxFramesInFlight": 1 })
     );
 
     h.browser
@@ -591,4 +591,171 @@ async fn a_slow_tab_switch_does_not_keep_a_departed_viewer_capturing() {
         stops.first().and_then(|stop| stop.session.as_deref()),
         Some("capture-1")
     );
+}
+
+fn watch(session_id: &str, tab: Option<i64>) -> Watch {
+    Watch {
+        session_id: session_id.to_string(),
+        tab,
+    }
+}
+
+/// The watcher's next frame. A watcher that yields nothing within 5 s fails the test.
+async fn next_watched(watcher: &mut Watcher) -> Option<(Watch, Frame)> {
+    match tokio::time::timeout(Duration::from_secs(5), watcher.next()).await {
+        Ok(item) => item,
+        Err(_) => panic!("watcher yielded nothing within 5 s"),
+    }
+}
+
+#[tokio::test]
+async fn a_watcher_streams_each_watched_session_tagged_with_its_watch() {
+    let h = harness();
+    h.tabs.set("a", live(&[1]));
+    h.tabs.set("b", live(&[2, 3]));
+    let mut watcher = h.hub.watcher(Quality::Low);
+
+    watcher.set([watch("a", None)]);
+    h.browser.wait_for("Page.startScreencast", 1).await;
+    watcher.set([watch("a", None), watch("b", Some(3))]);
+    let attach = h.browser.wait_for("Target.attachToTarget", 2).await;
+    assert_eq!(attach[1].params["targetId"], "target-3");
+    h.browser.wait_for("Page.startScreencast", 2).await;
+
+    h.browser.emit_frame("capture-1", b"from a", 1.0);
+    let first = next_watched(&mut watcher).await;
+    h.browser.emit_frame("capture-2", b"from b", 2.0);
+    let second = next_watched(&mut watcher).await;
+
+    let shown =
+        |item: Option<(Watch, Frame)>| item.map(|(watch, frame)| (watch, frame.tab_id, frame.jpeg));
+    assert_eq!(
+        shown(first),
+        Some((watch("a", None), 1, b"from a"[..].into()))
+    );
+    assert_eq!(
+        shown(second),
+        Some((watch("b", Some(3)), 3, b"from b"[..].into()))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_watch_with_nothing_to_show_yet_streams_once_the_session_has_a_tab() {
+    let h = harness();
+    let mut watcher = h.hub.watcher(Quality::Low);
+
+    // Watched before the server knows the session, then while it has no tab.
+    watcher.set([watch("s", None)]);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    h.tabs.set("s", live(&[]));
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(h.browser.sent("Target.attachToTarget").is_empty());
+
+    h.tabs.set("s", live(&[1]));
+    h.browser.wait_for("Page.startScreencast", 1).await;
+    h.browser.emit_frame("capture-1", b"first page", 1.0);
+    assert_eq!(
+        next_watched(&mut watcher)
+            .await
+            .map(|(watch, frame)| (watch, frame.jpeg)),
+        Some((watch("s", None), b"first page"[..].into()))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_watch_left_out_of_the_set_releases_its_capture() {
+    let h = harness();
+    h.tabs.set("a", live(&[1]));
+    h.tabs.set("b", live(&[2]));
+    let mut watcher = h.hub.watcher(Quality::Low);
+    watcher.set([watch("a", None)]);
+    h.browser.wait_for("Page.startScreencast", 1).await;
+    watcher.set([watch("a", None), watch("b", None)]);
+    h.browser.wait_for("Page.startScreencast", 2).await;
+
+    watcher.set([watch("b", None)]);
+    h.browser.emit_frame("capture-1", b"from a", 1.0);
+    h.browser.emit_frame("capture-2", b"from b", 1.0);
+    assert_eq!(
+        next_watched(&mut watcher).await.map(|(watch, _)| watch),
+        Some(watch("b", None))
+    );
+
+    tokio::time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
+    let stops = h.browser.sent("Page.stopScreencast");
+    assert_eq!(
+        stops
+            .iter()
+            .map(|stop| stop.session.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("capture-1")]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_slow_reader_gets_only_the_newest_frame_of_each_watch() {
+    let h = harness();
+    h.tabs.set("a", live(&[1]));
+    h.tabs.set("b", live(&[2]));
+    let mut watcher = h.hub.watcher(Quality::Low);
+    watcher.set([watch("a", None)]);
+    h.browser.wait_for("Page.startScreencast", 1).await;
+    watcher.set([watch("a", None), watch("b", None)]);
+    h.browser.wait_for("Page.startScreencast", 2).await;
+
+    // Nothing reads while each tab paints twice.
+    for (n, jpeg) in [b"a-old", b"a-new"].into_iter().enumerate() {
+        h.browser.emit_frame("capture-1", jpeg, n as f64);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    h.browser.emit_frame("capture-2", b"b-only", 1.0);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let mut read = Vec::new();
+    for _ in 0..2 {
+        read.push(
+            next_watched(&mut watcher)
+                .await
+                .map(|(_, frame)| frame.jpeg),
+        );
+    }
+    assert_eq!(
+        read,
+        [Some(b"a-new"[..].into()), Some(b"b-only"[..].into())]
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), watcher.next())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn dropping_a_watcher_releases_every_capture_it_held() {
+    let h = harness();
+    h.tabs.set("a", live(&[1]));
+    h.tabs.set("b", live(&[2]));
+    let mut watcher = h.hub.watcher(Quality::Low);
+    watcher.set([watch("a", None)]);
+    h.browser.wait_for("Page.startScreencast", 1).await;
+    watcher.set([watch("a", None), watch("b", None)]);
+    h.browser.wait_for("Page.startScreencast", 2).await;
+
+    drop(watcher);
+    tokio::time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
+
+    assert_eq!(h.browser.sent("Page.stopScreencast").len(), 2);
+}
+
+#[tokio::test]
+async fn a_watcher_ends_at_shutdown() {
+    let h = harness();
+    h.tabs.set("s", live(&[1]));
+    let mut watcher = h.hub.watcher(Quality::Low);
+    watcher.set([watch("s", None)]);
+    h.browser.wait_for("Page.startScreencast", 1).await;
+
+    h.shutdown.cancel();
+
+    assert!(next_watched(&mut watcher).await.is_none());
 }

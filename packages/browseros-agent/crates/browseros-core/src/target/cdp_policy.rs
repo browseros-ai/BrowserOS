@@ -143,6 +143,7 @@ fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
         "DOM.setFileInputFiles" => Some(&["files", "nodeId", "backendNodeId", "objectId"]),
         "Page.enable" => Some(&["enableFileChooserOpenedEvent"]),
         "Page.disable" => Some(&[]),
+        "Page.setInterceptFileChooserDialog" => Some(&["enabled", "cancel"]),
         "Page.navigate" => Some(&[
             "url",
             "referrer",
@@ -232,6 +233,8 @@ fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
             "pointerType",
         ]),
         "Input.dispatchTouchEvent" => Some(&["type", "touchPoints", "modifiers", "timestamp"]),
+        // Native HTML drag-and-drop: drag drives these once the browser intercepts a drag.
+        "Input.cancelDragging" => Some(&[]),
         "Input.insertText" => Some(&["text"]),
         "Input.synthesizeScrollGesture" => Some(&[
             "x",
@@ -272,6 +275,15 @@ fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
         "Accessibility.enable" => Some(&[]),
         "Accessibility.disable" => Some(&[]),
         "Accessibility.getFullAXTree" => Some(&["depth", "frameId"]),
+        // Read-only inspector capture; a snapshot finds clickable elements with it instead of
+        // running a script in the page.
+        "DOMSnapshot.captureSnapshot" => Some(&[
+            "computedStyles",
+            "includePaintOrder",
+            "includeDOMRects",
+            "includeBlendedBackgroundColors",
+            "includeTextColorOpacities",
+        ]),
         "Accessibility.getPartialAXTree" => {
             Some(&["nodeId", "backendNodeId", "objectId", "fetchRelatives"])
         }

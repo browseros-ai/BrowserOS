@@ -1424,7 +1424,7 @@ async fn live_projection_hides_handshakes_and_keeps_dispatch_backed_zero_tab_ses
             .all(|item| item["sessionId"] != fixture.zero_tab.id().as_str())
     );
 
-    app.state.tab_activity.set_now_for_testing(30_101);
+    app.state.tab_activity.set_now_for_testing(60_101);
     let (_, _, bytes) = request(
         &app.router,
         "GET",
@@ -1979,6 +1979,33 @@ async fn audit_storage_reports_usage_and_default_retention() -> anyhow::Result<(
 }
 
 #[tokio::test]
+async fn audit_agents_list_every_agent_with_a_task() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    seed_dispatch(&app, "session-1").await?;
+    seed_dispatch(&app, "session-2").await?;
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/audit/agents",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let body = json_body(&bytes)?;
+    let items = body["items"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("agents not array"))?;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["slug"], "codex");
+    assert_eq!(items[0]["label"], "Codex");
+    assert_eq!(items[0]["taskCount"], 2);
+    assert!(items[0]["lastStartedAt"].as_i64().is_some_and(|at| at > 0));
+    Ok(())
+}
+
+#[tokio::test]
 async fn audit_retention_round_trips_and_validates() -> anyhow::Result<()> {
     let app = test_app().await?;
 
@@ -2052,23 +2079,13 @@ async fn get_agent_settings(app: &TestApp) -> anyhow::Result<(StatusCode, Vec<u8
     Ok((status, bytes))
 }
 
-/// Asserts the switch, and that the credential source is one the contract allows.
-///
-/// The source itself is not pinned here: whether it is `environment` depends on whether
-/// JEV_TOKEN is set in the shell that ran the suite, and precedence has deterministic tests of
-/// its own in the settings store.
 fn assert_agent_settings(body: &serde_json::Value, human_help: bool) {
     assert_eq!(body["humanHelpEnabled"], json!(human_help));
     assert!(body["taskCleanupTipEnabled"].is_boolean());
-    let source = body["jevTokenSource"].as_str().unwrap_or_default();
-    assert!(
-        ["settings", "environment", "none"].contains(&source),
-        "unexpected jevTokenSource {source:?}"
-    );
     assert_eq!(
         body.as_object().map(serde_json::Map::len),
-        Some(3),
-        "the reply must carry nothing else, and above all not the token"
+        Some(2),
+        "the reply must carry nothing else"
     );
 }
 
@@ -2097,10 +2114,10 @@ async fn tests_that_agent_settings_offer_human_help_by_default() -> anyhow::Resu
 }
 
 #[tokio::test]
-async fn tests_that_cleanup_tip_is_opt_in_and_saved_independently() -> anyhow::Result<()> {
+async fn tests_that_cleanup_tip_is_on_by_default_and_saved_independently() -> anyhow::Result<()> {
     let app = test_app().await?;
     let (_, bytes) = get_agent_settings(&app).await?;
-    assert_eq!(json_body(&bytes)?["taskCleanupTipEnabled"], false);
+    assert_eq!(json_body(&bytes)?["taskCleanupTipEnabled"], true);
 
     for enabled in [true, false, true] {
         let (status, bytes) = put_agent_settings(
@@ -2240,97 +2257,4 @@ async fn extension_update_notification_is_an_origin_restricted_wakeup() -> anyho
         assert_eq!(response.status(), expected);
     }
     Ok(())
-}
-
-#[tokio::test]
-async fn tests_that_saving_a_jev_token_offers_the_loop_without_returning_the_token()
--> anyhow::Result<()> {
-    let app = test_app().await?;
-    let secret = "jev-not-a-real-token-0123456789";
-    let (status, bytes) = request_jev_token(&app, "PUT", Some(json!({ "token": secret }))).await?;
-    assert_eq!(status, StatusCode::OK);
-    let body = json_body(&bytes)?;
-    assert_eq!(body["jevTokenSource"], json!("settings"));
-    assert!(
-        !String::from_utf8_lossy(&bytes).contains(secret),
-        "the reply carried the token"
-    );
-
-    // And a read afterwards says the same thing, still without the value.
-    let (status, bytes) = get_agent_settings(&app).await?;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(json_body(&bytes)?["jevTokenSource"], json!("settings"));
-    assert!(!String::from_utf8_lossy(&bytes).contains(secret));
-    Ok(())
-}
-
-#[tokio::test]
-async fn tests_that_removing_a_jev_token_stops_reporting_it_as_saved() -> anyhow::Result<()> {
-    let app = test_app().await?;
-    request_jev_token(&app, "PUT", Some(json!({ "token": "jev-a-token" }))).await?;
-    let (status, bytes) = request_jev_token(&app, "DELETE", None).await?;
-    assert_eq!(status, StatusCode::OK);
-    assert_ne!(json_body(&bytes)?["jevTokenSource"], json!("settings"));
-    Ok(())
-}
-
-#[tokio::test]
-async fn tests_that_a_blank_jev_token_is_rejected() -> anyhow::Result<()> {
-    let app = test_app().await?;
-    for body in [json!({ "token": "" }), json!({ "token": "   " })] {
-        let (status, bytes) = request_jev_token(&app, "PUT", Some(body)).await?;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-        let error = json_body(&bytes)?;
-        assert_eq!(error["code"], "invalid_request");
-        assert!(
-            error["message"]
-                .as_str()
-                .is_some_and(|message| message.contains("token must be")),
-            "{error}"
-        );
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn tests_that_a_jev_token_of_the_wrong_type_is_rejected() -> anyhow::Result<()> {
-    let app = test_app().await?;
-    let (status, _) = request_jev_token(&app, "PUT", Some(json!({ "token": 7 }))).await?;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    Ok(())
-}
-
-/// Saving the switch must never clear the credential, which is why the write has
-/// a route of its own rather than a field on the switch's request.
-#[tokio::test]
-async fn tests_that_saving_the_human_help_switch_leaves_a_saved_token_alone() -> anyhow::Result<()>
-{
-    let app = test_app().await?;
-    request_jev_token(&app, "PUT", Some(json!({ "token": "jev-a-token" }))).await?;
-    let (_, bytes) =
-        put_agent_settings(&app, json!({ "humanHelpEnabled": false }).to_string()).await?;
-    let body = json_body(&bytes)?;
-    assert_eq!(body["humanHelpEnabled"], json!(false));
-    assert_eq!(body["jevTokenSource"], json!("settings"));
-    Ok(())
-}
-
-async fn request_jev_token(
-    app: &TestApp,
-    method: &str,
-    body: Option<serde_json::Value>,
-) -> anyhow::Result<(StatusCode, Vec<u8>)> {
-    let (content_type, payload) = match body {
-        Some(body) => (Some("application/json"), Body::from(body.to_string())),
-        None => (None, Body::empty()),
-    };
-    let (status, _, bytes) = request(
-        &app.router,
-        method,
-        "/api/v1/settings/agent/jev-token",
-        content_type,
-        payload,
-    )
-    .await?;
-    Ok((status, bytes))
 }

@@ -129,7 +129,7 @@ async fn screencast_streams_multipart_jpeg_frames_with_tab_headers() -> anyhow::
         Some("no-store")
     );
     let start = app.browser.wait_for("Page.startScreencast", 1).await;
-    assert_eq!(start[0].params["maxWidth"], 480);
+    assert_eq!(start[0].params["maxWidth"], 640);
 
     app.browser
         .emit_frame("capture-1", b"JPEGDATA", 1_800_000_000.25);

@@ -3888,10 +3888,59 @@ class DockerImageWorkflowTest(unittest.TestCase):
         )
         self.jobs = self.workflow["jobs"]
 
-    def test_only_the_publish_job_can_write_packages(self):
+    def test_only_jobs_that_push_images_can_write_packages(self):
+        # verify pushes the image it tested by digest; publish names it.
         self.assertEqual(self.workflow["permissions"], {})
         for name, job in self.jobs.items():
-            self.assertEqual(job["permissions"].get("packages"), "write" if name == "publish" else None)
+            self.assertEqual(
+                job["permissions"].get("packages"),
+                "write" if name in ("verify", "publish") else None,
+            )
+
+    def test_server_builds_on_warpbuild_with_a_cargo_cache_and_a_queue_watchdog(self):
+        server = self.jobs["server"]
+        self.assertEqual(server["runs-on"], "warp-custom-browseros-ubuntu-2204-x64-32x")
+        self.assertIn("timeout-minutes", server)
+        cache = next(step for step in server["steps"]
+                     if step.get("uses", "").startswith("Swatinem/rust-cache@"))
+        self.assertEqual(cache["with"]["cache-provider"], "warpbuild")
+        self.assertIn("~/.cargo/build/browseros", cache["with"]["cache-directories"])
+        self.assertEqual(cache["with"]["shared-key"], "neo-docker-${{ matrix.rust_target }}")
+        # Without the environment hash the key ignores Cargo.lock and never refreshes.
+        self.assertNotIn("add-rust-environment-hash-key", cache["with"])
+        watchdog = self.jobs["queue-watchdog"]["steps"][0]["env"]
+        self.assertEqual(watchdog["RUNNER_LABEL"], server["runs-on"])
+        self.assertEqual(watchdog["CONCURRENCY_GROUP"], self.workflow["concurrency"]["group"])
+
+    def test_verify_checks_the_image_runs_this_commits_server_before_smoke(self):
+        steps = self.jobs["verify"]["steps"]
+        names = [step.get("name") for step in steps]
+        check = names.index("Check the image runs this commit's server")
+        self.assertLess(names.index("Build native image"), check)
+        self.assertLess(check, next(i for i, step in enumerate(steps) if step.get("id") == "smoke"))
+        run = steps[check]["run"]
+        self.assertIn('sha256sum "$RUNNER_TEMP/neo-servers/$ARCH/browseros-claw-server-rs"', run)
+        self.assertIn("find /usr/lib /opt -type f -name browseros-claw-server", run)
+
+    def test_publish_tags_the_images_verify_tested_without_building(self):
+        steps = self.jobs["verify"]["steps"]
+        names = [step.get("name") for step in steps]
+        smoke = next(i for i, step in enumerate(steps) if step.get("id") == "smoke")
+        push = names.index("Push the tested image by digest")
+        self.assertLess(smoke, push)
+        self.assertEqual(steps[push]["if"], "inputs.push")
+        self.assertIn("--push-by-digest", steps[push]["run"])
+        self.assertLess(push, names.index("Check the pushed image is the one tested"))
+
+        publish = self.jobs["publish"]
+        self.assertEqual(publish["needs"], "verify")
+        self.assertNotIn("environment", publish)
+        uses = [step.get("uses", "") for step in publish["steps"]]
+        self.assertFalse(any(use.startswith("docker/setup-qemu-action") for use in uses))
+        tag = next(step for step in publish["steps"]
+                   if step.get("name") == "Tag the tested amd64 and arm64 images")
+        self.assertIn('--from-digests "$RUNNER_TEMP/neo-digests"', tag["run"])
+        self.assertNotIn("--server-dir", tag["run"])
 
     def test_native_smoke_checks_on_both_architectures_gate_publication(self):
         verify = self.jobs["verify"]
@@ -3911,14 +3960,18 @@ class DockerImageWorkflowTest(unittest.TestCase):
         self.assertEqual(self.jobs["publish"]["if"], "inputs.push")
 
     def test_keyed_jobs_scope_secrets_to_preparation_and_always_clean_files(self):
-        for name in ("verify", "publish"):
-            job = self.jobs[name]
-            self.assertEqual(job["environment"], "neo-captcha")
-            self.assertNotIn("CAPSOLVER_API_KEY", job.get("env", {}))
-            self.assertNotIn("TWOCAPTCHA_API_KEY", job.get("env", {}))
-            cleanup = job["steps"][-1]
-            self.assertEqual(cleanup["if"], "always()")
-            self.assertIn('rm -f "$RUNNER_TEMP/neo-capsolver-key" "$RUNNER_TEMP/neo-2captcha-key"', cleanup["run"])
+        # Only verify builds an image, so only verify holds provider keys.
+        job = self.jobs["verify"]
+        self.assertEqual(job["environment"], "neo-captcha")
+        self.assertNotIn("CAPSOLVER_API_KEY", job.get("env", {}))
+        self.assertNotIn("TWOCAPTCHA_API_KEY", job.get("env", {}))
+        cleanup = job["steps"][-1]
+        self.assertEqual(cleanup["if"], "always()")
+        self.assertIn('rm -f "$RUNNER_TEMP/neo-capsolver-key" "$RUNNER_TEMP/neo-2captcha-key"', cleanup["run"])
+        for name, other in self.jobs.items():
+            if name != "verify":
+                self.assertNotIn("CAPSOLVER_API_KEY", str(other))
+                self.assertNotIn("TWOCAPTCHA_API_KEY", str(other))
 
     def test_server_override_preserves_production_telemetry_configuration(self):
         build = next(step for step in self.jobs["server"]["steps"]

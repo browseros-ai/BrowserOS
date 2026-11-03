@@ -10,7 +10,11 @@ Navigate a page: load a url, or go back/forward/reload. \
 Returns a fresh snapshot of the resulting page \
 (navigation invalidates refs, so old [ref=eN] handles no longer apply). \
 Returns once the page has stopped changing, not merely once it has loaded, \
-so do not pause afterwards to let it catch up.";
+so do not pause afterwards to let it catch up. \
+A url the browser cannot load (unknown host, refused connection) is an error; \
+an HTTP error status is reported with the page; \
+a url that is a file downloads it and leaves the page as it was. \
+back/forward with no history entry in that direction leave the page as it was and say so.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -45,6 +49,7 @@ fn handler<'a>(
     Box::pin(async move {
         let args: NavigateArgs = parse_args(raw)?;
         let nav = ctx.browser.nav(PageId(args.page)).await?;
+        let mut status = None;
         let action = match args.action {
             NavigateAction::Url => {
                 let Some(url) = args.url.as_deref().filter(|url| !url.is_empty()) else {
@@ -52,16 +57,33 @@ fn handler<'a>(
                         "navigate: url is required for action=\"url\".",
                     )));
                 };
-                nav.goto(url).await?;
+                let outcome = nav.goto(url).await?;
+                if outcome.download {
+                    response.text(format!(
+                        "{url} is a file, so the browser downloaded it; the page did not change."
+                    ));
+                    response.data(json!({ "page": args.page, "download": true }));
+                    return Ok(None);
+                }
+                status = outcome.status;
                 "url"
             }
-            NavigateAction::Back => {
-                nav.back().await?;
-                "back"
-            }
-            NavigateAction::Forward => {
-                nav.forward().await?;
-                "forward"
+            NavigateAction::Back | NavigateAction::Forward => {
+                let back = matches!(args.action, NavigateAction::Back);
+                let moved = if back {
+                    nav.back().await?
+                } else {
+                    nav.forward().await?
+                };
+                let direction = if back { "back" } else { "forward" };
+                if !moved {
+                    response.text(format!(
+                        "There is no {direction} history entry; the page did not change."
+                    ));
+                    response.data(json!({ "page": args.page, "navigated": false }));
+                    return Ok(None);
+                }
+                direction
             }
             NavigateAction::Reload => {
                 nav.reload().await?;
@@ -82,8 +104,16 @@ fn handler<'a>(
                 .map(|info| info.url)
                 .unwrap_or_else(|| "unknown".to_string()),
         };
-        response.text(format!("navigated ({action}) -> {origin}"));
-        response.data(json!({ "page": args.page, "url": origin }));
+        let http_error = status
+            .filter(|status| *status >= 400)
+            .map(|status| format!(" (HTTP {status})"))
+            .unwrap_or_default();
+        response.text(format!("navigated ({action}) -> {origin}{http_error}"));
+        let mut data = json!({ "page": args.page, "url": origin });
+        if let Some(status) = status {
+            data["status"] = json!(status);
+        }
+        response.data(data);
         response.include_snapshot(args.page);
         Ok(None)
     })

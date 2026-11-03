@@ -23,7 +23,19 @@ pub struct FrameRegistry {
     connection_epoch: Mutex<u64>,
     oopif_sessions: Mutex<HashMap<FrameId, SessionId>>,
     same_process_sessions: Mutex<HashMap<FrameId, SessionId>>,
+    /// How a parent last resolved each child frame. See [`FrameLink`].
+    frame_links: Mutex<HashMap<FrameId, FrameLink>>,
     page_sessions: Mutex<HashMap<PageId, SessionId>>,
+}
+
+/// A child frame as its parent resolved it: the parent's endpoint, whose document holds the
+/// frame's owner element, and the endpoint the child was read through. Page.getFrameTree omits
+/// remote frames, so frame admission asks this parent for the owner instead. Only a hint for
+/// where to ask: admission re-verifies the owner on every call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FrameLink {
+    pub(crate) parent: SessionId,
+    pub(crate) endpoint: SessionId,
 }
 
 impl FrameRegistry {
@@ -35,6 +47,7 @@ impl FrameRegistry {
             connection_epoch: Mutex::new(connection_epoch),
             oopif_sessions: Mutex::new(HashMap::new()),
             same_process_sessions: Mutex::new(HashMap::new()),
+            frame_links: Mutex::new(HashMap::new()),
             page_sessions: Mutex::new(HashMap::new()),
         });
         Self::spawn_event_listener(registry.clone());
@@ -123,6 +136,36 @@ impl FrameRegistry {
                 cursor_uses_session_default: true,
             });
         };
+        // Boxed for the same reason as `PageAccess::frame_session`: many callers embed this.
+        let target = Box::pin(self.resolve_child_target(
+            page_session_id,
+            frame_id.clone(),
+            same_process_parent,
+            cross_process,
+            guard,
+        ))
+        .await?;
+        if let (Some(parent), Some(endpoint)) = (
+            same_process_parent.and_then(ProtocolSession::session_id),
+            target.session.session_id(),
+        ) {
+            let link = FrameLink {
+                parent: parent.clone(),
+                endpoint: endpoint.clone(),
+            };
+            self.frame_links.lock().await.insert(frame_id, link);
+        }
+        Ok(target)
+    }
+
+    async fn resolve_child_target(
+        &self,
+        page_session_id: SessionId,
+        frame_id: FrameId,
+        same_process_parent: Option<&ProtocolSession>,
+        cross_process: bool,
+        guard: Option<crate::connection::EpochGuard>,
+    ) -> Result<FrameTarget, CoreError> {
         if let Some(oopif) = self.oopif_sessions.lock().await.get(&frame_id).cloned() {
             return Ok(FrameTarget {
                 session: ProtocolSession::for_session(self.cdp.clone(), oopif)
@@ -186,7 +229,7 @@ impl FrameRegistry {
         })
     }
 
-    /// Scoped observer sessions verify both page-tree ownership and this live endpoint mapping.
+    /// Scoped frame endpoints verify both their owner element and this live endpoint mapping.
     /// Frame IDs alone survive navigations and cannot authorize a retained OOPIF session.
     pub(crate) async fn frame_session_matches(&self, frame: &FrameId, session: &SessionId) -> bool {
         self.clear_sessions_from_prior_connection().await;
@@ -203,6 +246,23 @@ impl FrameRegistry {
                 .is_some_and(|id| id == session)
     }
 
+    /// How a parent last resolved `frame`. See [`FrameLink`].
+    pub(crate) async fn frame_link(&self, frame: &FrameId) -> Option<FrameLink> {
+        self.clear_sessions_from_prior_connection().await;
+        self.frame_links.lock().await.get(frame).cloned()
+    }
+
+    /// The OOPIF whose own target `session` is attached to.
+    pub(crate) async fn oopif_for_session(&self, session: &SessionId) -> Option<FrameId> {
+        self.clear_sessions_from_prior_connection().await;
+        self.oopif_sessions
+            .lock()
+            .await
+            .iter()
+            .find(|(_, id)| *id == session)
+            .map(|(frame, _)| frame.clone())
+    }
+
     async fn clear_sessions_from_prior_connection(&self) {
         let current_epoch = self.cdp.connection_epoch();
         let mut cached_epoch = self.connection_epoch.lock().await;
@@ -213,6 +273,7 @@ impl FrameRegistry {
         // frame ids while every cached page, OOPIF, and inherited session id is already invalid.
         self.oopif_sessions.lock().await.clear();
         self.same_process_sessions.lock().await.clear();
+        self.frame_links.lock().await.clear();
         self.page_sessions.lock().await.clear();
         *cached_epoch = current_epoch;
     }
@@ -369,6 +430,10 @@ impl FrameRegistry {
             .lock()
             .await
             .retain(|_, existing| existing != session_id);
+        self.frame_links
+            .lock()
+            .await
+            .retain(|_, link| link.parent != *session_id && link.endpoint != *session_id);
     }
 
     /// A lagged event stream may have dropped a `detachedFromTarget`, leaving an OOPIF session that

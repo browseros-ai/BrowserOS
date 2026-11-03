@@ -8,8 +8,10 @@ allow_remote_in_mcp setting works through Docker's port forwarding), agents get
 the hosted tool set (BROWSERCLAW_HOSTED_MODE=1), an agent-opened tab loads
 and, in hosted mode, stays out of any tab group (the shipped neo.toml keeps the
 explicit grouping default), a new tab page is blank (the entrypoint's
---disable-browseros-features list reached the browser), and WebGL draws on the
-container's software GPU (the entrypoint's --ignore-gpu-blocklist reached it).
+--disable-browseros-features list reached the browser). WebGL1/2 must render a
+triangle on the container's software GPU (NEO_SOFTWARE_GRAPHICS reached the
+browser), and in hosted mode pages must see the hosted GPU identity, not that
+software renderer.
 
   python3 smoke.py [--vnc-port 6080] [--mcp-port 9010]
 
@@ -177,10 +179,10 @@ def main() -> None:
         new_tab["taskName"] = "docker smoke"
     opened = client.tool("tabs", new_tab)
     check("agent opened a tab", "opened page" in opened, opened.splitlines()[0] if opened else "")
+    check_graphics(client, int(re.search(r"opened page (\d+)", opened).group(1)), hosted)
     if hosted:
         check_ungrouped(client, int(re.search(r"opened page (\d+)", opened).group(1)))
-    page = check_new_tab_blank(client)
-    check_webgl(client, page)
+    check_new_tab_blank(client)
 
 
 def evaluate(client: McpClient, page: int, code: str) -> str:
@@ -188,7 +190,7 @@ def evaluate(client: McpClient, page: int, code: str) -> str:
 
     The value is the one line between the reply's [UNTRUSTED...] markers and its tip.
     """
-    reply = client.tool("evaluate", {"page": page, "code": code})
+    reply = client.tool("evaluate_in_page", {"page": page, "code": code})
     return next((line for line in reply.splitlines() if line and not line.startswith(("[", "Tip:"))), "")
 
 
@@ -209,34 +211,73 @@ def check_new_tab_blank(client: McpClient) -> int:
     return page
 
 
-# Clears a WebGL1 and a WebGL2 canvas to green and reads one pixel of each back.
-WEBGL_DRAW = """
-const results = [];
-for (const kind of ["webgl", "webgl2"]) {
-  const gl = document.createElement("canvas").getContext(kind);
-  if (!gl) {
-    results.push(kind + "=none");
-    continue;
-  }
-  gl.clearColor(0, 1, 0, 1);
-  gl.clear(gl.COLOR_BUFFER_BIT);
-  const pixel = new Uint8Array(4);
-  gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
-  results.push(kind + "=" + pixel.join(","));
-}
-return results.join(" ");
-"""
+# Renderer names for CPU-only drawing: Mesa's llvmpipe and softpipe, Chromium's SwiftShader.
+SOFTWARE_RENDERER = re.compile(r"llvmpipe|softpipe|swiftshader", re.IGNORECASE)
 
 
-def check_webgl(client: McpClient, page: int) -> None:
-    """WebGL draws on the container's software GPU.
+def check_graphics(client: McpClient, page: int, hosted: bool) -> None:
+    """WebGL draws on the container's software GPU, behind the hosted GPU identity.
 
     Without a GPU, Chromium draws with Mesa's llvmpipe and refuses every WebGL context
-    on it unless the entrypoint's --ignore-gpu-blocklist reached the browser. A context
-    alone proves little, so the page also draws and reads the pixel back.
+    on it unless NEO_SOFTWARE_GRAPHICS's --ignore-gpu-blocklist reached the browser. A
+    context or a renderer name proves little, so both WebGL versions render a triangle
+    and read it back. Hosted mode reports a desktop GPU in place of llvmpipe, and some
+    Chromium switches turn that identity off (--enable-unsafe-webgpu among them), so a
+    launcher that passes one fails here. Keep the workloads tiny so the release smoke
+    check remains cheap on ARM VMs.
     """
-    drawn = evaluate(client, page, WEBGL_DRAW)
-    check("WebGL1 and WebGL2 draw", drawn == "webgl=0,255,0,255 webgl2=0,255,0,255", drawn)
+    reply = client.tool("evaluate_in_page", {"page": page, "code": r"""
+const result = {};
+for (const kind of ['webgl', 'webgl2']) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 4;
+  const gl = canvas.getContext(kind);
+  if (!gl) { result[kind] = {context: false}; continue; }
+  try {
+    const modern = kind === 'webgl2';
+    const prefix = modern ? '#version 300 es\n' : '';
+    const vertex = prefix + (modern ? 'in' : 'attribute') +
+      ' vec2 position; void main() { gl_Position = vec4(position, 0., 1.); }';
+    const fragment = prefix + 'precision mediump float; ' +
+      (modern ? 'out vec4 color; ' : '') + 'void main() { ' +
+      (modern ? 'color' : 'gl_FragColor') + ' = vec4(1., 0.25, 0., 1.); }';
+    const program = gl.createProgram();
+    for (const [type, source] of [[gl.VERTEX_SHADER, vertex], [gl.FRAGMENT_SHADER, fragment]]) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source); gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw Error(gl.getShaderInfoLog(shader));
+      gl.attachShader(program, shader); gl.deleteShader(shader);
+    }
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw Error(gl.getProgramInfoLog(program));
+    gl.useProgram(program);
+    const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+    const position = gl.getAttribLocation(program, 'position');
+    gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const pixels = new Uint8Array(4);
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    const error = gl.getError();
+    const info = gl.getExtension('WEBGL_debug_renderer_info');
+    const renderer = gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER);
+    result[kind] = {context: true, pixels: Array.from(pixels), error, renderer};
+    gl.deleteBuffer(buffer); gl.deleteProgram(program);
+  } catch (error) { result[kind] = {context: true, error: String(error)}; }
+  finally { gl.getExtension('WEBGL_lose_context')?.loseContext(); }
+}
+return result;
+"""})
+    # MCP wraps the JSON value in its untrusted-content markers and may append a
+    # session tip. Decode just the first JSON object, not that presentation text.
+    result, _ = json.JSONDecoder().raw_decode(reply[reply.index("{"):])
+    for kind in ("webgl", "webgl2"):
+        value = result[kind]
+        check(f"{kind} renders and reads back", value.get("pixels") == [255, 64, 0, 255] and value.get("error") == 0, json.dumps(value))
+    if hosted:
+        for kind in ("webgl", "webgl2"):
+            renderer = result[kind].get("renderer", "")
+            check(f"hosted {kind} reports the GPU identity", not SOFTWARE_RENDERER.search(renderer), renderer)
 
 
 def check_ungrouped(client: McpClient, page: int) -> None:

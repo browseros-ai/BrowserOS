@@ -345,6 +345,7 @@ mod tests {
             "skills",
             "skill_runs",
             "skill_run_marks",
+            "skill_flows",
             "task_search",
             "seaql_migrations",
         ] {
@@ -448,7 +449,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 20);
+        assert_eq!(migrations.len(), 22);
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -528,6 +529,14 @@ mod tests {
         assert_eq!(
             migrations[19].try_get::<String>("", "version")?,
             "m0020_add_feedback_invite_snooze"
+        );
+        assert_eq!(
+            migrations[20].try_get::<String>("", "version")?,
+            "m0021_add_skill_flows"
+        );
+        assert_eq!(
+            migrations[21].try_get::<String>("", "version")?,
+            "m0022_add_mode_to_skill_runs"
         );
         Ok(())
     }
@@ -658,6 +667,7 @@ mod tests {
         };
         assert!(unknown.contains(&"m0007_add_session_efficiency_stats".to_string()));
         assert!(unknown.contains(&"m0020_add_feedback_invite_snooze".to_string()));
+        assert!(unknown.contains(&"m0022_add_mode_to_skill_runs".to_string()));
         conn.close().await?;
 
         // The database is left intact: no backup was made and it still carries every migration.
@@ -666,7 +676,7 @@ mod tests {
         let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM seaql_migrations")
             .fetch_one(&mut conn)
             .await?;
-        assert_eq!(migration_count, 20);
+        assert_eq!(migration_count, 22);
         conn.close().await?;
         Ok(())
     }
@@ -775,7 +785,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 20);
+        assert_eq!(migrations.len(), 22);
         assert_eq!(
             migrations
                 .iter()
@@ -798,7 +808,7 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("migration count missing"))?
             .try_get::<i64>("", "count")?;
-        assert_eq!(migration_count, 20);
+        assert_eq!(migration_count, 22);
         Ok(())
     }
 
@@ -934,7 +944,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 20);
+        assert_eq!(migrations.len(), 22);
         Ok(())
     }
 
@@ -992,7 +1002,7 @@ mod tests {
                 .await?;
             assert_eq!(
                 migrations.len(),
-                20,
+                22,
                 "doctor pass {attempt} was not repaired"
             );
 

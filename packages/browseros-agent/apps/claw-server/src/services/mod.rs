@@ -9,6 +9,7 @@ pub mod cockpit;
 pub mod error_reporting;
 pub mod feedback_cohort;
 pub mod first_run;
+pub mod flow;
 pub mod harness;
 pub mod harness_skills;
 pub mod help;

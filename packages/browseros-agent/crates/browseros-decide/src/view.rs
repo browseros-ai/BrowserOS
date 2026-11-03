@@ -1109,6 +1109,7 @@ mod tests {
                     value: AxValue {
                         value_type: "string".into(),
                         value: Some(serde_json::json!(url)),
+                        sources: None,
                     },
                 });
         }
@@ -1133,6 +1134,7 @@ mod tests {
                 value: AxValue {
                     value_type: "booleanOrUndefined".to_string(),
                     value: Some(value),
+                    sources: None,
                 },
             });
         node

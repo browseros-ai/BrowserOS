@@ -18,20 +18,32 @@ const EXPECTED_PAGES = [
   'dynamic.html',
   'fill.html',
   'form.html',
+  'frame-lab.html',
   'iframe-child.html',
   'iframe-grandchild.html',
   'iframe.html',
   'injection.html',
+  'labels.html',
   'links.html',
   'media.html',
+  'output-large.html',
   'overlay.html',
+  'script-isolation.html',
   'scroll.html',
+  'sdk-drag.html',
+  'sdk-fill.html',
+  'sdk-input.html',
+  'sdk-long-read.html',
+  'sdk-screenshot-tall.html',
+  'sdk-screenshot.html',
+  'sdk-spa-route.html',
   'snapshot-cursor-concurrency.html',
   'snapshot-frame-a.html',
   'snapshot-frame-b.html',
   'snapshot-frame-deep.html',
   'snapshot-frame-grandchild.html',
   'snapshot-frame-tree.html',
+  'upload-frame.html',
   'upload.html',
 ]
 
@@ -104,7 +116,11 @@ describe('fixture server', () => {
     expect(cursorConcurrency).toInclude('data-__bcid-page-owned')
     expect(cursorConcurrency).toInclude('Cursor candidate 63')
     expect(cursorConcurrency).toInclude('zero-sized-excluded')
-    expect(cursorConcurrency).toInclude('armVanishingCandidate')
+    expect(cursorConcurrency).toInclude('resetProbe')
+
+    const isolation = await read('script-isolation.html')
+    expect(isolation).toInclude('isolationProbe')
+    expect(isolation).toInclude("mode: 'closed'")
 
     const frameTree = await read('snapshot-frame-tree.html')
     expect(frameTree).toInclude('snapshotFrameFixture')
@@ -121,5 +137,10 @@ describe('fixture server', () => {
     expect(await read('snapshot-frame-grandchild.html')).toInclude(
       'Grandchild action ready',
     )
+
+    const frameLab = await read('frame-lab.html')
+    expect(frameLab).toInclude('window.frameLab')
+    expect(frameLab).toInclude("'nested-mixed': ['B', 'A']")
+    expect(frameLab).toInclude('isTrusted')
   })
 })
