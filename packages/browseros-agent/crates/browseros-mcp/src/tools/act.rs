@@ -18,8 +18,9 @@ use std::time::Duration;
 const DESCRIPTION: &str = "\
 Act on the page using refs from the last snapshot. \
 Click scrolls, briefly waits, and finds an uncovered point before sending native input. \
-If native preparation fails before a press is sent, an eligible single left click uses DOM fallback once. \
-Disabled, inert and modal-background controls remain refused. DOM fallback is reported: verify application state. \
+If native preparation fails before a press is sent, a single left click uses DOM fallback once: it presses the element itself, \
+through banners, overlays and open dialogs. Disabled, invisible and detached targets are refused. \
+DOM fallback is reported, with inert=true when the target was behind a dialog: verify application state. \
 If neither path can dispatch, handle the blocker ref/reason and retry. An unknown click outcome must not be automatically retried. \
 kinds: click, type (into focused element), fill (ref+value, or many via fields[]), \
 press (key/combo), hover, focus, check, uncheck, select (option value), scroll, drag. \
