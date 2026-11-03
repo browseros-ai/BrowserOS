@@ -53,6 +53,7 @@ export interface ContractCase {
 import { actCases } from './cases-act'
 import { captureIoCases } from './cases-capture-io'
 import { clawLayerCases } from './cases-claw-layer'
+import { clickRecoveryCases } from './cases-click-recovery'
 import { fillCases } from './cases-fill'
 import { fillReadbackCases } from './cases-fill-readback'
 import { frameRefCases } from './cases-frame-refs'
@@ -81,6 +82,7 @@ export const contractCases: ContractCase[] = [
   ...snapshotConcurrencyCases,
   ...frameRefCases,
   ...actCases,
+  ...clickRecoveryCases,
   ...fillCases,
   ...fillReadbackCases,
   ...readEvalCases,

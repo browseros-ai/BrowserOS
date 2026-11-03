@@ -33,6 +33,9 @@ use tokio_util::sync::CancellationToken;
 #[path = "tool_guard_tests.rs"]
 mod tool_guard_tests;
 
+#[path = "click_feedback_tests.rs"]
+mod click_feedback_tests;
+
 struct FakeConnection {
     sender: broadcast::Sender<CdpEvent>,
 }

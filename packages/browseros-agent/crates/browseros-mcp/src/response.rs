@@ -109,6 +109,18 @@ impl ToolResponse {
         merge_structured(&mut self.structured_content, value);
     }
 
+    /// Delivery is collected before an action can lose its acknowledgement.
+    /// Later error decoration must preserve that path while updating its status.
+    pub fn click_data(&mut self, value: Value) {
+        let mut click = self
+            .structured_content
+            .as_ref()
+            .and_then(|data| data.get("click"))
+            .cloned();
+        merge_structured(&mut click, value);
+        self.data(json!({"click": click}));
+    }
+
     /// Automatic readbacks are additional parts of the primary result. Keep their
     /// metadata in order rather than overwriting the action's fields or earlier pages.
     fn context_data(&mut self, page: u32, kind: &str, data: Value) {
