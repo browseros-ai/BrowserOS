@@ -88,8 +88,8 @@ struct Bounds {
     h: f64,
 }
 
-/// Native content quads retain transformed and multi-line geometry. The fallback
-/// is still pointer geometry: inability to read bounds never authorizes DOM activation.
+/// Native content quads retain transformed and multi-line geometry. A missing
+/// rectangle is a typed preparation failure; the click transaction owns recovery.
 pub(super) async fn get_element_quads(
     session: &ProtocolSession,
     backend_node_id: i64,
@@ -124,7 +124,7 @@ pub(super) async fn get_element_quads(
     let rect = rect
         .filter(|rect| rect.w > 0.0 && rect.h > 0.0)
         .ok_or_else(|| {
-            CoreError::Message(
+            CoreError::ClickPointUnavailable(
                 "Element has no visible click area; take a new snapshot. No click was sent."
                     .to_string(),
             )

@@ -54,11 +54,6 @@ pub async fn dispatch_click_with_options(
     opts: ClickOptions,
     modifiers: i64,
 ) -> Result<(), CoreError> {
-    if opts.method != super::ClickMethod::Pointer {
-        return Err(CoreError::Message(
-            "DOM activation needs an element ref; coordinate clicks use native input.".into(),
-        ));
-    }
     move_to_click(session, x, y, &opts).await?;
     dispatch_click_at_rest(session, x, y, opts, modifiers).await
 }

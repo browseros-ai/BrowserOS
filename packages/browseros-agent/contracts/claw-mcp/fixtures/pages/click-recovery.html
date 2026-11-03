@@ -33,7 +33,8 @@
   }
   if (mode === 'disabled') target.disabled = true;
   if (mode === 'first-legend' || mode === 'fieldset-disabled') {
-    cover.remove();
+    const keepCover = new URL(location.href).searchParams.get('cover') === 'true';
+    if (!keepCover) cover.remove();
     const fieldset = document.createElement('fieldset');
     fieldset.disabled = true;
     const legend = document.createElement('legend');
@@ -42,6 +43,19 @@
     target.style.cssText = 'width:240px;height:100px';
     (mode === 'first-legend' ? legend : fieldset).append(target);
     document.body.append(fieldset);
+    if (keepCover) {
+      const rect = target.getBoundingClientRect();
+      cover.style.left = rect.left + 'px';
+      cover.style.top = rect.top + 'px';
+    }
+  }
+  if (mode === 'unsupported') {
+    // SVG has native pointer behavior but no HTMLElement.click activation.
+    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.id='target'; svg.setAttribute('role','button'); svg.setAttribute('aria-label','Recovery target');
+    svg.innerHTML='<rect width="240" height="100" fill="steelblue" />';
+    svg.addEventListener('click', event => window.events.push({trusted:event.isTrusted}));
+    target.replaceWith(svg);
   }
   if (mode === 'large') {
     target.style.height = '3000px';

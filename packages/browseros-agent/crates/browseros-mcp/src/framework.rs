@@ -653,19 +653,26 @@ async fn execute_tool_inner(
         Err(err) => {
             // Preserve actionable click recovery in structured MCP output as
             // well as text. The SDK bridge carries the same ref in its exception.
-            match &err {
-                ToolError::Core(CoreError::ElementCovered {
-                    blocker,
-                    blocker_ref,
-                    ..
-                }) => {
-                    response.data(json!({ "click": { "status": "blocked", "sent": false,
-                        "blocker": { "description": blocker, "ref": blocker_ref } } }));
+            if let ToolError::Core(error) = &err {
+                let preparation = match error {
+                    CoreError::ClickFallbackUnavailable { native, .. } => native.as_ref(),
+                    other => other,
+                };
+                match preparation {
+                    CoreError::ElementCovered {
+                        blocker,
+                        blocker_ref,
+                        ..
+                    } => {
+                        response.data(json!({ "click": { "status": "blocked", "sent": false,
+                            "blocker": { "description": blocker, "ref": blocker_ref } } }));
+                    }
+                    CoreError::ClickOutcomeUnknown(_) => {
+                        response
+                            .data(json!({ "click": { "status": "unknown", "retryable": false } }));
+                    }
+                    _ => {}
                 }
-                ToolError::Core(CoreError::ClickOutcomeUnknown(_)) => {
-                    response.data(json!({ "click": { "status": "unknown", "retryable": false } }));
-                }
-                _ => {}
             }
             response.error(format!("{} failed: {err}", def.name));
         }

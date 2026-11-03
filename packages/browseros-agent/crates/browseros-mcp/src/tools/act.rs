@@ -6,7 +6,7 @@ use crate::framework::{
 use crate::response::FieldTarget;
 use browseros_core::{
     PageId, Ref,
-    input::{ClickMethod, ClickOptions, Point, PublicMouseButton as MouseButton, ScrollDirection},
+    input::{ClickOptions, Point, PublicMouseButton as MouseButton, ScrollDirection},
     snapshot::RefMap,
 };
 use futures_util::future::BoxFuture;
@@ -18,9 +18,9 @@ use std::time::Duration;
 const DESCRIPTION: &str = "\
 Act on the page using refs from the last snapshot. \
 Click scrolls, briefly waits, and finds an uncovered point before sending native input. \
-Persistent coverage returns a blocker ref: handle it and retry. \
-Only an explicit method=\"dom\" for kind=\"click\" bypasses coverage using DOM activation \
-(untrusted, single left click; verify application state). An unknown click outcome must not be automatically retried. \
+If native preparation fails before a press is sent, an eligible single left click uses DOM fallback once. \
+Disabled, inert and modal-background controls remain refused. DOM fallback is reported: verify application state. \
+If neither path can dispatch, handle the blocker ref/reason and retry. An unknown click outcome must not be automatically retried. \
 kinds: click, type (into focused element), fill (ref+value, or many via fields[]), \
 press (key/combo), hover, focus, check, uncheck, select (option value), scroll, drag. \
 dialog_accept/dialog_dismiss handle pending JavaScript dialogs. \
@@ -103,13 +103,6 @@ enum ActMouseButton {
     Right,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-enum ActClickMethod {
-    Pointer,
-    Dom,
-}
-
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct FillField {
@@ -186,9 +179,6 @@ struct ActArgs {
     button: Option<ActMouseButton>,
     #[serde(rename = "clickCount")]
     click_count: Option<i64>,
-    /// Only for kind=click. "pointer" (default) recovers before native delivery;
-    /// "dom" explicitly activates the DOM node, bypassing coverage without trusted events.
-    method: Option<ActClickMethod>,
     /// Defaults to true for fill (replace; false appends), false for type_at.
     clear: Option<bool>,
     /// Post-action diff detail: "full" (default) whole diff, "summary" change counts, "none" to skip it, or a number to cap the inline diff to that many characters. Use "none"/"summary"/a small number on large pages where a full diff floods context.
@@ -201,12 +191,13 @@ struct ActArgs {
     sensitive: Option<bool>,
 }
 
-/// Collects which filled refs resolved to a sensitive field so the audit layer can
-/// redact only those values, plus a page-wide flag for targets with no ref to key on.
+/// Effects collected across the dialog race: audit redaction must survive an
+/// interrupted action, and click delivery must describe the path actually used.
 #[derive(Default)]
-struct ActSensitivity {
+struct ActEffects {
     refs: Vec<String>,
     redact_all: bool,
+    dom_fallback: bool,
 }
 
 pub fn definition() -> crate::framework::ToolDef {
@@ -220,11 +211,6 @@ fn handler<'a>(
 ) -> BoxFuture<'a, ToolExecResult<Option<ToolResult>>> {
     Box::pin(async move {
         let args: ActArgs = parse_args(raw)?;
-        if args.method.is_some() && !matches!(args.kind, ActKind::Click) {
-            return Err(crate::framework::ToolError::message(
-                "method is only supported for kind=click with an element ref.",
-            ));
-        }
         let page_id = PageId(args.page);
         if !args.kind.is_dialog()
             && let Some(result) = pending_dialog_result(ctx, page_id.clone())
@@ -236,15 +222,15 @@ fn handler<'a>(
         // the input's own reply does.
         let document_start = ctx.browser.signals().document_mark(&page_id);
         let input = ctx.browser.input(page_id.clone()).await?;
-        let mut sensitivity = ActSensitivity::default();
+        let mut effects = ActEffects::default();
         // Honor an explicit sensitive flag before the action runs: a value must
         // still be redacted if the action later errors out (for example a stale ref
         // on a sibling field) after this field was already filled.
         if args.sensitive.unwrap_or(false) {
-            sensitivity.redact_all = true;
+            effects.redact_all = true;
         }
         let outcome: ToolExecResult<Option<ToolResult>> = if args.kind.is_dialog() {
-            let result = run_kind(&args, &input, &mut sensitivity).await;
+            let result = run_kind(&args, &input, &mut effects).await;
             if matches!(result, Ok(None)) {
                 ctx.browser.signals().clear_dialog(&page_id);
             }
@@ -264,7 +250,7 @@ fn handler<'a>(
             };
             tokio::select! {
                 biased;
-                result = run_kind(&args, &input, &mut sensitivity) => result,
+                result = run_kind(&args, &input, &mut effects) => result,
                 () = dialog => {
                     Ok(Some(pending_dialog_result(ctx, page_id.clone()).unwrap_or_else(
                         || {
@@ -280,10 +266,10 @@ fn handler<'a>(
         // Attach redaction hints before propagating any error or early return, so a
         // secret entered into the page before a failure is still kept out of the
         // ledger and its screenshot is skipped.
-        if sensitivity.redact_all || !sensitivity.refs.is_empty() {
+        if effects.redact_all || !effects.refs.is_empty() {
             response.set_audit_hints(AuditHints {
-                sensitive_refs: std::mem::take(&mut sensitivity.refs),
-                redact_all_values: sensitivity.redact_all,
+                sensitive_refs: std::mem::take(&mut effects.refs),
+                redact_all_values: effects.redact_all,
                 skip_screenshot: true,
             });
         }
@@ -320,9 +306,9 @@ fn handler<'a>(
         }
         response.data(json!({ "kind": args.kind.as_str() }));
         if matches!(args.kind, ActKind::Click) {
-            response.data(json!({ "click": { "status": "dispatched", "method": match args.method.unwrap_or(ActClickMethod::Pointer) {
-                ActClickMethod::Pointer => "pointer", ActClickMethod::Dom => "dom",
-            } } }));
+            response.data(
+                json!({ "click": { "status": "dispatched", "domFallback": effects.dom_fallback } }),
+            );
         }
         if let Some(detail) = resolve_diff_detail(args.diff) {
             response.include_diff(args.page, true, detail, document_start);
@@ -332,7 +318,11 @@ fn handler<'a>(
         }
         response.include_console_summary(args.page, console_start);
         Ok(Some(text_result(
-            format!("ok ({})", args.kind.as_str()),
+            if effects.dom_fallback {
+                "ok (click); DOM fallback dispatched once; verify application state.".to_string()
+            } else {
+                format!("ok ({})", args.kind.as_str())
+            },
             None,
         )))
     })
@@ -378,16 +368,17 @@ fn filled_refs(args: &ActArgs) -> Vec<Ref> {
 async fn run_kind(
     args: &ActArgs,
     input: &browseros_core::input::Input,
-    sensitivity: &mut ActSensitivity,
+    effects: &mut ActEffects,
 ) -> ToolExecResult<Option<ToolResult>> {
     match args.kind {
         ActKind::Click => {
             let Some(ref_id) = args.r#ref.as_deref() else {
                 return Ok(Some(error_result("act click: ref is required.")));
             };
-            input
+            effects.dom_fallback = input
                 .click(&Ref(ref_id.to_string()), click_options(args))
-                .await?;
+                .await?
+                .is_none();
         }
         ActKind::ClickAt => {
             let Some(point) = point_from_args(args, "click_at")? else {
@@ -404,7 +395,7 @@ async fn run_kind(
             // Classify the focused target before typing, so a secret is caught even
             // if the keystrokes navigate or detach the field.
             if input.focused_field_is_sensitive().await {
-                sensitivity.redact_all = true;
+                effects.redact_all = true;
             }
             input.type_text(text).await?;
         }
@@ -416,7 +407,7 @@ async fn run_kind(
                 return Ok(Some(error_result("act type_at: text is required.")));
             };
             if input.point_field_is_sensitive(point.x, point.y).await {
-                sensitivity.redact_all = true;
+                effects.redact_all = true;
             }
             input
                 .type_at(point.x, point.y, text, args.clear.unwrap_or(false))
@@ -429,7 +420,7 @@ async fn run_kind(
                         .ref_field_is_sensitive(&Ref(field.r#ref.clone()))
                         .await
                     {
-                        sensitivity.refs.push(field.r#ref.clone());
+                        effects.refs.push(field.r#ref.clone());
                     }
                     input
                         .fill(
@@ -443,7 +434,7 @@ async fn run_kind(
                 (args.r#ref.as_deref(), args.value.as_deref())
             {
                 if input.ref_field_is_sensitive(&Ref(ref_id.to_string())).await {
-                    sensitivity.refs.push(ref_id.to_string());
+                    effects.refs.push(ref_id.to_string());
                 }
                 input
                     .fill(&Ref(ref_id.to_string()), value, args.clear.unwrap_or(true))
@@ -550,10 +541,6 @@ async fn run_kind(
 
 fn click_options(args: &ActArgs) -> ClickOptions {
     ClickOptions {
-        method: match args.method.unwrap_or(ActClickMethod::Pointer) {
-            ActClickMethod::Pointer => ClickMethod::Pointer,
-            ActClickMethod::Dom => ClickMethod::Dom,
-        },
         button: args.button.as_ref().map(|button| match button {
             ActMouseButton::Left => MouseButton::Left,
             ActMouseButton::Middle => MouseButton::Middle,

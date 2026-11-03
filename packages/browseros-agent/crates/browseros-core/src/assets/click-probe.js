@@ -4,27 +4,9 @@
 function browserosProbeClick(quads, forcedPoints) {
   // Quads and input share the session viewport: same-process frames use its top
   // document, while an OOPIF has its own coordinate basis and parent checks.
-  const eligibilityError = () => {
-    if (!this.isConnected) return 'Element is detached; take a new snapshot.'
-    // Native disabled state includes fieldset inheritance and its first-legend exception.
-    if (this.matches(':disabled')) return 'Element is disabled or inert.'
-    for (
-      let node = this;
-      node;
-      node = node.parentElement || node.getRootNode().host
-    ) {
-      if (node.matches('[aria-disabled="true"], [inert]')) {
-        return 'Element is disabled or inert.'
-      }
-    }
-    const style = this.ownerDocument.defaultView.getComputedStyle(this)
-    if (style.visibility !== 'visible' || !this.getClientRects().length) {
-      return 'Element has no visible click area.'
-    }
-    return null
-  }
-  const unavailable = eligibilityError()
-  if (unavailable) return { unavailable }
+  const style = this.ownerDocument.defaultView.getComputedStyle(this)
+  if (style.visibility !== 'visible' || !this.getClientRects().length)
+    return { unavailable: 'Element has no visible click area.' }
   let doc = this.ownerDocument
   while (doc.defaultView.frameElement)
     doc = doc.defaultView.frameElement.ownerDocument

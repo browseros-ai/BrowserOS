@@ -9,7 +9,7 @@ use crate::{
 };
 use browseros_core::{
     NativeFeature, PageId, Ref, SessionId, WindowId,
-    input::{ClickMethod, ClickOptions, ScrollDirection},
+    input::{ClickOptions, ScrollDirection},
     pages::NewPageOptions,
     snapshot::{SnapshotMode, SnapshotOptions},
 };
@@ -68,8 +68,8 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.resolveRef(ref)               -> { backendNodeId, sessionId }
   page.read(selector?)               -> the whole page as a markdown STRING, so the script can search or slice all of it; return only what you need
   page.grep(pattern, { over, limit }?) -> matching lines as a STRING
-  page.click(ref, { method }?) / fill(ref,value) / hover(ref) / selectOption(ref,value)
-    click defaults to method: 'pointer': scroll, briefly wait, find an uncovered point, then send native input once. Persistent coverage throws with the blocker ref; handle that obstruction and retry. Only explicit method: 'dom' bypasses coverage with untrusted DOM activation (verify application state). An unknown click outcome must not be automatically repeated.
+  page.click(ref) / fill(ref,value) / hover(ref) / selectOption(ref,value)
+    click scrolls, briefly waits and tries exposed points before native input. If preparation fails before a press, an eligible single left click uses DOM fallback once and logs it; verify application state. Disabled, inert and modal-background targets remain refused. If neither path dispatches, the error includes the blocker ref/reason. An unknown click outcome must not be automatically repeated.
     fill types the value and leaves the result to the page, which may reformat it ("440 212") or reject it; after filling a form, page.snapshot() shows what each field holds. Date, time, color and range inputs take the value in their own format (2026-10-29, 14:30, #ff8800, 75) and hold it as the browser stores it (a range clamps to its bounds); fill throws only on a date or time the browser cannot parse
   page.check(ref) / uncheck(ref) / focus(ref) / drag(fromRef,toRef)
   page.type(text) / press(key) / insertText(text)   - these act on whatever has focus, so they take no ref. type sends key presses, so \n presses Enter; insertText inserts the text as-is, newlines included, without key events
@@ -151,6 +151,15 @@ const BOOTSTRAP_JS: &str = r#"
 
   function scoped(prefix, pageId) {
     return (name, args) => call(`${prefix}.${name}`, [pageId, ...args]);
+  }
+
+  // Both SDK facades share the recovery policy. Delivery metadata is logged even
+  // when a script ignores click's return value, so fallback is never silent.
+  async function clickRef(input, ref, extra) {
+    if (extra.length) throw new Error('click(ref) does not accept options; recovery is automatic.');
+    const result = await input('click', [asRef(ref, 'click')]);
+    if (result?.domFallback) __browserosConsole.log(`Click ${ref}: DOM fallback dispatched once; verify application state.`);
+    return result;
   }
 
   const REF_PATTERN = /^e\d+$/;
@@ -297,7 +306,7 @@ const BOOTSTRAP_JS: &str = r#"
       grep: (pattern, opts) =>
         tool('grep', typeof pattern === 'string' ? { ...opts, pattern } : pattern),
 
-      click: (ref, opts) => inp('click', [asRef(ref, 'click'), opts]),
+      click: (ref, ...extra) => clickRef(inp, ref, extra),
       fill: (ref, value) => inp('fill', [asRef(ref, 'fill'), value]),
       hover: (ref) => inp('hover', [asRef(ref, 'hover')]),
       selectOption: (ref, value) => inp('selectOption', [asRef(ref, 'selectOption'), value]),
@@ -401,7 +410,7 @@ const BOOTSTRAP_JS: &str = r#"
     input: (pageId) => {
       const run = scoped('input', pageId);
       return {
-        click: (ref, opts) => run('click', [ref, opts]),
+        click: (ref, ...extra) => clickRef(run, ref, extra),
         fill: (ref, value) => run('fill', [ref, value]),
         type: (text) => run('type', [text]),
         press: (key) => run('press', [key]),
@@ -1241,17 +1250,9 @@ impl BrowserBridge {
             }
             "input.click" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
-                #[derive(Default, Deserialize)]
-                #[serde(deny_unknown_fields)]
-                struct Options {
-                    #[serde(default)]
-                    method: ClickMethod,
+                if args.len() != 2 {
+                    return Err("click(ref) does not accept options; recovery is automatic.".into());
                 }
-                let options: Options = match args.get(2).filter(|value| !value.is_null()) {
-                    Some(value) => serde_json::from_value(value.clone())
-                        .map_err(|error| format!("Invalid click options: {error}"))?,
-                    None => Options::default(),
-                };
                 let input = self
                     .control
                     .race(self.ctx.browser.input(page_id.clone()))
@@ -1260,17 +1261,12 @@ impl BrowserBridge {
                     .race_input(
                         &page_id,
                         true,
-                        input.click(
-                            &Ref(ref_id),
-                            ClickOptions {
-                                method: options.method,
-                                ..Default::default()
-                            },
-                        ),
+                        input.click(&Ref(ref_id), ClickOptions::default()),
                     )
                     .await?
                 {
-                    Some(_) => Ok(BrowserCallValue::Undefined),
+                    Some(Some(_)) => Ok(BrowserCallValue::Undefined),
+                    Some(None) => Ok(BrowserCallValue::Json(json!({ "domFallback": true }))),
                     None => self.interaction_open_value(&page_id).await,
                 }
             }

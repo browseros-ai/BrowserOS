@@ -22,16 +22,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-/// Pointer delivery is the default. DOM activation is a separate, caller-selected
-/// operation because it bypasses hit testing and does not produce trusted input.
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ClickMethod {
-    #[default]
-    Pointer,
-    Dom,
-}
-
 pub use keyboard::{
     KeyInfo, clear_field, get_key_info, insert_text, modifier_bitmask, normalize_key, press_combo,
     type_text,
@@ -40,7 +30,6 @@ pub use mouse::MouseButton as PublicMouseButton;
 
 #[derive(Debug, Clone, Default)]
 pub struct ClickOptions {
-    pub method: ClickMethod,
     pub button: Option<MouseButton>,
     pub click_count: Option<i64>,
     /// Path start in the target's coordinate space: page coordinates for `click_at`,
@@ -170,6 +159,9 @@ impl Input {
         }
     }
 
+    /// Recover on one pinned node, preferring native input. `Some(point)` means
+    /// native dispatch; `None` means the internal DOM fallback dispatched once.
+    /// Either acknowledges delivery only; callers must verify application state.
     pub async fn click(
         &self,
         ref_id: &Ref,
@@ -184,6 +176,7 @@ impl Input {
         .await
     }
 
+    /// Backend-node callers share the ref click transaction and delivery result.
     pub async fn click_backend_node(
         &self,
         backend_node_id: i64,
@@ -728,7 +721,7 @@ const SELECT_OPTION_FN: &str = "function(val){\
 
 #[cfg(test)]
 mod tests {
-    use super::{ClickMethod, ClickOptions, Input, Point, PublicMouseButton, ScrollDirection};
+    use super::{ClickOptions, Input, Point, PublicMouseButton, ScrollDirection};
     use crate::{
         BrowserSession, BrowserSessionHooks, CoreError, Ref,
         connection::CdpConnection,
@@ -765,6 +758,9 @@ mod tests {
         hit_test_calls: usize,
         mouse_events: usize,
         fail_mouse_ack: Option<&'static str>,
+        ax_ignored_reason: Option<&'static str>,
+        fail_eligibility: bool,
+        fail_dom_ack: bool,
         mouse_calls: Vec<(Value, Instant)>,
         page_scrolls: usize,
         select_calls: usize,
@@ -985,6 +981,14 @@ mod tests {
                         }
                         Ok(json!({ "result": { "value": [] } }))
                     }
+                    "Accessibility.getPartialAXTree" => {
+                        let state = self.state.lock().map_err(|_| CdpError::ConnectionLost)?;
+                        if state.fail_eligibility {
+                            return Err(CdpError::ConnectionLost);
+                        }
+                        Ok(json!({"nodes":[{"backendDOMNodeId":params["backendNodeId"],
+                            "ignoredReasons":state.ax_ignored_reason.map(|name| json!({"name":name})).into_iter().collect::<Vec<_>>() }]}))
+                    }
                     "DOM.resolveNode" => Ok(json!({ "object": { "objectId": "target-object" } })),
                     "DOM.getNodeForLocation" => {
                         Ok(json!({ "backendNodeId": 20, "frameId": "main" }))
@@ -1108,6 +1112,15 @@ mod tests {
                 .get("functionDeclaration")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+            if function.contains("browserosActivateDom") {
+                if self.state.lock().is_ok_and(|state| state.fail_dom_ack) {
+                    return Err(CdpError::Protocol {
+                        code: -32000,
+                        message: "Execution context was destroyed".into(),
+                    });
+                }
+                return Ok(json!({"result":{"value":{}}}));
+            }
             if function.contains("browserosProbeClick")
                 && self.state.lock().is_ok_and(|state| {
                     state.missing_geometry
@@ -1231,6 +1244,9 @@ mod tests {
                 hit_test_calls: 0,
                 mouse_events: 0,
                 fail_mouse_ack: None,
+                ax_ignored_reason: None,
+                fail_eligibility: false,
+                fail_dom_ack: false,
                 mouse_calls: Vec::new(),
                 page_scrolls: 0,
                 select_calls: 0,
@@ -1355,7 +1371,6 @@ mod tests {
         for kind in 0..3 {
             let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
             let opts = ClickOptions {
-                method: ClickMethod::Pointer,
                 button: Some(PublicMouseButton::Right),
                 click_count: Some(2),
                 humanlike_from: Some(Point { x: 10.0, y: 5.0 }),
@@ -1402,7 +1417,6 @@ mod tests {
             connection.configure(|state| state.moved_box = true)?;
             let input = input.with_pointer(Some(Pointer::default()));
             let opts = ClickOptions {
-                method: ClickMethod::Pointer,
                 button: Some(PublicMouseButton::Right),
                 click_count: Some(2),
                 humanlike_from: Some(Point { x: 10.0, y: 5.0 }),
@@ -1743,7 +1757,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tests_that_newly_covered_targets_stop_before_effects_or_mouse_input()
+    async fn newly_covered_targets_stop_native_input_and_only_click_can_fall_back()
     -> Result<(), Box<dyn std::error::Error>> {
         for action in [PointerInput::Click, PointerInput::Hover, PointerInput::Fill] {
             let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
@@ -1752,15 +1766,17 @@ mod tests {
             })?;
             let input = input.with_pointer(Some(Pointer::default()));
             connection.take_calls()?;
-            let error = action
-                .run(&input, &ref_id)
-                .await
-                .err()
-                .ok_or("covered action succeeded")?;
-            if matches!(action, PointerInput::Fill) {
-                assert!(error.to_string().contains("covered by <div#overlay>"));
+            let result = action.run(&input, &ref_id).await;
+            if matches!(action, PointerInput::Click) {
+                assert_eq!(result?, None);
             } else {
-                assert!(matches!(error, CoreError::ElementCovered { .. }));
+                assert!(
+                    result
+                        .err()
+                        .ok_or("covered action succeeded")?
+                        .to_string()
+                        .contains("covered by <div#overlay>")
+                );
             }
             let calls = connection.take_calls()?;
             assert!(
@@ -1769,6 +1785,10 @@ mod tests {
                     .any(|call| call.method == "Input.dispatchMouseEvent")
             );
             assert_eq!(pointer_calls(&calls).count(), 1);
+            assert_eq!(
+                dom_activation_count(&calls),
+                usize::from(matches!(action, PointerInput::Click))
+            );
         }
         Ok(())
     }
@@ -2075,7 +2095,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tests_that_missing_click_geometry_never_activates_the_dom()
+    async fn missing_click_geometry_uses_dom_fallback_before_any_press()
     -> Result<(), Box<dyn std::error::Error>> {
         for after_move in [false, true] {
             let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
@@ -2085,16 +2105,18 @@ mod tests {
             })?;
             let input = input.with_pointer(Some(Pointer::default()));
             connection.take_calls()?;
-            assert!(input.click(&ref_id, ClickOptions::default()).await.is_err());
+            assert_eq!(input.click(&ref_id, ClickOptions::default()).await?, None);
             let calls = connection.take_calls()?;
             assert_eq!(press_count(&calls), 0);
             assert_eq!(pointer_calls(&calls).count(), usize::from(after_move));
             assert_eq!(
                 calls
                     .iter()
-                    .filter(|call| call.params["functionDeclaration"] == "function(){this.click()}")
+                    .filter(|call| call.params["functionDeclaration"]
+                        .as_str()
+                        .is_some_and(|script| script.contains("browserosActivateDom")))
                     .count(),
-                0
+                1
             );
         }
         Ok(())
@@ -2413,6 +2435,57 @@ mod tests {
         Ok(())
     }
 
+    fn dom_activation_count(calls: &[TestCall]) -> usize {
+        calls
+            .iter()
+            .filter(|call| {
+                call.params["functionDeclaration"]
+                    .as_str()
+                    .is_some_and(|script| script.contains("browserosActivateDom"))
+            })
+            .count()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dom_fallback_requires_eligibility_and_never_replays_a_lost_ack()
+    -> Result<(), CoreError> {
+        for refused in [
+            "activeModalDialog",
+            "activeAriaModalDialog",
+            "inertElement",
+            "inertSubtree",
+        ] {
+            let (connection, input, ref_id) =
+                input_harness(HitTestResponse::Blocked("div#overlay")).await?;
+            connection.configure(|state| state.ax_ignored_reason = Some(refused))?;
+            assert!(input.click(&ref_id, ClickOptions::default()).await.is_err());
+            let calls = connection.take_calls()?;
+            assert_eq!(press_count(&calls), 0);
+            assert_eq!(dom_activation_count(&calls), 0);
+        }
+        for fail_ack in [false, true] {
+            let (connection, input, ref_id) =
+                input_harness(HitTestResponse::Blocked("div#overlay")).await?;
+            connection.configure(|state| {
+                state.fail_eligibility = !fail_ack;
+                state.fail_dom_ack = fail_ack;
+            })?;
+            let result = input.click(&ref_id, ClickOptions::default()).await;
+            if fail_ack {
+                assert!(matches!(result, Err(CoreError::ClickOutcomeUnknown(_))));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(CoreError::ClickFallbackUnavailable { .. })
+                ));
+            }
+            let calls = connection.take_calls()?;
+            assert_eq!(press_count(&calls), 0);
+            assert_eq!(dom_activation_count(&calls), usize::from(fail_ack));
+        }
+        Ok(())
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_lost_press_or_release_ack_never_replays_a_click() -> Result<(), CoreError> {
         for failed_ack in ["mousePressed", "mouseReleased"] {
@@ -2434,6 +2507,7 @@ mod tests {
                 assert!(matches!(result, Err(CoreError::ClickOutcomeUnknown(_))));
                 let calls = connection.take_calls()?;
                 assert_eq!(press_count(&calls), 1, "{failed_ack}, entry {entry}");
+                assert_eq!(dom_activation_count(&calls), 0);
             }
         }
         Ok(())
@@ -2444,7 +2518,15 @@ mod tests {
         let (connection, input, ref_id) =
             input_harness(HitTestResponse::Blocked("div#consent-banner")).await?;
 
-        let result = input.click(&ref_id, ClickOptions::default()).await;
+        let result = input
+            .click(
+                &ref_id,
+                ClickOptions {
+                    click_count: Some(2),
+                    ..Default::default()
+                },
+            )
+            .await;
 
         let err = match result {
             Err(err) => err,
@@ -2454,8 +2536,13 @@ mod tests {
                 )));
             }
         };
-        let message = err.to_string();
-        match err {
+        let CoreError::ClickFallbackUnavailable { native, reason } = err else {
+            return Err(CoreError::Message(
+                "Expected refused fallback for double click".into(),
+            ));
+        };
+        assert!(reason.contains("repeated click"));
+        match *native {
             CoreError::ElementCovered {
                 target, blocker, ..
             } => {
@@ -2471,10 +2558,7 @@ mod tests {
             }
         }
         assert_eq!(connection.mouse_events(), 0);
-        assert_eq!(
-            message,
-            "Element e1 (button \"Submit\") is covered by <div#consent-banner>; no click was sent. blocker ref=e2. Handle the obstruction, then retry. DOM activation requires an explicit method=\"dom\" request."
-        );
+        assert_eq!(dom_activation_count(&connection.take_calls()?), 0);
         Ok(())
     }
 
@@ -2500,7 +2584,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn semantic_select_ignores_pointer_occlusion_but_click_stays_blocked()
+    async fn semantic_select_preserves_selection_while_click_uses_its_own_fallback()
     -> Result<(), CoreError> {
         let (connection, input, ref_id) = select_input_harness(
             HitTestResponse::Blocked("span.a-dropdown-prompt"),
@@ -2516,22 +2600,8 @@ mod tests {
         assert_eq!(connection.mouse_events(), 0);
         assert!(connection.select_semantics_preserved());
 
-        let click_result = input.click(&ref_id, ClickOptions::default()).await;
-        match click_result {
-            Err(CoreError::ElementCovered {
-                target, blocker, ..
-            }) => {
-                assert_eq!(target.ref_id, Some(Ref("e1".to_string())));
-                assert_eq!(target.role.as_deref(), Some("combobox"));
-                assert_eq!(target.name.as_deref(), Some("Sort by:"));
-                assert_eq!(blocker, "span.a-dropdown-prompt");
-            }
-            other => {
-                return Err(CoreError::Message(format!(
-                    "expected ElementCovered, got {other:?}"
-                )));
-            }
-        }
+        assert_eq!(input.click(&ref_id, ClickOptions::default()).await?, None);
+        assert_eq!(dom_activation_count(&connection.take_calls()?), 1);
         assert!(connection.hit_test_calls() >= 2);
         assert_eq!(connection.mouse_events(), 0);
         Ok(())

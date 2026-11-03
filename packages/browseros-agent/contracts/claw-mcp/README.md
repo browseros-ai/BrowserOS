@@ -15,11 +15,13 @@ audit records, cancellation, browser-down guidance, and transport hygiene.
 
 `cases-click-recovery.ts` checks ordinary native clicks through both `act` and
 `run`: partial/transient coverage, sticky headers, hover-triggered coverage, and
-parent overlays above same-site and cross-site frames. Persistent coverage must
-leave the target untouched and name the actual blocking DOM node with a usable
-ref. `method: "dom"` is an explicit untrusted activation, never an automatic
-fallback. The Rust input tests separately inject lost mouse acknowledgements to
-ensure a click is never replayed after dispatch becomes uncertain.
+parent overlays above same-site and cross-site frames. Eligible single left
+clicks use one internal, isolated DOM fallback only after native preparation
+fails, and report that delivery path. Disabled, inert and modal-background
+controls remain untouched. Failed fallback retains the native blocker's usable
+ref and explains the refusal. No public method selector can force DOM activation.
+The Rust input tests inject lost mouse and DOM acknowledgements to ensure a click
+is never replayed after dispatch becomes uncertain.
 
 Each case asserts Rust behavior directly. The retired TypeScript server and its
 historical behavior are not test dependencies.

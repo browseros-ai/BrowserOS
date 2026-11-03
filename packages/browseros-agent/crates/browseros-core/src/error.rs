@@ -55,7 +55,7 @@ pub enum CoreError {
     #[error("Provide either target element or both targetX and targetY.")]
     InvalidDragTarget,
     #[error(
-        "Element {target} is covered by <{blocker}>; no click was sent. {}Handle the obstruction, then retry. DOM activation requires an explicit method=\"dom\" request.",
+        "Element {target} is covered by <{blocker}>; no click was sent. {}Handle the obstruction, then retry.",
         blocker_ref.as_ref().map(|id| format!("blocker ref={id}. ")).unwrap_or_default()
     )]
     ElementCovered {
@@ -63,6 +63,15 @@ pub enum CoreError {
         target: Box<CoveredElementTarget>,
         blocker: String,
         blocker_ref: Option<Ref>,
+    },
+    /// Only geometry/coverage failures before dispatch authorize the internal fallback.
+    #[error("{0}")]
+    ClickPointUnavailable(String),
+    /// Retain the native obstruction so callers can still offer its actionable ref.
+    #[error("{native} DOM fallback was not sent: {reason}")]
+    ClickFallbackUnavailable {
+        native: Box<CoreError>,
+        reason: String,
     },
     /// Delivery may have happened; this deliberately does not carry a retryable CDP error.
     #[error(
