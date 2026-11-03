@@ -60,7 +60,7 @@ describe('toast helpers', () => {
       'Couldn’t open the payment page',
       new ApiResponseError(response, {
         code: 'already_subscribed',
-        message: 'This computer already has Pro.',
+        message: 'This computer already has ultrafast.',
       }),
     )
     toastApiError(
@@ -70,7 +70,7 @@ describe('toast helpers', () => {
     expect(host.shown).toEqual([
       {
         title: 'Couldn’t open the payment page',
-        description: 'This computer already has Pro.',
+        description: 'This computer already has ultrafast.',
         status: 'error',
       },
       {

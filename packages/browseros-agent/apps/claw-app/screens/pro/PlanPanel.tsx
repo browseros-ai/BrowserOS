@@ -32,12 +32,12 @@ export function PlanPanel({ plan, planKey, portal, onCancel }: PlanPanelProps) {
       queryClient.setQueryData(usePlan.getKey(), next)
       toastSuccess(
         next.periodEnd === null
-          ? 'Pro stays on.'
-          : `Pro stays on. It renews on ${formatDate(next.periodEnd)}`,
+          ? 'ultrafast stays on.'
+          : `ultrafast stays on. It renews on ${formatDate(next.periodEnd)}`,
       )
       track(AnalyticsEvent.ProResumed)
     },
-    onError: (error) => toastApiError('Couldn’t keep Pro', error),
+    onError: (error) => toastApiError('Couldn’t keep ultrafast', error),
   })
 
   const billing = (variant: ButtonVariant) => (
@@ -67,7 +67,7 @@ export function PlanPanel({ plan, planKey, portal, onCancel }: PlanPanelProps) {
       onClick={onCancel}
       className="self-center text-ink-3"
     >
-      Cancel Pro
+      Cancel ultrafast
     </Button>
   )
   const stale = plan.stale ? (
@@ -83,20 +83,20 @@ export function PlanPanel({ plan, planKey, portal, onCancel }: PlanPanelProps) {
         <StatusHead
           icon={<CalendarX />}
           warn
-          title={`Pro ends on ${ends}`}
+          title={`ultrafast ends on ${ends}`}
           sub="You won’t be charged again."
         />
         <p className="text-[14.5px] text-ink-2">
-          Changed your mind? Keep Pro and it renews on {ends} as usual.
+          Changed your mind? Keep ultrafast and it renews on {ends} as usual.
         </p>
         <StatefulButton
           state={resume.isPending ? 'loading' : 'idle'}
-          loadingText="Keep Pro"
+          loadingText="Keep ultrafast"
           disabled={resume.isPending}
           onClick={() => resume.mutate()}
           className="w-full font-semibold"
         >
-          Keep Pro
+          Keep ultrafast
         </StatefulButton>
         {billing('ghost')}
         {stale}
@@ -110,12 +110,13 @@ export function PlanPanel({ plan, planKey, portal, onCancel }: PlanPanelProps) {
         <StatusHead
           icon={<CreditCard />}
           warn
-          title="Pro is paused"
+          title="ultrafast is paused"
           sub="Your last few payments didn’t go through."
         />
         <p className="text-[14.5px] text-ink-2">
-          Pro features are off for now. Update your card and Pro turns back on
-          once the payment goes through. Nothing you’ve saved is lost.
+          ultrafast features are off for now. Update your card and ultrafast
+          turns back on once the payment goes through. Nothing you’ve saved is
+          lost.
         </p>
         {updateCard}
         {billing('ghost')}
@@ -135,7 +136,7 @@ export function PlanPanel({ plan, planKey, portal, onCancel }: PlanPanelProps) {
           sub="Last month’s payment didn’t go through."
         />
         <p className="text-[14.5px] text-ink-2">
-          Stripe will try again over the next few days. Pro stays on until{' '}
+          Stripe will try again over the next few days. ultrafast stays on until{' '}
           {plan.graceUntil === null ? '' : formatDate(plan.graceUntil)}.
         </p>
         {updateCard}
@@ -147,7 +148,7 @@ export function PlanPanel({ plan, planKey, portal, onCancel }: PlanPanelProps) {
 
   return (
     <>
-      <StatusHead icon={<BadgeCheck />} title="You’re on Pro" />
+      <StatusHead icon={<BadgeCheck />} title="You’re on ultrafast" />
       <dl className="flex flex-col gap-2.5 rounded-xl border border-border-2 bg-card px-4 py-3.5 text-[14.5px]">
         {plan.periodEnd !== null ? (
           <div className="flex justify-between gap-3">

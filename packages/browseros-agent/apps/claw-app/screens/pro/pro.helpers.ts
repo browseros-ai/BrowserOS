@@ -67,7 +67,7 @@ export interface ProPrices {
 
 export function proPrices(pricing: PlanPricing): ProPrices | null {
   const sold =
-    pricing.plans.find((plan) => plan.plan === 'pro') ?? pricing.plans[0]
+    pricing.plans.find((plan) => plan.plan === 'ultrafast') ?? pricing.plans[0]
   if (!sold) return null
   const single = (interval: BillingPeriod) =>
     sold.prices.find(

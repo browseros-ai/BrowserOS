@@ -46,30 +46,30 @@ export function CancelProDialog({
       const date = until === null ? '' : formatDate(until)
       toastSuccess(
         said
-          ? `Thanks for telling us. Pro ends on ${date}`
-          : `Pro will end on ${date}`,
+          ? `Thanks for telling us. ultrafast ends on ${date}`
+          : `ultrafast will end on ${date}`,
       )
       track(AnalyticsEvent.ProCancelConfirmed, { gave_feedback: Boolean(said) })
       onOpenChange(false)
     },
     onError: (error) =>
-      toastApiError('Couldn’t cancel Pro. Nothing changed.', error),
+      toastApiError('Couldn’t cancel ultrafast. Nothing changed.', error),
   })
 
   return (
     <CenterMorphModal open={open} onOpenChange={onOpenChange}>
       <CenterMorphModalContent
-        ariaLabel="Cancel neo Pro?"
+        ariaLabel="Cancel ultrafast?"
         showCloseButton={false}
         className="max-w-[480px] border-border-2 bg-card"
       >
         <div className="flex flex-col gap-5 p-6">
           <div className="flex flex-col gap-4">
             <h2 className="font-bold text-[20px] text-cyanotype-ink tracking-[-0.015em]">
-              Cancel neo Pro?
+              Cancel ultrafast?
             </h2>
             <p className="text-[14.5px] text-ink-2">
-              You keep Pro until{' '}
+              You keep ultrafast until{' '}
               <strong className="text-cyanotype-ink">
                 {plan.periodEnd === null ? '' : formatDate(plan.periodEnd)}
               </strong>
@@ -109,25 +109,25 @@ export function CancelProDialog({
               </div>
             </div>
             <p className="text-[13.5px] text-ink-3">
-              Changed your mind before then? Choose Keep Pro on this page.
+              Changed your mind before then? Choose Keep ultrafast on this page.
             </p>
           </div>
           <div className="flex justify-end gap-2">
             <StatefulButton
               variant="ghost"
               state={cancel.isPending ? 'loading' : 'idle'}
-              loadingText="Cancel Pro"
+              loadingText="Cancel ultrafast"
               disabled={cancel.isPending}
               onClick={() => {
                 const said = feedback.current?.value.trim()
                 cancel.mutate(said ? { feedback: said } : {})
               }}
             >
-              Cancel Pro
+              Cancel ultrafast
             </StatefulButton>
             <CenterMorphModalClose>
               <Button disabled={cancel.isPending} className="font-semibold">
-                Keep Pro
+                Keep ultrafast
               </Button>
             </CenterMorphModalClose>
           </div>

@@ -40,7 +40,7 @@ import {
 
 const TITLE = (
   <>
-    neo <em className="text-accent-ink">Pro</em>
+    <em className="text-accent-ink">ultrafast</em>
   </>
 )
 
@@ -147,7 +147,7 @@ export function Pro() {
 
 function lede(plan: Plan, prices: ProPrices | null): string | null {
   if (isPro(plan)) {
-    return 'Thanks for supporting BrowserOS. Here’s what Pro adds to neo.'
+    return 'Thanks for supporting BrowserOS. Here’s what ultrafast adds to neo.'
   }
   if (!prices?.month) return null
   const yearly = prices.year ? ', or less if you pay yearly' : ''
@@ -159,7 +159,7 @@ function lede(plan: Plan, prices: ProPrices | null): string | null {
 function FeatureList() {
   return (
     <Card
-      aria-label="What Pro adds"
+      aria-label="What ultrafast adds"
       className="gap-0 border-border-2 bg-card py-2 shadow-card"
     >
       <ul className="flex flex-col divide-y divide-border-2">
@@ -206,23 +206,23 @@ function ProQuestions({ prices }: { prices: ProPrices | null }) {
       : []),
     {
       q: 'How do I cancel?',
-      a: 'Come back to this page and choose Cancel Pro. You keep Pro until the end of the month you already paid for, and you are not charged again.',
+      a: 'Come back to this page and choose Cancel ultrafast. You keep ultrafast until the end of the month you already paid for, and you are not charged again.',
     },
     {
       q: 'I reinstalled neo or got a new computer.',
-      a: 'Choose Use a licence key and paste your key. Pro turns on right away.',
+      a: 'Choose Use a licence key and paste your key. ultrafast turns on right away.',
     },
     {
-      q: 'Can I use Pro on more than one computer?',
+      q: 'Can I use ultrafast on more than one computer?',
       a: 'Yes, on up to 5 computers with one key. You can see them all, and remove any, on this page.',
     },
     {
       q: 'Where’s my licence key?',
-      a: 'In the email we sent when you paid. Search for “neo Pro licence key”. Can’t find it? Reset your key on this page and we’ll email a new one.',
+      a: 'In the email we sent when you paid. Search for “ultrafast licence key”. Can’t find it? Reset your key on this page and we’ll email a new one.',
     },
     {
       q: 'What if someone else gets my key?',
-      a: 'Choose Reset key on this page. You get a new key, and Pro turns off on every other computer until you paste the new key there.',
+      a: 'Choose Reset key on this page. You get a new key, and ultrafast turns off on every other computer until you paste the new key there.',
     },
     {
       q: 'Who sees my card details?',

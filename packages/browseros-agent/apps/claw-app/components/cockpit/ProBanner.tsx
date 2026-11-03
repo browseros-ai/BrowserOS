@@ -3,7 +3,7 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Home's way to the neo Pro page, for Free installs on a build that sells
+ * Home's way to the ultrafast page, for Free installs on a build that sells
  * Pro. Impressions are not tracked: the cockpit is the new tab page, and the
  * Pro page's own view event is the funnel's denominator.
  */
@@ -59,11 +59,11 @@ export function ProBanner({ onClosed }: { onClosed?: () => void }) {
   if (dismissed || pricing.isPending || pricing.isError || !month) return null
   return (
     <PromoCard
-      aria-label="neo Pro"
+      aria-label="ultrafast"
       icon={<Sparkles />}
       title={
         <>
-          neo <em className="text-accent-ink">Pro</em>
+          <em className="text-accent-ink">ultrafast</em>
         </>
       }
       description={`Faster tasks, a year of history and more, for ${formatPrice(month)} a month.`}
@@ -77,7 +77,7 @@ export function ProBanner({ onClosed }: { onClosed?: () => void }) {
           onClick={() => track(AnalyticsEvent.UltrafastBannerClicked)}
           className="h-8 px-2.5 font-semibold text-[13.5px] text-accent-ink hover:bg-card/70 hover:text-accent-ink"
         >
-          See Pro
+          See ultrafast
           <ArrowRight aria-hidden className="size-[15px]" />
         </ButtonLink>
       }

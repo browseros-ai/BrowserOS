@@ -10,8 +10,8 @@ import * as api from '@/modules/api/client'
 const PRICING: PlanPricing = {
   plans: [
     {
-      plan: 'pro',
-      name: 'neo Pro',
+      plan: 'ultrafast',
+      name: 'BrowserOS neo',
       description: null,
       features: ['claw.ultrafast'],
       prices: [
@@ -137,15 +137,15 @@ function closeButton() {
 }
 
 describe('ProBanner', () => {
-  it('tests that it names the monthly price and links to the neo Pro page', async () => {
+  it('tests that it names the monthly price and links to the ultrafast page', async () => {
     await render()
 
-    expect(container.textContent).toContain('neo Pro')
+    expect(container.textContent).toContain('ultrafast')
     expect(container.textContent).toContain(
       'Faster tasks, a year of history and more, for $20 a month.',
     )
     const link = container.querySelector('a')
-    expect(link?.textContent).toContain('See Pro')
+    expect(link?.textContent).toContain('See ultrafast')
     expect(link?.getAttribute('href')).toBe('/pro')
   })
 

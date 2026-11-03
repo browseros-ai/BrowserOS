@@ -74,7 +74,8 @@ export function UseKeyDialog({
       if (code && TRACKED_FAILURES.has(code)) {
         track(AnalyticsEvent.ProKeyActivationFailed, { reason: code })
       }
-      if (!apiErrorMessage(error)) toastApiError('Couldn’t turn on Pro', error)
+      if (!apiErrorMessage(error))
+        toastApiError('Couldn’t turn on ultrafast', error)
     },
     onSettled: () => setAttempts((count) => count + 1),
   })
@@ -173,8 +174,8 @@ function EnterView({
   return (
     <DialogShell title="Use a licence key" onClose={onClose}>
       <p className="text-[14.5px] text-ink-2">
-        Have Pro on another computer, or reinstalled neo? Paste your licence key
-        to turn on Pro here.
+        Have ultrafast on another computer, or reinstalled neo? Paste your
+        licence key to turn on ultrafast here.
       </p>
       <form
         className="flex flex-col gap-1.5"
@@ -213,9 +214,9 @@ function EnterView({
       </form>
       {lostOpen ? (
         <p className="text-[13.5px] text-ink-2">
-          Search your email for “neo Pro licence key”. Still nothing? Open neo
-          Pro on a computer that has Pro and reset the key, or contact BrowserOS
-          support with your Stripe receipt.
+          Search your email for “ultrafast licence key”. Still nothing? Open the
+          ultrafast page on a computer that has ultrafast and reset the key, or
+          contact BrowserOS support with your Stripe receipt.
         </p>
       ) : (
         <button
@@ -232,12 +233,12 @@ function EnterView({
         </Button>
         <StatefulButton
           state={busy ? 'loading' : 'idle'}
-          loadingText="Turn on Pro"
+          loadingText="Turn on ultrafast"
           disabled={busy}
           onClick={onSubmit}
           className="font-semibold"
         >
-          Turn on Pro
+          Turn on ultrafast
         </StatefulButton>
       </div>
     </DialogShell>
@@ -345,7 +346,7 @@ function DoneView({
       </span>
       <div className="flex flex-col gap-2">
         <h2 className="font-bold text-[20px] text-cyanotype-ink tracking-[-0.015em]">
-          Pro is on for this computer
+          ultrafast is on for this computer
         </h2>
         <p className="text-[14.5px] text-ink-2">
           {renews}
@@ -378,11 +379,12 @@ function EndedView({
       </span>
       <div className="flex flex-col gap-2">
         <h2 className="font-bold text-[20px] text-cyanotype-ink tracking-[-0.015em]">
-          This key’s Pro has ended
+          This key’s ultrafast plan has ended
         </h2>
         <p className="text-[14.5px] text-ink-2">
-          Your key works, but the Pro plan it belongs to has ended. Get Pro
-          again and it comes back here and on every computer that uses this key.
+          Your key works, but the ultrafast plan it belongs to has ended. Get
+          ultrafast again and it comes back here and on every computer that uses
+          this key.
         </p>
         <p className="text-[13.5px] text-ink-3">
           Your key stays the same, so there’s nothing new to paste.
@@ -393,7 +395,7 @@ function EndedView({
           Not now
         </Button>
         <Button onClick={onGetProAgain} className="font-semibold">
-          Get Pro again
+          Get ultrafast again
         </Button>
       </div>
     </div>

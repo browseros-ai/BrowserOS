@@ -34,13 +34,16 @@ const planOf = (overrides: Partial<Plan> = {}): Plan => ({
   ...overrides,
 })
 
-describe('the neo Pro item', () => {
+describe('the ultrafast item', () => {
   const names = (plan?: Plan) =>
     secondaryNavItemsFor(plan).map((item) => item.name)
 
-  it('tests that it sits before Settings, named for Free or Pro', () => {
-    expect(names(planOf())).toEqual(['Get neo Pro', 'Settings'])
-    expect(names(planOf({ status: 'active' }))).toEqual(['neo Pro', 'Settings'])
+  it('tests that it sits before Settings, named for Free or ultrafast', () => {
+    expect(names(planOf())).toEqual(['Get ultrafast', 'Settings'])
+    expect(names(planOf({ status: 'active' }))).toEqual([
+      'ultrafast',
+      'Settings',
+    ])
     expect(secondaryNavItemsFor(planOf())[0]?.to).toBe('/pro')
   })
 

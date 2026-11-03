@@ -103,8 +103,8 @@ export function PricePanel({
         </PanelNote>
       ) : keyHasEnded(plan) ? (
         <PanelNote icon={<KeyRound />} tone="warn">
-          This computer’s licence key has no Pro right now. Get Pro to start it
-          again.
+          This computer’s licence key has no ultrafast plan right now. Get
+          ultrafast to start it again.
         </PanelNote>
       ) : null}
 
@@ -120,12 +120,12 @@ export function PricePanel({
 
       <StatefulButton
         state={checkout.isStarting ? 'loading' : 'idle'}
-        loadingText="Get Pro"
+        loadingText="Get ultrafast"
         disabled={checkout.isStarting}
         onClick={onBuy}
         className="w-full font-semibold"
       >
-        Get Pro
+        Get ultrafast
       </StatefulButton>
       <p className="flex items-start gap-2 text-[13px] text-ink-3">
         <Lock aria-hidden className="mt-0.5 size-3.5 shrink-0" />
@@ -204,7 +204,7 @@ function PriceLines({ price, amount }: { price: PlanPrice; amount: string }) {
       </div>
       <ul className="flex flex-col gap-2.5 text-[14.5px] text-ink">
         {[
-          'Everything in Pro, starting today',
+          'Everything in ultrafast, starting today',
           `Renews by itself ${eachPeriod(period)}`,
           'Cancel right here, any time',
         ].map((line) => (
@@ -265,7 +265,7 @@ function WaitingPanel({
   const steps: { label: string; state: StepState }[] = [
     { label: 'Payment page opened', state: 'done' },
     { label: `Pay ${amount} with Stripe`, state: paid ? 'done' : 'now' },
-    { label: 'Pro turns on here', state: paid ? 'now' : 'next' },
+    { label: 'ultrafast turns on here', state: paid ? 'now' : 'next' },
   ]
   return (
     <div role="status" className="flex flex-col gap-5">
@@ -275,7 +275,7 @@ function WaitingPanel({
         </div>
         <p className="mt-1 text-[14.5px] text-ink-2">
           {paid
-            ? 'One moment while neo turns on Pro.'
+            ? 'One moment while neo turns on ultrafast.'
             : 'We opened Stripe’s secure payment page in a new tab.'}
         </p>
       </div>

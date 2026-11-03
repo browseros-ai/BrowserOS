@@ -1,5 +1,5 @@
 /**
- * The neo Pro page against a stubbed claw-server. The real react-query hooks
+ * The ultrafast page against a stubbed claw-server. The real react-query hooks
  * run; only the HTTP client, the analytics transport, the new-tab call and
  * the animated modals are replaced.
  */
@@ -66,8 +66,8 @@ const planOf = (overrides: Partial<Plan> = {}): Plan => ({
 })
 
 const PRO = planOf({
-  plan: 'pro',
-  planName: 'neo Pro',
+  plan: 'ultrafast',
+  planName: 'BrowserOS neo',
   features: ['claw.ultrafast'],
   status: 'active',
   periodEnd: PERIOD_END,
@@ -77,8 +77,8 @@ const PRO = planOf({
 const PRICING: PlanPricing = {
   plans: [
     {
-      plan: 'pro',
-      name: 'neo Pro',
+      plan: 'ultrafast',
+      name: 'BrowserOS neo',
       description: null,
       features: ['claw.ultrafast'],
       prices: [
@@ -512,7 +512,7 @@ function expectNoKeyAnywhere() {
   expect(JSON.stringify(captured)).not.toMatch(FULL_KEY)
 }
 
-describe('the neo Pro page', () => {
+describe('the ultrafast page', () => {
   it('tests that Free shows the monthly price, the way in with a key, and the questions', async () => {
     await mount()
 
@@ -523,7 +523,7 @@ describe('the neo Pro page', () => {
     expect(text()).toContain('$20a month')
     expect(text()).toContain('Renews by itself each month')
     expect(text()).toContain('2 months free')
-    expect(button('Get Pro')).toBeTruthy()
+    expect(button('Get ultrafast')).toBeTruthy()
     expect(button('Use a licence key')).toBeTruthy()
     expect(text()).toContain('Questions people ask')
     expect(text()).toContain('Where’s my licence key?')
@@ -561,14 +561,14 @@ describe('the neo Pro page', () => {
     )
   })
 
-  it('tests that Pro shows the plan, the key’s first group and the computers, never the key', async () => {
+  it('tests that ultrafast shows the plan, the key’s first group and the computers, never the key', async () => {
     server.plan = async () => PRO
     await mount()
 
     expect(text()).toContain(
-      'Thanks for supporting BrowserOS. Here’s what Pro adds to neo.',
+      'Thanks for supporting BrowserOS. Here’s what ultrafast adds to neo.',
     )
-    expect(text()).toContain('You’re on Pro')
+    expect(text()).toContain('You’re on ultrafast')
     expect(text()).toContain('Next paymentNov 27, 2026')
     expect(text()).toContain('Computers2 of 5')
     expect(text()).toContain('It’s in the email we sent when you paid.')
@@ -585,21 +585,23 @@ describe('the neo Pro page', () => {
     expect(text()).toContain('This computer')
     expect(button('Rename Sam’s MacBook Air')).toBeTruthy()
     expect(button('Rename DESKTOP-4FQ7K2L')).toBeTruthy()
-    expect(button('Cancel Pro')).toBeTruthy()
+    expect(button('Cancel ultrafast')).toBeTruthy()
     expectNoKeyAnywhere()
   })
 
-  it('tests that Ending offers Keep Pro and keeps it', async () => {
+  it('tests that Ending offers Keep ultrafast and keeps it', async () => {
     server.plan = async () => ({ ...PRO, status: 'ending', endsAt: PERIOD_END })
     await mount()
-    expect(text()).toContain('Pro ends on Nov 27, 2026')
+    expect(text()).toContain('ultrafast ends on Nov 27, 2026')
     expect(text()).toContain('You won’t be charged again.')
 
-    await click('Keep Pro')
+    await click('Keep ultrafast')
 
     expect(callsTo('resumePlan')).toHaveLength(1)
-    expect(toasts.at(-1)?.title).toBe('Pro stays on. It renews on Nov 27, 2026')
-    expect(text()).toContain('You’re on Pro')
+    expect(toasts.at(-1)?.title).toBe(
+      'ultrafast stays on. It renews on Nov 27, 2026',
+    )
+    expect(text()).toContain('You’re on ultrafast')
     expect(events('pro_resumed')).toHaveLength(1)
   })
 
@@ -611,7 +613,7 @@ describe('the neo Pro page', () => {
     })
     await mount()
     expect(text()).toContain('Your card needs a look')
-    expect(text()).toContain('Pro stays on until Dec 4, 2026.')
+    expect(text()).toContain('ultrafast stays on until Dec 4, 2026.')
 
     await click('Update card')
 
@@ -620,10 +622,10 @@ describe('the neo Pro page', () => {
     expect(events('pro_billing_opened')).toHaveLength(1)
   })
 
-  it('tests that paused Pro offers the card and the billing page', async () => {
+  it('tests that paused ultrafast offers the card and the billing page', async () => {
     server.plan = async () => ({ ...PRO, status: 'unpaid', features: [] })
     await mount()
-    expect(text()).toContain('Pro is paused')
+    expect(text()).toContain('ultrafast is paused')
     expect(text()).toContain('Your last few payments didn’t go through.')
 
     await click('Billing and receipts')
@@ -639,13 +641,13 @@ describe('the neo Pro page', () => {
   })
 })
 
-describe('buying Pro', () => {
-  it('tests that Get Pro opens Stripe and waits, and Cancel says nothing was paid', async () => {
+describe('buying ultrafast', () => {
+  it('tests that Get ultrafast opens Stripe and waits, and Cancel says nothing was paid', async () => {
     await mount()
-    await click('Get Pro')
+    await click('Get ultrafast')
 
     expect(callsTo('startPlanCheckout')[0]?.body).toEqual({
-      plan: 'pro',
+      plan: 'ultrafast',
       interval: 'month',
     })
     expect(opened).toEqual(['https://checkout.stripe.com/c/pay/cs_test_1'])
@@ -665,52 +667,52 @@ describe('buying Pro', () => {
     expect(events('pro_checkout_abandoned')).toHaveLength(1)
   })
 
-  it('tests that a finished payment shows Welcome with the emailed key line, and Pro', async () => {
+  it('tests that a finished payment shows Welcome with the emailed key line, and ultrafast', async () => {
     server.checkout = async () => ({ status: 'complete', plan: PRO })
     await mount()
-    await click('Get Pro')
+    await click('Get ultrafast')
 
     const welcome = dialog()
-    expect(welcome.getAttribute('aria-label')).toBe('You’re on neo Pro')
+    expect(welcome.getAttribute('aria-label')).toBe('You’re on ultrafast')
     expect(welcome.textContent).toContain(
       'Thank you! We’ve emailed your licence key, and Stripe is emailing your receipt.',
     )
     expect(welcome.textContent).toContain(
-      'Use the key in that email to turn on Pro on your other computers.',
+      'Use the key in that email to turn on ultrafast on your other computers.',
     )
     expect(welcome.textContent).toContain(
-      'Renews on Nov 27, 2026. Billing, receipts and cancelling live on the neo Pro page.',
+      'Renews on Nov 27, 2026. Billing, receipts and cancelling live on the ultrafast page.',
     )
     expect(events('pro_checkout_completed')).toHaveLength(1)
     expectNoKeyAnywhere()
 
-    await click('Start using Pro')
+    await click('Start using ultrafast')
     expect(container.querySelector('[role="dialog"]')).toBeNull()
-    expect(text()).toContain('You’re on Pro')
+    expect(text()).toContain('You’re on ultrafast')
   })
 
   it('tests that a payment still being confirmed says so', async () => {
     server.checkout = async () => ({ status: 'complete', plan: null })
     await mount()
-    await click('Get Pro')
+    await click('Get ultrafast')
     expect(text()).toContain('Payment received')
-    expect(text()).toContain('One moment while neo turns on Pro.')
+    expect(text()).toContain('One moment while neo turns on ultrafast.')
   })
 
-  it('tests that paying again on a key whose Pro ended keeps the same key', async () => {
+  it('tests that paying again on a key whose ultrafast ended keeps the same key', async () => {
     server.plan = async () => planOf({ onKey: true })
     server.checkout = async () => ({ status: 'complete', plan: PRO })
     await mount()
     expect(text()).toContain(
-      'This computer’s licence key has no Pro right now. Get Pro to start it again.',
+      'This computer’s licence key has no ultrafast plan right now. Get ultrafast to start it again.',
     )
 
-    await click('Get Pro')
+    await click('Get ultrafast')
 
     const welcome = dialog().textContent ?? ''
     expect(welcome).toContain('Thank you! Stripe is emailing your receipt.')
     expect(welcome).toContain(
-      'Your key stays the same. Pro is back on every computer that uses it.',
+      'Your key stays the same. ultrafast is back on every computer that uses it.',
     )
     expect(welcome).not.toContain('We’ve emailed your licence key')
   })
@@ -718,7 +720,7 @@ describe('buying Pro', () => {
   it('tests that an expired checkout says no payment was made', async () => {
     server.checkout = async () => ({ status: 'expired', plan: null })
     await mount()
-    await click('Get Pro')
+    await click('Get ultrafast')
     expect(text()).toContain('No payment was made.')
     expect(events('pro_checkout_abandoned')).toHaveLength(1)
   })
@@ -727,14 +729,14 @@ describe('buying Pro', () => {
     server.startCheckout = async () => {
       throw apiError(409, {
         code: 'already_subscribed',
-        message: 'This computer already pays for Pro.',
+        message: 'This computer already pays for ultrafast.',
       })
     }
     await mount()
-    await click('Get Pro')
+    await click('Get ultrafast')
     expect(toasts.at(-1)).toMatchObject({
       title: 'Couldn’t open the payment page',
-      description: 'This computer already pays for Pro.',
+      description: 'This computer already pays for ultrafast.',
       status: 'error',
     })
     expect(events('pro_checkout_refused')[0]?.properties).toEqual({
@@ -749,7 +751,7 @@ describe('buying Pro', () => {
     }
     await mount()
     expect(callsTo('getPlanPricing')).toHaveLength(1)
-    await click('Get Pro')
+    await click('Get ultrafast')
     expect(toasts.at(-1)?.title).toBe(
       'That price changed. Check the new one and try again.',
     )
@@ -767,7 +769,7 @@ describe('Use a licence key', () => {
 
   async function turnOn(value: string) {
     await type(field('Licence key'), value)
-    await click('Turn on Pro', dialog())
+    await click('Turn on ultrafast', dialog())
   }
 
   it('tests that part of a key is caught here, without asking the server', async () => {
@@ -815,20 +817,20 @@ describe('Use a licence key', () => {
     server.activate = async () => {
       throw apiError(409, {
         code: 'already_subscribed',
-        message: 'This computer already pays for Pro. Contact support.',
+        message: 'This computer already pays for ultrafast. Contact support.',
       })
     }
     await openDialog()
     await turnOn(PASTED)
     expect(text()).toContain(
-      'This computer already pays for Pro. Contact support.',
+      'This computer already pays for ultrafast. Contact support.',
     )
   })
 
   it('tests that the help for a lost key points to the email', async () => {
     await openDialog()
     await click('Can’t find your key?')
-    expect(text()).toContain('Search your email for “neo Pro licence key”.')
+    expect(text()).toContain('Search your email for “ultrafast licence key”.')
   })
 
   it('tests that a full key lists its computers and Remove makes room', async () => {
@@ -865,36 +867,36 @@ describe('Use a licence key', () => {
       key: PASTED,
       replace: 'computer-0',
     })
-    expect(text()).toContain('Pro is on for this computer')
+    expect(text()).toContain('ultrafast is on for this computer')
     expect(text()).toContain(
       'It renews on Nov 27, 2026. Your key is now on 5 of 5 computers.',
     )
     expectNoKeyAnywhere()
   })
 
-  it('tests that a key whose Pro ended offers Get Pro again on that key', async () => {
+  it('tests that a key whose ultrafast ended offers Get ultrafast again on that key', async () => {
     server.activate = async () => ({ plan: planOf({ onKey: true }), key: KEY })
     await openDialog()
     await turnOn(PASTED)
 
-    expect(text()).toContain('This key’s Pro has ended')
+    expect(text()).toContain('This key’s ultrafast plan has ended')
     expect(events('pro_key_activated')[0]?.properties).toEqual({
       plan_ended: true,
     })
-    await click('Get Pro again')
+    await click('Get ultrafast again')
 
     expect(callsTo('startPlanCheckout')).toHaveLength(1)
     expect(text()).toContain('Finish in the payment tab')
   })
 
-  it('tests that a working key turns on Pro here', async () => {
+  it('tests that a working key turns on ultrafast here', async () => {
     await openDialog()
     await turnOn(PASTED)
 
-    expect(text()).toContain('Pro is on for this computer')
+    expect(text()).toContain('ultrafast is on for this computer')
     expect(text()).toContain('Your key is now on 2 of 5 computers.')
     await click('Done')
-    expect(text()).toContain('You’re on Pro')
+    expect(text()).toContain('You’re on ultrafast')
     expect(text()).toContain('It starts NEO-7K2QM.')
     expectNoKeyAnywhere()
   })
@@ -990,22 +992,22 @@ describe('the computers on the key', () => {
       'We’ve emailed your new key',
     )
     expect(dialog().textContent).toContain(
-      'Your old key no longer works. Paste the new one on your other computers to turn Pro back on there.',
+      'Your old key no longer works. Paste the new one on your other computers to turn ultrafast back on there.',
     )
     expect(text()).toContain('It starts NEO-Q3VTM.')
     expectNoKeyAnywhere()
   })
 })
 
-describe('cancelling Pro', () => {
+describe('cancelling ultrafast', () => {
   const FEEDBACK = 'Too pricey for me right now'
 
   async function openCancel() {
     server.plan = async () => PRO
     await mount()
-    await click('Cancel Pro')
+    await click('Cancel ultrafast')
     expect(dialog().textContent).toContain(
-      'You keep Pro until Nov 27, 2026. After that, neo goes back to Free and you aren’t charged again.',
+      'You keep ultrafast until Nov 27, 2026. After that, neo goes back to Free and you aren’t charged again.',
     )
   }
 
@@ -1016,13 +1018,13 @@ describe('cancelling Pro', () => {
   it('tests that cancelling with feedback sends it and thanks the reader', async () => {
     await openCancel()
     feedbackBox().value = FEEDBACK
-    await click('Cancel Pro', dialog())
+    await click('Cancel ultrafast', dialog())
 
     expect(callsTo('cancelPlan')[0]?.body).toEqual({ feedback: FEEDBACK })
     expect(toasts.at(-1)?.title).toBe(
-      'Thanks for telling us. Pro ends on Nov 27, 2026',
+      'Thanks for telling us. ultrafast ends on Nov 27, 2026',
     )
-    expect(text()).toContain('Pro ends on Nov 27, 2026')
+    expect(text()).toContain('ultrafast ends on Nov 27, 2026')
     expect(events('pro_cancel_confirmed')[0]?.properties).toEqual({
       gave_feedback: true,
     })
@@ -1031,9 +1033,9 @@ describe('cancelling Pro', () => {
 
   it('tests that cancelling without feedback sends none', async () => {
     await openCancel()
-    await click('Cancel Pro', dialog())
+    await click('Cancel ultrafast', dialog())
     expect(callsTo('cancelPlan')[0]?.body).toEqual({})
-    expect(toasts.at(-1)?.title).toBe('Pro will end on Nov 27, 2026')
+    expect(toasts.at(-1)?.title).toBe('ultrafast will end on Nov 27, 2026')
   })
 
   it('tests that a failed cancel keeps the feedback and changes nothing', async () => {
@@ -1042,19 +1044,19 @@ describe('cancelling Pro', () => {
     }
     await openCancel()
     feedbackBox().value = FEEDBACK
-    await click('Cancel Pro', dialog())
+    await click('Cancel ultrafast', dialog())
 
     expect(toasts.at(-1)).toMatchObject({
-      title: 'Couldn’t cancel Pro. Nothing changed.',
+      title: 'Couldn’t cancel ultrafast. Nothing changed.',
       status: 'error',
     })
     expect(feedbackBox().value).toBe(FEEDBACK)
-    expect(text()).toContain('You’re on Pro')
+    expect(text()).toContain('You’re on ultrafast')
   })
 
-  it('tests that Keep Pro closes the dialog without cancelling', async () => {
+  it('tests that Keep ultrafast closes the dialog without cancelling', async () => {
     await openCancel()
-    await click('Keep Pro', dialog())
+    await click('Keep ultrafast', dialog())
     expect(container.querySelector('[role="dialog"]')).toBeNull()
     expect(callsTo('cancelPlan')).toHaveLength(0)
   })

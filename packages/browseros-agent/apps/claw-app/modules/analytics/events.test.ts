@@ -18,7 +18,7 @@ describe('screenEventForPath', () => {
     )
   })
 
-  it('maps the neo Pro page', () => {
+  it('maps the ultrafast page', () => {
     expect(screenEventForPath('/pro')).toBe(AnalyticsEvent.ProPageViewed)
   })
 

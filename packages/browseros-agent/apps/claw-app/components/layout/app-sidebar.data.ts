@@ -34,10 +34,10 @@ export const secondaryNavItems: NavItem[] = [
   { name: 'Settings', to: '/settings', icon: Settings },
 ]
 
-/** The neo Pro item goes before Settings, only on builds that sell Pro. */
+/** The ultrafast item goes before Settings, only on builds that sell Pro. */
 export function secondaryNavItemsFor(plan: Plan | undefined): NavItem[] {
   if (!plan?.available) return secondaryNavItems
-  const name = plan.status === 'none' ? 'Get neo Pro' : 'neo Pro'
+  const name = plan.status === 'none' ? 'Get ultrafast' : 'ultrafast'
   return [{ name, to: '/pro', icon: Sparkles }, ...secondaryNavItems]
 }
 
@@ -46,7 +46,7 @@ export interface PlanTag {
   status: AnimatedBadgeStatus
 }
 
-/** The small tag beside neo Pro in the sidebar; Free has none. */
+/** The small tag beside ultrafast in the sidebar; Free has none. */
 export function planTagFor(plan: Plan | undefined): PlanTag | null {
   if (!plan?.available) return null
   switch (plan.status) {

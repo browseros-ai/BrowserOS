@@ -55,8 +55,8 @@ export function KeySection({ planKey }: KeySectionProps) {
         <div className="flex flex-col gap-3 px-[22px] py-5">
           <p className="text-[14.5px] text-ink-2">
             It’s in the email we sent when you paid. Paste it in neo on another
-            computer to use Pro there. Anyone with it can use your Pro, so keep
-            it to yourself.
+            computer to use ultrafast there. Anyone with it can use your plan,
+            so keep it to yourself.
             {key ? (
               <>
                 {' '}
@@ -75,7 +75,7 @@ export function KeySection({ planKey }: KeySectionProps) {
 
         <div className="flex flex-col gap-3 border-border-2 border-t px-[22px] py-5">
           <div className="flex items-baseline justify-between gap-3 font-bold text-[15.5px] text-cyanotype-ink">
-            <span>Computers using Pro</span>
+            <span>Computers using ultrafast</span>
             {key ? (
               <span className="whitespace-nowrap font-semibold text-[13.5px] text-ink-3 tabular-nums">
                 {key.computers.length} of {key.cap}

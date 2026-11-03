@@ -59,7 +59,7 @@ export function ResetKeyDialog({ open, onOpenChange }: ResetKeyDialogProps) {
               </h2>
               <p className="text-[14.5px] text-ink-2">
                 Your old key no longer works. Paste the new one on your other
-                computers to turn Pro back on there.
+                computers to turn ultrafast back on there.
               </p>
             </div>
             <CenterMorphModalClose>
@@ -73,9 +73,9 @@ export function ResetKeyDialog({ open, onOpenChange }: ResetKeyDialogProps) {
                 Reset your licence key?
               </h2>
               <p className="text-[14.5px] text-ink-2">
-                You get a new key, and the old one stops working. Pro stays on
-                here. Every other computer goes back to Free until you paste the
-                new key on it. We’ll email you the new key.
+                You get a new key, and the old one stops working. ultrafast
+                stays on here. Every other computer goes back to Free until you
+                paste the new key on it. We’ll email you the new key.
               </p>
               <p className="text-[13.5px] text-ink-3">
                 Do this if your key was shared or a computer was lost. Your

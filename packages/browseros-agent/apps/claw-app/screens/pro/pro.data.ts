@@ -9,7 +9,7 @@ import { usePlan, usePlanKey, usePlanPricing } from '@/modules/api/plan.hooks'
 import { isPro, proPrices } from './pro.helpers'
 import { useProCheckout, useProPortal } from './pro.hooks'
 
-/** Everything the neo Pro page reads: the plan, prices, key, checkout and portal. */
+/** Everything the ultrafast page reads: the plan, prices, key, checkout and portal. */
 export function useProData() {
   const plan = usePlan()
   const available = plan.data?.available === true

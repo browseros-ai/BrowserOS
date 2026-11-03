@@ -57,8 +57,9 @@ export function RemoveComputerDialog({
             Remove {name}?
           </h2>
           <p className="text-[14.5px] text-ink-2">
-            Pro turns off on that computer the next time it checks in, usually
-            within a few hours. You can add it back any time with your key.
+            ultrafast turns off on that computer the next time it checks in,
+            usually within a few hours. You can add it back any time with your
+            key.
           </p>
         </div>
         <div className="flex justify-end gap-2">

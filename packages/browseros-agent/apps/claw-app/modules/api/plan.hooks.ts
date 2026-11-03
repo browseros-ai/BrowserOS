@@ -3,7 +3,7 @@
  * Copyright 2026 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * neo Pro: this computer's plan, the prices on sale, a checkout's progress,
+ * ultrafast: this computer's plan, the prices on sale, a checkout's progress,
  * the licence key this computer is on, and the actions on them. Mutations
  * write their reply into the cache at the call site via `Hook.getKey()`.
  */

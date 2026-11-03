@@ -6,7 +6,7 @@
  * The cockpit's event catalog. Events are metadata about which screens
  * and controls get used; they never carry user content (no urls,
  * titles, prompts, tool i/o). `track` only accepts scalar properties.
- * neo Pro events never carry a licence key, an email, an amount or
+ * ultrafast events never carry a licence key, an email, an amount or
  * cancellation feedback.
  */
 
@@ -64,7 +64,7 @@ export function track(
 
 /**
  * Maps a cockpit route to its view event. The audit table, a task
- * detail, a replay and the neo Pro page are the surfaces we care about;
+ * detail, a replay and the ultrafast page are the surfaces we care about;
  * the home and mcp routes are covered by `app_opened`.
  */
 export function screenEventForPath(path: string): AnalyticsEventName | null {

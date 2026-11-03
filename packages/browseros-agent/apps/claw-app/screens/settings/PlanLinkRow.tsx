@@ -18,7 +18,7 @@ import { SettingRow, SettingsSection } from './settings.components'
 
 const PLAN_ROW_ID = 'your-plan'
 
-/** Settings' one row about Pro; everything else about it is on the neo Pro page. */
+/** Settings' one row about Pro; everything else about it is on the ultrafast page. */
 export function PlanLinkRow() {
   const plan = usePlan()
   const proHref = useHref('/pro')
@@ -33,7 +33,7 @@ export function PlanLinkRow() {
         id={PLAN_ROW_ID}
         title={
           <span className="flex flex-wrap items-center gap-2">
-            {current.status === 'none' ? 'Free' : 'neo Pro'}
+            {current.status === 'none' ? 'Free' : 'ultrafast'}
             {pill ? (
               <AnimatedBadge status={pill.status} size="sm" showIcon={false}>
                 {pill.label}
@@ -48,7 +48,7 @@ export function PlanLinkRow() {
             variant="secondary"
             className="font-semibold"
           >
-            Open neo Pro
+            Open ultrafast
             <ArrowRight aria-hidden className="size-4" />
           </ButtonLink>
         }
@@ -81,16 +81,16 @@ function planPill(
 function planLine(plan: Plan): string {
   switch (plan.status) {
     case 'active':
-      return `Next payment on ${dateOr(plan.periodEnd)}. Billing, receipts and cancelling are on the neo Pro page.`
+      return `Next payment on ${dateOr(plan.periodEnd)}. Billing, receipts and cancelling are on the ultrafast page.`
     case 'ending':
-      return `Pro stays on until ${dateOr(plan.endsAt)}. You can keep it from the neo Pro page.`
+      return `ultrafast stays on until ${dateOr(plan.endsAt)}. You can keep it from the ultrafast page.`
     case 'paymentFailed':
-      return 'Your last payment didn’t go through. Update your card on the neo Pro page.'
+      return 'Your last payment didn’t go through. Update your card on the ultrafast page.'
     case 'unpaid':
-      return 'Pro is paused because your payments didn’t go through. Update your card on the neo Pro page.'
+      return 'ultrafast is paused because your payments didn’t go through. Update your card on the ultrafast page.'
     default:
       return keyHasEnded(plan)
-        ? 'Your licence key’s Pro has ended. Get Pro again on the neo Pro page.'
-        : 'See what Pro adds, or use your licence key if you already paid.'
+        ? 'Your licence key’s ultrafast plan has ended. Get it again on the ultrafast page.'
+        : 'See what ultrafast adds, or use your licence key if you already paid.'
   }
 }

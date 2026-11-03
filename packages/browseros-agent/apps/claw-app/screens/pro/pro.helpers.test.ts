@@ -45,7 +45,13 @@ function pricingOf(
 ): PlanPricing {
   return {
     plans: [
-      { plan: 'pro', name: 'neo Pro', description: null, features: [], prices },
+      {
+        plan: 'ultrafast',
+        name: 'BrowserOS neo',
+        description: null,
+        features: [],
+        prices,
+      },
     ],
   }
 }
@@ -109,7 +115,7 @@ describe('prices', () => {
 })
 
 describe('the plan', () => {
-  it('tests that only a key with no Pro reads as ended', () => {
+  it('tests that only a key with no ultrafast reads as ended', () => {
     expect(keyHasEnded({ ...PLAN, onKey: true })).toBe(true)
     expect(keyHasEnded(PLAN)).toBe(false)
     expect(keyHasEnded({ ...PLAN, onKey: true, status: 'active' })).toBe(false)

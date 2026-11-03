@@ -91,7 +91,7 @@ function NavMenu({
  * and Settings with the connected agents pinned to the bottom.
  */
 export function AppSidebar() {
-  // Loading or unreachable reads as no billing, so the neo Pro item stays hidden.
+  // Loading or unreachable reads as no billing, so the ultrafast item stays hidden.
   const plan = usePlan()
   const tag = planTagFor(plan.data)
   return (
