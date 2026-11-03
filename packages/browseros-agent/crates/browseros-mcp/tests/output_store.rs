@@ -3,6 +3,62 @@ use serde_json::json;
 use std::time::Duration;
 
 #[tokio::test]
+async fn image_retrieval_accepts_four_mib_and_keeps_larger_parts_readable_as_chunks()
+-> anyhow::Result<()> {
+    use base64::Engine;
+    use browseros_mcp::{ToolExecution, execute_tool};
+    let directory = tempfile::tempdir()?;
+    let store = OutputStore::new(directory.path().join("outputs"), "session");
+    for size in [3 * 1024 * 1024, 4 * 1024 * 1024, 4 * 1024 * 1024 + 1] {
+        let call = store.begin_call();
+        // Retrieval transfers already-captured bytes without rendering or re-encoding them.
+        let bytes = vec![42; size];
+        call.write_part("capture", "png", &bytes).await?;
+        let output = call
+            .finish(&json!({"done":true}))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing image output"))?;
+        let result = execute_tool(
+            &browseros_mcp::tools::read_output::definition(),
+            json!({"outputId": output.id, "part":"capture.png"}),
+            ToolExecution::Outputs(&store),
+        )
+        .await;
+        if size <= 4 * 1024 * 1024 {
+            let result = result.map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let image = result
+                .content
+                .iter()
+                .find_map(|block| block.as_image())
+                .ok_or_else(|| anyhow::anyhow!("missing inline image"))?;
+            assert!(base64::engine::general_purpose::STANDARD.decode(&image.data)? == bytes);
+        } else {
+            assert!(
+                result.is_err(),
+                "oversized image should require chunked retrieval"
+            );
+            let chunk = execute_tool(
+                &browseros_mcp::tools::read_output::definition(),
+                json!({"outputId": output.id, "part":"capture.png", "encoding":"base64", "limit":1024}),
+                ToolExecution::Outputs(&store),
+            ).await.map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let value = chunk
+                .structured_content
+                .ok_or_else(|| anyhow::anyhow!("missing chunk"))?;
+            assert_eq!(value["nextOffset"], 1024);
+            assert!(
+                base64::engine::general_purpose::STANDARD.decode(
+                    value["data"]
+                        .as_str()
+                        .ok_or_else(|| anyhow::anyhow!("missing bytes"))?
+                )? == bytes[..1024]
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn concurrent_outputs_reserve_manifest_bytes_inside_the_session_limit() -> anyhow::Result<()>
 {
     let directory = tempfile::tempdir()?;

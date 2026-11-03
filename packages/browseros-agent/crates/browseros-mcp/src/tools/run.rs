@@ -1,5 +1,6 @@
 use super::evaluate_in_page::safe_prefix;
 use crate::{
+    constants::MAX_INLINE_OVERRIDE_BYTES,
     format::coverage::insert_coverage,
     framework::{
         HelperSource, InnerCallRecord, ToolCtx, ToolDef, ToolError, ToolExecResult, ToolResult,
@@ -35,12 +36,9 @@ const MAX_LOG_ENTRIES: usize = 1_000;
 const MAX_LOG_BYTES: usize = 1_000_000;
 const MAX_RETURN_VALUE_BYTES: usize = 2_000_000;
 /// What a run hands back to the model inline: its return value plus its logs, in UTF-8 bytes.
-/// About 6k tokens, enough for a few pages of extracted text. The script itself reads pages
+/// About 10k estimated tokens. The script itself reads pages
 /// whole, so only its answer has to fit; a larger one comes back as a preview plus a file.
-const DEFAULT_INLINE_RESULT_BYTES: usize = 25_000;
-/// The most `maxChars` can raise the inline result to: the largest return value a run
-/// accepts, so a remote client that asks can still receive any result whole.
-const MAX_INLINE_RESULT_BYTES: usize = MAX_RETURN_VALUE_BYTES;
+const DEFAULT_INLINE_RESULT_BYTES: usize = 30_000;
 
 const DESCRIPTION: &str = r#"The primary way to drive the browser - prefer run for any task; the granular tools are the fallback. Do multi-step flows, pagination, bulk extraction, and repeated act/read loops - in ONE call: async JavaScript against the `browser` SDK in the server runtime. console.log is captured; return a value to read it back; exceptions come back as a result, not thrown. Every call is `await`-able. Each run shares one wall-clock budget across execution, browser operations and waits. The timeout schema gives this server's default and maximum in milliseconds; callers may shorten it. A timeout above that maximum is rejected before script execution. For longer or open-ended page-driven loops, do one bounded chunk per call, or start the work on the page and poll its result with short follow-up calls.
 
@@ -87,7 +85,7 @@ Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers
   page.listHelpers() -> { host, helpers: [{ name, ageDays, candidate }] }; page.readHelper(name) -> source string
 Raw CDP: browser.cdp(method, params?, sessionId?) / page.cdp(method, paramsJson). Methods or parameters that need a newer BrowserOS return native_feature_unavailable without being sent.
 
-What a run returns to you, its return value plus its logs, is kept inline up to 25000 bytes (raise it with maxChars, up to 2000000). Past that you get a preview and output.id; use read_output in the same session to retrieve the complete JSON result and logs. Return only what the task needs to keep context small.
+What a run returns to you, its return value plus its logs, is kept inline up to 30000 UTF-8 bytes (raise it with maxChars, up to 150000). Past that you get a preview and output.id; use read_output in the same session to retrieve the complete JSON result and logs. The separate maximum return value is 2000000 bytes. Return only what the task needs to keep context small.
 
 Do the whole task in as few run calls as possible: loop over all the items in one call rather than one run per item. Parallelize independent work with Promise.all so N pages cost one wait cycle, not N. Keep steps on the same page sequential. The run budget includes navigation and waiting: batching reads of already-loaded pages is cheap, batching navigations is not, so keep it to about 5 fresh pages per call and split the rest into more calls. Efficient pattern:
   const pages = await Promise.all(urls.map(u => browser.open(u)));
@@ -481,7 +479,7 @@ struct RunArgs {
     #[schemars(with = "f64")]
     timeout: Option<f64>,
     /// Max size of the result kept inline (return value plus logs), in UTF-8 bytes: default
-    /// 25000, max 2000000. Larger results return a preview and an output ID; read_output
+    /// 30000, max 150000. Larger results return a preview and an output ID; read_output
     /// retrieves the complete JSON value/logs. Raise this to keep more inline.
     #[serde(default, rename = "maxChars")]
     max_chars: Option<u64>,
@@ -562,7 +560,7 @@ fn handler<'a>(
             .map_or(DEFAULT_INLINE_RESULT_BYTES, |max_chars| {
                 usize::try_from(max_chars)
                     .unwrap_or(usize::MAX)
-                    .min(MAX_INLINE_RESULT_BYTES)
+                    .min(MAX_INLINE_OVERRIDE_BYTES)
             });
         let outcome = match execute_run(args, ctx).await {
             Ok(outcome) => outcome,
@@ -684,7 +682,7 @@ impl RunOutcome {
             write_temp_tool_output_file(&ctx.output_files, "result", "json", &complete.to_string())
                 .await;
         let advice = format!(
-            "Return only what you need, or raise maxChars (up to {MAX_INLINE_RESULT_BYTES}) to receive more inline."
+            "Return only what you need, or raise maxChars (up to {MAX_INLINE_OVERRIDE_BYTES}) to receive more inline."
         );
         let note = match &saved {
             Ok(path) => format!(
@@ -3027,12 +3025,27 @@ try {
     }
 
     #[tokio::test]
+    async fn run_default_keeps_a_result_between_the_old_and_new_budgets_inline()
+    -> anyhow::Result<()> {
+        let result = run_tool("return 'x'.repeat(29000);", None).await?;
+        assert!(!result.is_error);
+        let value = result
+            .structured_content
+            .as_ref()
+            .and_then(|data| data.get("value"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("29k result should remain inline"))?;
+        assert_eq!(value.len(), 29_000);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn run_result_over_the_inline_limit_comes_back_as_a_preview() -> anyhow::Result<()> {
-        let result = run_tool("return 'x'.repeat(30000);", None).await?;
+        let result = run_tool("return 'x'.repeat(31000);", None).await?;
         assert!(!result.is_error);
         let text = tool_result_text(&result);
-        assert!(text.contains("Result truncated at 25000 bytes"), "{text}");
-        assert!(text.len() < 26_000, "{}", text.len());
+        assert!(text.contains("Result truncated at 30000 bytes"), "{text}");
+        assert!(text.len() < 31_000, "{}", text.len());
         let structured = result
             .structured_content
             .as_ref()
@@ -3061,6 +3074,52 @@ try {
             .and_then(Value::as_str)
             .map(str::len);
         assert_eq!(value, Some(30_000));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_clamps_inline_overrides_without_lowering_the_saved_return_limit()
+    -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut ctx = test_ctx();
+        ctx.output_files =
+            crate::output_store::OutputStore::new(directory.path().join("outputs"), "budget");
+        let result = execute_tool(
+            &definition(),
+            json!({ "code": "return 'x'.repeat(200000);", "maxChars": 2000000 }),
+            &ctx,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        assert!(!result.is_error);
+        assert!(tool_result_text(&result).contains("Result truncated at 150000 bytes"));
+        let id = result
+            .structured_content
+            .as_ref()
+            .and_then(|data| data.pointer("/output/id"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing complete saved output"))?;
+        let mut bytes = Vec::new();
+        let mut offset = 0;
+        loop {
+            let chunk = ctx
+                .output_files
+                .read(id, "result.json", offset, 64 * 1024)
+                .await?;
+            bytes.extend(chunk.bytes);
+            match chunk.next_offset {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+        let saved: Value = serde_json::from_slice(&bytes)?;
+        assert_eq!(
+            saved
+                .pointer("/structuredContent/value")
+                .and_then(Value::as_str)
+                .map(str::len),
+            Some(200_000)
+        );
         Ok(())
     }
 
