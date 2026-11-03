@@ -106,4 +106,95 @@ mod tests {
         assert_eq!(options["stopAfter"], 1);
         Ok(())
     }
+
+    // Runs the prelude against a fake browser on a fake clock, letting every pending timer
+    // fire after the run returns, the way a step that outlives its verification keeps going.
+    const LINGERING_COMMITS: &str = r#"(async () => {
+  let now = 0
+  const timers = []
+  Date.now = () => now
+  globalThis.sleep = (ms) => new Promise((resolve) => timers.push({ at: now + ms, resolve }))
+  const live = []
+  const page = (id) => {
+    const write = (method) => async (...args) => { live.push([method, ...args]) }
+    return {
+      id,
+      resolveRef: async () => ({}),
+      click: write('click'),
+      press: write('press'),
+      info: async () => { await sleep(150); return { pageId: id } },
+      snapshot: async () => { await sleep(150); return { text: '' } },
+      close: async () => {},
+    }
+  }
+  const browser = { open: async () => page(1), page }
+  const run = async (src) => {
+    live.length = 0
+    let out = null
+    __ultrafast
+      .run(browser, {
+        mode: 'verify', deadlineMs: 200, viewBytes: 100, inputs: {},
+        steps: [
+          { n: 1, src: 'async ({ browser, state }) => { state.page = await browser.open("x") }' },
+          { n: 2, commit: true, src },
+        ],
+      })
+      .then((value) => { out = value })
+    for (;;) {
+      for (let i = 0; i < 100; i++) await null
+      if (timers.length === 0) break
+      timers.sort((a, b) => a.at - b.at)
+      const next = timers.shift()
+      now = Math.max(now, next.at)
+      next.resolve()
+    }
+    return { status: out.status, kind: out.kind ?? null, dry: out.dry, live: [...live] }
+  }
+  return JSON.stringify({
+    slow: await run('async ({ state }) => { await sleep(300); await state.page.click("e5") }'),
+    reopened: await run(
+      'async ({ browser, state }) => { await sleep(300); state.page = browser.page(state.page.id); await state.page.press("Enter") }',
+    ),
+    unawaited: await run(
+      'async ({ state }) => { await state.page.click("e5"); sleep(20).then(() => state.page.click("e6")) }',
+    ),
+  })
+})()"#;
+
+    #[tokio::test]
+    async fn a_commit_step_still_running_after_verification_never_writes() -> anyhow::Result<()> {
+        use rquickjs::{AsyncContext, AsyncRuntime, CatchResultExt, Promise};
+        let runtime = AsyncRuntime::new()?;
+        let context = AsyncContext::full(&runtime).await?;
+        let report = context
+            .async_with(async |ctx| {
+                ctx.eval::<(), _>(PRELUDE)
+                    .catch(&ctx)
+                    .map_err(|err| err.to_string())?;
+                let promise: Promise<'_> = ctx
+                    .eval(LINGERING_COMMITS)
+                    .catch(&ctx)
+                    .map_err(|err| err.to_string())?;
+                promise
+                    .into_future::<String>()
+                    .await
+                    .catch(&ctx)
+                    .map_err(|err| err.to_string())
+            })
+            .await
+            .map_err(anyhow::Error::msg)?;
+        let report: Value = serde_json::from_str(&report)?;
+
+        for case in ["slow", "reopened", "unawaited"] {
+            assert_eq!(report[case]["live"], json!([]), "{case}: {report}");
+        }
+        assert_eq!(report["slow"]["kind"], "time_cap");
+        assert_eq!(report["reopened"]["kind"], "time_cap");
+        assert_eq!(report["unawaited"]["status"], "verified_to_commit");
+        assert_eq!(
+            report["unawaited"]["dry"],
+            json!([{ "method": "click", "ref": "e5" }])
+        );
+        Ok(())
+    }
 }

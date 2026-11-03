@@ -171,7 +171,7 @@ globalThis.__ultrafast = (() => {
       committed: st.committed,
       page,
       view,
-      dry: st.dry,
+      dry: [...st.dry],
     }
   }
 
@@ -238,7 +238,7 @@ globalThis.__ultrafast = (() => {
             status: 'reached',
             step: o.stopAfter,
             done: st.done,
-            dry: st.dry,
+            dry: [...st.dry],
           }
         }
         if (Date.now() > deadline)
@@ -251,6 +251,8 @@ globalThis.__ultrafast = (() => {
               message: 'the commit step needs the working page in state.page',
             })
           }
+          // Never cleared: a step that outlives its deadline, or a write it did not await,
+          // must still be recorded rather than performed after the verification hands back.
           st.dryRun = true
           try {
             await withinDeadline(step.fn(ctx), deadline, step.n)
@@ -263,8 +265,6 @@ globalThis.__ultrafast = (() => {
               step: step.n,
               message: message(error),
             })
-          } finally {
-            st.dryRun = false
           }
           if (st.dry.length === 0) {
             throw new HandBack('commit_outside_page', {
@@ -281,7 +281,7 @@ globalThis.__ultrafast = (() => {
           return {
             status: 'verified_to_commit',
             done: st.done,
-            dry: st.dry,
+            dry: [...st.dry],
             durationMs: Date.now() - started,
           }
         }
