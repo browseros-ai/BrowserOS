@@ -11,7 +11,10 @@ use browseros_core::target::{TargetBinding, TargetIntent};
 use browseros_mcp::TargetStore;
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 use tokio::sync::Mutex;
 
 const FILE: &str = "target-bindings.json";
@@ -23,6 +26,11 @@ struct Records {
     aliases: BTreeMap<SessionId, SessionId>,
     /// A group is an existing task-correlation handle on legacy transports.
     groups: BTreeMap<String, SessionId>,
+    /// Reserved before a session is published, including tasks that never select a target.
+    /// Keep these separate from `tasks`: a reservation must not establish target intent or
+    /// prevent a legacy reconnect from adopting its existing tab group's task.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    reserved_handles: BTreeSet<SessionId>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -102,6 +110,28 @@ impl TargetBindings {
             records: Mutex::new(records),
             store,
         }))
+    }
+
+    /// Claims a new handle durably before its live session or audit row is published.
+    /// The check and reservation share the persistence lock, so concurrent mints cannot
+    /// take the same short id and a restart cannot recycle an old task's handle.
+    pub(crate) async fn reserve_handle(&self, handle: &SessionId) -> AppResult<bool> {
+        let mut records = self.records.lock().await;
+        if records.reserved_handles.contains(handle)
+            || records.tasks.contains_key(handle)
+            || records.aliases.contains_key(handle)
+            || records
+                .tasks
+                .values()
+                .any(|record| &record.current_session == handle)
+        {
+            return Ok(false);
+        }
+        let mut next = records.clone();
+        next.reserved_handles.insert(handle.clone());
+        self.store.write_json(FILE, &next).await?;
+        *records = next;
+        Ok(true)
     }
 
     pub async fn get(&self, session: &SessionId) -> Option<TargetBinding> {
@@ -330,6 +360,79 @@ impl TargetStore for ClawTargetStore {
 mod tests {
     use super::*;
     use browseros_core::BrowserProfileId;
+
+    #[tokio::test]
+    async fn handle_reservations_are_exclusive_and_survive_restart() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let store = JsonStore::new(dir.path().to_path_buf());
+        let targets = TargetBindings::load(store.clone()).await?;
+        let handle = SessionId::new("0123abcd");
+        let (first, concurrent) = tokio::join!(
+            targets.reserve_handle(&handle),
+            targets.reserve_handle(&handle)
+        );
+        assert_ne!(first?, concurrent?, "only one caller can claim the handle");
+
+        let restarted = TargetBindings::load(store).await?;
+        assert!(!restarted.reserve_handle(&handle).await?);
+        assert!(
+            restarted
+                .reserve_handle(&SessionId::new("00000001"))
+                .await?
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_reservations_reject_retained_tasks_and_aliases_from_older_storage()
+    -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let store = JsonStore::new(dir.path().to_path_buf());
+        let targets = TargetBindings::load(store.clone()).await?;
+        let original = SessionId::new("00000001");
+        let successor = SessionId::new("00000002");
+        targets.set(&original, intent("eng")).await?;
+        targets.inherit(&original, &successor).await?;
+        targets.forget(&successor).await?;
+
+        // With no reservations yet, this file has the pre-reservation storage shape.
+        let restarted = TargetBindings::load(store).await?;
+        assert!(!restarted.reserve_handle(&original).await?);
+        assert!(!restarted.reserve_handle(&successor).await?);
+        assert!(restarted.is_stopped(&original).await);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reserving_a_handle_does_not_block_legacy_group_recovery() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let targets = TargetBindings::load(JsonStore::new(dir.path().to_path_buf())).await?;
+        let original = SessionId::new("old-transport");
+        let selected = targets.set(&original, intent("eng")).await?;
+        targets.remember_group(&original, "G1").await?;
+        let reconnect = SessionId::new("00000001");
+        assert!(targets.reserve_handle(&reconnect).await?);
+        assert!(targets.current_session(&reconnect).await.is_none());
+
+        targets.correlate_group(&reconnect, "G1").await?;
+        assert_eq!(targets.get(&reconnect).await, Some(selected));
+        assert_eq!(targets.canonical_task(&reconnect).await, original);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_failed_reservation_is_not_acknowledged_or_kept_in_memory() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let store = JsonStore::new(dir.path().to_path_buf());
+        let targets = TargetBindings::load(store.clone()).await?;
+        let handle = SessionId::new("00000001");
+        tokio::fs::create_dir(store.resolve(FILE)?).await?;
+        assert!(targets.reserve_handle(&handle).await.is_err());
+
+        tokio::fs::remove_dir(store.resolve(FILE)?).await?;
+        assert!(targets.reserve_handle(&handle).await?);
+        Ok(())
+    }
 
     fn intent(id: &str) -> TargetIntent {
         TargetIntent {

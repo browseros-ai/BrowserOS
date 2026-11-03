@@ -995,9 +995,16 @@ async fn mcp_stateless_structured_results_carry_the_session_handle() -> anyhow::
     .await?;
     let handle = first["result"]["_meta"]["com.browseros.neo/session"].clone();
     assert!(handle.is_string(), "{first}");
+    assert_eq!(handle.as_str().map(str::len), Some(8), "{first}");
     let structured = &first["result"]["structuredContent"];
     assert_eq!(structured["session"], handle, "{first}");
     assert_eq!(structured["value"], 1, "{first}");
+    assert!(
+        first["result"]["content"]
+            .to_string()
+            .contains("Pass this exact value"),
+        "{first}"
+    );
 
     // What the model saw is enough to stay in the same session.
     let second = stateless_mcp_request(
@@ -1012,6 +1019,24 @@ async fn mcp_stateless_structured_results_carry_the_session_handle() -> anyhow::
     .await?;
     assert_eq!(
         second["result"]["_meta"]["com.browseros.neo/session"], handle,
+        "{second}"
+    );
+    assert_eq!(second["result"]["structuredContent"]["session"], handle);
+    assert_eq!(second["result"]["structuredContent"]["value"], 2);
+    let compact = format!(
+        "[browseros-neo session: {}]",
+        handle.as_str().unwrap_or_default()
+    );
+    assert!(
+        second["result"]["content"]
+            .as_array()
+            .is_some_and(|blocks| blocks.iter().any(|block| block["text"] == compact)),
+        "{second}"
+    );
+    assert!(
+        !second["result"]["content"]
+            .to_string()
+            .contains("Pass this exact value"),
         "{second}"
     );
     Ok(())
