@@ -16,13 +16,10 @@ on:
       - ".github/scripts/macos-signing-keychain.sh"
       - ".github/workflows/bos-build-tests.yml"
       - ".github/workflows/build-browseros.yml"
-      - ".github/workflows/nightly-macos-browseros.yml"
       - ".github/workflows/nightly-macos-browserclaw.yml"
       - ".github/workflows/reusable-build-macos-nightly.yml"
       - ".github/workflows/publish-server-ota.yml"
       - ".github/workflows/repair-update-feed.yml"
-      - ".github/workflows/release-app-onboard.yml"
-      - ".github/workflows/release-browseros.yml"
       - ".github/workflows/release-browserclaw.yml"
       - ".github/workflows/release-claw-onboard.yml"
       - ".github/workflows/release-claw-server.yml"
@@ -31,7 +28,6 @@ on:
       - ".github/workflows/release-extensions.yml"
       - ".github/workflows/release-linux.yml"
       - ".github/workflows/release-macos.yml"
-      - ".github/workflows/release-server.yml"
       - ".github/workflows/release-windows.yml"
 
 jobs:

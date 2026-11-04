@@ -1,16 +1,14 @@
 # Nightly macOS CI
 
-The two manual entry workflows complete and publish one product each:
+The manual entry workflow completes and publishes one product:
 
 | Workflow | Display name | Rolling prerelease |
 | --- | --- | --- |
-| `.github/workflows/nightly-macos-browseros.yml` | Nightly: BrowserOS (macOS arm64) | `nightly-browseros` |
 | `.github/workflows/nightly-macos-browserclaw.yml` | Nightly: BrowserOS neo (macOS arm64) | `nightly-browserclaw` |
 
-Dispatch either entry from `main`; neither has a schedule or release-shape inputs.
+Dispatch it from `main`; it has no schedule or release-shape inputs.
 
 ```bash
-gh workflow run nightly-macos-browseros.yml --ref main
 gh workflow run nightly-macos-browserclaw.yml --ref main
 ```
 
@@ -21,9 +19,8 @@ R2 upload, and unconditional Chromium-workspace and signing-keychain cleanup.
 
 ## Product transaction
 
-Each entry freezes one source SHA, reserves a browser version and its own server
-and extension versions, then prepares those two exact components. BrowserOS pins
-`server`, `agent`, and the existing `app-onboard` version. BrowserOS neo pins
+The entry freezes one source SHA, reserves a browser version and its own server
+and extension versions, then prepares those two exact components. BrowserOS neo pins
 `claw-server-rust`, `browserclaw`, and the existing `claw-onboard` version.
 Onboarding bundles continue to release independently.
 
@@ -61,7 +58,7 @@ version already used by immutable uploads.
 Builders always check out the Reservation SHA. The state and merge commits are
 never build inputs. After branch deletion, `refs/pull/<PR_NUMBER>/head` keeps the
 validated reservation reachable for recovery. Shared browser version and build
-offset allocation remains monotonic across both products and saved family records.
+offset allocation remains monotonic across saved product and family records.
 
 ## Shared feeds and publication recovery
 
@@ -99,12 +96,14 @@ same source before cleanup or replacement is allowed.
 ## Cutover and saved family runs
 
 The old `.github/workflows/nightly.yml` dispatch entry and
-`nightly-macos-product.yml` helper are removed from current main. Historical runs
-retain their saved workflow definitions, including that helper. Both new entries
-retain the historical top-level `release-suite` concurrency group with
-`cancel-in-progress: false` and `queue: max`. This conservatively serializes whole
+`nightly-macos-product.yml` helper are removed from current main, as is the
+BrowserOS product entry `nightly-macos-browseros.yml`; its saved transaction
+records remain allocation history. Historical runs retain their saved workflow
+definitions, including that helper. The current entry retains the historical
+top-level `release-suite` concurrency group with `cancel-in-progress: false` and
+`queue: max`. This conservatively serializes whole
 nightly runs during cutover: an active or rerun family transaction cannot overlap
-a product transaction, while each new graph can succeed independently.
+a product transaction, while the product graph can succeed independently.
 
 Legacy records without a product field remain family records with identity
 `nightly-<source-sha>`. Inspect or recover those with the legacy CLI by omitting
@@ -126,7 +125,7 @@ shares `macos-build` with full releases. Component allocation retains
 The profile keeps `resource_mode: published` and executes:
 
 ```bash
-uv run browseros build --profile nightly-macos --product <browseros-or-browserclaw> \
+uv run browseros build --profile nightly-macos --product browserclaw \
   --arch arm64 --resource-mode published --chromium-src "$CHROMIUM_SRC"
 ```
 
