@@ -26,6 +26,7 @@ These are living notes from our discussion. Agreed points are recorded below; op
 - Expose capabilities outside Playwright through the same code mode. Publish `.d.ts` definitions and teach the agent how to call them.
 - Provide REST endpoints for screencasts, screenshots, recordings, tool traces, and audit traces. Customer applications can use them independently of the agent's tool list.
 - Design the browser layer so Jev-like operations and reusable skills can build on it.
+- Design reusable skills and hooks now; leave Jev-like APIs for later.
 
 ### Still to decide
 
@@ -41,7 +42,7 @@ No detailed API or runtime implementation has been agreed yet.
 - Choose the Playwright subset, including locators, waits, frames, pages, and network operations.
 - Define session identity, page handles, concurrent calls, timeouts, cancellation, and retry behavior.
 - Define the extra BrowserOS methods and generate matching `.d.ts` declarations.
-- Work through one concrete Jev operation and one reusable skill before choosing their interfaces.
+- Work through one concrete reusable skill before choosing its interface. Jev-like operations are later work.
 - Resolve secure filling without exposing credentials to agent-written JavaScript.
 
 ## Design of individual components
@@ -94,6 +95,16 @@ Under discussion; no engine or binding API has been selected.
 - Work through one JavaScript-to-Rust call, including its inputs, promise, and errors.
 - Select the engine and binding design.
 - Define the complete request and response contract.
+
+### Reusable skills design
+
+- Current design topic: reusing known website workflows through code mode.
+- Still to decide: instructions versus saved functions, discovery, creation and verification, storage, and loading into fresh runs.
+
+### Hooks design
+
+- Current design topic alongside reusable skills; implementation scope remains open.
+- Still to decide: who registers hooks, whether they run around a whole script or individual browser operations, and whether they can observe, block, modify, or retry work.
 
 ## Appendix
 
