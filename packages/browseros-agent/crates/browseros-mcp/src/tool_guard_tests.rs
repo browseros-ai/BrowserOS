@@ -273,7 +273,7 @@ fn probe_handler<'a>(
 fn probe_def() -> ToolDef {
     let mut def = tools::tab_groups::definition();
     def.name = "guard_probe";
-    def.handler = probe_handler;
+    def.handler = crate::framework::ToolHandler::Browser(probe_handler);
     def
 }
 

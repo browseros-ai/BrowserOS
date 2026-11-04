@@ -4,7 +4,7 @@
 //! snapshotting and acting never run page script (see `browseros_core::page_js`).
 
 use crate::{
-    constants::INLINE_PAGE_CONTENT_MAX_CHARS,
+    constants::{INLINE_PAGE_CONTENT_MAX_CHARS, MAX_INLINE_OVERRIDE_BYTES},
     framework::{
         ToolCtx, ToolExecResult, ToolResult, clamp_timeout, error_result, parse_args,
         pending_dialog_result, text_result,
@@ -23,12 +23,6 @@ const TOOL: &str = "evaluate_in_page";
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const MAX_TIMEOUT_MS: u64 = 30_000;
 
-/// Hard ceiling for the opt-in `maxChars`: a caller may pull up to this much of a
-/// large result inline instead of having it spilled to a local file. The default
-/// inline size stays small (`INLINE_PAGE_CONTENT_MAX_CHARS`) so ordinary results
-/// do not flood the model's context.
-const MAX_INLINE_OVERRIDE_CHARS: usize = 200_000;
-
 const DESCRIPTION: &str = "\
 Evaluate JavaScript in the page's own main world, where the page's scripts run and can watch it: hooks \
 the page installed on built-ins see every call, and the page can read globals the script sets. Use this \
@@ -41,7 +35,7 @@ says so, so never pause afterwards to let the page catch up. For an effect \
 that is entirely asynchronous, such as a click whose result arrives over the network, pass \
 `settle: true` to wait for the page to go quiet regardless. \
 `timeout` (capped at 30000 ms) limits how long the script runs; time spent awaiting a promise does not count against it. For page work that waits, start it on the page and poll with short follow-up calls rather than one long evaluate. \
-A result larger than the inline limit is truncated and its full text is written to a local file whose path a remote MCP client cannot read; return only what you need, or raise `maxChars` to receive more of the value inline.";
+A result larger than the inline limit returns a preview and output.id; use read_output in the same session to retrieve the full result, or raise `maxChars` to keep more inline.";
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -67,10 +61,10 @@ struct EvaluateArgs {
     #[serde(default)]
     settle: Option<bool>,
     /// Max size of the result kept inline, measured in UTF-8 bytes to match the
-    /// server's inline limit (default 5000, max 200000); a multibyte character
+    /// server's inline limit (default 15000, max 150000); a multibyte character
     /// counts as more than one byte. A result larger than this is truncated
-    /// inline and its full text is written to a local file, whose path a remote
-    /// MCP client cannot open; raise this to receive more of the value inline.
+    /// inline and its full value is retained as an output part; read_output retrieves
+    /// it remotely, or raise this to receive more of the value inline.
     #[serde(default)]
     max_chars: Option<u64>,
 }
@@ -163,9 +157,24 @@ async fn evaluate_in_page(raw: Value, ctx: &ToolCtx) -> ToolExecResult<Option<To
     };
     if text.len() > inline_limit {
         let excerpt = safe_prefix(&text, inline_limit);
-        let wrapped_text = wrap_untrusted(&text, &origin);
-        let content_length = wrapped_text.len();
-        match write_temp_tool_output_file(&ctx.output_files, tool, "txt", &wrapped_text).await {
+        let content_length = text.len();
+        // Keep the actual JSON value separate from its fenced display preview. A
+        // remote caller must not have to strip prose or reinterpret strings to decode it.
+        let mut complete = json!({ "page": args.page, "changed": moved, "settled": settled });
+        if let Some(value) = &value {
+            complete["value"] = value.clone();
+        } else {
+            complete["description"] = json!(text);
+        }
+        let complete = json!({ "isError": false, "structuredContent": complete, "text": [wrap_untrusted(&text, &origin)] });
+        match write_temp_tool_output_file(
+            &ctx.output_files,
+            "result",
+            "json",
+            &complete.to_string(),
+        )
+        .await
+        {
             Ok(path) => {
                 return Ok(Some(text_result(
                         [
@@ -314,11 +323,11 @@ pub(crate) fn safe_prefix(text: &str, max_chars: usize) -> String {
 }
 
 /// Resolves the inline size budget for a result: the caller's `maxChars` capped
-/// at `MAX_INLINE_OVERRIDE_CHARS`, or the small default when unset. A result
+/// at `MAX_INLINE_OVERRIDE_BYTES`, or the small default when unset. A result
 /// larger than this is truncated inline and its full text spilled to a file.
 fn resolve_inline_limit(max_chars: Option<u64>) -> usize {
     match max_chars {
-        Some(n) => (n as usize).min(MAX_INLINE_OVERRIDE_CHARS),
+        Some(n) => (n as usize).min(MAX_INLINE_OVERRIDE_BYTES),
         None => INLINE_PAGE_CONTENT_MAX_CHARS,
     }
 }
@@ -351,10 +360,7 @@ mod tests {
         // A caller can raise it, up to the hard ceiling.
         assert_eq!(resolve_inline_limit(Some(50_000)), 50_000);
         // Anything above the ceiling is clamped.
-        assert_eq!(
-            resolve_inline_limit(Some(10_000_000)),
-            MAX_INLINE_OVERRIDE_CHARS
-        );
+        assert_eq!(resolve_inline_limit(Some(10_000_000)), 150_000);
     }
 
     fn reading(count: u64, installed: bool) -> settle::ReadinessReading {

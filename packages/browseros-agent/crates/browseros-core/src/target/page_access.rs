@@ -435,6 +435,28 @@ mod frame_tests {
                     let at = params["backendNodeId"].as_f64().unwrap_or_default();
                     json!({"quads":[[at - 1.0, at - 1.0, at + 1.0, at - 1.0, at + 1.0, at + 1.0, at - 1.0, at + 1.0]]})
                 }
+                "Runtime.callFunctionOn"
+                    if params["functionDeclaration"]
+                        .as_str()
+                        .is_some_and(|function| function.contains("browserosProbeClick")) =>
+                {
+                    // This fixture tests admission and endpoint routing. Browser
+                    // contracts cover the probe's actual DOM/hit-test behavior.
+                    let forced = &params["arguments"][1]["value"];
+                    let points = if forced.is_array() {
+                        forced.clone()
+                    } else {
+                        let quad = &params["arguments"][0]["value"][0];
+                        let x = (quad[0]["x"].as_f64().unwrap_or_default()
+                            + quad[2]["x"].as_f64().unwrap_or_default())
+                            / 2.0;
+                        let y = (quad[0]["y"].as_f64().unwrap_or_default()
+                            + quad[2]["y"].as_f64().unwrap_or_default())
+                            / 2.0;
+                        json!([{ "x": x, "y": y }])
+                    };
+                    json!({"result":{"value":{"points": points, "viewport":{"width":800,"height":600}}}})
+                }
                 "Input.dispatchMouseEvent" => {
                     self.mouse
                         .lock()
@@ -689,7 +711,8 @@ mod frame_tests {
             let point = input
                 .click(&reference, crate::input::ClickOptions::default())
                 .await?;
-            // A dispatched point means trusted mouse input; the scripted fallback returns None.
+            // The default pointer method returns its dispatched point; DOM
+            // activation is available only as a separate explicit method.
             let expected = crate::input::Point {
                 x: backend,
                 y: backend,

@@ -140,6 +140,8 @@ fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
         "DOM.pushNodeByPathToFrontend" => Some(&["path"]),
         "DOM.scrollIntoViewIfNeeded" => Some(&["nodeId", "backendNodeId", "objectId", "rect"]),
         "DOM.focus" => Some(&["nodeId", "backendNodeId", "objectId"]),
+        // BrowserOS's press for the click fallback; older builds answer method-not-found.
+        "DOM.click" => Some(&["backendNodeId"]),
         "DOM.setFileInputFiles" => Some(&["files", "nodeId", "backendNodeId", "objectId"]),
         "Page.enable" => Some(&["enableFileChooserOpenedEvent"]),
         "Page.disable" => Some(&[]),

@@ -52,7 +52,7 @@ async fn format_snapshot_text(snapshot: &str, origin: &str, ctx: &ToolCtx) -> Fo
                             "Large snapshot ({token_estimate} estimated tokens, {content_length} chars) saved to: {}",
                             path.display()
                         ),
-                        "Read the file for the full snapshot and refs.".to_string(),
+                        "Use read_output for the full snapshot and refs.".to_string(),
                         format!(
                             "Showing the first {MAX_INLINE_EXCERPT_TOKENS} estimated tokens inline:"
                         ),

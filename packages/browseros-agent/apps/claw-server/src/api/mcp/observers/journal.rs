@@ -23,7 +23,8 @@ pub fn apply(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result<(
         if call.tool().name != "run" || context.cancelled || call.identity.is_none() {
             return Ok(());
         }
-        if !crate::services::flow::ULTRAFAST_ENABLED {
+        // Hosted servers never offer ultrafast skills, so their scripts have no reason to be kept.
+        if !crate::services::flow::ULTRAFAST_ENABLED || call.state.config.mode.is_hosted() {
             return Ok(());
         }
         let Some(code) = call.raw_args.get("code").and_then(Value::as_str) else {
