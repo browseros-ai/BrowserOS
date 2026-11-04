@@ -34,6 +34,11 @@ use store::FlowDoc;
 /// Runs a composed flow in the browser. The MCP service implements it with a real `run`
 /// dispatch; tests implement it with canned outcomes.
 pub trait FlowExec: Send + Sync {
+    /// The same policy used by the underlying run dispatch and its soft handback.
+    fn run_policy(&self) -> browseros_mcp::RunPolicy {
+        browseros_mcp::RunPolicy::default()
+    }
+
     fn exec<'a>(
         &'a self,
         doc: &'a FlowDoc,

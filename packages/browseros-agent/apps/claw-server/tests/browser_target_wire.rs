@@ -353,7 +353,9 @@ async fn browser_target_http_roundtrip_preserves_window_revision_and_native_stat
     let tabs = peer
         .call("tabs", json!({"action":"list"}), Some(handle))
         .await?;
-    assert!(tabs.get("structuredContent").is_none(), "{tabs}");
+    // Public metadata survives even without outputSchema; saved-output producers
+    // rely on this same envelope to expose their output references.
+    assert_eq!(structured(&tabs)?, json!({"pages":[]}));
     assert!(tabs["content"].is_array());
 
     // get remains a recovery operation after pin closure. Its wire status exposes

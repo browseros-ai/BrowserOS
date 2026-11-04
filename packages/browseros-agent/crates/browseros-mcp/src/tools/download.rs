@@ -50,8 +50,10 @@ fn handler<'a>(
         };
         let path = record.path;
         let filename = record.filename;
-        record_browser_output_file(&ctx.output_files, path.clone()).await;
-        Ok(Some(text_result(
+        let retention_error = record_browser_output_file(&ctx.output_files, path.clone())
+            .await
+            .err();
+        let mut result = text_result(
             format!(
                 "Downloaded \"{filename}\" ({} bytes) on the machine running this browser, to: {}",
                 record.bytes,
@@ -64,6 +66,16 @@ fn handler<'a>(
                 "filename": filename,
                 "bytes": record.bytes
             })),
-        )))
+        );
+        if let Some(error) = retention_error {
+            result.content.push(rmcp::model::ContentBlock::text(format!(
+                "Download completed, but could not retain its output: {error}"
+            )));
+            crate::framework::merge_structured(
+                &mut result.structured_content,
+                json!({ "outputWriteFailed": true }),
+            );
+        }
+        Ok(Some(result))
     })
 }

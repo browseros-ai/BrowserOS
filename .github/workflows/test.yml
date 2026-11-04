@@ -160,7 +160,7 @@ jobs:
           #!/usr/bin/env bash
           set -euo pipefail
           export APPIMAGE_EXTRACT_AND_RUN=1
-          # Chromium's hidden-window APIs require a real X11 platform.
+          # Cases that match hosted Neo's headed rendering need an X11 display.
           if [ "${BROWSEROS_TEST_HEADLESS:-true}" = "false" ]; then
             export XDG_SESSION_TYPE=x11
             exec xvfb-run --auto-servernum "$(dirname "$0")/BrowserOS.AppImage" "$@"
@@ -177,8 +177,8 @@ jobs:
         id: test
         env:
           BROWSEROS_BINARY: ${{ github.workspace }}/packages/browseros-agent/.ci/bin/browseros
-          # The hidden-window APIs that required X11 have been retired. Use the
-          # suite's headless default so native input does not depend on Xvfb focus.
+          # Keep the suite headless by default. Individual visual cases can
+          # request headed rendering; the wrapper starts Xvfb for those launches.
           BROWSEROS_TEST_HEADLESS: "true"
           BROWSEROS_TEST_EXTRA_ARGS: --no-sandbox --disable-dev-shm-usage
           BROWSEROS_JUNIT_PATH: ${{ github.workspace }}/packages/browseros-agent/${{ matrix.junit_path }}

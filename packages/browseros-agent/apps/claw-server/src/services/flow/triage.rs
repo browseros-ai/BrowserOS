@@ -139,6 +139,7 @@ mod tests {
                     expect: "done".into(),
                 }],
                 source_session: None,
+                prose_hash: None,
             },
             steps: (1..=4)
                 .map(|n| FlowStep {

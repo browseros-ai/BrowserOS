@@ -29,6 +29,7 @@ serde_path_to_error.workspace = true
 rquickjs.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

@@ -58,6 +58,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 syn = { version = "2", features = ["full", "visit"] }
+rquickjs.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite.workspace = true
 
