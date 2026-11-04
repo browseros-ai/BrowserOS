@@ -9,91 +9,37 @@
   },
   "favicon": "/logo/favicon.png",
   "navigation": {
-    "products": [
+    "groups": [
       {
-        "product": "BrowserOS neo",
-        "description": "Browser for agents",
-        "groups": [
-          {
-            "group": "Start",
-            "pages": [
-              "index",
-              "neo/how-it-works",
-              "neo/install"
-            ]
-          },
-          {
-            "group": "Connect your agent",
-            "pages": [
-              "neo/mcp/index",
-              "neo/mcp/claude-desktop",
-              "neo/mcp/manual"
-            ]
-          },
-          {
-            "group": "Using it",
-            "pages": [
-              "neo/cockpit",
-              "neo/tabs-and-isolation",
-              "neo/audit-and-replay"
-            ]
-          },
-          {
-            "group": "Reference",
-            "pages": [
-              "neo/privacy",
-              "changelog",
-              "contributing"
-            ]
-          }
+        "group": "Start",
+        "pages": [
+          "index",
+          "neo/how-it-works",
+          "neo/install"
         ]
       },
       {
-        "product": "BrowserOS",
-        "description": "Browser for humans",
-        "groups": [
-          {
-            "group": "Start",
-            "pages": [
-              "browseros/index",
-              "browseros/onboarding",
-              "browseros/update/index"
-            ]
-          },
-          {
-            "group": "Features",
-            "pages": [
-              "browseros/features/bring-your-own-llm",
-              "browseros/features/chatgpt-pro-oauth",
-              "browseros/features/github-copilot-oauth",
-              "browseros/features/local-models",
-              "browseros/features/scheduled-tasks",
-              "browseros/features/cowork",
-              "browseros/features/connect-mcps",
-              "browseros/features/smart-nudges",
-              "browseros/features/use-with-claude-code",
-              "browseros/features/sync-to-cloud",
-              "browseros/features/ad-blocking",
-              "browseros/features/vertical-tabs"
-            ]
-          },
-          {
-            "group": "Comparisons",
-            "pages": [
-              "browseros/comparisons/chrome-devtools-mcp",
-              "browseros/comparisons/claude-cowork",
-              "browseros/comparisons/openclaw"
-            ]
-          },
-          {
-            "group": "More",
-            "pages": [
-              "browseros/integrations/n8n",
-              "browseros/troubleshooting/connection-issues",
-              "browseros/changelog",
-              "browseros/contributing"
-            ]
-          }
+        "group": "Connect your agent",
+        "pages": [
+          "neo/mcp/index",
+          "neo/mcp/claude-desktop",
+          "neo/mcp/manual"
+        ]
+      },
+      {
+        "group": "Using it",
+        "pages": [
+          "neo/cockpit",
+          "neo/tabs-and-isolation",
+          "neo/audit-and-replay"
+        ]
+      },
+      {
+        "group": "Reference",
+        "pages": [
+          "neo/privacy",
+          "changelog",
+          "contributing"
         ]
       }
     ]
@@ -101,95 +47,95 @@
   "redirects": [
     {
       "source": "/onboarding",
-      "destination": "/browseros/onboarding"
+      "destination": "/"
     },
     {
       "source": "/features/ad-blocking",
-      "destination": "/browseros/features/ad-blocking"
+      "destination": "/"
     },
     {
       "source": "/features/bring-your-own-llm",
-      "destination": "/browseros/features/bring-your-own-llm"
+      "destination": "/"
     },
     {
       "source": "/features/chatgpt-pro-oauth",
-      "destination": "/browseros/features/chatgpt-pro-oauth"
+      "destination": "/"
     },
     {
       "source": "/features/connect-mcps",
-      "destination": "/browseros/features/connect-mcps"
+      "destination": "/"
     },
     {
       "source": "/features/cowork",
-      "destination": "/browseros/features/cowork"
+      "destination": "/"
     },
     {
       "source": "/features/github-copilot-oauth",
-      "destination": "/browseros/features/github-copilot-oauth"
+      "destination": "/"
     },
     {
       "source": "/features/local-models",
-      "destination": "/browseros/features/local-models"
+      "destination": "/"
     },
     {
       "source": "/features/scheduled-tasks",
-      "destination": "/browseros/features/scheduled-tasks"
+      "destination": "/"
     },
     {
       "source": "/features/smart-nudges",
-      "destination": "/browseros/features/smart-nudges"
+      "destination": "/"
     },
     {
       "source": "/features/sync-to-cloud",
-      "destination": "/browseros/features/sync-to-cloud"
+      "destination": "/"
     },
     {
       "source": "/features/use-with-claude-code",
-      "destination": "/browseros/features/use-with-claude-code"
+      "destination": "/"
     },
     {
       "source": "/features/vertical-tabs",
-      "destination": "/browseros/features/vertical-tabs"
+      "destination": "/"
     },
     {
       "source": "/comparisons/chrome-devtools-mcp",
-      "destination": "/browseros/comparisons/chrome-devtools-mcp"
+      "destination": "/"
     },
     {
       "source": "/comparisons/claude-cowork",
-      "destination": "/browseros/comparisons/claude-cowork"
+      "destination": "/"
     },
     {
       "source": "/comparisons/openclaw",
-      "destination": "/browseros/comparisons/openclaw"
+      "destination": "/"
     },
     {
       "source": "/integrations/n8n",
-      "destination": "/browseros/integrations/n8n"
+      "destination": "/"
     },
     {
       "source": "/troubleshooting/connection-issues",
-      "destination": "/browseros/troubleshooting/connection-issues"
+      "destination": "/"
     },
     {
       "source": "/update",
-      "destination": "/browseros/update"
+      "destination": "/"
     },
     {
       "source": "/update/index",
-      "destination": "/browseros/update/index"
+      "destination": "/"
     },
     {
       "source": "/update/linux",
-      "destination": "/browseros/update/linux"
+      "destination": "/"
     },
     {
       "source": "/update/macos",
-      "destination": "/browseros/update/macos"
+      "destination": "/"
     },
     {
       "source": "/update/windows",
-      "destination": "/browseros/update/windows"
+      "destination": "/"
     },
     {
       "source": "/neo",
@@ -213,11 +159,11 @@
     },
     {
       "source": "/features/workflows",
-      "destination": "/browseros/features/scheduled-tasks"
+      "destination": "/"
     },
     {
       "source": "/features/qwen-code-oauth",
-      "destination": "/browseros/features/bring-your-own-llm"
+      "destination": "/"
     },
     {
       "source": "/features/browserclaw",
@@ -297,7 +243,7 @@
     },
     {
       "source": "/browserclaw/comparisons/chrome-devtools-mcp",
-      "destination": "/browseros/comparisons/chrome-devtools-mcp"
+      "destination": "/"
     },
     {
       "source": "/browserclaw/comparisons/browser-use",
@@ -305,7 +251,15 @@
     },
     {
       "source": "/bring-your-own-keys/claude",
-      "destination": "/browseros/features/bring-your-own-llm"
+      "destination": "/"
+    },
+    {
+      "source": "/browseros",
+      "destination": "/"
+    },
+    {
+      "source": "/browseros/:slug*",
+      "destination": "/"
     }
   ],
   "logo": {
