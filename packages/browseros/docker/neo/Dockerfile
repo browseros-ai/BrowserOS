@@ -85,7 +85,7 @@ RUN userdel -r ubuntu \
 COPY openbox-rc.xml /etc/neo/openbox-rc.xml
 # Server behaviour knobs live in this file rather than in more environment
 # variables. The shipped copy only documents the defaults; deployments mount or
-# COPY their own over it (README).
+# COPY their own over it (README), including [run] wall_timeout_seconds (default 60).
 COPY neo.toml /etc/neo/neo.toml
 COPY novnc-index.html /usr/share/novnc/index.html
 # Load the clipboard bridge from vnc.html too: embedded viewers bypass index.html.
@@ -101,6 +101,7 @@ COPY --chmod=0755 neo-quit.py /usr/local/bin/neo-quit
 ENV NEO_SCREEN=1600x1000 \
     NEO_DATA_DIR=/data \
     NEO_DOWNLOAD_DIR="" \
+    NEO_OUTPUT_DIR="" \
     BROWSERCLAW_HOSTED_MODE=1 \
     BROWSERCLAW_CONFIG_FILE=/etc/neo/neo.toml \
     CLAW_ANALYTICS_ENABLED=0 \
@@ -115,6 +116,9 @@ ENV NEO_SCREEN=1600x1000 \
 
 # Callers choose their persistent mount; declaring VOLUME here would also create
 # an anonymous /data volume for every image built FROM Neo.
+# NEO_OUTPUT_DIR defaults at startup to $NEO_DATA_DIR/tool-output and is passed to
+# the MCP server as BROWSEROS_OUTPUT_DIR. Its private layout is session/output/parts;
+# use read_output IDs to retrieve artifacts rather than mounting the browser profile.
 EXPOSE 6080 9010
 
 HEALTHCHECK --interval=5s --timeout=5s --start-period=90s --retries=3 \

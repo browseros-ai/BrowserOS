@@ -17,6 +17,7 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::sync::Mutex;
 
 mod acquisition;
+mod click;
 mod clickable;
 use acquisition::{
     AcquiredFrame, CaptureTrace, SnapshotBudget, SnapshotStage, log_frame_error, trace_stage,
@@ -665,7 +666,11 @@ pub async fn resolve_ref_entry(
         });
     }
 
-    let fresh = find_by_role_name_nth(&fetch_ax_tree(session, ax_params).await?, entry);
+    let fresh = if entry.exact {
+        None
+    } else {
+        find_by_role_name_nth(&fetch_ax_tree(session, ax_params).await?, entry)
+    };
     let Some(fresh) = fresh else {
         return Err(CoreError::StaleRef {
             ref_id: entry.ref_id.clone(),

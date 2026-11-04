@@ -23,7 +23,9 @@ type TestResult = Result<(), Box<dyn Error>>;
 /// readiness probes the tools also send.
 const SCRIPT: &str = "40 + 2";
 /// A script whose result is longer than the inline limit.
-const LONG_RESULT: &str = "'x'.repeat(6000)";
+const LONG_RESULT: &str = "'x'.repeat(20000)";
+const MEDIUM_RESULT: &str = "'x'.repeat(12000)";
+const OVERRIDE_RESULT: &str = "'x'.repeat(200000)";
 
 struct Native {
     evaluations: Mutex<Vec<Value>>,
@@ -76,11 +78,19 @@ impl Native {
                 let is_script = params["expression"]
                     .as_str()
                     .is_some_and(|expression| expression.contains(SCRIPT));
-                if params["expression"]
-                    .as_str()
-                    .is_some_and(|expression| expression.contains(LONG_RESULT))
-                {
-                    return Ok(json!({"result": {"type": "string", "value": "x".repeat(6000)}}));
+                for (script, length) in [
+                    (LONG_RESULT, 20_000),
+                    (MEDIUM_RESULT, 12_000),
+                    (OVERRIDE_RESULT, 200_000),
+                ] {
+                    if params["expression"]
+                        .as_str()
+                        .is_some_and(|expression| expression.contains(script))
+                    {
+                        return Ok(
+                            json!({"result": {"type": "string", "value": "x".repeat(length)}}),
+                        );
+                    }
                 }
                 if is_script {
                     json!({"result": {"type": "number", "value": 42}})
@@ -230,6 +240,44 @@ async fn tests_that_an_old_page_evaluate_call_is_pointed_at_evaluate_in_page() -
     Ok(())
 }
 
+#[tokio::test]
+async fn evaluation_defaults_keep_medium_results_inline_and_clamp_large_overrides() -> TestResult {
+    let native = Native::new();
+    let context = ctx(&native);
+    let medium = call(
+        &context,
+        tools::evaluate_in_page::definition(),
+        json!({"page": 1, "code": format!("return {MEDIUM_RESULT};")}),
+    )
+    .await;
+    assert!(!medium.is_error, "{}", text(&medium));
+    assert_eq!(
+        medium
+            .structured_content
+            .as_ref()
+            .and_then(|data| data.get("value"))
+            .and_then(Value::as_str)
+            .map(str::len),
+        Some(12_000)
+    );
+    let large = call(
+        &context,
+        tools::evaluate_in_page::definition(),
+        json!({"page": 1, "code": format!("return {OVERRIDE_RESULT};"), "maxChars": 2000000}),
+    )
+    .await;
+    assert!(!large.is_error);
+    assert!(text(&large).contains("Evaluate result truncated at 150000 bytes"));
+    assert_eq!(
+        large
+            .structured_content
+            .as_ref()
+            .and_then(|data| data.get("writtenToFile")),
+        Some(&json!(true))
+    );
+    Ok(())
+}
+
 /// A run script reads the value itself, so it gets all of it rather than an excerpt plus a
 /// file path it has no way to open.
 #[tokio::test]
@@ -259,7 +307,7 @@ async fn tests_that_a_run_script_gets_a_long_result_whole() -> TestResult {
             .structured_content
             .as_ref()
             .and_then(|data| data.get("value")),
-        Some(&json!(6000))
+        Some(&json!(20000))
     );
     Ok(())
 }

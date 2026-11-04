@@ -1,0 +1,103 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Click recovery</title>
+<style>
+  body { margin: 0; font: 16px sans-serif; }
+  #target { position: absolute; left: 40px; top: 80px; width: 240px; height: 100px; }
+  #cover { position: fixed; left: 40px; top: 80px; width: 240px; height: 100px; z-index: 10; background: #888; }
+  #close { position: fixed; right: 20px; top: 20px; }
+</style>
+<button id="target">Recovery target</button>
+<div id="cover" aria-label="Click obstruction"></div>
+<button id="close" onclick="document.getElementById('cover').remove()">Dismiss obstruction</button>
+<script>
+  window.events = [];
+  // A page-world prototype patch must not intercept Neo's isolated DOM call.
+  window.pageWorldClickCalls = 0;
+  const originalClick = HTMLElement.prototype.click;
+  HTMLElement.prototype.click = function() {
+    window.pageWorldClickCalls++;
+    return originalClick.call(this);
+  };
+  target.addEventListener('click', event => window.events.push({ trusted: event.isTrusted }));
+  const mode = new URL(location.href).searchParams.get('mode');
+  if (mode === 'partial') {
+    cover.style.width = '150px';
+    // Recovery probes must read the real DOM through their isolated wrapper.
+    Document.prototype.elementFromPoint = () => null;
+  }
+  if (mode === 'clear') cover.remove();
+  if (mode === 'hover') {
+    cover.style.display = 'none';
+    target.addEventListener('pointerover', () => cover.style.display = 'block', { once: true });
+  }
+  if (mode === 'disabled') target.disabled = true;
+  if (mode === 'first-legend' || mode === 'fieldset-disabled') {
+    const keepCover = new URL(location.href).searchParams.get('cover') === 'true';
+    if (!keepCover) cover.remove();
+    const fieldset = document.createElement('fieldset');
+    fieldset.disabled = true;
+    const legend = document.createElement('legend');
+    legend.textContent = 'Fieldset legend';
+    fieldset.append(legend);
+    target.style.cssText = 'width:240px;height:100px';
+    (mode === 'first-legend' ? legend : fieldset).append(target);
+    document.body.append(fieldset);
+    if (keepCover) {
+      const rect = target.getBoundingClientRect();
+      cover.style.left = rect.left + 'px';
+      cover.style.top = rect.top + 'px';
+    }
+  }
+  if (mode === 'unsupported') {
+    // SVG has native pointer behavior but no HTMLElement.click activation.
+    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.id='target'; svg.setAttribute('role','button'); svg.setAttribute('aria-label','Recovery target');
+    svg.innerHTML='<rect width="240" height="100" fill="steelblue" />';
+    svg.addEventListener('click', event => window.events.push({trusted:event.isTrusted}));
+    target.replaceWith(svg);
+  }
+  if (mode === 'large') {
+    target.style.height = '3000px';
+    document.body.style.height = '3200px';
+  }
+  if (mode === 'replace') {
+    target.style.top = cover.style.top = '1200px';
+    cover.style.position = 'absolute';
+    document.body.style.height = '2000px';
+    addEventListener('scroll', () => setTimeout(() => {
+      const replacement = target.cloneNode(true);
+      replacement.addEventListener('click', event => window.events.push({ trusted: event.isTrusted }));
+      target.replaceWith(replacement);
+      cover.remove();
+      window.replaced = true;
+    }, 50), { once: true });
+  }
+  if (mode === 'sticky') {
+    cover.remove();
+    target.style.top = '900px';
+    document.body.style.height = '2400px';
+    const header = document.createElement('div');
+    header.id = 'sticky-header';
+    header.style.cssText = 'position:fixed;inset:0 0 auto;height:220px;background:#888;z-index:20';
+    document.body.append(header);
+    scrollTo(0, 880);
+  }
+  if (mode === 'transient') {
+    // Scroll is an observable start signal for the test; coverage outlives the first probe.
+    target.style.top = cover.style.top = '1200px';
+    cover.style.position = 'absolute';
+    addEventListener('scroll', () => setTimeout(() => cover.remove(), 250), { once: true });
+  }
+  if (mode === 'nested-closed') {
+    cover.remove();
+    const button = target;
+    button.style.cssText = 'width:240px;height:100px';
+    const outer = document.createElement('div');
+    outer.style.cssText = 'position:absolute;left:80px;top:100px';
+    document.body.append(outer);
+    const inner = document.createElement('div');
+    outer.attachShadow({ mode: 'closed' }).append(inner);
+    inner.attachShadow({ mode: 'closed' }).append(button);
+  }
+</script>

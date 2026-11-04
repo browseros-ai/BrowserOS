@@ -164,6 +164,16 @@ fn handler<'a>(
                 ),
             );
         }
+        // Retain this exact capture for retrieval. A script shares the outer call's
+        // collector, so its image also reaches the model instead of becoming JSON only.
+        if let Err(error) = ctx
+            .output_files
+            .image(&result.data, &result.mime_type, &structured)
+            .await
+        {
+            structured["outputWriteFailed"] = json!(true);
+            structured["outputError"] = json!(error.to_string());
+        }
         Ok(Some(ToolResult::image(
             result.data,
             result.mime_type,

@@ -17,6 +17,11 @@ use std::time::Duration;
 
 const DESCRIPTION: &str = "\
 Act on the page using refs from the last snapshot. \
+Click scrolls, briefly waits, and finds an uncovered point before sending native input. \
+If native preparation fails before a press is sent, a single left click uses DOM fallback once: it presses the element itself, \
+through banners, overlays and open dialogs. Disabled, invisible and detached targets are refused. \
+DOM fallback is reported, with inert=true when the target was behind a dialog: verify application state. \
+If neither path can dispatch, handle the blocker ref/reason and retry. An unknown click outcome must not be automatically retried. \
 kinds: click, type (into focused element), fill (ref+value, or many via fields[]), \
 press (key/combo), hover, focus, check, uncheck, select (option value), scroll, drag. \
 dialog_accept/dialog_dismiss handle pending JavaScript dialogs. \
@@ -187,8 +192,8 @@ struct ActArgs {
     sensitive: Option<bool>,
 }
 
-/// Collects which filled refs resolved to a sensitive field so the audit layer can
-/// redact only those values, plus a page-wide flag for targets with no ref to key on.
+/// Audit redaction survives a dialog race even when a partially entered field
+/// interrupts the action before it returns.
 #[derive(Default)]
 struct ActSensitivity {
     refs: Vec<String>,
@@ -268,6 +273,14 @@ fn handler<'a>(
                 skip_screenshot: true,
             });
         }
+        // The core records its handoff before awaiting the browser. Attach this
+        // before all early returns, including dialogs, choosers and failed acks.
+        if let Some((delivery, notice)) =
+            super::click_feedback::fallback_feedback(input.dom_fallback_status())
+        {
+            response.click_data(delivery);
+            response.text(notice);
+        }
         let filled = field_targets(ctx, &page_id, filled_refs(&args)).await;
         match outcome {
             Ok(Some(early)) => return Ok(Some(early)),
@@ -300,6 +313,9 @@ fn handler<'a>(
             return Ok(Some(chooser));
         }
         response.data(json!({ "kind": args.kind.as_str() }));
+        if matches!(args.kind, ActKind::Click) && input.dom_fallback_status().is_none() {
+            response.click_data(json!({ "status": "dispatched", "domFallback": false }));
+        }
         if let Some(detail) = resolve_diff_detail(args.diff) {
             response.include_diff(args.page, true, detail, document_start);
         }

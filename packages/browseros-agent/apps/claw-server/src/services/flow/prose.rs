@@ -15,6 +15,15 @@ pub fn prose_steps(skill_md: &str) -> Vec<String> {
         .collect()
 }
 
+/// A short fingerprint of the task steps a flow was verified against. A hand edit that rewrites
+/// a step without changing how many there are still changes it.
+#[must_use]
+pub fn fingerprint(steps: &[String]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = format!("{:x}", Sha256::digest(steps.join("\n").as_bytes()));
+    digest[..16].to_string()
+}
+
 /// The `## Learned from past runs` bullets.
 #[must_use]
 pub fn learned_notes(skill_md: &str) -> Vec<String> {
@@ -62,6 +71,21 @@ mod tests {
             vec!["Open the search.", "Click Add to cart."]
         );
         assert!(learned_notes(body).is_empty());
+    }
+
+    #[test]
+    fn the_fingerprint_follows_what_the_steps_say() {
+        let steps = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let send = fingerprint(&steps(&["Open the thread.", "Send the reply."]));
+        assert_eq!(
+            send,
+            fingerprint(&steps(&["Open the thread.", "Send the reply."]))
+        );
+        assert_ne!(
+            send,
+            fingerprint(&steps(&["Open the thread.", "Save it as a draft."]))
+        );
+        assert_eq!(send.len(), 16);
     }
 
     #[test]

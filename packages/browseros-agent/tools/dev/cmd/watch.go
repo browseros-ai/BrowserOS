@@ -31,13 +31,18 @@ var watchNew bool
 
 const (
 	watchRunLockMode           = "watch"
+	clawWatchStateLockMode     = "watch-claw-state"
 	defaultClawWatchServerPort = 9200
-	clawWatchStateDirName      = "browserclaw"
-	rustClawWatchPollInterval  = time.Second
+	defaultClawWatchStateDir   = ".browserclaw-dev"
+	clawWatchTempStatePrefix   = "browserclaw-dev-"
+	// Three managed child groups can each take up to eight seconds to stop.
+	// Leave room for that cleanup before a replacement watcher gives up.
+	watchShutdownTimeout      = 30 * time.Second
+	rustClawWatchPollInterval = time.Second
 )
 
 func init() {
-	watchCmd.Flags().BoolVar(&watchNew, "new", false, "Use random available ports in 9000-9999 and create a fresh user-data directory")
+	watchCmd.Flags().BoolVar(&watchNew, "new", false, "Use random available ports in 9000-9999, a fresh browser profile, and fresh Claw state")
 	watchCmd.Flags().Bool("claw", false, "No-op; BrowserOS neo is the only watch mode")
 	_ = watchCmd.Flags().MarkDeprecated("claw", "BrowserOS neo is the only watch mode; drop the flag")
 	rootCmd.AddCommand(watchCmd)
@@ -62,20 +67,52 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	var runLock *proc.WatchRunLock
+	stateDir, err := resolveWatchStateDir(watchNew)
+	if err != nil {
+		return err
+	}
+	stateLockDir, err := resolveClawWatchStateLockDir(stateDir)
+	if err != nil {
+		return err
+	}
+	var runLock, stateLock *proc.WatchRunLock
+	defer func() {
+		// The ownership locks outlive all managed children, including shutdown.
+		for _, lock := range []*proc.WatchRunLock{stateLock, runLock} {
+			if err := lock.Close(); err != nil {
+				proc.LogMsgf(proc.TagInfo, "Warning: closing run lock: %v", err)
+			}
+		}
+	}()
+	defer func() { reservations.ReleaseAll() }()
 	acquireRunLock := func(ports proc.Ports) error {
 		lock, stopped, err := proc.AcquireWatchRunLock(proc.WatchRunIdentity{
 			// All watch variants share one owner so they cannot supervise the same profile concurrently.
 			Mode:    watchRunLockMode,
 			Profile: userDataDir,
 			Ports:   ports,
-		}, 3*time.Second)
+		}, watchShutdownTimeout)
 		if err != nil {
 			return err
 		}
 		runLock = lock
 		if stopped {
 			proc.LogMsgf(proc.TagInfo, "Stopped existing dev watch for profile %s", userDataDir)
+		}
+		// Claw settings and sessions outlive a checkout's Chromium profile.
+		// Claim the state root before clearing ports: its previous supervisor
+		// must exit first, or it could respawn children on those same ports.
+		lock, stopped, err = proc.AcquireWatchRunLock(proc.WatchRunIdentity{
+			Mode:    clawWatchStateLockMode,
+			Profile: stateLockDir,
+			Ports:   ports,
+		}, watchShutdownTimeout)
+		if err != nil {
+			return err
+		}
+		stateLock = lock
+		if stopped {
+			proc.LogMsgf(proc.TagInfo, "Stopped existing dev watch for Claw state %s", stateDir)
 		}
 		return nil
 	}
@@ -126,13 +163,6 @@ func runWatch(cmd *cobra.Command, args []string) error {
 				p.CDP, p.Server, p.Extension)
 		}
 	}
-	defer func() {
-		if err := runLock.Close(); err != nil {
-			proc.LogMsgf(proc.TagInfo, "Warning: closing run lock: %v", err)
-		}
-	}()
-	defer reservations.ReleaseAll()
-
 	if err := runDevSetup(cmd.Context(), root); err != nil {
 		return err
 	}
@@ -146,11 +176,8 @@ func runWatch(cmd *cobra.Command, args []string) error {
 
 	clawBinary := browser.ResolveInstalledBinary()
 	logClawBrowserBinary(clawBinary)
-	env, err := buildWatchEnvWithBinaryResolution(p, userDataDir, clawBinary)
-	if err != nil {
-		return err
-	}
-	proc.LogMsgf(proc.TagInfo, "Claw state: %s", envValue(env, "BROWSERCLAW_DIR"))
+	env := buildWatchEnvWithResolvedState(p, userDataDir, clawBinary, stateDir)
+	proc.LogMsgf(proc.TagInfo, "Claw state: %s", stateDir)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -195,19 +222,23 @@ func resolveWatchDefaultPorts(root string) (proc.Ports, error) {
 }
 
 // buildWatchEnv forwards BrowserOS neo settings into WXT's Chromium launcher config.
-func buildWatchEnv(p proc.Ports, userDataDir string) ([]string, error) {
-	return buildWatchEnvWithBinaryResolution(p, userDataDir, browser.BinaryResolution{})
+func buildWatchEnv(p proc.Ports, userDataDir string, fresh bool) ([]string, error) {
+	return buildWatchEnvWithBinaryResolution(p, userDataDir, fresh, browser.BinaryResolution{})
 }
 
-func buildWatchEnvWithBinaryResolution(p proc.Ports, userDataDir string, binaryResolution browser.BinaryResolution) ([]string, error) {
-	env := proc.BuildEnv(p, "development")
-	stateDir, err := resolveWatchStateDir(userDataDir)
+func buildWatchEnvWithBinaryResolution(p proc.Ports, userDataDir string, fresh bool, binaryResolution browser.BinaryResolution) ([]string, error) {
+	stateDir, err := resolveWatchStateDir(fresh)
 	if err != nil {
 		return nil, err
 	}
-	// Resolve the root once before launching anything. Chromium and every
-	// sidecar then open the same installation.json instead of independently
-	// interpreting dev mode, HOME, or a relative environment override.
+	return buildWatchEnvWithResolvedState(p, userDataDir, binaryResolution, stateDir), nil
+}
+
+// buildWatchEnvWithResolvedState forwards the root claimed before port cleanup.
+// Resolving again here would allocate a second --new directory outside the lock;
+// Chromium and every sidecar must instead share the selected installation.json.
+func buildWatchEnvWithResolvedState(p proc.Ports, userDataDir string, binaryResolution browser.BinaryResolution, stateDir string) []string {
+	env := proc.BuildEnv(p, "development")
 	env = replaceEnvValue(env, "BROWSERCLAW_DIR", stateDir)
 	if binaryResolution.Path == "" {
 		binaryResolution = browser.ResolveInstalledBinary()
@@ -217,15 +248,14 @@ func buildWatchEnvWithBinaryResolution(p proc.Ports, userDataDir string, binaryR
 		fmt.Sprintf("BROWSEROS_PRODUCT=%s", browser.ProductBrowserClaw),
 		fmt.Sprintf("BROWSEROS_BINARY=%s", binaryResolution.Path),
 	)
-	return buildClawWatchEnv(env, p), nil
+	return buildClawWatchEnv(env, p)
 }
 
-// resolveWatchStateDir picks the BrowserOS neo state root, honoring a BROWSERCLAW_DIR override.
-// The state defaults to a directory inside the browser profile: it describes that profile's
-// tabs, sessions and target bindings, so it is per checkout for watch, fresh for --new,
-// guarded by the same run lock, and removed with the profile by dev:cleanup. A shared root
-// would let two dev servers open one database and close each other's live sessions.
-func resolveWatchStateDir(userDataDir string) (string, error) {
+// resolveWatchStateDir keeps Claw settings and session history in a shared
+// home root across worktrees. --new gets a separate temporary state root, retained
+// until dev:cleanup like the temporary browser profile. A BROWSERCLAW_DIR override
+// wins in either mode. Resolve once per run so the browser, server and lock agree.
+func resolveWatchStateDir(fresh bool) (string, error) {
 	if override := strings.TrimSpace(os.Getenv("BROWSERCLAW_DIR")); override != "" {
 		absolute, err := filepath.Abs(expandTilde(override))
 		if err != nil {
@@ -233,7 +263,32 @@ func resolveWatchStateDir(userDataDir string) (string, error) {
 		}
 		return absolute, nil
 	}
-	return filepath.Join(userDataDir, clawWatchStateDirName), nil
+	if fresh {
+		dir, err := os.MkdirTemp("", clawWatchTempStatePrefix)
+		if err != nil {
+			return "", fmt.Errorf("creating temporary Claw state dir: %w", err)
+		}
+		return dir, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve BROWSERCLAW_DIR default: %w", err)
+	}
+	return filepath.Join(home, defaultClawWatchStateDir), nil
+}
+
+// resolveClawWatchStateLockDir gives filesystem aliases one ownership identity.
+// Create the selected root first so symlinks can be resolved even on its first
+// run; /tmp/state and /private/tmp/state must never open the database concurrently.
+func resolveClawWatchStateLockDir(stateDir string) (string, error) {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return "", fmt.Errorf("creating Claw state dir: %w", err)
+	}
+	dir, err := filepath.EvalSymlinks(stateDir)
+	if err != nil {
+		return "", fmt.Errorf("resolving Claw state dir for ownership: %w", err)
+	}
+	return dir, nil
 }
 
 // envValue returns the last value assigned to key in an environ-style slice.

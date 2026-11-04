@@ -32,3 +32,12 @@
 # JavaScript world the page cannot see. false runs them in the page's own
 # world. Needs a claw-server newer than 0.0.84.
 # isolated_world = true
+
+# [run]
+# Default and maximum wall-clock budget for one run, in positive whole seconds.
+# Includes JavaScript execution, browser calls and waits. A caller's timeout (ms)
+# may shorten this budget; a larger value is rejected before the script starts.
+# Saved flows use the same budget with time reserved for their handback.
+# Restart Neo after changing this. The MCP client/proxy timeout must allow extra
+# time for request admission and output publication (for example, 90s for 60s).
+# wall_timeout_seconds = 60
