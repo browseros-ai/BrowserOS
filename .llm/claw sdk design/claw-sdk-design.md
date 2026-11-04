@@ -94,7 +94,9 @@ Under discussion; no engine or binding API has been selected.
 - Select the engine and binding design.
 - Define the complete request and response contract.
 
-## Inspiration
+## Appendix
+
+### Inspiration
 
 - **Ego:** complete code blocks can move loops and decisions into the runtime and reduce model/tool round trips. Its one-shot execution results support exploring that model; they do not settle our runtime design.
   https://lite.ego.app/blog/heredoc-vs-repl-ai-agents-2026
@@ -102,7 +104,7 @@ Under discussion; no engine or binding API has been selected.
   https://aside.com/blog/how-we-built-the-sota-browser-agent-that-outperforms-fable
 
 
-### Pomerado: research, not agreed SDK design
+#### Pomerado: research, not agreed SDK design
 
 - **Build once, call again.** An AI agent explores a website, writes a task function, and tests it. Guardian reviews the work before publication. Later calls run saved code without another model request. Source: `pomerado-source/typescript/src/standalone/run-operation.ts:66`.
 - **Give each function a contract.** A saved operation declares its name, inputs, outputs, and code. The runtime checks input and output shapes. This does not prove the answer is correct. Sources: `pomerado-source/typescript/authoring/examples/native-page.ts:6`, `pomerado-source/typescript/src/runtime/kernel-operation-run.ts:99`.
