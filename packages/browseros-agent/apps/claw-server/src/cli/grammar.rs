@@ -594,12 +594,35 @@ pub enum SkillCmd {
         name: String,
         #[arg(long)]
         description: String,
+        /// The numbered steps, one per line. A leading `1.` or `-` is stripped.
         #[arg(long)]
         steps: Option<String>,
         #[arg(long)]
         site: Option<String>,
         #[arg(long)]
         learned: Option<String>,
+        /// The second call: the flow that makes the skill runnable, as a JSON
+        /// array of `{ step, fn, commit? }`, or `-` to read it from stdin.
+        /// Without this a saved skill stays judgement-on-every-run and
+        /// `skill run` cannot execute it.
+        #[arg(long)]
+        flow: Option<String>,
+        /// Second call: the flow's inputs, as a JSON object of name to type.
+        #[arg(long)]
+        inputs: Option<String>,
+        /// Second call: the flow's output fields, as a JSON object.
+        #[arg(long)]
+        output: Option<String>,
+        /// Whether the flow only reads, or writes something irreversible.
+        #[arg(long, value_parser = ["read", "write"])]
+        effects: Option<String>,
+        /// Second call: at least three example input objects, as a JSON array.
+        #[arg(long)]
+        examples: Option<String>,
+        /// Record that this task needs judgement every run, so no flow is
+        /// saved for it.
+        #[arg(long)]
+        skip_flow: bool,
     },
     Ran {
         name: String,

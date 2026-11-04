@@ -10,6 +10,28 @@ use serde_json::{Map, Value, json};
 
 use crate::cli::exit::Failure;
 
+/// Splits a `--steps` argument into the array the tool expects.
+///
+/// Blank lines are dropped and a leading `1.` or `-` is stripped, because a
+/// person writing a numbered list in a shell argument writes the numbers, and
+/// the tool numbers the entries itself.
+fn step_lines(steps: &str) -> Value {
+    Value::Array(
+        steps
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                let stripped = line
+                    .split_once(". ")
+                    .filter(|(head, _)| head.chars().all(|c| c.is_ascii_digit()))
+                    .map_or(line, |(_, rest)| rest);
+                Value::String(stripped.trim_start_matches("- ").to_string())
+            })
+            .collect(),
+    )
+}
+
 /// `evaluate_in_page`'s own hard ceiling, which it clamps to rather than
 /// rejecting. Separate from `run`'s budget, which a deployment configures.
 const EVAL_TIMEOUT_CAP_MS: f64 = 30_000.0;
@@ -124,6 +146,23 @@ impl Plan {
 #[must_use]
 pub fn needs_external(command: &Command) -> Option<External> {
     match command {
+        // A flow is JSON with function sources in it, which is the one thing
+        // worth piping rather than quoting into an argument.
+        Command::Skill(SkillCmd::Save {
+            flow,
+            inputs,
+            output,
+            examples,
+            ..
+        }) if [flow, inputs, output, examples]
+            .iter()
+            .any(|given| given.as_deref() == Some("-")) =>
+        {
+            Some(External::Stdin)
+        }
+        Command::Skill(SkillCmd::Run { inputs, .. }) if inputs.as_deref() == Some("-") => {
+            Some(External::Stdin)
+        }
         Command::Run { file, code, .. } | Command::Eval { file, code, .. } => {
             if let Some(file) = file {
                 return Some(External::File(file.clone()));
@@ -775,14 +814,71 @@ pub fn build(command: &Command, external: Option<&str>) -> Result<Plan, Failure>
             steps,
             site,
             learned,
-        }) => Plan::tool(
-            ToolPlan::new("save_skill")
-                .arg("name", json!(name))
-                .arg("description", json!(description))
-                .arg("steps", opt(steps))
-                .arg("site", opt(site))
-                .arg("learnedNotes", opt(learned)),
-        ),
+            flow,
+            inputs,
+            output,
+            effects,
+            examples,
+            skip_flow,
+        }) => {
+            // `-` reads one of these from stdin, so a flow can be piped in
+            // rather than fought through shell quoting. Only one can, because
+            // there is only one stdin.
+            let dashed = [
+                ("flow", flow),
+                ("inputs", inputs),
+                ("output", output),
+                ("examples", examples),
+            ]
+            .into_iter()
+            .filter(|(_, given)| given.as_deref() == Some("-"))
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>();
+            if dashed.len() > 1 {
+                return Err(Failure::usage(format!(
+                    "only one of {} can read from stdin.",
+                    dashed.join(", ")
+                )));
+            }
+            let resolve = |given: &Option<String>| -> Result<Value, Failure> {
+                let Some(raw) = given.as_deref() else {
+                    return Ok(Value::Null);
+                };
+                let raw = if raw == "-" {
+                    external.ok_or_else(|| {
+                        Failure::usage("skill save was given `-` but nothing arrived on stdin.")
+                    })?
+                } else {
+                    raw
+                };
+                serde_json::from_str(raw)
+                    .map_err(|error| Failure::usage(format!("skill save: {error}")))
+            };
+            Plan::tool(
+                ToolPlan::new("save_skill")
+                    .arg("name", json!(name))
+                    .arg("description", json!(description))
+                    // The tool wants one entry per step, not a blob. A shell
+                    // supplies them as lines, which is the natural way to pass
+                    // a numbered list through an argument or a heredoc.
+                    .arg("steps", steps.as_deref().map_or(Value::Null, step_lines))
+                    .arg("site", opt(site))
+                    .arg("learnedNotes", opt(learned))
+                    .arg("flow", resolve(flow)?)
+                    .arg("inputs", resolve(inputs)?)
+                    .arg("output", resolve(output)?)
+                    .arg("examples", resolve(examples)?)
+                    .arg("effects", opt(effects))
+                    .arg(
+                        "ultrafast",
+                        if *skip_flow {
+                            json!("skip")
+                        } else {
+                            Value::Null
+                        },
+                    ),
+            )
+        }
         Command::Skill(SkillCmd::Ran { name }) => {
             Plan::tool(ToolPlan::new("mark_skill_run").arg("name", json!(name)))
         }

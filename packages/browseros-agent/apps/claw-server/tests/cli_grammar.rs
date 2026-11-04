@@ -567,3 +567,98 @@ fn only_tab_creation_carries_the_group() {
         assert!(!plan.with_group, "{argv:?} must not carry the group");
     }
 }
+
+/// `save_skill` wants one entry per step, not a blob.
+///
+/// A shell supplies them as lines, so the command splits them. Sending the
+/// raw string made every `skill save` fail with "steps must be an array of
+/// strings", which only a live call revealed.
+#[test]
+fn skill_save_sends_steps_as_an_array_one_entry_per_line() {
+    let cli = Cli::try_parse_from([
+        "browseros",
+        "skill",
+        "save",
+        "demo",
+        "--description",
+        "d",
+        "--steps",
+        "1. open the page\n2. fill the box\n\n- click Search",
+    ])
+    .unwrap_or_else(|error| panic!("{error}"));
+    let Ok(Plan::Tool(plan)) = claw_server::cli::plan::build(&cli.command, None) else {
+        panic!("skill save should plan a tool call");
+    };
+    assert_eq!(
+        plan.args["steps"],
+        serde_json::json!(["open the page", "fill the box", "click Search"]),
+        "numbering and bullets are stripped, blanks dropped"
+    );
+}
+
+/// A skill only becomes runnable after the second call carrying its flow, so
+/// without this `skill run` could never execute anything the CLI had saved.
+#[test]
+fn skill_save_can_carry_the_flow_that_makes_a_skill_runnable() {
+    let flow = r#"[{"step":1,"fn":"async () => {}"}]"#;
+    let cli = Cli::try_parse_from([
+        "browseros",
+        "skill",
+        "save",
+        "demo",
+        "--description",
+        "d",
+        "--flow",
+        flow,
+        "--inputs",
+        r#"{"query":"string"}"#,
+        "--effects",
+        "read",
+    ])
+    .unwrap_or_else(|error| panic!("{error}"));
+    let Ok(Plan::Tool(plan)) = claw_server::cli::plan::build(&cli.command, None) else {
+        panic!("skill save should plan a tool call");
+    };
+    assert_eq!(plan.args["flow"][0]["step"], 1);
+    assert_eq!(plan.args["inputs"]["query"], "string");
+    assert_eq!(plan.args["effects"], "read");
+
+    // `--skip-flow` records that the task needs judgement every run.
+    let cli = Cli::try_parse_from([
+        "browseros",
+        "skill",
+        "save",
+        "demo",
+        "--description",
+        "d",
+        "--skip-flow",
+    ])
+    .unwrap_or_else(|error| panic!("{error}"));
+    let Ok(Plan::Tool(plan)) = claw_server::cli::plan::build(&cli.command, None) else {
+        panic!("skill save should plan a tool call");
+    };
+    assert_eq!(plan.args["ultrafast"], "skip");
+}
+
+/// Only one of them can read stdin, because there is only one stdin.
+#[test]
+fn skill_save_refuses_two_arguments_reading_the_same_stdin() {
+    let cli = Cli::try_parse_from([
+        "browseros",
+        "skill",
+        "save",
+        "demo",
+        "--description",
+        "d",
+        "--flow",
+        "-",
+        "--inputs",
+        "-",
+    ])
+    .unwrap_or_else(|error| panic!("{error}"));
+    let error = claw_server::cli::plan::build(&cli.command, Some("[]"))
+        .err()
+        .unwrap_or_else(|| panic!("two stdin readers must be refused"));
+    assert_eq!(error.code, claw_server::cli::exit::Code::Usage);
+    assert!(error.message.contains("stdin"), "{}", error.message);
+}

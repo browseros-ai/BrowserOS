@@ -141,9 +141,30 @@ async fn run_tool(
 
     let started = Instant::now();
     let arguments = Value::Object(plan.args.clone());
-    let output = session
+    let mut output = session
         .call(plan.tool, arguments, !globals.no_auto_session)
         .await?;
+
+    // A recorded group that no longer exists refuses every call carrying it,
+    // so the directory stays wedged until someone deletes the scope file. The
+    // group can go without this CLI touching it: the user closes the tabs, or
+    // the server's own tab cleanup reaps them after its grace period. The
+    // group is an optimisation and never the caller's intent, so drop it and
+    // run the command that was actually asked for. Once, because a second
+    // refusal is about something else.
+    if output.is_error
+        && output.text.contains("group_out_of_scope")
+        && session.state().group_id.is_some()
+    {
+        session.persist(|state| state.group_id = None)?;
+        plan.args.remove("groupId");
+        io::note(
+            "[the tab group recorded here is gone, so it was dropped and the command retried without it]",
+        );
+        output = session
+            .call(plan.tool, Value::Object(plan.args.clone()), false)
+            .await?;
+    }
     let elapsed = started.elapsed().as_millis();
 
     if plan.remember_page
