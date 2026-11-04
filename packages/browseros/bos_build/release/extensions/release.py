@@ -28,7 +28,7 @@ from .specs import (
 from .workspace import require_env
 
 _VERSION_RE = re.compile(r"^\d+(\.\d+){0,3}$")
-_AUTO_VERSION_EXTENSION_NAMES = frozenset({"agent", "browserclaw"})
+_AUTO_VERSION_EXTENSION_NAMES = frozenset({"browserclaw"})
 _SOURCE_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _CRX_BINDING_SCHEMA = "browseros-extension-crx-v1"
 
