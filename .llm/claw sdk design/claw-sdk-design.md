@@ -19,6 +19,8 @@ These are living notes from our discussion. Agreed points are recorded below; op
 - The Rust browser layer implements navigation, finding elements, clicking, filling, and reading pages. It talks to Chromium through CDP, Chromium's browser-control protocol.
 - The customer owns the agent loop and adds one agent-facing tool: `neo.run`. It accepts JavaScript that can combine browser actions, loops, conditions, and data processing.
 - The customer calls `neo.run`; an embedded JavaScript runtime invokes Rust browser operations; those operations control BrowserOS Chromium.
+- **Stateless JavaScript execution.** Every `neo.run` starts with fresh JavaScript state. Variables, functions, and objects from an earlier call are not retained.
+- The SDK is a sidecar. Chromium owns the lasting browser state: tabs, navigation, cookies, and logins.
 - Support a large subset of Playwright, including the supported functions' expected behavior.
 - JavaScript is the agent-facing API. Rust is the browser-operation implementation. `.d.ts` files describe the callable API; they do not implement it.
 - Expose capabilities outside Playwright through the same code mode. Publish `.d.ts` definitions and teach the agent how to call them.
@@ -28,7 +30,7 @@ These are living notes from our discussion. Agreed points are recorded below; op
 ### Still to decide
 
 - The exact boundary between the Rust library, its binary, and thin Go/JavaScript clients.
-- One-shot JavaScript execution, state retained between calls, and how callers resume browser sessions.
+- The exact tab/session reference the client passes to continue operating on an existing page.
 - Which CAPTCHA, secure form filling, takeover, and proxy features ship first.
 - Hooks and customer-defined extensions were discussed; their V1 scope is not settled.
 
@@ -53,11 +55,44 @@ No detailed API or runtime implementation has been agreed yet.
 - The runtime exposes a large subset of Playwright plus additional BrowserOS methods described by `.d.ts` files.
 - Browser operations are implemented in Rust and control Chromium through CDP.
 
+#### Execution state
+
+- **Stateless between calls.** Each call gets fresh JavaScript variables, functions, and objects. No JavaScript state carries over from an earlier call.
+- Chromium keeps the browser state. Finishing a script does not close its tabs or clear its cookies and logins.
+- The caller chooses where to continue by passing a tab ID or session reference. The exact request fields are still open.
+
+#### Input
+
+- JavaScript code plus the caller's target tab or session reference.
+- The client's agent makes the call and can combine actions, loops, conditions, and data processing within that script.
+
+#### JavaScript engine and Rust bindings
+
+Under discussion; no engine or binding API has been selected.
+
+- Proposed flow: a Playwright-shaped JavaScript object calls a registered Rust function. Rust executes the browser operation through CDP. Its completion resolves or rejects the JavaScript promise.
+- The JavaScript engine handles ordinary JavaScript. The Rust layer implements browser behavior.
+- **QuickJS through `rquickjs`:** supports separate JavaScript contexts and calling async Rust functions through JavaScript promises. Initial recommendation, not a decision.
+  https://docs.rs/rquickjs/latest/rquickjs/
+  https://docs.rs/rquickjs/latest/rquickjs/struct.AsyncContext.html
+- **V8 through `deno_core`:** supports embedded JavaScript execution and registered Rust operations. An alternative with V8's native dependency and build setup.
+  https://docs.rs/deno_core/latest/deno_core/
+  https://github.com/denoland/rusty_v8#binary-builds
+- **Boa:** an engine written in Rust; its documentation still calls it experimental. An alternative to evaluate if an all-Rust engine matters.
+  https://docs.rs/boa_engine/latest/boa_engine/
+
+#### Return values
+
+- Playwright gives each method its own return type. After awaiting, `locator.click()` yields no value and `locator.count()` yields a number.
+  https://playwright.dev/docs/api/class-locator#locator-click
+  https://playwright.dev/docs/api/class-locator#locator-count
+- The return value of an entire `neo.run` script is our API decision. Proposed: let the script explicitly return its result. The result format, supported value types, logs, errors, and trace references are still open.
+
 #### Next to design
 
-- Follow one call from the customer's agent through JavaScript execution and Rust operations to its result.
-- Define the request, returned value, captured output, errors, and links to execution traces.
-- Choose the JavaScript engine, JavaScript-to-Rust binding, and state retained between calls.
+- Work through one JavaScript-to-Rust call, including its inputs, promise, and errors.
+- Select the engine and binding design.
+- Define the complete request and response contract.
 
 ## Inspiration
 
