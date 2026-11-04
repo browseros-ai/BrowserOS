@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+# This crate ships two binaries, so a bare `cargo run -p claw-server` has to be
+# told which one it means. The server is what every dev script runs; the CLI is
+# asked for by name.
+default-run = "browseros-claw-server-rs"
 
 [lib]
 path = "src/lib.rs"
