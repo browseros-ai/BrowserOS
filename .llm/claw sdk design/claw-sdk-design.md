@@ -70,6 +70,7 @@ No detailed API or runtime implementation has been agreed yet.
 
 Under discussion; no engine or binding API has been selected.
 
+- Detailed API inventory, Rust tool mapping, JavaScript bindings, code examples, and QuickJS/Deno comparison are delegated to a separate design: [Playwright and Rust bindings](playwright-rust-bindings-design.md). Draft in progress with `claudeo`.
 - Proposed flow: a Playwright-shaped JavaScript object calls a registered Rust function. Rust executes the browser operation through CDP. Its completion resolves or rejects the JavaScript promise.
 - The JavaScript engine handles ordinary JavaScript. The Rust layer implements browser behavior.
 - **QuickJS through `rquickjs`:** supports separate JavaScript contexts and calling async Rust functions through JavaScript promises. Initial recommendation, not a decision.
