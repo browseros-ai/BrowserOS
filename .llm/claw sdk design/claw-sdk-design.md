@@ -103,6 +103,8 @@ Under discussion; no engine or binding API has been selected.
 
 ### Custom SDK methods
 
+Separate design: [Client-defined SDK methods](client-sdk-methods-design.md), starting with the customer requirement and the Go login example. Its HLD is a proposal; low-level choices remain open.
+
 #### Agreed direction
 
 - A registration provides a JavaScript method name, input schema, output schema, and handler.
