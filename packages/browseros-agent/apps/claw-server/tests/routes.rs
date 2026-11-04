@@ -534,6 +534,7 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
         "download",
         "upload",
         "read",
+        "read_output",
         "grep",
         "screenshot",
         "pdf",
@@ -994,9 +995,16 @@ async fn mcp_stateless_structured_results_carry_the_session_handle() -> anyhow::
     .await?;
     let handle = first["result"]["_meta"]["com.browseros.neo/session"].clone();
     assert!(handle.is_string(), "{first}");
+    assert_eq!(handle.as_str().map(str::len), Some(8), "{first}");
     let structured = &first["result"]["structuredContent"];
     assert_eq!(structured["session"], handle, "{first}");
     assert_eq!(structured["value"], 1, "{first}");
+    assert!(
+        first["result"]["content"]
+            .to_string()
+            .contains("Pass this exact value"),
+        "{first}"
+    );
 
     // What the model saw is enough to stay in the same session.
     let second = stateless_mcp_request(
@@ -1011,6 +1019,24 @@ async fn mcp_stateless_structured_results_carry_the_session_handle() -> anyhow::
     .await?;
     assert_eq!(
         second["result"]["_meta"]["com.browseros.neo/session"], handle,
+        "{second}"
+    );
+    assert_eq!(second["result"]["structuredContent"]["session"], handle);
+    assert_eq!(second["result"]["structuredContent"]["value"], 2);
+    let compact = format!(
+        "[browseros-neo session: {}]",
+        handle.as_str().unwrap_or_default()
+    );
+    assert!(
+        second["result"]["content"]
+            .as_array()
+            .is_some_and(|blocks| blocks.iter().any(|block| block["text"] == compact)),
+        "{second}"
+    );
+    assert!(
+        !second["result"]["content"]
+            .to_string()
+            .contains("Pass this exact value"),
         "{second}"
     );
     Ok(())
@@ -1389,7 +1415,7 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
     .await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["result"]["isError"], false, "tabs_new body: {body:?}");
-    assert!(body["result"].get("structuredContent").is_none());
+    assert_eq!(body["result"]["structuredContent"]["page"], 1);
     assert!(body["result"].get("_meta").is_none());
 
     let tabs_list = json!({
@@ -1408,7 +1434,10 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
     .await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(list_body["result"]["isError"], false);
-    assert!(list_body["result"].get("structuredContent").is_none());
+    assert_eq!(
+        list_body["result"]["structuredContent"]["pages"][0]["page"],
+        1
+    );
     assert!(
         list_body["result"]["content"][0]["text"]
             .as_str()
@@ -1600,7 +1629,7 @@ async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    assert!(body["result"].get("structuredContent").is_none());
+    assert_eq!(body["result"]["structuredContent"]["page"], 1);
 
     let wait_call = json!({
         "jsonrpc": "2.0",

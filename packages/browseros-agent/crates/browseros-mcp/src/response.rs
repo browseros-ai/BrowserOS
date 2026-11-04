@@ -109,6 +109,30 @@ impl ToolResponse {
         merge_structured(&mut self.structured_content, value);
     }
 
+    /// Delivery is collected before an action can lose its acknowledgement.
+    /// Later error decoration must preserve that path while updating its status.
+    pub fn click_data(&mut self, value: Value) {
+        let mut click = self
+            .structured_content
+            .as_ref()
+            .and_then(|data| data.get("click"))
+            .cloned();
+        merge_structured(&mut click, value);
+        self.data(json!({"click": click}));
+    }
+
+    /// Automatic readbacks are additional parts of the primary result. Keep their
+    /// metadata in order rather than overwriting the action's fields or earlier pages.
+    fn context_data(&mut self, page: u32, kind: &str, data: Value) {
+        let structured = self.structured_content.get_or_insert_with(|| json!({}));
+        if let Some(object) = structured.as_object_mut() {
+            let contexts = object.entry("contexts").or_insert_with(|| json!([]));
+            if let Some(contexts) = contexts.as_array_mut() {
+                contexts.push(json!({ "page": page, "kind": kind, "data": data }));
+            }
+        }
+    }
+
     /// Record host-only audit hints (secret redaction, screenshot suppression) for
     /// this dispatch. Carried to the claw-server audit layer, never to the client.
     pub fn set_audit_hints(&mut self, hints: AuditHints) {
@@ -249,6 +273,7 @@ impl ToolResponse {
                     format_snapshot_result(&snapshot.text, &snapshot.coverage, &snapshot.url, ctx)
                         .await;
                 self.text(format!("[Page {page} snapshot]\n{}", formatted.text));
+                self.context_data(page, "snapshot", formatted.structured);
                 self.captures.insert(page, snapshot);
                 Ok(())
             }
@@ -278,6 +303,7 @@ impl ToolResponse {
                 };
                 let formatted = format_diff_result(&diff, &origin, ctx, detail).await;
                 self.text(format!("[Page {page} diff]\n{}", formatted.text));
+                self.context_data(page, "diff", formatted.structured);
                 if include_structured {
                     let mut structured = json!({ "changed": diff.changed });
                     // Text changing and the page changing are different
@@ -390,6 +416,16 @@ impl ToolResponse {
                     pointer::restore_after_capture(&page_session.session).await;
                 }
                 let result = result?;
+                if let Err(error) = ctx
+                    .output_files
+                    .image(&result.data, "image/png", &json!({ "page": page }))
+                    .await
+                {
+                    self.text(format!(
+                        "Screenshot captured, but could not retain its output: {error}"
+                    ));
+                    self.data(json!({ "outputWriteFailed": true }));
+                }
                 self.text(format!("[Page {page} screenshot]"));
                 self.image(result.data, "image/png");
                 Ok(())

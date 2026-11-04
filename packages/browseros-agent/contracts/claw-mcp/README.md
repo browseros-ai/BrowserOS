@@ -13,6 +13,20 @@ The suite covers every MCP tool and major failure path: `tabs`, `tab_groups`,
 It also checks ownership isolation, untrusted-content fencing, auto-context,
 audit records, cancellation, browser-down guidance, and transport hygiene.
 
+`cases-click-recovery.ts` checks ordinary native clicks through both `act` and
+`run`: partial/transient coverage, sticky headers, hover-triggered coverage, and
+parent overlays above same-site and cross-site frames. Single left clicks fall
+back to one press of the element itself only after native preparation fails,
+and report that delivery path. The press reaches a target under any cover,
+including dialogs, `inert` subtrees and parent-frame modals. BrowserOS builds
+with `DOM.click` send it as a trusted press and report when the target was
+inert; older builds use the page's own untrusted `click()`. The cases probe
+which one the browser has. Disabled and no-longer-visible targets are refused
+untouched, and a click the press cannot reproduce keeps the native blocker's
+usable ref. No public method selector can force DOM activation. The Rust input
+tests inject lost mouse and press acknowledgements to ensure a click is never
+replayed after dispatch becomes uncertain.
+
 Each case asserts Rust behavior directly. The retired TypeScript server and its
 historical behavior are not test dependencies.
 
@@ -46,9 +60,12 @@ Useful environment variables:
 | `CLAW_MCP_CAPTURE_DIR=<dir>` | Refresh raw CDP capture fixtures |
 
 The screenshot density cases declare `browserArgs` on their case definition.
-The runner restarts only its isolated browser/server when those arguments change,
-so `--force-device-scale-factor=2` applies to those cases alone. It restores the
-ordinary launch arguments before the remaining cases; browser-kill stays last.
+Cases can also override `headless`. The runner restarts only its isolated
+browser/server when either setting changes, so `--force-device-scale-factor=2`
+applies to density cases alone. On Linux, the repeated screenshot batch runs
+headed to match hosted Neo: new-headless Chromium can stall during repeated
+background captures. That case requires an X server; CI's browser wrapper starts
+Xvfb. Ordinary launch settings resume afterward; browser-kill stays last.
 
 The ungated fixture-server and MCP-client unit tests run under the normal Bun
 test suite.
@@ -79,8 +96,8 @@ The SDK fix contracts live in `cases-sdk-input.ts`, `cases-sdk-navigation.ts`,
 and HTTP 404 outcomes without adding server behavior. Existing `cases-fill.ts`
 already covers text, email, number, textarea and contenteditable regressions on
 both MCP and SDK paths. `insertText` has no granular MCP kind. SDK screenshots
-return metadata and annotations, so image dimensions are asserted through the
-granular screenshot image block; the SDK path checks its metadata and boxes.
+return metadata/annotations to the script and forward image blocks to the outer
+MCP result. Output cases verify that the same capture is remotely retrievable.
 
 ## Capture mode
 

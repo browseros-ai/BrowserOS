@@ -43,6 +43,8 @@ export interface ContractCase {
   name: string
   /** Browser arguments scoped to this case; changing them restarts the isolated runtime. */
   browserArgs?: string[]
+  /** Override the suite's launch mode; visual batches can match hosted Neo's headed X server. */
+  headless?: boolean
   /** ~12 cases carry true: the <60s tier run by test:claw-mcp-smoke. */
   smoke?: boolean
   run(ctx: CaseContext): Promise<void>
@@ -51,13 +53,16 @@ export interface ContractCase {
 import { actCases } from './cases-act'
 import { captureIoCases } from './cases-capture-io'
 import { clawLayerCases } from './cases-claw-layer'
+import { clickRecoveryCases } from './cases-click-recovery'
 import { fillCases } from './cases-fill'
 import { fillReadbackCases } from './cases-fill-readback'
 import { frameRefCases } from './cases-frame-refs'
 import { isolationCases } from './cases-isolation'
 import { labelCases } from './cases-labels'
 import { navigateSnapshotCases } from './cases-navigate-snapshot'
+import { outputCases } from './cases-outputs'
 import { readEvalCases } from './cases-read-eval'
+import { runBudgetCases } from './cases-run-budget'
 import { screenshotScaleCases } from './cases-screenshot-scale'
 import { sdkInputCases } from './cases-sdk-input'
 import { sdkNavigationCases } from './cases-sdk-navigation'
@@ -77,11 +82,14 @@ export const contractCases: ContractCase[] = [
   ...snapshotConcurrencyCases,
   ...frameRefCases,
   ...actCases,
+  ...clickRecoveryCases,
   ...fillCases,
   ...fillReadbackCases,
   ...readEvalCases,
   ...isolationCases,
   ...captureIoCases,
+  ...outputCases,
+  ...runBudgetCases,
   ...sdkInputCases,
   ...sdkNavigationCases,
   ...sdkReadEvalCases,

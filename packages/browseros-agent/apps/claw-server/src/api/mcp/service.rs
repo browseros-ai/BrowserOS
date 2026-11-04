@@ -49,7 +49,6 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use ulid::Ulid;
-use uuid::Uuid;
 
 const SERVER_NAME: &str = "browseros-neo";
 const SERVER_TITLE: &str = "BrowserOS neo";
@@ -215,7 +214,12 @@ impl ClawMcpService {
             .catalog
             .iter()
             .filter(|tool| tool.available(native))
-            .map(|tool| tool.to_mcp_tool(native))
+            .map(|tool| {
+                browseros_mcp::tools::run::with_policy(
+                    tool.to_mcp_tool(native),
+                    self.state.config.behavior.run_policy,
+                )
+            })
             .map(&decorate)
             .collect::<Vec<_>>();
         let mut local = vec![
@@ -747,12 +751,8 @@ impl ClawMcpService {
             }
             // A new session rather than the old id revived, so the work the user stopped
             // stays stopped and closed in the audit instead of gaining a second life.
-            let replacement = SessionId::new(Uuid::new_v4().to_string());
-            let started = self
-                .start_session_in_store(
-                    replacement.clone(),
-                    SessionClient::resolve(Some(client), None),
-                )
+            let (started, replacement) = self
+                .mint_session(SessionClient::resolve(Some(client), None))
                 .await?;
             lifecycle.session_id = Some(replacement);
             lifecycle.stop_reported = false;
@@ -933,9 +933,46 @@ impl ClawMcpService {
         &self,
         client: SessionClient,
     ) -> Result<(StartedSession, SessionId), McpError> {
-        let handle = SessionId::new(Uuid::new_v4().to_string());
-        let started = self.start_session_in_store(handle.clone(), client).await?;
-        Ok((started, handle))
+        self.mint_session_from(client, session_handle::candidate)
+            .await
+    }
+
+    /// Randomness is the only injected boundary. A live-map check alone cannot reserve
+    /// a short id across async minting or restart, so durable reservation precedes both
+    /// the audit start and publication. A failed/cancelled mint leaves its id reserved.
+    async fn mint_session_from(
+        &self,
+        client: SessionClient,
+        mut next: impl FnMut() -> SessionId,
+    ) -> Result<(StartedSession, SessionId), McpError> {
+        for _ in 0..session_handle::MAX_MINT_ATTEMPTS {
+            let handle = next();
+            if self.state.sessions.contains(&handle).await
+                || self.state.sessions.retirement_of(&handle).await.is_some()
+            {
+                continue;
+            }
+            if !self
+                .state
+                .targets
+                .reserve_handle(&handle)
+                .await
+                .map_err(|error| {
+                    McpError::internal_error(
+                        format!("mcp session reservation failed: {error}"),
+                        None,
+                    )
+                })?
+            {
+                continue;
+            }
+            let started = self.start_session_in_store(handle.clone(), client).await?;
+            return Ok((started, handle));
+        }
+        Err(McpError::internal_error(
+            "could not allocate a unique mcp session handle",
+            None,
+        ))
     }
 
     async fn learn_session_from_request(
@@ -1250,22 +1287,29 @@ impl ServerHandler for ClawMcpService {
                 unreachable!("catalog tool was validated before session resolution");
             };
             let browser_session = self.state.browser.session().await;
-            let binding = self
-                .state
-                .targets
-                .binding_for_execution(started.session.id())
-                .await
-                .map_err(|error| McpError::invalid_request(error.to_string(), None))?;
-            // Profile management must not load the Default profile as a side effect of admission.
-            let manages_target = self.catalog[tool_index].metadata.manages_target;
-            let view = match &browser_session {
-                Some(browser) if manages_target => {
-                    Some(BrowserView::capture_for_management(browser.clone(), binding, None).await)
+            // Execution requirements come from the registered handler. Reading saved
+            // output must not load a profile or depend on the current browser binding.
+            let view = if self.catalog[tool_index].requires_browser() {
+                let binding = self
+                    .state
+                    .targets
+                    .binding_for_execution(started.session.id())
+                    .await
+                    .map_err(|error| McpError::invalid_request(error.to_string(), None))?;
+                let manages_target = self.catalog[tool_index].metadata.manages_target;
+                match &browser_session {
+                    Some(browser) if manages_target => Some(
+                        BrowserView::capture_for_management(browser.clone(), binding, None).await,
+                    ),
+                    Some(browser) => {
+                        Some(BrowserView::capture(browser.clone(), binding, None).await)
+                    }
+                    None => None,
                 }
-                Some(browser) => Some(BrowserView::capture(browser.clone(), binding, None).await),
-                None => None,
-            }
-            .map(|view| hosted::with_viewports(view, self.state.viewports.as_ref()));
+                .map(|view| hosted::with_viewports(view, self.state.viewports.as_ref()))
+            } else {
+                None
+            };
             let target_store: Arc<dyn TargetStore> = Arc::new(ClawTargetStore {
                 bindings: self.state.targets.clone(),
                 session: started.session.id().clone(),
@@ -2301,6 +2345,13 @@ mod tests {
             .resolve_modern_session(None, None, None)
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(minted.as_str().len(), 8);
+        assert!(
+            minted
+                .as_str()
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
 
         let (again, reused) = service
             .resolve_modern_session(Some(minted.clone()), None, None)
@@ -2322,6 +2373,81 @@ mod tests {
             other.session.id().to_string(),
             first.session.id().to_string()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn minting_retries_live_retired_reserved_and_persisted_handle_collisions()
+    -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        for value in ["00000001", "00000002"] {
+            service
+                .start_session_in_store(SessionId::new(value), SessionClient::resolve(None, None))
+                .await
+                .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        }
+        call.state
+            .sessions
+            .remove(&SessionId::new("00000002"), "closed", None)
+            .await?;
+        call.state
+            .targets
+            .reserve_handle(&SessionId::new("00000003"))
+            .await?;
+        call.state
+            .targets
+            .clear(&SessionId::new("00000004"))
+            .await?;
+        call.state
+            .targets
+            .inherit(&SessionId::new("00000004"), &SessionId::new("00000005"))
+            .await?;
+
+        let mut candidate = 0_u32;
+        let (started, handle) = service
+            .mint_session_from(SessionClient::resolve(None, None), || {
+                candidate += 1;
+                SessionId::new(format!("{candidate:08x}"))
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(handle.as_str(), "00000006");
+        assert_eq!(started.session.id(), &handle);
+        assert!(call.state.sessions.contains(&handle).await);
+        assert!(!call.state.targets.reserve_handle(&handle).await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn minting_repeated_collisions_fails_without_reusing_a_live_session() -> anyhow::Result<()>
+    {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let before = call.state.sessions.count().await;
+        let result = service
+            .mint_session_from(SessionClient::resolve(None, None), || SessionId::new("s1"))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(call.state.sessions.count().await, before);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn modern_calls_still_accept_existing_full_uuid_handles() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let legacy = SessionId::new("11111111-2222-4333-8444-555555555555");
+        let original = service
+            .start_session_in_store(legacy.clone(), SessionClient::resolve(None, None))
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        let (reused, handle) = service
+            .resolve_modern_session(Some(legacy.clone()), None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(handle, legacy);
+        assert_eq!(reused.session.convo_id(), original.session.convo_id());
         Ok(())
     }
 

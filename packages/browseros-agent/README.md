@@ -1,16 +1,15 @@
 # BrowserOS Agent
 
-The agent platform behind both browsers. [BrowserOS neo](../../README.md) is `claw-app` plus `claw-server`, and [BrowserOS](../../README.BrowserOS.md) is `app` plus `server`.
+The agent platform behind [BrowserOS neo](../../README.md): `claw-app` plus `claw-server`.
 
 ## Start here instead
 
 Setup, the dev loop, what each project is built with, and where the code lives are all in the contributing guides. This file does not repeat them.
 
 - **[Contributing to BrowserOS neo](CONTRIBUTING.md)**
-- **[Contributing to BrowserOS](CONTRIBUTING.BrowserOS.md)**
 - **[Root contributing guide](../../CONTRIBUTING.md)** for the browser build, the CLA and PR conventions
 
-What follows is reference material for people already set up: how environment configuration works, how servers are configured at startup, and how production artifacts are built.
+What follows is reference material for people already set up: how environment configuration works, how the server is configured at startup, and how production artifacts are built.
 
 ## Environment configuration
 
@@ -39,18 +38,19 @@ Production build and upload scripts read `.env.production` plus exported process
 
 ## Server sidecar config
 
-Both servers read their startup configuration from a sidecar JSON file passed as `--config <path>`, rather than from flags or env. `tools/dev`, dogfood, and Chromium-managed launches all generate this file.
+`claw-server` reads its startup configuration from a sidecar JSON file passed as `--config <path>`, rather than from flags or env. `tools/dev`, dogfood, and Chromium-managed launches all generate this file.
 
 | Field | Description |
 |---|---|
-| `ports.server` | HTTP server port: MCP endpoints, chat, health |
+| `ports.server` | HTTP server port: the MCP endpoint and the cockpit API |
 | `ports.cdp` | Chromium CDP port, which the server connects to as a client |
 | `ports.proxy` | Browser proxy port emitted by Chromium |
 | `directories.resources` | Packaged resources root |
-| `directories.execution` | Runtime execution, log and config directory |
+| `flags.devMode` | Run as a dev server beside the installed app: its own state dir, and no automatic agent config provisioning. Defaults to on for debug builds |
+| `replay.retentionDays` | Days to keep session replays |
 | `instance.*` | Optional browser and client metadata |
 
-Default local ports are `9100` for the server, `9000` for CDP, and `9300` for the extension. The dev supervisor may pick others; see the contributing guides.
+Default local ports are `9100` for the server, `9000` for CDP, and `9300` for the extension. The dev supervisor may pick others; see the contributing guide.
 
 ## Typecheck: a gotcha worth knowing
 
@@ -61,19 +61,8 @@ A new package that omits this looks green in your editor and then fails CI with 
 ## Production artifacts
 
 ```bash
-bun run build                 # server and agent
-bun run build:server          # server resource artifacts for every target, uploads zips to R2
-bun run build:claw-server     # five-platform BrowserOS neo Rust resources, uploads zips to R2
-bun run build:agent           # the extension
-```
-
-`build:server` emits under `dist/prod/server/<target>/`, with zips at `dist/prod/server/`. The underlying script takes options directly:
-
-```bash
-bun scripts/build/server.ts --target=all
-bun scripts/build/server.ts --target=darwin-arm64,linux-x64
-bun scripts/build/server.ts --target=all --manifest=scripts/build/config/server-prod-resources.json
-bun scripts/build/server.ts --target=all --no-upload
+bun run build:claw-server               # five-platform BrowserOS neo Rust resources, uploads zips to R2
+bun run build:claw-onboard:resources    # the onboarding flow's resources, uploads to R2
 ```
 
 ### BrowserOS neo Rust artifacts
@@ -109,14 +98,16 @@ bun scripts/build/claw-server.ts --target=darwin-arm64 --no-upload    # one targ
 
 ## Focused test groups
 
-The full suites are `bun test` and `bun run test:main`. When you want a narrower loop:
+The full suites are `bun run test` and `bun run test:rust`. When you want a narrower loop:
 
 ```bash
-cd apps/server
-bun run test:tools         # the MCP tool surface
-bun run test:cdp           # CDP and browser control
-bun run test:integration   # end to end
+cargo test -p claw-server          # the Rust backend only
+bun run test:claw-api-contract     # the API contract fixtures and schema
+bun run test:claw-mcp-contract     # the MCP tool surface against a real browser
+bun run test:claw-mcp-smoke        # a quick pass of the same
 ```
+
+Both MCP suites skip unless `BROWSEROS_BINARY` points at a browser executable.
 
 ## License
 
