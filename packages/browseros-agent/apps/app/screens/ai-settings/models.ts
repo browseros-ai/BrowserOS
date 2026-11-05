@@ -25,6 +25,7 @@ export interface ModelInfo {
 const CUSTOM_PROVIDER_MODELS: Partial<Record<ProviderType, ModelInfo[]>> = {
   'openai-compatible': [],
   ollama: [],
+  antigravity: [],
   'qwen-code': [
     { modelId: 'coder-model', contextLength: 1000000 },
     { modelId: 'qwen3-coder-plus', contextLength: 1000000 },

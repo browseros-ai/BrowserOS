@@ -18,6 +18,7 @@ const providerTypeEnum = z.enum([
   'chatgpt-pro',
   'github-copilot',
   'qwen-code',
+  'antigravity',
 ])
 
 const credentiallessProviderTypes: ReadonlySet<

@@ -13,6 +13,7 @@ export type ProviderType =
   | 'chatgpt-pro'
   | 'github-copilot'
   | 'qwen-code'
+  | 'antigravity'
 
 /**
  * LLM Provider configuration

@@ -46,6 +46,7 @@ const TEMPLATE_CATEGORIES: Record<string, AddProviderCategory> = {
   'openai-compatible': 'api-key',
   ollama: 'local',
   lmstudio: 'local',
+  antigravity: 'local',
 }
 
 export function categoryForTemplate(templateId: string): AddProviderCategory {

@@ -108,6 +108,21 @@ function createLMStudioFactory(
   })
 }
 
+// Antigravity is served through a local OpenAI-compatible bridge built on the
+// Google Antigravity Python SDK (see tools/antigravity-bridge). The bridge owns
+// the Gemini / Vertex credentials, so an API key here is optional.
+function createAntigravityFactory(
+  config: ResolvedAgentConfig,
+): (modelId: string) => unknown {
+  if (!config.baseUrl) throw new Error('Antigravity provider requires baseUrl')
+  return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
+    name: 'antigravity',
+    baseURL: config.baseUrl,
+    ...(config.apiKey && { apiKey: config.apiKey }),
+  })
+}
+
 function createOllamaFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
@@ -214,6 +229,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.CHATGPT_PRO]: createChatGPTProFactory,
   [LLM_PROVIDERS.GITHUB_COPILOT]: createGitHubCopilotFactory,
   [LLM_PROVIDERS.QWEN_CODE]: createQwenCodeFactory,
+  [LLM_PROVIDERS.ANTIGRAVITY]: createAntigravityFactory,
 }
 
 // Providers whose assistant messages are serialized by @ai-sdk/openai-compatible,
@@ -229,6 +245,7 @@ const OPENAI_COMPATIBLE_SERIALIZER_PROVIDERS: ReadonlySet<string> = new Set([
   LLM_PROVIDERS.MOONSHOT,
   LLM_PROVIDERS.QWEN_CODE,
   LLM_PROVIDERS.GITHUB_COPILOT,
+  LLM_PROVIDERS.ANTIGRAVITY,
 ])
 
 /**

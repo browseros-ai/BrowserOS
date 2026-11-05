@@ -131,6 +131,16 @@ export const providerTemplates: ProviderTemplate[] = [
     setupGuideUrl:
       'https://docs.browseros.com/features/bring-your-own-llm#lmstudio',
   }),
+  {
+    id: 'antigravity',
+    name: 'Antigravity (local bridge)',
+    defaultBaseUrl: 'http://127.0.0.1:8765/v1',
+    defaultModelId: 'gemini-3.8-flash',
+    supportsImages: false,
+    contextWindow: 1000000,
+    setupGuideUrl:
+      'https://docs.browseros.com/features/bring-your-own-llm#antigravity',
+  },
   enrichTemplate('azure', {
     defaultModelId: '',
     apiKeyUrl:
@@ -160,6 +170,7 @@ export const providerTypeOptions: { value: ProviderType; label: string }[] = [
   { value: 'azure', label: 'Azure' },
   { value: 'ollama', label: 'Ollama' },
   { value: 'lmstudio', label: 'LM Studio' },
+  { value: 'antigravity', label: 'Antigravity' },
   { value: 'bedrock', label: 'AWS Bedrock' },
 ]
 
@@ -190,6 +201,7 @@ const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   azure: '',
   ollama: 'http://localhost:11434/v1',
   lmstudio: 'http://localhost:1234/v1',
+  antigravity: 'http://127.0.0.1:8765/v1',
   bedrock: '',
 }
 
