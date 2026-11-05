@@ -124,6 +124,8 @@ Under discussion; no engine or binding API has been selected.
 
 - Customers can customize behavior through plugins that register PreToolUse and PostToolUse handlers.
 - These are the only hook types in the current scope.
+- Working direction: hooks wrap browser operations inside `neo.run`; customers choose which operations to handle.
+- Hook context should provide the scoped browser object and the operation's target page when there is one.
 - Reference: Pi's extension API. Custom-method callback and action-plan designs have been removed.
 - Separate design: [SDK hooks](hooks-design.md). The plugin runtime, hook payloads, and execution boundary remain to be decided.
 
