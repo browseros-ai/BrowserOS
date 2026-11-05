@@ -2,7 +2,7 @@
 //! and a later upload must share the same request without retaining a stale document handle.
 use super::FileChooser;
 use crate::{CdpConnection, CoreError, PageId, ProtocolSession, SessionId};
-use browseros_cdp::CdpEvent;
+use browseros_cdp::{CdpError, CdpEvent};
 use serde_json::json;
 use std::{
     collections::{HashMap, HashSet},
@@ -76,6 +76,20 @@ impl TransferState {
 
     pub(crate) fn epoch(&self) -> u64 {
         self.connection.connection_epoch()
+    }
+
+    /// Drops a session Chromium no longer has, whether its detach event or a refused command
+    /// said so. Interception keeps per-session state like the page and frame registries do, so
+    /// a session left here would be set up again, and refused, on every later attachment of
+    /// its page. See `BrowserSession::forget_session`.
+    pub(crate) fn forget_session(&self, id: &SessionId) {
+        let mut state = self.lock();
+        state.choosers.remove(id);
+        state.intercepted.remove(id);
+        state.parents.remove(id);
+        state.setup_errors.remove(id);
+        drop(state);
+        self.notify();
     }
 
     pub(crate) fn changes(&self) -> watch::Receiver<u64> {
@@ -175,6 +189,12 @@ impl TransferState {
             // A post-dispatch admission failure may follow a successful native mutation.
             // Retain an epoch-pinned cleanup handle even on that error path.
             if let Err(error) = enabled {
+                if session_gone(&error) {
+                    // Nothing to clean up on a session that is gone. A recorded error would
+                    // outlive it, since the page's next attachment is a new session.
+                    self.forget_session(id);
+                    return Err(error);
+                }
                 self.lock()
                     .setup_errors
                     .insert(id.clone(), error.to_string());
@@ -212,7 +232,15 @@ impl TransferState {
         for child in children {
             let endpoint = ProtocolSession::for_session(self.connection.clone(), child.clone())
                 .with_epoch_guard(session.cancellation_endpoint().epoch_guard().cloned());
-            endpoint.send_value("Page.enable", json!({})).await?;
+            // A child frame whose session is gone holds no chooser, so it is forgotten rather
+            // than failing its page: left in place, it would fail every later attachment.
+            match endpoint.send_value("Page.enable", json!({})).await {
+                Err(error) if session_gone(&error) => {
+                    self.forget_session(&child);
+                    continue;
+                }
+                result => result?,
+            };
             self.lock()
                 .intercepted
                 .insert(child.clone(), endpoint.clone());
@@ -223,6 +251,10 @@ impl TransferState {
                 )
                 .await
             {
+                if session_gone(&error) {
+                    self.forget_session(&child);
+                    continue;
+                }
                 self.lock().setup_errors.insert(child, error.to_string());
                 return Err(error);
             }
@@ -334,14 +366,7 @@ impl TransferState {
             }
             "Target.detachedFromTarget" => {
                 if let Some(id) = event.params["sessionId"].as_str() {
-                    let id = SessionId::from(id);
-                    let mut state = self.lock();
-                    state.choosers.remove(&id);
-                    state.intercepted.remove(&id);
-                    state.parents.remove(&id);
-                    state.setup_errors.remove(&id);
-                    drop(state);
-                    self.notify();
+                    self.forget_session(&SessionId::from(id));
                 }
             }
             "Target.attachedToTarget" if event.params["targetInfo"]["type"] == "iframe" => {
@@ -366,10 +391,15 @@ impl TransferState {
                                 .map(|_| ())
                         }
                         .await;
-                        if let Err(error) = setup {
-                            // Keep the failure observable to the next scoped interaction.
-                            self.lock().setup_errors.insert(child, error.to_string());
-                            self.notify();
+                        match setup {
+                            Ok(()) => {}
+                            // The frame is gone, so there is no failure left to report.
+                            Err(error) if session_gone(&error) => self.forget_session(&child),
+                            Err(error) => {
+                                // Keep the failure observable to the next scoped interaction.
+                                self.lock().setup_errors.insert(child, error.to_string());
+                                self.notify();
+                            }
                         }
                     }
                 }
@@ -377,6 +407,10 @@ impl TransferState {
             _ => {}
         }
     }
+}
+
+fn session_gone(error: &CoreError) -> bool {
+    matches!(error, CoreError::Cdp(CdpError::SessionGone))
 }
 
 fn belongs_to(
@@ -395,4 +429,101 @@ fn belongs_to(
         current = parent;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TransferState;
+    use crate::{CdpConnection, CoreError, ProtocolSession, SessionId};
+    use browseros_cdp::{CdpError, CdpEvent};
+    use futures_util::future::BoxFuture;
+    use serde_json::{Value, json};
+    use std::{sync::Arc, time::Duration};
+    use tokio::sync::broadcast;
+
+    /// Answers every command, except that Chromium refuses each one sent on `gone` as gone.
+    struct Browser {
+        gone: SessionId,
+        events: broadcast::Sender<CdpEvent>,
+    }
+
+    impl CdpConnection for Browser {
+        fn send<'a>(
+            &'a self,
+            _method: &'a str,
+            _params: Value,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            let gone = session == Some(&self.gone);
+            Box::pin(async move {
+                if gone {
+                    Err(CdpError::SessionGone)
+                } else {
+                    Ok(json!({}))
+                }
+            })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            _method: &'a str,
+            _params_json: &'a str,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async { Ok("{}".to_string()) })
+        }
+
+        fn send_at_epoch<'a>(
+            &'a self,
+            _expected_epoch: u64,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            self.send(method, params, session)
+        }
+
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            self.events.subscribe()
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        fn connection_epoch(&self) -> u64 {
+            1
+        }
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_child_frame_gone_during_setup_never_blocks_its_page()
+    -> Result<(), CoreError> {
+        let browser = Arc::new(Browser {
+            gone: SessionId::from("child"),
+            events: broadcast::channel(16).0,
+        });
+        let transfers = TransferState::new(browser.clone());
+        let root = ProtocolSession::for_session(browser.clone(), SessionId::from("root"));
+        transfers.intercept(&root).await?;
+
+        // The child iframe attaches under the intercepted page and dies before its own setup.
+        let mut changes = transfers.changes();
+        browser
+            .events
+            .send(CdpEvent {
+                method: "Target.attachedToTarget".into(),
+                params: json!({"sessionId":"child","targetInfo":{"type":"iframe"}}),
+                session_id: Some(SessionId::from("root")),
+            })
+            .map_err(|error| CoreError::Message(error.to_string()))?;
+        tokio::time::timeout(Duration::from_secs(5), changes.changed())
+            .await
+            .map_err(|_| CoreError::Message("the attach was never observed".into()))?
+            .map_err(|error| CoreError::Message(error.to_string()))?;
+
+        transfers.intercept(&root).await?;
+        assert!(!transfers.has_pending());
+        Ok(())
+    }
 }

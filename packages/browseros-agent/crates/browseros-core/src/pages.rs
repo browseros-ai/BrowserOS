@@ -93,6 +93,8 @@ pub struct PageManager {
     cdp: Arc<dyn CdpConnection>,
     hooks: PageManagerHooks,
     file_transfers: Option<Arc<crate::file_transfers::TransferState>>,
+    /// Never held across a send on `cdp`, because a send refused as gone takes this lock to
+    /// forget its session (see `BrowserSession::forget_session`).
     state: Mutex<PageState>,
 }
 
