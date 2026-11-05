@@ -13,3 +13,6 @@ docs/videos/** filter=lfs diff=lfs merge=lfs -text
 
 # This Chromium CDP protocol file is hashed as raw bytes; never rewrite line endings.
 packages/browseros-agent/crates/browseros-cdp/protocol/protocol.json -text
+
+# lefthook hook scripts are run by bash; keep LF so Windows checkouts (core.autocrlf=true) don't add \r
+scripts/lefthook/*.sh text eol=lf
