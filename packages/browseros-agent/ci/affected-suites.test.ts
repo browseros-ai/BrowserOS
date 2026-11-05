@@ -99,7 +99,7 @@ describe('computeAffectedSuites', () => {
 
   it('adds the build suite when scripts change', () => {
     expect(
-      suiteNames([], ['packages/browseros-agent/scripts/build/server.ts']),
+      suiteNames([], ['packages/browseros-agent/scripts/build/claw-server.ts']),
     ).toEqual(['build'])
   })
 
