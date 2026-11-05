@@ -13,11 +13,13 @@
 //                            which an edit of the field leaves as it was
 //   rawLength(el)            selectText needs the real length
 //   sensitiveValues()        the sweep: Rust masks these exact values in a main-world result
-//   watch(root)              journal and sweep a closed shadow root Rust found
+//   watch(root)              journal and sweep a closed shadow root Rust found, while it lives
+//   takeHost()               a shadow host the journal reported, for Rust to scan
 //
 // The journal reports each value entered into a sensitive field through a CDP binding that was
 // added with executionContextName = this world, so only this world has it. Rust registers the
-// values with the secret set (sdk-traces' Privacy).
+// values with the secret set (sdk-traces' Privacy). It also reports HIDDEN_ROOT_REPORT (seal.rs)
+// when typing reaches a listener here from inside a closed root no one watches yet.
 //
 // Prototypes are per frame. Code here must never reach into another frame's document (it would
 // read through that frame's getters, which may not be sealed yet), so contentDocument and
@@ -253,7 +255,7 @@
     var active = document.activeElement;
     for (var depth = 0; depth < 32 && active; depth++) {
       var root = active.shadowRoot;
-      if (!root) for (var i = 0; i < watched.length; i++) if (watched[i] !== document && watched[i].host === active) root = watched[i];
+      if (!root) root = watchedHosts.get(active) || null;
       if (!root || !root.activeElement) break;
       active = root.activeElement;
     }
@@ -300,17 +302,40 @@
   var journal = typeof globalThis.__neoJournal === "function" ? globalThis.__neoJournal : null;
   delete globalThis.__neoJournal;
   var lastSent = new WeakMap();
+  // The closed roots Rust handed to watch(), held weakly: a component the page removed and
+  // dropped dies with its root and is swept no more, and the values swept from it before stay
+  // with the host's mask. A root the page keeps and attaches again is still watched, its
+  // listeners still on it. By host, since a host's shadow root never changes.
+  var watchedHosts = new WeakMap();
+  var watchedRoots = [];
+  // A composed event from inside a closed root reaches a listener outside it retargeted to the
+  // root's host, whose shadowRoot is null from here. So typing into a closed root that no one
+  // watches yet arrives as an input event at a host that is no field: the seal holds the host
+  // and reports it at once, and Rust scans it, watches its root and sweeps it, even when the page
+  // has removed the host by then. Each element is reported once (a contenteditable one reports
+  // the same way, and Rust finds no root in it), and at most MAX_PENDING_HOSTS wait for Rust.
+  var reportedHosts = new WeakSet();
+  var pendingHosts = [];
+  var MAX_PENDING_HOSTS = 16;
+  var reportHost = function (event, el) {
+    if (!journal || !event.composed || !(el instanceof Element) || isField(el)) return;
+    if (el.shadowRoot || watchedHosts.has(el) || reportedHosts.has(el)) return;
+    reportedHosts.add(el);
+    if (pendingHosts.length >= MAX_PENDING_HOSTS) pendingHosts.shift();
+    pendingHosts.push(el);
+    journal('{"hiddenRoot":true}');
+  };
   var record = function (event) {
     var path = raw.composedPath.call(event);
     var el = path && path[0];
     var k = kind(el);
-    if (!k || !journal) return;
+    if (!k) return reportHost(event, el);
+    if (!journal) return;
     var value = rawValue(el);
     if (!value || lastSent.get(el) === value) return;
     lastSent.set(el, value);
     journal(raw.stringify({ kind: k, value: value }));
   };
-  var watched = [];
   // A repeat watch adds the listeners again: adding one that is already there changes nothing,
   // and document.open() (sdk-playwright's setContent) removes every listener of the document
   // while this world and its seal live on.
@@ -318,9 +343,20 @@
     if (!root) return;
     raw.addEventListener.call(root, "input", record, true);
     raw.addEventListener.call(root, "change", record, true);
-    if (watched.indexOf(root) !== -1) return;
-    watched.push(root);
     observeTypes(root);
+    if (!(root instanceof ShadowRoot) || watchedHosts.has(root.host)) return;
+    watchedHosts.set(root.host, root);
+    watchedRoots.push(new WeakRef(root));
+  };
+  // The watched roots still alive; the dead ones leave the list.
+  var liveWatched = function () {
+    var live = [];
+    watchedRoots = watchedRoots.filter(function (ref) {
+      var root = ref.deref();
+      if (root) live.push(root);
+      return !!root;
+    });
+    return live;
   };
   watch(document);
 
@@ -331,7 +367,7 @@
     return root === document ? raw.documentQueryAll.call(document, selector) : raw.fragmentQueryAll.call(root, selector);
   };
   var sweepRoots = function () {
-    var roots = watched.slice();
+    var roots = [document].concat(liveWatched());
     var pending = [document];
     var visited = 0;
     while (pending.length && visited < MAX_SWEEP_ELEMENTS) {
@@ -364,6 +400,8 @@
       return out;
     },
     watch: watch,
+    /** The oldest host the journal reported and Rust has not taken yet, or null. */
+    takeHost: function () { return pendingHosts.length ? pendingHosts.shift() : null; },
   };
   return globalThis.__clawSeal.version;
 })(__RULES__)

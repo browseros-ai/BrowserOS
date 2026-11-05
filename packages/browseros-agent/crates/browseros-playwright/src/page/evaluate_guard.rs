@@ -50,7 +50,7 @@ use crate::page::sweep_scope::{self, Site};
 use crate::page::world_call::{unexpected, with_world};
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest};
 use crate::resolve::failed;
-use crate::world::{Endpoint, Place, SealedWorld};
+use crate::world::{Endpoint, Place, Scan, SealedWorld};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// How long one frame may take to be swept, from the start of the work that reaches it to the
@@ -290,9 +290,28 @@ impl Drop for EvaluateGuard<'_> {
     }
 }
 
-/// One world's sweep: the raw value of every sensitive field in its document.
+/// One world's sweep: the raw value of every sensitive field in its document, those inside its
+/// closed shadow roots included. The seal finds only the closed roots it was handed, and the page
+/// can attach one at any time without a trace in the page, so each sweep first scans the
+/// document and has the seal watch every root it does not watch yet (`world::hidden_roots`).
+/// The scan shares the frame's budget, so a frame whose roots cannot be watched in time is
+/// `Unswept::Late` like any other late frame, and the op is refused.
 async fn sweep_world(world: SealedWorld) -> Result<FieldValues, ProbeFailure> {
-    match probe::call(&world, &ProbeRequest::Sweep).await? {
+    sweep_watched(&world, Scan::Document).await
+}
+
+/// The sweep a journal report of `world` starts (`HIDDEN_ROOT_REPORT`): the seal watches the
+/// roots of the hosts it reported, and the world is swept while their fields still exist, so
+/// the host learns a value typed into a closed root the page removes before any op sweeps.
+pub(crate) async fn sweep_reported(world: &SealedWorld) -> Result<FieldValues, ProbeFailure> {
+    sweep_watched(world, Scan::Reported).await
+}
+
+/// The watch's hold lives until the sweep has read, so a root whose host the page removed is
+/// still alive for it.
+async fn sweep_watched(world: &SealedWorld, scan: Scan) -> Result<FieldValues, ProbeFailure> {
+    let _held = world.watch_hidden_roots(scan).await?;
+    match probe::call(world, &ProbeRequest::Sweep).await? {
         ProbeReply::Sweep { values } => Ok(values),
         other => Err(unexpected("sweep", other)),
     }
@@ -607,7 +626,7 @@ async fn sweep_frame(
 ) -> Result<Option<FieldValues>, Unswept> {
     let swept = with_world(page, &endpoint, &place, sweep_world);
     match time::timeout_at(deadline, swept).await {
-        Err(_late) => Err(Unswept::Late),
+        Err(_) | Ok(Err(ProbeFailure::Late)) => Err(Unswept::Late),
         Ok(Ok(swept)) => Ok(Some(swept)),
         Ok(Err(ProbeFailure::Gone)) => Ok(None),
         Ok(Err(failure)) => Err(Unswept::Failed(failure)),
@@ -1108,12 +1127,27 @@ mod tests {
                     json!({ "executionContextId": 7 })
                 }
                 "Runtime.evaluate" => json!({ "result": { "type": "object", "objectId": "g" } }),
+                // The hidden-root scan finds no shadow root.
+                "DOM.describeNode" => json!({ "node": { "backendNodeId": 1,
+                    "nodeName": "#document", "childNodeCount": 0, "children": [] } }),
                 "Runtime.callFunctionOn" => {
                     let request = &params["arguments"][0]["value"];
                     if request["op"] == "sweep" {
                         stage(oopif).await;
                         json!({ "result": { "type": "object",
                             "value": { "kind": "sweep", "values": [] } } })
+                    } else if params.get("arguments").is_none() {
+                        if params["functionDeclaration"]
+                            .as_str()
+                            .is_some_and(|function| function.contains("takeHost"))
+                        {
+                            // The seal reported no shadow host.
+                            json!({ "result": { "type": "object", "subtype": "null",
+                                "value": null } })
+                        } else {
+                            // The world's document, where the scan starts.
+                            json!({ "result": { "type": "object", "objectId": "d" } })
+                        }
                     } else {
                         json!({ "result": { "type": "object", "value": { "kind": "described",
                             "protocol": PROBE_PROTOCOL, "seq": request["frameSeq"], "url": "" } } })

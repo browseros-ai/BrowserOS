@@ -6,6 +6,8 @@
 //!                          └─ Runtime.evaluate(seal_source()) in that context, before any engine
 //!  typing in a sensitive field ── Runtime.bindingCalled {name: JOURNAL_BINDING, payload}
 //!                                  └─ JournalEntry::parse → sdk-traces' Privacy (secret set)
+//!  typing in an unwatched closed root ── Runtime.bindingCalled {payload: HIDDEN_ROOT_REPORT}
+//!                                  └─ sdk-playwright: __clawSeal.takeHost(), scan, watch, sweep
 //!  main-world evaluate ── Runtime.evaluate("__clawSeal.sensitiveValues()") before and after
 //!                          └─ FieldValues::from_sweep → mask the evaluate's result
 //! ```
@@ -28,6 +30,12 @@ pub const SEALED_WORLD: &str = "browseros-sdk";
 /// The CDP binding the journal calls. Add it with `executionContextName = SEALED_WORLD` so it
 /// exists only in the sealed world; the page can neither see nor call it.
 pub const JOURNAL_BINDING: &str = "__neoJournal";
+
+/// The journal payload that says typing reached the seal at a shadow host whose root the world
+/// cannot see: a closed root no one handed to `watch` yet. The seal holds the host until Rust
+/// takes it with `__clawSeal.takeHost()`, so it can be scanned even after the page removed it.
+/// It is no [`JournalEntry`], so a journal that reads only entries drops it.
+pub const HIDDEN_ROOT_REPORT: &str = r#"{"hiddenRoot":true}"#;
 
 /// Code in the sealed world must not reach another frame's document through these: prototypes
 /// are per frame, so it would read through getters that may not be sealed yet. `seal.js` nulls
@@ -93,12 +101,29 @@ impl JournalEntry {
 
 #[cfg(test)]
 mod tests {
-    use super::{FRAME_CROSSING_TOKENS, JournalEntry, RULES_PLACEHOLDER, seal_source};
+    use super::{
+        FRAME_CROSSING_TOKENS, HIDDEN_ROOT_REPORT, JournalEntry, RULES_PLACEHOLDER, seal_source,
+    };
     use crate::sensitive_fields::SensitiveKind;
 
     #[test]
     fn the_template_has_one_rules_placeholder() {
         assert_eq!(super::SEAL_TEMPLATE.matches(RULES_PLACEHOLDER).count(), 1);
+    }
+
+    #[test]
+    fn the_seal_reports_a_hidden_root_as_rust_reads_it_and_never_as_an_entry() {
+        assert_eq!(
+            super::SEAL_TEMPLATE
+                .matches(&format!("journal('{HIDDEN_ROOT_REPORT}')"))
+                .count(),
+            1,
+            "seal.js sends the report as this exact payload"
+        );
+        assert!(
+            JournalEntry::parse(HIDDEN_ROOT_REPORT).is_none(),
+            "a journal that reads only entries, takeover's, drops it"
+        );
     }
 
     #[test]

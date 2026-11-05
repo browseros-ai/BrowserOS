@@ -32,7 +32,11 @@ pub(crate) enum Projection {
     /// An element of a parent frame receives events at the point instead of the iframe:
     /// upstream's description of it (`<div id="overlay"></div>`), page text of the parent's
     /// `world`, whose site masks it.
-    Covered { by: PageText, world: SealedWorld },
+    /// The world is boxed: it is large, and the other variants carry little.
+    Covered {
+        by: PageText,
+        world: Box<SealedWorld>,
+    },
     /// A CSS transform on a parent's iframe makes the offset more than a translation.
     Transformed,
     /// An iframe on the way is gone: resolve the locator again.
@@ -89,7 +93,7 @@ pub(crate) async fn project(
         match hit? {
             Placed::Hit(Hit::Done(_)) => {}
             Placed::Hit(Hit::Missed { by }) => {
-                let world = hop.parent.clone();
+                let world = Box::new(hop.parent.clone());
                 return Ok(Projection::Covered { by, world });
             }
             Placed::Gone => return Ok(Projection::Gone),

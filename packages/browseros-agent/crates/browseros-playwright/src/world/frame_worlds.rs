@@ -14,7 +14,7 @@ use browseros_core::{FrameId, PageId, ProtocolSession, SessionId};
 use tokio::sync::OnceCell;
 
 use crate::probe::ProbeFailure;
-use crate::world::{Epoch, FrameSeq, Installed, SealedWorld, SessionKind, SessionSetup};
+use crate::world::{ContextId, Epoch, FrameSeq, Installed, SealedWorld, SessionKind, SessionSetup};
 
 /// Where a world is installed: a frame on a raw session, and how that session was set up.
 #[derive(Clone, Debug)]
@@ -239,6 +239,23 @@ impl FrameWorlds {
         if inner.live.get(&world.seq()) == Some(&key) {
             inner.live.remove(&world.seq());
         }
+    }
+
+    /// The installed world whose context on `session` is `context`, for a journal call, which
+    /// names its world only so. The match is only a lookup: every call into the world still goes
+    /// by its global's handle, which fails `Gone` once the context is not that world any more.
+    pub(crate) fn by_context(
+        &self,
+        session: &SessionId,
+        context: ContextId,
+    ) -> Option<SealedWorld> {
+        self.lock()
+            .cells
+            .iter()
+            .filter(|(key, _)| key.session == *session)
+            .filter_map(|(_, cell)| cell.get())
+            .find(|world| world.context() == context)
+            .cloned()
     }
 
     /// What `seq` names, for a ref jump: its world and its parents, or why there is none.

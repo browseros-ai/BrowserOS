@@ -74,6 +74,10 @@ pub(crate) enum ProbeFailure {
     /// The page asset and the crate disagree: a reply this build cannot read, a probe that
     /// threw, a stale asset.
     Broken(String),
+    /// An install's scan for hidden shadow roots missed the frame's budget (`FRAME_BUDGET`).
+    /// A world whose closed roots the seal may not see is not sealed, so the op is refused, as a
+    /// sweep that misses it refuses the op.
+    Late,
 }
 
 impl ProbeFailure {
@@ -102,6 +106,7 @@ impl fmt::Display for ProbeFailure {
             Self::Gone => f.write_str("the sealed world's document or session is gone"),
             Self::Cdp(error) => error.fmt(f),
             Self::Broken(why) => f.write_str(why),
+            Self::Late => f.write_str("the frame did not answer Neo's privacy scan in time"),
         }
     }
 }

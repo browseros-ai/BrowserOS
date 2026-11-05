@@ -42,6 +42,7 @@ mod wait_for_url;
 mod world_call;
 
 pub(crate) use context_op::ContextOp;
+pub(crate) use evaluate_guard::{FRAME_BUDGET, sweep_reported};
 pub(crate) use load_state::LoadState;
 pub(crate) use op_page::OpPage;
 pub(crate) use page_handle::PageHandle;

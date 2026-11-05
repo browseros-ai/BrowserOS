@@ -9,8 +9,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::op_scope::OpScope;
-use crate::page::OpPage;
 use crate::page::site_sweep::{SiteSweep, SiteValues};
+use crate::page::{FRAME_BUDGET, OpPage};
 use crate::probe::{
     self, ErrorClass, Hit, ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
     QueryState, Read, Want,
@@ -999,6 +999,14 @@ pub(crate) fn failed(scope: &OpScope<'_>, failure: ProbeFailure) -> PlaywrightEr
         ProbeFailure::Gone => scope.fail(ErrorCode::TargetClosed, "the frame's document went away"),
         ProbeFailure::Cdp(error) => scope.core_error(&error),
         ProbeFailure::Broken(why) => scope.fail(ErrorCode::Internal, &why),
+        ProbeFailure::Late => scope.fail(
+            ErrorCode::Unsupported,
+            &format!(
+                "a frame did not answer Neo's privacy scan within {}ms, so Neo cannot see every \
+                 shadow root of its page and refuses the op; try again once the frame responds",
+                FRAME_BUDGET.as_millis()
+            ),
+        ),
     }
 }
 

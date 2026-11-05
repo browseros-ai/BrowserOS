@@ -898,9 +898,10 @@ struct Measurement {
 enum Placed {
     At(PagePoint),
     /// A parent frame's element is in the way: its description, page text of `world`.
+    /// The world is boxed: it is large, and the other variants carry little.
     Covered {
         by: PageText,
-        world: SealedWorld,
+        world: Box<SealedWorld>,
     },
     Reresolve,
 }

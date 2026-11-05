@@ -10,9 +10,12 @@
 //!          │                                 executionContextCreated, watched from before the
 //!          │                                 create), or by number for a world that existed
 //!          │                                 if the session reported nothing about the number
-//!          └─ install_function(seal, engine, boot { frameSeq, epoch })
-//!               → described { seq, retired? }   a re-key's old seq is never handed out again
+//!          ├─ install_function(seal, engine, boot { frameSeq, epoch })
+//!          │    → described { seq, retired? }   a re-key's old seq is never handed out again
+//!          └─ watch_hidden_roots              a pierced DOM scan; the seal watches each closed
+//!                                             shadow root, which it cannot find by itself
 //!  every later call ── probe::call(world)    Runtime.callFunctionOn on that handle
+//!  every sweep ── watch_hidden_roots again, then the seal's sweep (hidden_roots)
 //!  a call fails Gone ── FrameWorlds::invalidate: the cell goes and the seq retires
 //! ```
 //!
@@ -23,6 +26,11 @@
 //!   a page's world in another renderer, so the install takes the handle by the new world's
 //!   `uniqueId`, or by number only across a window in which the session reported nothing about
 //!   that number (`SealedWorld::install`). Every later call goes by the handle.
+//! - **No closed root the seal cannot see.** The seal finds fields and hears input only from
+//!   the document down through open roots, so the install, and every sweep before it reads,
+//!   scans the document for closed roots and has the seal watch each (`hidden_roots`). A
+//!   scan that fails fails the install or the sweep, so a read whose frame held a root Neo
+//!   could not watch is refused.
 //! - **One engine per world.** The install's guard on `__neoProbe` makes it idempotent, and the
 //!   single-flight cell makes concurrent first uses share one install.
 //! - **A seq names one document forever.** Every new document gets a new seq and none is
@@ -40,6 +48,7 @@
 mod engine_source;
 mod frame_seq;
 mod frame_worlds;
+mod hidden_roots;
 mod journal;
 mod sealed_world;
 mod session_setup;
@@ -49,7 +58,7 @@ pub(crate) use frame_worlds::{
     Endpoint, FrameWorlds, Installer, LinkedParent, ParentLink, Place, SeqLookup,
 };
 pub(crate) use journal::Journal;
-pub(crate) use sealed_world::{ContextWatch, Installed, SealedWorld};
+pub(crate) use sealed_world::{ContextWatch, Installed, Scan, SealedWorld};
 pub(crate) use session_setup::{SessionKind, SessionSetup};
 
 #[cfg(test)]

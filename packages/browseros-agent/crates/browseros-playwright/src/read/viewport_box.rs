@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use crate::op_scope::OpScope;
 use crate::probe::{self, Point, ProbeFailure, ProbeReply, ProbeRequest, Read, Rect};
 use crate::read::element_read;
-use crate::resolve::{FramePath, Hop};
+use crate::resolve::{self, FramePath, Hop};
 use crate::target::Strictness;
 use crate::{ErrorCode, PlaywrightError};
 
@@ -121,5 +121,6 @@ async fn frame_origin(
         )),
         Err(ProbeFailure::Cdp(error)) => Err(scope.core_error(&error)),
         Err(ProbeFailure::Broken(why)) => Err(scope.fail(ErrorCode::Internal, &why)),
+        Err(failure @ ProbeFailure::Late) => Err(resolve::failed(scope, failure)),
     }
 }
