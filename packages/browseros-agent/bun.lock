@@ -315,16 +315,16 @@
       "name": "@browseros/claw-api-rust",
       "version": "0.0.0",
     },
+    "crates/claw-sdk-api": {
+      "name": "@browseros/claw-sdk-api-rust",
+      "version": "0.0.0",
+    },
     "crates/harness-integrations": {
       "name": "@browseros/harness-integrations-rust",
       "version": "0.0.0",
     },
     "crates/hosted-api": {
       "name": "@browseros/hosted-api-rust",
-      "version": "0.0.0",
-    },
-    "crates/neo-service-api": {
-      "name": "@browseros/neo-service-api-rust",
       "version": "0.0.0",
     },
     "packages/acpx-ai-provider": {
@@ -672,6 +672,8 @@
 
     "@browseros/claw-onboard": ["@browseros/claw-onboard@workspace:apps/claw-onboard"],
 
+    "@browseros/claw-sdk-api-rust": ["@browseros/claw-sdk-api-rust@workspace:crates/claw-sdk-api"],
+
     "@browseros/claw-server": ["@browseros/claw-server@workspace:apps/claw-server"],
 
     "@browseros/diagnostics": ["@browseros/diagnostics@workspace:packages/diagnostics"],
@@ -679,8 +681,6 @@
     "@browseros/harness-integrations-rust": ["@browseros/harness-integrations-rust@workspace:crates/harness-integrations"],
 
     "@browseros/hosted-api-rust": ["@browseros/hosted-api-rust@workspace:crates/hosted-api"],
-
-    "@browseros/neo-service-api-rust": ["@browseros/neo-service-api-rust@workspace:crates/neo-service-api"],
 
     "@browseros/onboarding-video": ["@browseros/onboarding-video@workspace:packages/onboarding-video"],
 

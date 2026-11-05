@@ -1,5 +1,5 @@
 //! What [`TraceStore`](crate::TraceStore) reads back: records as stored (masked and bounded),
-//! typed, ready for the service routes to map onto `neo-service-api` models.
+//! typed, ready for the service routes to map onto `claw-sdk-api` models.
 
 use crate::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationKind, Outcome, PageState,

@@ -1,6 +1,6 @@
 /**
  * Shared plumbing for the OpenAPI codegen scripts (`claw-api.ts`, `hosted-api.ts`,
- * `neo-service-api.ts`).
+ * `claw-sdk-api.ts`).
  *
  * Both run the same pinned OpenAPI Generator image and normalize its output so a fresh
  * generation is byte-identical across machines. Their `--check` modes rely on that to

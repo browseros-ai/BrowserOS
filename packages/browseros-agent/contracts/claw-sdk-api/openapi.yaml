@@ -1,0 +1,1273 @@
+openapi: 3.0.3
+info:
+  title: BrowserOS claw-sdk API
+  version: 1.0.0
+  description: |
+    The host-facing API of hosted BrowserOS Neo (claw-sdk): run and operation records,
+    screenshots, the live view, the VNC display and owner takeover.
+
+    It is served on Neo's host listener, never on the agent's MCP port. That is a Unix socket by
+    default (`[host_api] socket` in `neo.toml`), with a TCP bind only when `[host_api] tcp` is
+    set. The same listener serves sdk-extensions' host API under `/host/v1`. Every request
+    needs `Authorization: Bearer <token>` (`[host_api] token_file`); on the socket the peer's
+    uid is checked too. Tokens are never accepted in query strings.
+
+    Ids: a run id is a UUIDv7; an operation id is `<runId>.<seq>`, where `seq` counts the run's
+    operations in start order; a session id is the handle `run` returns in
+    `_meta["com.browseros.neo/session"]`.
+
+    Delivery keeps three answers apart so a client never repeats a write blindly: `not_sent`
+    (no side effect was attempted), `done` (Neo has a definite answer) and `unknown` (sent,
+    never confirmed).
+
+    Compatibility: changes within `/v1` are additive. New response fields and new values of an
+    extensible enum (`x-extensible-enum`) can appear at any time, so clients must ignore fields
+    and values they do not know. Fields are never removed or renamed within `/v1`.
+servers:
+  - url: http://localhost
+    description: >-
+      Over the Unix socket named by `[host_api] socket` (the Host header is ignored), or over
+      TCP at `[host_api] tcp` when that is set.
+security:
+  - bearer: []
+paths:
+  /v1/sessions:
+    get:
+      operationId: listSessions
+      summary: Sessions, most recently active first.
+      parameters:
+        - name: live
+          in: query
+          description: Only live (`true`) or only ended (`false`) sessions.
+          schema:
+            type: boolean
+        - $ref: '#/components/parameters/Since'
+        - $ref: '#/components/parameters/Until'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: One page of sessions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/sessions/{sessionId}:
+    get:
+      operationId: getSession
+      summary: One session with its runs (without operations), pages, privacy and takeover.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: The session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/sessions/{sessionId}/trace:
+    get:
+      operationId: getSessionTrace
+      summary: The session with its runs and every operation, redacted and with privacy applied.
+      description: |
+        `tail` keeps only the last N operations; runs whose operations were all cut are still
+        listed. `screenshots` inlines images: `none`, `all`, or `last:N` (N from 1 to 50).
+        Operations after the session's `privateSince` never carry a screenshot, and `visuals`
+        then says why.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - name: tail
+          in: query
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 1000
+        - name: screenshots
+          in: query
+          schema:
+            type: string
+            default: none
+      responses:
+        '200':
+          description: The trace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionTrace'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/sessions/{sessionId}/private:
+    post:
+      operationId: makeSessionPrivate
+      summary: Make the session private now. Durable, and it cannot be undone.
+      description: |
+        Returns once the flag is committed: from then on no screenshot or frame of the session
+        is captured or served. Secrets to mask in text go to `POST /host/v1/secrets` instead.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MakePrivateRequest'
+      responses:
+        '200':
+          description: The session's privacy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Privacy'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/runs:
+    get:
+      operationId: listRuns
+      summary: Runs, newest first. `hostRef` finds the run a host call produced.
+      parameters:
+        - name: session
+          in: query
+          schema:
+            type: string
+        - name: hostRef
+          in: query
+          schema:
+            type: string
+            maxLength: 200
+        - name: idempotencyKey
+          in: query
+          schema:
+            type: string
+            maxLength: 200
+        - name: status
+          in: query
+          schema:
+            type: string
+            x-extensible-enum: [running, ok, error, cancelled, timeout, interrupted]
+        - $ref: '#/components/parameters/Since'
+        - $ref: '#/components/parameters/Until'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: One page of runs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/runs/{runId}:
+    get:
+      operationId: getRun
+      summary: One run with every operation in start order.
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: wait
+          in: query
+          description: >-
+            Seconds to hold the request until the run is `complete`. The response is 200 either
+            way; check `complete`.
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+            maximum: 60
+            default: 0
+        - name: include
+          in: query
+          description: '`screenshots` inlines each operation''s screenshot as base64 JPEG.'
+          schema:
+            type: string
+            x-extensible-enum: [screenshots]
+      responses:
+        '200':
+          description: The run.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/operations/{operationId}:
+    get:
+      operationId: getOperation
+      summary: One operation.
+      parameters:
+        - $ref: '#/components/parameters/OperationId'
+      responses:
+        '200':
+          description: The operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/operations/{operationId}/screenshot:
+    get:
+      operationId: getOperationScreenshot
+      summary: The page after the operation, as JPEG.
+      parameters:
+        - $ref: '#/components/parameters/OperationId'
+      responses:
+        '200':
+          description: The image.
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          $ref: '#/components/responses/Withheld'
+  /v1/events:
+    get:
+      operationId: streamEvents
+      summary: Server-sent events, for one session or for all.
+      description: |
+        `text/event-stream`; each event's `data` is one `Event`. Event ids are `<boot>-<n>`:
+        send the last one back as `Last-Event-ID` to resume within the same Neo process. After a
+        restart, read the state endpoints again.
+      parameters:
+        - name: session
+          in: query
+          schema:
+            type: string
+        - name: Last-Event-ID
+          in: header
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The stream.
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/Event'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/sessions/{sessionId}/screencast:
+    get:
+      operationId: getScreencast
+      summary: A live MJPEG view of the session's current tab, or of `tab`.
+      description: |
+        `multipart/x-mixed-replace`; each part carries `Content-Type: image/jpeg`,
+        `Content-Length`, `X-Tab-Id`, `X-Url` and `X-Frame-At` (Unix epoch ms, the browser's
+        capture time). Without `tab` the stream follows the tab the session's latest operation
+        targeted. It ends when the session ends, the pinned tab closes, or the session becomes
+        private. Capture runs only while someone watches; viewers of one tab and quality share
+        one capture.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/Quality'
+        - $ref: '#/components/parameters/Tab'
+      responses:
+        '200':
+          description: The frame stream.
+          content:
+            multipart/x-mixed-replace:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/NotLive'
+  /v1/sessions/{sessionId}/video:
+    get:
+      operationId: getVideo
+      summary: A live AV1 video (fragmented MP4) of one tab of the session.
+      description: |
+        The initialization segment first, then one keyframe-led fragment about every 2 seconds,
+        for Media Source Extensions or WebCodecs. It stays on `tab`, or on the session's current
+        tab when the request starts, and ends when that tab closes, the session ends, or the
+        session becomes private. A client that falls behind skips whole fragments.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/Quality'
+        - $ref: '#/components/parameters/Tab'
+      responses:
+        '200':
+          description: The video stream.
+          content:
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/NotLive'
+  /v1/sessions/{sessionId}/frames:
+    get:
+      operationId: getFrames
+      summary: The screencast as a WebSocket, for relays.
+      description: |
+        Upgrade to WebSocket. Each frame is a text message holding a `FrameHeader`, then one
+        binary message holding the JPEG. Close codes: 4001 `session_ended`, 4002 `tab_closed`,
+        4003 `session_private`, 4004 `server_shutdown`.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/Quality'
+        - $ref: '#/components/parameters/Tab'
+      responses:
+        '101':
+          description: Switching protocols.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/NotLive'
+  /v1/display:
+    get:
+      operationId: openDisplay
+      summary: Neo's whole screen as RFB over WebSocket (subprotocol `binary`, noVNC-compatible).
+      description: |
+        `view` drops every input message. `control` forwards input. Its first input event makes
+        every live session private before the event is forwarded, and every session that starts
+        while it is open is private from the start. Private-field values are collected for
+        masking while it is open and when it closes. `follow` keeps that session's current page
+        in front of the screen while no owner has control.
+      parameters:
+        - name: mode
+          in: query
+          required: true
+          schema:
+            type: string
+            x-extensible-enum: [view, control]
+        - name: follow
+          in: query
+          schema:
+            type: string
+      responses:
+        '101':
+          description: Switching protocols.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/sessions/{sessionId}/takeovers:
+    post:
+      operationId: offerTakeover
+      summary: Offer the owner one page of the session. The agent is unaffected until `control`.
+      description: Idempotent per session; an open takeover is returned with `created` false.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OfferTakeoverRequest'
+      responses:
+        '200':
+          description: The takeover.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Takeover'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/takeovers/{takeoverId}:
+    get:
+      operationId: getTakeover
+      summary: One takeover. `wait` holds the request until its state differs from `state`.
+      parameters:
+        - $ref: '#/components/parameters/TakeoverId'
+        - name: wait
+          in: query
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+            maximum: 60
+            default: 0
+        - name: state
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The takeover.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Takeover'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/takeovers/{takeoverId}/control:
+    post:
+      operationId: takeControl
+      summary: The owner opened the link. Make the session private, lock the agent out, front and fit the page.
+      description: |
+        While a takeover is in `control`, the agent's operations on the session and on the
+        page fail with `host / owner_has_control` and delivery `not_sent`. With
+        `[takeover] block_reads = false`, reads still run.
+      parameters:
+        - $ref: '#/components/parameters/TakeoverId'
+      responses:
+        '200':
+          description: In control.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Takeover'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/takeovers/{takeoverId}/viewer:
+    put:
+      operationId: setTakeoverViewer
+      summary: The owner's viewer size in CSS px. Resizes the screen and refits on a change.
+      parameters:
+        - $ref: '#/components/parameters/TakeoverId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ViewerSize'
+      responses:
+        '200':
+          description: The current view.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TakeoverView'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/takeovers/{takeoverId}/view:
+    get:
+      operationId: getTakeoverView
+      summary: Geometry for the owner's page. Never field values, labels or page text.
+      parameters:
+        - $ref: '#/components/parameters/TakeoverId'
+      responses:
+        '200':
+          description: The view.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TakeoverView'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/takeovers/{takeoverId}/navigate:
+    post:
+      operationId: navigateTakeover
+      summary: The owner's browser bar.
+      parameters:
+        - $ref: '#/components/parameters/TakeoverId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NavigateRequest'
+      responses:
+        '200':
+          description: Done, or a notice for the owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NavigateResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/takeovers/{takeoverId}/release:
+    post:
+      operationId: releaseTakeover
+      summary: Give the browser back. Returns once the agent's lock is lifted.
+      parameters:
+        - $ref: '#/components/parameters/TakeoverId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseRequest'
+      responses:
+        '200':
+          description: Released.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Takeover'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/takeovers/{takeoverId}/display:
+    get:
+      operationId: openTakeoverDisplay
+      summary: The screen in control mode, valid only while this takeover is in `control`.
+      description: RFB over WebSocket, subprotocol `binary`. Closes when the takeover is released.
+      parameters:
+        - $ref: '#/components/parameters/TakeoverId'
+      responses:
+        '101':
+          description: Switching protocols.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+  parameters:
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+    OperationId:
+      name: operationId
+      in: path
+      required: true
+      description: '`<runId>.<seq>`.'
+      schema:
+        type: string
+    TakeoverId:
+      name: takeoverId
+      in: path
+      required: true
+      schema:
+        type: string
+    Since:
+      name: since
+      in: query
+      description: At or after this time (Unix epoch ms).
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+    Until:
+      name: until
+      in: query
+      description: At or before this time (Unix epoch ms).
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque `nextCursor` from the previous page.
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 100
+        default: 25
+    Quality:
+      name: quality
+      in: query
+      description: >-
+        `low` is 640×400 at up to 4 frames per second (10 for `/video`); `high` is 1280×800 at
+        up to 10 (15 for `/video`). Frames keep the tab's aspect ratio.
+      schema:
+        type: string
+        x-extensible-enum: [low, high]
+        default: high
+    Tab:
+      name: tab
+      in: query
+      description: A browser tab id the session has open. Without it, the current tab.
+      schema:
+        type: integer
+        format: int64
+  responses:
+    BadRequest:
+      description: A parameter or body is invalid (`invalid_request`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: No token, a wrong token, or a peer uid outside the socket's group (`unauthorized`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: >-
+        Nothing has this id (`not_found`), or retention deleted it (`expired`), or `tab` is not
+        a tab the session has open (`tab_not_found`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Withheld:
+      description: The image is withheld because the session was private (`withheld`), or it expired (`expired`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotLive:
+      description: >-
+        Nothing to watch: the session ended (`session_not_live`), has no open tab yet
+        (`no_open_tab`), or is private (`session_private`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: >-
+        The takeover is in the wrong state (`takeover_not_offered`, `takeover_not_in_control`,
+        `takeover_released`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unavailable:
+      description: >-
+        Neo could not commit a privacy change (`privacy_unavailable`), so nothing was done, or
+        the display is not running (`display_unavailable`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    OperationError:
+      type: object
+      required: [owner, code, message, retryable]
+      properties:
+        owner:
+          type: string
+          description: >-
+            Whose behavior must change to fix it: `neo` (browser, OS or Neo itself), `script`
+            (the agent's own code: a syntax error, `invalid_input`, `strict_mode_violation`,
+            `no_match`, `method_unavailable`), `website` (what the page did) or `host` (the
+            host's rules, services or owner, including `owner_has_control`).
+          x-extensible-enum: [neo, script, website, host]
+        code:
+          type: string
+          description: Stable snake_case, e.g. `owner_has_control`, `strict_mode_violation`, `target_closed`.
+        hostCode:
+          type: string
+          description: The host's own code when `code` is `host_error`, e.g. `needs_owner`.
+        message:
+          type: string
+        retryable:
+          type: boolean
+          description: True only when delivery is `not_sent` or the operation is a read.
+        operationId:
+          type: string
+          description: On a run's error, the operation it came from.
+    PageRef:
+      type: object
+      properties:
+        pageId:
+          type: integer
+          format: int32
+        tabId:
+          type: integer
+          format: int64
+        url:
+          type: string
+        title:
+          type: string
+    Privacy:
+      type: object
+      required: [private]
+      properties:
+        private:
+          type: boolean
+        since:
+          type: integer
+          format: int64
+          description: Unix epoch ms; no pixel at or after this time is captured.
+        reason:
+          type: string
+          x-extensible-enum: [secret_input, takeover, display_input, host]
+    MakePrivateRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          x-extensible-enum: [host]
+          default: host
+    SessionSummary:
+      type: object
+      required: [id, status, startedAt, runCount, privacy]
+      properties:
+        id:
+          type: string
+        client:
+          type: string
+          description: The MCP client's `clientInfo.name`.
+        status:
+          type: string
+          x-extensible-enum: [live, ended]
+        startedAt:
+          type: integer
+          format: int64
+        endedAt:
+          type: integer
+          format: int64
+        runCount:
+          type: integer
+          format: int64
+        privacy:
+          $ref: '#/components/schemas/Privacy'
+    Session:
+      type: object
+      required: [id, status, startedAt, runCount, privacy, pages, runs]
+      properties:
+        id:
+          type: string
+        client:
+          type: string
+        status:
+          type: string
+          x-extensible-enum: [live, ended]
+        startedAt:
+          type: integer
+          format: int64
+        endedAt:
+          type: integer
+          format: int64
+        runCount:
+          type: integer
+          format: int64
+        privacy:
+          $ref: '#/components/schemas/Privacy'
+        currentPage:
+          $ref: '#/components/schemas/PageRef'
+        pages:
+          type: array
+          description: The session's open pages, current first.
+          items:
+            $ref: '#/components/schemas/PageRef'
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunSummary'
+        takeover:
+          $ref: '#/components/schemas/Takeover'
+    SessionList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionSummary'
+        nextCursor:
+          type: string
+          description: Pass as `cursor` for the next page; absent on the last page.
+    SessionTrace:
+      type: object
+      required: [session, runs, operations, truncated, visuals]
+      properties:
+        session:
+          $ref: '#/components/schemas/SessionSummary'
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunSummary'
+        operations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Operation'
+        truncated:
+          type: boolean
+          description: True when `tail` cut older operations.
+        visuals:
+          type: string
+          x-extensible-enum: [available, withheld_private_input]
+    RunSummary:
+      type: object
+      required: [id, sessionId, status, effects, startedAt, operationCount, complete]
+      properties:
+        id:
+          type: string
+        sessionId:
+          type: string
+        status:
+          type: string
+          description: '`interrupted`: Neo stopped (crashed or restarted) before the run ended.'
+          x-extensible-enum: [running, ok, error, cancelled, timeout, interrupted]
+        effects:
+          type: string
+          description: >-
+            `none`: no write was sent. `done`: every write that was sent got a definite answer.
+            `unknown`: at least one write was sent and never confirmed; check the page before
+            repeating anything.
+          x-extensible-enum: [none, done, unknown]
+        error:
+          $ref: '#/components/schemas/OperationError'
+        hostRef:
+          type: string
+        idempotencyKey:
+          type: string
+        startedAt:
+          type: integer
+          format: int64
+        endedAt:
+          type: integer
+          format: int64
+        operationCount:
+          type: integer
+          format: int64
+        complete:
+          type: boolean
+          description: Ended, and its screenshot work finished; a re-read returns the same data.
+        traceGaps:
+          type: integer
+          format: int64
+          description: Operation events Neo dropped under disk pressure; zero or absent normally.
+    Run:
+      type: object
+      required: [id, sessionId, status, effects, startedAt, operationCount, complete, operations]
+      properties:
+        id:
+          type: string
+        sessionId:
+          type: string
+        status:
+          type: string
+          x-extensible-enum: [running, ok, error, cancelled, timeout, interrupted]
+        effects:
+          type: string
+          x-extensible-enum: [none, done, unknown]
+        error:
+          $ref: '#/components/schemas/OperationError'
+        hostRef:
+          type: string
+        idempotencyKey:
+          type: string
+        startedAt:
+          type: integer
+          format: int64
+        endedAt:
+          type: integer
+          format: int64
+        operationCount:
+          type: integer
+          format: int64
+        complete:
+          type: boolean
+        traceGaps:
+          type: integer
+          format: int64
+        host:
+          type: object
+          description: The host data the run was started with (`_meta["com.browseros.neo/run"].host`).
+        code:
+          type: string
+          description: The script, masked. Absent when `codeWithheld` is set.
+        codeWithheld:
+          type: string
+          x-extensible-enum: [sensitive_input]
+        result:
+          description: The script's return value, masked and bounded.
+        resultTruncated:
+          type: boolean
+        unknown:
+          type: array
+          description: Write operations that were sent and never confirmed.
+          items:
+            $ref: '#/components/schemas/UnknownOperation'
+        operations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Operation'
+    UnknownOperation:
+      type: object
+      required: [operationId, name]
+      properties:
+        operationId:
+          type: string
+        name:
+          type: string
+    RunList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunSummary'
+        nextCursor:
+          type: string
+    Operation:
+      type: object
+      required: [id, runId, name, kind, effect, outcome, delivery, startedAt, hasScreenshot]
+      properties:
+        id:
+          type: string
+        runId:
+          type: string
+        parentId:
+          type: string
+          description: The operation this one ran inside; absent for the agent's own calls.
+        name:
+          type: string
+          description: e.g. `page.goto`, `locator.click`, `zuzu.auth.fill`, `host.call`, `host.protectedFill`.
+        kind:
+          type: string
+          x-extensible-enum: [builtin, defined, next, host_call, protected]
+        attempt:
+          type: integer
+          format: int32
+          description: For `next`, which call of `next()` this was, from 1.
+        effect:
+          type: string
+          x-extensible-enum: [read, write]
+        page:
+          $ref: '#/components/schemas/PageRef'
+        args:
+          description: >-
+            Safe arguments: masked, secret fields `[redacted]`, bounded. Page and locator
+            handles appear as their branded JSON, e.g. `{"$neo":"locator","page":3,"selector":"…"}`.
+        argsTruncated:
+          type: boolean
+        result:
+          description: Safe result, masked and bounded.
+        resultTruncated:
+          type: boolean
+        outcome:
+          type: string
+          x-extensible-enum: [ok, error, cancelled]
+        delivery:
+          type: string
+          description: >-
+            `not_sent`: no side effect was attempted. `done`: Neo has a definite answer.
+            `unknown`: sent and never confirmed; never repeat it blindly.
+          x-extensible-enum: [not_sent, done, unknown]
+        error:
+          $ref: '#/components/schemas/OperationError'
+        startedAt:
+          type: integer
+          format: int64
+        sentAt:
+          type: integer
+          format: int64
+        endedAt:
+          type: integer
+          format: int64
+        durationMs:
+          type: integer
+          format: int64
+        hasScreenshot:
+          type: boolean
+        screenshot:
+          $ref: '#/components/schemas/Screenshot'
+    Screenshot:
+      type: object
+      required: [contentType, data]
+      properties:
+        contentType:
+          type: string
+          x-extensible-enum: [image/jpeg]
+        data:
+          type: string
+          description: The image bytes, base64 with the standard alphabet and padding.
+    FrameHeader:
+      type: object
+      description: The text message that precedes each JPEG on `/frames`.
+      required: [tabId, at, bytes]
+      properties:
+        tabId:
+          type: integer
+          format: int64
+        url:
+          type: string
+        at:
+          type: integer
+          format: int64
+          description: The browser's capture time, Unix epoch ms; the same clock as operations.
+        bytes:
+          type: integer
+          format: int32
+    OfferTakeoverRequest:
+      type: object
+      required: [page]
+      properties:
+        page:
+          type: integer
+          format: int32
+          minimum: 1
+          description: The session's page id.
+        ttlSeconds:
+          type: integer
+          format: int32
+          minimum: 60
+          maximum: 3600
+          description: Released by itself after this long; capped by `[takeover] max_minutes`.
+    Takeover:
+      type: object
+      required: [id, sessionId, page, state, createdAt, expiresAt]
+      properties:
+        id:
+          type: string
+        sessionId:
+          type: string
+        page:
+          $ref: '#/components/schemas/PageRef'
+        state:
+          type: string
+          x-extensible-enum: [offered, control, released]
+        releaseReason:
+          type: string
+          x-extensible-enum: [done, idle, host, expired, page_closed]
+        created:
+          type: boolean
+          description: False when an open takeover was returned instead.
+        createdAt:
+          type: integer
+          format: int64
+        controlAt:
+          type: integer
+          format: int64
+        releasedAt:
+          type: integer
+          format: int64
+        expiresAt:
+          type: integer
+          format: int64
+        display:
+          type: string
+          description: While in `control`, the path of this takeover's display.
+    ViewerSize:
+      type: object
+      required: [width, height]
+      properties:
+        width:
+          type: integer
+          format: int32
+          minimum: 100
+          maximum: 4096
+        height:
+          type: integer
+          format: int32
+          minimum: 100
+          maximum: 4096
+    TakeoverView:
+      type: object
+      required: [screen, fit]
+      properties:
+        screen:
+          $ref: '#/components/schemas/ViewerSize'
+        mode:
+          type: string
+          x-extensible-enum: [mobile, desktop]
+        fit:
+          type: string
+          x-extensible-enum: [pending, fitted, partial]
+        keyboard:
+          $ref: '#/components/schemas/TakeoverKeyboard'
+        browser:
+          $ref: '#/components/schemas/TakeoverBrowserBar'
+        popups:
+          type: array
+          description: Pages the shared tab opened that stay where they are.
+          items:
+            type: string
+    TakeoverKeyboard:
+      type: object
+      description: >-
+        Boxes of the fields a phone keyboard opens for, in screen px, `[x, y, width, height]`.
+        Present only while they were measured at `width`×`height`.
+      required: [width, height, boxes, at]
+      properties:
+        width:
+          type: integer
+          format: int32
+        height:
+          type: integer
+          format: int32
+        at:
+          type: integer
+          format: int64
+        boxes:
+          type: array
+          maxItems: 128
+          items:
+            type: array
+            minItems: 4
+            maxItems: 4
+            items:
+              type: number
+    TakeoverBrowserBar:
+      type: object
+      description: The shared tab's place, for the owner page's browser bar. Mobile only.
+      required: [url, back, forward]
+      properties:
+        url:
+          type: string
+        back:
+          type: boolean
+        forward:
+          type: boolean
+    NavigateRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          x-extensible-enum: [back, forward, reload, open]
+        input:
+          type: string
+          maxLength: 2000
+          description: >-
+            For `open`: what the owner typed. A web address opens as is (https added); other text
+            is searched; a non-http scheme or embedded credentials is refused.
+    NavigateResult:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          x-extensible-enum: [completed, refused, failed]
+        notice:
+          type: string
+          description: A sentence for the owner when the bar did not move.
+    ReleaseRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          x-extensible-enum: [done, idle, host]
+          default: done
+    Event:
+      type: object
+      required: [type, at]
+      properties:
+        type:
+          type: string
+          x-extensible-enum:
+            [
+              run.started,
+              run.ended,
+              operation.started,
+              operation.ended,
+              session.page,
+              session.private,
+              session.ended,
+              takeover.state,
+            ]
+        at:
+          type: integer
+          format: int64
+        sessionId:
+          type: string
+        run:
+          $ref: '#/components/schemas/RunSummary'
+        operation:
+          $ref: '#/components/schemas/Operation'
+        page:
+          $ref: '#/components/schemas/PageRef'
+        takeover:
+          $ref: '#/components/schemas/Takeover'
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          x-extensible-enum:
+            [
+              invalid_request,
+              unauthorized,
+              not_found,
+              expired,
+              withheld,
+              tab_not_found,
+              session_not_live,
+              no_open_tab,
+              session_private,
+              takeover_not_offered,
+              takeover_not_in_control,
+              takeover_released,
+              privacy_unavailable,
+              display_unavailable,
+              internal_error,
+            ]
+        message:
+          type: string
+        requestId:
+          type: string
+          description: Also sent as the `x-request-id` response header.

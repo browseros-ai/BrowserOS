@@ -116,8 +116,8 @@ jobs:
       - name: Check hosted API generated code
         run: bun run codegen:hosted-api:check
 
-      - name: Check Neo service API generated code
-        run: bun run codegen:neo-service-api:check
+      - name: Check claw-sdk API generated code
+        run: bun run codegen:claw-sdk-api:check
 
   hosted-api-breaking:
     name: runner / Hosted API breaking changes
@@ -141,10 +141,10 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: bash contracts/hosted-api/check-breaking.sh "origin/$BASE_REF"
 
-      - name: Check Neo service API spec against the base branch
+      - name: Check claw-sdk API spec against the base branch
         env:
           BASE_REF: ${{ github.base_ref }}
-        run: bash contracts/neo-service-api/check-breaking.sh "origin/$BASE_REF"
+        run: bash contracts/claw-sdk-api/check-breaking.sh "origin/$BASE_REF"
 
   claw-api-contract:
     name: runner / Claw API conformance

@@ -576,6 +576,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "claw-sdk-api"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_with",
+]
+
+[[package]]
 name = "claw-server"
 version = "0.0.93"
 dependencies = [
@@ -1902,15 +1911,6 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "neo-service-api"
-version = "1.0.0"
-dependencies = [
- "serde",
- "serde_json",
- "serde_with",
 ]
 
 [[package]]

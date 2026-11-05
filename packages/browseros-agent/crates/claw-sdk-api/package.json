@@ -1,0 +1,9 @@
+{
+  "name": "@browseros/claw-sdk-api-rust",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint:rust": "cargo fmt --package claw-sdk-api -- --check && cargo clippy --package claw-sdk-api --all-targets --locked -- -D warnings",
+    "test:rust": "cargo test --package claw-sdk-api --locked"
+  }
+}
