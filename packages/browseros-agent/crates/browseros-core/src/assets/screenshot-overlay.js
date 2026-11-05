@@ -1,5 +1,5 @@
-// biome-ignore-all lint: Injected ES5 asset mirrors the TypeScript browser-core runtime string.
-// biome-ignore format: Keep injected script byte-oriented and close to the TypeScript source.
+// biome-ignore-all lint: Injected ES5 page script, evaluated verbatim through CDP.
+// biome-ignore format: Keep the injected script byte-oriented.
 (() => {
   var items = __BROWSEROS_ITEMS__;
   var attr = __BROWSEROS_ATTR__;

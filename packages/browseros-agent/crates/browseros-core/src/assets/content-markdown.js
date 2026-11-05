@@ -1,5 +1,5 @@
-// biome-ignore-all lint: Injected ES5 asset mirrors the TypeScript browser-core runtime string.
-// biome-ignore format: Keep injected script byte-oriented and close to the TypeScript source.
+// biome-ignore-all lint: Injected ES5 page script, evaluated verbatim through CDP.
+// biome-ignore format: Keep the injected script byte-oriented.
 (function(o) {
 var SKIP = {SCRIPT:1,STYLE:1,NOSCRIPT:1,SVG:1,TEMPLATE:1,CANVAS:1,VIDEO:1,AUDIO:1,OBJECT:1,EMBED:1};
 var FORM = {INPUT:1,SELECT:1,TEXTAREA:1,BUTTON:1};

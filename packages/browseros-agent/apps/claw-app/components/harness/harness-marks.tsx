@@ -2,7 +2,6 @@
  * Per-harness brand marks for the new-agent wizard and any other
  * surface that renders a harness tile. Each mark wraps a brand SVG
  * installed from the `@svgl` shadcn registry (see `components.json`).
- * Mirror of `apps/app/screens/mcp-settings/agent-marks.tsx`.
  *
  * Brand marks choose their own colors, including light/dark variants.
  * Consumer className should only provide sizing.
