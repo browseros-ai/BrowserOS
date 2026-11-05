@@ -7,6 +7,7 @@ use browseros_core::{BrowserSession, FrameId, PageId, ProtocolSession};
 use crate::op_scope::{AdmittedPage, OpScope};
 use crate::page::PageState;
 use crate::probe::ProbeFailure;
+use crate::target::PageRef;
 use crate::world::{Endpoint, FrameWorlds, Installer, Place, SealedWorld, SessionKind};
 use crate::{Playwright, PlaywrightError};
 
@@ -34,6 +35,17 @@ impl<'op> OpPage<'op> {
             admitted,
             state,
         })
+    }
+
+    /// Admits the page a target's brand names, once its tab checks out
+    /// ([`PageRef::checked`]).
+    pub(crate) async fn admit_handle(
+        pw: &'op Playwright,
+        scope: &'op OpScope<'_>,
+        handle: &PageRef,
+    ) -> Result<Self, PlaywrightError> {
+        let page = handle.checked(pw.browser(), scope).await?;
+        Self::admit(pw, scope, &page).await
     }
 
     /// The tab.

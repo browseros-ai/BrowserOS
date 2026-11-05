@@ -210,6 +210,43 @@ describe('retrying matchers', () => {
     })
   })
 
+  it("tests that an uncaught expect failure or refusal settles the run as that op's failure", async () => {
+    // Each as claw-sdk's bridge sends it (runtime/bridge.rs `ErrBody`): Rust's assertion
+    // failure, and the dispatcher refusing the op.
+    const failures = [
+      {
+        code: 'assertion_failed',
+        owner: 'website',
+        delivery: 'not_sent',
+        retryable: false,
+        operationId: 'run.1',
+        timeout: true,
+        message:
+          'expect(locator).toHaveText(expected) failed\n\nLocator: locator(\'#total\')\nExpected: "nope"\nReceived: "$12"\nTimeout: 50ms',
+      },
+      {
+        code: 'owner_has_control',
+        owner: 'host',
+        delivery: 'not_sent',
+        retryable: true,
+        operationId: 'run.1',
+        timeout: false,
+        message: 'expect.locator: the owner is in control of this tab',
+      },
+    ]
+    for (const failure of failures) {
+      const runtime = loadPrelude({
+        seed: SEED,
+        answer: () => ({ err: failure }),
+      })
+      expect(
+        await runtime.settle(
+          "await expect(page.locator('#total')).toHaveText('nope', { timeout: 50 })",
+        ),
+      ).toEqual({ operation: failure })
+    }
+  })
+
   it("tests that a locator matcher on something else fails as Playwright's does, before any op", async () => {
     const runtime = loadPrelude({ seed: SEED })
     expect(

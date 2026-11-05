@@ -1,16 +1,17 @@
 // What Rust receives for a script's Playwright calls: op names, the `call` header (the method
 // the script called and its resolved timeout), the target handles target.rs decodes, and the
-// prelude's own refusals. Every op goes through a fake bootstrap that carries JSON only.
+// prelude's own refusals. Every op goes through claw-sdk's real bootstrap, which carries JSON
+// only, over a test host (support/prelude-runtime.ts).
 import { describe, expect, it } from 'bun:test'
 import { recordEveryOp } from '../scripts/wire-examples'
 import { OPS } from '../src/prelude/ops.generated'
-import { json, loadPrelude, SEED } from './support/prelude-runtime'
+import { type Call, json, loadPrelude, SEED } from './support/prelude-runtime'
 
 type Part = { name: string; source: string; body: unknown }
 type Chunk = { parts: Part[]; capture?: number }
 type LocatorTarget = {
   $neo: 'locator'
-  page: number
+  page: { $neo: 'page'; id: number | null; tab?: number }
   frame: string | null
   chunks: Chunk[]
   display: string
@@ -50,7 +51,7 @@ describe('locator targets', () => {
           call: { api: 'locator.click', timeoutMs: 5000 },
           target: {
             $neo: 'locator',
-            page: 7,
+            page: { $neo: 'page', id: 7, tab: 1007 },
             frame: null,
             chunks: [
               {
@@ -247,7 +248,7 @@ describe('locator targets', () => {
   it('tests that an element handle acts on its pinned element', async () => {
     const element = {
       $neo: 'element',
-      page: 7,
+      page: { $neo: 'page', id: 7, tab: 1007 },
       seq: 4,
       node: 1234,
       display: '<button>Save</button>',
@@ -392,13 +393,14 @@ describe('errors', () => {
     return {
       name: e.name, message: e.message, bootstrapClass: e instanceof TimeoutError,
       code: e.code, owner: e.owner, delivery: e.delivery, retryable: e.retryable,
-      operationId: e.operationId, hostCode: e.hostCode, timeout: e.timeout,
+      operationId: e.operationId, timeout: e.timeout,
     }
   }`
 
   it("tests that a timed-out op reaches the script as the bootstrap's TimeoutError with every field", async () => {
     const runtime = loadPrelude({
       seed: SEED,
+      // Every field claw-sdk's bridge sends (runtime/bridge.rs `ErrBody`).
       answer: () => ({
         err: {
           code: 'not_actionable',
@@ -406,7 +408,6 @@ describe('errors', () => {
           delivery: 'unknown',
           retryable: false,
           operationId: 'run.3',
-          hostCode: 'none',
           timeout: true,
           message:
             "page.click: Timeout 5000ms exceeded.\nCall log:\n  - waiting for locator('#go')",
@@ -423,7 +424,6 @@ describe('errors', () => {
       delivery: 'unknown',
       retryable: false,
       operationId: 'run.3',
-      hostCode: 'none',
       timeout: true,
     })
   })
@@ -450,6 +450,25 @@ describe('errors', () => {
       owner: 'host',
       retryable: true,
     })
+  })
+
+  it("tests that an uncaught op failure settles the run as that op's failure", async () => {
+    const failure = {
+      code: 'not_actionable',
+      owner: 'website',
+      delivery: 'unknown',
+      retryable: false,
+      operationId: 'run.1',
+      timeout: true,
+      message: 'page.click: Timeout 50ms exceeded.',
+    }
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: () => ({ err: failure }),
+    })
+    expect(
+      await runtime.settle("await page.click('#go', { timeout: 50 })"),
+    ).toEqual({ operation: failure })
   })
 
   it('tests that an unprefixed message gets the method first', async () => {
@@ -546,30 +565,79 @@ describe('errors', () => {
 })
 
 describe('synchronous state', () => {
-  it('tests that the seed gives the default page, the open tabs and the browser version', async () => {
+  it("tests that the run's init names the agent's page, and reply facts list the other tabs", async () => {
     const runtime = loadPrelude({
-      seed: {
-        page: 7,
+      seed: SEED,
+      answer: () => ({
+        ok: 'Cart',
         pages: [
           { id: 7, tab: 1007, url: 'https://shop.example/cart', title: 'Cart' },
           { id: 9, tab: 1009, url: 'https://mail.example/', title: 'Mail' },
         ],
-        browserVersion: '146.0.7680.0',
+      }),
+    })
+    expect(
+      json(
+        await runtime.run(
+          'const before = context.pages().map((p) => p.url()); await page.title(); return { before, url: page.url(), pages: context.pages().map((p) => p.url()), same: context.pages()[0] === page, version: browser.version(), contexts: browser.contexts().length }',
+        ),
+      ),
+    ).toEqual({
+      before: ['about:blank'],
+      url: 'https://shop.example/cart',
+      pages: ['https://shop.example/cart', 'https://mail.example/'],
+      same: true,
+      version: '',
+      contexts: 1,
+    })
+    expect(runtime.sent('page.title').map((call) => call.input.page)).toEqual([
+      { $neo: 'page', id: 7, tab: 1007 },
+    ])
+  })
+
+  it("tests that the tabs the run's init lists are in context.pages() before any op", async () => {
+    const runtime = loadPrelude({
+      seed: {
+        ...SEED,
+        pages: [
+          {
+            id: 7,
+            tab: 1007,
+            url: 'https://shop.example/cart',
+            title: 'Cart',
+            closed: false,
+          },
+          {
+            id: 9,
+            tab: 1009,
+            url: 'https://mail.example/',
+            title: 'Mail',
+            closed: false,
+          },
+        ],
       },
     })
     expect(
       json(
         await runtime.run(
-          'return { url: page.url(), pages: context.pages().map((p) => p.url()), same: context.pages()[0] === page, version: browser.version(), contexts: browser.contexts().length }',
+          'const listed = context.pages().map((p) => ({ url: p.url(), brand: p.toJSON(), run: p === page })); await context.pages()[1].title(); return listed',
         ),
       ),
-    ).toEqual({
-      url: 'https://shop.example/cart',
-      pages: ['https://shop.example/cart', 'https://mail.example/'],
-      same: true,
-      version: '146.0.7680.0',
-      contexts: 1,
-    })
+    ).toEqual([
+      {
+        url: 'https://shop.example/cart',
+        brand: { $neo: 'page', id: 7, tab: 1007 },
+        run: true,
+      },
+      {
+        url: 'https://mail.example/',
+        brand: { $neo: 'page', id: 9, tab: 1009 },
+        run: false,
+      },
+    ])
+    expect(runtime.calls.map((call) => [call.name, call.input.page])).toEqual([
+      ['page.title', { $neo: 'page', id: 9, tab: 1009 }],
+    ])
   })
 
   it("tests that every envelope's page facts refresh url() and isClosed()", async () => {
@@ -674,21 +742,40 @@ describe('synchronous state', () => {
     ])
   })
 
-  it('tests that the lazy default page opens one tab for racing first ops, and keeps its identity', async () => {
-    const runtime = loadPrelude({
-      answer: (call) =>
-        call.name === 'context.newPage'
-          ? { page: { $neo: 'page', id: 12, tab: 1012 }, url: 'about:blank' }
-          : null,
-    })
+  const unopened = { $neo: 'page', id: null } as const
+  const opened = { $neo: 'page', id: 12, tab: 1012 } as const
+
+  /**
+   * claw-sdk's door for a run with no tab yet: an op whose target names the unopened page gets
+   * the tab it opened (once, however many race) and names it in the reply's `defaultPage`.
+   */
+  const lazyDoor = (ok: (call: Call) => unknown) => (call: Call) => {
+    const target = call.input.target as LocatorTarget | undefined
+    const page = (call.input.page ?? target?.page) as { id?: unknown }
+    return page?.id === null
+      ? {
+          ok: ok(call),
+          defaultPage: { id: 12, tab: 1012 },
+          pages: [{ id: 12, tab: 1012, url: 'about:blank', title: '' }],
+        }
+      : { ok: ok(call) }
+  }
+
+  it("tests that the run's page names itself unopened until a reply's defaultPage binds its tab", async () => {
+    const runtime = loadPrelude({ answer: lazyDoor(() => null) })
     const result = json(
       await runtime.run(
-        "const before = context.pages().length; await Promise.all([page.click('#a'), page.click('#b')]); return { before, after: context.pages().length, same: context.pages()[0] === page }",
+        "const before = { pages: context.pages().length, brand: JSON.stringify(page) }; await Promise.all([page.click('#a'), page.click('#b')]); await page.click('#c'); return { before, after: context.pages().length, same: context.pages()[0] === page, brand: JSON.stringify(page) }",
       ),
     )
-    expect(result).toEqual({ before: 0, after: 1, same: true })
+    expect(result).toEqual({
+      before: { pages: 0, brand: JSON.stringify(unopened) },
+      after: 1,
+      same: true,
+      brand: JSON.stringify(opened),
+    })
     expect(runtime.calls.map((call) => call.name)).toEqual([
-      'context.newPage',
+      'locator.click',
       'locator.click',
       'locator.click',
     ])
@@ -696,26 +783,50 @@ describe('synchronous state', () => {
       runtime
         .sent('locator.click')
         .map((call) => (call.input.target as LocatorTarget).page),
-    ).toEqual([12, 12])
+    ).toEqual([unopened, unopened, opened])
+  })
+
+  it("tests that an event op on the run's unopened page gets its tab through the door first", async () => {
+    const popup = {
+      seq: 1,
+      event: 'popup',
+      page: opened,
+      popup: {
+        page: { $neo: 'page', id: 13, tab: 1013 },
+        url: 'https://ads.example/',
+      },
+    }
+    const runtime = loadPrelude({
+      answer: lazyDoor((call) => (call.name === 'events.wait' ? popup : null)),
+    })
+    const result = json(
+      await runtime.run(
+        "const popup = await page.waitForEvent('popup'); return { url: popup.url(), listed: context.pages().length }",
+      ),
+    )
+    expect(result).toEqual({ url: 'https://ads.example/', listed: 2 })
+    expect(runtime.calls.map((call) => [call.name, call.input.page])).toEqual([
+      ['page.frames', unopened],
+      ['events.wait', opened],
+    ])
   })
 
   it('tests that page brands carry the tab the host named, and a page with none is refused unsent', async () => {
     const runtime = loadPrelude({
-      seed: { page: 7, pages: [{ id: 7, url: 'https://a.example/' }] },
+      seed: SEED,
       answer: (call) =>
         call.name === 'context.newPage'
           ? {
-              ok: {
-                page: { $neo: 'page', id: 8, tab: 1008 },
-                url: 'about:blank',
-              },
-              pages: [{ id: 7, tab: 1007 }],
+              page: { $neo: 'page', id: 8, tab: 1008 },
+              url: 'about:blank',
             }
-          : null,
+          : call.name === 'page.opener'
+            ? { opener: { $neo: 'page', id: 9 } }
+            : null,
     })
     const refused = json(
       await runtime.run(
-        'try { await page.reload() } catch (e) { return { code: e.code, message: e.message } }',
+        'const opener = await page.opener(); try { await opener.reload() } catch (e) { return { code: e.code, message: e.message } }',
       ),
     )
     expect(refused).toEqual({
@@ -723,7 +834,7 @@ describe('synchronous state', () => {
       message:
         'page.reload: Neo has no tab id for this page; get the page again from context.pages()',
     })
-    expect(runtime.calls).toEqual([])
+    expect(runtime.calls.map((call) => call.name)).toEqual(['page.opener'])
     await runtime.run(
       'const tab = await context.newPage(); await page.title(); await tab.title()',
     )
@@ -736,7 +847,6 @@ describe('synchronous state', () => {
   it('tests that newPage and opener return Page objects, one per page id', async () => {
     const runtime = loadPrelude({
       seed: SEED,
-      revive: false,
       answer: (call) =>
         call.name === 'context.newPage'
           ? { page: { $neo: 'page', id: 21, tab: 1021 }, url: 'about:blank' }
@@ -766,15 +876,12 @@ describe('the op table', () => {
       }
       const field = op.target
       if (field === null) continue
-      const handle = call.input[field] as
-        | { $neo?: string; page?: unknown; id?: unknown }
-        | undefined
-      const page = field === 'page' ? handle?.id : handle?.page
-      if (
-        typeof page !== 'number' ||
-        (field === 'page' && handle?.$neo !== 'page')
-      )
-        misplaced.push(`${call.name}: no page handle in ${field}`)
+      // The door reads the page brand at `page`, or at `target.page` for an element op.
+      type Brand = { $neo?: string; id?: unknown }
+      const handle = call.input[field] as (Brand & { page?: Brand }) | undefined
+      const page = field === 'page' ? handle : handle?.page
+      if (page?.$neo !== 'page' || typeof page.id !== 'number')
+        misplaced.push(`${call.name}: no page brand in ${field}`)
     }
     expect(misplaced).toEqual([])
     const sent = new Set(calls.map((call) => call.name))

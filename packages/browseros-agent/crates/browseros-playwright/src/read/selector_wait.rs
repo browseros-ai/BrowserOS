@@ -110,7 +110,7 @@ async fn poll_selector(
     returning: Returning,
     matched: &AtomicBool,
 ) -> Result<Value, PlaywrightError> {
-    let page = OpPage::admit(pw, scope, &target.page).await?;
+    let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, strict);
     scope.log(format!("waiting for {}{}", target.display, state.suffix()));
     let backoff = Backoff::outer(scope.timeout());
@@ -147,7 +147,7 @@ async fn poll_selector(
                 sweep,
             } => {
                 element_read::mark_sensitive(scope, sensitive);
-                element_read::report_swept(pw, &target.page, &sweep);
+                element_read::report_swept(pw, page.id(), &sweep);
                 element_read::read_value(scope, value)?
             }
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {

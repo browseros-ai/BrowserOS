@@ -95,7 +95,7 @@ async fn poll_locator(
     strict: Strictness,
     read: &Read,
 ) -> Result<Reading, PlaywrightError> {
-    let page = OpPage::admit(pw, scope, &target.page).await?;
+    let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, strict);
     scope.log(format!("waiting for {}", target.display));
     let backoff = Backoff::outer(scope.timeout());
@@ -119,7 +119,7 @@ async fn poll_locator(
                 sweep,
             } => {
                 mark_sensitive(scope, sensitive);
-                report_swept(pw, &target.page, &sweep);
+                report_swept(pw, page.id(), &sweep);
                 return Ok(Reading { value, path });
             }
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {}
@@ -138,7 +138,7 @@ async fn read_handle(
     target: &ElementTarget,
     read: &Read,
 ) -> Result<Option<Reading>, PlaywrightError> {
-    let page = OpPage::admit(pw, scope, &target.page).await?;
+    let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let Some(site) = HandleSite::find(&page, scope, target).await? else {
         return Ok(None);
     };
@@ -155,7 +155,7 @@ async fn read_handle(
             sweep,
         } => {
             mark_sensitive(scope, sensitive);
-            report_swept(pw, &target.page, &sweep);
+            report_swept(pw, page.id(), &sweep);
             Ok(Some(Reading {
                 value,
                 path: site.path().clone(),
@@ -189,7 +189,7 @@ pub(crate) async fn read_visibility(
             return Ok(reading.map_or(without_element, |reading| reading.value));
         }
     };
-    let page = OpPage::admit(pw, scope, &target.page).await?;
+    let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, strict);
     scope.log(format!("  checking visibility of {}", target.display));
     let attempt = resolver

@@ -4,8 +4,9 @@
  * Playwright's synchronous accessors (`url()`, `isClosed()`, `frames()`, `mainFrame()`) read
  * caches here. They are refreshed by the host's page facts after every op, by the URL and
  * frame tree each navigation or wait returns, and by events (a close, a popup). The run's
- * default page may not have a tab yet (a new task); its first op opens one, once, however
- * many ops race to be first.
+ * own page may not have a tab yet (a new task). Its ops then name it as
+ * `{"$neo":"page","id":null}`, claw-sdk's door opens one tab for them however many race to be
+ * first, and the reply's `defaultPage` binds this object to that tab (`BrowserContext`).
  */
 import { invoke, sleep } from './bridge'
 import type { BrowserContext } from './context'
@@ -50,6 +51,7 @@ import type {
   NavigationResult,
   PageBrand,
   PageFact,
+  PageHandle,
 } from './wire'
 
 export type CloseOptions = { runBeforeUnload?: boolean; reason?: string }
@@ -72,7 +74,7 @@ const PDF_KEYS = [
 ] as const
 
 export class Page extends EventEmitter {
-  /** Core's page id; null until the run's lazy default page opens its tab. */
+  /** Core's page id; null until a reply names the tab the door opened for the run's page. */
   _id: number | null
   /** The browser's tab id, which the page's brand carries; null until a fact or result names it. */
   _tab: number | null = null
@@ -84,7 +86,6 @@ export class Page extends EventEmitter {
   _url: string
   _title = ''
   _closed = false
-  #opening: Promise<number> | undefined
   readonly #childFrames = new Map<string, Frame>()
 
   constructor(context: BrowserContext, id: number | null, url = 'about:blank') {
@@ -151,8 +152,15 @@ export class Page extends EventEmitter {
     return []
   }
 
-  toJSON(): PageBrand | { $neo: 'page' } {
-    return this._id === null ? { $neo: 'page' } : { $neo: 'page', id: this._id }
+  /**
+   * The brand the bootstrap's codec sends for a page the script passes to a call itself
+   * (`neo.solveCaptcha(page)`), the handle the prelude's own ops send. A page whose tab no
+   * reply named carries `tab: null`, which the door refuses with a hint.
+   */
+  toJSON(): PageHandle | { $neo: 'page'; id: number; tab: null } {
+    return this._id === null
+      ? { $neo: 'page', id: null }
+      : { $neo: 'page', id: this._id, tab: this._tab }
   }
 
   // ---- builders ---------------------------------------------------------------------------
@@ -678,27 +686,40 @@ export class Page extends EventEmitter {
 
   // ---- internals ------------------------------------------------------------------------
 
-  /** Core's page id, opening the run's default tab on its first op. */
-  async _pageId(api: string): Promise<number> {
-    if (this._id !== null) return this._id
-    if (this._closed)
-      throw clientError(api, 'Target page, context or browser has been closed')
-    this.#opening ??= this._context._openDefaultPage(api, this)
-    return await this.#opening
-  }
-
   /**
-   * The page's handle for an op. Every fact, result and event the host sends names the tab;
-   * a page whose tab nothing named yet is refused here rather than sent half-branded.
+   * The page's handle for an op whose page the door resolves (at `page` or `target.page`):
+   * the unopened brand while the run's page has no tab, so the door opens it. Every fact,
+   * result and event the host sends names the tab; a page whose tab nothing named yet is
+   * refused here rather than sent half-branded.
    */
-  async _brand(api: string): Promise<PageBrand> {
-    const id = await this._pageId(api)
+  async _brand(api: string): Promise<PageHandle> {
+    if (this._id === null) {
+      if (this._closed)
+        throw clientError(
+          api,
+          'Target page, context or browser has been closed',
+        )
+      return { $neo: 'page', id: null }
+    }
     if (this._tab === null)
       throw clientError(
         api,
         'Neo has no tab id for this page; get the page again from context.pages()',
       )
-    return { $neo: 'page', id, tab: this._tab }
+    return { $neo: 'page', id: this._id, tab: this._tab }
+  }
+
+  /**
+   * The handle of a page that has its tab, for the event ops, whose page the door does not
+   * resolve. The run's unopened page gets its tab first from one op the door does resolve,
+   * `page.frames`, as its first op of any kind would; the reply binds it.
+   */
+  async _openedBrand(api: string): Promise<PageBrand> {
+    if (this._id === null) await this._refreshFrames(api)
+    const brand = await this._brand(api)
+    if (brand.id === null)
+      throw new Error(`${api}: Neo opened no tab for the run's page`)
+    return brand
   }
 
   /** An element handle from an op result, revived or raw; null when the op found none. */

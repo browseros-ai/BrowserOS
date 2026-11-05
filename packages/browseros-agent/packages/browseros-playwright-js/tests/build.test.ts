@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { runInNewContext } from 'node:vm'
 import { staleOutputs } from '../scripts/build'
+import { loadPrelude } from './support/prelude-runtime'
 
 const asset = (name: string) =>
   readFileSync(
@@ -38,18 +39,25 @@ it('tests that the page asset defines only __neoProbe, and a second evaluation k
   expect(context.__neoProbe).toBe(probe)
 })
 
-it("tests that the prelude asset adds only Playwright's four globals to the bootstrap's realm", () => {
-  const realm: Record<string, unknown> = {
-    __neo: { invoke: () => Promise.resolve(null) },
-  }
-  runInNewContext(asset('prelude.js'), realm)
-  expect(Reflect.ownKeys(realm).sort()).toEqual([
+// The JS twin of claw-sdk's runtime/tests.rs pin: a run's realm gains only `__neo` and the
+// natives, and the agent's API arrives as its function's parameters.
+it("tests that the prelude asset adds no global and gives the agent's function Playwright's four parameters", () => {
+  const runtime = loadPrelude()
+  const fresh = new Set(
+    runInNewContext('Object.getOwnPropertyNames(globalThis)') as string[],
+  )
+  const names = runtime.evaluate(
+    'Object.getOwnPropertyNames(globalThis)',
+  ) as string[]
+  expect(names.filter((name) => !fresh.has(name)).sort()).toEqual([
     '__neo',
-    'browser',
-    'context',
-    'expect',
-    'page',
+    '__neo_invoke',
+    '__neo_log',
+    '__neo_sleep',
   ])
+  expect(runtime.evaluate('__neo.parameters()')).toBe(
+    'console, setTimeout, clearTimeout, NeoError, TimeoutError, page, context, browser, expect',
+  )
 })
 
 it('tests that the prelude asset refuses to start without the bootstrap', () => {

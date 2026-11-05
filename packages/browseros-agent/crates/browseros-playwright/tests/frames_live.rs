@@ -22,11 +22,11 @@ mod locator;
 
 use std::time::{Duration, Instant};
 
-use browseros_core::PageId;
 use browseros_core::sensitive_fields::SensitiveKind;
+use browseros_core::{PageId, TabId};
 use browseros_playwright::{ErrorCode, TypedBy};
 use fixture_server::{FixtureServer, Page, nest_pages};
-use live_browser::{Journaled, LiveBrowser, TestResult};
+use live_browser::{Journaled, LiveBrowser, TestPage, TestResult};
 use locator::{aria_ref, attr, css, enter_frame, locator, role, text};
 use serde_json::{Value, json};
 use tokio::time;
@@ -44,7 +44,7 @@ const FRAMES: [(&[&str], &str); 8] = [
 ];
 
 /// `frameLocator('[title=…]')` down `titles`, then `last`.
-fn down(page: &PageId, titles: &[&str], last: Value) -> Value {
+fn down(page: &TestPage, titles: &[&str], last: Value) -> Value {
     use std::fmt::Write as _;
     let mut parts = Vec::new();
     let mut display = "page".to_owned();
@@ -66,7 +66,7 @@ fn count(target: &Value) -> Value {
 }
 
 /// Opens the nested fixture once every frame, down to c4, has its button.
-async fn nested(live: &LiveBrowser, server: &FixtureServer) -> TestResult<PageId> {
+async fn nested(live: &LiveBrowser, server: &FixtureServer) -> TestResult<TestPage> {
     let page = live
         .open(&server.url("127.0.0.1", "/nest/top.html"))
         .await?;
@@ -82,7 +82,10 @@ async fn nested(live: &LiveBrowser, server: &FixtureServer) -> TestResult<PageId
 fn tests_that_hand_built_chunks_are_the_vendored_parsers() {
     // `splitSelectorByFrame` from crates/browseros-playwright/assets/prelude.js, run on the
     // selectors each helper stands for.
-    let page = PageId(7);
+    let page = TestPage {
+        id: PageId(7),
+        tab: TabId(1007),
+    };
     let built = locator(
         &page,
         &[
@@ -220,16 +223,9 @@ async fn tests_that_a_strict_violation_inside_a_frame_reads_as_upstreams() -> Te
 }
 
 /// `page.frames()` for `page`, as the prelude asks for it: the frame handle ids it sends back.
-async fn frame_ids(live: &LiveBrowser, page: &PageId) -> TestResult<Vec<(String, String)>> {
-    let tab = live
-        .browser
-        .pages
-        .get_tab_id(page.clone())
-        .await
-        .ok_or("an open tab has a tab id")?;
-    let brand = json!({ "$neo": "page", "id": page.0, "tab": tab.0 });
+async fn frame_ids(live: &LiveBrowser, page: &TestPage) -> TestResult<Vec<(String, String)>> {
     let tree = live
-        .invoke("page.frames", json!({ "page": brand }))
+        .invoke("page.frames", json!({ "page": page.brand() }))
         .await??;
     let frames = tree
         .get("frames")
@@ -248,7 +244,7 @@ async fn frame_ids(live: &LiveBrowser, page: &PageId) -> TestResult<Vec<(String,
 
 /// `frame.locator(selector)` on the child frame `frame`, as the prelude's `locatorBrand` builds
 /// it: the frame's wire id beside the chunks.
-fn in_frame(page: &PageId, frame: &str, last: Value, display: &str) -> Value {
+fn in_frame(page: &TestPage, frame: &str, last: Value, display: &str) -> Value {
     let mut target = locator(page, &[last], display);
     if let Some(fields) = target.as_object_mut() {
         fields.insert("frame".to_owned(), json!(frame));
@@ -495,7 +491,7 @@ async fn tests_that_the_journal_reports_typing_in_an_oopif_password_field() -> T
         )
         .await?;
     let expected = Journaled {
-        page: page.clone(),
+        page: page.id.clone(),
         kind: SensitiveKind::Password,
         value: "journal-oopif".to_owned(),
         by: TypedBy::NotAgent,

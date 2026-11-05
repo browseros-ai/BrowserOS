@@ -127,7 +127,7 @@ mod tests {
             click()?,
             json!({
                 "call": { "api": "page.click" },
-                "target": { "$neo": "locator", "page": 7, "display": "x",
+                "target": { "$neo": "locator", "page": { "$neo": "page", "id": 7, "tab": 1007 }, "display": "x",
                             "chunks": [{ "parts": [{ "name": "aria-ref", "body": " e5", "source": " e5" }] }] },
                 "strict": "strict",
             }),
@@ -160,7 +160,7 @@ mod tests {
         let input = OpInput::decode(
             click()?,
             json!({
-                "target": { "$neo": "locator", "page": 7, "display": "getByRef('f7e3')",
+                "target": { "$neo": "locator", "page": { "$neo": "page", "id": 7, "tab": 1007 }, "display": "getByRef('f7e3')",
                             "chunks": [{ "parts": [{ "name": "aria-ref", "body": "f7e3", "source": "f7e3" }] }] },
                 "strict": "strict",
             }),

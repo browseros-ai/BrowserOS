@@ -23,10 +23,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use browseros_core::{PageId, SessionId};
+use browseros_core::SessionId;
 use browseros_playwright::ErrorCode;
 use fixture_server::{FixtureServer, Page, nest_pages};
-use live_browser::{LiveBrowser, TestResult};
+use live_browser::{LiveBrowser, TestPage, TestResult};
 use locator::{attr, css, enter_frame, locator, role};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
@@ -43,7 +43,7 @@ static BUSY_RENDERER: Semaphore = Semaphore::const_new(QUIET_TESTS as usize);
 const QUIET_TESTS: u32 = 16;
 
 /// A locator for one CSS selector in the main frame, displayed as `locator('<selector>')`.
-fn at(page: &PageId, selector: &str) -> Value {
+fn at(page: &TestPage, selector: &str) -> Value {
     locator(page, &[css(selector)], &format!("locator('{selector}')"))
 }
 
@@ -53,7 +53,7 @@ fn call(api: &str, target: &Value, timeout_ms: u64) -> Value {
 }
 
 /// Opens the reads fixture in a new tab.
-async fn reads_page(live: &LiveBrowser) -> TestResult<(FixtureServer, PageId)> {
+async fn reads_page(live: &LiveBrowser) -> TestResult<(FixtureServer, TestPage)> {
     let mut pages = nest_pages();
     pages.insert("/reads.html".to_owned(), Page::html(READS));
     let server = FixtureServer::start(pages).await?;
@@ -62,7 +62,7 @@ async fn reads_page(live: &LiveBrowser) -> TestResult<(FixtureServer, PageId)> {
 }
 
 /// `op` on `selector` with a 5 s timeout, which must succeed.
-async fn read(live: &LiveBrowser, page: &PageId, op: &str, selector: &str) -> TestResult<Value> {
+async fn read(live: &LiveBrowser, page: &TestPage, op: &str, selector: &str) -> TestResult<Value> {
     Ok(live
         .invoke(op, call(op, &at(page, selector), 5_000))
         .await??)
@@ -302,7 +302,7 @@ async fn tests_that_a_containers_text_never_carries_a_sensitive_textarea_raw() -
         live.hooks
             .swept()
             .iter()
-            .any(|swept| swept.page == page && swept.value == PREFILLED_VALUE),
+            .any(|swept| swept.page == page.id && swept.value == PREFILLED_VALUE),
         "the host is handed the value to register"
     );
     live.close(&page).await
@@ -619,7 +619,7 @@ async fn tests_that_an_element_handle_reads_its_node_until_the_node_goes() -> Te
     assert_eq!(
         (title["page"].clone(), title["display"].clone()),
         (
-            json!(page.0),
+            page.brand(),
             json!("<h1 id=\"title\" title=\"Greeting\">…</h1>")
         ),
         "the handle names its page and prints upstream's preview"
@@ -737,7 +737,7 @@ async fn tests_that_dollar_dollar_hands_out_all_600_matches_in_order() -> TestRe
 }
 
 /// `selector` queried from `handle`'s node, as `elementHandle.$` and `$$` send it.
-fn rooted(page: &PageId, handle: &Value, selector: &str) -> Value {
+fn rooted(page: &TestPage, handle: &Value, selector: &str) -> Value {
     let mut target = locator(page, &[css(selector)], &format!("locator('{selector}')"));
     if let Some(fields) = target.as_object_mut() {
         fields.insert("frame".to_owned(), Value::Null);
@@ -1282,12 +1282,12 @@ async fn in_frame(live: &LiveBrowser, session: &SessionId, expression: &str) -> 
 /// frame `frame` records a click (`window.__state.clicks`), and returns what it recorded.
 async fn click_until_seen(
     live: &LiveBrowser,
-    page: &PageId,
+    page: &TestPage,
     frame: &SessionId,
     x: f64,
     y: f64,
 ) -> TestResult<Vec<Value>> {
-    let session = live.browser.pages.get_session(page.clone()).await?;
+    let session = live.browser.pages.get_session(page.id.clone()).await?;
     for _ in 0..10 {
         session
             .session
@@ -1305,8 +1305,8 @@ async fn click_until_seen(
 }
 
 /// One mouse event on the page's root session, in main-viewport CSS pixels.
-async fn mouse(live: &LiveBrowser, page: &PageId, kind: &str, x: f64, y: f64) -> TestResult {
-    let session = live.browser.pages.get_session(page.clone()).await?;
+async fn mouse(live: &LiveBrowser, page: &TestPage, kind: &str, x: f64, y: f64) -> TestResult {
+    let session = live.browser.pages.get_session(page.id.clone()).await?;
     session
         .session
         .send::<_, Value>(
@@ -1323,7 +1323,7 @@ fn field(rect: &Value, name: &str) -> TestResult<f64> {
 }
 
 /// `frameLocator('[title=…]')` down `titles`, then the frame's button.
-fn button_down(page: &PageId, titles: &[&str]) -> Value {
+fn button_down(page: &TestPage, titles: &[&str]) -> Value {
     let mut parts = Vec::new();
     for title in titles {
         parts.push(attr(&format!("[title=\"{title}\"s]")));
@@ -1399,7 +1399,7 @@ async fn tests_that_a_box_in_a_nested_oopif_is_where_input_reaches_it() -> TestR
     // only for the tab in front, which a parallel test's new tab may take: the tab comes to
     // the front and the move is sent again until c4 has seen one.
     let (x, y) = (field(&box_, "x")? + 3.0, field(&box_, "y")? + 3.0);
-    let session = live.browser.pages.get_session(page.clone()).await?;
+    let session = live.browser.pages.get_session(page.id.clone()).await?;
     let mut moves = Value::Null;
     for _ in 0..20 {
         session
@@ -1488,8 +1488,13 @@ fn scaled_pages() -> HashMap<String, Page> {
 
 /// The border box CDP measures for the button of the same-process iframe `id`, in the main
 /// viewport (`DOM.getBoxModel` on the page's session, which composes every transform).
-async fn measured_box(live: &LiveBrowser, page: &PageId, id: &str) -> TestResult<[f64; 4]> {
-    let session = live.browser.pages.get_session(page.clone()).await?.session;
+async fn measured_box(live: &LiveBrowser, page: &TestPage, id: &str) -> TestResult<[f64; 4]> {
+    let session = live
+        .browser
+        .pages
+        .get_session(page.id.clone())
+        .await?
+        .session;
     let expression =
         format!("document.getElementById('{id}').contentDocument.querySelector('button')");
     let button: Value = session

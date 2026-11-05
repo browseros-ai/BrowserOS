@@ -5,7 +5,8 @@
  *   assets/injected.js   page side: src/probe/index.ts with Playwright's InjectedScript, one
  *                        IIFE whose only global is __neoProbe, evaluated in the sealed world
  *   assets/prelude.js    agent side: src/prelude/index.ts, the vendored isomorphic helpers, one
- *                        IIFE for QuickJS whose only global is __neoIsomorphic
+ *                        IIFE for QuickJS that defines no global (it hands the agent's
+ *                        function its parameters through claw-sdk's `__neo.provide`)
  *   tests/data/probe-protocol.json   the typed protocol examples the Rust mirror decodes
  *   tests/data/wire-examples.json    every op input the fresh prelude sends, which the crate
  *                                    invokes offline (scripts/wire-examples.ts)

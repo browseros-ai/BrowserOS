@@ -16,8 +16,8 @@
   kind: finding
   route: sdk-skeleton bootstrap (bytes brand), J4 prelude
   reason: Playwright returns a Node Buffer, so toString('base64') is base64. The skeleton's
-    {"$neo":"bytes"} brand revives to a plain Uint8Array (Runner N's mock_bootstrap.js does the
-    same), whose toString() joins the byte values, so a script that forwards a screenshot as
+    {"$neo":"bytes"} brand revives to a plain Uint8Array (bootstrap.js, which Runner N runs),
+    whose toString() joins the byte values, so a script that forwards a screenshot as
     base64 sends the wrong text. A Uint8Array whose toString takes Buffer's encodings ('base64',
     'hex', 'utf8') would close it.
   p: iVBORw0KGgoA

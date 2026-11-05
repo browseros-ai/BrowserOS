@@ -59,7 +59,7 @@ pub(crate) async fn read(
     part: DocumentPart,
 ) -> Result<Value, PlaywrightError> {
     main_frame_only(scope, input.frame.as_ref())?;
-    let page = OpPage::admit(pw, scope, &input.page.checked(pw.browser(), scope).await?).await?;
+    let page = OpPage::admit_handle(pw, scope, &input.page).await?;
     let request = &ProbeRequest::Document { part };
     let (text, sweep) = with_world(
         &page,
@@ -104,7 +104,7 @@ pub(crate) async fn set_content(
             "waitUntil \"networkidle\" cannot be observed after setContent in Neo; use \"load\"",
         ));
     }
-    let page = OpPage::admit(pw, scope, &input.page.checked(pw.browser(), scope).await?).await?;
+    let page = OpPage::admit_handle(pw, scope, &input.page).await?;
     let main = page.main_endpoint();
     let session_id = main
         .session

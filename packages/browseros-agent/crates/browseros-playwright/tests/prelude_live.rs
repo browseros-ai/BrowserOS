@@ -73,18 +73,18 @@ async fn tests_that_the_prelude_builds_playwrights_locators_in_quickjs() -> Test
         .ok_or("the goldens list their cases")?;
     let codes: Vec<&Value> = cases.iter().filter_map(|case| case.get("code")).collect();
     let host: Arc<dyn OpHost> = Arc::new(NoOps);
-    let seed = json!({ "page": 7, "pages": [{ "id": 7, "tab": 1007, "url": "https://a.test/" }],
-                       "browserVersion": "" });
+    let init = json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 } });
+    // A direct eval, so each golden sees the agent's `page` parameter.
     let script = format!(
         "const built = {codes}.map((code) => {{\n\
-           const locator = (0, eval)(code)\n\
+           const locator = eval(code)\n\
            return {{ code, selector: locator._selector ?? locator._frameSelector, toString: String(locator) }}\n\
          }})\n\
          const go = page.getByRole('button', {{ name: 'Go' }})\n\
          return {{ built, go: {{ selector: go._selector, toString: go.toString() }} }}",
         codes = serde_json::to_string(&codes)?,
     );
-    let result = run_script(&host, &seed, &script).await?;
+    let result = run_script(&host, &init, &script).await?;
     let expected: Vec<Value> = cases
         .iter()
         .map(|case| {
@@ -101,6 +101,48 @@ async fn tests_that_the_prelude_builds_playwrights_locators_in_quickjs() -> Test
         result["go"],
         json!({ "selector": "internal:role=button[name=\"Go\"i]",
                 "toString": "getByRole('button', { name: 'Go' })" })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_an_uncaught_expect_failure_settles_as_its_ops_failure() -> TestResult {
+    let host: Arc<dyn OpHost> = Arc::new(NoOps);
+    let init = json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 } });
+    let script = "await expect(page.locator('#total')).toHaveText('nope', { timeout: 50 })";
+    let settled = run_script(&host, &init, script).await;
+    assert_eq!(
+        settled,
+        Err(
+            "the script threw the error of an op: internal: expect.locator: this script was to \
+             send no op"
+                .to_owned()
+        ),
+        "the bootstrap knows the op's own error, so the run reports the failure the door recorded"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_context_pages_lists_the_tabs_the_run_init_names() -> TestResult {
+    let host: Arc<dyn OpHost> = Arc::new(NoOps);
+    let init = json!({
+        "page": { "$neo": "page", "id": 7, "tab": 1007 },
+        "pages": [
+            { "id": 7, "tab": 1007, "url": "https://shop.example/cart", "title": "Cart", "closed": false },
+            { "id": 9, "tab": 1009, "url": "https://mail.example/", "title": "Mail", "closed": false },
+        ],
+    });
+    let script =
+        "return context.pages().map((p) => ({ url: p.url(), brand: p.toJSON(), run: p === page }))";
+    let listed = run_script(&host, &init, script).await?;
+    assert_eq!(
+        listed,
+        json!([
+            { "url": "https://shop.example/cart", "brand": { "$neo": "page", "id": 7, "tab": 1007 }, "run": true },
+            { "url": "https://mail.example/", "brand": { "$neo": "page", "id": 9, "tab": 1009 }, "run": false },
+        ]),
+        "every tab the init lists, with no op sent"
     );
     Ok(())
 }
@@ -127,8 +169,8 @@ async fn tests_that_a_playwright_script_runs_through_the_prelude_on_a_live_brows
     let url = |name: &str| server.url("127.0.0.1", &format!("/prelude/{name}.html"));
     let run = Arc::new(LiveRun::connect().await?);
     let host: Arc<dyn OpHost> = run;
-    // No default page: the prelude opens the run's tab on first use, as for a new task.
-    let seed = json!({ "page": null, "pages": [], "browserVersion": "" });
+    // No tab yet, as for a new task: the door opens the run's tab for its first op.
+    let init = json!({ "page": null });
     let script = format!(
         "try {{\n\
            const response = await page.goto({page})\n\
@@ -164,7 +206,7 @@ async fn tests_that_a_playwright_script_runs_through_the_prelude_on_a_live_brows
         page = json!(url("page")),
         side = json!(url("side")),
     );
-    let result = run_script(&host, &seed, &script).await?;
+    let result = run_script(&host, &init, &script).await?;
     assert_eq!(
         result,
         json!({

@@ -29,9 +29,10 @@ pub struct OpSpec {
 pub enum OpTarget {
     /// The op acts on no page (`context.pages`, the event pump).
     None,
-    /// This top-level input field holds a branded handle: `"page"` holds
-    /// `{"$neo":"page","id":7}`, and `"target"` holds a locator or element handle whose `page`
-    /// field is the page id.
+    /// This top-level input field holds a branded handle: `"page"` holds the page brand
+    /// `{"$neo":"page","id":7,"tab":1234}`, and `"target"` holds a locator or element handle
+    /// whose `page` field is that brand. The host resolves and checks that page, and hands the
+    /// crate its resolved brand there.
     Field(&'static str),
 }
 

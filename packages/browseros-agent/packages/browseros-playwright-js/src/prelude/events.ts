@@ -172,7 +172,7 @@ export class EventHub {
       since,
       timeoutMs(api, settings.timeout(options)),
     )
-    const target = page === null ? null : await page._brand(api)
+    const target = page === null ? null : await page._openedBrand(api)
     let after: number | null = null
     for (;;) {
       const left = deadline.left()
@@ -213,7 +213,7 @@ export class EventHub {
         'events.listen',
         { api, timeoutMs: 0 },
         {
-          page: page === null ? null : await page._brand(api),
+          page: page === null ? null : await page._openedBrand(api),
           event,
           on,
           since,

@@ -26,10 +26,9 @@ mod locator;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use browseros_core::PageId;
 use browseros_playwright::ErrorCode;
 use fixture_server::{FixtureServer, Page, nest_pages};
-use live_browser::{LiveBrowser, Swept, TestResult};
+use live_browser::{LiveBrowser, Swept, TestPage, TestResult};
 use locator::{aria_ref, attr, css, enter_frame, locator, role};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
@@ -226,19 +225,13 @@ fn assert_nested(printed: &[Printed], frames: &HashMap<&str, Frame>) -> TestResu
     Ok(())
 }
 
-/// A `page.ariaSnapshot` input for `page`, whose handle carries the tab core lists it on.
-async fn page_snapshot(live: &LiveBrowser, page: &PageId, mode: &str) -> TestResult<Value> {
-    let tab = live
-        .browser
-        .pages
-        .get_tab_id(page.clone())
-        .await
-        .ok_or("core lists the page")?;
-    Ok(json!({
+/// A `page.ariaSnapshot` input for `page`.
+fn page_snapshot(page: &TestPage, mode: &str) -> Value {
+    json!({
         "call": { "api": "page.ariaSnapshot", "timeoutMs": 10_000 },
-        "page": { "$neo": "page", "id": page.0, "tab": tab.0 },
+        "page": page.brand(),
         "mode": mode,
-    }))
+    })
 }
 
 fn locator_snapshot(target: &Value, mode: &str) -> Value {
@@ -250,7 +243,7 @@ fn locator_snapshot(target: &Value, mode: &str) -> Value {
     })
 }
 
-fn by_ref(page: &PageId, r#ref: &str) -> Value {
+fn by_ref(page: &TestPage, r#ref: &str) -> Value {
     locator(page, &[aria_ref(r#ref)], &format!("getByRef('{ref}')"))
 }
 
@@ -260,7 +253,7 @@ fn text_content(target: &Value) -> Value {
 
 /// `locator.count` of `getByRef(ref).and(getByLabel(label))`: 1 only when the ref names the
 /// very element labelled `label`, in the document the ref was printed in.
-fn labelled_count(page: &PageId, r#ref: &str, label: &str) -> Value {
+fn labelled_count(page: &TestPage, r#ref: &str, label: &str) -> Value {
     let label = attr(&format!("[aria-label=\"{label}\"s]"));
     let and = json!({
         "name": "internal:and",
@@ -283,10 +276,10 @@ fn nest_and_hang() -> HashMap<String, Page> {
 
 /// The page's ai-mode snapshot, once every frame of the fixture printed its button. The
 /// snapshots before that install each frame's world as they reach it.
-async fn loaded(live: &LiveBrowser, page: &PageId) -> TestResult<Value> {
+async fn loaded(live: &LiveBrowser, page: &TestPage) -> TestResult<Value> {
     for _ in 0..100 {
         let snapshot = live
-            .invoke("page.ariaSnapshot", page_snapshot(live, page, "ai").await?)
+            .invoke("page.ariaSnapshot", page_snapshot(page, "ai"))
             .await??;
         let printed = printed(field(&snapshot, "json"));
         let all = FRAMES.iter().all(|(_, name)| {
@@ -307,7 +300,7 @@ async fn loaded(live: &LiveBrowser, page: &PageId) -> TestResult<Value> {
 /// field (and the button ref does not).
 async fn assert_refs_read(
     live: &LiveBrowser,
-    page: &PageId,
+    page: &TestPage,
     frames: &HashMap<&str, Frame>,
     names: &[&str],
 ) -> TestResult {
@@ -339,7 +332,7 @@ async fn assert_refs_read(
 }
 
 /// `ref`, read now, fails at once with `element_detached` and reads nothing.
-async fn assert_detached(live: &LiveBrowser, page: &PageId, r#ref: &str) -> TestResult {
+async fn assert_detached(live: &LiveBrowser, page: &TestPage, r#ref: &str) -> TestResult {
     let started = Instant::now();
     let failed = live
         .invoke("locator.textContent", text_content(&by_ref(page, r#ref)))
@@ -422,10 +415,7 @@ async fn tests_that_f2_all_sixteen_refs_read_their_own_element_after_later_snaps
     live.invoke("locator.ariaSnapshot", locator_snapshot(&b1_body, "ai"))
         .await??;
     let second = live
-        .invoke(
-            "page.ariaSnapshot",
-            page_snapshot(&live, &page, "ai").await?,
-        )
+        .invoke("page.ariaSnapshot", page_snapshot(&page, "ai"))
         .await??;
     let after = frames(&printed(&second["json"]))?;
     for name in &names {
@@ -544,10 +534,7 @@ async fn tests_that_f6_an_unresponsive_frame_is_partial_and_the_rest_returns_wit
 
     let started = Instant::now();
     let snapshot = live
-        .invoke(
-            "page.ariaSnapshot",
-            page_snapshot(&live, &page, "ai").await?,
-        )
+        .invoke("page.ariaSnapshot", page_snapshot(&page, "ai"))
         .await??;
     let took = started.elapsed();
     assert!(
@@ -835,10 +822,7 @@ async fn tests_that_typed_secrets_echoed_in_page_text_come_back_masked() -> Test
 
     // ai mode reads both frames, so each frame's sweep masks the other's echoes too.
     let snapshot = live
-        .invoke(
-            "page.ariaSnapshot",
-            page_snapshot(&live, &page, "ai").await?,
-        )
+        .invoke("page.ariaSnapshot", page_snapshot(&page, "ai"))
         .await??;
     let ai = strings(&snapshot);
     for secret in ["482913", "hunter2-oopif"] {
@@ -856,10 +840,7 @@ async fn tests_that_typed_secrets_echoed_in_page_text_come_back_masked() -> Test
     // Default mode reads the main frame alone, as upstream's does, and masks its echo with
     // that frame's sweep.
     let snapshot = live
-        .invoke(
-            "page.ariaSnapshot",
-            page_snapshot(&live, &page, "default").await?,
-        )
+        .invoke("page.ariaSnapshot", page_snapshot(&page, "default"))
         .await??;
     let plain = strings(&snapshot);
     assert!(
@@ -876,7 +857,7 @@ async fn tests_that_typed_secrets_echoed_in_page_text_come_back_masked() -> Test
     for value in ["482913", "hunter2-oopif"] {
         assert!(
             swept.contains(&Swept {
-                page: page.clone(),
+                page: page.id.clone(),
                 value: value.to_owned(),
             }),
             "the host was told of {value} on its page"

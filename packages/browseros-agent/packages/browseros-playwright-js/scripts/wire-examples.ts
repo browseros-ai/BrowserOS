@@ -16,7 +16,7 @@ const RECORDED_AT = 1_700_000_000_000
 
 const ELEMENT = {
   $neo: 'element',
-  page: 7,
+  page: { $neo: 'page', id: 7, tab: 1007 },
   seq: 0,
   node: 9,
   display: '<button>Go</button>',

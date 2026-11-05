@@ -4,8 +4,9 @@
 //! per frame, as the vendored `splitSelectorByFrame` does. `frames_live.rs` checks these
 //! shapes against the vendored parser's own output.
 
-use browseros_core::PageId;
 use serde_json::{Value, json};
+
+use crate::live_browser::TestPage;
 
 /// A part whose body is the source, as every non-CSS engine's is.
 fn part(name: &str, body: &str) -> Value {
@@ -46,9 +47,9 @@ pub(crate) fn enter_frame() -> Value {
     part("internal:control", "enter-frame")
 }
 
-/// The locator target `{"$neo":"locator",...}` over `parts`, split into chunks at each
-/// enter-frame part.
-pub(crate) fn locator(page: &PageId, parts: &[Value], display: &str) -> Value {
+/// The locator target `{"$neo":"locator",...}` on `page` over `parts`, split into chunks at
+/// each enter-frame part.
+pub(crate) fn locator(page: &TestPage, parts: &[Value], display: &str) -> Value {
     let mut chunks = vec![Vec::new()];
     for part in parts {
         if *part == enter_frame() {
@@ -61,5 +62,5 @@ pub(crate) fn locator(page: &PageId, parts: &[Value], display: &str) -> Value {
         .into_iter()
         .map(|parts| json!({ "parts": parts }))
         .collect();
-    json!({ "$neo": "locator", "page": page.0, "chunks": chunks, "display": display })
+    json!({ "$neo": "locator", "page": page.brand(), "chunks": chunks, "display": display })
 }

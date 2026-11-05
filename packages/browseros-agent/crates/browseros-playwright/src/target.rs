@@ -37,7 +37,14 @@ use crate::{ErrorCode, PlaywrightError};
 /// process-local page id, which restarts at 1 with Neo; `tab` is the browser's tab id, which
 /// does not. Both fields are private so that every op reads the id through
 /// [`PageRef::checked`], which refuses a handle whose id now names another tab.
-#[derive(Clone, Debug, Deserialize)]
+///
+/// Every target carries one, so the host's door finds an op's page at `page` or `target.page`
+/// in its input and checks its policies on that tab. The run's lazy default page
+/// (`{"$neo":"page","id":null}`) never reaches the crate: the host substitutes the tab it
+/// resolved before `Playwright::invoke`, and a null id fails to decode here as `invalid_input`,
+/// so the crate never acts on a tab the door did not clear. It serializes back unchanged, as
+/// the page of the element handles an op hands out.
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PageRef {
     #[serde(rename = "$neo")]
@@ -74,7 +81,7 @@ impl PageRef {
 }
 
 /// The only brand a page handle carries.
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 enum PageBrand {
     #[serde(rename = "page")]
     Page,
@@ -90,11 +97,13 @@ pub(crate) enum Target {
     Element(ElementTarget),
 }
 
-/// `{"$neo":"locator","page":7,"frame":null,"chunks":[...],"display":"getByRole('button')"}`.
+/// `{"$neo":"locator","page":{"$neo":"page","id":7,"tab":1234},"frame":null,"chunks":[...],
+/// "display":"getByRole('button')"}`.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LocatorTarget {
-    pub(crate) page: PageId,
+    /// The page the locator was built on.
+    pub(crate) page: PageRef,
     /// The frame the locator was built from (`frame.locator(..)`); `None` is the main frame.
     #[serde(default)]
     pub(crate) frame: Option<FrameId>,
@@ -116,12 +125,14 @@ pub(crate) enum RootHandle {
     Element(ElementTarget),
 }
 
-/// `{"$neo":"element","page":7,"seq":4,"node":1234,"display":"<button>Save</button>"}`. Once
-/// document `seq` is gone, the handle is detached for good.
+/// `{"$neo":"element","page":{"$neo":"page","id":7,"tab":1234},"seq":4,"node":1234,
+/// "display":"<button>Save</button>"}`. Once document `seq` is gone, the handle is detached for
+/// good.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ElementTarget {
-    pub(crate) page: PageId,
+    /// The page the element was pinned on.
+    pub(crate) page: PageRef,
     pub(crate) seq: FrameSeq,
     pub(crate) node: BackendNodeId,
     /// Playwright's preview of the element, for messages.
@@ -468,7 +479,7 @@ mod tests {
     fn tests_that_a_locator_target_decodes_its_frames() -> Result<(), Box<dyn Error>> {
         let target: Target = serde_json::from_value(json!({
             "$neo": "locator",
-            "page": 7,
+            "page": { "$neo": "page", "id": 7, "tab": 1007 },
             "frame": "F1",
             "chunks": [
                 chunk("internal:attr", "[id=\"pay\"s]"),
@@ -479,7 +490,10 @@ mod tests {
         let Target::Locator(locator) = target else {
             panic!("a locator brand is a locator target");
         };
-        assert_eq!(locator.page, PageId(7));
+        assert_eq!(
+            (&locator.page.id, locator.page.tab),
+            (&PageId(7), TabId(1007))
+        );
         assert_eq!(locator.frame, Some(FrameId("F1".to_owned())));
         let (hops, last) = locator.hops_and_last_bodies();
         assert_eq!(hops, ["[id=\"pay\"s]"], "the iframe chunk is a hop");
@@ -493,15 +507,21 @@ mod tests {
 
     #[test]
     fn tests_that_an_element_target_names_its_document_and_node() -> Result<(), Box<dyn Error>> {
+        let page = json!({ "$neo": "page", "id": 7, "tab": 1007 });
         let target: Target = serde_json::from_value(json!({
-            "$neo": "element", "page": 7, "seq": 4, "node": 1234, "display": "<button>Save</button>",
+            "$neo": "element", "page": page, "seq": 4, "node": 1234, "display": "<button>Save</button>",
         }))?;
         let Target::Element(element) = target else {
             panic!("an element brand is an element target");
         };
         assert_eq!(
+            serde_json::to_value(&element.page)?,
+            page,
+            "an element handle hands its page back as it came"
+        );
+        assert_eq!(
             (
-                element.page,
+                element.page.id,
                 element.seq,
                 element.node,
                 element.display.as_str()
@@ -518,15 +538,36 @@ mod tests {
 
     #[test]
     fn tests_that_targets_refuse_what_they_do_not_know() {
+        let page = json!({ "$neo": "page", "id": 7, "tab": 1007 });
         for bad in [
-            json!({ "$neo": "locator", "page": 7, "chunks": [], "display": "x" }),
-            json!({ "$neo": "locator", "page": 7, "chunks": [chunk("css", "a")], "display": "x", "steps": [] }),
+            json!({ "$neo": "locator", "page": page, "chunks": [], "display": "x" }),
+            json!({ "$neo": "locator", "page": page, "chunks": [chunk("css", "a")], "display": "x", "steps": [] }),
             json!({ "$neo": "page", "id": 7 }),
-            json!({ "page": 7, "chunks": [chunk("css", "a")], "display": "x" }),
+            json!({ "page": page, "chunks": [chunk("css", "a")], "display": "x" }),
+            json!({ "$neo": "locator", "page": 7, "chunks": [chunk("css", "a")], "display": "x" }),
+            json!({ "$neo": "element", "page": 7, "seq": 4, "node": 1234, "display": "x" }),
         ] {
             assert!(
                 serde_json::from_value::<Target>(bad.clone()).is_err(),
                 "{bad} is no target"
+            );
+        }
+    }
+
+    /// The door resolves the run's default page once, checks its policies on that tab, and
+    /// hands the crate that tab. A target still naming the unresolved page would let the crate
+    /// pick a tab of its own, so it never decodes, at the top or nested in a target.
+    #[test]
+    fn tests_that_the_unresolved_default_page_never_decodes() {
+        let lazy = json!({ "$neo": "page", "id": null });
+        assert!(serde_json::from_value::<PageRef>(lazy.clone()).is_err());
+        for target in [
+            json!({ "$neo": "locator", "page": lazy, "chunks": [chunk("css", "a")], "display": "x" }),
+            json!({ "$neo": "element", "page": lazy, "seq": 4, "node": 1234, "display": "x" }),
+        ] {
+            assert!(
+                serde_json::from_value::<Target>(target.clone()).is_err(),
+                "{target} names no tab the door cleared"
             );
         }
     }

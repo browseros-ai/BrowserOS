@@ -364,7 +364,7 @@ async fn every_match(
     let Target::Locator(target) = &input.target else {
         return Err(scope.not_built());
     };
-    let page = OpPage::admit(pw, scope, &target.page).await?;
+    let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, Strictness::FirstMatch);
     let attempt = resolver
         .attempt(|last, _| ProbeRequest::ReadAll {
@@ -379,7 +379,7 @@ async fn every_match(
             values,
             sweep,
         }) => {
-            element_read::report_swept(pw, &target.page, &sweep);
+            element_read::report_swept(pw, page.id(), &sweep);
             Ok(Matched { count, values })
         }
         Attempt::Reply(other) => Err(resolver.refused(other)),

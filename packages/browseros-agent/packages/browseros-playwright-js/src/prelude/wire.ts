@@ -23,9 +23,21 @@ import type { AriaSnapshotJSON, ParsedSelector } from './vendored'
 /**
  * `{"$neo":"page","id":7,"tab":1234}`, the skeleton's page brand: core's process-local page id
  * and the browser's tab id. Rust refuses a handle whose id now names another tab, as after a
- * Neo restart.
+ * Neo restart. Every target carries one whole, so claw-sdk's door finds an op's page at
+ * `page` or `target.page` and checks its policies on that tab.
  */
 export type PageBrand = { $neo: 'page'; id: number; tab: number }
+
+/**
+ * `{"$neo":"page","id":null}`: the run's own page before any op opened its tab (claw-sdk's
+ * lazy default page). The door opens the tab for the first op whose target names it, hands
+ * Rust that tab's brand in its place, and the reply's `defaultPage` names it to the prelude.
+ * Rust never sees it.
+ */
+export type UnopenedPageBrand = { $neo: 'page'; id: null }
+
+/** How an op names its page when the door resolves it: at `page` or at `target.page`. */
+export type PageHandle = PageBrand | UnopenedPageBrand
 
 /**
  * A locator, re-resolved by Rust on every attempt. `chunks` is the vendored
@@ -35,7 +47,7 @@ export type PageBrand = { $neo: 'page'; id: number; tab: number }
  */
 export type LocatorBrand = {
   $neo: 'locator'
-  page: number
+  page: PageHandle
   /** The frame the locator was built from (`frame.locator()`); null is the main frame. */
   frame: string | null
   chunks: ParsedSelector[]
@@ -48,10 +60,13 @@ export type LocatorBrand = {
   root?: ElementBrand
 }
 
-/** One element pinned in one document (`ElementHandle`); detached for good once it goes. */
+/**
+ * One element pinned in one document (`ElementHandle`); detached for good once it goes. Rust
+ * makes it, with the page brand of the op that found the element.
+ */
 export type ElementBrand = {
   $neo: 'element'
-  page: number
+  page: PageBrand
   seq: number
   node: number
   display: string
@@ -70,8 +85,8 @@ export type Strictness = 'strict' | 'firstMatch'
 export type CallHeader = { api: string; timeoutMs: number }
 
 /**
- * What the host knows about a tab: the seed, every envelope's `pages`, events. `tab` is the
- * browser's tab id, which the page's brand carries.
+ * What the host knows about a tab: the run's init, every reply's `pages`, results, events.
+ * `tab` is the browser's tab id, which the page's brand carries.
  */
 export type PageFact = {
   id: number
@@ -241,7 +256,7 @@ export type PdfOptions = Record<string, unknown>
 
 export type TargetArgs = { target: Target; strict: Strictness }
 export type EveryMatchArgs = { target: Target }
-export type PageArgs = { page: PageBrand }
+export type PageArgs = { page: PageHandle }
 /** A page op on one of the page's frames; `frame` is left out for the main frame. */
 export type FrameArgs = PageArgs & { frame?: string }
 export type ExpectArgs = {
@@ -366,7 +381,11 @@ export type OpInputs = {
   'page.pdf': PageArgs & PdfOptions
   'context.pages': Record<string, never>
   'context.newPage': Record<string, never>
-  /** `since` is the script's `Date.now()` when it attached the listener (or removed it). */
+  /**
+   * `since` is the script's `Date.now()` when it attached the listener (or removed it). The
+   * event ops name no target the door resolves, so their page always has its tab: the
+   * prelude opens the run's lazy page first (`Page._openedBrand`).
+   */
   'events.listen': {
     page: PageBrand | null
     event: EventName
@@ -399,8 +418,8 @@ export type OpInputs = {
 }
 
 /**
- * Each op's result. Page and element handles may arrive revived by the bootstrap
- * (`__neo.handles.register`) or as raw brands; the classes read both.
+ * Each op's result. Page and element handles arrive revived by the bootstrap
+ * (`__neo.brands.register`); the revivers and the classes read the raw brands.
  */
 export type OpOutputs = {
   'locator.click': null

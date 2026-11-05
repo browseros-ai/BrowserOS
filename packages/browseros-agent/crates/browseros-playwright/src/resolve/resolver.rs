@@ -655,7 +655,6 @@ fn selector_text(chunk: &Chunk) -> String {
 mod tests {
     use std::time::Duration;
 
-    use browseros_core::PageId;
     use serde_json::{Value, json};
     use tokio::time;
 
@@ -666,7 +665,7 @@ mod tests {
     use crate::resolve::{Attempt, HopIframe};
     use crate::target::{CallHeader, Chunk, LocatorTarget, Strictness, Target};
     use crate::test_support::fixture_server::{FixtureServer, nest_pages};
-    use crate::test_support::{LiveBrowser, TestResult, count_op};
+    use crate::test_support::{LiveBrowser, Tab, TestResult, count_op};
     use crate::world::{FrameSeq, SeqLookup};
 
     #[test]
@@ -685,7 +684,7 @@ mod tests {
     }
 
     /// A locator down the nested fixture's iframes by title, ending on `last`.
-    fn down(page: &PageId, titles: &[&str], last: Value) -> TestResult<LocatorTarget> {
+    fn down(tab: &Tab, titles: &[&str], last: Value) -> TestResult<LocatorTarget> {
         let mut chunks: Vec<Value> = titles
             .iter()
             .map(|title| {
@@ -695,7 +694,7 @@ mod tests {
             .collect();
         chunks.push(last);
         let target: Target = serde_json::from_value(json!({
-            "$neo": "locator", "page": page.0, "chunks": chunks, "display": titles.join(" >> "),
+            "$neo": "locator", "page": tab.brand(), "chunks": chunks, "display": titles.join(" >> "),
         }))?;
         let Target::Locator(target) = target else {
             return Err("a locator brand is a locator".into());
@@ -729,7 +728,7 @@ mod tests {
         let env = live.env();
         let scope = OpScope::new(&env, count_op()?, CallHeader::default());
         let page = OpPage::admit(&live.playwright, &scope, &tab.page).await?;
-        let deepest = down(&tab.page, &["b1", "c2", "a3", "c4"], button())?;
+        let deepest = down(&tab, &["b1", "c2", "a3", "c4"], button())?;
         let resolver = Resolver::new(&page, &scope, &deepest, Strictness::Strict);
         let c4 = resolved(&resolver).await?;
         assert_eq!(c4.path.hops().len(), 4, "four parents above c4");
@@ -757,7 +756,7 @@ mod tests {
         // A jump into c4's document needs no hop: the links give its parents.
         let jump_ref = format!("f{}e1", c4.world.seq().0);
         let jump = down(
-            &tab.page,
+            &tab,
             &[],
             json!({ "parts": [{ "name": "aria-ref", "body": jump_ref, "source": jump_ref }] }),
         )?;
@@ -790,7 +789,7 @@ mod tests {
         let env = live.env();
         let scope = OpScope::new(&env, count_op()?, CallHeader::default());
         let page = OpPage::admit(&live.playwright, &scope, &tab.page).await?;
-        let a1 = down(&tab.page, &["a1"], button())?;
+        let a1 = down(&tab, &["a1"], button())?;
         let resolver = Resolver::new(&page, &scope, &a1, Strictness::Strict);
         let before = resolved(&resolver).await?.world;
 

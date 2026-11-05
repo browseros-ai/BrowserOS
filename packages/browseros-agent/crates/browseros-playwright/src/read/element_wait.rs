@@ -99,7 +99,7 @@ async fn poll_element(
     target: &ElementTarget,
     state: ElementWait,
 ) -> Result<Value, PlaywrightError> {
-    let page = OpPage::admit(pw, scope, &target.page).await?;
+    let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let gone = || {
         if state == ElementWait::Hidden {
             Ok(Value::Null)

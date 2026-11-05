@@ -13,7 +13,7 @@ import {
   type ParsedSelector,
   splitSelectorByFrame,
 } from './vendored'
-import type { LocatorBrand } from './wire'
+import type { LocatorBrand, PageHandle } from './wire'
 
 /** What a locator's frame must provide for `has` checks and wire handles. */
 export type FrameLike = object
@@ -59,7 +59,7 @@ export function withLocatorOptions(
  */
 export function locatorBrand(
   api: string,
-  page: number,
+  page: PageHandle,
   frame: string | null,
   selector: string,
 ): LocatorBrand {

@@ -1,41 +1,63 @@
 /**
- * The prelude's only contact with claw-sdk's run bootstrap (sdk-skeleton D8). claw-sdk
- * evaluates the prelude in each run's fresh QuickJS runtime after its bootstrap, so the
- * prelude's state lives exactly as long as one run. What it relies on, one function each:
+ * The prelude's only contact with claw-sdk's run bootstrap
+ * (apps/claw-sdk/src/runtime/js/bootstrap.js). claw-sdk evaluates the prelude in each run's
+ * fresh QuickJS realm after its bootstrap, so the prelude's state lives exactly as long as one
+ * run. What it uses, one function each:
  *
- * - `__neo.invoke(name, input)` (documented): resolves with an op's `ok` value; rejects with the
- *   bootstrap's NeoError, a TimeoutError when the op timed out, holding the envelope's fields.
- * - `__neo.handles.register(brand, fromJson)` (documented): revives brands in results. Results
- *   are read as raw brands too, so a bootstrap that revives nothing still works.
- * - `__neo.onPageFacts(listener)` (assumed): every envelope's `pages` facts, which keep
- *   `page.url()`, `isClosed()` and `context.pages()` current between ops.
- * - `__neoPlaywrightSeed` (assumed): the run's default page and the tabs open at start, for the
- *   synchronous `context.pages()` and the `page` global.
- * - `setTimeout` and `clearTimeout` (the bootstrap's, over `__neo_sleep`): `waitForTimeout`,
- *   polling waits, and the deadline a `waitForEvent` predicate races.
+ * - `__neo.invoke(name, input)`: resolves with an op's `ok` value, its brands revived; rejects
+ *   with the bootstrap's NeoError, a TimeoutError when the op timed out.
+ * - `__neo.brands.register(brand, fromJson)`: the reviver for one brand in results.
+ * - `__neo.onReply(listener)`: every reply envelope, before its value is revived. Its `pages`
+ *   facts keep `page.url()`, `isClosed()` and `context.pages()` current between ops, and its
+ *   `defaultPage` names the tab the door opened for the run's lazy page.
+ * - `__neo.provide(name, build)`: one parameter of the agent's function. `build(init)` runs
+ *   once, when the run starts; `init.page` is the run's page brand when it already has a tab,
+ *   and `init.pages`, when the run service sends it, lists every tab as reply facts do.
+ * - `__neo_sleep(ms)`: the clock native the bootstrap's own `setTimeout` rides on, capped by
+ *   the run's deadline and cut short by its stop. The bootstrap hands `setTimeout` to the
+ *   agent's function only, so `waitForTimeout`, polling waits and the deadline a
+ *   `waitForEvent` predicate races read the native directly.
  *
- * Each is read as a property of `globalThis`. The bundle names no host identifier, which
- * tests/prelude-globals.test.ts checks, so the bootstrap must define these as global object
- * properties rather than top-level `const` bindings.
+ * Each is read as a property of `globalThis`, and the prelude defines no global of its own:
+ * the bundle names no host identifier, which tests/prelude-globals.test.ts checks, and
+ * claw-sdk's runtime/tests.rs pins that a run's realm gains only `__neo` and its natives.
  */
 import { shapeBridgeError, unsupportedError } from './errors'
 import type { OpName } from './ops.generated'
-import type { CallHeader, OpInputs, OpOutputs, PageFact } from './wire'
+import type {
+  CallHeader,
+  OpInputs,
+  OpOutputs,
+  PageBrand,
+  PageFact,
+} from './wire'
 
 type Bootstrap = {
   invoke(name: string, input?: unknown): Promise<unknown>
-  handles?: {
+  brands: {
     register(brand: string, fromJson: (json: object) => unknown): void
   }
-  onPageFacts?(listener: (pages: unknown) => void): void
+  onReply(listener: (envelope: unknown) => void): void
+  provide(name: string, build: (init: unknown) => unknown): void
 }
 
-/** What the host knows when the run starts. */
-export type Seed = {
-  /** The run's default page (the task's last tab), or null to open one on first use. */
-  page: number | null
+/** What a run starts with (claw-sdk's run_script.rs `init`). */
+export type RunInit = {
+  /** The task's tab when the run service knows one; null opens one on the first op. */
+  page: PageBrand | null
+  /**
+   * Every tab in the browser, as facts like a reply's, when the run service lists them
+   * (`init.pages`); empty when it does not, and replies alone then name the other tabs.
+   */
   pages: PageFact[]
-  browserVersion: string
+}
+
+/** What one reply says about pages. */
+export type Reply = {
+  /** Fresh facts about the pages the op touched, its target first. */
+  pages: PageFact[]
+  /** The tab of the run's own page, on the reply of an op the door opened it for. */
+  defaultPage: { id: number; tab: number } | null
 }
 
 function host(): Bootstrap {
@@ -68,25 +90,40 @@ export function registerBrand(
   brand: 'page' | 'element',
   fromJson: (json: object) => unknown,
 ): void {
-  host().handles?.register(brand, fromJson)
+  host().brands.register(brand, fromJson)
 }
 
-export function onPageFacts(listener: (facts: PageFact[]) => void): void {
-  host().onPageFacts?.((pages) => listener(readPageFacts(pages)))
+export function onReply(listener: (reply: Reply) => void): void {
+  host().onReply((envelope) =>
+    listener({
+      pages: readPageFacts(field(envelope, 'pages')),
+      defaultPage: readTab(field(envelope, 'defaultPage')),
+    }),
+  )
 }
 
-/** The run-start seed, or an empty one: no known tabs, and a page opened on first use. */
-export function readSeed(): Seed {
-  const seed: unknown = Reflect.get(globalThis, '__neoPlaywrightSeed')
-  if (typeof seed !== 'object' || seed === null)
-    return { page: null, pages: [], browserVersion: '' }
-  const page: unknown = Reflect.get(seed, 'page')
-  const version: unknown = Reflect.get(seed, 'browserVersion')
-  return {
-    page: typeof page === 'number' ? page : null,
-    pages: readPageFacts(Reflect.get(seed, 'pages')),
-    browserVersion: typeof version === 'string' ? version : '',
-  }
+/** Gives the agent's function its `name` parameter, built once from the run's init. */
+export function provide(name: string, build: (init: RunInit) => unknown): void {
+  host().provide(name, (init) => {
+    const page = readTab(field(init, 'page'))
+    return build({
+      page: page ? { $neo: 'page', ...page } : null,
+      pages: readPageFacts(field(init, 'pages')),
+    })
+  })
+}
+
+function field(value: unknown, name: string): unknown {
+  return typeof value === 'object' && value !== null
+    ? Reflect.get(value, name)
+    : undefined
+}
+
+/** `{ id, tab }` from a page brand or a `defaultPage`, or null. */
+function readTab(value: unknown): { id: number; tab: number } | null {
+  const id = field(value, 'id')
+  const tab = field(value, 'tab')
+  return typeof id === 'number' && typeof tab === 'number' ? { id, tab } : null
 }
 
 /** Page facts from the host, dropping anything without a numeric id. */
@@ -111,32 +148,39 @@ function readPageFacts(pages: unknown): PageFact[] {
   return facts
 }
 
-/** Resolves after `ms` on the bootstrap's timer, which the run deadline caps. */
+/** The bootstrap's clock, or null in a realm without one. */
+function clock(): ((ms: number) => Promise<unknown>) | null {
+  const sleep: unknown = Reflect.get(globalThis, '__neo_sleep')
+  return typeof sleep === 'function'
+    ? (ms) => Promise.resolve(Reflect.apply(sleep, globalThis, [ms]))
+    : null
+}
+
+/** Resolves after `ms` on the bootstrap's clock, which the run deadline caps. */
 export function sleep(api: string, ms: number): Promise<void> {
-  const setTimer: unknown = Reflect.get(globalThis, 'setTimeout')
-  if (typeof setTimer !== 'function')
+  const after = clock()
+  if (!after)
     return Promise.reject(
       unsupportedError(
         api,
         'this runtime has no timers; wait on the page instead',
       ),
     )
-  return new Promise((resolve) => {
-    Reflect.apply(setTimer, globalThis, [resolve, ms])
-  })
+  return after(ms).then(() => undefined)
 }
 
 /**
- * Calls `fire` after `ms` on the bootstrap's timer, and returns what cancels it. A runtime
- * without timers never fires it.
+ * Calls `fire` after `ms` on the bootstrap's clock, and returns what cancels it. A runtime
+ * without a clock never fires it.
  */
 export function startTimer(ms: number, fire: () => void): () => void {
-  const setTimer: unknown = Reflect.get(globalThis, 'setTimeout')
-  if (typeof setTimer !== 'function') return () => {}
-  const id: unknown = Reflect.apply(setTimer, globalThis, [fire, ms])
+  const after = clock()
+  if (!after) return () => {}
+  let live = true
+  void after(ms).then(() => {
+    if (live) fire()
+  })
   return () => {
-    const clearTimer: unknown = Reflect.get(globalThis, 'clearTimeout')
-    if (typeof clearTimer === 'function')
-      Reflect.apply(clearTimer, globalThis, [id])
+    live = false
   }
 }

@@ -13,7 +13,6 @@
     "delivery",
     "retryable",
     "operationId",
-    "hostCode",
     "timeout"
   ];
 
@@ -51,18 +50,19 @@
     return `${api}: ${message}`;
   }
   function shapeBridgeError(op, api, thrown) {
-    const fields = readFields(thrown);
-    const message = thrown instanceof Error ? thrown.message : typeof thrown === "object" && thrown !== null ? String(Reflect.get(thrown, "message") ?? thrown) : String(thrown);
-    if (op === "expect.locator" || op === "expect.page")
-      return withFields(new PlaywrightError(message), fields);
-    const timedOut = fields.timeout === true || thrown instanceof Error && thrown.name === "TimeoutError";
-    const shaped = apiMessage(api, op, message);
+    const read = readFields(thrown);
+    const timedOut = read.timeout === true || thrown instanceof Error && thrown.name === "TimeoutError";
+    const assertion = op === "expect.locator" || op === "expect.page";
+    const named = timedOut && !assertion ? "TimeoutError" : "Error";
     if (thrown instanceof Error) {
-      thrown.message = shaped;
-      thrown.name = timedOut ? "TimeoutError" : "Error";
-      return thrown;
+      if (!assertion)
+        thrown.message = apiMessage(api, op, thrown.message);
+      thrown.name = named;
+      return withFields(thrown, { timeout: timedOut });
     }
-    return withFields(timedOut ? new TimeoutError(shaped) : new PlaywrightError(shaped), fields);
+    const message = typeof thrown === "object" && thrown !== null ? String(Reflect.get(thrown, "message") ?? thrown) : String(thrown);
+    const shaped = assertion ? message : apiMessage(api, op, message);
+    return withFields(named === "TimeoutError" ? new TimeoutError(shaped) : new PlaywrightError(shaped), { ...read, timeout: timedOut });
   }
   function clientError(api, message) {
     return withFields(new PlaywrightError(`${api}: ${message}`), {
@@ -115,22 +115,30 @@
     }
   }
   function registerBrand(brand, fromJson) {
-    host().handles?.register(brand, fromJson);
+    host().brands.register(brand, fromJson);
   }
-  function onPageFacts(listener) {
-    host().onPageFacts?.((pages) => listener(readPageFacts(pages)));
+  function onReply(listener) {
+    host().onReply((envelope) => listener({
+      pages: readPageFacts(field(envelope, "pages")),
+      defaultPage: readTab(field(envelope, "defaultPage"))
+    }));
   }
-  function readSeed() {
-    const seed = Reflect.get(globalThis, "__neoPlaywrightSeed");
-    if (typeof seed !== "object" || seed === null)
-      return { page: null, pages: [], browserVersion: "" };
-    const page = Reflect.get(seed, "page");
-    const version = Reflect.get(seed, "browserVersion");
-    return {
-      page: typeof page === "number" ? page : null,
-      pages: readPageFacts(Reflect.get(seed, "pages")),
-      browserVersion: typeof version === "string" ? version : ""
-    };
+  function provide(name, build) {
+    host().provide(name, (init) => {
+      const page = readTab(field(init, "page"));
+      return build({
+        page: page ? { $neo: "page", ...page } : null,
+        pages: readPageFacts(field(init, "pages"))
+      });
+    });
+  }
+  function field(value, name) {
+    return typeof value === "object" && value !== null ? Reflect.get(value, name) : undefined;
+  }
+  function readTab(value) {
+    const id = field(value, "id");
+    const tab = field(value, "tab");
+    return typeof id === "number" && typeof tab === "number" ? { id, tab } : null;
   }
   function readPageFacts(pages) {
     if (!Array.isArray(pages))
@@ -159,23 +167,29 @@
     }
     return facts;
   }
+  function clock() {
+    const sleep = Reflect.get(globalThis, "__neo_sleep");
+    return typeof sleep === "function" ? (ms) => Promise.resolve(Reflect.apply(sleep, globalThis, [ms])) : null;
+  }
   function sleep(api, ms) {
-    const setTimer = Reflect.get(globalThis, "setTimeout");
-    if (typeof setTimer !== "function")
+    const after = clock();
+    if (!after)
       return Promise.reject(unsupportedError(api, "this runtime has no timers; wait on the page instead"));
-    return new Promise((resolve) => {
-      Reflect.apply(setTimer, globalThis, [resolve, ms]);
+    return after(ms).then(() => {
+      return;
     });
   }
   function startTimer(ms, fire) {
-    const setTimer = Reflect.get(globalThis, "setTimeout");
-    if (typeof setTimer !== "function")
+    const after = clock();
+    if (!after)
       return () => {};
-    const id = Reflect.apply(setTimer, globalThis, [fire, ms]);
+    let live = true;
+    after(ms).then(() => {
+      if (live)
+        fire();
+    });
     return () => {
-      const clearTimer = Reflect.get(globalThis, "clearTimeout");
-      if (typeof clearTimer === "function")
-        Reflect.apply(clearTimer, globalThis, [id]);
+      live = false;
     };
   }
 
@@ -388,11 +402,9 @@
   // packages/browseros-playwright-js/src/prelude/browser.ts
   class Browser extends EventEmitter {
     #context;
-    #versionValue;
-    constructor(context, version) {
+    constructor(context) {
       super();
       this.#context = context;
-      this.#versionValue = version;
       context._browser = this;
       markHandle(this);
     }
@@ -400,13 +412,13 @@
       return [this.#context];
     }
     version() {
-      return this.#versionValue;
+      return "";
     }
     isConnected() {
       return true;
     }
     toJSON() {
-      return { version: this.#versionValue };
+      return { version: this.version() };
     }
   }
 
@@ -691,7 +703,7 @@
         throw unsupportedError(api, `Neo reports only Playwright's events, not "${event}"`);
       const options = typeof optionsOrPredicate === "function" ? { predicate: optionsOrPredicate } : optionsOrPredicate ?? {};
       const deadline = new EventDeadline(api, event, since, timeoutMs(api, settings.timeout(options)));
-      const target = page === null ? null : await page._brand(api);
+      const target = page === null ? null : await page._openedBrand(api);
       let after = null;
       for (;; ) {
         const left = deadline.left();
@@ -719,7 +731,7 @@
       const api = `${page === null ? "browserContext" : "page"}.${on ? "on" : "off"}`;
       try {
         await invoke("events.listen", { api, timeoutMs: 0 }, {
-          page: page === null ? null : await page._brand(api),
+          page: page === null ? null : await page._openedBrand(api),
           event,
           on,
           since
@@ -4095,7 +4107,7 @@
     async _locatorBrand(api, selector) {
       if (typeof selector !== "string")
         throw clientError(api, `selector: expected string, got ${typeof selector}`);
-      return locatorBrand(api, await this._page._pageId(api), this._id, selector);
+      return locatorBrand(api, await this._page._brand(api), this._id, selector);
     }
     async _selectorOp(op, api, selector, strict, timeout, args) {
       const target = await this._locatorBrand(api, selector);
@@ -4733,7 +4745,6 @@
     _url;
     _title = "";
     _closed = false;
-    #opening;
     #childFrames = new Map;
     constructor(context, id, url = "about:blank") {
       super();
@@ -4784,7 +4795,7 @@
       return [];
     }
     toJSON() {
-      return this._id === null ? { $neo: "page" } : { $neo: "page", id: this._id };
+      return this._id === null ? { $neo: "page", id: null } : { $neo: "page", id: this._id, tab: this._tab };
     }
     locator(selector, options) {
       return this._mainFrame.locator(selector, options);
@@ -5006,19 +5017,23 @@
       if (isReported(event, "page"))
         this._context._events.listen(this, event, listening);
     }
-    async _pageId(api) {
-      if (this._id !== null)
-        return this._id;
-      if (this._closed)
-        throw clientError(api, "Target page, context or browser has been closed");
-      this.#opening ??= this._context._openDefaultPage(api, this);
-      return await this.#opening;
-    }
     async _brand(api) {
-      const id = await this._pageId(api);
+      if (this._id === null) {
+        if (this._closed)
+          throw clientError(api, "Target page, context or browser has been closed");
+        return { $neo: "page", id: null };
+      }
       if (this._tab === null)
         throw clientError(api, "Neo has no tab id for this page; get the page again from context.pages()");
-      return { $neo: "page", id, tab: this._tab };
+      return { $neo: "page", id: this._id, tab: this._tab };
+    }
+    async _openedBrand(api) {
+      if (this._id === null)
+        await this._refreshFrames(api);
+      const brand = await this._brand(api);
+      if (brand.id === null)
+        throw new Error(`${api}: Neo opened no tab for the run's page`);
+      return brand;
     }
     _handle(value) {
       if (value instanceof ElementHandle)
@@ -5149,23 +5164,16 @@
       return null;
     return typeof tab === "number" ? { id, tab } : { id };
   }
-  function entryFact(entry) {
-    const fact = pageFact(entry.page);
-    return fact ? { ...fact, url: entry.url } : null;
-  }
 
   class BrowserContext extends EventEmitter {
     _timeoutSettings = new TimeoutSettings;
     _events;
     _browser = null;
     #byId = new Map;
-    _defaultPage;
-    constructor(seed = readSeed()) {
+    #unopened = null;
+    constructor() {
       super();
       this._events = new EventHub(this);
-      for (const fact of seed.pages)
-        this._pageFor(fact);
-      this._defaultPage = seed.page === null ? new Page(this, null) : this._pageFor({ id: seed.page });
       markHandle(this);
     }
     pages() {
@@ -5221,19 +5229,24 @@
         return null;
       return this._pageFor(url === undefined ? fact : { ...fact, url });
     }
-    _applyFacts(facts) {
-      for (const fact of facts)
+    _runPage(init) {
+      for (const fact of init.pages)
         this._pageFor(fact);
+      if (init.page)
+        return this._pageFor(init.page);
+      this.#unopened = new Page(this, null);
+      return this.#unopened;
     }
-    async _openDefaultPage(api, page) {
-      const fact = entryFact(await invoke("context.newPage", { api, timeoutMs: 0 }, {}));
-      if (!fact)
-        throw clientError(api, "context.newPage returned no page");
-      page._id = fact.id;
-      page._tab = fact.tab ?? null;
-      this.#byId.set(fact.id, page);
-      page._applyFact(fact);
-      return fact.id;
+    _applyReply({ pages, defaultPage }) {
+      const page = this.#unopened;
+      if (defaultPage && page) {
+        this.#unopened = null;
+        page._id = defaultPage.id;
+        page._tab = defaultPage.tab;
+        this.#byId.set(defaultPage.id, page);
+      }
+      for (const fact of pages)
+        this._pageFor(fact);
     }
     async#openPage(api) {
       const opened = await invoke("context.newPage", { api, timeoutMs: 0 }, {});
@@ -6312,19 +6325,17 @@ Call Log:
     ConsoleMessage,
     Response
   });
-  var seed = readSeed();
-  var context = new BrowserContext(seed);
-  var browser = new Browser(context, seed.browserVersion);
+  var context = new BrowserContext;
+  var browser = new Browser(context);
+  var expect = createExpect();
   registerBrand("page", (json) => context._pageFromResult(json));
   registerBrand("element", (json) => {
     const brand = elementBrand(json);
-    return brand ? new ElementHandle(context._pageFor({ id: brand.page }), brand) : json;
+    return brand ? new ElementHandle(context._pageFor(brand.page), brand) : json;
   });
-  onPageFacts((facts) => context._applyFacts(facts));
-  Object.assign(globalThis, {
-    page: context._defaultPage,
-    context,
-    browser,
-    expect: createExpect()
-  });
+  onReply((reply) => context._applyReply(reply));
+  provide("page", (init) => context._runPage(init));
+  provide("context", () => context);
+  provide("browser", () => browser);
+  provide("expect", () => expect);
 })();

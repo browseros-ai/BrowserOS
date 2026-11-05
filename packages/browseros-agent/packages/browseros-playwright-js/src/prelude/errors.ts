@@ -3,26 +3,29 @@
  *
  * Two sources:
  * - an op failed: the bootstrap rejects `__neo.invoke` with its NeoError (a TimeoutError when
- *   the op timed out) holding the envelope's fields. `shapeBridgeError` keeps that object, so
- *   the bootstrap's classes still match, and fixes only the name and the first line.
+ *   the op timed out) holding the envelope's code, owner, delivery, retryable and operationId.
+ *   `shapeBridgeError` reshapes that object in place, expect's failures included: the
+ *   bootstrap knows its NeoErrors by identity (a WeakMap), so only that object settles an
+ *   uncaught failure as the op's own, with the owner and delivery the door decided, where a
+ *   copy would settle as the script's `script_error`. It fixes the name and the first line and
+ *   adds `timeout`, which the bootstrap says only by its class.
  * - the prelude refused a call before any op: `clientError` and `unsupportedError`, with the
  *   fields the dispatcher would have set for the same refusal (`not_sent`, never retryable).
  *   `waitTimeoutError` is the same idea for a wait deadline the prelude keeps across ops.
  *
  * The first line names the method the script called (`page.click: ...`), as playwright-core's
  * client prefixes every API error. expect's errors are the exception: Playwright prints those
- * as `expect(locator).toHaveText(expected) failed` in a plain Error, never a TimeoutError.
+ * as `expect(locator).toHaveText(expected) failed`, named `Error`, never `TimeoutError`.
  */
 import type { OpName } from './ops.generated'
 
-/** What claw-sdk's error envelope says (sdk-skeleton D8), copied onto every error. */
+/** What claw-sdk's error envelope says (runtime/bridge.rs `ErrBody`), on every error. */
 type ErrorFields = {
   code?: string
   owner?: 'neo' | 'script' | 'website' | 'host'
   delivery?: 'not_sent' | 'done' | 'unknown'
   retryable?: boolean
   operationId?: string
-  hostCode?: string
   timeout?: boolean
 }
 
@@ -32,7 +35,6 @@ const FIELDS = [
   'delivery',
   'retryable',
   'operationId',
-  'hostCode',
   'timeout',
 ] as const
 
@@ -75,33 +77,37 @@ function apiMessage(api: string, op: string, message: string): string {
   return `${api}: ${message}`
 }
 
-/** Shapes what `__neo.invoke` rejected with into the error the script receives. */
+/**
+ * Shapes what `__neo.invoke` rejected with into the error the script receives: the
+ * bootstrap's own error in place, never a copy (see above). QuickJS captures `stack` as
+ * frames only, with no name or message line, so the renamed error's stack stays true.
+ */
 export function shapeBridgeError(
   op: OpName,
   api: string,
   thrown: unknown,
 ): Error {
-  const fields = readFields(thrown)
-  const message =
-    thrown instanceof Error
-      ? thrown.message
-      : typeof thrown === 'object' && thrown !== null
-        ? String(Reflect.get(thrown, 'message') ?? thrown)
-        : String(thrown)
-  if (op === 'expect.locator' || op === 'expect.page')
-    return withFields(new PlaywrightError(message), fields)
+  const read = readFields(thrown)
   const timedOut =
-    fields.timeout === true ||
+    read.timeout === true ||
     (thrown instanceof Error && thrown.name === 'TimeoutError')
-  const shaped = apiMessage(api, op, message)
+  const assertion = op === 'expect.locator' || op === 'expect.page'
+  const named = timedOut && !assertion ? 'TimeoutError' : 'Error'
   if (thrown instanceof Error) {
-    thrown.message = shaped
-    thrown.name = timedOut ? 'TimeoutError' : 'Error'
-    return thrown
+    if (!assertion) thrown.message = apiMessage(api, op, thrown.message)
+    thrown.name = named
+    return withFields(thrown, { timeout: timedOut })
   }
+  const message =
+    typeof thrown === 'object' && thrown !== null
+      ? String(Reflect.get(thrown, 'message') ?? thrown)
+      : String(thrown)
+  const shaped = assertion ? message : apiMessage(api, op, message)
   return withFields(
-    timedOut ? new TimeoutError(shaped) : new PlaywrightError(shaped),
-    fields,
+    named === 'TimeoutError'
+      ? new TimeoutError(shaped)
+      : new PlaywrightError(shaped),
+    { ...read, timeout: timedOut },
   )
 }
 

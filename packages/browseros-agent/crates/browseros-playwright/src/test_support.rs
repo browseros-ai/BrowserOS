@@ -14,7 +14,7 @@ use browseros_cdp::{CdpClient, ConnectOptions};
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId, ProtocolSession,
-    TargetId,
+    TabId, TargetId,
 };
 use serde_json::{Value, json};
 use tokio::time;
@@ -129,19 +129,19 @@ impl LiveBrowser {
 
     /// The tab `target` is, as this connection's core numbers it.
     pub(crate) async fn tab(&self, target: &TargetId) -> TestResult<Tab> {
-        let page = self
+        let info = self
             .browser
             .pages
             .list()
             .await?
             .into_iter()
             .find(|info| info.target_id == *target)
-            .ok_or("the tab is not listed")?
-            .page_id;
-        let session = self.browser.pages.get_session(page.clone()).await?;
+            .ok_or("the tab is not listed")?;
+        let session = self.browser.pages.get_session(info.page_id.clone()).await?;
         Ok(Tab {
             target: target.clone(),
-            page,
+            page: info.page_id,
+            id: info.tab_id,
             session: session.session,
         })
     }
@@ -167,10 +167,17 @@ impl LiveBrowser {
 pub(crate) struct Tab {
     pub(crate) target: TargetId,
     pub(crate) page: PageId,
+    /// The browser's tab id, the page brand's `tab`.
+    pub(crate) id: TabId,
     pub(crate) session: ProtocolSession,
 }
 
 impl Tab {
+    /// `{"$neo":"page","id":7,"tab":1234}`, as a target names this tab.
+    pub(crate) fn brand(&self) -> Value {
+        json!({ "$neo": "page", "id": self.page.0, "tab": self.id.0 })
+    }
+
     /// The page's own main world, which the seal leaves alone.
     pub(crate) async fn main_world(&self, expression: &str) -> TestResult<Value> {
         let result: Value = self

@@ -12,7 +12,7 @@ use std::time::Duration;
 use browseros_cdp::{CdpClient, ConnectOptions};
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
 use browseros_core::{
-    BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId, TargetId,
+    BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId, TabId, TargetId,
 };
 use browseros_playwright::{
     Op, OpEnv, Playwright, PlaywrightError, PlaywrightHooks, Refusal, RunState, TypedBy,
@@ -21,6 +21,20 @@ use serde_json::{Value, json};
 use tokio::time;
 
 pub(crate) type TestResult<T = ()> = Result<T, Box<dyn Error>>;
+
+/// A tab a test opened, as a page brand names it: core's page id and the browser's tab id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TestPage {
+    pub(crate) id: PageId,
+    pub(crate) tab: TabId,
+}
+
+impl TestPage {
+    /// `{"$neo":"page","id":7,"tab":1234}`, the brand every target carries for this tab.
+    pub(crate) fn brand(&self) -> Value {
+        json!({ "$neo": "page", "id": self.id.0, "tab": self.tab.0 })
+    }
+}
 
 /// One value the journal reported.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,7 +182,11 @@ impl LiveBrowser {
                 "body": [{ "simples": [{ "selector": { "css": "html", "functions": [] }, "combinator": "" }] }],
                 "source": "html",
             }] });
-            let target = json!({ "$neo": "locator", "page": open.page_id.0, "chunks": [html], "display": "html" });
+            let page = TestPage {
+                id: open.page_id,
+                tab: open.tab_id,
+            };
+            let target = json!({ "$neo": "locator", "page": page.brand(), "chunks": [html], "display": "html" });
             live.invoke("locator.count", json!({ "target": target }))
                 .await??;
         }
@@ -176,7 +194,7 @@ impl LiveBrowser {
     }
 
     /// Opens `url` in a new tab, waits for it to load, and returns the tab's page.
-    pub(crate) async fn open(&self, url: &str) -> TestResult<PageId> {
+    pub(crate) async fn open(&self, url: &str) -> TestResult<TestPage> {
         let created = self
             .browser
             .cdp("Target.createTarget", json!({ "url": url }), None)
@@ -188,15 +206,18 @@ impl LiveBrowser {
                 .ok_or("no target id")?
                 .to_owned(),
         );
-        let page = self
+        let info = self
             .browser
             .pages
             .list()
             .await?
             .into_iter()
             .find(|info| info.target_id == target)
-            .ok_or("the tab is not listed")?
-            .page_id;
+            .ok_or("the tab is not listed")?;
+        let page = TestPage {
+            id: info.page_id,
+            tab: info.tab_id,
+        };
         let loaded = format!(
             "document.readyState === 'complete' && location.href === {}",
             serde_json::to_string(url)?
@@ -211,8 +232,8 @@ impl LiveBrowser {
     }
 
     /// Evaluates `expression` in the page's own main world, which the seal leaves alone.
-    pub(crate) async fn main_world(&self, page: &PageId, expression: &str) -> TestResult<Value> {
-        let session = self.browser.pages.get_session(page.clone()).await?;
+    pub(crate) async fn main_world(&self, page: &TestPage, expression: &str) -> TestResult<Value> {
+        let session = self.browser.pages.get_session(page.id.clone()).await?;
         let result: Value = session
             .session
             .send(
@@ -241,11 +262,11 @@ impl LiveBrowser {
         Ok(self.playwright.invoke(&env, op, input).await)
     }
 
-    pub(crate) async fn close(&self, page: &PageId) -> TestResult {
+    pub(crate) async fn close(&self, page: &TestPage) -> TestResult {
         let info = self
             .browser
             .pages
-            .get_info(page.clone())
+            .get_info(page.id.clone())
             .await
             .ok_or("no such page")?;
         self.browser

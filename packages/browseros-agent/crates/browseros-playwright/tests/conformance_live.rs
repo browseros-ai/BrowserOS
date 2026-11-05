@@ -1,13 +1,14 @@
 //! Runner N of conformance tier 1 (design D15): every case in `tests/conformance/cases/` run
-//! by the real prelude in QuickJS (`support/js_runner.rs`), with every op going through
-//! `Playwright::invoke`, as claw-sdk's `run` tool will run an agent's script. Runner P
-//! (`tests/conformance/runner-p.mjs`) runs the same files on real Playwright, and
-//! `tests/conformance/diff.mjs` compares the two; this test only records Neo's outcomes.
+//! by the real prelude behind claw-sdk's real bootstrap in QuickJS (`support/js_runner.rs`),
+//! with every op going through `Playwright::invoke`, as claw-sdk's `run` tool will run an
+//! agent's script. Runner P (`tests/conformance/runner-p.mjs`) runs the same files on real
+//! Playwright, and `tests/conformance/diff.mjs` compares the two; this test only records Neo's
+//! outcomes.
 //!
 //! Each case gets a fresh QuickJS runtime and a fresh `Playwright` over its own CDP
-//! connection, so no run state, listener or ref map carries from one case to the next. The
-//! prelude opens the case's tab on first use, as for a new task, and every tab it knows of is
-//! closed when the case ends.
+//! connection, so no run state, listener or ref map carries from one case to the next. The run
+//! starts with no tab, as a new task does, so the door opens one for its first op, and every
+//! tab the prelude knows of is closed when the case ends.
 //!
 //! `tests/conformance/run.sh tier1` runs it with everything it needs. By hand, it needs a
 //! throwaway BrowserOS on `BROWSEROS_CDP_PORT`, `tests/conformance/server.mjs` on
@@ -40,9 +41,14 @@ const HARNESS: &str = include_str!("conformance/harness.js");
 /// Runs one case after `HARNESS`, with `source` and `port` bound before it. Neo's side of the
 /// contract: `harness.pageEval` over the `__neo_test_eval` native, and the tabs the prelude
 /// opened closed at the end.
+///
+/// `harness.js` compiles a case with the `AsyncFunction` constructor, whose code sees globals
+/// only, while claw-sdk hands an agent's code the bootstrap's `console` and timers as its
+/// function's parameters. They become globals here for the case, as Node's are for Runner P.
 const RUN_CASE: &str = r"
 const skip = __conformance.needs(source)
 if (skip !== null) return { skipped: skip }
+Object.assign(globalThis, { console, setTimeout, clearTimeout })
 const pageEval = async (target, expression) => {
   if (target?._id == null) throw new Error('harness.pageEval: the page is not open yet')
   const reply = JSON.parse(await __neo_test_eval(target._id, target._tab, String(expression)))
@@ -121,12 +127,12 @@ async fn run_case(port: u16, source: &str) -> Value {
         Err(error) => return json!({ "broke": format!("connect: {error}") }),
     };
     let host: Arc<dyn OpHost> = Arc::new(run);
-    let seed = json!({ "page": null, "pages": [], "browserVersion": "" });
+    let init = json!({ "page": null });
     let script = format!(
         "{HARNESS}\nconst source = {}\nconst port = {port}\n{RUN_CASE}",
         Value::from(source)
     );
-    match time::timeout(CASE_BUDGET, run_script(&host, &seed, &script)).await {
+    match time::timeout(CASE_BUDGET, run_script(&host, &init, &script)).await {
         Ok(Ok(outcome)) => outcome,
         Ok(Err(error)) => json!({ "broke": error }),
         Err(_) => json!({ "broke": format!("the case ran past {CASE_BUDGET:?}") }),

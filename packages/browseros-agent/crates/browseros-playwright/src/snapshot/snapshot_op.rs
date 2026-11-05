@@ -160,7 +160,7 @@ async fn locator_snapshot(
     let Target::Locator(target) = &input.target else {
         return Err(scope.not_built());
     };
-    let page = OpPage::admit(pw, scope, &target.page).await?;
+    let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let snapshotter = Snapshotter {
         pw,
         scope,
@@ -481,7 +481,7 @@ mod tests {
         }))?;
         assert_eq!((page.mode, page.depth), (SnapshotMode::Ai, Some(3)));
         let locator: LocatorInput = serde_json::from_value(json!({
-            "target": { "$neo": "locator", "page": 7, "chunks": [
+            "target": { "$neo": "locator", "page": { "$neo": "page", "id": 7, "tab": 1007 }, "chunks": [
                 { "parts": [{ "name": "aria-ref", "body": "f2e5", "source": "f2e5" }] },
             ], "display": "getByRef('f2e5')" },
             "strict": "strict",

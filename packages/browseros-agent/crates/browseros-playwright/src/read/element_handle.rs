@@ -1,7 +1,6 @@
 //! Element handles: made from an element the probe pinned, and handed out by
 //! `locator.elementHandle(s)`, `page.$`, `page.$$` and `page.waitForSelector`.
 
-use browseros_core::PageId;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -10,7 +9,7 @@ use crate::page::OpPage;
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Read, ReadAll};
 use crate::read::element_read;
 use crate::resolve::{self, Landed, Resolver};
-use crate::target::{LocatorTarget, Strictness};
+use crate::target::{LocatorTarget, PageRef, Strictness};
 use crate::world::{BackendNodeId, Pin, SealedWorld};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
@@ -67,12 +66,14 @@ struct DescribedNode {
 }
 
 /// The handle for the element `pin` names in `world`: wire.ts's `ElementBrand`,
-/// `{"$neo":"element","page":7,"seq":4,"node":1234,"display":"<button>Save</button>"}`, which
-/// `ElementTarget` reads back. It names the document and the node's backend id, so it never
-/// depends on the pin staying in the probe's table. `None` when the element went first.
+/// `{"$neo":"element","page":{"$neo":"page","id":7,"tab":1234},"seq":4,"node":1234,
+/// "display":"<button>Save</button>"}`, which `ElementTarget` reads back. It names the document
+/// and the node's backend id, so it never depends on the pin staying in the probe's table, and
+/// carries the op's page brand, so the host's door finds and checks the page of a later op on
+/// it. `None` when the element went first.
 pub(crate) async fn element_brand(
     scope: &OpScope<'_>,
-    page: &PageId,
+    page: &PageRef,
     world: &SealedWorld,
     pin: Pin,
     preview: &str,
@@ -97,7 +98,7 @@ pub(crate) async fn element_brand(
     };
     Ok(Some(json!({
         "$neo": "element",
-        "page": page.0,
+        "page": page,
         "seq": world.seq(),
         "node": node,
         "display": preview,
@@ -112,7 +113,7 @@ pub(crate) async fn query_one(
     target: &LocatorTarget,
     strict: Strictness,
 ) -> Result<Value, PlaywrightError> {
-    let page = OpPage::admit(pw, scope, &target.page).await?;
+    let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, strict);
     let landed = resolver
         .attempt_at(|last, frame_visible| ProbeRequest::Read {
@@ -132,7 +133,7 @@ pub(crate) async fn query_one(
             sweep,
         } => {
             element_read::mark_sensitive(scope, sensitive);
-            element_read::report_swept(pw, &target.page, &sweep);
+            element_read::report_swept(pw, page.id(), &sweep);
             let located: Located = element_read::read_value(scope, value)?;
             let brand =
                 element_brand(scope, &target.page, &world, located.pin, &located.preview).await?;
@@ -156,7 +157,7 @@ pub(crate) async fn query_all(
     scope: &OpScope<'_>,
     target: &LocatorTarget,
 ) -> Result<Value, PlaywrightError> {
-    let page = OpPage::admit(pw, scope, &target.page).await?;
+    let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, Strictness::FirstMatch);
     let landed = resolver
         .attempt_at(|last, _| ProbeRequest::ReadAll {
@@ -175,7 +176,7 @@ pub(crate) async fn query_all(
     else {
         return Err(resolver.refused(reply));
     };
-    element_read::report_swept(pw, &target.page, &sweep);
+    element_read::report_swept(pw, page.id(), &sweep);
     let mut handles = Vec::with_capacity(values.len());
     for value in values {
         let PinnedMatch { pin, preview } = element_read::read_value(scope, value)?;

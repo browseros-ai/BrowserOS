@@ -57,7 +57,7 @@ import type {
   LocatorBrand,
   OpInputs,
   OpOutputs,
-  PageBrand,
+  PageHandle,
   PointerOptions,
   ScreenshotOptions,
   SnapshotResult,
@@ -518,7 +518,7 @@ export class Frame extends EventEmitter {
     return this._page._timeoutSettings.navigationTimeout(options)
   }
 
-  async _frameArgs(api: string): Promise<{ page: PageBrand; frame?: string }> {
+  async _frameArgs(api: string): Promise<{ page: PageHandle; frame?: string }> {
     const page = await this._page._brand(api)
     return this._id === null ? { page } : { page, frame: this._id }
   }
@@ -529,7 +529,7 @@ export class Frame extends EventEmitter {
         api,
         `selector: expected string, got ${typeof selector}`,
       )
-    return locatorBrand(api, await this._page._pageId(api), this._id, selector)
+    return locatorBrand(api, await this._page._brand(api), this._id, selector)
   }
 
   /** One op on the element `selector` names in this frame. */

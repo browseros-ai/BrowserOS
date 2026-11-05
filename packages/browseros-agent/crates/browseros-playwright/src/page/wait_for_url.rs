@@ -65,7 +65,7 @@ pub(crate) async fn wait_for_url(
     input: WaitForUrlInput,
 ) -> Result<Value, PlaywrightError> {
     main_frame_only(scope, input.frame.as_ref())?;
-    let page = OpPage::admit(pw, scope, &input.page.checked(pw.browser(), scope).await?).await?;
+    let page = OpPage::admit_handle(pw, scope, &input.page).await?;
     let main = page.main_endpoint();
     let session_id = main
         .session

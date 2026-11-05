@@ -21,7 +21,7 @@ const api: Api = JSON.parse(
 
 const ELEMENT = {
   $neo: 'element',
-  page: 7,
+  page: { $neo: 'page', id: 7, tab: 1007 },
   seq: 0,
   node: 5,
   display: '<body></body>',
