@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Storage CLI - Push third-party resources to R2 for build:server ingestion."""
+"""Storage CLI - Push third-party resources to R2 for build ingestion."""
 
 import hashlib
 import json
