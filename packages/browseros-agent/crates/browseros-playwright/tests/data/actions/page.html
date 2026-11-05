@@ -1,0 +1,57 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Actions</title>
+<style>
+  body { margin: 0; font: 14px sans-serif }
+  #src, #dst { display: inline-block; width: 100px; height: 60px; border: 1px solid #888; margin: 12px }
+  #mover { position: absolute; left: 0; top: 260px; width: 90px; height: 30px }
+  #far { margin-top: 2400px; display: block }
+</style></head>
+<body>
+<button id="go">Go</button>
+<button id="twice">Twice</button>
+<button id="hover">Hover me</button>
+<button id="disabled" disabled>Disabled</button>
+<label id="agree-label"><input id="agree" type="checkbox"> Agree</label>
+<input id="stuck" type="checkbox" aria-label="Stuck">
+<input id="choice" type="radio" name="choice" aria-label="Choice" checked>
+<button id="ask">Ask</button>
+<a id="next" href="/actions/next.html">Next</a>
+<input id="field" aria-label="Field">
+<div id="src" draggable="true">Drag me</div><div id="dst">Drop here</div>
+<button id="mover">Mover</button>
+<button id="far">Far</button>
+<script>
+  // Every pointer event on an element with an id, as the page saw it, with the page's
+  // visibility then: a background tab is hidden unless focus emulation is on.
+  window.__log = [];
+  const log = (entry) => window.__log.push(entry);
+  for (const type of ['mousedown', 'mouseup', 'click', 'dblclick'])
+    document.addEventListener(type, (e) => {
+      if (e.target.id) log(`${type} ${e.target.id} ${document.visibilityState}`);
+    }, true);
+  document.getElementById('hover').addEventListener('mouseenter', () => log('enter hover'));
+  document.getElementById('stuck').addEventListener('click', (e) => e.preventDefault());
+  document.getElementById('ask').addEventListener('click', () => log(`confirm ${confirm('Sure?')}`));
+  const field = document.getElementById('field');
+  field.addEventListener('focus', () => log('focus field'));
+  field.addEventListener('blur', () => log('blur field'));
+  field.addEventListener('ping', (e) => log(`ping trusted=${e.isTrusted} bubbles=${e.bubbles} detail=${e.detail}`));
+  const src = document.getElementById('src');
+  const dst = document.getElementById('dst');
+  src.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', 'payload'); log('dragstart src'); });
+  dst.addEventListener('dragover', (e) => e.preventDefault());
+  dst.addEventListener('drop', (e) => { e.preventDefault(); log(`drop dst ${e.dataTransfer.getData('text/plain')}`); });
+  // The mover slides right every 10 ms for 700 ms after startMoving(), then stops.
+  const mover = document.getElementById('mover');
+  window.startMoving = () => {
+    window.__stopped = false;
+    let left = 0;
+    const until = Date.now() + 700;
+    const timer = setInterval(() => {
+      left += 4;
+      mover.style.left = `${left}px`;
+      if (Date.now() >= until) { clearInterval(timer); window.__stopped = true; }
+    }, 10);
+  };
+  mover.addEventListener('click', () => log(`mover stopped=${window.__stopped}`));
+</script>
+</body></html>

@@ -22,6 +22,12 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # runtime, and the US keyboard table and macOS editing commands for the Rust keyboard port. An
 # upstream import that is not on this list makes the engine build fail, so a missed file cannot
 # ship silently.
+#
+# The tests/ files are upstream's own page tests, the input of conformance tier 2
+# (tests/conformance/tier2/convert.mjs): the specs it lifts, the two helper modules their
+# helpers come from, and the static assets those tests load from upstream's test server.
+# Nothing under tests/ is built into the crate. The converter skips a test whose asset is
+# missing here and names the asset, so a newly needed one is added to this list.
 FILES=(
   LICENSE
   NOTICE
@@ -50,6 +56,66 @@ FILES=(
   packages/isomorphic/yaml.ts
   packages/playwright-core/src/server/macEditingCommands.ts
   packages/playwright-core/src/server/usKeyboardLayout.ts
+  tests/assets/counter.html
+  tests/assets/deep-shadow.html
+  tests/assets/dom.html
+  tests/assets/empty.html
+  tests/assets/frames/frame.html
+  tests/assets/frames/frameset.html
+  tests/assets/frames/nested-frames.html
+  tests/assets/frames/one-frame.html
+  tests/assets/frames/script.js
+  tests/assets/frames/style.css
+  tests/assets/frames/two-frames.html
+  tests/assets/grid.html
+  tests/assets/input/animating-button.html
+  tests/assets/input/button.html
+  tests/assets/input/checkbox.html
+  tests/assets/input/fileupload.html
+  tests/assets/input/keyboard.html
+  tests/assets/input/mouse-helper.js
+  tests/assets/input/rotatedButton.html
+  tests/assets/input/scrollable.html
+  tests/assets/input/select.html
+  tests/assets/input/textarea.html
+  tests/assets/offscreenbuttons.html
+  tests/assets/one-style.css
+  tests/assets/one-style.html
+  tests/assets/playground.html
+  tests/assets/wrappedlink.html
+  tests/config/utils.ts
+  tests/page/locator-any-frame.spec.ts
+  tests/page/locator-click.spec.ts
+  tests/page/locator-convenience.spec.ts
+  tests/page/locator-element-handle.spec.ts
+  tests/page/locator-evaluate.spec.ts
+  tests/page/locator-frame.spec.ts
+  tests/page/locator-highlight.spec.ts
+  tests/page/locator-is-visible.spec.ts
+  tests/page/locator-list.spec.ts
+  tests/page/locator-misc-1.spec.ts
+  tests/page/locator-misc-2.spec.ts
+  tests/page/locator-query.spec.ts
+  tests/page/locator-wait-for-function.spec.ts
+  tests/page/page-aria-snapshot-ai.spec.ts
+  tests/page/page-check.spec.ts
+  tests/page/page-click-during-navigation.spec.ts
+  tests/page/page-click-react.spec.ts
+  tests/page/page-click-scroll.spec.ts
+  tests/page/page-click-timeout-1.spec.ts
+  tests/page/page-click-timeout-2.spec.ts
+  tests/page/page-click-timeout-3.spec.ts
+  tests/page/page-click-timeout-4.spec.ts
+  tests/page/page-click.spec.ts
+  tests/page/page-fill.spec.ts
+  tests/page/page-keyboard.spec.ts
+  tests/page/page-wait-for-selector-1.spec.ts
+  tests/page/page-wait-for-selector-2.spec.ts
+  tests/page/pageTest.ts
+  tests/page/selectors-css.spec.ts
+  tests/page/selectors-get-by.spec.ts
+  tests/page/selectors-role.spec.ts
+  tests/page/selectors-text.spec.ts
 )
 
 commit="$(git -C "$checkout" rev-parse --verify "${tag}^{commit}")"

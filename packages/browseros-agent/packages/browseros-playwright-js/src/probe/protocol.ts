@@ -20,7 +20,7 @@ import type { ParsedSelector } from '../../../../crates/browseros-playwright/thi
  * as `Mask`). `boot` reports it, and an install whose number differs from Rust's
  * PROBE_PROTOCOL fails as `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 6
+export const PROTOCOL = 11
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
@@ -82,11 +82,14 @@ export type HitAction = 'mouse' | 'hover' | 'drag'
 /**
  * Arms the hit-target interceptor. `blockAll` is Playwright's `trial`. With `expectRect`
  * the probe arms only while the element still has that rect (the stability baseline).
+ * `expiryMs` bounds an interceptor whose verdict never comes; Rust sets it past the last event
+ * its op can still send.
  */
 export type ArmPlan = {
   action: HitAction
   blockAll: boolean
   token: number
+  expiryMs: number
   expectRect?: Rect
 }
 export type SelectOption =
@@ -94,6 +97,10 @@ export type SelectOption =
   | { value: string }
   | { label: string }
   | { index: number }
+/**
+ * An edit of a pinned element; each answers `value` or `detached`. A `fill` answers
+ * `Filled`, a `selectOptions` answers `Selected`, the others answer null.
+ */
 export type Edit =
   | { kind: 'fill'; value: string }
   | { kind: 'selectOptions'; options: SelectOption[] }
@@ -101,6 +108,17 @@ export type Edit =
   | { kind: 'focus'; resetSelection: boolean }
   | { kind: 'blur' }
   | { kind: 'dispatchEvent'; type: string; init: Record<string, unknown> }
+/**
+ * A fill's `value`: `done` when the input took the value itself (date, color, range and the
+ * other input types without typing), `needsinput` when it is focused and selected for Rust's
+ * Input.insertText.
+ */
+export type Filled = 'done' | 'needsinput'
+/** A selectOptions' `value`: the selected values, or why upstream retries. */
+export type Selected =
+  | string[]
+  | 'error:optionsnotfound'
+  | 'error:optionnotenabled'
 export type QueryState =
   | 'visible'
   | 'hidden'
@@ -114,7 +132,8 @@ export type QueryState =
  * layout box); `frameOrigin` is an `<iframe>`'s content-box origin there and its scale
  * (`FrameOrigin`), which Rust applies to a child frame's boxes to place them in the main
  * frame's viewport; `located` is what upstream's `waitForSelector` checks on each poll, with
- * the element pinned for a handle.
+ * the element pinned for a handle; `checkable` is what `check` and `uncheck` read around
+ * their click (`Checkable`); `fileInput` is the file input `setInputFiles` sets (`FileInput`).
  */
 export type Read =
   | { kind: 'textContent' }
@@ -126,6 +145,8 @@ export type Read =
   | { kind: 'state'; state: QueryState }
   | { kind: 'frameOrigin' }
   | { kind: 'located' }
+  | { kind: 'checkable' }
+  | { kind: 'fileInput'; multiple: boolean }
 /**
  * A `frameOrigin` read's value: where the iframe's document starts in this frame's viewport,
  * and how much the iframe's own and its ancestors' transforms scale it there (rendered size
@@ -135,6 +156,18 @@ export type Read =
 export type FrameOrigin =
   | { x: number; y: number; scaleX: number; scaleY: number }
   | 'rotated'
+/**
+ * A `checkable` read's value: upstream's `elementState(el, 'checked')` as `_setChecked` reads
+ * it, whether the element (or the control its label names) is checked, and whether that
+ * control is a radio, which `uncheck` refuses before it clicks.
+ */
+export type Checkable = { checked: boolean; radio: boolean }
+/**
+ * A `fileInput` read's value: the `<input type=file>` the element is or its label names,
+ * pinned, after upstream's `_setInputFiles` checks for `multiple` files. Rust sets the files
+ * on its node through core's file transfers.
+ */
+export type FileInput = { pin: Pin }
 /** A `located` read's value. `count` is how many matched, for upstream's call-log line. */
 export type Located = {
   pin: Pin
@@ -173,6 +206,12 @@ export type ActRequest = {
   arm?: ArmPlan
 }
 export type VerdictRequest = { op: 'verdict'; token: number }
+/**
+ * How many trusted pointer moves this frame has received. Rust reads it before an action's
+ * approach and again after it, and presses once it grew: the browser now routes the action's
+ * point to this frame. It needs no interceptor, so a forced action checks its route too.
+ */
+export type MovesRequest = { op: 'moves' }
 export type DisarmRequest = { op: 'disarm' }
 export type FrameBoxRequest = {
   op: 'frameBox'
@@ -198,13 +237,17 @@ export type SnapshotRequest = {
   mode: SnapshotMode
   depth?: number
 }
+/**
+ * One poll of one retrying matcher. Rust's loop owns the timing, `.not` and the failure, so a
+ * poll never waits. `strictness` is `firstMatch` for the matchers of every match (count and
+ * the array forms), which read all matches.
+ */
 export type ExpectRequest = {
   op: 'expect'
   target: ProbeTarget
   strictness: Strictness
   frameVisible: boolean
   params: ExpectParams
-  finalPoll: boolean
 }
 export type SweepRequest = { op: 'sweep' }
 export type FocusedRequest = { op: 'focused' }
@@ -235,6 +278,7 @@ export type ProbeRequest =
   | ResolveRequest
   | ActRequest
   | VerdictRequest
+  | MovesRequest
   | DisarmRequest
   | FrameBoxRequest
   | EditRequest
@@ -275,6 +319,10 @@ export type Described = {
 /** Zero matches. `staleRef` names a ref that can never match here again: fail at once. */
 export type NoMatch = { kind: 'none'; staleRef?: string }
 export type StrictViolation = { kind: 'strict'; message: string }
+/**
+ * `sensitive`, here and in `Measured`, is the seal's kind of the field an edit of the element
+ * changes: the element, or the control its label names (sensitive.ts `editedKind`).
+ */
 export type ResolvedElement = {
   kind: 'element'
   pin: Pin
@@ -308,6 +356,7 @@ export type Measured = {
 export type Covered = { kind: 'covered'; by: string }
 export type Armed = { kind: 'armed'; rect: Rect; point: Point; token: number }
 export type Verdict = { kind: 'verdict'; hit: Hit }
+export type Moves = { kind: 'moves'; moves: number }
 export type FrameBox = {
   kind: 'frameBox'
   origin: Point | null
@@ -342,19 +391,33 @@ export type Snapshot = {
   iframes: SnapshotIframe[]
   sweep: string[]
 }
+/**
+ * What one poll saw. `matches` is the matcher's own result, before `.not`. `resolved` is
+ * upstream's call-log text for what the locator resolved to (an element's preview, or
+ * `3 elements`). `received` is the value the matcher compared, already masked by the seal;
+ * left out when it is `undefined`. `sensitive` is the seal's kind of a field whose value or
+ * value attribute was compared through `__clawSeal.valueEquals` or `attributeEquals`, so
+ * Rust can mark the op's target sensitive.
+ */
 export type ExpectPoll = {
   kind: 'expect'
   matches: boolean
+  resolved: string
   received?: unknown
-  ariaSnapshot?: string
+  sensitive: SensitiveKind | null
 }
 /** Raw values of this document's sensitive fields, for Rust's mask; never for the agent. */
 export type Sweep = { kind: 'sweep'; values: string[] }
-/** The focused element: a sensitive field? An iframe (pinned, so Rust can hop into it)? */
+/**
+ * The focused element: a sensitive field? An iframe (pinned, so Rust can hop into it)? Or an
+ * element that may host a closed shadow root this world cannot see into (pinned as `host`,
+ * so Rust can ask CDP whether it does)?
+ */
 export type Focused = {
   kind: 'focused'
   sensitive: boolean
   iframe: Pin | null
+  host: Pin | null
 }
 export type UrlMatch = { kind: 'urlMatch'; matches: boolean; url: string }
 /**
@@ -390,6 +453,7 @@ export type ProbeReply =
   | Covered
   | Armed
   | Verdict
+  | Moves
   | FrameBox
   | Value
   | ReadValue
@@ -419,6 +483,7 @@ export const REPLY_KINDS = {
   resolve: ['element', 'frame', 'notFrame', 'none', 'strict', 'detached'],
   act: ['measured', 'armed', 'covered', 'state', 'detached', 'none', 'strict'],
   verdict: ['verdict'],
+  moves: ['moves'],
   disarm: ['verdict'],
   frameBox: ['frameBox', 'detached', 'none', 'strict'],
   edit: ['value', 'detached'],

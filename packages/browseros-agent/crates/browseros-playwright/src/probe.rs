@@ -28,9 +28,10 @@ pub(crate) use probe_call::{
     ProbeFailure, ProbeMask, call, call_masked, call_on, pinned_object, reply_of,
 };
 pub(crate) use probe_reply::{
-    ErrorClass, PROBE_PROTOCOL, PageText, Point, ProbeReply, Rect, SnapshotIframe,
+    ErrorClass, Hit, PROBE_PROTOCOL, PageText, Point, ProbeReply, Rect, SnapshotIframe,
 };
 pub(crate) use probe_request::{
-    DocumentPart, ParsedSelector, ProbeRequest, ProbeTarget, QueryState, Read, ReadAll,
+    ArmPlan, DocumentPart, Edit, ElementState, ExpectParams, FillValue, HitAction, ParsedSelector,
+    ProbeRequest, ProbeTarget, QueryState, Read, ReadAll, Retarget, ScrollPlan, SelectOption,
     SnapshotMode, UrlPattern, Want,
 };

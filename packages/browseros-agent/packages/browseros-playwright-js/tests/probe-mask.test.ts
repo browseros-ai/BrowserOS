@@ -80,7 +80,7 @@ it("tests that the engine's whitespace-normalized copy of a value is masked", ()
   expect(masked(['  ab  '], 'ab and  ab  ').value).toBe('ab and[private]')
 })
 
-it('tests that text reaching a cut without a mask marks the call, and outside a call nothing', () => {
+it('tests that text reaching a cut without a mask marks the call, and outside a call is masked whole', () => {
   expect(masked(undefined, `Signed in with ${SECRET}`)).toEqual({
     value: `Signed in with ${SECRET}`,
     needsMask: true,
@@ -89,7 +89,8 @@ it('tests that text reaching a cut without a mask marks the call, and outside a 
     value: `Signed in with ${SECRET}`,
     needsMask: false,
   })
-  expect(maskPageText(SECRET)).toBe(SECRET)
+  expect(maskPageText(`Signed in with ${SECRET}`)).toBe('[private]')
+  expect(maskPageText('')).toBe('')
 })
 
 it('tests that every reply that previews page text answers needsMask without a mask', () => {

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use browseros_core::{BrowserSession, FrameId, PageId, ProtocolSession};
+use browseros_core::{BrowserSession, FrameId, PageId, ProtocolSession, TargetId};
 
 use crate::op_scope::{AdmittedPage, OpScope};
 use crate::page::PageState;
@@ -48,19 +48,36 @@ impl<'op> OpPage<'op> {
         Self::admit(pw, scope, &page).await
     }
 
+    /// The crate instance the op runs in.
+    pub(crate) fn playwright(&self) -> &'op Playwright {
+        self.pw
+    }
+
     /// The tab.
     pub(crate) fn id(&self) -> &PageId {
         &self.admitted.id
     }
 
-    /// The `Playwright` the op runs in, whose hooks learn every value a sweep finds.
-    pub(crate) fn playwright(&self) -> &'op Playwright {
-        self.pw
-    }
-
     /// The tab's sealed worlds.
     pub(crate) fn frames(&self) -> &FrameWorlds {
         self.state.frames()
+    }
+
+    /// The tab's state, for what outlives the op: its input lock, its focus lease.
+    pub(crate) fn state(&self) -> &Arc<PageState> {
+        &self.state
+    }
+
+    /// The tab's CDP target.
+    pub(crate) fn target_id(&self) -> &TargetId {
+        &self.admitted.session.target_id
+    }
+
+    /// The tab's root session, where all input goes.
+    pub(crate) fn root_session(&self) -> ProtocolSession {
+        self.pw
+            .browser()
+            .protocol_session(self.admitted.session.session_id.clone())
     }
 
     /// The browser session, for core's frame registry.

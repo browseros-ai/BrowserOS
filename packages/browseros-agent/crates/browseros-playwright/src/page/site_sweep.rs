@@ -1,5 +1,8 @@
 //! What every sealed-world read is masked with: the raw values of every sensitive field in the
-//! read frame's site, across every CDP session of the page.
+//! read frame's site, across every CDP session of the page. The page text an action or a
+//! matcher reports goes through the same mask ([`swept_now`], [`refused`]): a strict
+//! violation's previews, the element a click names as in its way, a select's values, and a
+//! matcher's `Received` and its `locator resolved to` lines.
 //!
 //! A read runs in one frame's sealed world, and the probe's reply carries that frame's own
 //! sweep. But the page's own script reads every frame of its site through `frames[…]`, `parent`
@@ -24,7 +27,11 @@
 //! (`Resolver::attempt_masked`), and any other request that meets such text, a strict
 //! violation say, answers `needsMask` and is asked again with them (`resolve::remask`). Either
 //! way the site is swept once more after a reply with cut text in it, because a field of
-//! another frame may have changed in between ([`SiteValues::lacks_any_of`]).
+//! another frame may have changed in between ([`SiteValues::lacks_any_of`]). Actions ask the
+//! same way (`resolve::ask`), and an `expect` poll, which always previews, sends the values
+//! with it (`resolve::ask_masked`, `Resolver::attempt_masked`). The one cut outside a probe
+//! call, the hit-target interceptor's description of what a trusted event hit, is masked whole
+//! in the page, and its verdict describes the miss again inside its own call.
 //!
 //! A frame of another site is never swept: its script cannot reach the read frame's
 //! documents, so whatever it holds can only arrive by a message the frame chose to send.
@@ -56,8 +63,8 @@ impl SiteSweep {
     /// The values the read is masked with: `own`, the sweep its reply came with, and every
     /// other frame's. All of them go to the host, also when a frame was not swept, so its own
     /// mask at every exit knows them from now on. A frame of the site that missed its budget
-    /// fails the read closed as `neo / unsupported`, as a main-world script is refused: the
-    /// read's text may hold that frame's value, and Neo cannot tell.
+    /// fails the op closed as `neo / unsupported`, as a main-world script is refused: the
+    /// page text may hold that frame's value, and Neo cannot tell.
     pub(crate) fn values(
         self,
         pw: &Playwright,
@@ -75,15 +82,17 @@ impl SiteSweep {
             Some(Unswept::Late) => Err(scope.fail(
                 ErrorCode::Unsupported,
                 &format!(
-                    "a frame of the read frame's site did not answer Neo's privacy sweep within \
-                     {}ms, so the read's result is withheld; try again once the frame responds",
+                    "a frame of the page's site did not answer Neo's privacy sweep within {}ms, \
+                     so page text that may hold its values is withheld; try again once the frame \
+                     responds",
                     FRAME_BUDGET.as_millis()
                 ),
             )),
             Some(Unswept::Lost) => Err(scope.fail(
                 ErrorCode::Unsupported,
-                "Neo lost its connection to a frame of the read frame's site and could not reach \
-                 it again for its privacy sweep, so the read's result is withheld; try again",
+                "Neo lost its connection to a frame of the page's site and could not reach it \
+                 again for its privacy sweep, so page text that may hold its values is withheld; \
+                 try again",
             )),
             Some(Unswept::Failed(failure)) => Err(resolve::failed(scope, failure)),
         }
@@ -134,6 +143,15 @@ impl SiteValues {
     /// A read's value, every string in it masked once.
     pub(crate) fn mask(&self, value: PageText) -> Value {
         value.masked(&self.0)
+    }
+
+    /// Page text that is one string (an element's preview, what a matcher resolved to), masked
+    /// once, for a message or a call-log line.
+    pub(crate) fn mask_line(&self, text: PageText) -> String {
+        match self.mask(text) {
+            Value::String(text) => text,
+            other => other.to_string(),
+        }
     }
 
     /// Page text outside a read's value (a document's markup or title, a strict violation's
@@ -200,6 +218,14 @@ impl SiteValues {
     }
 }
 
+#[cfg(test)]
+impl SiteValues {
+    /// Values as a site's sweep would find them, for unit tests without a browser.
+    pub(crate) fn found(values: FieldValues) -> Self {
+        Self(values)
+    }
+}
+
 /// A reply that ends a read in `world`. A strict violation previews each match's markup, page
 /// text the probe sends without a sweep, so its message is masked with the site's values first:
 /// `mask`'s sweep when the read took one, else one taken now, on this error path only. Any
@@ -223,4 +249,20 @@ pub(crate) async fn refused(
         Ok(values) => values.refused(scope, ProbeReply::Strict { message }),
         Err(withheld) => withheld,
     }
+}
+
+/// The values of `world`'s site, swept now, for page text an op reports outside a read's value:
+/// the element a click names as in its way, a select's values. `own` is what the op knows to be
+/// a sensitive field's value besides the sweep (a sensitive select's selected values). Actions
+/// sweep only when a reply carries such text, so a click that lands sends no sweep; a frame of
+/// the site that misses its budget fails the op closed, as [`SiteSweep::values`] does.
+pub(crate) async fn swept_now(
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    world: SealedWorld,
+    own: FieldValues,
+) -> Result<SiteValues, PlaywrightError> {
+    SiteSweep::of(page, world)
+        .await
+        .values(page.playwright(), scope, page.id(), own)
 }

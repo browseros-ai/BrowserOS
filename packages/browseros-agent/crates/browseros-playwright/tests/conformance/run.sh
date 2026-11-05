@@ -2,30 +2,43 @@
 # Conformance (design D15). `run.sh tier1 [case ...]` runs every case in cases/ (or the named
 # ones) on real Playwright (runner-p.mjs) and on Neo (tests/conformance_live.rs), diffs the two
 # (diff.mjs) against deviations.yaml, and exits 0 only when every difference is listed.
-# harness.js says how to write a case.
+# harness.js says how to write a case. `run.sh tier2 [case ...]` does the same for the cases
+# tier2/convert.mjs lifts from upstream's own tests (cases/tier2, after checking they are
+# fresh), against tier2/deviations.yaml.
 #
 # It starts what it needs and stops it at exit: the fixture server (server.mjs) and, unless
 # BROWSEROS_CDP_PORT names a running one, a throwaway headless BrowserOS with its own profile.
 #
-#   PLAYWRIGHT_NODE_MODULES  node_modules holding playwright-core at the vendored version
-#                            (required; the sdk-playwright spikes install one)
+#   PLAYWRIGHT_NODE_MODULES  node_modules holding playwright-core and @playwright/test at the
+#                            vendored version (required; the sdk-playwright spikes install one)
 #   BROWSEROS_CDP_PORT       a throwaway BrowserOS to use instead of starting one
 #   PORT_BASE                the started browser's ports, PORT_BASE to PORT_BASE+3 (9351)
 #   BROWSEROS_APP            the BrowserOS binary to start
-#   CONFORMANCE_OUT          where outcomes go (packages/browseros-agent/target/conformance)
+#   CONFORMANCE_OUT          where outcomes go (packages/browseros-agent/target/conformance),
+#                            tier 2's in its tier2/
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 agent="$(cd "$here/../../../.." && pwd)"
 
-if [[ "${1:-}" != tier1 ]]; then
-  echo "usage: run.sh tier1 [case ...]" >&2
-  exit 2
-fi
+out="${CONFORMANCE_OUT:-$agent/target/conformance}"
+case "${1:-}" in
+  tier1) deviations="$here/deviations.yaml" ;;
+  tier2)
+    deviations="$here/tier2/deviations.yaml"
+    export CONFORMANCE_CASES_DIR=cases/tier2
+    out="$out/tier2"
+    ;;
+  *)
+    echo "usage: run.sh tier1|tier2 [case ...]" >&2
+    exit 2
+    ;;
+esac
+tier="$1"
 shift
 : "${PLAYWRIGHT_NODE_MODULES:?set PLAYWRIGHT_NODE_MODULES to a node_modules with playwright-core}"
 export PLAYWRIGHT_NODE_MODULES
-out="${CONFORMANCE_OUT:-$agent/target/conformance}"
+if [[ "$tier" == tier2 ]]; then node "$here/tier2/convert.mjs" --check; fi
 mkdir -p "$out"
 # The logs go too: the server's port is read from its log, and the shell truncates a redirect
 # only once the background child runs, so an old log could hand out the last run's port.
@@ -91,4 +104,4 @@ node "$here/runner-p.mjs" "$out/p" "$@"
   CONFORMANCE_OUT="$out/n" CONFORMANCE_CASES="$*" \
     cargo +1.98.0 test -p browseros-playwright --locked --test conformance_live -- --ignored --nocapture
 )
-node "$here/diff.mjs" "$out/p" "$out/n" "$here/deviations.yaml" --stubs
+node "$here/diff.mjs" "$out/p" "$out/n" "$deviations" --stubs

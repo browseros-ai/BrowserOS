@@ -110,6 +110,10 @@ pub(crate) enum ProbeRequest {
     },
     /// Stops the interceptor armed with `token` and reports whether the trusted events hit.
     Verdict { token: u32 },
+    /// How many trusted pointer moves this frame has received. The route check reads it
+    /// before an action's approach and again after: once it grew, the browser routes the
+    /// action's point here. It reads no interceptor, so a forced action checks its route too.
+    Moves,
     /// Stops whatever interceptor is armed in this world. Idempotent.
     Disarm,
     /// For a parent frame of an action's element: the iframe's content-box origin, and with
@@ -140,13 +144,12 @@ pub(crate) enum ProbeRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         depth: Option<i64>,
     },
-    /// One `expect` poll; `final_poll` asks for the failure-only extras.
+    /// One poll of one retrying matcher; Rust's loop owns the timing, `.not` and the failure.
     Expect {
         target: ProbeTarget,
         strictness: Strictness,
         frame_visible: bool,
         params: ExpectParams,
-        final_poll: bool,
     },
     /// `__clawSeal.sensitiveValues()`, for the evaluate guard.
     Sweep,
@@ -230,6 +233,9 @@ pub(crate) struct ArmPlan {
     pub(crate) action: HitAction,
     pub(crate) block_all: bool,
     pub(crate) token: u32,
+    /// How long the probe keeps it armed without a verdict: past the last event the op can
+    /// still send, so its expiry only frees a page whose Rust is gone.
+    pub(crate) expiry_ms: u64,
     /// The stability baseline: the probe arms only while the element still has this rect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) expect_rect: Option<Rect>,
@@ -320,12 +326,20 @@ pub(crate) enum Read {
     /// What `waitForSelector` checks on one poll: the first match pinned, its visibility and
     /// how many matched.
     Located,
+    /// What `check` and `uncheck` read around their click: `{ checked, radio }` of the element,
+    /// or of the control its label names.
+    Checkable,
+    /// The `<input>` that `setInputFiles` sets, the element or the control its label names,
+    /// pinned (`{ pin }`) after upstream's checks for `multiple` files.
+    FileInput {
+        multiple: bool,
+    },
 }
 
 impl Read {
     /// Whether the value can hold page text, so the read is masked with its site's values. A
-    /// state, a box and a frame's origin cannot (protocol.ts `TEXTLESS`, whose reads send no
-    /// sweep).
+    /// state, a checkable, a file input's pin, a box and a frame's origin cannot (protocol.ts
+    /// `TEXTLESS`, whose reads send no sweep).
     pub(crate) fn holds_page_text(&self) -> bool {
         match self {
             Self::TextContent
@@ -334,7 +348,11 @@ impl Read {
             | Self::InputValue
             | Self::Attribute { .. }
             | Self::Located => true,
-            Self::BoundingBox | Self::State { .. } | Self::FrameOrigin => false,
+            Self::BoundingBox
+            | Self::State { .. }
+            | Self::Checkable
+            | Self::FileInput { .. }
+            | Self::FrameOrigin => false,
         }
     }
 }
@@ -369,10 +387,17 @@ pub(crate) enum SnapshotMode {
 }
 
 /// Upstream's per-poll expect parameters minus the selector, passed through as the prelude
-/// built them.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// built them. They hold the script's expected value, which for `toHaveValue` on a password
+/// field is the password, so they never print (STYLE P4).
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub(crate) struct ExpectParams(pub(crate) Map<String, Value>);
+
+impl fmt::Debug for ExpectParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[expect params]")
+    }
+}
 
 /// A `waitForURL` pattern: a glob, or a `RegExp`'s source and flags.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -439,6 +464,7 @@ mod tests {
             "resolve",
             "act",
             "verdict",
+            "moves",
             "disarm",
             "frameBox",
             "edit",

@@ -33,7 +33,10 @@ const MIN_LENGTH = 4
 /** One call's state: its mask, and whether page text reached a cut without one. */
 type CallMask = { forms: string[] | undefined; unmasked: boolean }
 
-/** The call running now. Probe calls are synchronous and never nest, so one slot holds it. */
+/**
+ * The call running now. Probe calls never nest, and a handler cuts page text only before its
+ * first await, so one slot holds it.
+ */
 let running: CallMask | undefined
 
 /**
@@ -63,10 +66,15 @@ export function underMask<T>(
  * `text` with every form of every value of the call's mask replaced by `[private]`, leftmost
  * and longest first, as core's `FieldValues` replaces them. Without a mask the call is marked
  * as needing one and `text` comes back as it is, never to leave the page.
+ *
+ * Outside any call the engine still cuts text: the hit-target interceptor describes what a
+ * trusted event hit while the event runs (act.ts), and its verdict carries that description
+ * to Rust later. No mask is in force then and no reply can be refused, so the text is masked
+ * whole; the verdict describes a miss again inside its own call.
  */
 export function maskPageText(text: string): string {
   const call = running
-  if (!call) return text
+  if (!call) return text === '' ? text : ECHO_MASK
   if (!call.forms) {
     call.unmasked = true
     return text

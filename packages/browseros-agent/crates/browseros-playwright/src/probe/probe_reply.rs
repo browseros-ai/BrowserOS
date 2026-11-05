@@ -23,7 +23,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 6;
+pub(crate) const PROBE_PROTOCOL: u32 = 11;
 
 /// One reply; `kind` is the tag. Any request may also answer `error`, `uninstalled` when the
 /// world has no booted probe, and `needsMask` when it came without the mask its reply needs.
@@ -55,7 +55,9 @@ pub(crate) enum ProbeReply {
     Strict {
         message: String,
     },
-    /// One element, pinned. `sensitive` is the seal's `kind(el)`.
+    /// One element, pinned. `sensitive` is the seal's `kind` of the field an edit of the
+    /// element changes: the element, or the control its label names. An op marks its target
+    /// sensitive on it before it logs or sends a value.
     Element {
         pin: Pin,
         preview: String,
@@ -79,7 +81,7 @@ pub(crate) enum ProbeReply {
     State {
         missing: ElementState,
     },
-    /// Measured, not armed: frame-local CSS pixels.
+    /// Measured, not armed: frame-local CSS pixels. `sensitive` is as [`Self::Element`]'s.
     Measured {
         pin: Pin,
         rect: Rect,
@@ -88,9 +90,9 @@ pub(crate) enum ProbeReply {
         transformed: bool,
         sensitive: Option<SensitiveKind>,
     },
-    /// Upstream's description of what intercepts pointer events.
+    /// Upstream's description of what intercepts pointer events: the page's own markup.
     Covered {
-        by: String,
+        by: PageText,
     },
     /// The interceptor is armed with `token`.
     Armed {
@@ -101,14 +103,19 @@ pub(crate) enum ProbeReply {
     Verdict {
         hit: Hit,
     },
+    /// `moves`'s answer: the trusted pointer moves the frame received so far.
+    Moves {
+        moves: u64,
+    },
     /// A parent frame's iframe origin (`None` when transformed) and its hit test.
     FrameBox {
         origin: Option<Point>,
         hit: Option<Hit>,
     },
-    /// A read's or an edit's result, already masked by the seal.
+    /// An edit's result, masked by the seal at sensitive fields' own getters only: the
+    /// probe's own words for most edits, and the options' values for `selectOptions`.
     Value {
-        value: Value,
+        value: PageText,
     },
     /// One element's read, masked by the seal at sensitive fields' own getters only. `sweep`
     /// holds the raw values of the document's sensitive fields, for Rust's mask and the host's
@@ -136,23 +143,28 @@ pub(crate) enum ProbeReply {
         #[serde(deserialize_with = "field_values")]
         sweep: FieldValues,
     },
-    /// One `expect` poll.
+    /// One `expect` poll: the matcher's own result before `.not`, upstream's call-log text for
+    /// what the locator resolved to, the value it compared (`None` is JavaScript's
+    /// `undefined`, which leaves the field out; `null` stays a value), and the seal's kind of
+    /// a field compared through `__clawSeal.valueEquals` or `attributeEquals`.
     Expect {
         matches: bool,
-        #[serde(default)]
-        received: Option<Value>,
-        #[serde(default)]
-        aria_snapshot: Option<String>,
+        resolved: PageText,
+        #[serde(default, deserialize_with = "present")]
+        received: Option<PageText>,
+        sensitive: Option<SensitiveKind>,
     },
     /// Raw values of this document's sensitive fields.
     Sweep {
         #[serde(deserialize_with = "field_values")]
         values: FieldValues,
     },
-    /// The focused element.
+    /// The focused element: a sensitive field, an iframe the keys go into, or an element that
+    /// may host a closed shadow root, which the sealed world cannot see into.
     Focused {
         sensitive: bool,
         iframe: Option<Pin>,
+        host: Option<Pin>,
     },
     UrlMatch {
         matches: bool,
@@ -197,6 +209,7 @@ impl ProbeReply {
             Self::Covered { .. } => "covered",
             Self::Armed { .. } => "armed",
             Self::Verdict { .. } => "verdict",
+            Self::Moves { .. } => "moves",
             Self::FrameBox { .. } => "frameBox",
             Self::Value { .. } => "value",
             Self::Read { .. } => "read",
@@ -248,14 +261,15 @@ pub(crate) struct Rect {
     pub(crate) height: f64,
 }
 
-/// `"done"`, or upstream's description of the element the pointer events reached instead.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+/// `"done"`, or upstream's description of the element the pointer events reached instead,
+/// which is the page's own markup.
+#[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum Hit {
     Done(HitDone),
     Missed {
         #[serde(rename = "hitTargetDescription")]
-        by: String,
+        by: PageText,
     },
 }
 
@@ -303,6 +317,12 @@ impl PageText {
     pub(crate) fn textless(self) -> Value {
         self.0
     }
+
+    /// The text as a sensitive field's own values, a select's selected values: what the mask
+    /// and the host's `values_swept` add to a site's sweep once an edit set them.
+    pub(crate) fn field_values(&self) -> FieldValues {
+        FieldValues::from_sweep(&self.0)
+    }
 }
 
 impl fmt::Debug for PageText {
@@ -331,6 +351,11 @@ fn mask_strings(values: &FieldValues, value: &mut Value) {
     }
 }
 
+/// A field that is there, `null` included: `Option<PageText>` alone reads `null` as absent.
+fn present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<PageText>, D::Error> {
+    PageText::deserialize(deserializer).map(Some)
+}
+
 /// The seal's raw values go straight into `FieldValues`, which never prints them.
 fn field_values<'de, D: Deserializer<'de>>(deserializer: D) -> Result<FieldValues, D::Error> {
     let sweep = Value::deserialize(deserializer)?;
@@ -342,10 +367,11 @@ mod tests {
     use std::error::Error;
     use std::fmt::Write as _;
 
+    use browseros_core::sensitive_fields::FieldValues;
     use serde_json::{Value, json};
     use sha2::{Digest, Sha256};
 
-    use super::{Hit, PROBE_PROTOCOL, ProbeReply};
+    use super::{Hit, PROBE_PROTOCOL, ProbeReply, Rect};
 
     const PROTOCOL: &str = include_str!("../../tests/data/probe-protocol.json");
     const LOCK: &str = include_str!("../../tests/data/probe-protocol.lock");
@@ -376,6 +402,19 @@ mod tests {
              old probe would answer the old shapes. Bump PROTOCOL in protocol.ts and \
              PROBE_PROTOCOL here, rebuild, and record the line this test then prints"
         );
+        Ok(())
+    }
+
+    /// An action echoes the rect the probe measured back as `expectRect`, and the probe arms
+    /// only while its new rect is `===` that one. A transformed element's rect has 17-digit
+    /// floats, so a parse even one ULP off (`serde_json`'s default) makes it unstable forever.
+    #[test]
+    fn tests_that_a_measured_rect_comes_back_to_the_probe_bit_for_bit() -> Result<(), Box<dyn Error>>
+    {
+        let measured = r#"{"x":586.4763793945312,"y":364.80352783203125,"width":107.90814208984375,"height":48.043212890625}"#;
+        let reply: Value = serde_json::from_str(measured)?;
+        let rect: Rect = serde_json::from_value(reply)?;
+        assert_eq!(serde_json::to_string(&rect)?, measured);
         Ok(())
     }
 
@@ -445,10 +484,39 @@ mod tests {
         let missed: ProbeReply = serde_json::from_value(
             json!({ "kind": "verdict", "hit": { "hitTargetDescription": "<div id=\"x\">" } }),
         )?;
-        assert!(
-            matches!(&missed, ProbeReply::Verdict { hit: Hit::Missed { by } } if by == "<div id=\"x\">"),
-            "{missed:?}"
-        );
+        let ProbeReply::Verdict {
+            hit: Hit::Missed { by },
+        } = missed
+        else {
+            return Err("a description is a miss".into());
+        };
+        assert_eq!(by.masked(&FieldValues::default()), json!("<div id=\"x\">"));
+        Ok(())
+    }
+
+    /// Upstream logs `unexpected value "null"` for an absent attribute and `"undefined"` for
+    /// no value, so the two must stay apart.
+    #[test]
+    fn tests_that_an_expect_poll_keeps_null_apart_from_undefined() -> Result<(), Box<dyn Error>> {
+        let poll = |received: Option<Value>| {
+            let mut reply = json!({ "kind": "expect", "matches": false, "resolved": "<input/>", "sensitive": null });
+            if let (Some(received), Some(fields)) = (received, reply.as_object_mut()) {
+                fields.insert("received".to_owned(), received);
+            }
+            serde_json::from_value::<ProbeReply>(reply)
+        };
+        let ProbeReply::Expect {
+            received: Some(received),
+            ..
+        } = poll(Some(Value::Null))?
+        else {
+            return Err("null is a value".into());
+        };
+        assert_eq!(received.textless(), Value::Null);
+        assert!(matches!(
+            poll(None)?,
+            ProbeReply::Expect { received: None, .. }
+        ));
         Ok(())
     }
 

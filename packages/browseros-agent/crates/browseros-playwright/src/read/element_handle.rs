@@ -78,6 +78,25 @@ pub(crate) async fn element_brand(
     pin: Pin,
     preview: &str,
 ) -> Result<Option<Value>, PlaywrightError> {
+    let Some(node) = backend_node(scope, world, pin).await? else {
+        return Ok(None);
+    };
+    Ok(Some(json!({
+        "$neo": "element",
+        "page": page,
+        "seq": world.seq(),
+        "node": node,
+        "display": preview,
+    })))
+}
+
+/// The CDP backend node id of the element `pin` names in `world`, which names the node on
+/// that world's session for good; `None` when the element or the world went first.
+pub(crate) async fn backend_node(
+    scope: &OpScope<'_>,
+    world: &SealedWorld,
+    pin: Pin,
+) -> Result<Option<BackendNodeId>, PlaywrightError> {
     let object = match probe::pinned_object(scope, world, pin).await {
         Ok(Some(object)) => object,
         Ok(None) | Err(ProbeFailure::Gone) => return Ok(None),
@@ -87,22 +106,13 @@ pub(crate) async fn element_brand(
         .session()
         .send::<_, Described>("DOM.describeNode", json!({ "objectId": object }))
         .await;
-    let node = match described {
-        Ok(described) => described.node.backend_node_id,
-        Err(error) => {
-            return match ProbeFailure::from_core(error) {
-                ProbeFailure::Gone => Ok(None),
-                failure => Err(resolve::failed(scope, failure)),
-            };
-        }
-    };
-    Ok(Some(json!({
-        "$neo": "element",
-        "page": page,
-        "seq": world.seq(),
-        "node": node,
-        "display": preview,
-    })))
+    match described {
+        Ok(described) => Ok(Some(described.node.backend_node_id)),
+        Err(error) => match ProbeFailure::from_core(error) {
+            ProbeFailure::Gone => Ok(None),
+            failure => Err(resolve::failed(scope, failure)),
+        },
+    }
 }
 
 /// `page.$` and `frame.$`: the first match now as a handle, or null, as upstream's

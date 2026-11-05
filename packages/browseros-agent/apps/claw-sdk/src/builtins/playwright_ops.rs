@@ -42,16 +42,25 @@ use crate::dispatch::{
 /// Here so that `runtime/`, which never names a browser crate (STYLE.md P2), can install it.
 pub(crate) const PLAYWRIGHT_PRELUDE: &str = browseros_playwright::PRELUDE_JS;
 
-/// The `run` description's one line for every Playwright op. It names what is not built yet and
-/// what is held ([`HELD`]), so a model does not spend a call finding out.
+/// The `run` description's one line for every Playwright op. It names the families a model reaches
+/// for, what the prelude refuses, and what is held ([`HELD`]), so a model does not spend a call
+/// finding out.
 const PLAYWRIGHT_LINE: &str = "Playwright's API (as of 1.56) on `page`, `context` and \
     `browser`: locators (`getByRole`, `getByText`, `getByLabel`, `getByTestId`, `locator`, \
     `frameLocator`, `filter`, `nth`) that wait and are strict, frames (`page.frames()`, \
-    `frame.locator`), reads (`textContent`, `innerText`, `getAttribute`, `count`, \
-    `isVisible`, `page.content()`, `page.title()`), navigation (`goto`, `reload`, \
-    `waitForURL`, `waitForLoadState`), `screenshot`, and events (`page.on`, `waitForEvent`). \
-    Actions (`click`, `fill`, `press`), `keyboard`, `mouse` and `expect` are not built yet and \
-    fail with `internal_error`. Running script in the page (`page.evaluate`, \
+    `frame.locator`), reads (`textContent`, `innerText`, `getAttribute`, `inputValue`, \
+    `count`, `isVisible`, `page.content()`, `page.title()`), actions that wait until the \
+    element is actionable (`click`, `dblclick`, `hover`, `fill`, `clear`, `press`, \
+    `pressSequentially`, `check`, `uncheck`, `setChecked`, `selectOption`, `selectText`, \
+    `focus`, `blur`, `dragTo`, `dispatchEvent`, `scrollIntoViewIfNeeded`; no `tap`), \
+    `page.keyboard` (`press`, `type`, `insertText`, `down`, `up`), `page.mouse` (`move`, \
+    `down`, `up`, `click`, `dblclick`, `wheel`), navigation (`goto`, `reload`, `waitForURL`, \
+    `waitForLoadState`), `screenshot`, events (`page.on`, `waitForEvent`), and `expect`: \
+    retrying locator matchers (`toBeVisible`, `toBeChecked`, `toHaveText`, `toContainText`, \
+    `toHaveValue`, `toHaveCount`, `toHaveAttribute`, ...) and page matchers (`toHaveTitle`, \
+    `toHaveURL`), with `.not`, value matchers (`toBe`, `toEqual`, ...), `expect.poll` and \
+    `toPass`; soft assertions, `toBeOK` and screenshot, snapshot and `toMatchAriaSnapshot` \
+    comparisons are not available. Running script in the page (`page.evaluate`, \
     `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, `$eval`, `$$eval`, \
     `elementHandle.evaluate`, `page.setContent`, and their `frame` forms) is not available for \
     now and fails with `method_unavailable`, and `goto` and `reload` open only `http`, `https`, \

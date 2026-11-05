@@ -13,7 +13,9 @@
 //! `tests/conformance/run.sh tier1` runs it with everything it needs. By hand, it needs a
 //! throwaway BrowserOS on `BROWSEROS_CDP_PORT`, `tests/conformance/server.mjs` on
 //! `CONFORMANCE_PORT`, and `CONFORMANCE_OUT`, the directory the outcomes go to;
-//! `CONFORMANCE_CASES` (names, space-separated) runs only those cases:
+//! `CONFORMANCE_CASES` (names, space-separated) runs only those cases, and
+//! `CONFORMANCE_CASES_DIR` (relative to `tests/conformance/`, `cases` by default) picks a tier's
+//! directory, such as tier 2's `cases/tier2`:
 //! `cargo test -p browseros-playwright --test conformance_live -- --ignored`.
 
 #[path = "support/js_runner.rs"]
@@ -43,12 +45,13 @@ const HARNESS: &str = include_str!("conformance/harness.js");
 /// opened closed at the end.
 ///
 /// `harness.js` compiles a case with the `AsyncFunction` constructor, whose code sees globals
-/// only, while claw-sdk hands an agent's code the bootstrap's `console` and timers as its
-/// function's parameters. They become globals here for the case, as Node's are for Runner P.
+/// only, while claw-sdk hands an agent's code the bootstrap's `console` and timers, and the
+/// prelude's `expect`, as its function's parameters. They become globals here for the case, as
+/// Node's and Playwright Test's `expect` are for Runner P.
 const RUN_CASE: &str = r"
 const skip = __conformance.needs(source)
 if (skip !== null) return { skipped: skip }
-Object.assign(globalThis, { console, setTimeout, clearTimeout })
+Object.assign(globalThis, { console, setTimeout, clearTimeout, expect })
 const pageEval = async (target, expression) => {
   if (target?._id == null) throw new Error('harness.pageEval: the page is not open yet')
   const reply = JSON.parse(await __neo_test_eval(target._id, target._tab, String(expression)))
@@ -77,7 +80,10 @@ async fn tests_that_every_conformance_case_runs_through_the_prelude() -> TestRes
         .map(|names| names.split_whitespace().map(str::to_owned).collect())
         .unwrap_or_default();
     fs::create_dir_all(&out)?;
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/conformance/cases");
+    let tier = env::var("CONFORMANCE_CASES_DIR").unwrap_or_else(|_| "cases".to_owned());
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/conformance")
+        .join(tier);
     for (name, source) in cases(&dir, &only)? {
         let outcome = run_case(port, &source).await;
         let kind = outcome

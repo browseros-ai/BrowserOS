@@ -1525,6 +1525,8 @@ async fn the_ops_that_run_script_in_the_pages_main_world_are_held() -> Result<()
                 "Target.getTargets",
                 "Target.setDiscoverTargets",
                 "Browser.setDownloadBehavior",
+                // The crate reads the platform once at its start, for the keyboard's chords.
+                "Browser.getVersion",
             ]
             .contains(&method.as_str())
         })
@@ -1857,38 +1859,26 @@ async fn a_crate_failure_keeps_its_owner_and_timeout_and_its_answer_decides_deli
 }
 
 #[tokio::test]
-async fn an_op_the_crate_has_not_built_answers_so_on_the_tab_its_locator_names()
--> Result<(), Box<dyn Error>> {
+async fn an_action_runs_in_the_crate_on_the_tab_its_locator_names() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
     let page = harness.owner_tab("https://example.com/").await?;
     let (run, _guard) = harness.run()?;
     let input = json!({
-        "call": { "api": "page.click", "timeoutMs": 5000 },
+        "call": { "api": "page.click", "timeoutMs": 200 },
         "target": locator(&handle(&page)),
         "strict": "strict",
+        "options": {},
     });
     let (operation, reply) = harness.submit_op(&run, "locator.click", input).await;
+    // The fake browser has no sealed world to click in, so the crate's click stops before it
+    // sends anything; `tests/playwright_browseros.rs` clicks on a real one. What is pinned here is
+    // that the door let the action through to the crate, on the locator's tab.
     let failure = failure(reply)?;
-    assert_eq!(
-        (
-            failure.error.owner(),
-            failure.error.code(),
-            failure.delivery
-        ),
-        (
-            ErrorOwner::Neo,
-            ErrorCode::INTERNAL_ERROR,
-            Delivery::NotSent
-        ),
-        "{}",
-        failure.error
-    );
+    assert_eq!(failure.delivery, Delivery::NotSent, "{}", failure.error);
+    let message = failure.error.message();
     assert!(
-        failure
-            .error
-            .message()
-            .starts_with("page.click: not built yet"),
-        "the crate's message, named after the API the script called: {}",
+        message.starts_with("page.click: ") && !message.contains("not built"),
+        "the crate's own message, named after the API the script called: {}",
         failure.error
     );
     assert_eq!(

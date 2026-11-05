@@ -6,6 +6,7 @@
 
 use std::error::Error;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 use std::{env, future};
 
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, ConnectOptions};
@@ -20,6 +21,7 @@ use browseros_playwright::{
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
+use tokio::time;
 
 /// A live test's result.
 pub(crate) type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -56,9 +58,21 @@ struct Tap {
     browser: Arc<dyn CdpConnection>,
     watch: Mutex<Option<(&'static str, Intercept)>>,
     policy: Policy,
+    /// The `Input.*` commands sent while a test records them, as `{ method, params }`.
+    inputs: Mutex<Option<Vec<Value>>>,
 }
 
 impl Tap {
+    /// Keeps `method` and its params when it is an input command and a test is recording.
+    fn record(&self, method: &str, params: impl FnOnce() -> Value) {
+        if !method.starts_with("Input.") {
+            return;
+        }
+        if let Some(inputs) = lock(&self.inputs).as_mut() {
+            inputs.push(json!({ "method": method, "params": params() }));
+        }
+    }
+
     /// Acts on `method` if it is the watched one, once; whether the command must hang.
     fn hangs(&self, method: &str) -> bool {
         let mut watch = lock(&self.watch);
@@ -86,6 +100,7 @@ impl CdpConnection for Tap {
         if self.hangs(method) {
             return Box::pin(future::pending());
         }
+        self.record(method, || params.clone());
         self.browser.send(method, params, session)
     }
 
@@ -98,6 +113,9 @@ impl CdpConnection for Tap {
         if self.hangs(method) {
             return Box::pin(future::pending());
         }
+        self.record(method, || {
+            serde_json::from_str(params_json).unwrap_or(Value::Null)
+        });
         self.browser.send_raw_json(method, params_json, session)
     }
 
@@ -111,6 +129,7 @@ impl CdpConnection for Tap {
         if self.hangs(method) {
             return Box::pin(future::pending());
         }
+        self.record(method, || params.clone());
         self.browser
             .send_at_epoch(expected_epoch, method, params, session)
     }
@@ -125,6 +144,9 @@ impl CdpConnection for Tap {
         if self.hangs(method) {
             return Box::pin(future::pending());
         }
+        self.record(method, || {
+            serde_json::from_str(params_json).unwrap_or(Value::Null)
+        });
         self.browser
             .send_raw_json_at_epoch(expected_epoch, method, params_json, session)
     }
@@ -152,6 +174,8 @@ struct LiveEnv {
     run_state: Arc<RunState>,
     calls: Mutex<Vec<EnvCall>>,
     policy: Policy,
+    /// What `recheck` refuses with, as a takeover would, until a test allows it again.
+    refusal: Mutex<Option<Refusal>>,
 }
 
 impl LiveEnv {
@@ -172,10 +196,13 @@ impl OpEnv for LiveEnv {
         &self.run_state
     }
 
-    /// Allows, unless the tap set a refusal for this one call.
+    /// Allows, unless the tap set a refusal for this one call, or a test refuses every recheck.
     fn recheck(&self) -> Result<(), Refusal> {
         self.record(EnvCall::Recheck);
-        lock(&self.policy).take().map_or(Ok(()), Err)
+        if let Some(refusal) = lock(&self.policy).take() {
+            return Err(refusal);
+        }
+        lock(&self.refusal).clone().map_or(Ok(()), Err)
     }
 
     fn mark_sent(&self) {
@@ -257,6 +284,7 @@ impl LiveRun {
             browser: wrap(client),
             watch: Mutex::default(),
             policy: Arc::clone(&policy),
+            inputs: Mutex::default(),
         });
         let browser = BrowserSession::new(
             Arc::clone(&tap) as Arc<dyn CdpConnection>,
@@ -272,6 +300,7 @@ impl LiveRun {
             run_state: Arc::default(),
             calls: Mutex::default(),
             policy,
+            refusal: Mutex::default(),
         };
         Ok(Self {
             browser,
@@ -290,6 +319,17 @@ impl LiveRun {
     /// The next command the crate sends with `method` gets `intercept`; later ones pass.
     pub(crate) fn intercept(&self, method: &'static str, intercept: Intercept) {
         *lock(&self.tap.watch) = Some((method, intercept));
+    }
+
+    /// Starts recording the `Input.*` commands the crate sends, forgetting earlier ones.
+    pub(crate) fn record_input(&self) {
+        *lock(&self.tap.inputs) = Some(Vec::new());
+    }
+
+    /// The `Input.*` commands sent since [`LiveRun::record_input`], as `{ method, params }`;
+    /// recording goes on.
+    pub(crate) fn recorded_input(&self) -> Vec<Value> {
+        lock(&self.tap.inputs).clone().unwrap_or_default()
     }
 
     /// Runs op `name` with `input`, as claw-sdk's handler does.
@@ -382,6 +422,115 @@ impl LiveRun {
             .capture
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(refusal);
+    }
+
+    /// Every recheck from now on is refused with `refusal`, as the owner taking over the tab
+    /// would; `None` allows them again.
+    pub(crate) fn refuse_rechecks(&self, refusal: Option<Refusal>) {
+        *self
+            .env
+            .refusal
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = refusal;
+    }
+
+    /// A background tab on `url`, opened the way the owner or another session opens one, so
+    /// core did not create it for the agent. Returns once it loaded.
+    pub(crate) async fn open_adopted(&self, url: &str) -> TestResult<TestPage> {
+        let created = self
+            .browser
+            .cdp(
+                "Target.createTarget",
+                json!({ "url": url, "background": true }),
+                None,
+            )
+            .await?;
+        let target = created
+            .get("targetId")
+            .and_then(Value::as_str)
+            .ok_or("no target id")?
+            .to_owned();
+        let info = self
+            .browser
+            .pages
+            .list()
+            .await?
+            .into_iter()
+            .find(|info| info.target_id.as_str() == target)
+            .ok_or("the tab is not listed")?;
+        let page = TestPage {
+            id: info.page_id,
+            tab: info.tab_id,
+        };
+        for _ in 0..100 {
+            if self.eval(&page, "document.readyState").await? == json!("complete") {
+                return Ok(page);
+            }
+            time::sleep(Duration::from_millis(50)).await;
+        }
+        Err(format!("{url} did not load within 5 s").into())
+    }
+
+    /// Evaluates `expression` by value in the main world of `page`'s out-of-process frame whose
+    /// URL contains `url_part`, through a session of the test's own: what that frame's page
+    /// itself sees, without the crate. The frame is picked from `page`'s own `page.frames`, never
+    /// from the browser's whole target list: other tests leave tabs open on the same fixture, and
+    /// their frames carry the same URLs. An OOPIF's frame id is its target id.
+    pub(crate) async fn frame_eval(
+        &self,
+        page: &TestPage,
+        url_part: &str,
+        expression: &str,
+    ) -> TestResult<Value> {
+        let frames = self
+            .invoke("page.frames", json!({ "call": {}, "page": brand(page) }))
+            .await?;
+        let target = frames
+            .get("frames")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|frame| {
+                frame
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .is_some_and(|url| url.contains(url_part))
+            })
+            .and_then(|frame| frame.get("id").cloned())
+            .ok_or(format!("no frame on {url_part} in this page"))?;
+        let attached = self
+            .browser
+            .cdp(
+                "Target.attachToTarget",
+                json!({ "targetId": target, "flatten": true }),
+                None,
+            )
+            .await?;
+        let session = attached
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .ok_or("no session id")?
+            .to_owned();
+        let reply = self
+            .browser
+            .protocol_session(SessionId::from(session.as_str()))
+            .send_value(
+                "Runtime.evaluate",
+                json!({ "expression": expression, "returnByValue": true }),
+            )
+            .await;
+        let _detached = self
+            .browser
+            .cdp(
+                "Target.detachFromTarget",
+                json!({ "sessionId": session }),
+                None,
+            )
+            .await;
+        Ok(reply?
+            .pointer("/result/value")
+            .cloned()
+            .unwrap_or(Value::Null))
     }
 
     /// What the crate asked of the host so far.

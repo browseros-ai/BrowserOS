@@ -11,6 +11,31 @@
 #
 # diff.mjs fails when an entry's values stop matching or the difference goes away, so an entry
 # is deleted in the commit that closes it. `diff.mjs --stubs` prints new entries to fill in.
+- case: actions-check
+  path: /returned/clicks
+  kind: finding
+  route: R8 probe act (clickPoint)
+  reason: "Upstream's _clickablePoint takes the middle of the first DOM.getContentQuads quad. For
+    a <label> that wraps its checkbox, Chromium returns one quad per child, the checkbox's
+    first, so upstream clicks the checkbox itself. Neo's probe takes the middle of the first
+    getClientRects box, the whole label line, and clicks the label's text, so the page sees a
+    click on the label and then the click the label passes to its checkbox (measured: quads
+    [36..49] and [52..112], one client rect [32..112]). The checkbox still ends up checked."
+  p:
+    - "#box"
+    - "#box"
+    - "#labelled"
+    - "#first"
+    - "#second"
+    - "#stuck"
+  n:
+    - "#box"
+    - "#box"
+    - label
+    - "#labelled"
+    - "#first"
+    - "#second"
+    - "#stuck"
 - case: captures
   path: /returned/base64Start
   kind: finding

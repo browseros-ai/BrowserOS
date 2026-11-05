@@ -1,0 +1,835 @@
+/**
+ * Copyright 2018 Google Inc. All rights reserved.
+ * Modifications copyright (c) Microsoft Corporation.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { test as it, expect } from './pageTest';
+import { attachFrame } from '../config/utils';
+
+it.skip(({ isAndroid }) => isAndroid);
+
+it('should type into a textarea @smoke', async ({ page }) => {
+  await page.evaluate(() => {
+    const textarea = document.createElement('textarea');
+    document.body.appendChild(textarea);
+    textarea.focus();
+  });
+  const text = 'Hello world. I am the text that was typed!';
+  await page.keyboard.type(text);
+  expect(await page.evaluate(() => document.querySelector('textarea').value)).toBe(text);
+});
+
+it('should move with the arrow keys', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/textarea.html');
+  await page.type('textarea', 'Hello World!');
+  expect(await page.evaluate(() => document.querySelector('textarea').value)).toBe('Hello World!');
+  for (let i = 0; i < 'World!'.length; i++)
+    await page.keyboard.press('ArrowLeft');
+  await page.keyboard.type('inserted ');
+  expect(await page.evaluate(() => document.querySelector('textarea').value)).toBe('Hello inserted World!');
+  await page.keyboard.down('Shift');
+  for (let i = 0; i < 'inserted '.length; i++)
+    await page.keyboard.press('ArrowLeft');
+  await page.keyboard.up('Shift');
+  await page.keyboard.press('Backspace');
+  expect(await page.evaluate(() => document.querySelector('textarea').value)).toBe('Hello World!');
+});
+
+it('should send a character with ElementHandle.press', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/textarea.html');
+  const textarea = await page.$('textarea');
+  await textarea.press('a');
+  expect(await page.evaluate(() => document.querySelector('textarea').value)).toBe('a');
+
+  await page.evaluate(() => window.addEventListener('keydown', e => e.preventDefault(), true));
+
+  await textarea.press('b');
+  expect(await page.evaluate(() => document.querySelector('textarea').value)).toBe('a');
+});
+
+it('should send a character with insertText', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/textarea.html');
+  await page.focus('textarea');
+  await page.keyboard.insertText('嗨');
+  expect(await page.evaluate(() => document.querySelector('textarea').value)).toBe('嗨');
+  await page.evaluate(() => window.addEventListener('keydown', e => e.preventDefault(), true));
+  await page.keyboard.insertText('a');
+  expect(await page.evaluate(() => document.querySelector('textarea').value)).toBe('嗨a');
+});
+
+it('should not type text with Alt modifier', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/42928' },
+}, async ({ page }) => {
+  await page.setContent(`<input><textarea></textarea><div contenteditable></div>`);
+  for (const locator of [page.locator('input'), page.locator('textarea'), page.locator('div')]) {
+    await locator.press('Alt+KeyA');
+    await locator.press('Alt+Digit1');
+    await locator.press('Alt+Shift+KeyA');
+    await page.keyboard.down('Alt');
+    await page.keyboard.press('b');
+    await page.keyboard.up('Alt');
+    await locator.press('c');
+  }
+  await expect(page.locator('input')).toHaveValue('c');
+  await expect(page.locator('textarea')).toHaveValue('c');
+  await expect(page.locator('div')).toHaveText('c');
+});
+
+it('insertText should only emit input event', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/textarea.html');
+  await page.focus('textarea');
+  page.on('console', m => console.log(m.text()));
+  const events = await page.evaluateHandle(() => {
+    const events = [];
+    document.addEventListener('keydown', e => events.push(e.type));
+    document.addEventListener('keyup', e => events.push(e.type));
+    document.addEventListener('keypress', e => events.push(e.type));
+    document.addEventListener('input', e => events.push(e.type));
+    return events;
+  });
+  await page.keyboard.insertText('hello world');
+  expect(await events.jsonValue()).toEqual(['input']);
+});
+
+it('should emit keydown, keypress, textInput and input when typing a character', async ({ page }) => {
+  await page.setContent(`<input>`);
+  const events = await page.evaluateHandle(() => {
+    const events: string[] = [];
+    for (const type of ['keydown', 'keypress', 'textInput', 'input', 'keyup'])
+      document.querySelector('input').addEventListener(type, () => events.push(type));
+    return events;
+  });
+  await page.focus('input');
+  await page.keyboard.press('f');
+  expect(await events.jsonValue()).toEqual(['keydown', 'keypress', 'textInput', 'input', 'keyup']);
+});
+
+it('should dispatch key events in separate tasks', async ({ page, browserName, isBidi }) => {
+  it.skip(browserName === 'firefox' && !isBidi, 'Firefox/Juggler dispatches keydown and keypress in the same task');
+  await page.setContent(`<input>`);
+  const log = await page.evaluateHandle(() => {
+    const log: string[] = [];
+    const input = document.querySelector('input');
+    for (const type of ['keydown', 'keypress'])
+      input.addEventListener(type, () => { log.push(type); queueMicrotask(() => log.push('microtask-' + type)); });
+    input.focus();
+    return log;
+  });
+  await page.keyboard.press('a');
+  // A microtask scheduled in the keydown handler must run before keypress,
+  // proving each event is delivered in its own task rather than synchronously.
+  expect(await log.jsonValue()).toEqual(['keydown', 'microtask-keydown', 'keypress', 'microtask-keypress']);
+});
+
+it('should report shiftKey', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/keyboard.html');
+  const keyboard = page.keyboard;
+  const codeForKey = { 'Shift': 16, 'Alt': 18, 'Control': 17 };
+  for (const modifierKey in codeForKey) {
+    await keyboard.down(modifierKey);
+    expect(await page.evaluate('getResult()')).toBe('Keydown: ' + modifierKey + ' ' + modifierKey + 'Left LEFT [' + modifierKey + ']');
+    await keyboard.down('!');
+    // Shift+! will generate a keypress
+    if (modifierKey === 'Shift')
+      expect(await page.evaluate('getResult()')).toBe('Keydown: ! Digit1 STANDARD [' + modifierKey + ']\nKeypress: ! Digit1 STANDARD 33 [' + modifierKey + ']');
+    else
+      expect(await page.evaluate('getResult()')).toBe('Keydown: ! Digit1 STANDARD [' + modifierKey + ']');
+
+    await keyboard.up('!');
+    expect(await page.evaluate('getResult()')).toBe('Keyup: ! Digit1 STANDARD [' + modifierKey + ']');
+    await keyboard.up(modifierKey);
+    expect(await page.evaluate('getResult()')).toBe('Keyup: ' + modifierKey + ' ' + modifierKey + 'Left LEFT []');
+  }
+});
+
+it('should report multiple modifiers', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/keyboard.html');
+  const keyboard = page.keyboard;
+  await keyboard.down('Control');
+  expect(await page.evaluate('getResult()')).toBe('Keydown: Control ControlLeft LEFT [Control]');
+  await keyboard.down('Alt');
+  expect(await page.evaluate('getResult()')).toBe('Keydown: Alt AltLeft LEFT [Alt Control]');
+  await keyboard.down(';');
+  expect(await page.evaluate('getResult()')).toBe('Keydown: ; Semicolon STANDARD [Alt Control]');
+  await keyboard.up(';');
+  expect(await page.evaluate('getResult()')).toBe('Keyup: ; Semicolon STANDARD [Alt Control]');
+  await keyboard.up('Control');
+  expect(await page.evaluate('getResult()')).toBe('Keyup: Control ControlLeft LEFT [Alt]');
+  await keyboard.up('Alt');
+  expect(await page.evaluate('getResult()')).toBe('Keyup: Alt AltLeft LEFT []');
+});
+
+it('should send proper codes while typing', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/keyboard.html');
+  await page.keyboard.type('!');
+  expect(await page.evaluate('getResult()')).toBe(
+      ['Keydown: ! Digit1 STANDARD []',
+        'Keypress: ! Digit1 STANDARD 33 []',
+        'Keyup: ! Digit1 STANDARD []'].join('\n'));
+  await page.keyboard.type('^');
+  expect(await page.evaluate('getResult()')).toBe(
+      ['Keydown: ^ Digit6 STANDARD []',
+        'Keypress: ^ Digit6 STANDARD 94 []',
+        'Keyup: ^ Digit6 STANDARD []'].join('\n'));
+});
+
+it('should send proper codes while typing with shift', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/keyboard.html');
+  const keyboard = page.keyboard;
+  await keyboard.down('Shift');
+  await page.keyboard.type('~');
+  expect(await page.evaluate('getResult()')).toBe(
+      ['Keydown: Shift ShiftLeft LEFT [Shift]',
+        'Keydown: ~ Backquote STANDARD [Shift]',
+        'Keypress: ~ Backquote STANDARD 126 [Shift]',
+        'Keyup: ~ Backquote STANDARD [Shift]'].join('\n'));
+  await keyboard.up('Shift');
+});
+
+it('should not type canceled events', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/textarea.html');
+  await page.focus('textarea');
+  await page.evaluate(() => {
+    window.addEventListener('keydown', event => {
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      if (event.key === 'l')
+        event.preventDefault();
+      if (event.key === 'o')
+        event.preventDefault();
+    }, false);
+  });
+  await page.keyboard.type('Hello World!');
+  expect(await page.$eval('textarea', textarea => textarea.value)).toBe('He Wrd!');
+});
+
+it('should press plus', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/keyboard.html');
+  await page.keyboard.press('+');
+  expect(await page.evaluate('getResult()')).toBe(
+      ['Keydown: + Equal STANDARD []',
+        'Keypress: + Equal STANDARD 43 []',
+        'Keyup: + Equal STANDARD []'].join('\n'));
+});
+
+it('should press shift plus', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/keyboard.html');
+  await page.keyboard.press('Shift++');
+  expect(await page.evaluate('getResult()')).toBe(
+      ['Keydown: Shift ShiftLeft LEFT [Shift]',
+        'Keydown: + Equal STANDARD [Shift]',
+        'Keypress: + Equal STANDARD 43 [Shift]',
+        'Keyup: + Equal STANDARD [Shift]',
+        'Keyup: Shift ShiftLeft LEFT []'].join('\n'));
+});
+
+it('should support plus-separated modifiers', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/keyboard.html');
+  await page.keyboard.press('Shift+~');
+  expect(await page.evaluate('getResult()')).toBe(
+      ['Keydown: Shift ShiftLeft LEFT [Shift]',
+        'Keydown: ~ Backquote STANDARD [Shift]',
+        'Keypress: ~ Backquote STANDARD 126 [Shift]',
+        'Keyup: ~ Backquote STANDARD [Shift]',
+        'Keyup: Shift ShiftLeft LEFT []'].join('\n'));
+});
+
+it('should support multiple plus-separated modifiers', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/keyboard.html');
+  await page.keyboard.press('Control+Shift+~');
+  expect(await page.evaluate('getResult()')).toBe(
+      ['Keydown: Control ControlLeft LEFT [Control]',
+        'Keydown: Shift ShiftLeft LEFT [Control Shift]',
+        'Keydown: ~ Backquote STANDARD [Control Shift]',
+        'Keyup: ~ Backquote STANDARD [Control Shift]',
+        'Keyup: Shift ShiftLeft LEFT [Control]',
+        'Keyup: Control ControlLeft LEFT []'].join('\n'));
+});
+
+it('should shift raw codes', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/keyboard.html');
+  await page.keyboard.press('Shift+Digit3');
+  expect(await page.evaluate('getResult()')).toBe(
+      ['Keydown: Shift ShiftLeft LEFT [Shift]',
+        'Keydown: # Digit3 STANDARD [Shift]',
+        'Keypress: # Digit3 STANDARD 35 [Shift]',
+        'Keyup: # Digit3 STANDARD [Shift]',
+        'Keyup: Shift ShiftLeft LEFT []'].join('\n'));
+});
+
+it('should specify repeat property', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/textarea.html');
+  await page.focus('textarea');
+  const lastEvent = await captureLastKeydown(page);
+  await page.keyboard.down('a');
+  expect(await lastEvent.evaluate(e => e.repeat)).toBe(false);
+  await page.keyboard.press('a');
+  expect(await lastEvent.evaluate(e => e.repeat)).toBe(true);
+
+  await page.keyboard.down('b');
+  expect(await lastEvent.evaluate(e => e.repeat)).toBe(false);
+  await page.keyboard.down('b');
+  expect(await lastEvent.evaluate(e => e.repeat)).toBe(true);
+
+  await page.keyboard.up('a');
+  await page.keyboard.down('a');
+  expect(await lastEvent.evaluate(e => e.repeat)).toBe(false);
+});
+
+it('should type all kinds of characters', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/textarea.html');
+  await page.focus('textarea');
+  const text = 'This text goes onto two lines.\nThis character is 嗨.';
+  await page.keyboard.type(text);
+  expect(await page.$eval('textarea', t => t.value)).toBe(text);
+});
+
+it('should specify location', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/textarea.html');
+  const lastEvent = await captureLastKeydown(page);
+  const textarea = await page.$('textarea');
+
+  await textarea.press('Digit5');
+  expect.soft(await lastEvent.evaluate(e => e.location)).toBe(0);
+  expect.soft(await lastEvent.evaluate(e => e.key)).toBe('5');
+  expect.soft(await lastEvent.evaluate(e => e.code)).toBe('Digit5');
+
+  await textarea.press('ControlLeft');
+  expect.soft(await lastEvent.evaluate(e => e.location)).toBe(1);
+  expect.soft(await lastEvent.evaluate(e => e.key)).toBe('Control');
+  expect.soft(await lastEvent.evaluate(e => e.code)).toBe('ControlLeft');
+
+  await textarea.press('ControlRight');
+  expect.soft(await lastEvent.evaluate(e => e.location)).toBe(2);
+  expect.soft(await lastEvent.evaluate(e => e.key)).toBe('Control');
+  expect.soft(await lastEvent.evaluate(e => e.code)).toBe('ControlRight');
+
+  await textarea.press('NumpadSubtract');
+  expect.soft(await lastEvent.evaluate(e => e.location)).toBe(3);
+  expect.soft(await lastEvent.evaluate(e => e.key)).toBe('-');
+  expect.soft(await lastEvent.evaluate(e => e.code)).toBe('NumpadSubtract');
+});
+
+it('should specify numpad location on keyup', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/keyboard.html');
+  await page.keyboard.press('NumpadSubtract');
+  expect(await page.evaluate('getResult()')).toBe(
+      ['Keydown: - NumpadSubtract NUMPAD []',
+        'Keypress: - NumpadSubtract NUMPAD 45 []',
+        'Keyup: - NumpadSubtract NUMPAD []'].join('\n'));
+});
+
+it('should press NumpadDecimal as Delete', async ({ page }) => {
+  await page.setContent('<textarea></textarea>');
+  const lastEvent = await captureLastKeydown(page);
+  const textarea = page.locator('textarea');
+
+  await textarea.press('NumpadDecimal');
+  expect(await lastEvent.evaluate(e => e.key)).toBe('Delete');
+  expect(await lastEvent.evaluate(e => e.code)).toBe('NumpadDecimal');
+  expect(await lastEvent.evaluate(e => e.location)).toBe(3);
+  await expect(textarea).toHaveValue('');
+});
+
+it('should type numpad digits with Shift', async ({ page }) => {
+  await page.setContent('<textarea></textarea>');
+  const textarea = page.locator('textarea');
+  await textarea.press('Shift+Numpad1');
+  await textarea.press('Shift+NumpadDecimal');
+  await textarea.press('Shift+Numpad9');
+  await expect(textarea).toHaveValue('1.9');
+});
+
+it('should press Enter', async ({ page, server }) => {
+  await page.setContent('<textarea></textarea>');
+  await page.focus('textarea');
+  const lastEventHandle = await captureLastKeydown(page);
+  await testEnterKey('Enter', 'Enter', 'Enter');
+  await testEnterKey('NumpadEnter', 'Enter', 'NumpadEnter');
+  await testEnterKey('\n', 'Enter', 'Enter');
+  await testEnterKey('\r', 'Enter', 'Enter');
+
+  async function testEnterKey(key, expectedKey, expectedCode) {
+    await page.keyboard.press(key);
+    const lastEvent = await lastEventHandle.jsonValue();
+    expect(lastEvent.key).toBe(expectedKey); // had the wrong key
+    expect(lastEvent.code).toBe(expectedCode); // had the wrong code
+    const value = await page.$eval('textarea', t => t.value);
+    expect(value).toBe('\n'); // failed to create a newline
+    await page.$eval('textarea', t => t.value = '');
+  }
+});
+
+it('should press audio and media control keys', async ({ page, browserName }) => {
+  await page.setContent('<input autofocus>');
+  await page.focus('input');
+  const lastEvent = await captureLastKeydown(page);
+  const mediaKeys = [
+    { key: 'AudioVolumeMute', code: browserName === 'firefox' ? 'VolumeMute' : 'AudioVolumeMute' },
+    { key: 'AudioVolumeDown', code: browserName === 'firefox' ? 'VolumeDown' : 'AudioVolumeDown' },
+    { key: 'AudioVolumeUp', code: browserName === 'firefox' ? 'VolumeUp' : 'AudioVolumeUp' },
+    { key: 'MediaTrackNext', code: 'MediaTrackNext' },
+    { key: 'MediaTrackPrevious', code: 'MediaTrackPrevious' },
+    { key: 'MediaPlayPause', code: 'MediaPlayPause' },
+  ];
+
+  for (const mediaKey of mediaKeys) {
+    await page.keyboard.press(mediaKey.key);
+    expect.soft(await lastEvent.evaluate(e => e.key)).toBe(mediaKey.key);
+    expect.soft(await lastEvent.evaluate(e => e.code)).toBe(mediaKey.code);
+    expect.soft(await lastEvent.evaluate(e => e.location)).toBe(0);
+  }
+});
+
+it('should throw on unknown keys', async ({ page, server }) => {
+  let error = await page.keyboard.press('NotARealKey').catch(e => e);
+  expect(error.message).toContain('Unknown key: "NotARealKey"');
+
+  error = await page.keyboard.press('ё').catch(e => e);
+  expect(error && error.message).toContain('Unknown key: "ё"');
+
+  error = await page.keyboard.press('😊').catch(e => e);
+  expect(error && error.message).toContain('Unknown key: "😊"');
+});
+
+it('should type emoji', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/textarea.html');
+  await page.type('textarea', '👹 Tokyo street Japan 🇯🇵');
+  expect(await page.$eval('textarea', textarea => textarea.value)).toBe('👹 Tokyo street Japan 🇯🇵');
+});
+
+it('should type emoji into an iframe', async ({ page, server }) => {
+  await page.goto(server.EMPTY_PAGE);
+  await attachFrame(page, 'emoji-test', server.PREFIX + '/input/textarea.html');
+  const frame = page.frames()[1];
+  const textarea = await frame.$('textarea');
+  await textarea.type('👹 Tokyo street Japan 🇯🇵');
+  expect(await frame.$eval('textarea', textarea => textarea.value)).toBe('👹 Tokyo street Japan 🇯🇵');
+});
+
+it('should handle selectAll', async ({ page, server, isMac }) => {
+  await page.goto(server.PREFIX + '/input/textarea.html');
+  const textarea = await page.$('textarea');
+  await textarea.type('some text');
+  await page.keyboard.down('ControlOrMeta');
+  await page.keyboard.press('a');
+  await page.keyboard.up('ControlOrMeta');
+  await page.keyboard.press('Backspace');
+  expect(await page.$eval('textarea', textarea => textarea.value)).toBe('');
+});
+
+it('pressing Meta should not result in any text insertion on any platform', async ({ page, server, isMac }) => {
+  it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/28495' });
+  await page.setContent('<input type="text" value="hello world">');
+  const input = page.locator('input');
+  await expect(input).toHaveValue('hello world');
+  await input.focus();
+  await page.keyboard.press('Meta');
+  await expect(input).toHaveValue('hello world');
+});
+
+it('should be able to prevent selectAll', async ({ page, server, isMac }) => {
+  await page.goto(server.PREFIX + '/input/textarea.html');
+  const textarea = await page.$('textarea');
+  await textarea.type('some text');
+  await page.$eval('textarea', textarea => {
+    textarea.addEventListener('keydown', event => {
+      if (event.key === 'a' && (event.metaKey || event.ctrlKey))
+        event.preventDefault();
+    }, false);
+  });
+  await page.keyboard.down('ControlOrMeta');
+  await page.keyboard.press('a');
+  await page.keyboard.up('ControlOrMeta');
+  await page.keyboard.press('Backspace');
+  expect(await page.$eval('textarea', textarea => textarea.value)).toBe('some tex');
+});
+
+it('should support MacOS shortcuts', async ({ page, server, platform, browserName }) => {
+  it.skip(platform !== 'darwin');
+  // @see https://github.com/microsoft/playwright/issues/5721
+  it.fixme(browserName === 'firefox' && platform === 'darwin');
+
+  await page.goto(server.PREFIX + '/input/textarea.html');
+  const textarea = await page.$('textarea');
+  await textarea.type('some text');
+  // select one word backwards
+  await page.keyboard.press('Shift+Control+Alt+KeyB');
+  await page.keyboard.press('Backspace');
+  expect(await page.$eval('textarea', textarea => textarea.value)).toBe('some ');
+});
+
+it('should press the meta key', async ({ page }) => {
+  const lastEvent = await captureLastKeydown(page);
+  await page.keyboard.press('Meta');
+  const { key, code, metaKey } = await lastEvent.jsonValue();
+  expect(key).toBe('Meta');
+  expect(code).toBe('MetaLeft');
+  expect(metaKey).toBe(true);
+});
+
+it('should work with keyboard events with empty.html', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/empty.html');
+  const lastEvent = await captureLastKeydown(page);
+  await page.keyboard.press('a');
+  expect(await lastEvent.evaluate(l => l.key)).toBe('a');
+});
+
+it('should work after a cross origin navigation', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/empty.html');
+  await page.goto(server.CROSS_PROCESS_PREFIX + '/empty.html');
+  const lastEvent = await captureLastKeydown(page);
+  await page.keyboard.press('a');
+  expect(await lastEvent.evaluate(l => l.key)).toBe('a');
+});
+
+it('should expose keyIdentifier in webkit', async ({ page, browserName }) => {
+  it.skip(browserName !== 'webkit', 'event.keyIdentifier has been removed from all browsers except WebKit');
+
+  const lastEvent = await captureLastKeydown(page);
+  const keyMap = {
+    'ArrowUp': 'Up',
+    'ArrowDown': 'Down',
+    'ArrowLeft': 'Left',
+    'ArrowRight': 'Right',
+    'Backspace': 'U+0008',
+    'Tab': 'U+0009',
+    'Delete': 'U+007F',
+    'a': 'U+0041',
+    'b': 'U+0042',
+    'F12': 'F12',
+  };
+  for (const [key, keyIdentifier] of Object.entries(keyMap)) {
+    await page.keyboard.press(key);
+    expect(await lastEvent.evaluate(e => e.keyIdentifier)).toBe(keyIdentifier);
+  }
+});
+
+it('should scroll with PageDown', async ({ page, server }) => {
+  await page.goto(server.PREFIX + '/input/scrollable.html');
+  // A click is required for WebKit to send the event into the body.
+  await page.click('body');
+  await page.keyboard.press('PageDown');
+  // We can't wait for the scroll to finish, so just wait for it to start.
+  await page.waitForFunction(() => scrollY > 0);
+});
+
+it('should move around the selection in a contenteditable', async ({ page, isMac }) => {
+  await page.setContent(`<div contenteditable></div>`);
+  await page.focus('div');
+  const modifier = isMac ? 'Alt' : 'Control';
+  await page.keyboard.type('Hello World');
+  await page.keyboard.down(modifier);
+  await page.keyboard.down('Shift');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.up('Shift');
+  await page.keyboard.up(modifier);
+  expect(await page.evaluate(() => window.getSelection().toString())).toBe('World');
+});
+
+it('should move to the start of the document', async ({ page, isMac }) => {
+  it.skip(!isMac);
+  await page.setContent(`<div contenteditable></div>`);
+  await page.focus('div');
+  await page.keyboard.type('1\n2\n3\n');
+  await page.keyboard.press('Shift+Meta+ArrowUp');
+  expect(await page.evaluate(() => window.getSelection().toString())).toBe('1\n2\n3\n');
+});
+
+it('should dispatch a click event on a button when Space gets pressed', async ({ page }) => {
+  await page.setContent(`<button type="button">a11y</button>`);
+  const actual = await page.evaluateHandle(() => {
+    const actual = { clicked: false };
+    document.querySelector('button').addEventListener('click', () => (actual.clicked = true));
+    return actual;
+  });
+  await page.focus('button');
+  await page.keyboard.press('Space');
+  expect((await actual.jsonValue()).clicked).toBe(true);
+});
+
+it('should dispatch a click event on a button when Enter gets pressed', async ({ page }) => {
+  await page.setContent(`<button type="button">a11y</button>`);
+  const actual = await page.evaluateHandle(() => {
+    const actual = { clicked: false };
+    document.querySelector('button').addEventListener('click', () => (actual.clicked = true));
+    return actual;
+  });
+  await page.focus('button');
+  await page.keyboard.press('Enter');
+  expect((await actual.jsonValue()).clicked).toBe(true);
+});
+
+it('should support simple copy-pasting', async ({ page }) => {
+  await page.setContent(`<div contenteditable>123</div>`);
+  await page.focus('div');
+  await page.keyboard.press(`ControlOrMeta+KeyA`);
+  await page.keyboard.press(`ControlOrMeta+KeyC`);
+  await page.keyboard.press(`ControlOrMeta+KeyV`);
+  await page.keyboard.press(`ControlOrMeta+KeyV`);
+  expect(await page.evaluate(() => document.querySelector('div').textContent)).toBe('123123');
+});
+
+it('should support simple cut-pasting', async ({ page }) => {
+  await page.setContent(`<div contenteditable>123</div>`);
+  await page.focus('div');
+  await page.keyboard.press(`ControlOrMeta+KeyA`);
+  await page.keyboard.press(`ControlOrMeta+KeyX`);
+  await page.keyboard.press(`ControlOrMeta+KeyV`);
+  await page.keyboard.press(`ControlOrMeta+KeyV`);
+  expect(await page.evaluate(() => document.querySelector('div').textContent)).toBe('123123');
+});
+
+it('should support undo-redo', async ({ page, browserName, isLinux, channel }) => {
+  it.fixme(browserName === 'webkit' && isLinux || channel === 'webkit-wsl', 'https://github.com/microsoft/playwright/issues/12000');
+  await page.setContent(`<div contenteditable></div>`);
+  const div = page.locator('div');
+  await expect(div).toHaveText('');
+  await div.type('123');
+  await expect(div).toHaveText('123');
+  await page.keyboard.press(`ControlOrMeta+KeyZ`);
+  await expect(div).toHaveText('');
+  await page.keyboard.press(`Shift+ControlOrMeta+KeyZ`);
+  await expect(div).toHaveText('123');
+});
+
+it('should type repeatedly in contenteditable in shadow dom', async ({ page }) => {
+  it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/12941' });
+
+  await page.setContent(`
+    <html>
+      <body>
+        <shadow-element></shadow-element>
+        <script>
+          customElements.define('shadow-element', class extends HTMLElement {
+            constructor() {
+              super();
+              this.attachShadow({ mode: 'open' });
+            }
+
+            connectedCallback() {
+              this.shadowRoot.innerHTML = \`
+                <style>
+                  .editor { padding: 1rem; margin: 1rem; border: 1px solid #ccc; }
+                </style>
+                <div class=editor contenteditable id=foo></div>
+                <hr>
+                <section>
+                  <div class=editor contenteditable id=bar></div>
+                </section>
+              \`;
+            }
+          });
+        </script>
+      </body>
+    </html>
+  `);
+
+  const editor = page.locator('shadow-element > .editor').first();
+  await editor.type('This is the first box.');
+
+  const sectionEditor = page.locator('section .editor');
+  await sectionEditor.type('This is the second box.');
+
+  expect(await editor.textContent()).toBe('This is the first box.');
+  expect(await sectionEditor.textContent()).toBe('This is the second box.');
+});
+
+it('should type repeatedly in contenteditable in shadow dom with nested elements', async ({ page }) => {
+  await page.setContent(`
+    <html>
+      <body>
+        <shadow-element></shadow-element>
+        <script>
+          customElements.define('shadow-element', class extends HTMLElement {
+            constructor() {
+              super();
+              this.attachShadow({ mode: 'open' });
+            }
+
+            connectedCallback() {
+              this.shadowRoot.innerHTML = \`
+                <style>
+                  .editor { padding: 1rem; margin: 1rem; border: 1px solid #ccc; }
+                </style>
+                <div class=editor contenteditable id=foo><p>hello</p></div>
+                <hr>
+                <section>
+                  <div class=editor contenteditable id=bar><p>world</p></div>
+                </section>
+              \`;
+            }
+          });
+        </script>
+      </body>
+    </html>
+  `);
+
+  const editor = page.locator('shadow-element > .editor').first();
+  await editor.type('This is the first box: ');
+
+  const sectionEditor = page.locator('section .editor');
+  await sectionEditor.type('This is the second box: ');
+
+  expect(await editor.textContent()).toBe('This is the first box: hello');
+  expect(await sectionEditor.textContent()).toBe('This is the second box: world');
+});
+
+it('should type repeatedly in input in shadow dom', async ({ page }) => {
+  await page.setContent(`
+    <html>
+      <body>
+        <shadow-element></shadow-element>
+        <script>
+          customElements.define('shadow-element', class extends HTMLElement {
+            constructor() {
+              super();
+              this.attachShadow({ mode: 'open' });
+            }
+
+            connectedCallback() {
+              this.shadowRoot.innerHTML = \`
+                <style>
+                  .editor { padding: 1rem; margin: 1rem; border: 1px solid #ccc; }
+                </style>
+                <input class=editor id=foo>
+                <hr>
+                <section>
+                  <input class=editor id=bar>
+                </section>
+              \`;
+            }
+          });
+        </script>
+      </body>
+    </html>
+  `);
+
+  const editor = page.locator('shadow-element > .editor').first();
+  await editor.type('This is the first box.');
+
+  const sectionEditor = page.locator('section .editor');
+  await sectionEditor.type('This is the second box.');
+
+  expect(await editor.inputValue()).toBe('This is the first box.');
+  expect(await sectionEditor.inputValue()).toBe('This is the second box.');
+});
+
+it('type to non-focusable element should maintain old focus', async ({ page }) => {
+  await page.setContent(`
+    <div id="focusable" tabindex="0">focusable div</div>
+    <div id="non-focusable-and-non-editable">non-editable, non-focusable</div>
+  `);
+
+  await page.locator('#focusable').focus();
+  expect(await page.evaluate(() => document.activeElement?.id)).toBe('focusable');
+  await page.locator('#non-focusable-and-non-editable').type('foo');
+  expect(await page.evaluate(() => document.activeElement?.id)).toBe('focusable');
+});
+
+async function captureLastKeydown(page) {
+  const lastEvent = await page.evaluateHandle(() => {
+    const lastEvent = {
+      repeat: false,
+      location: -1,
+      code: '',
+      key: '',
+      metaKey: false,
+      keyIdentifier: 'unsupported'
+    };
+    document.addEventListener('keydown', e => {
+      lastEvent.repeat = e.repeat;
+      lastEvent.location = e.location;
+      lastEvent.key = e.key;
+      lastEvent.code = e.code;
+      lastEvent.metaKey = e.metaKey;
+      lastEvent.keyIdentifier = 'keyIdentifier' in e && typeof e['keyIdentifier'] === 'string' && e['keyIdentifier'];
+    }, true);
+    return lastEvent;
+  });
+  return lastEvent;
+}
+
+it('should dispatch insertText after context menu was opened', async ({ server, page, browserName, isWindows }) => {
+  it.skip(browserName === 'chromium' && isWindows, 'context menu support is best-effort for Linux and MacOS');
+  await page.goto(server.PREFIX + '/input/textarea.html');
+  await page.evaluate(() => {
+    window['contextMenuPromise'] = new Promise(x => {
+      window.addEventListener('contextmenu', x, false);
+    });
+  });
+
+  const box = await page.locator('textarea').boundingBox();
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  await page.mouse.click(cx, cy, { button: 'right' });
+  await page.evaluate(() => window['contextMenuPromise']);
+
+  await page.keyboard.insertText('嗨');
+  await expect.poll(() => page.locator('textarea').inputValue()).toBe('嗨');
+});
+
+it('should type after context menu was opened', async ({ server, page, browserName, isWindows }) => {
+  it.skip(browserName === 'chromium' && isWindows, 'context menu support is best-effort for Linux and MacOS');
+  await page.evaluate(() => {
+    window['keys'] = [];
+    window.addEventListener('keydown', event => window['keys'].push(event.key));
+    window['contextMenuPromise'] = new Promise(x => {
+      window.addEventListener('contextmenu', x, false);
+    });
+  });
+
+
+  await page.mouse.move(100, 100);
+  await page.mouse.down({ button: 'right' });
+  await page.evaluate(() => window['contextMenuPromise']);
+
+  await page.keyboard.down('ArrowDown');
+
+  await expect.poll(() => page.evaluate('window.keys')).toEqual(['ArrowDown']);
+});
+
+it('should have correct Keydown/Keyup order when pressing Escape key', async ({ page, server, browserName }) => {
+  it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/27709' });
+
+  await page.goto(server.PREFIX + '/input/keyboard.html');
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate('getResult()')).toBe(`
+Keydown: Escape Escape STANDARD []
+Keyup: Escape Escape STANDARD []
+`.trim());
+});
+
+it('should close dialog on Escape key press in contenteditable', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/36727' }
+}, async ({ page, isFrozenWebkit }) => {
+  it.skip(isFrozenWebkit);
+
+  await page.setContent(`
+    <dialog>
+      <div contenteditable>Edit Me</div>
+    </dialog>
+  `);
+
+  const dialog = page.locator('dialog');
+  const widget = dialog.locator('[contenteditable]');
+  await dialog.evaluate((node: HTMLDialogElement) => node.showModal());
+  await expect(dialog).toHaveJSProperty('open', true);
+  await expect(widget).toBeVisible();
+
+  await widget.press('Escape');
+  await expect(dialog).toHaveJSProperty('open', false);
+  await expect(widget).not.toBeVisible();
+});

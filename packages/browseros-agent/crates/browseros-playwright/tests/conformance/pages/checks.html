@@ -1,0 +1,11 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Checks</title><script src="events.js"></script></head>
+<body>
+<!-- check and uncheck targets: a checkbox, one checked through its label, two radios, a
+     checkbox whose click handler cancels the change, and a button, which has no checked state. -->
+<input type="checkbox" id="box" aria-label="Box">
+<label><input type="checkbox" id="labelled"> Labelled</label>
+<input type="radio" name="pick" id="first" aria-label="First">
+<input type="radio" name="pick" id="second" aria-label="Second">
+<input type="checkbox" id="stuck" aria-label="Stuck" onclick="return false">
+<button id="plain">Plain</button>
+</body></html>

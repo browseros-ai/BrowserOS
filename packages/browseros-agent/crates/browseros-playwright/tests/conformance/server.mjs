@@ -6,6 +6,8 @@
  *
  *   /<file>          conformance/pages/<file>
  *   /nest/<file>     tests/data/nest/<file>, the nested-frame fixture of design D22
+ *   /upstream/<file> third_party/playwright/tests/assets/<file>, the pages of upstream's test
+ *                    server that tier 2's lifted tests load (its server.PREFIX)
  *
  * Two query parameters shape any response, for the cases that time load states:
  *   ?delay=<ms>      answer after <ms>
@@ -22,6 +24,7 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const ROOTS = [
   ['/nest/', resolve(here, '../data/nest')],
+  ['/upstream/', resolve(here, '../../third_party/playwright/tests/assets')],
   ['/', resolve(here, 'pages')],
 ]
 const TYPES = {

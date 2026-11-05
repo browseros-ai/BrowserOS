@@ -13,6 +13,8 @@
  *   fixtures   fixtures.url(path, site) is a URL on the fixture server (server.mjs), where
  *              site 'a' is 127.0.0.1, 'b' is localhost and 'c' is [::1], three sites, so a
  *              frame on another site is an out-of-process iframe
+ *   expect     a global, not a parameter: Playwright Test's expect under Runner P, the
+ *              prelude's under Runner N
  *   harness    test-only help no Playwright script has:
  *              pageEval(page, expression)  runs expression in the page's own main world with a
  *                                          user gesture, as the user or the page itself would,

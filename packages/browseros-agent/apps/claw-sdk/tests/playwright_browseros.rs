@@ -7,6 +7,8 @@
 //!    ─ getByRef / aria-ref= on a printed ref ─ locator reads ─ reads inside the iframe
 //!  page.on('console') first: page.frames opens the lazy tab ─ events.listen ─ the event pump
 //!  context.pages() first: the run's init lists every tab
+//!  a form: fill a field and click a button through locators, then expect the page's answer
+//!    (a matcher that holds passes, one that does not throws)
 //!  a local file (Neo's host token, /etc/hosts): the door refuses each goto to one, and the
 //!    page's own navigations to one (location, meta refresh, a link, an iframe, a popup, an
 //!    allowed load's redirect) read nothing local
@@ -141,6 +143,29 @@ for (const [path, into] of [['/to-hosts', tried.local], ['/to-secret', tried.loc
 return tried;
 "#;
 
+/// What a model writes to use a form: fill a field by its label, click a button by its role, then
+/// `expect` the page's answer. The button's handler writes the greeting, so it shows only if the
+/// fill and the click both reached the page. A matcher that does not hold must throw, or a
+/// passing `expect` would prove nothing.
+const FORM: &str = r#"
+const html = '<title>Greeter</title>'
+  + '<label>Name <input id="name"></label>'
+  + '<button onclick="document.querySelector(\'output\').textContent = \'Hello, \' + document.querySelector(\'#name\').value">Greet</button>'
+  + '<output></output>';
+await page.goto('data:text/html,' + encodeURIComponent(html));
+await page.getByLabel('Name').fill('Ada Lovelace');
+await page.getByRole('button', { name: 'Greet' }).click();
+await expect(page.getByRole('status')).toHaveText('Hello, Ada Lovelace');
+const unmet = await expect(page.getByRole('status'))
+  .toHaveText('Goodbye', { timeout: 500 })
+  .then(() => 'passed', (error) => String(error.message));
+return {
+  value: await page.getByLabel('Name').inputValue(),
+  greeting: await page.getByRole('status').textContent(),
+  unmet,
+};
+"#;
+
 /// A page that types `SECRET` into its own password field a key every 150 ms, as autofill or
 /// the owner would, too fast for the field to go quiet before the last key, and shows the field
 /// in its title. The agent reads the page while it types, then waits until the field has gone
@@ -187,6 +212,11 @@ async fn a_fresh_tasks_first_call_can_be_a_console_listener() -> TestResult {
 #[tokio::test(flavor = "multi_thread")]
 async fn context_pages_lists_every_tab_in_a_runs_first_statement() -> TestResult {
     on_browseros(|rig| Box::pin(tabs_first(rig))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_script_fills_and_clicks_a_form_and_expects_the_answer() -> TestResult {
+    on_browseros(|rig| Box::pin(fill_and_click(rig))).await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -328,6 +358,22 @@ async fn drive(rig: &Rig) -> TestResult {
         "each read answers from the markup the script loaded: {value}"
     );
     client.cancel().await?;
+    Ok(())
+}
+
+async fn fill_and_click(rig: &Rig) -> TestResult {
+    let reply = reply_of(rig, FORM, "form").await?;
+    let value = reply.get("value").ok_or("the script returns")?;
+    let text = |name: &str| value.get(name).and_then(Value::as_str);
+    assert_eq!(
+        (text("value"), text("greeting")),
+        (Some("Ada Lovelace"), Some("Hello, Ada Lovelace")),
+        "the fill reached the field and the click ran the page's handler: {reply}"
+    );
+    assert!(
+        text("unmet").is_some_and(|message| message != "passed" && message.contains("toHaveText")),
+        "a matcher that does not hold throws, naming itself: {reply}"
+    );
     Ok(())
 }
 

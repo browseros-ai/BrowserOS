@@ -237,6 +237,16 @@ impl DialogTable {
         }
     }
 
+    /// Whether dialog `id` of the tab `target` is still open in the browser, a script's answer
+    /// in flight included: until the browser closes it, it blocks the tab's input.
+    pub(crate) fn is_open(&self, id: DialogId, target: &TargetId) -> bool {
+        matches!(
+            self.slots.get(&id),
+            Some(Slot::Open(dialog) | Slot::Answering(dialog))
+                if dialog.target.as_ref() == Some(target)
+        )
+    }
+
     /// `Open` to `Answering`, for the tab `target` only: the session to answer on.
     fn start_answer(&mut self, id: DialogId, target: &TargetId) -> Result<SessionId, Unanswerable> {
         let session = match self.slots.get(&id) {

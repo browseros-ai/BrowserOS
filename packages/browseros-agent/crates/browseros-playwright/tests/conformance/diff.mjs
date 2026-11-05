@@ -14,8 +14,11 @@
  * a listed one whose values changed, a listed one that no longer happens (delete it), a case
  * only one runner ran, and a runner that broke.
  *
- *   PLAYWRIGHT_NODE_MODULES=<node_modules with playwright-core> \
+ *   PLAYWRIGHT_NODE_MODULES=<node_modules with playwright-core> [CONFORMANCE_CASES_DIR=cases/tier2] \
  *   node diff.mjs <P outcomes dir> <N outcomes dir> <deviations.yaml> [--stubs]
+ *
+ * CONFORMANCE_CASES_DIR (cases by default) is the tier's case directory, where an entry's case
+ * must still exist.
  *
  * --stubs also prints each unlisted difference as a deviations.yaml entry to fill in.
  */
@@ -253,7 +256,9 @@ for (const name of names) {
 }
 // A deviation for a case left out of this run (run.sh's case filter) is neither used nor stale.
 const caseFiles = new Set(
-  readdirSync(resolve(here, 'cases')).map((file) => basename(file, '.js')),
+  readdirSync(resolve(here, process.env.CONFORMANCE_CASES_DIR ?? 'cases')).map(
+    (file) => basename(file, '.js'),
+  ),
 )
 for (const entry of byKey.values())
   if (!entry.used && names.includes(entry.case))

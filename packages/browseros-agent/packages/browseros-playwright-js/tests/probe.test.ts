@@ -265,6 +265,7 @@ it('tests that sweep and focused answer through the seal, and an unknown request
     kind: 'focused',
     sensitive: false,
     iframe: null,
+    host: null,
   })
   expect(probe.call({ op: 'teleport' })).toEqual({
     kind: 'error',

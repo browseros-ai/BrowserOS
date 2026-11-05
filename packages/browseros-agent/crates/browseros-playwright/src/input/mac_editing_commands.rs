@@ -22,14 +22,6 @@
 //! browser runs on macOS (server/chromium/crInput.ts), as data. On other platforms a key down
 //! sends none.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the keyboard reads this table; no op sends keys until the keyboard leaves land"
-    )
-)]
-
 /// One shortcut and the commands it runs.
 pub(crate) struct EditingShortcut {
     /// Upstream's key: the held modifiers in the order Shift, Control, Alt, Meta, then the

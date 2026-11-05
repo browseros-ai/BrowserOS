@@ -22,14 +22,6 @@
 //! it sends. The keyboard (`keyboard.rs`) derives the names a key can be pressed by from it,
 //! as upstream's `buildLayoutClosure` (server/input.ts) does.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the keyboard reads this table; no op sends keys until the keyboard leaves land"
-    )
-)]
-
 /// One physical key, as upstream's `KeyDefinition` declares it. An absent field keeps
 /// upstream's default, which the keyboard applies: `keyCodeWithoutLocation || keyCode`,
 /// `text || ''` and `location || 0`.

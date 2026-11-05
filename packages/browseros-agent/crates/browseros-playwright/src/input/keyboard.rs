@@ -7,14 +7,6 @@
 //! sends Shift down and only then fails on `Foo` in `press('Shift+Foo')`, which leaves Shift
 //! held; here that call fails with nothing held and nothing to send.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "keyboard ops and press/type actions send these bursts once their leaves land"
-    )
-)]
-
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::LazyLock;
@@ -23,7 +15,7 @@ use std::{fmt, mem};
 
 use serde_json::{Value, json};
 
-use super::input_devices::{InputEvent, InputStep};
+use super::input_devices::{Held, Hold, InputEvent, InputStep};
 use super::mac_editing_commands::MAC_EDITING_COMMANDS;
 use super::us_keyboard_layout::{KEYPAD_LOCATION, US_KEYBOARD_LAYOUT};
 
@@ -283,6 +275,35 @@ pub(crate) enum KeyEvent {
 }
 
 impl KeyEvent {
+    /// Whether this is a key down that copies or cuts the selection on `platform`, which
+    /// design D14 refuses in a password, card or one-time-code field: Meta+C and Meta+X on a
+    /// Mac; Control+C, Control+X, Control+Insert and Shift+Delete elsewhere. Read from the
+    /// event, with the modifiers held when it goes down, so a chord split across calls
+    /// (`keyboard.down('Control')`, then `type('c')`) counts too.
+    pub(crate) fn copies(&self, platform: Platform) -> bool {
+        let Self::Down { key, modifiers, .. } = self else {
+            return false;
+        };
+        match platform {
+            Platform::Mac => {
+                modifiers.contains(Modifier::Meta) && matches!(key.code, "KeyC" | "KeyX")
+            }
+            Platform::Linux | Platform::Windows => {
+                (modifiers.contains(Modifier::Control)
+                    && matches!(key.code, "KeyC" | "KeyX" | "Insert"))
+                    || (modifiers.contains(Modifier::Shift) && key.code == "Delete")
+            }
+        }
+    }
+
+    /// The key this event presses or lets go, by its code.
+    pub(crate) fn hold(&self) -> Hold {
+        match self {
+            Self::Down { key, .. } => Hold::Press(Held::Key(key.code)),
+            Self::Up { key, .. } => Hold::Release(Held::Key(key.code)),
+        }
+    }
+
     pub(crate) fn params(&self) -> Value {
         match self {
             Self::Down {
@@ -316,8 +337,10 @@ impl KeyEvent {
     }
 }
 
-/// One page's keyboard: the held modifiers and keys, and the browser's platform.
-#[derive(Debug)]
+/// One page's keyboard: the held modifiers and keys, and the browser's platform. `Clone`, so a
+/// burst can be built on a copy that the tab keeps only once the burst goes out
+/// (`PageInput::plan`).
+#[derive(Clone, Debug)]
 pub(crate) struct Keyboard {
     platform: Platform,
     modifiers: Modifiers,
@@ -337,6 +360,11 @@ impl Keyboard {
     /// The modifiers held now. Mouse events carry them too.
     pub(crate) fn modifiers(&self) -> Modifiers {
         self.modifiers
+    }
+
+    /// The browser's platform, which decides what copies (`KeyEvent::copies`).
+    pub(crate) fn platform(&self) -> Platform {
+        self.platform
     }
 
     /// Upstream's `resolveSmartModifier` for an action's `modifiers` option: `ControlOrMeta` by

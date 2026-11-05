@@ -30,6 +30,7 @@ export const POINTER_KEYS = [
   'modifiers',
   'noWaitAfter',
   'position',
+  'scroll',
   'steps',
   'trial',
 ] as const
@@ -39,12 +40,20 @@ export const HOVER_KEYS = [
   'modifiers',
   'noWaitAfter',
   'position',
+  'scroll',
   'trial',
 ] as const
-export const CHECK_KEYS = ['force', 'noWaitAfter', 'position', 'trial'] as const
+export const CHECK_KEYS = [
+  'force',
+  'noWaitAfter',
+  'position',
+  'scroll',
+  'trial',
+] as const
 export const DRAG_KEYS = [
   'force',
   'noWaitAfter',
+  'scroll',
   'sourcePosition',
   'targetPosition',
   'steps',

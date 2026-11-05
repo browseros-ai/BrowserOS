@@ -18,8 +18,11 @@
  * (page-mask.ts).
  */
 import { isInvalidSelectorError } from '../../../../crates/browseros-playwright/third_party/playwright/packages/isomorphic/selectorParser'
+import { act, disarm, frameBox, listenForMoves, moves, verdict } from './act'
 import { RefMap } from './aria-ref'
 import { documentText, replaceDocument } from './document'
+import { edit } from './edit'
+import { expect } from './expect'
 import { underMask } from './page-mask'
 import {
   type BootOptions,
@@ -44,7 +47,6 @@ import { matchUrl } from './url'
 import {
   createEngine,
   engineTable,
-  notBuilt,
   Pins,
   ProbeError,
   type World,
@@ -52,29 +54,31 @@ import {
 
 /**
  * The requests the table routes. `setContent` is not one: it changes the probe's own
- * lifecycle, so `call` handles it, as `boot` handles booting.
+ * lifecycle, so `call` handles it, as `boot` handles booting. A handler that must await the
+ * page (`expect`'s viewport check) answers with a promise.
  */
 type Routed = Exclude<ValueOp, 'setContent'>
 type Handler<O extends Routed> = (
   world: World,
   request: RequestOf<O>,
   root: Node | undefined,
-) => ReplyTo<O>
+) => ReplyTo<O> | Promise<ReplyTo<O>>
 type Handlers = { [O in Routed]: Handler<O> }
 
 /** One entry per request kind: adding a kind is a line here plus its handler file. */
 const HANDLERS: Handlers = {
   describe: described,
   resolve,
-  act: notBuilt,
-  verdict: notBuilt,
-  disarm: notBuilt,
-  frameBox: notBuilt,
-  edit: notBuilt,
+  act,
+  verdict,
+  moves,
+  disarm,
+  frameBox,
+  edit,
   read,
   readAll,
   snapshot,
-  expect: notBuilt,
+  expect,
   sweep,
   focused,
   matchUrl,
@@ -103,7 +107,11 @@ function createProbe(): NeoProbe {
   // refs printed under it, so the next boot hands it to Rust to retire.
   let lastSeq: number | undefined
 
-  /** One request's reply in `booted`, the error replies included. */
+  /**
+   * One request's reply in `booted`, the error replies included. A handler that answers with
+   * a promise (`expect`'s viewport check) has its mask in force only until its first await,
+   * so it cuts and quotes page text before it awaits.
+   */
   function answer(
     booted: World,
     request: ProbeRequest,
@@ -119,12 +127,12 @@ function createProbe(): NeoProbe {
         return replaceDocument(booted, request, () => {
           world = undefined
         })
-      return dispatch(booted, request.op, request, scope)
+      const reply = dispatch(booted, request.op, request, scope)
+      // CDP's `awaitPromise` settles a promise for Rust, so a handler that throws after
+      // its first await is classified here, as a synchronous one is below.
+      return reply instanceof Promise ? reply.catch(thrownReply) : reply
     } catch (error) {
-      return errorReply(
-        classify(error),
-        error instanceof Error ? error.message : String(error),
-      )
+      return thrownReply(error)
     }
   }
 
@@ -143,7 +151,9 @@ function createProbe(): NeoProbe {
       // are dropped, and a fresh engine takes the new seq.
       pins.clear()
       refs.forget()
+      listenForMoves()
       const injected = createEngine(frameSeq)
+      injected.onGlobalListenersRemoved.add(listenForMoves)
       refs.install(engineTable(injected), injected.utils)
       world = { epoch, seq: frameSeq, injected, seal, pins, refs }
       const retired = lastSeq
@@ -193,7 +203,7 @@ function dispatch<O extends Routed>(
   op: O,
   request: RequestOf<O>,
   root: Node | undefined,
-): ReplyTo<O> {
+): ReplyTo<O> | Promise<ReplyTo<O>> {
   const handler: Handler<O> = HANDLERS[op]
   return handler(world, request, root)
 }
@@ -250,6 +260,13 @@ function classify(error: unknown): ErrorClass {
   )
     return 'script'
   return 'internal'
+}
+
+function thrownReply(error: unknown): ErrorReply {
+  return errorReply(
+    classify(error),
+    error instanceof Error ? error.message : String(error),
+  )
 }
 
 function errorReply(errorClass: ErrorClass, message: string): ErrorReply {

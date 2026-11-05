@@ -10,6 +10,7 @@ use tokio::sync::OnceCell;
 use uuid::Uuid;
 
 use crate::TypedBy;
+use crate::input::Platform;
 use crate::op_scope::AdmittedPage;
 use crate::page::PageState;
 use crate::world::FrameSeq;
@@ -40,6 +41,8 @@ pub(crate) struct PageRegistry {
     open_at_start: OnceCell<OpenAtStart>,
     /// The first seq of a tab that was already open.
     reopened_base: FrameSeq,
+    /// The browser's platform, read once: it decides what `ControlOrMeta` presses.
+    platform: OnceCell<Platform>,
 }
 
 /// The tabs that were open when this `Playwright` started.
@@ -63,6 +66,16 @@ struct TargetInfo {
     target_id: TargetId,
 }
 
+/// The browser did not say what it runs on.
+struct Unanswered;
+
+/// `Browser.getVersion`'s answer, of which only the user agent is read.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Version {
+    user_agent: String,
+}
+
 impl PageRegistry {
     /// An empty registry with a fresh random base.
     pub(crate) fn new() -> Self {
@@ -72,6 +85,7 @@ impl PageRegistry {
             pages: Mutex::default(),
             open_at_start: OnceCell::new(),
             reopened_base: FrameSeq(REOPENED_BASE_MIN + pick),
+            platform: OnceCell::new(),
         }
     }
 
@@ -79,6 +93,7 @@ impl PageRegistry {
     /// the one from the instance's start; an op that comes first waits for the same read.
     pub(crate) async fn note_open_tabs(&self, browser: &BrowserSession) {
         self.open_at_start(browser).await;
+        self.platform(browser).await;
     }
 
     /// The state of the tab `admitted` names, created on first use.
@@ -99,10 +114,11 @@ impl PageRegistry {
         } else {
             FrameSeq(0)
         };
+        let platform = self.platform(browser).await;
         Arc::clone(
             self.lock()
                 .entry(admitted.id.clone())
-                .or_insert_with(|| Arc::new(PageState::new(first))),
+                .or_insert_with(|| Arc::new(PageState::new(first, platform))),
         )
     }
 
@@ -115,6 +131,26 @@ impl PageRegistry {
     pub(crate) fn typed_by(&self, page: &PageId) -> TypedBy {
         self.get(page)
             .map_or(TypedBy::NotAgent, |state| state.typed_by())
+    }
+
+    /// Upstream's `CRBrowser._platform()`, from the user agent. A browser that does not answer
+    /// reads as Linux, the hosted cell's platform, without being remembered, so the next op
+    /// asks again.
+    async fn platform(&self, browser: &BrowserSession) -> Platform {
+        self.platform
+            .get_or_try_init(|| async {
+                let version = browser
+                    .cdp("Browser.getVersion", json!({}), None)
+                    .await
+                    .ok()
+                    .and_then(|version: Value| serde_json::from_value::<Version>(version).ok());
+                version
+                    .map(|version| Platform::from_user_agent(&version.user_agent))
+                    .ok_or(Unanswered)
+            })
+            .await
+            .copied()
+            .unwrap_or(Platform::Linux)
     }
 
     async fn open_at_start(&self, browser: &BrowserSession) -> &OpenAtStart {

@@ -12,7 +12,7 @@ use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::page::site_sweep::{SiteSweep, SiteValues};
 use crate::probe::{
-    self, ErrorClass, ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
+    self, ErrorClass, Hit, ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
     QueryState, Read, Want,
 };
 use crate::resolve::frame_start::{FrameStart, Started};
@@ -78,7 +78,7 @@ impl Way {
 
 /// Where the last chunk runs.
 #[derive(Debug)]
-struct Resolved {
+pub(crate) struct Resolved {
     world: SealedWorld,
     /// The parents of `world`'s frame, from the main frame down.
     path: FramePath,
@@ -88,6 +88,51 @@ struct Resolved {
     jumped: Option<AriaRefJump>,
     /// The handle's node the last chunk is queried from, when it is also the first.
     root: Option<String>,
+}
+
+impl Resolved {
+    /// Where an action finds an element handle's node: its document's world and that frame's
+    /// parents, with the node as the root of every request. Its frames count as visible, as
+    /// upstream's handle actions pass `frameVisible: true`.
+    pub(crate) fn of_handle(site: &HandleSite<'_>) -> Self {
+        Self {
+            world: site.world().clone(),
+            path: site.path().clone(),
+            frame_visible: true,
+            jumped: None,
+            root: Some(site.node().to_owned()),
+        }
+    }
+
+    /// Sends `request` in [`Resolved::world`], with the root node the target is queried from
+    /// when there is one (an element handle's node, or the root of a locator rooted at a
+    /// handle). A pinned target ignores the root. A reply that would hold page text the engine
+    /// cut (a strict violation, a covered element's description) answers `needsMask`, and the
+    /// request goes once more with the site's values ([`ask`]), so every action request is
+    /// masked in the page without a sweep before the ones that hold no text.
+    pub(crate) async fn call(
+        &self,
+        page: &OpPage<'_>,
+        scope: &OpScope<'_>,
+        request: &ProbeRequest,
+    ) -> Result<Result<ProbeReply, ProbeFailure>, PlaywrightError> {
+        ask(page, scope, &self.world, request, self.root.as_deref()).await
+    }
+
+    /// The world the last chunk runs in.
+    pub(crate) fn world(&self) -> &SealedWorld {
+        &self.world
+    }
+
+    /// The parent frames between the page and `world`.
+    pub(crate) fn path(&self) -> &FramePath {
+        &self.path
+    }
+
+    /// Every `<iframe>` on the way is visible.
+    pub(crate) fn frame_visible(&self) -> bool {
+        self.frame_visible
+    }
 }
 
 /// One pass over the chunks.
@@ -279,24 +324,49 @@ impl<'a> Resolver<'a> {
         Ok(None)
     }
 
+    /// Resolves the target to the world its last chunk runs in, for ops that keep talking to
+    /// that world across calls (an action's measurements, interceptor and verdict). `None`
+    /// while a frame on the way is not there yet. A world that turns out gone on the way is
+    /// invalidated and the pass runs once more, as in [`Resolver::attempt_at`].
+    pub(crate) async fn locate(&self) -> Result<Option<Resolved>, PlaywrightError> {
+        for _ in 0..2 {
+            match self.resolve().await? {
+                Step::Ready(resolved) => return Ok(Some(resolved)),
+                Step::Missing => return Ok(None),
+                Step::Gone(world) => {
+                    if let Some(world) = world {
+                        self.page.frames().invalidate(&world);
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// The world `resolved` named went away under a call: it is forgotten, and the op
+    /// resolves again, unless a ref jump landed there, whose document is gone for good.
+    pub(crate) fn lost(&self, resolved: &Resolved) -> Result<(), PlaywrightError> {
+        self.page.frames().invalidate(&resolved.world);
+        match resolved.jumped {
+            Some(jump) => Err(self.detached(&jump.to_string())),
+            None => Ok(()),
+        }
+    }
+
     /// A reply that ends the op: a ref that can never match again, a strict violation, an
     /// error thrown in the page, or a reply the request does not take.
     pub(crate) fn refused(&self, reply: ProbeReply) -> PlaywrightError {
         refused(self.scope, reply)
     }
 
-    /// `request` in `world`, and once more with the site's values when it answers `needsMask`.
+    /// [`ask`] on this resolver's page.
     async fn ask(
         &self,
         world: &SealedWorld,
         request: &ProbeRequest,
         root: Option<&str>,
     ) -> Result<Result<ProbeReply, ProbeFailure>, PlaywrightError> {
-        let asked = call_from(world, request, root).await;
-        if !matches!(asked, Ok(ProbeReply::NeedsMask)) {
-            return Ok(asked);
-        }
-        Box::pin(remask(self.page, self.scope, world, request, root)).await
+        ask(self.page, self.scope, world, request, root).await
     }
 
     /// One pass: the start world, then one hop per chunk but the last. A chunk that leads
@@ -446,7 +516,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// A probe failure that is not the liveness rule's to handle.
-    fn failed(&self, failure: ProbeFailure) -> PlaywrightError {
+    pub(crate) fn failed(&self, failure: ProbeFailure) -> PlaywrightError {
         failed(self.scope, failure)
     }
 }
@@ -522,6 +592,52 @@ async fn hop_from(
         Err(ProbeFailure::Gone) => return Ok(Hopped::ParentGone),
         Err(failure) => return Err(failed(scope, failure)),
     };
+    // Boxed: every resolver pass awaits a hop, and every locator op's future holds a pass.
+    Box::pin(enter_pinned(page, scope, parent, pin, key, visible)).await
+}
+
+/// Into the child frame behind the `<iframe>` that `pin` names in `parent`, as [`hop`] does
+/// with a chunk: the way down to the frame a focused iframe hands keyboard input to. An
+/// element that is gone or is no iframe any more is [`Hopped::Missing`].
+pub(crate) async fn hop_pinned(
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    parent: &SealedWorld,
+    pin: Pin,
+) -> Result<Hopped, PlaywrightError> {
+    let request = ProbeRequest::Resolve {
+        target: ProbeTarget::Pin(pin),
+        strictness: Strictness::Strict,
+        want: Want::Frame,
+    };
+    // A pin names one element, so only a not-an-iframe preview can ask for the mask
+    // (`needsMask`); the preview is never shown here, so it is not asked for again.
+    let (pin, key, visible) = match probe::call(parent, &request).await {
+        Ok(ProbeReply::Frame {
+            pin, key, visible, ..
+        }) => (pin, key, visible),
+        Ok(
+            ProbeReply::None { stale_ref: None }
+            | ProbeReply::Detached
+            | ProbeReply::NotFrame { .. }
+            | ProbeReply::NeedsMask,
+        ) => return Ok(Hopped::Missing),
+        Ok(other) => return Err(refused(scope, other)),
+        Err(ProbeFailure::Gone) => return Ok(Hopped::ParentGone),
+        Err(failure) => return Err(failed(scope, failure)),
+    };
+    enter_pinned(page, scope, parent, pin, key, visible).await
+}
+
+/// A hop's iframe, pinned in `parent`, by handle, then [`enter_iframe`].
+async fn enter_pinned(
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    parent: &SealedWorld,
+    pin: Pin,
+    key: String,
+    visible: bool,
+) -> Result<Hopped, PlaywrightError> {
     let object = match probe::pinned_object(scope, parent, pin).await {
         Ok(Some(object)) => object,
         Ok(None) => return Ok(Hopped::Missing),
@@ -611,6 +727,40 @@ pub(super) async fn enter_iframe(
         Err(ProbeFailure::Gone) => Ok(Hopped::ChildGone),
         Err(failure) => Err(failed(scope, failure)),
     }
+}
+
+/// `request` in `world` (from `root` when there is one), and once more with the site's values
+/// ([`remask`]) when it answers `needsMask`: the probe met page text the engine cuts, a strict
+/// violation's or a covered element's say, with no mask to put on it first. Every request of a
+/// locator op, an action or a matcher whose reply can hold such text goes through here,
+/// [`Resolver::attempt_masked`] or [`remask`], never a bare probe call that would refuse the
+/// reply.
+pub(crate) async fn ask(
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    world: &SealedWorld,
+    request: &ProbeRequest,
+    root: Option<&str>,
+) -> Result<Result<ProbeReply, ProbeFailure>, PlaywrightError> {
+    let asked = call_from(world, request, root).await;
+    if !matches!(asked, Ok(ProbeReply::NeedsMask)) {
+        return Ok(asked);
+    }
+    Box::pin(remask(page, scope, world, request, root)).await
+}
+
+/// `request` in `world` with its site's values, swept first, for a request whose reply always
+/// previews page text (an `expect` poll's `resolved`), so it never answers `needsMask`. The
+/// values come back with the reply, for the op's own mask of it.
+pub(crate) async fn ask_masked(
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    world: &SealedWorld,
+    request: &ProbeRequest,
+) -> Result<(Result<ProbeReply, ProbeFailure>, SiteValues), PlaywrightError> {
+    let site = site_values(page, scope, world).await?;
+    let Masked { reply, site } = masked_call(page, scope, world, request, None, site).await?;
+    Ok((reply, site))
 }
 
 /// Sends `request` in `world` again, with the values of every sensitive field of the world's
@@ -715,12 +865,26 @@ async fn checked_call(
 }
 
 /// Whether `reply` can hold page text the probe cut for a preview or a hint: anything but a
-/// miss, an iframe (whose reply carries no preview) or a failure. A kind added later counts as
-/// holding some until it is listed here.
+/// miss, an iframe (whose reply carries no preview), an action's states, measurements and
+/// arming, a hit test that hit, or a failure. A kind added later counts as holding some until
+/// it is listed here.
 fn holds_cut_text(reply: &Result<ProbeReply, ProbeFailure>) -> bool {
     !matches!(
         reply,
-        Ok(ProbeReply::None { .. } | ProbeReply::Detached | ProbeReply::Frame { .. }) | Err(_)
+        Ok(ProbeReply::None { .. }
+            | ProbeReply::Detached
+            | ProbeReply::Frame { .. }
+            | ProbeReply::State { .. }
+            | ProbeReply::Measured { .. }
+            | ProbeReply::Armed { .. }
+            | ProbeReply::Moves { .. }
+            | ProbeReply::Focused { .. }
+            | ProbeReply::Verdict { hit: Hit::Done(_) }
+            | ProbeReply::FrameBox {
+                hit: None | Some(Hit::Done(_)),
+                ..
+            })
+            | Err(_)
     )
 }
 

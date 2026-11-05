@@ -1,7 +1,9 @@
 // Every conformance page loads this first. It records what the page receives in
 // window.__events, in order, so a case can return the same log under Runner P and Runner N.
 // Only what a page can observe goes in: the event type, its target, trust, keys, buttons and
-// values. Coordinates and timestamps differ between runs and stay out.
+// values. Coordinates and timestamps differ between runs and stay out. The log is mirrored into
+// <html data-events> as JSON, so a case reads a child frame's log with
+// frame.locator('html').getAttribute('data-events'), which both runners can do.
 window.__events = []
 ;(() => {
   const name = (node) => {
@@ -34,6 +36,7 @@ window.__events = []
     if (event.type === 'input' || event.type === 'change')
       entry.value = valueOf(event.target)
     window.__events.push(entry)
+    document.documentElement.dataset.events = JSON.stringify(window.__events)
   }
   for (const type of [
     'pointerdown',

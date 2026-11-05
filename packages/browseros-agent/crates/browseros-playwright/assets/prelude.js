@@ -307,6 +307,7 @@
     "modifiers",
     "noWaitAfter",
     "position",
+    "scroll",
     "steps",
     "trial"
   ];
@@ -316,12 +317,20 @@
     "modifiers",
     "noWaitAfter",
     "position",
+    "scroll",
     "trial"
   ];
-  var CHECK_KEYS = ["force", "noWaitAfter", "position", "trial"];
+  var CHECK_KEYS = [
+    "force",
+    "noWaitAfter",
+    "position",
+    "scroll",
+    "trial"
+  ];
   var DRAG_KEYS = [
     "force",
     "noWaitAfter",
+    "scroll",
     "sourcePosition",
     "targetPosition",
     "steps",

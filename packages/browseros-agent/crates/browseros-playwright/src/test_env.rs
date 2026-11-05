@@ -4,9 +4,11 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
-use browseros_core::{BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, SessionId};
+use browseros_core::{
+    BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, ProtocolSession, SessionId,
+};
 use futures_util::future::BoxFuture;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::{OpEnv, Refusal, RunState};
@@ -146,4 +148,70 @@ pub(crate) fn offline_session() -> Arc<BrowserSession> {
 
 fn offline_view() -> BrowserView {
     BrowserView::unbound(offline_session(), None)
+}
+
+/// A CDP connection that answers every call with `{}` and records each `(method, params)`, for
+/// unit tests of what the crate sends.
+#[derive(Debug, Default)]
+pub(crate) struct Recording {
+    sent: Mutex<Vec<(String, Value)>>,
+    targeted: TargetedEvents,
+}
+
+impl Recording {
+    /// A session on this connection.
+    pub(crate) fn session(self: &Arc<Self>, id: &str) -> ProtocolSession {
+        ProtocolSession::for_session(
+            Arc::clone(self) as Arc<dyn CdpConnection>,
+            SessionId::from(id),
+        )
+    }
+
+    /// Every call so far, in order.
+    pub(crate) fn sent(&self) -> Vec<(String, Value)> {
+        self.sent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl CdpConnection for Recording {
+    fn send<'a>(
+        &'a self,
+        method: &'a str,
+        params: Value,
+        _session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        self.sent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((method.to_owned(), params));
+        Box::pin(async { Ok(Value::Object(Map::new())) })
+    }
+
+    fn send_raw_json<'a>(
+        &'a self,
+        _method: &'a str,
+        _params_json: &'a str,
+        _session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        Box::pin(async { Ok("{}".to_owned()) })
+    }
+
+    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        broadcast::channel(1).1
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    fn connection_epoch(&self) -> u64 {
+        1
+    }
 }

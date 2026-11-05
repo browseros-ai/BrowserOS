@@ -20,20 +20,15 @@ const PAGE = `<html><body>
  * Request kinds later units implement, by op, or by op and read for the reads (`read.state`).
  * Each unit deletes its line as it builds the kind.
  */
-const NOT_BUILT = new Set<string>([
-  'act',
-  'verdict',
-  'disarm',
-  'frameBox',
-  'edit',
-  'expect',
-])
+const NOT_BUILT = new Set<string>([])
 
 /** The NOT_BUILT key of one example request. */
 const kindOf = (op: string, request: unknown): string => {
   const read = fieldOf(request, 'read')
   if (op === 'read') return `read.${String(fieldOf(read, 'kind'))}`
   if (op === 'readAll') return `readAll.${String(read)}`
+  if (op === 'edit')
+    return `edit.${String(fieldOf(fieldOf(request, 'edit'), 'kind'))}`
   return op
 }
 
@@ -42,6 +37,14 @@ const kindOf = (op: string, request: unknown): string => {
  * their kinds or an error; the live tests cover them in a real browser.
  */
 const NEEDS_A_BROWSER = new Set<string>(['setContent'])
+
+/**
+ * Built handlers whose example answers `internal` on this page by design: a fresh page has
+ * armed no interceptor, and a verdict for an unarmed token must not vouch for input nobody
+ * checked; linkedom computes no styles, which a frame's box is read from.
+ * tests/actions_live.rs runs them on a real layout.
+ */
+const INTERNAL_ON_A_FRESH_PAGE = new Set<string>(['verdict', 'frameBox'])
 
 let page: ProbePage | undefined
 afterEach(() => page?.close())
@@ -64,13 +67,14 @@ it('tests that the protocol examples type-check against protocol.ts', () => {
   expect(result.status).toBe(0)
 })
 
-it('tests that every example request gets a reply its op allows from the built probe', () => {
+it('tests that every example request gets a reply its op allows from the built probe', async () => {
   page = openProbePage(PAGE)
   page.boot({ frameSeq: 0, epoch: 'protocol-test' })
   const wrong: { op: string; reply: unknown; why: string }[] = []
   for (const [op, requests] of Object.entries(REQUEST_EXAMPLES)) {
     for (const request of requests) {
-      const reply = page.call(request)
+      // `expect` answers with a promise, which CDP's `awaitPromise` settles for Rust.
+      const reply = await page.call(request)
       if (!isValueOp(op)) {
         if (reply !== null && !(reply instanceof Element))
           wrong.push({
@@ -100,7 +104,8 @@ it('tests that every example request gets a reply its op allows from the built p
       if (
         !unbuilt &&
         !NEEDS_A_BROWSER.has(op) &&
-        fieldOf(reply, 'class') === 'internal'
+        fieldOf(reply, 'class') === 'internal' &&
+        !INTERNAL_ON_A_FRESH_PAGE.has(op)
       )
         wrong.push({ op, reply, why: 'a built handler failed inside' })
     }

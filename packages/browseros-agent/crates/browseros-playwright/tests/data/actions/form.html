@@ -1,0 +1,41 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Form</title>
+<style>body { margin: 0; font: 14px sans-serif } input, textarea, select, div[contenteditable] { display: block; margin: 6px }</style></head>
+<body>
+<input id="field" aria-label="Field">
+<textarea id="area" aria-label="Area"></textarea>
+<input id="password" type="password" aria-label="Password">
+<input id="card" autocomplete="cc-number" aria-label="Card number" value="4111 1111 1111 1111">
+<textarea id="secret" autocomplete="current-password" aria-label="Secret">hunter2 and more words</textarea>
+<input id="number" type="number" aria-label="Number">
+<input id="date" type="date" aria-label="Date">
+<div id="editable" contenteditable="true">Edit me</div>
+<input id="readonly" readonly aria-label="Readonly" value="fixed">
+<button id="button">Button</button>
+<p id="note">A note</p>
+<select id="color" aria-label="Color">
+  <option value="r">Red</option><option value="g">Green</option><option value="b" disabled>Blue</option>
+</select>
+<select id="many" multiple aria-label="Many">
+  <option value="1">One</option><option value="2">Two</option><option value="3">Three</option>
+</select>
+<input id="upload" type="file" aria-label="Upload">
+<input id="uploads" type="file" multiple aria-label="Uploads">
+<label id="upload-label">Labelled <input id="labelled" type="file"></label>
+<input id="hidden-field" style="display: none" aria-label="Hidden field">
+<form id="search-form" action="/actions/next.html"><input id="search" name="q" aria-label="Search"></form>
+<script>
+  // What the page saw, in order: every key event and the clipboard events on the form's
+  // fields, and each field's value after an input or change event.
+  window.__log = [];
+  const log = (entry) => window.__log.push(entry);
+  for (const type of ['keydown', 'keyup'])
+    document.addEventListener(type, (e) => log(`${type} ${e.target.id} ${e.key} ${e.code}`), true);
+  for (const type of ['copy', 'cut'])
+    document.addEventListener(type, (e) => log(`${type} ${e.target.id}`), true);
+  for (const type of ['input', 'change'])
+    document.addEventListener(type, (e) => {
+      const files = e.target.files ? [...e.target.files].map((f) => f.name).join(',') : null;
+      log(`${type} ${e.target.id} ${files ?? e.target.value ?? e.target.textContent}`);
+    }, true);
+</script>
+</body></html>

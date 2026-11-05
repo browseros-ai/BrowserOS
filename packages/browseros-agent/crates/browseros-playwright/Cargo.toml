@@ -11,11 +11,15 @@ description = "Playwright-compatible locators and actions for BrowserOS Neo's ru
 browseros-cdp.workspace = true
 browseros-core.workspace = true
 browseros-trace.workspace = true
-# A snapshot reads every child frame of a frame at once (`join_all`), as upstream does.
+# Asks frames at once (`join_all`): a snapshot's child frames, an action's parent frames.
 futures-util.workspace = true
 serde.workspace = true
 # `raw_value`: a selector chunk is the prelude's parsed selector, passed to the page untouched.
-serde_json = { workspace = true, features = ["raw_value"] }
+# `float_roundtrip`: a number the probe measured comes back to it bit for bit. Without it,
+# serde_json parses a 17-digit float (most rects of a transformed element) one ULP off, the
+# probe's `===` stability check against the echoed rect never passes, and the click times out.
+# Features unify per build, so this also covers the CDP client's own parse of each reply.
+serde_json = { workspace = true, features = ["float_roundtrip", "raw_value"] }
 # Names the failing field in `invalid_input` messages (`target.chunks[0]: ...`).
 serde_path_to_error.workspace = true
 tokio.workspace = true

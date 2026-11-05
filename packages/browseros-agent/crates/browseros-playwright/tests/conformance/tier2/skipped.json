@@ -1,0 +1,1010 @@
+[
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:36",
+    "title": "should click a button inside an iframe",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:44",
+    "title": "should click a button in the main frame",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:52",
+    "title": "should fail click when elements match in multiple frames",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:63",
+    "title": "should fail click upon strict mode violation inside a single frame",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:73",
+    "title": "should time out on click when there are no matches",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:82",
+    "title": "should count elements in a single frame",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:91",
+    "title": "should fail count when elements match in multiple frames",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:100",
+    "title": "should support toHaveCount",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:108",
+    "title": "should wait for a frame to appear with toHaveCount",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:122",
+    "title": "should fail toHaveCount when elements match in multiple frames",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:133",
+    "title": "should support toHaveText",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:140",
+    "title": "should support toHaveText with an array",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:147",
+    "title": "should fail toHaveText when elements match in multiple frames",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:158",
+    "title": "should fail toHaveText with an array when elements match in multiple frames",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:168",
+    "title": "should fail toHaveText upon strict mode violation inside a single frame",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:178",
+    "title": "should support evaluate",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:185",
+    "title": "should fail evaluate when elements match in multiple frames",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:195",
+    "title": "should time out on evaluate when there are no matches",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:204",
+    "title": "should support evaluateAll",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:213",
+    "title": "should fail evaluateAll when elements match in multiple frames",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:223",
+    "title": "should support hasText filter",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:230",
+    "title": "should support first/last/nth",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:240",
+    "title": "should support nth in the middle of the chain",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:247",
+    "title": "should support composite locators",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:254",
+    "title": "should support capture",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:261",
+    "title": "should find a frame inside the scope",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:272",
+    "title": "should find a nested frame inside the scope",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:289",
+    "title": "should find a frame inside the scope while another iframe is stalled",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:301",
+    "title": "should respect the scope without a frame inside the scope",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:312",
+    "title": "should not match a chain across a frame boundary",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:325",
+    "title": "should only search frames inside the starting frame",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:337",
+    "title": "should enter a frame found in a nested frame",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:345",
+    "title": "should click inside an entered frame",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:355",
+    "title": "should not search nested frames after entering a frame",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:365",
+    "title": "should support two frameLocators",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:374",
+    "title": "should support locator before frameLocator",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:383",
+    "title": "should support owner of a frameLocator",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:391",
+    "title": "should wait for the frame to enter to appear",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:408",
+    "title": "should fail when the frame to enter matches in multiple frames",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:423",
+    "title": "should support contentFrame",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:436",
+    "title": "should not allow frameLocator() inside a composite locator",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:461",
+    "title": "should support a composite locator under frameLocator()",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:469",
+    "title": "should support a composite locator under frameLocator() and a frame locator",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:489",
+    "title": "should resolve aria-ref selectors",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:501",
+    "title": "should click while another iframe is stalled",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:512",
+    "title": "should support toBeVisible while another iframe is stalled",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:521",
+    "title": "should support toHaveCount while another iframe is stalled",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-any-frame.spec.ts:530",
+    "title": "should treat elements inside hidden iframe as hidden",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-convenience.spec.ts:20",
+    "title": "should have a nice preview",
+    "kind": "unsupported",
+    "reason": "locator.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:69",
+    "title": "should work for iframe @smoke",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:79",
+    "title": "should work for nested iframe",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:89",
+    "title": "should work for $ and $$",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:104",
+    "title": "should wait for frame 2",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:110",
+    "title": "should wait for frame to go",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:134",
+    "title": "should click in lazy iframe",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:167",
+    "title": "waitFor should survive frame reattach",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:181",
+    "title": "click should survive frame reattach",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:195",
+    "title": "click should survive iframe navigation",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:204",
+    "title": "should non work for non-frame",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:213",
+    "title": "locator.frameLocator should work for iframe",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:223",
+    "title": "locator.frameLocator should throw on ambiguity",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:231",
+    "title": "locator.frameLocator should not throw on first/last/nth",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:242",
+    "title": "getBy coverage",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:272",
+    "title": "should work with COEP/COOP/CORP isolated iframe",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:302",
+    "title": "locator.contentFrame should work",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-frame.spec.ts:313",
+    "title": "frameLocator.owner should work",
+    "kind": "unsupported",
+    "reason": "page.route is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-highlight.spec.ts:22",
+    "title": "should highlight locator",
+    "kind": "unsupported",
+    "reason": "locator.highlight is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-misc-1.spec.ts:21",
+    "title": "should hover @smoke",
+    "kind": "upstream-skip",
+    "reason": "it.skip(!headless) depends on what the converter cannot know: headed messes up with hover"
+  },
+  {
+    "test": "tests/page/locator-misc-1.spec.ts:30",
+    "title": "should hover when Node is removed",
+    "kind": "upstream-skip",
+    "reason": "it.skip(!headless) depends on what the converter cannot know: headed messes up with hover"
+  },
+  {
+    "test": "tests/page/locator-misc-1.spec.ts:95",
+    "title": "should focus and blur a button",
+    "kind": "unsupported",
+    "reason": "page.exposeFunction is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-misc-1.spec.ts:133",
+    "title": "should upload the file",
+    "kind": "node",
+    "reason": "imports path"
+  },
+  {
+    "test": "tests/page/locator-misc-2.spec.ts:96",
+    "title": "should take screenshot",
+    "kind": "unsupported",
+    "reason": "page.setViewportSize is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-misc-2.spec.ts:107",
+    "title": "should return bounding box",
+    "kind": "unsupported",
+    "reason": "page.setViewportSize is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-query.spec.ts:147",
+    "title": "should support has:locator",
+    "kind": "upstream-skip",
+    "reason": "it.skip(trace === 'on') depends on what the converter cannot know"
+  },
+  {
+    "test": "tests/page/locator-query.spec.ts:181",
+    "title": "should support locator.filter",
+    "kind": "upstream-skip",
+    "reason": "it.skip(trace === 'on') depends on what the converter cannot know"
+  },
+  {
+    "test": "tests/page/locator-query.spec.ts:304",
+    "title": "count() should not throw during navigation",
+    "kind": "fixture",
+    "reason": "uses the playwright fixture"
+  },
+  {
+    "test": "tests/page/locator-wait-for-function.spec.ts:19",
+    "title": "should wait for an attribute to appear",
+    "kind": "unsupported",
+    "reason": "locator.waitForFunction is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-wait-for-function.spec.ts:25",
+    "title": "should return immediately when already truthy",
+    "kind": "unsupported",
+    "reason": "locator.waitForFunction is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-wait-for-function.spec.ts:30",
+    "title": "should accept ElementHandle arguments",
+    "kind": "unsupported",
+    "reason": "locator.waitForFunction is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-wait-for-function.spec.ts:36",
+    "title": "should accept string expression",
+    "kind": "unsupported",
+    "reason": "locator.waitForFunction is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-wait-for-function.spec.ts:41",
+    "title": "should resolve a promise returned by the predicate",
+    "kind": "unsupported",
+    "reason": "locator.waitForFunction is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-wait-for-function.spec.ts:46",
+    "title": "should wait for element to appear and survive rerender",
+    "kind": "unsupported",
+    "reason": "locator.waitForFunction is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-wait-for-function.spec.ts:68",
+    "title": "should throw when predicate throws",
+    "kind": "unsupported",
+    "reason": "locator.waitForFunction is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-wait-for-function.spec.ts:76",
+    "title": "should throw on strict mode violation",
+    "kind": "unsupported",
+    "reason": "locator.waitForFunction is not supported in Neo"
+  },
+  {
+    "test": "tests/page/locator-wait-for-function.spec.ts:82",
+    "title": "should abort via signal",
+    "kind": "unsupported",
+    "reason": "AbortController: the signal option"
+  },
+  {
+    "test": "tests/page/locator-wait-for-function.spec.ts:94",
+    "title": "should abort via already-aborted signal",
+    "kind": "unsupported",
+    "reason": "AbortController: the signal option"
+  },
+  {
+    "test": "tests/page/page-aria-snapshot-ai.spec.ts:102",
+    "title": "should stitch all frame snapshots",
+    "kind": "unsupported",
+    "reason": "locator.normalize is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-aria-snapshot-ai.spec.ts:145",
+    "title": "should re-number refs across navigations but not same-document navigations",
+    "kind": "server",
+    "reason": "server.setRoute"
+  },
+  {
+    "test": "tests/page/page-aria-snapshot-ai.spec.ts:530",
+    "title": "should not distill snapshots outside of ai mode",
+    "kind": "unsupported",
+    "reason": "expect(...).toMatchAriaSnapshot is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-aria-snapshot-ai.spec.ts:543",
+    "title": "should truncate data url in link",
+    "kind": "node",
+    "reason": "uses Buffer"
+  },
+  {
+    "test": "tests/page/page-aria-snapshot-ai.spec.ts:551",
+    "title": "should gracefully fallback when child frame cant be captured",
+    "kind": "asset",
+    "reason": "/redirectloop1.html (add it to sync.sh)"
+  },
+  {
+    "test": "tests/page/page-aria-snapshot-ai.spec.ts:574",
+    "title": "should auto-wait for blocking CSS",
+    "kind": "server",
+    "reason": "server.setRoute"
+  },
+  {
+    "test": "tests/page/page-aria-snapshot-ai.spec.ts:678",
+    "title": "return empty snapshot when iframe is not loaded",
+    "kind": "asset",
+    "reason": "/frame.html (add it to sync.sh)"
+  },
+  {
+    "test": "tests/page/page-aria-snapshot-ai.spec.ts:716",
+    "title": "should snapshot frameset pages",
+    "kind": "server",
+    "reason": "server.setRoute"
+  },
+  {
+    "test": "tests/page/page-aria-snapshot-ai.spec.ts:743",
+    "title": "should snapshot a locator inside a frameset frame",
+    "kind": "unsupported",
+    "reason": "locator.normalize is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-aria-snapshot-ai.spec.ts:756",
+    "title": "should stitch iframes inside a frameset frame",
+    "kind": "server",
+    "reason": "server.setRoute"
+  },
+  {
+    "test": "tests/page/page-aria-snapshot-ai.spec.ts:781",
+    "title": "should stitch nested frameset documents",
+    "kind": "server",
+    "reason": "server.setRoute"
+  },
+  {
+    "test": "tests/page/page-click-during-navigation.spec.ts:20",
+    "title": "should not fail with internal error upon navigation",
+    "kind": "internal",
+    "reason": "passes Playwright's __testHookAfterStable option"
+  },
+  {
+    "test": "tests/page/page-click-react.spec.ts:33",
+    "title": "should not retarget when element changes on hover",
+    "kind": "asset",
+    "reason": "/react.html (add it to sync.sh)"
+  },
+  {
+    "test": "tests/page/page-click-react.spec.ts:43",
+    "title": "should not retarget when element is recycled on hover",
+    "kind": "asset",
+    "reason": "/react.html (add it to sync.sh)"
+  },
+  {
+    "test": "tests/page/page-click-scroll.spec.ts:38",
+    "title": "should scroll into view display:contents",
+    "kind": "upstream-skip",
+    "reason": "it.skip(browserName === 'chromium' && browserMajorVersion < 105) depends on what the converter cannot know: Needs https://chromium-review.googlesource.com/c/chromium/src/+/3758670"
+  },
+  {
+    "test": "tests/page/page-click-scroll.spec.ts:52",
+    "title": "should scroll into view display:contents with a child",
+    "kind": "upstream-skip",
+    "reason": "it.skip(browserName === 'chromium' && browserMajorVersion < 105) depends on what the converter cannot know: Needs https://chromium-review.googlesource.com/c/chromium/src/+/3758670"
+  },
+  {
+    "test": "tests/page/page-click-scroll.spec.ts:64",
+    "title": "should scroll into view display:contents with position",
+    "kind": "upstream-skip",
+    "reason": "it.fixme: DOM.getBoxModel does not work for display:contents"
+  },
+  {
+    "test": "tests/page/page-click-timeout-1.spec.ts:20",
+    "title": "should avoid side effects after timeout",
+    "kind": "internal",
+    "reason": "passes Playwright's __testHookBeforePointerAction option"
+  },
+  {
+    "test": "tests/page/page-click-timeout-3.spec.ts:20",
+    "title": "should fail when element jumps during hit testing",
+    "kind": "internal",
+    "reason": "passes Playwright's __testHookBeforeHitTarget option"
+  },
+  {
+    "test": "tests/page/page-click-timeout-4.spec.ts:36",
+    "title": "should click for the second time after first timeout",
+    "kind": "internal",
+    "reason": "passes Playwright's __testHookBeforePointerAction option"
+  },
+  {
+    "test": "tests/page/page-click-timeout-4.spec.ts:52",
+    "title": "should fail to click the button behind a large header after scrolling around",
+    "kind": "unsupported",
+    "reason": "page.setViewportSize is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:30",
+    "title": "should click button inside frameset",
+    "kind": "unsupported",
+    "reason": "handle.contentFrame is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:251",
+    "title": "should click on checkbox input and toggle",
+    "kind": "fixture",
+    "reason": "uses the headless fixture"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:295",
+    "title": "should scroll and click the button with smooth scroll behavior",
+    "kind": "unsupported",
+    "reason": "page.addStyleTag is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:352",
+    "title": "should click the button inside an iframe",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:362",
+    "title": "should click the button with fixed position inside an iframe",
+    "kind": "upstream-skip",
+    "reason": "it.fixme"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:378",
+    "title": "should click the button behind sticky header",
+    "kind": "unsupported",
+    "reason": "page.setViewportSize is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:415",
+    "title": "should click the button behind position:absolute header",
+    "kind": "unsupported",
+    "reason": "page.setViewportSize is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:895",
+    "title": "should not throw protocol error when navigating during the click",
+    "kind": "internal",
+    "reason": "passes Playwright's __testHookBeforeStable option"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:910",
+    "title": "should retry when navigating during the click",
+    "kind": "internal",
+    "reason": "passes Playwright's __testHookBeforeStable option"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:926",
+    "title": "should not hang when frame is detached",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:1030",
+    "title": "should not retain removed iframe after clicking inside it",
+    "kind": "unsupported",
+    "reason": "page.requestGC is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:1078",
+    "title": "should click a button that is overlaid by a permission popup",
+    "kind": "unsupported",
+    "reason": "page.setViewportSize is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:1221",
+    "title": "should fire contextmenu event on right click in correct order",
+    "kind": "fixture",
+    "reason": "uses the isWindows fixture"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:1324",
+    "title": "should click with tweened mouse movement",
+    "kind": "upstream-skip",
+    "reason": "it.skip(!headless) depends on what the converter cannot know: System cursor tends to interfere with this test"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:1355",
+    "title": "should abort via signal",
+    "kind": "unsupported",
+    "reason": "AbortController: the signal option"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:1371",
+    "title": "should throw an Error when aborted in-flight with a string reason",
+    "kind": "unsupported",
+    "reason": "AbortController: the signal option"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:1383",
+    "title": "should abort via already-aborted signal",
+    "kind": "unsupported",
+    "reason": "AbortController: the signal option"
+  },
+  {
+    "test": "tests/page/page-click.spec.ts:1394",
+    "title": "should throw an Error when aborted via an already-aborted signal with a string reason",
+    "kind": "unsupported",
+    "reason": "AbortController: the signal option"
+  },
+  {
+    "test": "tests/page/page-fill.spec.ts:76",
+    "title": "should fill color input case insensitive",
+    "kind": "fixture",
+    "reason": "uses the isWindows fixture"
+  },
+  {
+    "test": "tests/page/page-fill.spec.ts:388",
+    "title": "should not throw when fill causes navigation",
+    "kind": "unsupported",
+    "reason": "page.waitForNavigation is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:90",
+    "title": "insertText should only emit input event",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:106",
+    "title": "should emit keydown, keypress, textInput and input when typing a character",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:119",
+    "title": "should dispatch key events in separate tasks",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:272",
+    "title": "should specify repeat property",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:299",
+    "title": "should specify location",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:334",
+    "title": "should press NumpadDecimal as Delete",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:355",
+    "title": "should press Enter",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:375",
+    "title": "should press audio and media control keys",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:413",
+    "title": "should type emoji into an iframe",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:460",
+    "title": "should support MacOS shortcuts",
+    "kind": "upstream-skip",
+    "reason": "it.skip(platform !== 'darwin') depends on what the converter cannot know"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:474",
+    "title": "should press the meta key",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:483",
+    "title": "should work with keyboard events with empty.html",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:490",
+    "title": "should work after a cross origin navigation",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:498",
+    "title": "should expose keyIdentifier in webkit",
+    "kind": "upstream-skip",
+    "reason": "it.skip: event.keyIdentifier has been removed from all browsers except WebKit"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:529",
+    "title": "should move around the selection in a contenteditable",
+    "kind": "fixture",
+    "reason": "uses the isMac fixture"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:542",
+    "title": "should move to the start of the document",
+    "kind": "upstream-skip",
+    "reason": "it.skip(!isMac) depends on what the converter cannot know"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:551",
+    "title": "should dispatch a click event on a button when Space gets pressed",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:563",
+    "title": "should dispatch a click event on a button when Enter gets pressed",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:765",
+    "title": "should dispatch insertText after context menu was opened",
+    "kind": "upstream-skip",
+    "reason": "it.skip(browserName === 'chromium' && isWindows) depends on what the converter cannot know: context menu support is best-effort for Linux and MacOS"
+  },
+  {
+    "test": "tests/page/page-keyboard.spec.ts:784",
+    "title": "should type after context menu was opened",
+    "kind": "upstream-skip",
+    "reason": "it.skip(browserName === 'chromium' && isWindows) depends on what the converter cannot know: context menu support is best-effort for Linux and MacOS"
+  },
+  {
+    "test": "tests/page/page-wait-for-selector-1.spec.ts:52",
+    "title": "elementHandle.waitForSelector should immediately resolve if node exists",
+    "kind": "unsupported",
+    "reason": "handle.waitForSelector is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-wait-for-selector-1.spec.ts:59",
+    "title": "elementHandle.waitForSelector should wait",
+    "kind": "unsupported",
+    "reason": "handle.waitForSelector is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-wait-for-selector-1.spec.ts:68",
+    "title": "elementHandle.waitForSelector should timeout",
+    "kind": "unsupported",
+    "reason": "handle.waitForSelector is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-wait-for-selector-1.spec.ts:75",
+    "title": "elementHandle.waitForSelector should throw on navigation",
+    "kind": "unsupported",
+    "reason": "handle.waitForSelector is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-wait-for-selector-1.spec.ts:96",
+    "title": "should resolve promise when node is added",
+    "kind": "unsupported",
+    "reason": "handle.getProperty is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-wait-for-selector-1.spec.ts:209",
+    "title": "page.waitForSelector is shortcut for main frame",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-wait-for-selector-1.spec.ts:220",
+    "title": "should run in specified frame",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-wait-for-selector-1.spec.ts:232",
+    "title": "should throw when frame is detached",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-wait-for-selector-2.spec.ts:196",
+    "title": "should support >> selector syntax",
+    "kind": "unsupported",
+    "reason": "handle.getProperty is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-wait-for-selector-2.spec.ts:240",
+    "title": "should run in specified frame xpath",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-wait-for-selector-2.spec.ts:252",
+    "title": "should throw when frame is detached xpath",
+    "kind": "unsupported",
+    "reason": "page.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-wait-for-selector-2.spec.ts:293",
+    "title": "should work when navigating before node adoption",
+    "kind": "internal",
+    "reason": "passes Playwright's __testHookBeforeAdoptNode option"
+  },
+  {
+    "test": "tests/page/page-wait-for-selector-2.spec.ts:313",
+    "title": "should fail when navigating while on handle",
+    "kind": "unsupported",
+    "reason": "handle.waitForSelector is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-wait-for-selector-2.spec.ts:332",
+    "title": "should fail if element handle was detached while waiting",
+    "kind": "unsupported",
+    "reason": "handle.waitForSelector is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-wait-for-selector-2.spec.ts:342",
+    "title": "should succeed if element handle was detached while waiting for hidden",
+    "kind": "unsupported",
+    "reason": "handle.waitForSelector is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-wait-for-selector-2.spec.ts:351",
+    "title": "should succeed if element handle was detached while waiting for detached",
+    "kind": "unsupported",
+    "reason": "handle.waitForSelector is not supported in Neo"
+  },
+  {
+    "test": "tests/page/selectors-css.spec.ts:77",
+    "title": "should work for open shadow roots",
+    "kind": "unsupported",
+    "reason": "handle.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/selectors-css.spec.ts:277",
+    "title": "should work with :nth-child(of) notation with nested functions",
+    "kind": "upstream-skip",
+    "reason": "it.skip(browserName === 'chromium' && browserMajorVersion < 111) depends on what the converter cannot know: https://caniuse.com/css-nth-child-of"
+  },
+  {
+    "test": "tests/page/selectors-get-by.spec.ts:26",
+    "title": "getByTestId with custom testId should work",
+    "kind": "fixture",
+    "reason": "uses the playwright fixture"
+  },
+  {
+    "test": "tests/page/selectors-get-by.spec.ts:34",
+    "title": "getByTestId with comma-separated testIdAttributes should match any",
+    "kind": "fixture",
+    "reason": "uses the playwright fixture"
+  },
+  {
+    "test": "tests/page/selectors-text.spec.ts:468",
+    "title": "should work with paired quotes in the middle of selector",
+    "kind": "shape",
+    "reason": "uses expect outside an assertion"
+  }
+]

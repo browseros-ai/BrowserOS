@@ -6,7 +6,10 @@
  * checks the shape it expects and fails as `internal` otherwise, so an upgrade that renames
  * a field breaks loudly at the first request instead of resolving refs wrongly.
  */
-import { InjectedScript } from '../../../../crates/browseros-playwright/third_party/playwright/packages/injected/src/injectedScript'
+import {
+  type FrameExpectParams,
+  InjectedScript,
+} from '../../../../crates/browseros-playwright/third_party/playwright/packages/injected/src/injectedScript'
 import type { RefMap } from './aria-ref'
 import type { ErrorClass, ErrorReply, Pin } from './protocol'
 import type { ClawSeal } from './sensitive'
@@ -157,6 +160,40 @@ export function lastSnapshotRefs(
       'the vendored InjectedScript keeps no _lastAriaSnapshotForQuery.info',
     )
   return info
+}
+
+/** What one of the engine's expect checks found: its own result, before `.not`. */
+export type ExpectCheck = { matches: boolean; received?: unknown }
+
+/** InjectedScript's per-element and per-array expect checks (private upstream). */
+export type ExpectChecks = {
+  single(
+    element: Element,
+    params: FrameExpectParams,
+    frameVisible: boolean,
+  ): Promise<ExpectCheck>
+  every(elements: Element[], params: FrameExpectParams): ExpectCheck
+}
+
+/**
+ * `expectSingleElement` and `expectArray`, the checks behind the engine's public `expect`.
+ * The public one also renders an aria snapshot on every failing poll, for the test runner's
+ * error context, which Neo has no place for; these two are what it calls to match.
+ */
+export function expectChecks(injected: InjectedScript): ExpectChecks {
+  const single: unknown = Reflect.get(injected, 'expectSingleElement')
+  const every: unknown = Reflect.get(injected, 'expectArray')
+  if (typeof single !== 'function' || typeof every !== 'function')
+    throw new ProbeError(
+      'internal',
+      'the vendored InjectedScript has no expectSingleElement or expectArray',
+    )
+  return {
+    single: (element, params, frameVisible) =>
+      Reflect.apply(single, injected, [element, params, frameVisible]),
+    every: (elements, params) =>
+      Reflect.apply(every, injected, [elements, params]),
+  }
 }
 
 /** The `src` of an `<iframe>` or `<frame>`; undefined for any other element. */

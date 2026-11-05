@@ -6,7 +6,9 @@
 
 use serde_json::{Value, json};
 
-use crate::live_browser::TestPage;
+// The tab type of the live helper the test drives, `live_browser`'s or `live_run`'s, as the
+// test's root imports it. Both name a tab by the page brand's `id` and `tab`.
+use crate::TestPage;
 
 /// A part whose body is the source, as every non-CSS engine's is.
 fn part(name: &str, body: &str) -> Value {
@@ -62,5 +64,6 @@ pub(crate) fn locator(page: &TestPage, parts: &[Value], display: &str) -> Value 
         .into_iter()
         .map(|parts| json!({ "parts": parts }))
         .collect();
-    json!({ "$neo": "locator", "page": page.brand(), "chunks": chunks, "display": display })
+    let page = json!({ "$neo": "page", "id": page.id.0, "tab": page.tab.0 });
+    json!({ "$neo": "locator", "page": page, "chunks": chunks, "display": display })
 }

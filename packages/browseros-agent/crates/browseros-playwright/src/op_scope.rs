@@ -263,6 +263,13 @@ impl<'env> OpScope<'env> {
         PlaywrightError::new(code, format!("{}: {message}{log}", self.api))
     }
 
+    /// `head` and the call log, for a failed `expect` matcher: Playwright prints those as
+    /// `expect(locator).toBeVisible() failed` and their own lines, not as `<api>: <message>`.
+    pub(crate) fn fail_matcher(&self, code: ErrorCode, head: &str) -> PlaywrightError {
+        let log = self.lock_log().render();
+        PlaywrightError::new(code, format!("{head}{log}"))
+    }
+
     /// A core or CDP failure the leaf could not recover from, as one of the crate's codes.
     pub(crate) fn core_error(&self, error: &CoreError) -> PlaywrightError {
         self.fail(ErrorCode::from_core(error), &error.to_string())

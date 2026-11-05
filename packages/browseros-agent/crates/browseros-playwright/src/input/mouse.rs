@@ -8,19 +8,11 @@
 //! around it, and Chromium's own input handler carries an HTML5 drag from such moves (core's
 //! `mouse::dispatch_drag` relies on the same).
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "mouse ops and pointer actions send these bursts once their leaves land"
-    )
-)]
-
 use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::input_devices::{InputEvent, InputStep};
+use super::input_devices::{Held, Hold, InputEvent, InputStep};
 use super::keyboard::Modifiers;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,6 +117,19 @@ enum MouseEventKind {
 }
 
 impl MouseEvent {
+    /// The button this event presses or lets go; moves and wheels hold nothing.
+    pub(crate) fn hold(&self) -> Option<Hold> {
+        match self.kind {
+            MouseEventKind::Pressed { button, .. } => Some(Hold::Press(Held::Button(button))),
+            MouseEventKind::Released { button, .. } => Some(Hold::Release(Held::Button(button))),
+            MouseEventKind::Moved { .. } | MouseEventKind::Wheel { .. } => None,
+        }
+    }
+
+    pub(crate) fn is_move(&self) -> bool {
+        matches!(self.kind, MouseEventKind::Moved { .. })
+    }
+
     /// The CDP params, with the position times core's `pointer_scale`. Wheel deltas are not
     /// positions and stay unscaled, as core's own scrolling sends them.
     pub(crate) fn params(&self, pointer_scale: f64) -> Value {
@@ -182,7 +187,7 @@ impl MouseEvent {
 }
 
 /// One page's mouse. Events carry the keyboard's held modifiers, which each call takes.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Mouse {
     position: Point,
     /// The button pressed last, until any release: upstream forgets it then, even with another
@@ -192,6 +197,11 @@ pub(crate) struct Mouse {
 }
 
 impl Mouse {
+    /// Whether `button` is down, as the last burst left it.
+    pub(crate) fn holds(&self, button: MouseButton) -> bool {
+        self.buttons.with(button) == self.buttons
+    }
+
     /// `mouse.move(x, y, { steps })`: `steps` moves along the line from the current position,
     /// the last one on `to`. With zero steps the pointer moves without an event, as upstream.
     pub(crate) fn move_to(

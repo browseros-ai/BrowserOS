@@ -9,6 +9,8 @@
  */
 import { parentElementOrShadowHost } from '../../../../crates/browseros-playwright/third_party/playwright/packages/injected/src/domUtils'
 import type {
+  Checkable,
+  FileInput,
   FrameOrigin,
   Located,
   PinnedMatch,
@@ -73,7 +75,46 @@ function readerFor(request: ReadRequest, root: Node | undefined): Reader {
         value: located(world, request, element, root),
         from: element,
       })
+    case 'checkable':
+      return (world, element) => ({
+        value: checkable(world, element),
+        from: element,
+      })
+    case 'fileInput':
+      return (world, element) => fileInput(world, element, read.multiple)
   }
+}
+
+/**
+ * Upstream's `_setInputFiles` checks, with its messages: the element or the control its label
+ * names must be an `<input>` that takes this many files, and Neo sets files, not directories.
+ * Whether it is `type=file` is core's check, where the files are set.
+ */
+function fileInput(world: World, element: Element, multiple: boolean): Reading {
+  const { injected } = world
+  const control = injected.retarget(element, 'follow-label')
+  if (control?.tagName !== 'INPUT')
+    throw injected.createStacklessError('Node is not an HTMLInputElement')
+  const input = control as HTMLInputElement
+  if (multiple && !input.multiple && !input.webkitdirectory)
+    throw injected.createStacklessError(
+      'Non-multiple file input can only accept single file',
+    )
+  if (input.webkitdirectory)
+    throw injected.createStacklessError(
+      '[webkitdirectory] input requires passing a path to a directory',
+    )
+  const value: FileInput = { pin: world.pins.add(input) }
+  return { value, from: input }
+}
+
+/**
+ * Upstream's `_setChecked` check: `elementState(el, 'checked')` follows a label to its control
+ * and throws "Not a checkbox or radio button" for anything else; `isRadio` is that control's.
+ */
+function checkable(world: World, element: Element): Checkable {
+  const { matches, isRadio } = world.injected.elementState(element, 'checked')
+  return { checked: matches, radio: isRadio === true }
 }
 
 /** Upstream's `inputValue`: the control a label names, and only a form control. */
@@ -212,11 +253,13 @@ function located(
 }
 
 /**
- * The reads whose value is only a boolean, a box or a frame origin, which no page text can
+ * The reads whose value is only booleans, a box or a frame origin, which no page text can
  * reach. Every other read sends this document's sweep with its value.
  */
 const TEXTLESS: ReadonlySet<ReadRequest['read']['kind']> = new Set([
   'state',
+  'checkable',
+  'fileInput',
   'boundingBox',
   'frameOrigin',
 ])

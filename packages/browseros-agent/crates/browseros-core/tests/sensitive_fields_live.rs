@@ -332,10 +332,16 @@ async fn exercise(
         &page,
         "(() => {
             const otp = document.getElementById('otp_ac');
+            const prefilled = document.getElementById('pw_attr');
             const card = document.getElementById('cc_number');
             card.focus(); card.select();
             return {
                 equals: [__clawSeal.valueEquals(otp, '482913'), __clawSeal.valueEquals(otp, '000000')],
+                attributes: [
+                    __clawSeal.attributeEquals(prefilled, 'value', 'PWATTR_7d1q'),
+                    __clawSeal.attributeEquals(prefilled, 'value', 'PWATTR_7d1'),
+                    __clawSeal.attributeEquals(otp, 'value', '482913'),
+                ],
                 length: __clawSeal.rawLength(document.getElementById('pw')),
                 selection: String(getSelection()),
                 frame: document.getElementById('child').contentDocument,
@@ -348,6 +354,11 @@ async fn exercise(
     )
     .await?;
     assert_eq!(checks["equals"], json!([true, false]));
+    assert_eq!(
+        checks["attributes"],
+        json!([true, false, false]),
+        "attributeEquals compares the markup exactly, not the typed value"
+    );
     assert_eq!(checks["length"], json!(12));
     assert_eq!(checks["selection"], json!(""));
     assert_eq!(

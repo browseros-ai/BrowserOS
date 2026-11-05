@@ -204,6 +204,12 @@ export type Pumped = { events: EventRecord[]; lost: number }
 export type MouseButton = 'left' | 'right' | 'middle'
 export type Modifier = 'Alt' | 'Control' | 'ControlOrMeta' | 'Meta' | 'Shift'
 
+/**
+ * Whether an action scrolls its element into view first (1.64.1's `scroll`). `none` leaves
+ * the page where it is, and an element outside the viewport is then retried until it is in.
+ */
+export type ScrollOption = 'auto' | 'none'
+
 /** Playwright's pointer options, minus the timeout (in the header) and strict (beside them). */
 export type PointerOptions = {
   button?: MouseButton
@@ -213,12 +219,14 @@ export type PointerOptions = {
   modifiers?: Modifier[]
   noWaitAfter?: boolean
   position?: Point
+  scroll?: ScrollOption
   steps?: number
   trial?: boolean
 }
 export type DragOptions = {
   force?: boolean
   noWaitAfter?: boolean
+  scroll?: ScrollOption
   sourcePosition?: Point
   targetPosition?: Point
   steps?: number

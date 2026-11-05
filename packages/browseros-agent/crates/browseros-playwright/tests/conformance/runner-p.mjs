@@ -7,7 +7,7 @@
  * `setContent`: playwright-core 1.64.1's `setContent` never sees `load` on a fresh BrowserOS
  * tab (decisions.md). Every tab the case opened, popups included, is closed after it.
  *
- *   PLAYWRIGHT_NODE_MODULES=<node_modules with playwright-core 1.64.1> \
+ *   PLAYWRIGHT_NODE_MODULES=<node_modules with playwright-core and @playwright/test 1.64.1> \
  *   BROWSEROS_CDP_PORT=9521 CONFORMANCE_PORT=<server.mjs port> \
  *   node runner-p.mjs <out dir> [case name ...]
  *
@@ -53,6 +53,10 @@ if (`v${version}` !== vendored) {
   process.exit(2)
 }
 const { chromium } = require('playwright-core')
+// Cases call `expect` as a free name, as scripts in Neo's `run` do (claw-sdk hands them the
+// prelude's), and harness.js compiles them to see it as a global.
+// Playwright Test's own expect is the reference: its matchers poll and fail as upstream's do.
+globalThis.expect = require('@playwright/test').expect
 
 vm.runInThisContext(readFileSync(resolve(here, 'harness.js'), 'utf8'), {
   filename: 'harness.js',
@@ -117,7 +121,9 @@ async function runCase(context, source) {
   }
 }
 
-const casesDir = resolve(here, 'cases')
+// CONFORMANCE_CASES_DIR (relative to this directory) picks a tier's cases: tier 2's are in
+// cases/tier2, which tier 1's listing skips because it reads only the files directly in cases/.
+const casesDir = resolve(here, process.env.CONFORMANCE_CASES_DIR ?? 'cases')
 const names = readdirSync(casesDir)
   .filter((file) => file.endsWith('.js'))
   .map((file) => basename(file, '.js'))

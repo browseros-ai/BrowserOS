@@ -10,7 +10,8 @@
 #[path = "support/live_run.rs"]
 #[expect(
     dead_code,
-    reason = "the swept values serve page_world_live, which includes this too"
+    reason = "the swept values serve page_world_live, and the recheck refusal, adopted tabs and \
+              frame reads serve actions_live, which include this too"
 )]
 mod live_run;
 #[path = "support/page_server.rs"]

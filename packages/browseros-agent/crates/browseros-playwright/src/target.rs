@@ -44,7 +44,7 @@ use crate::{ErrorCode, PlaywrightError};
 /// resolved before `Playwright::invoke`, and a null id fails to decode here as `invalid_input`,
 /// so the crate never acts on a tab the door did not clear. It serializes back unchanged, as
 /// the page of the element handles an op hands out.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PageRef {
     #[serde(rename = "$neo")]
@@ -81,7 +81,7 @@ impl PageRef {
 }
 
 /// The only brand a page handle carries.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 enum PageBrand {
     #[serde(rename = "page")]
     Page,
@@ -95,6 +95,16 @@ pub(crate) enum Target {
     Locator(LocatorTarget),
     /// One node pinned in one document, as a Playwright `ElementHandle` is.
     Element(ElementTarget),
+}
+
+impl Target {
+    /// The page the target is on, whichever kind of target it is.
+    pub(crate) fn page(&self) -> &PageRef {
+        match self {
+            Self::Locator(locator) => locator.page(),
+            Self::Element(element) => element.page(),
+        }
+    }
 }
 
 /// `{"$neo":"locator","page":{"$neo":"page","id":7,"tab":1234},"frame":null,"chunks":[...],
@@ -118,6 +128,14 @@ pub(crate) struct LocatorTarget {
     pub(crate) display: String,
 }
 
+impl LocatorTarget {
+    /// The page the locator is on. Ops read it here rather than from the field, so the page's
+    /// wire shape can change in one place.
+    pub(crate) fn page(&self) -> &PageRef {
+        &self.page
+    }
+}
+
 /// The handle a query is rooted at, with its `$neo` tag, which must say `element`.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "$neo", rename_all = "lowercase")]
@@ -137,6 +155,13 @@ pub(crate) struct ElementTarget {
     pub(crate) node: BackendNodeId,
     /// Playwright's preview of the element, for messages.
     pub(crate) display: String,
+}
+
+impl ElementTarget {
+    /// The page the handle's node is on; see [`LocatorTarget::page`].
+    pub(crate) fn page(&self) -> &PageRef {
+        &self.page
+    }
 }
 
 /// One frame's part of a selector: a vendored `ParsedSelector`, passed to the page untouched.

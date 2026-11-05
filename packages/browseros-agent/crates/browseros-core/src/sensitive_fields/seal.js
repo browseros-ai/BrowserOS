@@ -9,6 +9,8 @@
 // survive only inside this closure, for jobs that never hand a value to the agent:
 //   kind(el)                 which fields are sensitive (also traces' sensitive_target)
 //   valueEquals(el, s)       expect(...).toHaveValue compares the real value, reports the mask
+//   attributeEquals(el, n, s) expect(...).toHaveAttribute compares the markup's raw attribute,
+//                            which an edit of the field leaves as it was
 //   rawLength(el)            selectText needs the real length
 //   sensitiveValues()        the sweep: Rust masks these exact values in a main-world result
 //   watch(root)              journal and sweep a closed shadow root Rust found
@@ -347,6 +349,7 @@
     version: 1,
     kind: kind,
     valueEquals: function (el, expected) { return rawValue(el) === expected; },
+    attributeEquals: function (el, name, expected) { return attr(el, name) === expected; },
     rawLength: function (el) { return String(rawValue(el) || "").length; },
     /** Raw values of every sensitive field in this document and its shadow roots. */
     sensitiveValues: function () {

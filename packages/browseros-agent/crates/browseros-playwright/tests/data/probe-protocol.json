@@ -1,5 +1,5 @@
 {
-  "protocol": 6,
+  "protocol": 11,
   "callFunction": "function (request, root, mask) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, mask) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -24,6 +24,9 @@
     ],
     "verdict": [
       "verdict"
+    ],
+    "moves": [
+      "moves"
     ],
     "disarm": [
       "verdict"
@@ -232,6 +235,7 @@
         "action": "mouse",
         "blockAll": false,
         "token": 11,
+        "expiryMs": 8000,
         "expectRect": {
           "x": 8,
           "y": 8,
@@ -243,6 +247,9 @@
     {
       "op": "verdict",
       "token": 11
+    },
+    {
+      "op": "moves"
     },
     {
       "op": "disarm"
@@ -421,6 +428,27 @@
       "read": {
         "kind": "state",
         "state": "checked"
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "pin": 3
+      },
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "checkable"
+      }
+    },
+    {
+      "op": "read",
+      "target": "root",
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "fileInput",
+        "multiple": false
       }
     },
     {
@@ -735,8 +763,7 @@
         ],
         "isNot": false,
         "useInnerText": false
-      },
-      "finalPoll": false
+      }
     },
     {
       "op": "expect",
@@ -751,14 +778,30 @@
           ]
         }
       },
-      "strictness": "strict",
+      "strictness": "firstMatch",
       "frameVisible": true,
       "params": {
         "expression": "to.have.count",
         "expectedNumber": 3,
         "isNot": true
-      },
-      "finalPoll": true
+      }
+    },
+    {
+      "op": "expect",
+      "target": "document",
+      "strictness": "strict",
+      "frameVisible": true,
+      "params": {
+        "expression": "to.have.title",
+        "expectedText": [
+          {
+            "regexSource": "done$",
+            "regexFlags": "i",
+            "normalizeWhiteSpace": true
+          }
+        ],
+        "isNot": false
+      }
     },
     {
       "op": "sweep"
@@ -801,19 +844,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 6,
+      "protocol": 11,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 6,
+      "protocol": 11,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 6,
+      "protocol": 11,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -905,6 +948,10 @@
       }
     },
     {
+      "kind": "moves",
+      "moves": 3
+    },
+    {
       "kind": "frameBox",
       "origin": {
         "x": 8,
@@ -944,6 +991,14 @@
         "r",
         "g"
       ]
+    },
+    {
+      "kind": "value",
+      "value": "needsinput"
+    },
+    {
+      "kind": "value",
+      "value": "error:optionsnotfound"
     },
     {
       "kind": "read",
@@ -992,6 +1047,23 @@
     {
       "kind": "read",
       "value": "rotated",
+      "sensitive": null,
+      "sweep": []
+    },
+    {
+      "kind": "read",
+      "value": {
+        "checked": true,
+        "radio": true
+      },
+      "sensitive": null,
+      "sweep": []
+    },
+    {
+      "kind": "read",
+      "value": {
+        "pin": 7
+      },
       "sensitive": null,
       "sweep": []
     },
@@ -1072,18 +1144,41 @@
     },
     {
       "kind": "expect",
-      "matches": true
+      "matches": true,
+      "resolved": "<h1 id=\"greeting\">Hello</h1>",
+      "received": "Hello",
+      "sensitive": null
     },
     {
       "kind": "expect",
       "matches": false,
-      "received": "Hullo"
+      "resolved": "3 elements",
+      "received": [
+        "one",
+        "two",
+        "three"
+      ],
+      "sensitive": null
     },
     {
       "kind": "expect",
       "matches": false,
+      "resolved": "<input id=\"name\"/>",
+      "received": null,
+      "sensitive": null
+    },
+    {
+      "kind": "expect",
+      "matches": false,
+      "resolved": "<input type=\"password\" id=\"pw\"/>",
       "received": "••••",
-      "ariaSnapshot": "- textbox \"Password\": ••••"
+      "sensitive": "password"
+    },
+    {
+      "kind": "expect",
+      "matches": false,
+      "resolved": "<div id=\"x\">…</div>",
+      "sensitive": null
     },
     {
       "kind": "sweep",
@@ -1099,12 +1194,20 @@
     {
       "kind": "focused",
       "sensitive": true,
-      "iframe": null
+      "iframe": null,
+      "host": null
     },
     {
       "kind": "focused",
       "sensitive": false,
-      "iframe": 9
+      "iframe": 9,
+      "host": null
+    },
+    {
+      "kind": "focused",
+      "sensitive": false,
+      "iframe": null,
+      "host": 4
     },
     {
       "kind": "urlMatch",

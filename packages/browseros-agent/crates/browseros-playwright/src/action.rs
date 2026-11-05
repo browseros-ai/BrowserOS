@@ -1,7 +1,47 @@
 //! Playwright's actions on one element: its two retry levels run on Rust's clock, its
 //! actionability checks run in the element's sealed world, and the input is trusted CDP input
 //! on the page's root session, sent only after `OpScope::send_effect`.
+//!
+//! ```text
+//!  outer loop  (re-resolve; waits 0, 20, 50, 100, 100, 500, then 500 ms)
+//!    resolve ─ Missing: wait │ strict: fail │ stale ref: fail at once │ hidden frame: wait
+//!    inner loop (the pinned element; waits 0, 20, 100, 100, 500, then 500 ms;
+//!                scroll rotation per attempt: if needed, end, center, start)
+//!      ① act { chunk | pin, states, scroll }        ─ measured { rect } │ state │ detached
+//!         16 ms on Rust's clock (never page rAF, which a background tab never runs)
+//!      ── the tab's input lock ──────────────────────────────────────────────────────────
+//!      parents (child frames only): every iframe's origin, then its hit test │ covered
+//!      ② act { pin, arm { expectRect, token } }     ─ armed │ measured (moved) │ covered
+//!      send_effect(): recheck, mark_sent           ─ Sent, right before the first input
+//!      modifiers, the move                                       (root session, page pixels)
+//!      reached { token }, out-of-process frames only ─ yes │ no: the move again, 16 ms apart
+//!      the buttons, modifiers back
+//!      ⑥ verdict { token }                           ─ done │ missed: retry
+//!      ──────────────── ArmGuard disarms on every other exit; PageInput releases ─────────
+//!    a click waits for the navigations its input requested to commit; nothing else settles
+//! ```
+//!
+//! An element handle runs the same inner loop on its own node, with no outer loop around it:
+//! once its node detaches the action fails (`subject.rs`).
+//!
+//! A warm click is 6 CDP messages (①, ②, three dispatches, ⑥). A tab core did not create for
+//! the agent adds 2 (the focus lease), each parent frame adds 2 (its origin, its hit test), and
+//! an element in an out-of-process frame adds 1 (`reached`) when its first move got there.
 
 pub(crate) mod action_op;
+mod actionability;
+mod arm_guard;
+mod copy_refusal;
+mod element_action;
+mod file_action;
+mod focus_lease;
+mod form_action;
+mod frame_projection;
+mod key_action;
+mod pointer;
+mod requested_navigations;
+mod subject;
 
 pub(crate) use action_op::ActionOp;
+pub(crate) use copy_refusal::{Focus, focus_of, refuse_copy};
+pub(crate) use focus_lease::{FocusLease, lease};

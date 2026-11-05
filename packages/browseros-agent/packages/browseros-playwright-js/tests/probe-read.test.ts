@@ -137,6 +137,16 @@ it("tests that state reads are upstream's elementState, frames' visibility inclu
   })
 })
 
+it("tests that the checkable read carries no sweep and throws upstream's message", () => {
+  const probe = booted()
+  // linkedom has no `checked` property, so the values themselves are read by actions_live.rs.
+  expect(read(probe, 'h1', { kind: 'checkable' })).toEqual({
+    kind: 'error',
+    class: 'script',
+    message: 'Not a checkbox or radio button',
+  })
+})
+
 it('tests that readAll reads every match in document order, and nothing for none', () => {
   const probe = booted()
   const every = (selector: string, kind: string) =>

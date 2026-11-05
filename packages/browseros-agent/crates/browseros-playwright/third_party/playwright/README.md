@@ -28,6 +28,13 @@ Playwright checkout is a plain `diff -r`. `sync.sh` writes `SHA256SUMS`, and the
   crate's Rust ports (`src/input/us_keyboard_layout.rs` and `src/input/mac_editing_commands.rs`,
   written by `packages/browseros-playwright-js/scripts/port-keyboard-layout.ts`). Both headers
   read "Copyright 2017 Google Inc., modifications copyright Microsoft Corporation", Apache-2.0.
+- `tests/`. Upstream's own page tests at the same tag, the input of conformance tier 2: the
+  `tests/page/*.spec.ts` files that `crates/browseros-playwright/tests/conformance/tier2/convert.mjs`
+  lifts into case files, `tests/page/pageTest.ts` and `tests/config/utils.ts` for the helpers
+  those specs import, and the static `tests/assets/` pages the lifted tests load from upstream's
+  test server (the conformance fixture server serves them under `/upstream/`). They are pinned
+  here so the conversion reruns offline and byte for byte. Nothing under `tests/` is built
+  into the crate or shipped; it is Apache-2.0 under the same `LICENSE` and `NOTICE`.
 - `sync.sh`, `VERSION`, `SHA256SUMS` and this README are ours.
 
 ## What the engine build changes
@@ -52,6 +59,9 @@ a mask of whole values (`packages/browseros-playwright-js/src/probe/page-mask.ts
   upstream code.
 - Type-only imports such as `./selectorEngine` and `@protocol/structs`. The bundler erases
   them, so their files are not needed.
+- Upstream's other tests and assets, its test fixtures and its test server. Tier 2 maps the
+  server's `PREFIX`, `CROSS_PROCESS_PREFIX` and `EMPTY_PAGE` onto the fixture server, and skips
+  every test that needs more of it.
 - The Playwright client, server and protocol (apart from the two keyboard tables), the test runner,
   reporters, the trace viewer, codegen and the recorder, Playwright MCP, browser downloads, and
   every other injected script (`clock.ts`, `bindingsController.ts`, `webSocketMock.ts`,
@@ -75,4 +85,6 @@ a mask of whole values (`packages/browseros-playwright-js/src/probe/page-mask.ts
 5. Port the keyboard tables with `bun scripts/port-keyboard-layout.ts` there, and record new
    goldens from the same Playwright release with `scripts/capture-goldens.mjs` (its header says
    how). The crate's keyboard and mouse tests replay those goldens.
-6. Review the diff and keep release notes in the commit message.
+6. Lift the new release's page tests with `node tests/conformance/tier2/convert.mjs` in the
+   crate (its header says what it needs), then run `tests/conformance/run.sh tier2`.
+7. Review the diff and keep release notes in the commit message.

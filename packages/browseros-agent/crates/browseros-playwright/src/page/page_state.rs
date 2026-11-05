@@ -1,11 +1,15 @@
 //! What the crate keeps about one tab between operations.
 
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::Instant;
 
 use crate::TypedBy;
+use crate::action::FocusLease;
+use crate::input::{Platform, TabInput};
 use crate::op_scope::Sent;
 use crate::world::{FrameSeq, FrameWorlds};
 
@@ -17,10 +21,24 @@ const TYPING_GRACE: Duration = Duration::from_millis(250);
 /// One tab's state, shared by every op on it. Created on the first op that admits the tab,
 /// and kept while the `Playwright` lives: a second one for the same tab would restart its seq
 /// counter and could give a seq to two documents.
+///
+/// | Field | Written by | Lock |
+/// |---|---|---|
+/// | `frames` | installs, invalidation | std mutex inside, never across an await |
+/// | `typing` | input ops, from `mark_sent` to their end | std mutex |
+/// | `input` | one burst at a time: a click's arm, input and verdict; a key press | tokio mutex, FIFO |
+/// | `focus` | the focus lease of input ops on tabs core did not create | tokio mutex, one CDP call |
+/// | `tokens` | arming requests | atomic |
 #[derive(Debug)]
 pub(crate) struct PageState {
     frames: FrameWorlds,
     typing: Mutex<TypingWindow>,
+    /// The tab's keyboard and mouse. Holding the lock is holding the tab's input, which keeps
+    /// two ops' events from interleaving and a frame's one interceptor slot to one op.
+    input: Arc<AsyncMutex<TabInput>>,
+    focus: Arc<FocusLease>,
+    /// Hit-target interceptor tokens, unique on this tab.
+    tokens: AtomicU32,
 }
 
 /// Whether an agent input op is typing on the page, for the journal's [`TypedBy`].
@@ -40,11 +58,15 @@ pub(crate) struct Typing<'page> {
 }
 
 impl PageState {
-    /// A tab whose main frame's first document will take `first`.
-    pub(crate) fn new(first: FrameSeq) -> Self {
+    /// A tab whose main frame's first document will take `first`, in a browser on
+    /// `platform`.
+    pub(crate) fn new(first: FrameSeq, platform: Platform) -> Self {
         Self {
             frames: FrameWorlds::new(first),
             typing: Mutex::default(),
+            input: Arc::new(AsyncMutex::new(TabInput::new(platform))),
+            focus: Arc::default(),
+            tokens: AtomicU32::new(1),
         }
     }
 
@@ -53,12 +75,23 @@ impl PageState {
         &self.frames
     }
 
+    /// The tab's input, for `PageInput::hold`.
+    pub(crate) fn input(&self) -> &Arc<AsyncMutex<TabInput>> {
+        &self.input
+    }
+
+    /// The tab's focus emulation holders.
+    pub(crate) fn focus(&self) -> &Arc<FocusLease> {
+        &self.focus
+    }
+
+    /// A token no other interceptor armed on this tab has.
+    pub(crate) fn next_token(&self) -> u32 {
+        self.tokens.fetch_add(1, Ordering::Relaxed)
+    }
+
     /// Opens the typing window for one input op. It takes the op's [`Sent`], so only an op
     /// that was marked sent can claim the page's typing.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "fills, typing and key presses open it")
-    )]
     pub(crate) fn typing(&self, _sent: &Sent<'_>) -> Typing<'_> {
         self.lock_typing().open += 1;
         Typing { page: self }
@@ -99,6 +132,7 @@ mod tests {
 
     use super::{PageState, TYPING_GRACE};
     use crate::TypedBy;
+    use crate::input::Platform;
     use crate::op::Op;
     use crate::op_scope::OpScope;
     use crate::target::CallHeader;
@@ -111,7 +145,7 @@ mod tests {
         let env = TestEnv::new();
         let op = Op::from_name("locator.fill").ok_or("locator.fill is an op")?;
         let scope = OpScope::new(&env, op, CallHeader::default());
-        let page = PageState::new(FrameSeq(0));
+        let page = PageState::new(FrameSeq(0), Platform::Linux);
         assert_eq!(page.typed_by(), TypedBy::NotAgent, "nobody typed yet");
         let sent = scope.send_effect()?;
         let typing = page.typing(&sent);

@@ -63,6 +63,7 @@ const sealStandIn = (sensitiveValues: () => string[]) => ({
   kind: (element: Element) =>
     element.getAttribute('type') === 'password' ? 'password' : null,
   valueEquals: () => false,
+  attributeEquals: () => false,
   rawLength: () => 0,
   sensitiveValues,
   watch: () => undefined,

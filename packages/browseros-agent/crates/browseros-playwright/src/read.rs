@@ -23,4 +23,5 @@ pub(crate) mod read_op;
 mod selector_wait;
 mod viewport_box;
 
+pub(crate) use element_handle::backend_node;
 pub(crate) use read_op::ReadOp;

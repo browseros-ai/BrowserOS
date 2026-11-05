@@ -10,7 +10,7 @@ use tokio::sync::futures::Notified;
 
 use crate::RunState;
 use crate::events::dialog_table::{self, DialogAnswer, DialogTable, Unanswerable};
-use crate::events::page_event::{DialogId, PageEvent};
+use crate::events::page_event::{DialogId, DialogKind, PageEvent};
 use crate::events::{PageEventKind, Subscription};
 
 /// How many records the log keeps. A reader that falls further behind is told how many it lost.
@@ -151,6 +151,34 @@ impl EventHub {
                 .upgrade()
                 .is_some_and(|run| run.events.wants(target, event))
         })
+    }
+
+    /// The seq of the newest record: a reader's place for "from now on".
+    pub(crate) fn head(&self) -> u64 {
+        self.lock_log().last_seq
+    }
+
+    /// The type of a dialog recorded on `target` after seq `after` that is still open, if
+    /// any. An action whose input such a dialog blocks names it when it times out: Chromium
+    /// acknowledges no input and answers no page call until the dialog closes (measured).
+    pub(crate) fn open_dialog_after(&self, after: u64, target: &TargetId) -> Option<&'static str> {
+        let opened: Vec<(DialogId, DialogKind)> = self
+            .lock_log()
+            .records
+            .iter()
+            .filter(|record| record.seq > after)
+            .filter_map(|record| match &record.event {
+                PageEvent::Dialog(dialog) if dialog.target == *target => {
+                    Some((dialog.id, dialog.kind))
+                }
+                _ => None,
+            })
+            .collect();
+        let dialogs = self.dialogs();
+        opened
+            .into_iter()
+            .find(|(id, _)| dialogs.is_open(*id, target))
+            .map(|(_, kind)| kind.as_str())
     }
 
     /// The held dialogs. A std mutex, never held across an await.

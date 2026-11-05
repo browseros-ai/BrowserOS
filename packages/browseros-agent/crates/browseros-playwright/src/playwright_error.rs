@@ -13,6 +13,11 @@
 //! target and a lost connection are ambiguous, and every failure Neo saw end, a CDP error reply
 //! included (sdk-traces D2), is definite.
 //!
+//! One exception widens the answer. An action that sent input and then lost track of what it
+//! did (its hit-target verdict came back unreadable) is ambiguous whatever its code, because
+//! the input may have landed; the leaf says so with [`PlaywrightError::after_input`]. The
+//! owner and the code stay the code's.
+//!
 //! A host policy's refusal is not one of these codes. It passes through with the policy's own
 //! owner, code and host code (`host / owner_has_control`).
 
@@ -190,6 +195,8 @@ pub struct PlaywrightError {
     failure: Failure,
     /// Playwright-shaped, call log included.
     message: String,
+    /// The op sent input and cannot tell what it did: the answer is ambiguous.
+    outcome_lost: bool,
 }
 
 /// What failed: one of the crate's codes, or a host policy that refused.
@@ -212,6 +219,7 @@ impl PlaywrightError {
         Self {
             failure: Failure::Code(code),
             message,
+            outcome_lost: false,
         }
     }
 
@@ -270,9 +278,18 @@ impl PlaywrightError {
     #[must_use]
     pub fn answer(&self) -> Answer {
         match &self.failure {
+            Failure::Code(_) if self.outcome_lost => Answer::Ambiguous,
             Failure::Code(code) => code.answer(),
             Failure::Refused { .. } => Answer::Definite,
         }
+    }
+
+    /// The same failure, raised after the op sent input it can no longer account for, such as
+    /// a click whose verdict came back unreadable: the answer becomes ambiguous.
+    #[must_use]
+    pub(crate) fn after_input(mut self) -> Self {
+        self.outcome_lost = true;
+        self
     }
 
     /// `script / invalid_input`, for inputs that fail before an op's scope exists.
@@ -291,6 +308,7 @@ impl From<Refusal> for PlaywrightError {
                 host_code: refusal.host_code,
             },
             message: refusal.message,
+            outcome_lost: false,
         }
     }
 }

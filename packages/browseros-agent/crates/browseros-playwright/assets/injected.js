@@ -1464,327 +1464,6 @@
     return result;
   }
 
-  // packages/browseros-playwright-js/src/probe/aria-ref.ts
-  class RefMap {
-    byRef = new Map;
-    frameKeys = new WeakMap;
-    nextFrameKey = 1;
-    unresolved = [];
-    install(engines, utils) {
-      engines.set("aria-ref", {
-        queryAll: (root, body) => {
-          const ref = String(body);
-          const element = this.byRef.get(ref)?.deref();
-          if (!element?.isConnected) {
-            this.unresolved.push(ref);
-            return [];
-          }
-          return utils.isInsideScope(root, element) ? [element] : [];
-        }
-      });
-    }
-    query(run) {
-      this.unresolved = [];
-      const elements = run();
-      const [staleRef] = this.unresolved;
-      this.unresolved = [];
-      return { elements, staleRef };
-    }
-    remember(refs) {
-      for (const [ref, { element }] of refs)
-        this.byRef.set(ref, new WeakRef(element));
-      for (const [ref, weak] of this.byRef)
-        if (!weak.deref())
-          this.byRef.delete(ref);
-    }
-    frameKey(iframe) {
-      const known = this.frameKeys.get(iframe);
-      if (known !== undefined)
-        return known;
-      const key = `#${this.nextFrameKey++}`;
-      this.frameKeys.set(iframe, key);
-      this.byRef.set(key, new WeakRef(iframe));
-      return key;
-    }
-    forget() {
-      for (const weak of this.byRef.values()) {
-        const element = weak.deref();
-        if (element)
-          Reflect.deleteProperty(element, "_ariaRef");
-      }
-      this.byRef.clear();
-      this.frameKeys = new WeakMap;
-    }
-  }
-
-  // packages/browseros-playwright-js/src/probe/document.ts
-  function documentText(world, request) {
-    const { document } = world.injected;
-    return {
-      kind: "documentText",
-      text: request.part === "title" ? document.title : content(document),
-      sweep: world.seal.sensitiveValues()
-    };
-  }
-  function content(document) {
-    const doctype = document.doctype ? doctypeMarkup(document.doctype) : "";
-    return doctype + (document.documentElement?.outerHTML ?? "");
-  }
-  function doctypeMarkup(doctype) {
-    let markup = `<!DOCTYPE ${doctype.name}`;
-    if (doctype.publicId)
-      markup += ` PUBLIC "${doctype.publicId}"`;
-    else if (doctype.systemId)
-      markup += " SYSTEM";
-    if (doctype.systemId)
-      markup += ` "${doctype.systemId}"`;
-    return `${markup}>`;
-  }
-  function replaceDocument(world, request, opened) {
-    const { document } = world.injected;
-    document.open();
-    opened();
-    try {
-      document.write(request.html);
-    } finally {
-      document.close();
-      world.seal.watch(document);
-    }
-    return { kind: "replaced" };
-  }
-
-  // packages/browseros-playwright-js/src/probe/page-mask.ts
-  var ECHO_MASK = "[private]";
-  var MIN_LENGTH = 4;
-  var running;
-  function underMask(mask, run) {
-    const call = {
-      forms: mask === undefined ? undefined : formsOf(mask),
-      unmasked: false
-    };
-    const outer = running;
-    running = call;
-    try {
-      const value = run();
-      return { value, needsMask: call.unmasked };
-    } finally {
-      running = outer;
-    }
-  }
-  function maskPageText(text) {
-    const call = running;
-    if (!call)
-      return text;
-    if (!call.forms) {
-      call.unmasked = true;
-      return text;
-    }
-    return replaceForms(text, call.forms);
-  }
-  function formsOf(mask) {
-    const forms = new Set;
-    for (const value of mask) {
-      if ([...value].length < MIN_LENGTH)
-        continue;
-      const encoded = encodeURIComponent(value);
-      for (const form of [
-        value,
-        JSON.stringify(value).slice(1, -1),
-        encoded,
-        encoded.replaceAll("%20", "+"),
-        htmlEscaped(value, false),
-        htmlEscaped(value, true),
-        whiteSpaceNormalized(value),
-        flatString(value)
-      ])
-        if ([...form].length >= MIN_LENGTH)
-          forms.add(form);
-    }
-    return [...forms];
-  }
-  function htmlEscaped(value, attribute) {
-    return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll(" ", "&nbsp;").replaceAll('"', attribute ? "&quot;" : '"');
-  }
-  function whiteSpaceNormalized(value) {
-    return value.replace(/[\u200b\u00ad]/g, "").trim().replace(/\s+/g, " ");
-  }
-  function flatString(value) {
-    return value.split(" ").map((chunk) => chunk.replace(/\r\n/g, `
-`).replace(/[​­]/g, "").replace(/\s\s*/g, " ")).join(" ").trim();
-  }
-  function replaceForms(text, forms) {
-    const found = [];
-    for (const form of forms) {
-      for (let start = text.indexOf(form);start !== -1; start = text.indexOf(form, start + 1))
-        found.push({ start, end: start + form.length });
-    }
-    if (found.length === 0)
-      return text;
-    found.sort((a, b) => a.start - b.start || b.end - a.end);
-    let masked = "";
-    let cursor = 0;
-    for (const { start, end } of found) {
-      if (start < cursor)
-        continue;
-      masked += text.slice(cursor, start) + ECHO_MASK;
-      cursor = end;
-    }
-    return masked + text.slice(cursor);
-  }
-
-  // packages/browseros-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 6;
-
-  // crates/browseros-playwright/third_party/playwright/packages/injected/src/domUtils.ts
-  var globalOptions = {};
-  function setGlobalOptions(options) {
-    globalOptions = options;
-  }
-  function isInsideScope(scope, element) {
-    while (element) {
-      if (scope.contains(element))
-        return true;
-      element = enclosingShadowHost(element);
-    }
-    return false;
-  }
-  function parentElementOrShadowHost(element) {
-    if (element.parentElement)
-      return element.parentElement;
-    if (!element.parentNode)
-      return;
-    if (element.parentNode.nodeType === 11 && element.parentNode.host)
-      return element.parentNode.host;
-  }
-  function enclosingShadowRootOrDocument(element) {
-    let node = element;
-    while (node.parentNode)
-      node = node.parentNode;
-    if (node.nodeType === 11 || node.nodeType === 9)
-      return node;
-  }
-  function enclosingShadowHost(element) {
-    while (element.parentElement)
-      element = element.parentElement;
-    return parentElementOrShadowHost(element);
-  }
-  function closestCrossShadow(element, css, scope) {
-    while (element) {
-      const closest = element.closest(css);
-      if (scope && closest !== scope && closest?.contains(scope))
-        return;
-      if (closest)
-        return closest;
-      element = enclosingShadowHost(element);
-    }
-  }
-  function getElementComputedStyle(element, pseudo) {
-    const cache = pseudo === "::before" ? cacheStyleBefore : pseudo === "::after" ? cacheStyleAfter : cacheStyle;
-    if (cache && cache.has(element))
-      return cache.get(element);
-    const style = element.ownerDocument && element.ownerDocument.defaultView ? element.ownerDocument.defaultView.getComputedStyle(element, pseudo) : undefined;
-    cache?.set(element, style);
-    return style;
-  }
-  function isElementStyleVisibilityVisible(element, style) {
-    const cached = cacheStyleVisibility?.get(element);
-    if (cached !== undefined)
-      return cached;
-    const result = computeElementStyleVisibilityVisible(element, style);
-    cacheStyleVisibility?.set(element, result);
-    return result;
-  }
-  function computeElementStyleVisibilityVisible(element, style) {
-    style = style ?? getElementComputedStyle(element);
-    if (!style)
-      return true;
-    if (!element.checkVisibility() && !isWebKitListBoxOptionVisible(element, style))
-      return false;
-    if (style.visibility !== "visible")
-      return false;
-    return true;
-  }
-  function isListBoxSelect(select) {
-    return select.multiple || select.size > 1;
-  }
-  function isWebKitListBoxOptionVisible(element, style) {
-    if (globalOptions.browserNameForWorkarounds !== "webkit" || element.nodeName !== "OPTION" || style.display === "none")
-      return false;
-    const select = element.closest("select");
-    if (!select || !isListBoxSelect(select))
-      return false;
-    for (let e = element.parentElement;e && e !== select; e = e.parentElement) {
-      if (getElementComputedStyle(e)?.display === "none")
-        return false;
-    }
-    return isElementStyleVisibilityVisible(select);
-  }
-  function computeBox(element) {
-    const style = getElementComputedStyle(element);
-    if (!style)
-      return { visible: true, inline: false };
-    const cursor = style.cursor;
-    if (style.display === "contents") {
-      for (let child = element.firstChild;child; child = child.nextSibling) {
-        if (child.nodeType === 1 && isElementVisible(child))
-          return { visible: true, inline: false, cursor };
-        if (child.nodeType === 3 && isVisibleTextNode(child))
-          return { visible: true, inline: true, cursor };
-      }
-      return { visible: false, inline: false, cursor };
-    }
-    if (!isElementStyleVisibilityVisible(element, style))
-      return { cursor, visible: false, inline: false };
-    const rect = element.getBoundingClientRect();
-    return { cursor, visible: rect.width > 0 && rect.height > 0, inline: style.display === "inline" };
-  }
-  function isElementVisible(element) {
-    return computeBox(element).visible;
-  }
-  var kTextNodeRange = Symbol("playwrightTextNodeRange");
-  function isVisibleTextNode(node) {
-    const document = node.ownerDocument;
-    const range = document[kTextNodeRange] ??= document.createRange();
-    range.selectNode(node);
-    const rect = range.getBoundingClientRect();
-    const result = rect.width > 0 && rect.height > 0;
-    range.setStart(document, 0);
-    range.collapse(true);
-    return result;
-  }
-  function elementSafeTagName(element) {
-    const tagName = element.tagName;
-    if (typeof tagName === "string") {
-      const firstCharCode = tagName.charCodeAt(0);
-      if (firstCharCode >= 97 && firstCharCode <= 122)
-        return tagName.toUpperCase();
-      return tagName;
-    }
-    if (element instanceof HTMLFormElement)
-      return "FORM";
-    return element.tagName.toUpperCase();
-  }
-  var cacheStyle;
-  var cacheStyleBefore;
-  var cacheStyleAfter;
-  var cacheStyleVisibility;
-  var cachesCounter = 0;
-  function beginDOMCaches() {
-    ++cachesCounter;
-    cacheStyle ??= new Map;
-    cacheStyleBefore ??= new Map;
-    cacheStyleAfter ??= new Map;
-    cacheStyleVisibility ??= new Map;
-  }
-  function endDOMCaches() {
-    if (!--cachesCounter) {
-      cacheStyle = undefined;
-      cacheStyleBefore = undefined;
-      cacheStyleAfter = undefined;
-      cacheStyleVisibility = undefined;
-    }
-  }
-
   // crates/browseros-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot.ts
   function hasPointerCursor(ariaNode) {
     return ariaNode.box.cursor === "pointer";
@@ -3169,6 +2848,85 @@
     return testIdAttributeName.split(",");
   }
 
+  // packages/browseros-playwright-js/src/probe/page-mask.ts
+  var ECHO_MASK = "[private]";
+  var MIN_LENGTH = 4;
+  var running;
+  function underMask(mask, run) {
+    const call = {
+      forms: mask === undefined ? undefined : formsOf(mask),
+      unmasked: false
+    };
+    const outer = running;
+    running = call;
+    try {
+      const value = run();
+      return { value, needsMask: call.unmasked };
+    } finally {
+      running = outer;
+    }
+  }
+  function maskPageText(text) {
+    const call = running;
+    if (!call)
+      return text === "" ? text : ECHO_MASK;
+    if (!call.forms) {
+      call.unmasked = true;
+      return text;
+    }
+    return replaceForms(text, call.forms);
+  }
+  function formsOf(mask) {
+    const forms = new Set;
+    for (const value of mask) {
+      if ([...value].length < MIN_LENGTH)
+        continue;
+      const encoded = encodeURIComponent(value);
+      for (const form of [
+        value,
+        JSON.stringify(value).slice(1, -1),
+        encoded,
+        encoded.replaceAll("%20", "+"),
+        htmlEscaped(value, false),
+        htmlEscaped(value, true),
+        whiteSpaceNormalized(value),
+        flatString(value)
+      ])
+        if ([...form].length >= MIN_LENGTH)
+          forms.add(form);
+    }
+    return [...forms];
+  }
+  function htmlEscaped(value, attribute) {
+    return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll(" ", "&nbsp;").replaceAll('"', attribute ? "&quot;" : '"');
+  }
+  function whiteSpaceNormalized(value) {
+    return value.replace(/[\u200b\u00ad]/g, "").trim().replace(/\s+/g, " ");
+  }
+  function flatString(value) {
+    return value.split(" ").map((chunk) => chunk.replace(/\r\n/g, `
+`).replace(/[​­]/g, "").replace(/\s\s*/g, " ")).join(" ").trim();
+  }
+  function replaceForms(text, forms) {
+    const found = [];
+    for (const form of forms) {
+      for (let start = text.indexOf(form);start !== -1; start = text.indexOf(form, start + 1))
+        found.push({ start, end: start + form.length });
+    }
+    if (found.length === 0)
+      return text;
+    found.sort((a, b) => a.start - b.start || b.end - a.end);
+    let masked = "";
+    let cursor = 0;
+    for (const { start, end } of found) {
+      if (start < cursor)
+        continue;
+      masked += text.slice(cursor, start) + ECHO_MASK;
+      cursor = end;
+    }
+    return masked + text.slice(cursor);
+  }
+
   // packages/browseros-playwright-js/src/probe/masked-strings.ts
   function trimStringWithEllipsis2(input, cap) {
     return trimStringWithEllipsis(maskPageText(input), cap);
@@ -3350,6 +3108,156 @@
     removeNameRepeatingChild,
     unwrapSingleChildGenerics
   ];
+
+  // crates/browseros-playwright/third_party/playwright/packages/injected/src/domUtils.ts
+  var globalOptions = {};
+  function setGlobalOptions(options) {
+    globalOptions = options;
+  }
+  function isInsideScope(scope, element) {
+    while (element) {
+      if (scope.contains(element))
+        return true;
+      element = enclosingShadowHost(element);
+    }
+    return false;
+  }
+  function parentElementOrShadowHost(element) {
+    if (element.parentElement)
+      return element.parentElement;
+    if (!element.parentNode)
+      return;
+    if (element.parentNode.nodeType === 11 && element.parentNode.host)
+      return element.parentNode.host;
+  }
+  function enclosingShadowRootOrDocument(element) {
+    let node = element;
+    while (node.parentNode)
+      node = node.parentNode;
+    if (node.nodeType === 11 || node.nodeType === 9)
+      return node;
+  }
+  function enclosingShadowHost(element) {
+    while (element.parentElement)
+      element = element.parentElement;
+    return parentElementOrShadowHost(element);
+  }
+  function closestCrossShadow(element, css, scope) {
+    while (element) {
+      const closest = element.closest(css);
+      if (scope && closest !== scope && closest?.contains(scope))
+        return;
+      if (closest)
+        return closest;
+      element = enclosingShadowHost(element);
+    }
+  }
+  function getElementComputedStyle(element, pseudo) {
+    const cache = pseudo === "::before" ? cacheStyleBefore : pseudo === "::after" ? cacheStyleAfter : cacheStyle;
+    if (cache && cache.has(element))
+      return cache.get(element);
+    const style = element.ownerDocument && element.ownerDocument.defaultView ? element.ownerDocument.defaultView.getComputedStyle(element, pseudo) : undefined;
+    cache?.set(element, style);
+    return style;
+  }
+  function isElementStyleVisibilityVisible(element, style) {
+    const cached = cacheStyleVisibility?.get(element);
+    if (cached !== undefined)
+      return cached;
+    const result = computeElementStyleVisibilityVisible(element, style);
+    cacheStyleVisibility?.set(element, result);
+    return result;
+  }
+  function computeElementStyleVisibilityVisible(element, style) {
+    style = style ?? getElementComputedStyle(element);
+    if (!style)
+      return true;
+    if (!element.checkVisibility() && !isWebKitListBoxOptionVisible(element, style))
+      return false;
+    if (style.visibility !== "visible")
+      return false;
+    return true;
+  }
+  function isListBoxSelect(select) {
+    return select.multiple || select.size > 1;
+  }
+  function isWebKitListBoxOptionVisible(element, style) {
+    if (globalOptions.browserNameForWorkarounds !== "webkit" || element.nodeName !== "OPTION" || style.display === "none")
+      return false;
+    const select = element.closest("select");
+    if (!select || !isListBoxSelect(select))
+      return false;
+    for (let e = element.parentElement;e && e !== select; e = e.parentElement) {
+      if (getElementComputedStyle(e)?.display === "none")
+        return false;
+    }
+    return isElementStyleVisibilityVisible(select);
+  }
+  function computeBox(element) {
+    const style = getElementComputedStyle(element);
+    if (!style)
+      return { visible: true, inline: false };
+    const cursor = style.cursor;
+    if (style.display === "contents") {
+      for (let child = element.firstChild;child; child = child.nextSibling) {
+        if (child.nodeType === 1 && isElementVisible(child))
+          return { visible: true, inline: false, cursor };
+        if (child.nodeType === 3 && isVisibleTextNode(child))
+          return { visible: true, inline: true, cursor };
+      }
+      return { visible: false, inline: false, cursor };
+    }
+    if (!isElementStyleVisibilityVisible(element, style))
+      return { cursor, visible: false, inline: false };
+    const rect = element.getBoundingClientRect();
+    return { cursor, visible: rect.width > 0 && rect.height > 0, inline: style.display === "inline" };
+  }
+  function isElementVisible(element) {
+    return computeBox(element).visible;
+  }
+  var kTextNodeRange = Symbol("playwrightTextNodeRange");
+  function isVisibleTextNode(node) {
+    const document = node.ownerDocument;
+    const range = document[kTextNodeRange] ??= document.createRange();
+    range.selectNode(node);
+    const rect = range.getBoundingClientRect();
+    const result = rect.width > 0 && rect.height > 0;
+    range.setStart(document, 0);
+    range.collapse(true);
+    return result;
+  }
+  function elementSafeTagName(element) {
+    const tagName = element.tagName;
+    if (typeof tagName === "string") {
+      const firstCharCode = tagName.charCodeAt(0);
+      if (firstCharCode >= 97 && firstCharCode <= 122)
+        return tagName.toUpperCase();
+      return tagName;
+    }
+    if (element instanceof HTMLFormElement)
+      return "FORM";
+    return element.tagName.toUpperCase();
+  }
+  var cacheStyle;
+  var cacheStyleBefore;
+  var cacheStyleAfter;
+  var cacheStyleVisibility;
+  var cachesCounter = 0;
+  function beginDOMCaches() {
+    ++cachesCounter;
+    cacheStyle ??= new Map;
+    cacheStyleBefore ??= new Map;
+    cacheStyleAfter ??= new Map;
+    cacheStyleVisibility ??= new Map;
+  }
+  function endDOMCaches() {
+    if (!--cachesCounter) {
+      cacheStyle = undefined;
+      cacheStyleBefore = undefined;
+      cacheStyleAfter = undefined;
+      cacheStyleVisibility = undefined;
+    }
+  }
 
   // crates/browseros-playwright/third_party/playwright/packages/injected/src/roleUtils.ts
   function hasExplicitAccessibleName(e) {
@@ -8065,12 +7973,6 @@ ${value.stack}`;
   }
 
   // packages/browseros-playwright-js/src/probe/world.ts
-  var notBuilt = () => ({
-    kind: "error",
-    class: "internal",
-    message: "not built yet"
-  });
-
   class ProbeError extends Error {
     errorClass;
     constructor(errorClass, message) {
@@ -8144,11 +8046,71 @@ ${value.stack}`;
       throw new ProbeError("internal", "the vendored InjectedScript keeps no _lastAriaSnapshotForQuery.info");
     return info;
   }
+  function expectChecks(injected) {
+    const single = Reflect.get(injected, "expectSingleElement");
+    const every = Reflect.get(injected, "expectArray");
+    if (typeof single !== "function" || typeof every !== "function")
+      throw new ProbeError("internal", "the vendored InjectedScript has no expectSingleElement or expectArray");
+    return {
+      single: (element, params, frameVisible) => Reflect.apply(single, injected, [element, params, frameVisible]),
+      every: (elements, params) => Reflect.apply(every, injected, [elements, params])
+    };
+  }
   function frameSource(element) {
     if (element.nodeName !== "IFRAME" && element.nodeName !== "FRAME")
       return;
     const src = Reflect.get(element, "src");
     return typeof src === "string" ? src : "";
+  }
+
+  // packages/browseros-playwright-js/src/probe/sensitive.ts
+  var SEAL_METHODS = [
+    "kind",
+    "valueEquals",
+    "attributeEquals",
+    "rawLength",
+    "sensitiveValues",
+    "watch"
+  ];
+  function sealIn(scope) {
+    const seal = Reflect.get(scope, "__clawSeal");
+    return isClawSeal(seal) ? seal : undefined;
+  }
+  function isClawSeal(value) {
+    if (typeof value !== "object" || value === null)
+      return false;
+    return typeof Reflect.get(value, "version") === "number" && SEAL_METHODS.every((name) => typeof Reflect.get(value, name) === "function");
+  }
+  function editedKind(world, element) {
+    return world.seal.kind(world.injected.retarget(element, "follow-label") ?? element);
+  }
+  function sweep(world) {
+    return { kind: "sweep", values: world.seal.sensitiveValues() };
+  }
+  var MAX_SHADOW_DEPTH = 32;
+  function focused(world) {
+    const element = deepActiveElement(world.injected.document);
+    if (!element)
+      return { kind: "focused", sensitive: false, iframe: null, host: null };
+    const sensitive = world.seal.kind(element) !== null;
+    const iframe = frameSource(element) === undefined ? null : world.pins.add(element);
+    const unseen = !sensitive && iframe === null && !element.shadowRoot;
+    return {
+      kind: "focused",
+      sensitive,
+      iframe,
+      host: unseen ? world.pins.add(element) : null
+    };
+  }
+  function deepActiveElement(document) {
+    let active = document.activeElement;
+    for (let depth = 0;depth < MAX_SHADOW_DEPTH; depth++) {
+      const inner = active?.shadowRoot?.activeElement;
+      if (!inner)
+        break;
+      active = inner;
+    }
+    return active;
   }
 
   // packages/browseros-playwright-js/src/probe/resolve.ts
@@ -8222,7 +8184,7 @@ ${value.stack}`;
         kind: "element",
         pin: world.pins.add(element),
         preview: world.injected.previewNode(element),
-        sensitive: world.seal.kind(element)
+        sensitive: editedKind(world, element)
       };
     const src = frameSource(element);
     if (src === undefined)
@@ -8238,6 +8200,444 @@ ${value.stack}`;
   function pinned(world, request) {
     return world.pins.held(request.pin) ?? null;
   }
+
+  // packages/browseros-playwright-js/src/probe/act.ts
+  var slots = new WeakMap;
+  function slotOf(world) {
+    let slot = slots.get(world);
+    if (!slot) {
+      slot = {};
+      slots.set(world, slot);
+    }
+    return slot;
+  }
+  var trustedMoves = 0;
+  function countMove(event) {
+    if (event.isTrusted)
+      trustedMoves++;
+  }
+  function listenForMoves() {
+    for (const type of ["pointermove", "mousemove"])
+      window.addEventListener(type, countMove, { capture: true, passive: true });
+  }
+  function stopArmed(slot) {
+    const armed = slot.armed;
+    if (!armed)
+      return;
+    slot.armed = undefined;
+    clearTimeout(armed.expiry);
+    const { token, target, point } = armed;
+    return {
+      token,
+      hit: armed.interception.stop(),
+      target,
+      point,
+      expired: false
+    };
+  }
+  function act(world, request, root) {
+    const found = resolveTarget(world, request.target, request.strictness, root);
+    if (found.kind !== "one")
+      return found;
+    const { element } = found;
+    const { injected } = world;
+    for (const state of request.states) {
+      const result = injected.elementState(element, state, request.frameVisible);
+      if (result.received === "error:notconnected")
+        return { kind: "detached" };
+      if (!result.matches)
+        return { kind: "state", missing: state };
+    }
+    const pin = typeof request.target === "object" && "pin" in request.target ? request.target.pin : world.pins.add(element);
+    const { arm } = request;
+    if (arm)
+      stopArmed(slotOf(world));
+    else
+      scroll(element, request.scroll);
+    const rect = injected.retarget(element, "no-follow-label")?.getBoundingClientRect();
+    if (!rect)
+      return { kind: "detached" };
+    const box = rectOf(rect);
+    const place = clickPoint(element, request.position);
+    if (!place)
+      return { kind: "state", missing: "visible" };
+    const measured = {
+      kind: "measured",
+      pin,
+      rect: box,
+      point: place.point,
+      inView: place.inView,
+      transformed: isTransformed(element),
+      sensitive: editedKind(world, element)
+    };
+    if (!arm || !place.inView)
+      return measured;
+    if (arm.expectRect && !sameRect(box, arm.expectRect))
+      return measured;
+    const interception = injected.setupHitTargetInterceptor(element, arm.action, place.point, arm.blockAll);
+    if (interception === "error:notconnected")
+      return { kind: "detached" };
+    if (typeof interception === "string")
+      return { kind: "covered", by: interception };
+    const slot = slotOf(world);
+    slot.stopped = undefined;
+    slot.armed = {
+      token: arm.token,
+      interception,
+      target: injected.retarget(element, "button-link") ?? element,
+      point: place.point,
+      expiry: setTimeout(() => {
+        const stopped = stopArmed(slot);
+        if (stopped)
+          slot.stopped = { ...stopped, expired: true };
+      }, arm.expiryMs)
+    };
+    return { kind: "armed", rect: box, point: place.point, token: arm.token };
+  }
+  function verdict(world, request) {
+    const slot = slotOf(world);
+    if (slot.armed?.token === request.token)
+      slot.stopped = stopArmed(slot);
+    const stopped = slot.stopped;
+    if (stopped?.token !== request.token)
+      throw new ProbeError("internal", `no interceptor is armed with token ${request.token}`);
+    if (stopped.expired)
+      throw new ProbeError("internal", `the interceptor armed with token ${request.token} expired before its verdict, so the input's later events went unchecked`);
+    return { kind: "verdict", hit: describedAgain(world, stopped) };
+  }
+  function describedAgain(world, stopped) {
+    if (stopped.hit === "done")
+      return stopped.hit;
+    const again = world.injected.expectHitTarget(stopped.point, stopped.target);
+    return again === "done" ? stopped.hit : again;
+  }
+  function moves(_world, _request) {
+    return { kind: "moves", moves: trustedMoves };
+  }
+  function disarm(world, _request) {
+    const slot = slotOf(world);
+    const stopped = stopArmed(slot);
+    slot.stopped = undefined;
+    return { kind: "verdict", hit: stopped?.hit ?? "done" };
+  }
+  function frameBox(world, request, root) {
+    const found = resolveTarget(world, request.iframe, "firstMatch", root);
+    if (found.kind !== "one")
+      return found;
+    const iframe = found.element;
+    const style = world.injected.describeIFrameStyle(iframe);
+    if (style === "error:notconnected")
+      return { kind: "detached" };
+    const box = iframe.getBoundingClientRect();
+    return {
+      kind: "frameBox",
+      origin: style === "transformed" ? null : { x: box.x + style.left, y: box.y + style.top },
+      hit: request.point ? world.injected.expectHitTarget(request.point, iframe) : null
+    };
+  }
+  function scroll(element, plan) {
+    switch (plan) {
+      case "none":
+      case "alreadyProtocol":
+        return;
+      case "ifNeeded": {
+        const ifNeeded = Reflect.get(element, "scrollIntoViewIfNeeded");
+        if (typeof ifNeeded === "function")
+          Reflect.apply(ifNeeded, element, [true]);
+        else
+          element.scrollIntoView({ block: "center", inline: "center" });
+        return;
+      }
+      case "end":
+      case "center":
+      case "start":
+        element.scrollIntoView({ block: plan, inline: plan, behavior: "instant" });
+    }
+  }
+  function clickPoint(element, position) {
+    const boxes = Array.from(element.getClientRects());
+    const [first] = boxes;
+    if (!first)
+      return;
+    if (position) {
+      const style = getComputedStyle(element);
+      const box = element.getBoundingClientRect();
+      return {
+        point: {
+          x: box.x + parseInt(style.borderLeftWidth || "", 10) + position.x,
+          y: box.y + parseInt(style.borderTopWidth || "", 10) + position.y
+        },
+        inView: true
+      };
+    }
+    const width = innerWidth;
+    const height = innerHeight;
+    for (const box of boxes) {
+      const left = Math.max(box.left, 0);
+      const right = Math.min(box.right, width);
+      const top = Math.max(box.top, 0);
+      const bottom = Math.min(box.bottom, height);
+      if ((right - left) * (bottom - top) > 0.99)
+        return {
+          point: { x: (left + right) / 2, y: (top + bottom) / 2 },
+          inView: true
+        };
+    }
+    return {
+      point: { x: first.x + first.width / 2, y: first.y + first.height / 2 },
+      inView: false
+    };
+  }
+  function isTransformed(element) {
+    for (let at = element;at; at = at.parentElement) {
+      if (getComputedStyle(at).transform !== "none")
+        return true;
+    }
+    return false;
+  }
+  function rectOf(rect) {
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  }
+  function sameRect(a, b) {
+    return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+  }
+
+  // packages/browseros-playwright-js/src/probe/aria-ref.ts
+  class RefMap {
+    byRef = new Map;
+    frameKeys = new WeakMap;
+    nextFrameKey = 1;
+    unresolved = [];
+    install(engines, utils) {
+      engines.set("aria-ref", {
+        queryAll: (root, body) => {
+          const ref = String(body);
+          const element = this.byRef.get(ref)?.deref();
+          if (!element?.isConnected) {
+            this.unresolved.push(ref);
+            return [];
+          }
+          return utils.isInsideScope(root, element) ? [element] : [];
+        }
+      });
+    }
+    query(run) {
+      this.unresolved = [];
+      const elements = run();
+      const [staleRef] = this.unresolved;
+      this.unresolved = [];
+      return { elements, staleRef };
+    }
+    remember(refs) {
+      for (const [ref, { element }] of refs)
+        this.byRef.set(ref, new WeakRef(element));
+      for (const [ref, weak] of this.byRef)
+        if (!weak.deref())
+          this.byRef.delete(ref);
+    }
+    frameKey(iframe) {
+      const known = this.frameKeys.get(iframe);
+      if (known !== undefined)
+        return known;
+      const key = `#${this.nextFrameKey++}`;
+      this.frameKeys.set(iframe, key);
+      this.byRef.set(key, new WeakRef(iframe));
+      return key;
+    }
+    forget() {
+      for (const weak of this.byRef.values()) {
+        const element = weak.deref();
+        if (element)
+          Reflect.deleteProperty(element, "_ariaRef");
+      }
+      this.byRef.clear();
+      this.frameKeys = new WeakMap;
+    }
+  }
+
+  // packages/browseros-playwright-js/src/probe/document.ts
+  function documentText(world, request) {
+    const { document } = world.injected;
+    return {
+      kind: "documentText",
+      text: request.part === "title" ? document.title : content(document),
+      sweep: world.seal.sensitiveValues()
+    };
+  }
+  function content(document) {
+    const doctype = document.doctype ? doctypeMarkup(document.doctype) : "";
+    return doctype + (document.documentElement?.outerHTML ?? "");
+  }
+  function doctypeMarkup(doctype) {
+    let markup = `<!DOCTYPE ${doctype.name}`;
+    if (doctype.publicId)
+      markup += ` PUBLIC "${doctype.publicId}"`;
+    else if (doctype.systemId)
+      markup += " SYSTEM";
+    if (doctype.systemId)
+      markup += ` "${doctype.systemId}"`;
+    return `${markup}>`;
+  }
+  function replaceDocument(world, request, opened) {
+    const { document } = world.injected;
+    document.open();
+    opened();
+    try {
+      document.write(request.html);
+    } finally {
+      document.close();
+      world.seal.watch(document);
+    }
+    return { kind: "replaced" };
+  }
+
+  // packages/browseros-playwright-js/src/probe/edit.ts
+  function apply(world, edit, element) {
+    const { injected } = world;
+    switch (edit.kind) {
+      case "fill": {
+        const filled = injected.fill(element, edit.value);
+        if (filled === "error:notconnected")
+          return filled;
+        if (filled === "needsinput")
+          selectSensitiveText(world, element);
+        return valueReply(filled);
+      }
+      case "selectOptions": {
+        const selected = injected.selectOptions(element, edit.options);
+        return selected === "error:notconnected" ? selected : valueReply(selected);
+      }
+      case "selectText": {
+        const selected = injected.selectText(element);
+        if (selected === "done")
+          selectSensitiveText(world, element);
+        return selected === "done" ? valueReply(null) : selected;
+      }
+      case "focus":
+        return doneOf(injected.focusNode(element, edit.resetSelection));
+      case "blur":
+        return doneOf(injected.blurNode(element));
+      case "dispatchEvent":
+        injected.dispatchEvent(element, edit.type, edit.init);
+        return valueReply(null);
+    }
+  }
+  function valueReply(value) {
+    return { kind: "value", value };
+  }
+  function doneOf(result) {
+    return result === "done" ? valueReply(null) : result;
+  }
+  function selectSensitiveText(world, element) {
+    const control = world.injected.retarget(element, "follow-label");
+    if (control?.nodeName.toLowerCase() !== "textarea")
+      return;
+    if (world.seal.kind(control) === null)
+      return;
+    const textarea = control;
+    textarea.selectionStart = 0;
+    textarea.selectionEnd = world.seal.rawLength(textarea);
+  }
+  function edit(world, request) {
+    const element = world.pins.live(request.pin);
+    if (!element)
+      return { kind: "detached" };
+    const edited = apply(world, request.edit, element);
+    return edited === "error:notconnected" ? { kind: "detached" } : edited;
+  }
+
+  // packages/browseros-playwright-js/src/probe/expect.ts
+  var REGEX_REFUSED = "a RegExp is not matched against a password, card or one-time-code field, because each match would reveal part of the secret; compare with the exact string";
+  var OPTIONS_REFUSED = "a password, card or one-time-code field is compared only as an exact string, without ignoreCase";
+  async function expect(world, request, root) {
+    const params = request.params;
+    const checks = expectChecks(world.injected);
+    if (params.expression === "to.have.count" || params.expression.endsWith(".array")) {
+      const elements = queryAll(world, request.target, root);
+      const count = `${elements.length} element${elements.length === 1 ? "" : "s"}`;
+      return poll(checks.every(elements, params), count, null);
+    }
+    const found = resolveTarget(world, request.target, request.strictness, root);
+    if (found.kind !== "one")
+      return found;
+    const { element } = found;
+    const resolved = world.injected.previewNode(element);
+    const sealed = sealedCheck(world, element, params);
+    if (sealed)
+      return poll(sealed.check, resolved, sealed.kind);
+    const check = await checks.single(element, params, request.frameVisible);
+    return poll(check, resolved, null);
+  }
+  function poll(check, resolved, sensitive) {
+    return {
+      kind: "expect",
+      matches: check.matches,
+      resolved,
+      received: check.received,
+      sensitive
+    };
+  }
+  function sealedCheck(world, element, params) {
+    const { expression } = params;
+    const valueAttribute = expression === "to.have.attribute.value" && String(params.expressionArg).toLowerCase() === "value";
+    if (expression !== "to.have.value" && expression !== "to.have.values" && !valueAttribute)
+      return;
+    const field = valueAttribute ? element : world.injected.retarget(element, "follow-label");
+    const kind = field ? world.seal.kind(field) : null;
+    if (!field || !kind)
+      return;
+    const expected = exactStrings(params);
+    if (expression === "to.have.values")
+      return selectCheck(world, field, expected, kind);
+    const [wanted] = expected;
+    if (expected.length !== 1 || wanted === undefined)
+      throw new ProbeError("internal", `${expression} takes one expected value`);
+    if (valueAttribute)
+      return { check: attributeCheck(world, field, wanted), kind };
+    return {
+      check: {
+        matches: world.seal.valueEquals(field, wanted),
+        received: sealedValue(field)
+      },
+      kind
+    };
+  }
+  function exactStrings(params) {
+    return (params.expectedText ?? []).map((item) => {
+      if (item.regexSource !== undefined)
+        throw new ProbeError("unsupported", REGEX_REFUSED);
+      if (item.ignoreCase || item.matchSubstring || item.normalizeWhiteSpace)
+        throw new ProbeError("unsupported", OPTIONS_REFUSED);
+      return item.string ?? "";
+    });
+  }
+  function attributeCheck(world, field, wanted) {
+    return {
+      matches: world.seal.attributeEquals(field, "value", wanted),
+      received: field.getAttribute("value")
+    };
+  }
+  function selectCheck(world, field, expected, kind) {
+    if (field.nodeName !== "SELECT")
+      return;
+    const select = field;
+    if (!select.multiple)
+      return;
+    const selected = select.selectedOptions.length;
+    if (selected > 1)
+      throw new ProbeError("unsupported", "toHaveValues compares a password, card or one-time-code select only while at most one option is selected");
+    const received = selected === 0 ? [] : [sealedValue(select)];
+    const [wanted] = expected;
+    const matches = selected === expected.length && (wanted === undefined || world.seal.valueEquals(select, wanted));
+    return { check: { matches, received }, kind };
+  }
+  function sealedValue(field) {
+    const value = Reflect.get(field, "value");
+    return typeof value === "string" ? value : "";
+  }
+
+  // packages/browseros-playwright-js/src/probe/protocol.ts
+  var PROTOCOL = 11;
 
   // packages/browseros-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -8281,7 +8681,31 @@ ${value.stack}`;
           value: located(world, request, element, root),
           from: element
         });
+      case "checkable":
+        return (world, element) => ({
+          value: checkable(world, element),
+          from: element
+        });
+      case "fileInput":
+        return (world, element) => fileInput(world, element, read.multiple);
     }
+  }
+  function fileInput(world, element, multiple) {
+    const { injected } = world;
+    const control = injected.retarget(element, "follow-label");
+    if (control?.tagName !== "INPUT")
+      throw injected.createStacklessError("Node is not an HTMLInputElement");
+    const input = control;
+    if (multiple && !input.multiple && !input.webkitdirectory)
+      throw injected.createStacklessError("Non-multiple file input can only accept single file");
+    if (input.webkitdirectory)
+      throw injected.createStacklessError("[webkitdirectory] input requires passing a path to a directory");
+    const value = { pin: world.pins.add(input) };
+    return { value, from: input };
+  }
+  function checkable(world, element) {
+    const { matches, isRadio } = world.injected.elementState(element, "checked");
+    return { checked: matches, radio: isRadio === true };
   }
   function inputValue(world, element) {
     const control = world.injected.retarget(element, "follow-label");
@@ -8360,6 +8784,8 @@ ${value.stack}`;
   }
   var TEXTLESS = new Set([
     "state",
+    "checkable",
+    "fileInput",
     "boundingBox",
     "frameOrigin"
   ]);
@@ -8406,48 +8832,6 @@ ${value.stack}`;
           sweep: sweep()
         };
     }
-  }
-
-  // packages/browseros-playwright-js/src/probe/sensitive.ts
-  var SEAL_METHODS = [
-    "kind",
-    "valueEquals",
-    "rawLength",
-    "sensitiveValues",
-    "watch"
-  ];
-  function sealIn(scope) {
-    const seal = Reflect.get(scope, "__clawSeal");
-    return isClawSeal(seal) ? seal : undefined;
-  }
-  function isClawSeal(value) {
-    if (typeof value !== "object" || value === null)
-      return false;
-    return typeof Reflect.get(value, "version") === "number" && SEAL_METHODS.every((name) => typeof Reflect.get(value, name) === "function");
-  }
-  function sweep(world) {
-    return { kind: "sweep", values: world.seal.sensitiveValues() };
-  }
-  var MAX_SHADOW_DEPTH = 32;
-  function focused(world) {
-    const element = deepActiveElement(world.injected.document);
-    if (!element)
-      return { kind: "focused", sensitive: false, iframe: null };
-    return {
-      kind: "focused",
-      sensitive: world.seal.kind(element) !== null,
-      iframe: frameSource(element) === undefined ? null : world.pins.add(element)
-    };
-  }
-  function deepActiveElement(document) {
-    let active = document.activeElement;
-    for (let depth = 0;depth < MAX_SHADOW_DEPTH; depth++) {
-      const inner = active?.shadowRoot?.activeElement;
-      if (!inner)
-        break;
-      active = inner;
-    }
-    return active;
   }
 
   // packages/browseros-playwright-js/src/probe/snapshot.ts
@@ -8656,15 +9040,16 @@ ${value.stack}`;
   var HANDLERS = {
     describe: described,
     resolve,
-    act: notBuilt,
-    verdict: notBuilt,
-    disarm: notBuilt,
-    frameBox: notBuilt,
-    edit: notBuilt,
+    act,
+    verdict,
+    moves,
+    disarm,
+    frameBox,
+    edit,
     read,
     readAll,
     snapshot,
-    expect: notBuilt,
+    expect,
     sweep,
     focused,
     matchUrl,
@@ -8693,9 +9078,10 @@ ${value.stack}`;
           return replaceDocument(booted, request, () => {
             world = undefined;
           });
-        return dispatch(booted, request.op, request, scope);
+        const reply = dispatch(booted, request.op, request, scope);
+        return reply instanceof Promise ? reply.catch(thrownReply) : reply;
       } catch (error) {
-        return errorReply(classify(error), error instanceof Error ? error.message : String(error));
+        return thrownReply(error);
       }
     }
     return {
@@ -8708,7 +9094,9 @@ ${value.stack}`;
           throw new ProbeError("internal", "refusing to boot: this world has no seal (__clawSeal)");
         pins.clear();
         refs.forget();
+        listenForMoves();
         const injected = createEngine(frameSeq);
+        injected.onGlobalListenersRemoved.add(listenForMoves);
         refs.install(engineTable(injected), injected.utils);
         world = { epoch, seq: frameSeq, injected, seal, pins, refs };
         const retired = lastSeq;
@@ -8758,6 +9146,9 @@ ${value.stack}`;
     if (error instanceof Error && Object.getPrototypeOf(error) === Error.prototype)
       return "script";
     return "internal";
+  }
+  function thrownReply(error) {
+    return errorReply(classify(error), error instanceof Error ? error.message : String(error));
   }
   function errorReply(errorClass, message) {
     return { kind: "error", message, class: errorClass };

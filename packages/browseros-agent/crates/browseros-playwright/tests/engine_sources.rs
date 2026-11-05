@@ -139,7 +139,8 @@ enum ValueRead {
     /// never sensitive (sdk-privacy D3).
     NeverSensitive,
     /// An `expect` value matcher's received value. For a sensitive field the probe compares
-    /// through `__clawSeal.valueEquals` instead and prints the masked value (design D14).
+    /// through `__clawSeal.valueEquals` (a value attribute through `attributeEquals`) instead
+    /// and prints the masked value (design D14).
     ProbeCompares,
     /// `selectText` on a textarea measures the value, and a sensitive one's masked length is
     /// not its own: sdk-privacy D3 has the probe select such a field by the seal's raw length.
