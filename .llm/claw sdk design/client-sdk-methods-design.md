@@ -1,6 +1,6 @@
 # Client-defined SDK methods
 
-Working design. The requirement is agreed; the HLD below is a proposal for discussion. Transport and other low-level choices remain open.
+Working design. The requirements are agreed. The HLD contains alternatives, not a selected design.
 
 ## Requirements
 
@@ -28,87 +28,83 @@ The Go handler chooses the saved login and asks Neo to fill the fields. Credenti
 
 The agent calls the added methods inside `neo.run`; this follows the existing code-mode design.
 
-### 1. Registration: tell Neo where calls should go
+### Option A: call the customer's running service
 
-There are two running programs: Neo's Rust sidecar and the customer's Go service.
+- The customer tells Neo which methods its Go service handles.
+- When the agent calls `zuzu.auth.fill`, Neo forwards the request to that service.
+- Go checks the vault and asks Neo to perform the browser fill.
+- Neo performs the fill. Go returns the result to the waiting agent call.
 
-The Go service already contains a function, say `FillLogin`. At startup, it registers the public name `zuzu.auth.fill`, the input/output shapes, and that function with its Neo client.
-
-Illustrative setup, not a final API:
-
-```text
-client.register("zuzu.auth.fill", inputShape, outputShape, FillLogin)
-```
-
-The client keeps `FillLogin` in Go. It sends Neo the method's name, input/output shapes, and a way to route calls back to this service. It does not send the Go function.
+This lets Go coordinate multiple browser steps. It requires Neo to accept requests from Go while the original method call waits.
 
 ```text
-Go service                         Neo sidecar
-keeps: name -> Go function          keeps: name -> Go service
-           -- registration ------->
+Agent -> Neo -> Go service
+               Go -> Neo -> Chromium
+Agent <- Neo <- Go result
 ```
 
-### 2. Give the agent a JavaScript method
+### Option B: hook-style request and reply
 
-Neo creates a small JavaScript function named `zuzu.auth.fill`. This function forwards calls to the registered Go handler. It is installed in each fresh run.
+An alternative to explore, borrowing the external-handler pattern from Claude Code hooks:
 
-The same registration describes the method in generated `.d.ts` declarations so the agent knows how to call it.
-
-### 3. Send references, not JavaScript objects
-
-The `page` object lives in Neo's JavaScript runtime. Go cannot directly use an object in another program's memory.
-
-Instead, Neo sends a reference identifying the tab. It resolves the field locators and sends references identifying those fields.
-
-For illustration only:
-
-| Value in agent JavaScript | Information sent to Go |
-|---|---|
-| `page` | Reference to tab 17 |
-| `page.getByLabel("Email")` | Reference to the email field in that tab |
-| `page.getByLabel("Password")` | Reference to the password field in that tab |
-
-These references let Go ask Neo to act on the same browser objects. The actual reference format and lifetime are still to design.
-
-### 4. Go performs the customer logic; Neo performs browser actions
+- The customer supplies a method description and a trusted HTTP endpoint. A local executable is another option if it runs beside Neo.
+- When the method is called, Neo sends a JSON request to the handler.
+- For login, Go checks the vault and replies privately with the requested fill instructions.
+- Neo performs the fill and produces the public result. Go does not call back into Neo.
 
 ```text
-Agent JavaScript      Neo sidecar (Rust)      mirrord (Go)
-      | call method          |                    |
-      |--------------------->| send references     |
-      |                      |------------------->|
-      |                      |   protected fill   |
-      |                      |<-------------------|
-      |                      |                    |
-      |                      +--> Chromium        |
-      |                      |   fill completed   |
-      |                      |------------------->|
-      |                      |   safe result      |
-      |<---------------------|<-------------------|
+Agent -> Neo -> Go handler
+         Neo <- private fill instructions
+         Neo -> Chromium
+Agent <- Neo result
 ```
 
-Go checks its rules, gets the credentials, and requests a protected fill from Neo. Neo types into Chromium and reports completion. Go returns the safe result to the waiting JavaScript call.
+This is simpler for a request that produces a known browser action. It is less flexible when Go needs to inspect the result of one browser step before choosing the next. That would need more exchanges or Option A.
 
-Neo must remain able to handle that fill request while `neo.run` waits for Go.
+The private reply may contain credentials. It must never become agent-visible hook output, logs, or trace arguments. Neo reports `filled` only after the browser operation completes; failures remain failures.
+
+### What we borrow from hooks
+
+Claude Code can invoke a command with JSON on stdin or POST JSON to an HTTP handler. The handler returns a defined reply. Event hooks can run only when relevant and may modify inputs or provide feedback.
+
+That is an execution pattern, not automatic creation of new JavaScript methods. We still need to describe the name and signature of `zuzu.auth.fill` and expose it inside `neo.run`. Our private browser-action reply in Option B is a proposed Neo protocol, not a Claude Code feature.
+
+Ordinary before/after hooks can also be useful. A hook around the outer `neo.run` call cannot replace a custom method awaited partway through the script; that requires an invocation point inside the SDK.
+
+### What both options still need
+
+- A description of each method, used to expose its JavaScript function and `.d.ts` declaration in fresh runs.
+- Small references to the target tab and fields. A JavaScript `Page` object cannot be passed directly into Go.
+- A clear separation between private handler data and the result shown to the agent.
 
 ## Misc LLD points
 
-- Connection and message format for registration, method calls, and browser calls back from Go.
+- Decide between a service callback, a hook-style request/reply, or both.
+- Define the connection and message format. Local commands require colocated code; HTTP can reach the existing Go service.
 - Which host/session may register and invoke a method.
 - How page and field references are encoded, checked, and expired.
 - How input/output shapes describe special values such as pages and locators.
+- For Option B, define the allowed browser instructions and how Neo handles their success or failure.
+- Decide which hooks run before/after a whole script and which run around individual operations.
 - How nested calls share cancellation, deadlines, and trace IDs.
 - What happens when Go disconnects or a browser action's outcome is unknown.
 
 ## Design of individual components
 
-- **Go client registry:** keeps the customer's handler functions and receives method calls.
-- **Neo method registry:** knows which methods exist and where each is implemented.
+- **Method descriptions:** names, signatures, and where each method is handled.
 - **JavaScript wrappers and declarations:** expose those methods inside fresh runs.
-- **Protected browser interface:** lets trusted Go handlers request browser actions without returning secrets to agent code.
+- **Option A handler connection:** forwards calls to Go and accepts browser requests back.
+- **Option B handler runner:** sends one request to a trusted command or HTTP endpoint and reads its reply.
+- **Protected browser operations:** perform the requested actions and expose only safe results to the agent.
 
 ## References
 
 - Parent design: [Claw SDK working design](claw-sdk-design.md).
 - Reference document, section 3 and the login sequence:
   https://docs.shadowfax92.workers.dev/chVZOHAd
+- Claude Code hooks reference, including command/HTTP input and output:
+  https://code.claude.com/docs/en/hooks
+- Claude Code hooks guide. Command hooks do not themselves trigger tool calls; the browser-action reply above is our proposed extension:
+  https://code.claude.com/docs/en/hooks-guide
+- The user supplied a summary of Daisy Hollman's talk. The hook protocol details above were checked against the current official documentation:
+  https://www.youtube.com/watch?v=shZgedW15vg&t=2689
