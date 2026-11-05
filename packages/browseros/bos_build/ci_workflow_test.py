@@ -1454,6 +1454,47 @@ print(json.dumps({
             1,
         )
 
+    def test_extension_release_rejects_the_original_agent_extension(self):
+        # The agent extension's source and build moved to browseros-human;
+        # its manifest entry stays frozen here, so no run may build or bump it.
+        workflow = self.load_workflow("release-extensions.yml")
+        triggers = workflow.get("on", workflow.get(True))
+        self.assertEqual(
+            triggers["workflow_dispatch"]["inputs"]["extension"]["options"],
+            ["all", "controller", "bugreporter", "browserclaw"],
+        )
+        validate = self.named_step(workflow, "prepare", "Validate lifecycle inputs")
+        for extension, version, accepted in (
+            ("browserclaw", "", True),
+            ("bugreporter", "1.2.3.0", True),
+            ("bugreporter", "", False),
+            ("agent", "", False),
+            ("agent", "1.2.3.0", False),
+        ):
+            with (
+                self.subTest(extension=extension, version=version),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                output = Path(temp_dir) / "output"
+                result = subprocess.run(
+                    [git_bash_path(), "-c", validate["run"]],
+                    env={
+                        **os.environ,
+                        "GITHUB_OUTPUT": str(output),
+                        "BRANCH": "",
+                        "DEFER_FINALIZE": "false",
+                        "EXTENSION": extension,
+                        "MODE": "build",
+                        "STATE_OWNER": "component",
+                        "VERSION": version,
+                    },
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(
+                    result.returncode == 0, accepted, result.stdout + result.stderr
+                )
+
     def test_component_resolvers_include_immutable_r2_allocations(self):
         jobs = (
             ("release-claw-server.yml", "prepare", "Resolve release"),
