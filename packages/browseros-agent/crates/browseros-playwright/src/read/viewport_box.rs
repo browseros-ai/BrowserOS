@@ -110,7 +110,7 @@ async fn frame_origin(
         read: Read::FrameOrigin,
     };
     match probe::call(&hop.parent, &request).await {
-        Ok(ProbeReply::Read { value, .. }) => element_read::read_value(scope, value),
+        Ok(ProbeReply::Read { value, .. }) => element_read::read_value(scope, value.textless()),
         Ok(ProbeReply::None { .. } | ProbeReply::Detached) | Err(ProbeFailure::Gone) => Ok(None),
         Ok(other) => Err(scope.fail(
             ErrorCode::Internal,

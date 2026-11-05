@@ -1,6 +1,9 @@
 //! From a locator to the world its last chunk runs in, through every frame on the way.
 
+use std::future::Future;
+
 use browseros_core::FrameId;
+use futures_util::future;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -16,8 +19,8 @@ use crate::target::{AriaRefJump, Chunk, LocatorTarget, RootHandle, Strictness};
 use crate::world::{ParentLink, Pin, Place, SealedWorld, SeqLookup};
 use crate::{ErrorCode, PlaywrightError};
 
-/// Resolves one locator for one op. It never waits: "not there yet" is
-/// [`Attempt::Missing`], and the op's retry loop owns the timing.
+/// Resolves one locator for one op. It never waits: "not there yet" is an attempt that lands
+/// nowhere (`None`), and the op's retry loop owns the timing.
 pub(crate) struct Resolver<'a> {
     page: &'a OpPage<'a>,
     scope: &'a OpScope<'a>,
@@ -29,22 +32,16 @@ pub(crate) struct Resolver<'a> {
     start: Option<FrameStart>,
 }
 
-/// What one attempt got: the probe's reply to the op's request in the last chunk's world, or
-/// nothing, because a frame on the way is not there yet.
-#[derive(Debug)]
-pub(crate) enum Attempt {
-    Reply(ProbeReply),
-    Missing,
-}
-
 /// A reply, and where the request that got it ran: what an op needs when it goes on working
 /// in that world (making a handle of a pinned element) or above it (placing a box in the main
-/// viewport).
+/// viewport). `alongside` is what [`Resolver::attempt_alongside`] ran in that world at the same
+/// time as the request, such as a read's site sweep; none for [`Resolver::attempt_at`].
 #[derive(Debug)]
-pub(crate) struct Landed {
+pub(crate) struct Landed<T = ()> {
     pub(crate) reply: ProbeReply,
     pub(crate) world: SealedWorld,
     pub(crate) path: FramePath,
+    pub(crate) alongside: T,
 }
 
 /// The frames one pass went through so far: their parents, top down, and whether every
@@ -159,29 +156,34 @@ impl<'a> Resolver<'a> {
     }
 
     /// Resolves the target and sends the op's request, built by `request` from the last chunk
-    /// and whether every frame on the way is visible, in the last chunk's world.
+    /// and whether every frame on the way is visible, in the last chunk's world. The reply comes
+    /// back with that world and its parents; `None` is "a frame on the way is not there yet".
     ///
     /// The liveness rule: a world that turns out gone (a stale handle, a lost session, an
     /// `uninstalled` probe) is invalidated, and the whole pass runs once more, installing
     /// fresh worlds where documents changed; if that fails too, the frame is mid-navigation
-    /// and the attempt is `Missing`. A world a ref jump landed in is the exception: its
+    /// and the attempt lands nowhere. A world a ref jump landed in is the exception: its
     /// document is the ref's, so the op fails at once with `element_detached`.
-    pub(crate) async fn attempt(
-        &self,
-        request: impl Fn(ParsedSelector, bool) -> ProbeRequest,
-    ) -> Result<Attempt, PlaywrightError> {
-        Ok(match self.attempt_at(request).await? {
-            Some(landed) => Attempt::Reply(landed.reply),
-            None => Attempt::Missing,
-        })
-    }
-
-    /// [`Resolver::attempt`], keeping the world the request ran in and its parents; `None` is
-    /// [`Attempt::Missing`].
     pub(crate) async fn attempt_at(
         &self,
         request: impl Fn(ParsedSelector, bool) -> ProbeRequest,
     ) -> Result<Option<Landed>, PlaywrightError> {
+        self.attempt_alongside(request, |_world| future::ready(()))
+            .await
+    }
+
+    /// [`Resolver::attempt_at`], with `alongside` run on the world the request lands in, at the
+    /// same time as the request, so a read's sweep of its frame's site (`page::SiteSweep`)
+    /// overlaps the read instead of following it. Only the output of the pass whose request was
+    /// answered is kept.
+    pub(crate) async fn attempt_alongside<T, Fut>(
+        &self,
+        request: impl Fn(ParsedSelector, bool) -> ProbeRequest,
+        alongside: impl Fn(SealedWorld) -> Fut,
+    ) -> Result<Option<Landed<T>>, PlaywrightError>
+    where
+        Fut: Future<Output = T>,
+    {
         for _ in 0..2 {
             let resolved = match self.resolve().await? {
                 Step::Ready(resolved) => resolved,
@@ -195,12 +197,18 @@ impl<'a> Resolver<'a> {
             };
             let last = ParsedSelector::of(self.target.chunks.last());
             let request = request(last, resolved.frame_visible);
-            match call_from(&resolved.world, &request, resolved.root.as_deref()).await {
+            let (called, beside) = future::join(
+                call_from(&resolved.world, &request, resolved.root.as_deref()),
+                alongside(resolved.world.clone()),
+            )
+            .await;
+            match called {
                 Ok(reply) => {
                     return Ok(Some(Landed {
                         reply,
                         world: resolved.world,
                         path: resolved.path,
+                        alongside: beside,
                     }));
                 }
                 Err(ProbeFailure::Gone) => {
@@ -557,7 +565,7 @@ async fn iframes_visible(scope: &OpScope<'_>, path: &FramePath) -> Result<bool, 
             },
         };
         let visible = match probe::call(&hop.parent, &request).await {
-            Ok(ProbeReply::Read { value, .. }) => value == Value::Bool(true),
+            Ok(ProbeReply::Read { value, .. }) => value.textless() == Value::Bool(true),
             Ok(ProbeReply::None { .. } | ProbeReply::Detached) | Err(ProbeFailure::Gone) => false,
             Ok(other) => return Err(refused(scope, other)),
             Err(failure) => return Err(failed(scope, failure)),
@@ -655,6 +663,7 @@ fn selector_text(chunk: &Chunk) -> String {
 mod tests {
     use std::time::Duration;
 
+    use browseros_core::sensitive_fields::FieldValues;
     use serde_json::{Value, json};
     use tokio::time;
 
@@ -662,7 +671,7 @@ mod tests {
     use crate::op_scope::OpScope;
     use crate::page::OpPage;
     use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, Read};
-    use crate::resolve::{Attempt, HopIframe};
+    use crate::resolve::{HopIframe, Landed};
     use crate::target::{CallHeader, Chunk, LocatorTarget, Strictness, Target};
     use crate::test_support::fixture_server::{FixtureServer, nest_pages};
     use crate::test_support::{LiveBrowser, Tab, TestResult, count_op};
@@ -803,8 +812,12 @@ mod tests {
         };
         let mut text = Value::Null;
         for _ in 0..100 {
-            if let Attempt::Reply(ProbeReply::Read { value, .. }) = resolver.attempt(read).await? {
-                text = value;
+            if let Some(Landed {
+                reply: ProbeReply::Read { value, .. },
+                ..
+            }) = resolver.attempt_at(read).await?
+            {
+                text = value.masked(&FieldValues::default());
                 if text == "B3 button" {
                     break;
                 }

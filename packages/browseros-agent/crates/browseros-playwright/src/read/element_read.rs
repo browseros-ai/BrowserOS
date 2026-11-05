@@ -4,16 +4,17 @@
 //! element-handle forms. A locator is re-resolved on every attempt; an element handle's node
 //! is read once, because it is there or it is gone for good.
 
-use browseros_core::PageId;
-use browseros_core::sensitive_fields::{FieldValues, SensitiveKind};
+use browseros_core::sensitive_fields::SensitiveKind;
+use futures_util::future;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::backoff::Backoff;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
+use crate::page::site_sweep::{self, ReadMask};
 use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, QueryState, Read};
-use crate::resolve::{self, Attempt, FramePath, HandleSite, Landed, Resolver};
+use crate::resolve::{self, FramePath, HandleSite, Landed, Resolver};
 use crate::target::{ElementTarget, LocatorTarget, Strictness, Target};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
@@ -109,7 +110,14 @@ async fn poll_locator(
             frame_visible,
             read: read.clone(),
         };
-        let Some(Landed { reply, path, .. }) = resolver.attempt_at(request).await? else {
+        let masked = |world| ReadMask::of(&page, world, read.holds_page_text());
+        let Some(Landed {
+            reply,
+            path,
+            world,
+            alongside: mask,
+        }) = resolver.attempt_alongside(request, masked).await?
+        else {
             continue;
         };
         match reply {
@@ -119,11 +127,11 @@ async fn poll_locator(
                 sweep,
             } => {
                 mark_sensitive(scope, sensitive);
-                report_swept(pw, page.id(), &sweep);
+                let value = mask.value(pw, scope, page.id(), sweep, value)?;
                 return Ok(Reading { value, path });
             }
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {}
-            other => return Err(resolver.refused(other)),
+            other => return Err(site_sweep::refused(pw, scope, &page, world, other, mask).await),
         }
     }
     Err(scope.timed_out(ErrorCode::NoMatch))
@@ -148,20 +156,26 @@ async fn read_handle(
         frame_visible: true,
         read: read.clone(),
     };
-    match site.call(&request).await? {
+    let world = site.world().clone();
+    let (reply, mask) = future::join(
+        site.call(&request),
+        ReadMask::of(&page, world, read.holds_page_text()),
+    )
+    .await;
+    match reply? {
         ProbeReply::Read {
             value,
             sensitive,
             sweep,
         } => {
             mark_sensitive(scope, sensitive);
-            report_swept(pw, page.id(), &sweep);
             Ok(Some(Reading {
-                value,
+                value: mask.value(pw, scope, page.id(), sweep, value)?,
                 path: site.path().clone(),
             }))
         }
         ProbeReply::Detached => Ok(None),
+        // A read of the handle's own node finds one element, so no strict violation.
         other => Err(resolve::refused(scope, other)),
     }
 }
@@ -192,27 +206,27 @@ pub(crate) async fn read_visibility(
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, strict);
     scope.log(format!("  checking visibility of {}", target.display));
-    let attempt = resolver
-        .attempt(|last, frame_visible| ProbeRequest::Read {
+    let landed = resolver
+        .attempt_at(|last, frame_visible| ProbeRequest::Read {
             target: ProbeTarget::Chunk(last),
             strictness: strict,
             frame_visible,
             read: read.clone(),
         })
         .await?;
-    match attempt {
-        Attempt::Missing
-        | Attempt::Reply(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) => {
-            Ok(without_element)
-        }
+    let Some(Landed { reply, world, .. }) = landed else {
+        return Ok(without_element);
+    };
+    match reply {
+        ProbeReply::None { stale_ref: None } | ProbeReply::Detached => Ok(without_element),
         // A state read carries no sweep (protocol.ts `ReadValue`).
-        Attempt::Reply(ProbeReply::Read {
+        ProbeReply::Read {
             value, sensitive, ..
-        }) => {
+        } => {
             mark_sensitive(scope, sensitive);
-            Ok(value)
+            Ok(value.textless())
         }
-        Attempt::Reply(other) => Err(resolver.refused(other)),
+        other => Err(site_sweep::refused(pw, scope, &page, world, other, ReadMask::Textless).await),
     }
 }
 
@@ -220,15 +234,6 @@ pub(crate) async fn read_visibility(
 pub(crate) fn mark_sensitive(scope: &OpScope<'_>, sensitive: Option<SensitiveKind>) {
     if sensitive.is_some() {
         scope.mark_sensitive_target();
-    }
-}
-
-/// Hands the host the sensitive values a read's sweep found on `page`, as a snapshot and
-/// `page.content()` do: the read's value is already masked with them (`probe::reply_of`), and
-/// the host registers them so its own mask catches them in every later result.
-pub(crate) fn report_swept(pw: &Playwright, page: &PageId, sweep: &FieldValues) {
-    if !sweep.is_empty() {
-        pw.hooks().values_swept(page.clone(), sweep);
     }
 }
 

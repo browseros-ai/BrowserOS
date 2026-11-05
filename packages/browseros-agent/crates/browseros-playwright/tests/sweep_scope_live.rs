@@ -673,8 +673,14 @@ fn cost_pages() -> HashMap<String, Page> {
     pages
 }
 
-/// The median and slowest of `calls` runs of `op`, after three to warm the worlds up.
-async fn cost<F, Fut>(calls: usize, op: F) -> TestResult<(Duration, Duration)>
+/// What `calls` timed runs of one op took.
+struct Cost {
+    median: Duration,
+    slowest: Duration,
+}
+
+/// The cost of `calls` runs of `op`, after three to warm the worlds up.
+async fn cost<F, Fut>(calls: usize, op: F) -> TestResult<Cost>
 where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<Value, PlaywrightError>>,
@@ -689,8 +695,10 @@ where
         took.push(started.elapsed());
     }
     took.sort();
-    let median = took.get(took.len() / 2).copied().unwrap_or_default();
-    Ok((median, took.last().copied().unwrap_or_default()))
+    Ok(Cost {
+        median: took.get(took.len() / 2).copied().unwrap_or_default(),
+        slowest: took.last().copied().unwrap_or_default(),
+    })
 }
 
 /// Prints what `page.evaluate` costs on one frame, on the nested fixture with and without its
@@ -719,7 +727,7 @@ async fn measures_the_cost_of_the_sweep() -> TestResult {
                 if hangs {
                     time::sleep(HANG_STARTS).await;
                 }
-                let (median, slowest) =
+                let Cost { median, slowest } =
                     cost(40, || page_evaluate(&run, &page, "() => document.title")).await?;
                 report(&format!(
                     "page.evaluate, {name}: median {median:?}, slowest {slowest:?}"

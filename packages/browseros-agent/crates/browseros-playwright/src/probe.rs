@@ -20,7 +20,9 @@ mod probe_reply;
 mod probe_request;
 
 pub(crate) use probe_call::{ProbeFailure, call, call_on, pinned_object, reply_of};
-pub(crate) use probe_reply::{ErrorClass, PROBE_PROTOCOL, Point, ProbeReply, Rect, SnapshotIframe};
+pub(crate) use probe_reply::{
+    ErrorClass, PROBE_PROTOCOL, PageText, Point, ProbeReply, Rect, SnapshotIframe,
+};
 pub(crate) use probe_request::{
     DocumentPart, ParsedSelector, ProbeRequest, ProbeTarget, QueryState, Read, ReadAll,
     SnapshotMode, UrlPattern, Want,

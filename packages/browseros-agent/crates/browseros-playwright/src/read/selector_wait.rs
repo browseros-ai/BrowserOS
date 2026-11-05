@@ -8,10 +8,11 @@ use serde_json::Value;
 use crate::backoff::Backoff;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
+use crate::page::site_sweep::{self, ReadMask, SiteSweep};
 use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, Read};
 use crate::read::element_handle::{self, Located};
 use crate::read::element_read;
-use crate::resolve::{self, Landed, Resolver};
+use crate::resolve::{Landed, Resolver};
 use crate::target::{LocatorTarget, Strictness};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
@@ -124,7 +125,9 @@ async fn poll_selector(
             frame_visible,
             read: Read::Located,
         };
-        let landed = match resolver.attempt_at(request).await {
+        // Its preview reaches the call log and the handle: page text.
+        let swept = |world| SiteSweep::of(&page, world);
+        let landed = match resolver.attempt_alongside(request, swept).await {
             Ok(landed) => landed,
             Err(error)
                 if state.met_without_element()
@@ -134,7 +137,13 @@ async fn poll_selector(
             }
             Err(error) => return Err(error),
         };
-        let Some(Landed { reply, world, .. }) = landed else {
+        let Some(Landed {
+            reply,
+            world,
+            alongside: site,
+            ..
+        }) = landed
+        else {
             if state.met_without_element() {
                 return Ok(Value::Null);
             }
@@ -147,7 +156,7 @@ async fn poll_selector(
                 sweep,
             } => {
                 element_read::mark_sensitive(scope, sensitive);
-                element_read::report_swept(pw, page.id(), &sweep);
+                let value = site.values(pw, scope, page.id(), sweep)?.mask(value);
                 element_read::read_value(scope, value)?
             }
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {
@@ -160,7 +169,10 @@ async fn poll_selector(
             ProbeReply::None { stale_ref: Some(_) } if state.met_without_element() => {
                 return Ok(Value::Null);
             }
-            other => return Err(resolve::refused(scope, other)),
+            other => {
+                let mask = ReadMask::Site(site);
+                return Err(site_sweep::refused(pw, scope, &page, world, other, mask).await);
+            }
         };
         scope.log(located.log_line());
         matched.store(true, Ordering::Relaxed);

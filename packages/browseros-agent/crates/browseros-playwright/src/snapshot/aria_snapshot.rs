@@ -92,8 +92,9 @@ pub(crate) enum AriaChild {
 pub(crate) struct FrameSnapshot {
     /// The frame's `ariaSnapshotJSON` nodes, its iframe nodes not stitched yet.
     pub(crate) json: Vec<AriaNode>,
-    /// The frame's sensitive values (`__clawSeal.sensitiveValues()`). One frame's sweep masks
-    /// echoes in every frame: a code typed in one frame can be printed by another.
+    /// The sensitive values of every frame of the frame's site, its own document's among them
+    /// (`page::site_sweep`). One frame's sweep masks echoes in every frame: a code typed in one
+    /// frame can be printed by another.
     pub(crate) sweep: FieldValues,
     /// One entry per iframe the frame printed with a ref, in any order.
     pub(crate) children: Vec<ChildFrame>,

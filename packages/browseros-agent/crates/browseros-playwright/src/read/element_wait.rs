@@ -157,7 +157,7 @@ async fn meets(
             value, sensitive, ..
         } => {
             element_read::mark_sensitive(scope, sensitive);
-            element_read::read_value(scope, value).map(Some)
+            element_read::read_value(scope, value.textless()).map(Some)
         }
         ProbeReply::Detached => Ok(None),
         other => Err(resolve::refused(scope, other)),
@@ -171,7 +171,9 @@ async fn border_box(
     site: &HandleSite<'_>,
 ) -> Result<Option<Option<Rect>>, PlaywrightError> {
     match site.call(&root_read(Read::BoundingBox)).await? {
-        ProbeReply::Read { value, .. } => element_read::read_value(scope, value).map(Some),
+        ProbeReply::Read { value, .. } => {
+            element_read::read_value(scope, value.textless()).map(Some)
+        }
         ProbeReply::Detached => Ok(None),
         other => Err(resolve::refused(scope, other)),
     }

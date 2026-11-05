@@ -5,19 +5,25 @@
 //! ```text
 //!  root frame   snapshot { root }       the op: its own retry loop and Playwright timeout
 //!     │           → json, iframes [{ ref, depth, src }], sweep (to the host at once)
+//!     │         and with it SiteSweep: every frame of its site, whose values become its sweep
 //!     └─ every iframe ref, all at once, each child inside its own FRAME_BUDGET:
 //!          the world that printed the ref (its f<seq> prefix) ─ hop(aria-ref=<ref>)
-//!            ─ the child's world ─ snapshot { root: document }
+//!            ─ the child's world ─ snapshot { root: document }, and SiteSweep with it
 //!          read      → the same below it, each grandchild on a fresh budget
 //!          not read  → PartialFrame { ref, frame: src, reason }; the iframe keeps its ref
-//!  aria_snapshot::stitch: merge, the name rule, every frame's sweep masks → { json, partial }
+//!  a frame of any read frame's site unswept → neo / unsupported, the snapshot withheld
+//!  aria_snapshot::stitch: merge, the name rule, the union of every site's values masks
+//!                         every string once → { json, partial }
 //! ```
 //!
-//! A snapshot only reads, so it never calls `send_effect`. Default mode mints no refs and so
-//! prints no iframes to follow: it is single-frame, as upstream's is.
+//! Every frame read is masked with its whole site's values, not only its own document's: the
+//! frame's own script can copy a value from any frame of its site, also from one no snapshot
+//! reaches (a hidden iframe, one behind a closed shadow root). A snapshot only reads, so it
+//! never calls `send_effect`. Default mode mints no refs and so prints no iframes to follow: it
+//! reads one frame, as upstream's does.
 
-use std::fmt;
 use std::time::Duration;
+use std::{fmt, mem};
 
 use browseros_core::sensitive_fields::FieldValues;
 use futures_util::future::{self, BoxFuture};
@@ -32,10 +38,11 @@ use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE, TARGET};
 use crate::page::OpPage;
+use crate::page::site_sweep::{self, ReadMask, SiteSweep};
 use crate::probe::{
     self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, SnapshotIframe, SnapshotMode,
 };
-use crate::resolve::{self, Attempt, Hopped, Resolver};
+use crate::resolve::{self, Hopped, Landed, Resolver};
 use crate::target::{Chunk, PageRef, Strictness, Target};
 use crate::world::{Place, SeqLookup};
 use crate::{ErrorCode, Playwright, PlaywrightError};
@@ -66,10 +73,11 @@ impl SnapshotOp {
     }
 }
 
-/// How long one child frame's own calls may take: the hop into it, its world's install and
-/// its snapshot (decisions.md). A frame that misses it is reported partial and the rest of the
-/// page is returned; upstream instead waits on a hung frame until the whole call times out.
-/// Its children start budgets of their own, so a slow level does not eat the levels below.
+/// How long one child frame's own calls may take: the hop into it, its world's install, its
+/// snapshot and its site's sweep (decisions.md). A frame that misses it is reported partial and
+/// the rest of the page is returned; upstream instead waits on a hung frame until the whole call
+/// times out. Its children start budgets of their own, so a slow level does not eat the levels
+/// below.
 const FRAME_BUDGET: Duration = Duration::from_secs(2);
 
 /// `page.ariaSnapshot`.
@@ -142,8 +150,8 @@ async fn page_snapshot(
         let Ok(read) = scope.within(snapshotter.main_frame(&request)).await else {
             return Err(scope.timed_out(ErrorCode::WaitTimeout));
         };
-        if let Some(frame) = read? {
-            return Ok(snapshotter.stitched(frame, input.depth).await);
+        if let Some(root) = read? {
+            return snapshotter.stitched(root, input.depth).await;
         }
     }
     Err(scope.timed_out(ErrorCode::WaitTimeout))
@@ -174,28 +182,44 @@ async fn locator_snapshot(
         if scope.sleep(backoff.wait(attempt)).await.is_err() {
             return Err(scope.timed_out(ErrorCode::NoMatch));
         }
-        let snapshot = resolver.attempt(|last, _frame_visible| ProbeRequest::Snapshot {
+        let request = |last, _frame_visible| ProbeRequest::Snapshot {
             root: ProbeTarget::Chunk(last),
             mode: input.mode,
             depth: input.depth,
-        });
-        let Ok(attempt) = scope.within(snapshot).await else {
+        };
+        let swept = |world| SiteSweep::of(&page, world);
+        let Ok(attempt) = scope
+            .within(resolver.attempt_alongside(request, swept))
+            .await
+        else {
             return Err(scope.timed_out(ErrorCode::NoMatch));
         };
-        match attempt? {
-            Attempt::Reply(ProbeReply::Snapshot {
+        let Some(Landed {
+            reply,
+            world,
+            alongside: site,
+            ..
+        }) = attempt?
+        else {
+            continue;
+        };
+        match reply {
+            ProbeReply::Snapshot {
                 json,
                 iframes,
                 sweep,
-            }) => {
-                let frame = snapshotter
+            } => {
+                let reply = snapshotter
                     .frame_reply(json, iframes, sweep)
                     .map_err(|why| scope.fail(ErrorCode::Internal, why))?;
-                return Ok(snapshotter.stitched(frame, input.depth).await);
+                let root = FrameRead { reply, site };
+                return snapshotter.stitched(root, input.depth).await;
             }
-            Attempt::Missing
-            | Attempt::Reply(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) => {}
-            Attempt::Reply(other) => return Err(resolver.refused(other)),
+            ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {}
+            other => {
+                let mask = ReadMask::Site(site);
+                return Err(site_sweep::refused(pw, scope, &page, world, other, mask).await);
+            }
         }
     }
     Err(scope.timed_out(ErrorCode::NoMatch))
@@ -228,6 +252,14 @@ impl FrameReply {
     }
 }
 
+/// One frame read: its reply, and the sweep of its frame's site taken in the same world at the
+/// same time. Every frame the snapshot reads comes as one, so no frame's text is stitched
+/// without its site's values.
+struct FrameRead {
+    reply: FrameReply,
+    site: SiteSweep,
+}
+
 /// Why a child frame was not read: the reason its `# partial` line prints.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Unread {
@@ -253,11 +285,12 @@ impl fmt::Display for Unread {
 }
 
 impl Snapshotter<'_> {
-    /// One read of the main frame: its reply, or `None` to try again.
+    /// One read of the main frame, with the sweep of its site taken at the same time: its
+    /// reply, or `None` to try again.
     async fn main_frame(
         &self,
         request: &ProbeRequest,
-    ) -> Result<Option<FrameReply>, PlaywrightError> {
+    ) -> Result<Option<FrameRead>, PlaywrightError> {
         let world = match self
             .page
             .world(&self.page.main_endpoint(), Place::Main)
@@ -267,14 +300,19 @@ impl Snapshotter<'_> {
             Err(ProbeFailure::Gone) => return Ok(None),
             Err(failure) => return Err(resolve::failed(self.scope, failure)),
         };
-        match probe::call(&world, request).await {
+        let (reply, site) = future::join(
+            probe::call(&world, request),
+            SiteSweep::of(self.page, world.clone()),
+        )
+        .await;
+        match reply {
             Ok(ProbeReply::Snapshot {
                 json,
                 iframes,
                 sweep,
             }) => self
                 .frame_reply(json, iframes, sweep)
-                .map(Some)
+                .map(|reply| Some(FrameRead { reply, site }))
                 .map_err(|why| self.scope.fail(ErrorCode::Internal, why)),
             Ok(ProbeReply::None { stale_ref: None }) => Ok(None),
             Ok(other) => Err(resolve::refused(self.scope, other)),
@@ -310,18 +348,42 @@ impl Snapshotter<'_> {
         })
     }
 
-    /// `root` with every frame below it read, stitched and masked.
+    /// `root` with every frame below it read, stitched and masked. Every frame read, the root
+    /// and each child, takes its whole site's values as its sweep, and the stitch masks every
+    /// string and partial entry once with the union of them all: a value one frame's script
+    /// copied from any frame of its site is masked in every mode, also from a frame no snapshot
+    /// reads (a hidden iframe, one behind a closed shadow root). Masking once, not frame by
+    /// frame, never leaves the tail of a long value after a shorter one inside it was masked.
     async fn stitched(
         &self,
-        root: FrameReply,
+        root: FrameRead,
         depth: Option<i64>,
-    ) -> aria_snapshot::SnapshotResult {
-        aria_snapshot::stitch(self.below(root, depth).await)
+    ) -> Result<aria_snapshot::SnapshotResult, PlaywrightError> {
+        let root = self.site_masked(root)?;
+        Ok(aria_snapshot::stitch(self.below(root, depth).await?))
     }
 
-    /// `frame`'s tree: every iframe it rendered, read at once (upstream's `Promise.all`).
-    /// Boxed, because each child below is read the same way.
-    fn below(&self, frame: FrameReply, depth: Option<i64>) -> BoxFuture<'_, FrameSnapshot> {
+    /// `read`'s reply with its sweep widened to the values of every frame of its site, all of
+    /// them told to the host. A frame of that site that could not be swept fails the whole
+    /// snapshot closed (`neo / unsupported`), not as a partial frame: this frame's text, already
+    /// read, may hold the unswept frame's value.
+    fn site_masked(&self, read: FrameRead) -> Result<FrameReply, PlaywrightError> {
+        let FrameRead { mut reply, site } = read;
+        let own = mem::take(&mut reply.sweep);
+        reply.sweep = site
+            .values(self.pw, self.scope, self.page.id(), own)?
+            .into_values();
+        Ok(reply)
+    }
+
+    /// `frame`'s tree: every iframe it rendered, read at once (upstream's `Promise.all`). The
+    /// first child that withholds the snapshot drops the others. Boxed, because each child
+    /// below is read the same way.
+    fn below(
+        &self,
+        frame: FrameReply,
+        depth: Option<i64>,
+    ) -> BoxFuture<'_, Result<FrameSnapshot, PlaywrightError>> {
         Box::pin(async move {
             let FrameReply {
                 json,
@@ -329,45 +391,55 @@ impl Snapshotter<'_> {
                 sweep,
             } = frame;
             let children =
-                future::join_all(iframes.into_iter().map(|iframe| self.child(iframe, depth))).await;
-            FrameSnapshot {
+                future::try_join_all(iframes.into_iter().map(|iframe| self.child(iframe, depth)))
+                    .await?;
+            Ok(FrameSnapshot {
                 json,
                 sweep,
                 children,
-            }
+            })
         })
     }
 
-    /// One child frame: entered and read inside [`FRAME_BUDGET`], then its own children on
-    /// budgets of their own. Every way it can fail becomes a partial frame, so one frame never
-    /// costs the rest of the page; the host's cancel and the run deadline still drop the op.
-    async fn child(&self, iframe: SnapshotIframe, depth: Option<i64>) -> ChildFrame {
+    /// One child frame: entered, read and its site swept inside [`FRAME_BUDGET`], then its own
+    /// children on budgets of their own. A frame that was not read is a partial frame, so one
+    /// frame never costs the rest of the page; a read frame whose site was not swept withholds
+    /// the snapshot. The host's cancel and the run deadline still drop the op.
+    async fn child(
+        &self,
+        iframe: SnapshotIframe,
+        depth: Option<i64>,
+    ) -> Result<ChildFrame, PlaywrightError> {
         let depth = child_depth(depth, iframe.depth);
         // A dropped read leaves nothing behind: an install interrupted inside its cell
-        // leaves the cell empty for the next op, and the op's objects go with its scope.
+        // leaves the cell empty for the next op, and the op's objects go with its scope. A read
+        // dropped with its sweep unfinished returns none of the frame's text.
         let read = time::timeout(FRAME_BUDGET, self.enter(&iframe.r#ref, depth))
             .await
             .unwrap_or(Err(Unread::Timeout));
         match read {
-            Ok(frame) => ChildFrame::Read {
-                iframe_ref: iframe.r#ref,
-                snapshot: self.below(frame, depth).await,
-            },
-            Err(unread) => ChildFrame::Partial(PartialFrame {
+            Ok(read) => {
+                let frame = self.site_masked(read)?;
+                Ok(ChildFrame::Read {
+                    iframe_ref: iframe.r#ref,
+                    snapshot: self.below(frame, depth).await?,
+                })
+            }
+            Err(unread) => Ok(ChildFrame::Partial(PartialFrame {
                 r#ref: iframe.r#ref,
                 frame: iframe.src,
                 reason: unread.to_string(),
-            }),
+            })),
         }
     }
 
-    /// Enters the frame behind the iframe `iframe_ref` and reads it at its body. The hop
-    /// starts in the world that printed the ref, named by its prefix (upstream jumps there the
-    /// same way, `_jumpToAriaRefFrameIfNeeded`), and goes through `aria-ref=<ref>`, so it
-    /// records the child's parent link like any resolver hop. A child world that went away
-    /// under the read (its frame navigated since the install) is dropped and entered once
-    /// more, as the resolver's liveness rule does.
-    async fn enter(&self, iframe_ref: &str, depth: Option<i64>) -> Result<FrameReply, Unread> {
+    /// Enters the frame behind the iframe `iframe_ref` and reads it at its body, sweeping its
+    /// site at the same time. The hop starts in the world that printed the ref, named by its
+    /// prefix (upstream jumps there the same way, `_jumpToAriaRefFrameIfNeeded`), and goes
+    /// through `aria-ref=<ref>`, so it records the child's parent link like any resolver hop. A
+    /// child world that went away under the read (its frame navigated since the install) is
+    /// dropped and entered once more, as the resolver's liveness rule does.
+    async fn enter(&self, iframe_ref: &str, depth: Option<i64>) -> Result<FrameRead, Unread> {
         // The engine mints every ref this reads, so one that is not a ref is a probe bug.
         let Ok(chunk) = Chunk::aria_ref(iframe_ref) else {
             return Err(Unread::Failed(ErrorCode::Internal));
@@ -401,7 +473,12 @@ impl Snapshotter<'_> {
                     ));
                 }
             };
-            match probe::call(&child, &request).await {
+            let (reply, site) = future::join(
+                probe::call(&child, &request),
+                SiteSweep::of(self.page, child.clone()),
+            )
+            .await;
+            match reply {
                 Ok(ProbeReply::Snapshot {
                     json,
                     iframes,
@@ -409,9 +486,15 @@ impl Snapshotter<'_> {
                 }) => {
                     return self
                         .frame_reply(json, iframes, sweep)
+                        .map(|reply| FrameRead { reply, site })
                         .map_err(|_why| Unread::Failed(ErrorCode::Internal));
                 }
-                Ok(ProbeReply::None { .. }) => return Ok(FrameReply::empty()),
+                Ok(ProbeReply::None { .. }) => {
+                    return Ok(FrameRead {
+                        reply: FrameReply::empty(),
+                        site,
+                    });
+                }
                 Ok(other) => {
                     let refused = resolve::refused(self.scope, other);
                     return Err(Unread::Failed(

@@ -322,6 +322,23 @@ pub(crate) enum Read {
     Located,
 }
 
+impl Read {
+    /// Whether the value can hold page text, so the read is masked with its site's values. A
+    /// state, a box and a frame's origin cannot (protocol.ts `TEXTLESS`, whose reads send no
+    /// sweep).
+    pub(crate) fn holds_page_text(&self) -> bool {
+        match self {
+            Self::TextContent
+            | Self::InnerText
+            | Self::InnerHtml
+            | Self::InputValue
+            | Self::Attribute { .. }
+            | Self::Located => true,
+            Self::BoundingBox | Self::State { .. } | Self::FrameOrigin => false,
+        }
+    }
+}
+
 /// What a `readAll` reads from every match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -330,6 +347,17 @@ pub(crate) enum ReadAll {
     TextContents,
     InnerTexts,
     Pins,
+}
+
+impl ReadAll {
+    /// Whether the values can hold page text: every read but the count (a pin's preview is
+    /// the element's markup).
+    pub(crate) fn holds_page_text(self) -> bool {
+        match self {
+            Self::TextContents | Self::InnerTexts | Self::Pins => true,
+            Self::Count => false,
+        }
+    }
 }
 
 /// `ariaSnapshot`'s mode.

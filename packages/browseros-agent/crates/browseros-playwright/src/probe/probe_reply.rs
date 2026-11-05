@@ -9,6 +9,8 @@
     reason = "the protocol is mirrored whole, and each op family reads its own replies"
 )]
 
+use std::fmt;
+
 use browseros_core::sensitive_fields::{FieldValues, SensitiveKind};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -109,21 +111,21 @@ pub(crate) enum ProbeReply {
     Value {
         value: Value,
     },
-    /// One element's read, masked by the seal and then, at decode (`reply_of`), every string
-    /// in it with `sweep`: the raw values of the document's sensitive fields, for Rust's mask
-    /// and the host's `values_swept`, never for the agent. `sensitive` is the seal's `kind` of
-    /// the element the value came from.
+    /// One element's read, masked by the seal at sensitive fields' own getters only. `sweep`
+    /// holds the raw values of the document's sensitive fields, for Rust's mask and the host's
+    /// `values_swept`, never for the agent. `sensitive` is the seal's `kind` of the element the
+    /// value came from.
     Read {
-        value: Value,
+        value: PageText,
         sensitive: Option<SensitiveKind>,
         #[serde(deserialize_with = "field_values")]
         sweep: FieldValues,
     },
-    /// A `readAll`: how many matched, and one value per match where the read has values,
-    /// masked at decode with `sweep` as a `Read` is.
+    /// A `readAll`: how many matched, and one value per match where the read has values, with
+    /// `sweep` as a `Read` has it.
     Values {
         count: u32,
-        values: Vec<Value>,
+        values: Vec<PageText>,
         #[serde(deserialize_with = "field_values")]
         sweep: FieldValues,
     },
@@ -269,6 +271,62 @@ pub(crate) struct SnapshotIframe {
     pub(crate) src: String,
 }
 
+/// A read's value as the probe sent it. The seal masks a sensitive field's own getters, not the
+/// text around it: a `<div>` holding a prefilled `<textarea>` reads the value raw through
+/// `innerText`, and a page can copy a value typed in any frame of its site into its own text.
+/// So no read's text leaves the op without one of the two ways out: [`PageText::masked`], with
+/// the values of every sensitive field of the read frame's site (`page::SiteValues`), or
+/// [`PageText::textless`], for a read that holds no page text. It prints as `[page text]`.
+#[derive(Deserialize)]
+#[serde(transparent)]
+pub(crate) struct PageText(Value);
+
+impl PageText {
+    /// The value with every string in it masked once with `values`, as `FieldValues::mask_json`
+    /// masks one: a long value wherever it occurs, a short one only as a whole string. Only
+    /// string leaves are masked: an object's keys are the probe's own (`pin`, `preview`), and a
+    /// short value equal to one would break the decode without hiding anything. One pass with
+    /// every value matters: a second pass over masked text misses a value that the first pass
+    /// cut short (`[private]efgh` once `abcd` masked part of `abcdefgh`).
+    pub(crate) fn masked(mut self, values: &FieldValues) -> Value {
+        mask_strings(values, &mut self.0);
+        self.0
+    }
+
+    /// The value of a read that holds no page text: a state, a box or a frame's origin
+    /// (protocol.ts `TEXTLESS`), which the probe answers with booleans, numbers and its own
+    /// words.
+    pub(crate) fn textless(self) -> Value {
+        self.0
+    }
+}
+
+impl fmt::Debug for PageText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[page text]")
+    }
+}
+
+/// Masks every string in `value` with `values`.
+fn mask_strings(values: &FieldValues, value: &mut Value) {
+    match value {
+        Value::String(_) => {
+            values.mask_json(value);
+        }
+        Value::Array(items) => {
+            for item in items {
+                mask_strings(values, item);
+            }
+        }
+        Value::Object(fields) => {
+            for field in fields.values_mut() {
+                mask_strings(values, field);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
 /// The seal's raw values go straight into `FieldValues`, which never prints them.
 fn field_values<'de, D: Deserializer<'de>>(deserializer: D) -> Result<FieldValues, D::Error> {
     let sweep = Value::deserialize(deserializer)?;
@@ -397,6 +455,13 @@ mod tests {
         assert!(
             !format!("{reply:?}").contains("hunter2"),
             "swept values are secrets (STYLE P4)"
+        );
+        let read: ProbeReply = serde_json::from_value(json!({
+            "kind": "read", "value": "Signed in with hunter2", "sensitive": null, "sweep": [],
+        }))?;
+        assert!(
+            !format!("{read:?}").contains("hunter2"),
+            "a read's text is unmasked until its site's values mask it, so it never prints"
         );
         Ok(())
     }

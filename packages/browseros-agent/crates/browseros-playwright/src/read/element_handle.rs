@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
+use crate::page::site_sweep::{self, ReadMask, SiteSweep};
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Read, ReadAll};
 use crate::read::element_read;
 use crate::resolve::{self, Landed, Resolver};
@@ -115,15 +116,20 @@ pub(crate) async fn query_one(
 ) -> Result<Value, PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, strict);
-    let landed = resolver
-        .attempt_at(|last, frame_visible| ProbeRequest::Read {
-            target: ProbeTarget::Chunk(last),
-            strictness: strict,
-            frame_visible,
-            read: Read::Located,
-        })
-        .await?;
-    let Some(Landed { reply, world, .. }) = landed else {
+    let request = |last, frame_visible| ProbeRequest::Read {
+        target: ProbeTarget::Chunk(last),
+        strictness: strict,
+        frame_visible,
+        read: Read::Located,
+    };
+    let swept = |world| SiteSweep::of(&page, world);
+    let Some(Landed {
+        reply,
+        world,
+        alongside: site,
+        ..
+    }) = resolver.attempt_alongside(request, swept).await?
+    else {
         return Ok(Value::Null);
     };
     match reply {
@@ -133,14 +139,17 @@ pub(crate) async fn query_one(
             sweep,
         } => {
             element_read::mark_sensitive(scope, sensitive);
-            element_read::report_swept(pw, page.id(), &sweep);
+            let value = site.values(pw, scope, page.id(), sweep)?.mask(value);
             let located: Located = element_read::read_value(scope, value)?;
             let brand =
                 element_brand(scope, &target.page, &world, located.pin, &located.preview).await?;
             Ok(brand.unwrap_or(Value::Null))
         }
         ProbeReply::None { stale_ref: None } | ProbeReply::Detached => Ok(Value::Null),
-        other => Err(resolver.refused(other)),
+        other => {
+            let mask = ReadMask::Site(site);
+            Err(site_sweep::refused(pw, scope, &page, world, other, mask).await)
+        }
     }
 }
 
@@ -159,13 +168,18 @@ pub(crate) async fn query_all(
 ) -> Result<Value, PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, Strictness::FirstMatch);
-    let landed = resolver
-        .attempt_at(|last, _| ProbeRequest::ReadAll {
-            target: ProbeTarget::Chunk(last),
-            read: ReadAll::Pins,
-        })
-        .await?;
-    let Some(Landed { reply, world, .. }) = landed else {
+    let request = |last, _| ProbeRequest::ReadAll {
+        target: ProbeTarget::Chunk(last),
+        read: ReadAll::Pins,
+    };
+    let swept = |world| SiteSweep::of(&page, world);
+    let Some(Landed {
+        reply,
+        world,
+        alongside: site,
+        ..
+    }) = resolver.attempt_alongside(request, swept).await?
+    else {
         return Ok(json!([]));
     };
     let ProbeReply::Values {
@@ -176,10 +190,10 @@ pub(crate) async fn query_all(
     else {
         return Err(resolver.refused(reply));
     };
-    element_read::report_swept(pw, page.id(), &sweep);
+    let site = site.values(pw, scope, page.id(), sweep)?;
     let mut handles = Vec::with_capacity(values.len());
     for value in values {
-        let PinnedMatch { pin, preview } = element_read::read_value(scope, value)?;
+        let PinnedMatch { pin, preview } = element_read::read_value(scope, site.mask(value))?;
         let Some(brand) = element_brand(scope, &target.page, &world, pin, &preview).await? else {
             return Err(scope.fail(
                 ErrorCode::TargetClosed,

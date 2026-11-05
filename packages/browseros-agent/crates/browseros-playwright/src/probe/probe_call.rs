@@ -17,7 +17,6 @@ use std::fmt;
 use browseros_cdp::CdpError;
 use browseros_core::CoreError;
 use browseros_core::page_js::is_stale_context;
-use browseros_core::sensitive_fields::FieldValues;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -203,7 +202,10 @@ pub(crate) async fn call_on(
 }
 
 /// The reply in a by-value `Runtime.callFunctionOn` result; `uninstalled` is `Gone`. The
-/// install decodes its `described` with it too.
+/// install decodes its `described` with it too. A read's text stays raw in its [`PageText`]
+/// here: only the op knows the read frame's site, whose values mask it (`page::SiteValues`).
+///
+/// [`PageText`]: crate::probe::PageText
 pub(crate) fn reply_of(called: Value) -> Result<ProbeReply, ProbeFailure> {
     let called: Called = serde_json::from_value(called)
         .map_err(|error| ProbeFailure::Broken(format!("CDP returned no call result: {error}")))?;
@@ -215,52 +217,11 @@ pub(crate) fn reply_of(called: Value) -> Result<ProbeReply, ProbeFailure> {
     }
     match serde_json::from_value(called.result.value) {
         Ok(ProbeReply::Uninstalled) => Err(ProbeFailure::Gone),
-        Ok(reply) => Ok(masked(reply)),
+        Ok(reply) => Ok(reply),
         Err(error) => Err(ProbeFailure::Broken(format!(
             "the probe answered a reply this build cannot read ({error}); rebuild \
              packages/browseros-playwright-js"
         ))),
-    }
-}
-
-/// A read's reply with every string of its value masked by the sweep it came with.
-///
-/// The seal guards each sensitive field's own getters, not the text of the elements around
-/// it: a `<div>` holding a prefilled `<textarea>` reads the value raw through `innerText`, and
-/// a page can echo a typed value anywhere. Masking here, where every by-value reply is decoded,
-/// means no read's value reaches an op unmasked, whichever op asked. Only string leaves are
-/// masked: an object's keys are the probe's own (`pin`, `preview`), and a short value equal to
-/// one would break the decode without hiding anything.
-fn masked(mut reply: ProbeReply) -> ProbeReply {
-    match &mut reply {
-        ProbeReply::Read { value, sweep, .. } => mask_strings(sweep, value),
-        ProbeReply::Values { values, sweep, .. } => {
-            for value in values {
-                mask_strings(sweep, value);
-            }
-        }
-        _ => {}
-    }
-    reply
-}
-
-/// Masks every string in `value` with `sweep`, as `FieldValues::mask_json` masks one.
-fn mask_strings(sweep: &FieldValues, value: &mut Value) {
-    match value {
-        Value::String(_) => {
-            sweep.mask_json(value);
-        }
-        Value::Array(items) => {
-            for item in items {
-                mask_strings(sweep, item);
-            }
-        }
-        Value::Object(fields) => {
-            for field in fields.values_mut() {
-                mask_strings(sweep, field);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
 }
 
@@ -323,6 +284,7 @@ mod tests {
 
     use browseros_cdp::CdpError;
     use browseros_core::CoreError;
+    use browseros_core::sensitive_fields::FieldValues;
     use serde_json::{Value, json};
 
     use super::{CALL_FUNCTION, ProbeFailure, reply_of};
@@ -394,29 +356,35 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_every_string_a_read_returns_is_masked_with_its_sweep()
+    fn tests_that_every_string_a_read_returns_is_masked_once_with_every_value()
     -> Result<(), Box<dyn Error>> {
         let read = reply_of(json!({ "result": { "type": "object", "value": {
-            "kind": "read", "sensitive": null, "sweep": ["s3cret&<pw>", "123"],
-            "value": { "pin": 4, "preview": "<p>s3cret&amp;&lt;pw&gt;</p>", "visible": true },
+            "kind": "read", "sensitive": null, "sweep": ["s3cret&<pw>"],
+            "value": { "pin": 4, "preview": "<p>s3cret&amp;&lt;pw&gt; abcdefgh</p>", "visible": true },
         } } }))?;
-        let ProbeReply::Read { value, .. } = read else {
+        let ProbeReply::Read { value, sweep, .. } = read else {
             return Err("a read is a read".into());
         };
+        let site = sweep.union(FieldValues::from_sweep(&json!(["abcd", "abcdefgh"])));
         assert_eq!(
-            value,
-            json!({ "pin": 4, "preview": "<p>[private]</p>", "visible": true }),
-            "markup's escaped form too, and a number stays a number"
+            value.masked(&site),
+            json!({ "pin": 4, "preview": "<p>[private] [private]</p>", "visible": true }),
+            "markup's escaped form too, a longer value of another frame whole, and a number \
+             stays a number"
         );
         let all = reply_of(json!({ "result": { "type": "object", "value": {
             "kind": "values", "count": 3, "sweep": ["s3cret&<pw>", "123"],
             "values": ["before s3cret&<pw> after", "123", "1234"],
         } } }))?;
-        let ProbeReply::Values { values, .. } = all else {
+        let ProbeReply::Values { values, sweep, .. } = all else {
             return Err("a readAll is values".into());
         };
+        let masked: Vec<Value> = values
+            .into_iter()
+            .map(|value| value.masked(&sweep))
+            .collect();
         assert_eq!(
-            values,
+            masked,
             [
                 json!("before [private] after"),
                 json!("[private]"),

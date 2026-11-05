@@ -10,13 +10,14 @@
 //! ```
 
 use browseros_core::FrameId;
+use futures_util::future;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::op_scope::{OpScope, Sent};
 use crate::page::document_watch::DocumentWatch;
-use crate::page::evaluate_guard::mask_text;
 use crate::page::navigation::watch_error;
+use crate::page::site_sweep::SiteSweep;
 use crate::page::world_call::{main_frame_only, unexpected, with_world};
 use crate::page::{LoadState, OpPage};
 use crate::probe::{self, DocumentPart, ProbeFailure, ProbeReply, ProbeRequest};
@@ -48,10 +49,10 @@ pub(crate) struct SetContentInput {
 }
 
 /// Reads `part` of the main frame's document. The seal masks the fields the markup serializes;
-/// the frame's sweep then masks a typed value the page echoed elsewhere in its markup or its
-/// title, which no getter of the seal sees (an attribute a script copied the value into). The
-/// sweep also goes to the host, as evaluate's and snapshot's do, so its mask at every exit
-/// knows the values this read masked.
+/// the values of every sensitive field in the main frame's site then mask a typed value the
+/// page copied elsewhere in its markup or its title, which no getter of the seal sees (an
+/// attribute, a heading), from its own fields or from any frame of its site. They also go to
+/// the host, as evaluate's and snapshot's do, so its mask at every exit knows them.
 pub(crate) async fn read(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -61,23 +62,27 @@ pub(crate) async fn read(
     main_frame_only(scope, input.frame.as_ref())?;
     let page = OpPage::admit_handle(pw, scope, &input.page).await?;
     let request = &ProbeRequest::Document { part };
-    let (text, sweep) = with_world(
+    let admitted = &page;
+    let (text, sweep, site) = with_world(
         &page,
         &page.main_endpoint(),
         &Place::Main,
         |world| async move {
-            match probe::call(&world, request).await? {
-                ProbeReply::DocumentText { text, sweep } => Ok((text, sweep)),
+            let (reply, site) = future::join(
+                probe::call(&world, request),
+                SiteSweep::of(admitted, world.clone()),
+            )
+            .await;
+            match reply? {
+                ProbeReply::DocumentText { text, sweep } => Ok((text, sweep, site)),
                 other => Err(unexpected("document", other)),
             }
         },
     )
     .await
     .map_err(|failure| failed(scope, failure))?;
-    if !sweep.is_empty() {
-        pw.hooks().values_swept(page.id().clone(), &sweep);
-    }
-    Ok(Value::String(mask_text(&sweep, text)))
+    let values = site.values(pw, scope, page.id(), sweep)?;
+    Ok(Value::String(values.mask_text(text)))
 }
 
 /// Replaces the main frame's document with `html` and waits for `waitUntil`, as upstream does.

@@ -58,7 +58,7 @@ use crate::{ErrorCode, Playwright, PlaywrightError};
 /// lost session, installing its world on first use, and the sweep, all under one deadline
 /// (decisions.md, "Main-world sweep scope"). A healthy frame takes a few milliseconds; a frame
 /// of the script's site that misses it fails the op closed.
-const FRAME_BUDGET: Duration = Duration::from_secs(1);
+pub(crate) const FRAME_BUDGET: Duration = Duration::from_secs(1);
 
 /// The function every main-world script runs in: upstream's `normalizeEvaluationExpression`
 /// (a method shorthand becomes a function) and `UtilityScript.evaluate` (a function's source is
@@ -299,7 +299,7 @@ async fn sweep_world(world: SealedWorld) -> Result<FieldValues, ProbeFailure> {
 }
 
 /// Why a sweep left a frame of the script's site unswept.
-enum Unswept {
+pub(crate) enum Unswept {
     /// It missed its [`FRAME_BUDGET`], as an unresponsive renderer's calls do.
     Late,
     /// It came back gone on a second read of its target too (a lost session, a session of
@@ -340,9 +340,9 @@ impl Unswept {
 
 /// What a sweep found so far, and the first frame of the script's site it could not sweep.
 #[derive(Default)]
-struct Found {
-    values: FieldValues,
-    unswept: Option<Unswept>,
+pub(crate) struct Found {
+    pub(crate) values: FieldValues,
+    pub(crate) unswept: Option<Unswept>,
 }
 
 impl Found {
@@ -368,7 +368,7 @@ impl Found {
 /// hung or not, is never asked anything (`sweep_scope`). The list is read on every sweep: no
 /// renderer-side count finds every out-of-process frame (decisions.md, "Main-world sweep
 /// scope").
-async fn sweep_site(page: &OpPage<'_>, script: &Endpoint, place: &Place) -> Found {
+pub(crate) async fn sweep_site(page: &OpPage<'_>, script: &Endpoint, place: &Place) -> Found {
     // The script's session is read once for all of its frames, so they share one deadline.
     let deadline = Instant::now() + FRAME_BUDGET;
     let (own, tree, targets) = future::join3(
@@ -570,15 +570,19 @@ async fn sweep_attempt(
 
 /// A frame of a session's tree as its sweep reaches it: the endpoint its world lives on, and
 /// the frame's place in the page, which the world's install takes with it.
-struct TreeFrame {
-    endpoint: Endpoint,
-    place: Place,
+pub(crate) struct TreeFrame {
+    pub(crate) endpoint: Endpoint,
+    pub(crate) place: Place,
 }
 
 /// Where `frame` of `session`'s tree is swept: the page's main frame, whose first document
 /// takes the page's first seq, through the main endpoint; any other as a frame found in a tree
 /// rather than through a hop.
-fn frame_endpoint(page: &OpPage<'_>, session: &ProtocolSession, frame: FrameId) -> TreeFrame {
+pub(crate) fn frame_endpoint(
+    page: &OpPage<'_>,
+    session: &ProtocolSession,
+    frame: FrameId,
+) -> TreeFrame {
     let main = page.main_endpoint();
     if frame == main.frame {
         TreeFrame {

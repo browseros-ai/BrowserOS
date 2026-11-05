@@ -8,12 +8,13 @@ use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, TARGET};
 use crate::page::OpPage;
+use crate::page::site_sweep::ReadMask;
 use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, QueryState, Read, ReadAll};
 use crate::read::element_read::Visibility;
 use crate::read::element_wait::ElementWait;
 use crate::read::selector_wait::{Returning, SelectorState};
 use crate::read::{element_handle, element_read, element_wait, selector_wait, viewport_box};
-use crate::resolve::{Attempt, Resolver};
+use crate::resolve::{Landed, Resolver};
 use crate::target::{Strictness, Target};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
@@ -366,24 +367,36 @@ async fn every_match(
     };
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, Strictness::FirstMatch);
-    let attempt = resolver
-        .attempt(|last, _| ProbeRequest::ReadAll {
-            target: ProbeTarget::Chunk(last),
-            read,
-        })
-        .await?;
-    match attempt {
-        Attempt::Missing => Ok(Matched::default()),
-        Attempt::Reply(ProbeReply::Values {
-            count,
-            values,
-            sweep,
-        }) => {
-            element_read::report_swept(pw, page.id(), &sweep);
-            Ok(Matched { count, values })
+    let request = |last, _| ProbeRequest::ReadAll {
+        target: ProbeTarget::Chunk(last),
+        read,
+    };
+    let masked = |world| ReadMask::of(&page, world, read.holds_page_text());
+    let Some(Landed {
+        reply,
+        alongside: mask,
+        ..
+    }) = resolver.attempt_alongside(request, masked).await?
+    else {
+        return Ok(Matched::default());
+    };
+    let ProbeReply::Values {
+        count,
+        values,
+        sweep,
+    } = reply
+    else {
+        return Err(resolver.refused(reply));
+    };
+    let values = match mask {
+        ReadMask::Site(site) => {
+            let site = site.values(pw, scope, page.id(), sweep)?;
+            values.into_iter().map(|value| site.mask(value)).collect()
         }
-        Attempt::Reply(other) => Err(resolver.refused(other)),
-    }
+        // The count sends no values.
+        ReadMask::Textless => Vec::new(),
+    };
+    Ok(Matched { count, values })
 }
 
 /// One element's read, once the locator matches (`read_attached`).

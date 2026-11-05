@@ -1,8 +1,8 @@
 //! Playwright's reads of elements: resolved and read in one sealed-world call, so field values
-//! come back masked at the source. The seal guards each field, not the text around it, so
-//! every string a read returns is masked again with the frame's sweep where the reply is
-//! decoded (`probe::reply_of`), and the sweep goes to the host (`report_swept`). Reads never
-//! mark their op sent.
+//! come back masked at the source. The seal guards each field, not the text around it, so every
+//! string a read returns, a preview or a strict violation's message included, is masked again
+//! with the values of every frame of the read frame's site, swept alongside the read
+//! (`page::site_sweep`), and those values go to the host. Reads never mark their op sent.
 //!
 //! ```text
 //!  read_op ── decodes the op's input, then
