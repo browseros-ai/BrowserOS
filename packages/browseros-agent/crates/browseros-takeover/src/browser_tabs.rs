@@ -70,6 +70,18 @@ impl BrowserTabs {
         self.session.pages.list().await.map_err(PartError::Browser)
     }
 
+    /// The tabs in front: each window's active tab, from a fresh `Browser.getTabs`. Neo has one
+    /// window, so this is the tab its one screen shows.
+    pub(crate) async fn front_tabs(&self) -> Result<Vec<TabId>, PartError> {
+        Ok(self
+            .pages()
+            .await?
+            .into_iter()
+            .filter(|page| page.is_active)
+            .map(|page| page.tab_id)
+            .collect())
+    }
+
     /// The open tab's page, and the page target's session: the one core attached with the
     /// Page, DOM and Runtime domains on. It is not admitted, so a send costs one round trip; a
     /// bound view's session re-reads the tab around every send.

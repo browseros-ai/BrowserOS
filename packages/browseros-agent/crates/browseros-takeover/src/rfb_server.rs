@@ -302,17 +302,17 @@ pub(crate) fn set_desktop_size(size: ScreenSize, screen: ScreenEntry) -> Vec<u8>
     message
 }
 
-fn u16_at(buffer: &[u8], at: usize) -> Option<u16> {
+pub(crate) fn u16_at(buffer: &[u8], at: usize) -> Option<u16> {
     let bytes = buffer.get(at..at.checked_add(2)?)?;
     Some(u16::from_be_bytes(bytes.try_into().ok()?))
 }
 
-fn u32_at(buffer: &[u8], at: usize) -> Option<u32> {
+pub(crate) fn u32_at(buffer: &[u8], at: usize) -> Option<u32> {
     let bytes = buffer.get(at..at.checked_add(4)?)?;
     Some(u32::from_be_bytes(bytes.try_into().ok()?))
 }
 
-fn i32_at(buffer: &[u8], at: usize) -> Option<i32> {
+pub(crate) fn i32_at(buffer: &[u8], at: usize) -> Option<i32> {
     u32_at(buffer, at).map(|value| i32::from_be_bytes(value.to_be_bytes()))
 }
 

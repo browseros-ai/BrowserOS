@@ -13,6 +13,10 @@
 //!   list, through Neo's sealed world in every frame (`sealed_frames`).
 //! - [`Journal`] arms that world's journal during control, so the value the owner leaves in each
 //!   such field is registered: caught at its `input` event, so a navigation cannot lose it.
+//! - [`Displays`] shows Neo's one screen over RFB, the only way a host reaches Xvnc: view
+//!   displays to spectators, with no input and never while a private tab is in front; control
+//!   displays to the owner, whose first input waits until every open tab is private. A view can
+//!   keep a tab, or a task's tab, in front.
 //!
 //! ```text
 //!  POST /v1/locks ─▶ BrowserTabs::page (is the tab open) ─▶ Locks::lock ─ settle ─▶ Lock
@@ -22,12 +26,17 @@
 //!  Xvnc ─ layouts ─▶ the screen watcher ─▶ the fits loop ─▶ refits; owner views every 750 ms
 //!  POST /v1/tabs/{tabId}/sweep ─▶ sweep ─ sealed_frames, every frame ─▶ SecretSet
 //!  control (display, takeover) ─▶ Journal::arm ─ binding calls ─▶ SecretSet
+//!  GET /v1/display ─▶ Displays::admit ─ upgrade ─▶ Admitted::serve ─ RFB, filtered ─▶ Xvnc
+//!    control: first input ─▶ views close ─▶ every open tab private ─▶ the input goes on
+//!    view: follow ─ the task's operations ─▶ Browser.activateTab
+//!    views: tab.private, a 250 ms poll ─ a private tab in front ─▶ every view closes
 //! ```
 //!
 //! The rules live apart from the I/O, as pure functions that test alone: the lock decision,
-//! the fit rule, the surface's plans, the RFB bytes and the owner's address rule.
+//! the fit rule, the surface's plans, the RFB bytes both ways and the display's verdict table,
+//! the owner's address rule and follow's next activation, private targets included.
 //!
-//! The display and the v1 flow join this crate next.
+//! The v1 takeover flow joins this crate next.
 
 #![deny(missing_docs)]
 #![deny(
@@ -39,8 +48,11 @@
 )]
 
 mod browser_tabs;
+mod displays;
 mod fit_rule;
 mod fits;
+mod follow;
+mod front_tab;
 mod journal;
 mod limits;
 mod lock_decision;
@@ -49,6 +61,7 @@ mod owner_address;
 mod owner_view;
 mod part_error;
 mod part_ids;
+mod rfb_client;
 mod rfb_server;
 mod screen;
 mod screen_size;
@@ -60,6 +73,9 @@ mod sweep;
 pub mod testing;
 
 pub use browser_tabs::BrowserTabs;
+pub use displays::{
+    Admitted, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow, ViewsHold,
+};
 pub use fit_rule::FitMode;
 pub use fits::{BarAction, BarOutcome, BrowserBar, Fit, FitState, Fits, Fitted, Keyboard};
 pub use journal::{ArmedJournal, Journal};

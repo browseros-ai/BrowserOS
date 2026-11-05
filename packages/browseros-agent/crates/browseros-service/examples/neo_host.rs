@@ -28,7 +28,8 @@
 //!   `DELETE /surface/journal` disarms it, `POST /surface/runs <json>` records a run with that
 //!   result (`{"runId"}`, committed when it answers) so a mask can be read back from
 //!   `/v1/runs/{id}`, and `GET /surface/secrets` counts the secret set (`{"count"}`).
-//! - `--xvnc <addr>`: Xvnc's RFB address for the fits (`127.0.0.1:5900`, the image's).
+//! - `--xvnc <addr>`: Xvnc's RFB address for the fits and `GET /v1/display` (`127.0.0.1:5900`,
+//!   the image's).
 //! - `--neo-screen <WxH>`: the size the screen rests at between fits (`NEO_SCREEN` from the
 //!   environment, else `1600x1000`). The service puts the screen there at start.
 //! - `--agent-viewport <mobile|desktop>`: before serving, sets the `--open` tab's viewport to

@@ -105,3 +105,37 @@ pub(crate) const MAX_RECT_BYTES: usize = 4096 * 4096 * 4;
 
 /// The longest desktop name a ServerInit may carry.
 pub(crate) const MAX_DESKTOP_NAME: usize = 64 * 1024;
+
+/// The longest paste a display takes, in bytes of ClientCutText body (plain or extended). A
+/// longer one closes the display as soon as its length arrives, so no viewer can make Neo buffer
+/// more than this for one message.
+pub(crate) const MAX_PASTE: usize = 1 << 20;
+
+/// The most screens a viewer's SetDesktopSize may list. Neo has one; noVNC sends one.
+pub(crate) const MAX_DESKTOP_SCREENS: u8 = 16;
+
+/// The most a display holds of its viewer's bytes while the first input waits for every open tab
+/// to go private. They wait in memory, behind that input, so a viewer cannot grow them without
+/// end while a commit stalls. Room for one more paste of the longest kind, and the pointer moves
+/// and update requests around it; more closes the display.
+pub(crate) const MAX_HELD_INPUT: usize = 2 * MAX_PASTE;
+
+/// How long a display waits for Xvnc to accept its connection. Xvnc is on the same host, so a
+/// longer wait means it is not there.
+pub(crate) const XVNC_DIAL: Duration = Duration::from_secs(2);
+
+/// The most Xvnc bytes one read takes before they go to the viewer as one frame.
+pub(crate) const SERVER_CHUNK: usize = 64 * 1024;
+
+/// How long a control display that took input may sweep the open tabs when it ends (decision
+/// 31). A takeover's release waits for it, inside its own 10 s budget.
+pub(crate) const CLOSE_SWEEP: Duration = Duration::from_secs(5);
+
+/// How often a follower re-checks its pause and its tab, besides each operation the followed
+/// task starts. It also covers a trace event stream that lagged.
+pub(crate) const FOLLOW_TICK: Duration = Duration::from_secs(1);
+
+/// How often the front-tab watch reads which tab is in front while any view display is open
+/// (decision 34). The browser sends no event when a tab comes to the front, so this bounds how
+/// long a view can show a private tab that the agent brought forward.
+pub(crate) const FRONT_POLL: Duration = Duration::from_millis(250);

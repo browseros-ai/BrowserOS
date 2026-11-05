@@ -8,7 +8,7 @@ repository.workspace = true
 description = "The host API of hosted BrowserOS Neo (claw-sdk): the /v1 router, the host auth, the event stream and the takeover parts' routes"
 
 [dependencies]
-axum.workspace = true
+axum = { workspace = true, features = ["ws"] }
 base64.workspace = true
 browseros-core.workspace = true
 browseros-takeover.workspace = true
@@ -29,6 +29,7 @@ browseros-cdp.workspace = true
 sqlx.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+tokio-tungstenite.workspace = true
 tokio-util.workspace = true
 tower.workspace = true
 tracing-subscriber.workspace = true

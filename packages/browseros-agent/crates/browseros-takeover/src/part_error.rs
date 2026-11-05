@@ -34,4 +34,9 @@ pub enum PartError {
     /// No page fits a screen this small: a side is under 100 px.
     #[error("no page fits a {0} screen")]
     UnusableViewer(ScreenSize),
+    /// View displays are closed while the owner has control (a control display took input, or
+    /// a takeover holds them off), and while a private tab is in front (decision 34). The viewer
+    /// may try again later.
+    #[error("view displays are paused while the owner has control or a private tab is in front")]
+    DisplayPaused,
 }

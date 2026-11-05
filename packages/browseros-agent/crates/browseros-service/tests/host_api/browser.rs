@@ -1,8 +1,9 @@
 //! A scripted browser for the camera and the tab checks: the tabs a test opens, and how captures
 //! answer. It speaks the CDP the capture path sends (`Browser.getTabs`, `Browser.getTabInfo`,
 //! `Target.attachToTarget`, `Page.captureScreenshot`), what a sweep of a one-frame tab sends
-//! (`Page.getFrameTree`, the sealed world, the seal's field values), and the fit's window calls,
-//! with one window whose state `setWindowBounds` changes; every other command answers `{}`.
+//! (`Page.getFrameTree`, the sealed world, the seal's field values), the control journal's script,
+//! the fit's window calls, with one window whose state `setWindowBounds` changes, and
+//! `Browser.activateTab`, which brings a tab to the front; every other command answers `{}`.
 //!
 //! It is not core's scripted `TestConnection`: captures that a test holds and releases need a
 //! reply that waits, which a canned reply cannot do.
@@ -41,6 +42,8 @@ enum Captures {
 
 pub(crate) struct ScriptedBrowser {
     tabs: Mutex<Vec<i64>>,
+    /// The tab in front. Until a tab is brought there, every tab reports itself active.
+    front: Mutex<Option<i64>>,
     /// What every tab's password, card and code fields hold, as the seal reports it to a sweep.
     fields: Mutex<Vec<String>>,
     /// `Browser.getTabs` fails, as when the browser is gone.
@@ -56,6 +59,7 @@ impl ScriptedBrowser {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             tabs: Mutex::default(),
+            front: Mutex::default(),
             fields: Mutex::default(),
             unreachable: AtomicBool::new(false),
             captures: watch::channel(Captures::Answer).0,
@@ -88,6 +92,11 @@ impl ScriptedBrowser {
 
     pub(crate) fn close_tab(&self, tab: i64) {
         self.lock_tabs().retain(|open| *open != tab);
+    }
+
+    /// Brings `tab` to the front, as the agent's or the owner's `Browser.activateTab` does.
+    pub(crate) fn bring_to_front(&self, tab: i64) {
+        *self.front.lock().unwrap_or_else(PoisonError::into_inner) = Some(tab);
     }
 
     /// The owner typed these into sensitive fields.
@@ -135,14 +144,15 @@ impl ScriptedBrowser {
         self.tabs.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn tab(tab: i64) -> Value {
+    fn tab(&self, tab: i64) -> Value {
+        let front = *self.front.lock().unwrap_or_else(PoisonError::into_inner);
         json!({
             "tabId": tab,
             "targetId": format!("target-{tab}"),
             "windowId": 1,
             "url": format!("https://example.test/{tab}"),
             "title": format!("Tab {tab}"),
-            "isActive": true,
+            "isActive": front.is_none_or(|front| front == tab),
             "isLoading": false,
             "loadProgress": 1.0,
             "isPinned": false,
@@ -171,15 +181,24 @@ impl ScriptedBrowser {
             "Browser.getTabs" if self.unreachable.load(Ordering::SeqCst) => {
                 Err(CdpError::ConnectionLost)
             }
-            "Browser.getTabs" => Ok(json!({
-                "tabs": self.lock_tabs().iter().map(|tab| Self::tab(*tab)).collect::<Vec<_>>(),
-            })),
+            "Browser.getTabs" => {
+                let tabs = self.lock_tabs().clone();
+                Ok(json!({
+                    "tabs": tabs.into_iter().map(|tab| self.tab(tab)).collect::<Vec<_>>(),
+                }))
+            }
+            "Browser.activateTab" => {
+                if let Some(tab) = params["tabId"].as_i64() {
+                    self.bring_to_front(tab);
+                }
+                Ok(json!({}))
+            }
             "Browser.getTabInfo" => {
                 let open = params["tabId"]
                     .as_i64()
                     .filter(|tab| self.lock_tabs().contains(tab));
                 match open {
-                    Some(tab) => Ok(json!({ "tab": Self::tab(tab) })),
+                    Some(tab) => Ok(json!({ "tab": self.tab(tab) })),
                     None => Err(CdpError::Protocol {
                         code: -32000,
                         message: "No tab with given id".into(),
@@ -191,6 +210,10 @@ impl ScriptedBrowser {
                 Ok(json!({ "sessionId": format!("scripted-session-{session}") }))
             }
             "Page.captureScreenshot" => self.capture().await,
+            // The control journal's new-document script, which a control display adds per tab.
+            "Page.addScriptToEvaluateOnNewDocument" => {
+                Ok(json!({ "identifier": "scripted-journal" }))
+            }
             "Page.getFrameTree" => Ok(json!({ "frameTree": { "frame": { "id": "main" } } })),
             "Page.createIsolatedWorld" if params["worldName"] == SEALED_WORLD => {
                 Ok(json!({ "executionContextId": 1 }))

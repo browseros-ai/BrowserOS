@@ -25,6 +25,7 @@ pub(crate) enum ErrorCode {
     BrowserUnavailable,
     InternalError,
     FitRestored,
+    DisplayPaused,
     DisplayUnavailable,
 }
 
@@ -43,6 +44,7 @@ impl ErrorCode {
             Self::BrowserUnavailable => "browser_unavailable",
             Self::InternalError => "internal_error",
             Self::FitRestored => "fit_restored",
+            Self::DisplayPaused => "display_paused",
             Self::DisplayUnavailable => "display_unavailable",
         }
     }
@@ -173,13 +175,13 @@ impl From<PartError> for ApiError {
                     "the browser did not answer in time",
                 )
             },
-            // Xvnc is the display: the screen the owner's viewer shows.
+            // Xvnc is the display: the screen every display shows and every fit resizes.
             PartError::Screen(cause) => Self {
                 cause: Some(cause.to_string()),
                 ..Self::new(
                     StatusCode::SERVICE_UNAVAILABLE,
                     ErrorCode::DisplayUnavailable,
-                    "Neo's screen could not be resized",
+                    "Neo's screen did not answer as it should",
                 )
             },
             PartError::FitRestored => Self::new(
@@ -190,6 +192,12 @@ impl From<PartError> for ApiError {
             PartError::UnusableViewer(_) => {
                 Self::invalid("`width` and `height` must each be at least 100")
             }
+            PartError::DisplayPaused => Self::new(
+                StatusCode::CONFLICT,
+                ErrorCode::DisplayPaused,
+                "view displays are paused while the owner has control or a private tab is in \
+                 front; try again later",
+            ),
         }
     }
 }

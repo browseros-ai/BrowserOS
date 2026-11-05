@@ -10,7 +10,8 @@ use crate::api_error::ApiError;
 use crate::host_service::Authenticated;
 use crate::service::ServiceState;
 use crate::{
-    events_route, fit_routes, part_routes, record_routes, response_id, secret_routes, tab_routes,
+    display_route, events_route, fit_routes, part_routes, record_routes, response_id,
+    secret_routes, tab_routes,
 };
 use axum::extract::Request;
 use axum::middleware::Next;
@@ -45,6 +46,7 @@ pub(crate) fn router(state: Arc<ServiceState>) -> Router {
         .route("/v1/fits/{fit_id}/navigate", post(fit_routes::navigate_fit))
         .route("/v1/fits/{fit_id}/restore", post(fit_routes::restore_fit))
         .route("/v1/secrets", post(secret_routes::register_secret))
+        .route("/v1/display", get(display_route::open_display))
         .fallback(not_found)
         .with_state(state)
         .layer(middleware::from_fn(require_authenticated))

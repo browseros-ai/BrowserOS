@@ -5,12 +5,13 @@
 //! - the first update a client asks for carries the layout (reason 0);
 //! - a SetDesktopSize is applied and answered in the client's next update (reason 1, with a
 //!   status), and every other client sees the change in its next one (reason 2);
-//! - an incremental update request waits until the screen changes, so a client gets a layout
-//!   only while it keeps a request outstanding;
-//! - any other message closes the connection.
+//! - an incremental update request is answered when the screen changes, so a client gets a
+//!   layout only while it keeps a request outstanding. Messages sent meanwhile are still read;
+//! - it takes every message a display may pass on, and records each one a connection sends, its
+//!   handshake included ([`FakeXvnc::received`]). Any other message closes the connection.
 //!
-//! The bytes are written by hand, not with `rfb_server`'s parsers, so a parser bug cannot hide
-//! behind a fake that shares it.
+//! The bytes are written and framed by hand, not with `rfb_server`'s or `rfb_client`'s parsers,
+//! so a parser bug cannot hide behind a fake that shares it.
 
 use crate::{ScreenSize, Xvnc};
 use std::io;
@@ -42,7 +43,8 @@ struct State {
     screen_flags: u32,
     /// Each SetDesktopSize received, as `<w>x<h> id <id> flags <flags>`.
     requests: Vec<String>,
-    connections: usize,
+    /// Every message each connection sent, by the order connections were accepted.
+    received: Vec<Vec<Vec<u8>>>,
     answer: Answer,
     /// Cancelled to close every open connection.
     open: CancellationToken,
@@ -73,7 +75,7 @@ impl FakeXvnc {
                 screen_id: 7,
                 screen_flags: 0,
                 requests: Vec::new(),
-                connections: 0,
+                received: Vec::new(),
                 answer: Answer::Apply,
                 open: CancellationToken::new(),
             }),
@@ -83,12 +85,12 @@ impl FakeXvnc {
             let shared = Arc::clone(&shared);
             async move {
                 while let Ok((socket, _)) = listener.accept().await {
-                    let open = {
+                    let (connection, open) = {
                         let mut state = shared.state();
-                        state.connections += 1;
-                        state.open.clone()
+                        state.received.push(Vec::new());
+                        (state.received.len() - 1, state.open.clone())
                     };
-                    tokio::spawn(serve(Arc::clone(&shared), socket, open));
+                    tokio::spawn(serve(Arc::clone(&shared), socket, connection, open));
                 }
             }
         });
@@ -129,7 +131,20 @@ impl FakeXvnc {
     /// How many connections it has accepted. Xvnc logs each one.
     #[must_use]
     pub fn connections(&self) -> usize {
-        self.shared.state().connections
+        self.shared.state().received.len()
+    }
+
+    /// Every message connection `connection` sent so far, in order, each with its type byte:
+    /// the version, the security type and the ClientInit first. Connections count from 0, in
+    /// the order they were accepted.
+    #[must_use]
+    pub fn received(&self, connection: usize) -> Vec<Vec<u8>> {
+        self.shared
+            .state()
+            .received
+            .get(connection)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Lists the screen with this id and these flags from now on, as TigerVNC does when it
@@ -227,30 +242,45 @@ impl Shared {
     fn answers_at_once(&self) -> bool {
         matches!(self.state().answer, Answer::Never)
     }
+
+    fn record(&self, connection: usize, message: &[u8]) {
+        if let Some(received) = self.state().received.get_mut(connection) {
+            received.push(message.to_vec());
+        }
+    }
 }
 
 /// One client's connection, until it closes, sends a message Xvnc would not take, or the fake
 /// drops it.
-async fn serve(shared: Arc<Shared>, mut socket: TcpStream, open: CancellationToken) {
+async fn serve(
+    shared: Arc<Shared>,
+    mut socket: TcpStream,
+    connection: usize,
+    open: CancellationToken,
+) {
     // Biased, so the first poll after a drop ends the connection without running `converse`.
     // Unbiased, `converse` could run first and answer a held request with a change made after
     // the drop, and the client would see that change before it dials again.
     tokio::select! {
         biased;
         () = open.cancelled() => {}
-        _ = converse(&shared, &mut socket) => {}
+        _ = converse(&shared, &mut socket, connection) => {}
     }
 }
 
-async fn converse(shared: &Shared, socket: &mut TcpStream) -> io::Result<()> {
+async fn converse(shared: &Shared, socket: &mut TcpStream, connection: usize) -> io::Result<()> {
     socket.write_all(b"RFB 003.008\n").await?;
-    socket.read_exact(&mut [0; 12]).await?;
+    let mut version = [0; 12];
+    socket.read_exact(&mut version).await?;
+    shared.record(connection, &version);
     // One security type, None; then the client's pick and a SecurityResult of 0.
     socket.write_all(&[1, 1]).await?;
-    socket.read_u8().await?;
+    let security = socket.read_u8().await?;
+    shared.record(connection, &[security]);
     socket.write_all(&[0, 0, 0, 0]).await?;
     // ClientInit, then ServerInit: the size, 32 bits per pixel true colour, the name "neo".
-    socket.read_u8().await?;
+    let shared_flag = socket.read_u8().await?;
+    shared.record(connection, &[shared_flag]);
     let ScreenSize { width, height } = shared.state().size;
     let mut init = Vec::new();
     init.extend_from_slice(&width.to_be_bytes());
@@ -262,52 +292,108 @@ async fn converse(shared: &Shared, socket: &mut TcpStream) -> io::Result<()> {
 
     let mut changes = shared.changes.subscribe();
     let mut layout = Some((0, 0));
+    // An incremental update request the fake holds until the screen changes.
+    let mut held = false;
     loop {
-        match socket.read_u8().await? {
-            // SetEncodings: padding, a u16 count, 4 bytes each.
-            2 => {
-                let mut head = [0; 3];
-                socket.read_exact(&mut head).await?;
-                let count = u16::from_be_bytes([head[1], head[2]]);
-                socket
-                    .read_exact(&mut vec![0; 4 * usize::from(count)])
-                    .await?;
-            }
-            // FramebufferUpdateRequest: incremental, then x, y, w, h.
-            3 => {
-                let mut request = [0; 9];
-                socket.read_exact(&mut request).await?;
-                if request[0] == 1 && layout.is_none() && !shared.answers_at_once() {
-                    // Another client's resize, or nothing until the connection goes.
-                    if changes.changed().await.is_err() {
-                        return Ok(());
-                    }
-                    layout = Some((2, 0));
+        let kind = tokio::select! {
+            biased;
+            changed = changes.changed(), if held => {
+                // Another client's resize, or nothing until the connection goes.
+                if changed.is_err() {
+                    return Ok(());
                 }
+                held = false;
+                changes.borrow_and_update();
+                socket.write_all(&shared.update(Some((2, 0)))).await?;
+                continue;
+            }
+            kind = socket.read_u8() => kind?,
+        };
+        let Some(message) = read_message(socket, kind).await? else {
+            return Ok(());
+        };
+        shared.record(connection, &message);
+        let byte = |at: usize| message.get(at).copied().unwrap_or(0);
+        match kind {
+            // FramebufferUpdateRequest: incremental, then x, y, w, h.
+            3 if byte(1) == 1 && layout.is_none() && !shared.answers_at_once() => held = true,
+            3 => {
                 changes.borrow_and_update();
                 socket.write_all(&shared.update(layout.take())).await?;
             }
             // SetDesktopSize: padding, w, h, a screen count, padding, 16 bytes per screen.
             251 => {
-                let mut head = [0; 7];
-                socket.read_exact(&mut head).await?;
-                let mut screens = vec![0; 16 * usize::from(head[5])];
-                socket.read_exact(&mut screens).await?;
                 let size = ScreenSize {
-                    width: u16::from_be_bytes([head[1], head[2]]),
-                    height: u16::from_be_bytes([head[3], head[4]]),
+                    width: u16::from_be_bytes([byte(2), byte(3)]),
+                    height: u16::from_be_bytes([byte(4), byte(5)]),
                 };
                 let field = |at: usize| {
-                    screens
-                        .get(at..at + 4)
+                    message
+                        .get(8 + at..8 + at + 4)
                         .and_then(|bytes| bytes.try_into().ok())
                         .map_or(0, u32::from_be_bytes)
                 };
                 layout = shared.resize(size, field(0), field(12));
                 // This client's own change is not another client's.
                 changes.borrow_and_update();
+                // A change answers the request the fake holds, as Xvnc's next update does.
+                if held {
+                    held = false;
+                    socket.write_all(&shared.update(layout.take())).await?;
+                }
             }
-            _ => return Ok(()),
+            _ => {}
         }
     }
+}
+
+/// The client message whose type byte was `kind`, read whole and framed by hand as RFB 3.8 says,
+/// the type byte first. `None` for a message Neo's display never passes on.
+async fn read_message(socket: &mut TcpStream, kind: u8) -> io::Result<Option<Vec<u8>>> {
+    let mut message = vec![kind];
+    let rest = match kind {
+        0 => 19,
+        3 | 150 => 9,
+        4 => 7,
+        5 => 5,
+        // SetEncodings: padding, a u16 count, 4 bytes each.
+        2 => {
+            take(socket, &mut message, 3).await?;
+            4 * usize::from(u16::from_be_bytes([message[2], message[3]]))
+        }
+        // ClientCutText: padding, an i32 length (negative: extended, −length bytes), the text.
+        6 => {
+            take(socket, &mut message, 7).await?;
+            let length = i32::from_be_bytes([message[4], message[5], message[6], message[7]]);
+            usize::try_from(length.unsigned_abs()).unwrap_or(usize::MAX)
+        }
+        // ClientFence: padding, u32 flags, a u8 length, the payload.
+        248 => {
+            take(socket, &mut message, 8).await?;
+            usize::from(message[8])
+        }
+        // SetDesktopSize: padding, w, h, a screen count, padding, 16 bytes per screen.
+        251 => {
+            take(socket, &mut message, 7).await?;
+            16 * usize::from(message[6])
+        }
+        // QEMU: a subtype; 0, the extended key event, has 10 bytes more.
+        255 => {
+            take(socket, &mut message, 1).await?;
+            if message[1] != 0 {
+                return Ok(None);
+            }
+            10
+        }
+        _ => return Ok(None),
+    };
+    take(socket, &mut message, rest).await?;
+    Ok(Some(message))
+}
+
+/// Reads `count` more bytes onto `message`.
+async fn take(socket: &mut TcpStream, message: &mut Vec<u8>, count: usize) -> io::Result<()> {
+    let start = message.len();
+    message.resize(start + count, 0);
+    socket.read_exact(&mut message[start..]).await.map(drop)
 }

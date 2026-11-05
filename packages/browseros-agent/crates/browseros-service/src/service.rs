@@ -4,7 +4,9 @@
 //! The service also builds the takeover parts once, so the app reaches them through it rather
 //! than wiring each one: the lock policy and tab cleanup read [`Service::locks`], and the browser
 //! link's tab events go to [`Service::tab_opened`], [`Service::tab_closed`] and
-//! [`Service::retain_tabs`], which hand each event to every part that keeps state about tabs.
+//! [`Service::retain_tabs`], which hand each event to every part that keeps state about tabs:
+//! `Privacy`, the fits, the locks, and the displays (a control display arms its journal on each
+//! tab that opens).
 
 use crate::event_log::{EventKind, EventLog, LogEvent};
 use crate::screenshot_taker::Camera;
@@ -12,7 +14,7 @@ use crate::{router, wire};
 use axum::Router;
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, TabId};
-use browseros_takeover::{BrowserTabs, Fits, Journal, Locks, Xvnc};
+use browseros_takeover::{BrowserTabs, Displays, Fits, Journal, Locks, Xvnc};
 use browseros_trace::{EpochMillis, Privacy, PrivacyError, ShotJobs, TraceSink, TraceStore};
 use std::sync::Arc;
 
@@ -34,7 +36,7 @@ pub struct ServiceInputs {
     /// `spawn_writer` got the other end).
     pub screenshots: ShotJobs,
     /// Neo's screen: Xvnc's address and the size it rests at (the image's `NEO_SCREEN`). The
-    /// fits resize it to the owner's viewer and put it back.
+    /// fits resize it to the owner's viewer and put it back, and `GET /v1/display` shows it.
     pub xvnc: Xvnc,
 }
 
@@ -52,14 +54,10 @@ pub(crate) struct ServiceState {
     pub(crate) events: Arc<EventLog>,
     pub(crate) browser: BrowserTabs,
     pub(crate) locks: Arc<Locks>,
-    /// The control journal, registering into the same secret set as `privacy`. The display and
-    /// the takeover flow arm it while the owner has control (decision 31).
-    #[expect(
-        dead_code,
-        reason = "the display (step 8) and the takeover flow (step 9b) arm it"
-    )]
-    pub(crate) journal: Journal,
     pub(crate) fits: Arc<Fits>,
+    /// Neo's screen over RFB for `GET /v1/display`. Its control displays arm the control journal,
+    /// which registers into the same secret set as `privacy` (decision 31).
+    pub(crate) displays: Arc<Displays>,
 }
 
 impl Service {
@@ -93,6 +91,15 @@ impl Service {
         let browser = BrowserTabs::new(browser, viewports);
         let journal = Journal::new(browser.clone(), Arc::clone(privacy.secrets()));
         let fits = Fits::new(browser.clone(), xvnc, Arc::clone(privacy.secrets()));
+        let displays = Displays::new(
+            xvnc.addr,
+            browser.clone(),
+            Arc::clone(&privacy),
+            journal,
+            Arc::clone(&locks),
+            sink.clone(),
+            store.clone(),
+        );
         // A Neo restart in the middle of a fit drops the fit, but would leave Xvnc at the
         // owner's size and the window fullscreen, and nothing else would ever put them back.
         // Best-effort and logged. A fit that takes the surface first wins; its release puts
@@ -109,8 +116,8 @@ impl Service {
                 events,
                 browser,
                 locks,
-                journal,
                 fits,
+                displays,
             }),
         }
     }
@@ -129,12 +136,15 @@ impl Service {
     }
 
     /// The browser link saw a tab open. While a control display is open, the tab starts
-    /// private: the owner may already be typing into it.
+    /// private and that display's journal arms on it: the owner may already be typing into it.
     ///
     /// # Errors
-    /// When the tab's private flag could not be committed. It still holds in memory.
+    /// When the tab's private flag could not be committed. It still holds in memory, and the
+    /// journal is armed either way.
     pub async fn tab_opened(&self, tab: TabId, at: EpochMillis) -> Result<(), PrivacyError> {
-        self.state.privacy.tab_opened(tab, at).await
+        let private = self.state.privacy.tab_opened(tab, at).await;
+        self.state.displays.tab_opened(tab).await;
+        private
     }
 
     /// The browser link saw a tab close: its fit is restored (so the screen does not stay at

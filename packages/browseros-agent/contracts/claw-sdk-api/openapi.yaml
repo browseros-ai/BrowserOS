@@ -350,17 +350,35 @@ paths:
   /v1/display:
     get:
       operationId: openDisplay
-      summary: Neo's whole screen as RFB over WebSocket (subprotocol `binary`, noVNC-compatible).
+      summary: Neo's whole screen as RFB over WebSocket (noVNC-compatible).
       description: |
+        Binary frames carry RFB 3.8 both ways. No subprotocol is required, and `binary` is echoed
+        when the client offers it.
+
         `view` drops every input message. `control` forwards input. Its first input event makes
         every open tab private before the event is forwarded, and every tab that opens while it
         is open is private from the start. Private-field values are collected for masking while
-        it is open and when it closes. View displays pause while a control display has forwarded
-        input. While no owner has control, `followTab` keeps that tab in front of the screen, and
-        `followTask` keeps the task's current page in front (the tab its latest operation
-        targeted). `followTab` and `followTask` are mutually exclusive, so sending both is
-        `400 invalid_request`. `release` ties a control display to a takeover: releasing the
-        takeover closes it.
+        it is open and when it closes. When a control display forwards its first input, view
+        displays close (`4001`), and new ones are refused (`409 display_paused`) while that
+        control display is open or a takeover is active. View displays also close, and are
+        refused the same way, while the tab in front of the screen is private. A private tab
+        stays private until it closes, so after control ends, views come back once a tab that is
+        not private is in front. While no owner has control, `followTab` keeps that tab in front
+        of the screen, and `followTask` keeps the task's current page in front (the tab its
+        latest operation targeted). Neither brings a private tab to the front. `followTab` and
+        `followTask` are mutually exclusive, so sending both is `400 invalid_request`. A control
+        display takes neither, and a view display takes no `release`. `release` ties a control
+        display to a takeover: releasing the takeover closes it.
+
+        A display ends with a WebSocket close frame that says why:
+        - `4001` paused: the owner has control, or a private tab is in front; try again later;
+        - `4002` released: the display's takeover was released;
+        - `1008`: the client sent something the display refuses: an RFB message it does not
+          know, a paste over 1 MiB, or a handshake other than RFB 3.8 with no security;
+        - `1003`: the client sent a text frame;
+        - `1011`: Neo's screen closed the connection.
+
+        A client that went away is sent no code.
       parameters:
         - name: mode
           in: query
@@ -805,7 +823,8 @@ components:
         A part was already given back: the fit was restored (`fit_restored`), the lock released
         (`lock_released`), or the takeover released (`takeover_released`). Or a takeover is in
         the way: the lock belongs to one, so release the takeover instead (`takeover_lock`), or
-        view displays are paused while the owner has control (`display_paused`).
+        view displays are paused while the owner has control or a private tab is in front
+        (`display_paused`).
       content:
         application/json:
           schema:

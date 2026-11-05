@@ -11,7 +11,7 @@ use crate::limits::{
     DEFAULT_LIMIT, DEFAULT_TAIL, MAX_INLINE_SCREENSHOTS, MAX_LIMIT, MAX_TAIL, MAX_WAIT_SECONDS,
 };
 use browseros_core::TabId;
-use browseros_takeover::{FitId, LockId};
+use browseros_takeover::{FitId, Follow, LockId, TakeoverId};
 use browseros_trace::{
     EpochMillis, OperationId, RequestId, RunId, RunQuery, RunStatus, TailQuery, TaskId,
 };
@@ -107,6 +107,65 @@ pub(crate) fn events(raw: Option<&str>) -> Result<EventFilter, ApiError> {
         task: params.task()?,
         tab: params.tab()?,
     })
+}
+
+/// `GET /v1/display`, parsed: which display, before any takeover is looked up.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DisplayQuery {
+    /// `mode=view`, and what it keeps in front.
+    View(Option<Follow>),
+    /// `mode=control`, and the takeover it belongs to (`release`).
+    Control(Option<TakeoverId>),
+}
+
+/// `GET /v1/display`: `mode` is required; a view may take `followTab` or `followTask` (one of
+/// them, decision 18), and a control display `release`. Any other combination is a 400. A
+/// `release` that is not a takeover id names no takeover: a 404.
+pub(crate) fn display(raw: Option<&str>) -> Result<DisplayQuery, ApiError> {
+    let params = Params::parse(raw);
+    let follow_tab = params
+        .get("followTab")?
+        .map(|text| {
+            text.parse()
+                .map(TabId)
+                .map_err(|_| ApiError::invalid("`followTab` must be an integer"))
+        })
+        .transpose()?;
+    let follow_task = params
+        .get("followTask")?
+        .map(|text| {
+            TaskId::parse(text)
+                .map_err(|_| ApiError::invalid("`followTask` must be 1 to 128 bytes"))
+        })
+        .transpose()?;
+    let follow = match (follow_tab, follow_task) {
+        (Some(_), Some(_)) => {
+            return Err(ApiError::invalid(
+                "`followTab` and `followTask` cannot both be given",
+            ));
+        }
+        (Some(tab), None) => Some(Follow::Tab(tab)),
+        (None, Some(task)) => Some(Follow::Task(task)),
+        (None, None) => None,
+    };
+    let release = params.get("release")?;
+    match params.get("mode")? {
+        Some("view") if release.is_some() => {
+            Err(ApiError::invalid("`release` is for a control display"))
+        }
+        Some("view") => Ok(DisplayQuery::View(follow)),
+        Some("control") if follow.is_some() => Err(ApiError::invalid(
+            "a control display follows nothing: the owner moves the screen",
+        )),
+        Some("control") => release
+            .map(|text| {
+                text.parse()
+                    .map_err(|_| ApiError::not_found("no takeover has this id"))
+            })
+            .transpose()
+            .map(DisplayQuery::Control),
+        _ => Err(ApiError::invalid("`mode` must be view or control")),
+    }
 }
 
 /// A run id in a path. Text that is not one names no run.
@@ -233,11 +292,12 @@ impl<'a> Params<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Inline, events, run, run_id, runs, tab_id, trace};
+    use super::{DisplayQuery, Inline, display, events, run, run_id, runs, tab_id, trace};
     use crate::api_error::ErrorCode;
     use crate::limits::{DEFAULT_LIMIT, DEFAULT_TAIL};
     use axum::http::StatusCode;
     use browseros_core::TabId;
+    use browseros_takeover::{Follow, TakeoverId};
     use browseros_trace::{EpochMillis, RunId, RunStatus, TaskId};
     use std::time::Duration;
 
@@ -361,6 +421,62 @@ mod tests {
         );
         assert_eq!(filter.and_then(|filter| filter.tab), Some(TabId(4)));
         assert!(refused(events(Some("tab=x"))));
+    }
+
+    #[test]
+    fn a_display_is_a_view_that_may_follow_or_a_control_display_that_may_be_bound() {
+        let takeover = "tk_01900000-0000-7000-8000-000000000000";
+        let cases = [
+            ("mode=view", Some(DisplayQuery::View(None))),
+            (
+                "mode=view&followTab=12",
+                Some(DisplayQuery::View(Some(Follow::Tab(TabId(12))))),
+            ),
+            (
+                "mode=view&followTask=checkout%201",
+                TaskId::parse("checkout 1")
+                    .ok()
+                    .map(|task| DisplayQuery::View(Some(Follow::Task(task)))),
+            ),
+            ("mode=control", Some(DisplayQuery::Control(None))),
+            (
+                &format!("mode=control&release={takeover}"),
+                takeover
+                    .parse::<TakeoverId>()
+                    .ok()
+                    .map(|id| DisplayQuery::Control(Some(id))),
+            ),
+            ("mode=view&future=ignored", Some(DisplayQuery::View(None))),
+        ];
+        for (raw, expected) in cases {
+            assert!(expected.is_some(), "{raw}: the case itself is malformed");
+            assert_eq!(display(Some(raw)).ok(), expected, "{raw}");
+        }
+    }
+
+    #[test]
+    fn a_display_refuses_contradictions_and_a_release_that_names_no_takeover() {
+        for raw in [
+            "",
+            "mode=",
+            "mode=watch",
+            "mode=view&mode=view",
+            "mode=view&followTab=12&followTask=checkout",
+            "mode=view&followTab=front",
+            "mode=view&followTask=",
+            "mode=view&release=tk_01900000-0000-7000-8000-000000000000",
+            "mode=control&followTab=12",
+            "mode=control&followTask=checkout",
+        ] {
+            assert!(refused(display(Some(raw))), "{raw}");
+        }
+        assert!(refused(display(None)), "no mode");
+        for raw in ["mode=control&release=nope", "mode=control&release=lk_x"] {
+            assert!(
+                display(Some(raw)).is_err_and(|error| error.status == StatusCode::NOT_FOUND),
+                "{raw}"
+            );
+        }
     }
 
     #[test]

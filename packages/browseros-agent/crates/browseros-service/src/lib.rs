@@ -14,8 +14,9 @@
 //!                                router ─ x-request-id ─▶ records, screenshots, tab privacy,
 //!                                  │                       sweep, secrets, locks, fits
 //!                                  │                       └▶ TraceStore, Privacy, Locks, Fits
-//!                                  └▶ GET /v1/events ◀── EventLog ◀── TraceSink's events,
-//!                                                                     lock changes, tab.closed
+//!                                  ├▶ GET /v1/events ◀── EventLog ◀── TraceSink's events,
+//!                                  │                                  lock changes, tab.closed
+//!                                  └▶ GET /v1/display ─ WebSocket, RFB ─▶ Displays ─▶ Xvnc
 //!
 //!  trace writer ─ ShotJobs ─▶ camera (screenshot_taker) ─ agent's BrowserSession ─▶ JPEG file
 //!       ▲                                  │
@@ -41,6 +42,7 @@
 )]
 
 mod api_error;
+mod display_route;
 mod event_log;
 mod event_resume;
 mod events_route;

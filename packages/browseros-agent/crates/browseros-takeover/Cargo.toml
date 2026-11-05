@@ -11,6 +11,8 @@ description = "The owner's side of hosted BrowserOS Neo (claw-sdk): the takeover
 browseros-cdp.workspace = true
 browseros-core.workspace = true
 browseros-trace.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
 percent-encoding.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -24,7 +26,6 @@ zeroize.workspace = true
 
 [dev-dependencies]
 browseros-cdp.workspace = true
-futures-util.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber.workspace = true

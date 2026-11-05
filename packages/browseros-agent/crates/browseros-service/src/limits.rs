@@ -51,3 +51,12 @@ pub(crate) const VIEWER_SIDE: std::ops::RangeInclusive<u16> = 100..=4096;
 
 /// The most characters the owner's typed address may have (`NavigateRequest.input`).
 pub(crate) const MAX_NAVIGATE_INPUT: usize = 2000;
+
+/// The largest WebSocket message or frame a display takes from its viewer: a 1 MiB paste, its
+/// header and the messages merged with it, with room to spare. tungstenite would otherwise
+/// buffer up to 64 MiB for one message.
+pub(crate) const DISPLAY_MESSAGE_MAX: usize = 2 << 20;
+
+/// How long a display's close frame may take to leave. A viewer that stopped reading would
+/// otherwise hold the display's task open.
+pub(crate) const CLOSE_FRAME_WAIT: Duration = Duration::from_secs(5);

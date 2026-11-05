@@ -2,6 +2,7 @@
 //! scripted browser, and through `host_service` on a real Unix socket.
 
 mod browser;
+mod display;
 mod errors;
 mod events;
 mod fits;
