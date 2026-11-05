@@ -253,7 +253,21 @@ impl Observer {
         self.state.lock().await.refs.arrangement()
     }
 
+    /// Resolves a ref, rerun once on a fresh page session under the same rule as
+    /// [`Self::capture`]. Acting and the audit layer's sensitive-field check both start here, so
+    /// a ref that failed on a dead session would fail the act or, worse, let a password fill
+    /// through unredacted once the act itself re-attached.
     pub async fn resolve_ref(&self, ref_id: &Ref) -> Result<ResolvedElement, CoreError> {
+        let page_session = self.page_session().await?;
+        let result = self.resolve_ref_once(ref_id).await;
+        if result.is_err() && self.session_replaced(&page_session).await {
+            self.page_session().await?;
+            return self.resolve_ref_once(ref_id).await;
+        }
+        result
+    }
+
+    async fn resolve_ref_once(&self, ref_id: &Ref) -> Result<ResolvedElement, CoreError> {
         let entry = self
             .state
             .lock()
@@ -262,7 +276,6 @@ impl Observer {
             .get(ref_id)
             .cloned()
             .ok_or_else(|| CoreError::UnknownRef(ref_id.clone()))?;
-        let _page_session = self.page_session().await?;
         let mut target = self
             .frames
             .resolve_frame_target_with_epoch(
