@@ -4,7 +4,6 @@
     "apps/claw-onboard/src/main.tsx",
     "scripts/run-bun-test.ts",
     "scripts/dev/inspect-ui.ts",
-    "scripts/patch-windows-exe.ts",
     "packages/agent-cursor/src/index.ts",
     "packages/agent-cursor/scripts/classic-entry.ts"
   ],
