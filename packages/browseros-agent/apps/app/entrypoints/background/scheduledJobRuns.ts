@@ -9,9 +9,9 @@ import {
   putScheduledJobRun,
 } from '@/modules/schedules/schedules.api'
 import { applyLastRunAt } from '@/modules/schedules/schedules.helpers'
+import { shouldCatchUpScheduledJob } from './scheduledJobCatchUp'
 
 const STALE_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
-const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000
 
 const runAbortControllers = new Map<string, AbortController>()
 
@@ -146,7 +146,6 @@ export const scheduledJobRuns = async () => {
 
   let runningMissedJobs = false
 
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: TODO(dani) refactor to reduce complexity
   const runMissedJobs = async () => {
     if (runningMissedJobs) return
     runningMissedJobs = true
@@ -158,38 +157,9 @@ export const scheduledJobRuns = async () => {
 
       const jobs = loadedJobs.filter((j) => j.enabled)
       const now = Date.now()
-      const cutoff = now - TWENTY_FOUR_HOURS_MS
 
       for (const job of jobs) {
-        const hasRecentRun = runs.some(
-          (r) => r.jobId === job.id && new Date(r.startedAt).getTime() > cutoff,
-        )
-        if (hasRecentRun) continue
-
-        const hasRunningRun = runs.some(
-          (r) => r.jobId === job.id && r.status === 'running',
-        )
-        if (hasRunningRun) continue
-
-        if (job.scheduleType === 'daily' && job.scheduleTime) {
-          const [hours, minutes] = job.scheduleTime.split(':').map(Number)
-          const scheduledToday = new Date()
-          scheduledToday.setHours(hours, minutes, 0, 0)
-          if (now < scheduledToday.getTime()) continue
-        }
-
-        if (
-          (job.scheduleType === 'hourly' || job.scheduleType === 'minutes') &&
-          job.scheduleInterval
-        ) {
-          const intervalMs =
-            job.scheduleType === 'hourly'
-              ? job.scheduleInterval * 60 * 60 * 1000
-              : job.scheduleInterval * 60 * 1000
-          const createdAt = new Date(job.createdAt).getTime()
-          if (now - createdAt < intervalMs) continue
-        }
-
+        if (!shouldCatchUpScheduledJob(job, runs, now)) continue
         await executeScheduledJob(job.id)
       }
     } finally {
