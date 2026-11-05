@@ -73,7 +73,7 @@ def main(
         None,
         "--product",
         "-p",
-        help="Product to build (browseros, browserclaw)",
+        help="Product to build (browserclaw)",
     ),
     modules: Optional[str] = typer.Option(
         None,

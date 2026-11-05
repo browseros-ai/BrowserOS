@@ -356,12 +356,12 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
 
     def test_browser_lanes_do_not_receive_extension_build_secrets(self):
         secret_names = (
-            "BROWSEROS_AGENT_V2_KEY",
             "BROWSERCLAW_KEY",
-            "VITE_PUBLIC_SENTRY_DSN",
-            "VITE_PUBLIC_POSTHOG_KEY",
+            "BUGREPORTER_KEY",
+            "BROWSEROS_CONTROLLER_KEY",
+            "POSTHOG_API_KEY",
             "VITE_CLAW_POSTHOG_KEY",
-            "SENTRY_AUTH_TOKEN",
+            "VITE_CLAW_POSTHOG_HOST",
         )
         for workflow_name in (
             "build-browseros.yml",
