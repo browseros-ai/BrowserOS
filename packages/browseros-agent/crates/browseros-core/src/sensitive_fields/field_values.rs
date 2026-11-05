@@ -208,8 +208,7 @@ fn build_matcher(values: &[Zeroizing<String>], newlines: Newlines) -> Option<Aho
             }
             patterns.push(Zeroizing::new(encoded));
         }
-        for markup in [Markup::Text, Markup::Attribute] {
-            let escaped = html_escaped(plain, markup);
+        for escaped in html_spellings(plain) {
             // The serializer leaves newlines raw, so the plain form's newline rule applies.
             if *escaped != plain
                 && (newlines == Newlines::Included || !escaped.contains('\n'))
@@ -227,6 +226,17 @@ fn build_matcher(values: &[Zeroizing<String>], newlines: Newlines) -> Option<Aho
         .build(patterns.iter().map(|pattern| pattern.as_str()))
         .map_err(|error| tracing::error!(%error, "field-value matcher could not be built"))
         .ok()
+}
+
+/// `value` as Chromium's HTML serializer writes it as text and as an attribute value
+/// (`outerHTML`, `innerHTML`, `page.content()`). Either may equal `value`. Both masking layers
+/// match these: L1 here, for a value still in a field, and L2's secret set in browseros-trace,
+/// for a value only the host or a past field knows. One definition keeps them from drifting.
+pub fn html_spellings(value: &str) -> [Zeroizing<String>; 2] {
+    [
+        html_escaped(value, Markup::Text),
+        html_escaped(value, Markup::Attribute),
+    ]
 }
 
 /// Where the HTML serializer writes a string.

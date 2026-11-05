@@ -14,6 +14,7 @@
 //! every result.
 
 use aho_corasick::{AhoCorasick, MatchKind};
+use browseros_core::sensitive_fields;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::Value;
 use std::fmt;
@@ -252,6 +253,15 @@ fn rebuild(inner: &mut Inner) {
                 patterns.push(Zeroizing::new(encoded));
             }
         }
+        // A value the page shows only as text or in an attribute reads back from the HTML
+        // serializer (`page.content()`, `innerHTML`) with `&`, `<`, `>`, U+00A0 and, in
+        // attributes, `"` as entities. L1 masks these spellings only for a value still in a
+        // field, so for one only the host or an earlier field knows, L2 is the last layer.
+        for escaped in sensitive_fields::html_spellings(plain) {
+            if *escaped != plain && !patterns.iter().any(|known| **known == *escaped) {
+                patterns.push(escaped);
+            }
+        }
     }
     inner.matcher = if patterns.is_empty() {
         None
@@ -282,6 +292,24 @@ mod tests {
         let mut text = text.to_string();
         set.mask_str(&mut text);
         text
+    }
+
+    /// sdk-privacy leak test finding 2: a host-registered value shown only as page text came back
+    /// raw from `page.content()`, which spells `&`, `<`, `>` and U+00A0 as entities in text and
+    /// in attributes, and `"` in attributes.
+    #[test]
+    fn a_value_is_masked_as_the_html_serializer_spells_it_in_text_and_attributes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let set = set_with(&["p&ss<w\"rd>\u{a0}x"]);
+        assert_eq!(
+            masked(&set, "<p>p&amp;ss&lt;w\"rd&gt;&nbsp;x</p>"),
+            "<p>[private]</p>"
+        );
+        assert_eq!(
+            masked(&set, "<i data-v=\"p&amp;ss&lt;w&quot;rd&gt;&nbsp;x\"></i>"),
+            "<i data-v=\"[private]\"></i>"
+        );
+        Ok(())
     }
 
     #[test]

@@ -17,7 +17,7 @@ mod seal;
 mod sensitive_values;
 
 pub use field_rules::{FieldAttributes, FieldRules, FieldTag, SensitiveKind};
-pub use field_values::{ECHO_MASK, FieldValues, MIN_SUBSTRING_LEN};
+pub use field_values::{ECHO_MASK, FieldValues, MIN_SUBSTRING_LEN, html_spellings};
 pub use mask_value::{FIELD_MASK, is_card_number, mask_value};
 pub use seal::{FRAME_CROSSING_TOKENS, JOURNAL_BINDING, JournalEntry, SEALED_WORLD, seal_source};
 pub use sensitive_values::SensitiveValues;
