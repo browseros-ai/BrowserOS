@@ -1,5 +1,5 @@
-//! `Locks` as its callers see it, over a real trace store and writer: the dispatcher's check,
-//! the settle, the TTL, the tab's end, and the takeover binding.
+//! `Locks` as its callers see it, over a real trace store and writer: the dispatcher's check and
+//! its past-instant form, the settle, the TTL, the tab's end, and the takeover binding.
 //!
 //! The settle reads the store through sqlx, whose pool does not run under paused time, so these
 //! tests use real time with the shortest TTL (1 s) where a TTL has to pass.
@@ -457,6 +457,57 @@ async fn only_its_own_takeover_ends_a_takeovers_lock() -> TestResult {
         h.locks.unlock_takeover(lock.id, owner)?,
         released,
         "releasing again changes nothing"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_past_instant_is_judged_by_the_locks_that_covered_it_held_or_ended() -> TestResult {
+    let h = harness().await?;
+    let (tab, other) = (LockTarget::Tab(TabId(12)), LockTarget::Tab(TabId(13)));
+    let taken = h
+        .locks
+        .lock(TabId(12), Reads::Block, ttl(60)?, LockBinding::Host)
+        .await;
+    let released = h.locks.unlock_host(taken.id)?;
+    let end = released.ended.ok_or("released")?.at;
+    assert_eq!(
+        h.locks.check(tab, Effect::Write),
+        Ok(()),
+        "nothing is refused now"
+    );
+    for at in [released.created_at, end] {
+        assert_eq!(
+            h.locks.check_at(tab, Effect::Write, at),
+            refused_by(&released),
+            "the ended lock covered {}",
+            at.millis()
+        );
+    }
+    assert_eq!(
+        h.locks.check_at(tab, Effect::Write, end.plus_millis(1)),
+        Ok(()),
+        "the release, not the TTL, ended it"
+    );
+
+    let held = h
+        .locks
+        .lock(TabId(13), Reads::Allow, ttl(60)?, LockBinding::Host)
+        .await;
+    assert_eq!(
+        h.locks.check_at(other, Effect::Write, held.expires_at),
+        refused_by(&held),
+        "a held lock covers through its expires_at"
+    );
+    assert_eq!(
+        h.locks.check_at(other, Effect::Read, held.expires_at),
+        Ok(()),
+        "reads: allow"
+    );
+    assert_eq!(
+        h.locks
+            .check_at(other, Effect::Write, held.created_at.plus_millis(-1)),
+        Ok(())
     );
     Ok(())
 }

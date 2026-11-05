@@ -2,9 +2,10 @@
 //!
 //! Three kinds of caller reach the lock table, at three costs:
 //! - the dispatcher's lock policy asks [`Locks::check`] about every agent operation, at both of
-//!   its policy stages. The check is synchronous: a pure fold (`lock_decision::decide`) over the
-//!   held locks, under a `std::sync::Mutex` that no code holds across an await. The agent's hot
-//!   path never waits on I/O, or on a host that is taking a lock;
+//!   its policy stages, and [`Locks::check_at`] answers the same question for a past instant,
+//!   such as when a page event the agent reads was recorded. Both are synchronous: a pure fold
+//!   (`lock_decision`) over the locks, under a `std::sync::Mutex` that no code holds across an
+//!   await. The agent's hot path never waits on I/O, or on a host that is taking a lock;
 //! - the host's routes take, read and release locks;
 //! - tab cleanup asks [`Locks::is_locked`], and never closes a locked tab.
 //!
@@ -340,6 +341,50 @@ impl Locks {
         lock_decision::decide(table.held.values(), target, effect, Instant::now())
     }
 
+    /// Whether the locks refused an agent operation with `effect` on `target` at `at`, a past
+    /// instant: [`Self::check`], asked about `at` instead of now. Asked about the instant a page
+    /// event was recorded, the lock that held the event's tab then still refuses it after that
+    /// lock has ended, though the agent reads the event later.
+    ///
+    /// A lock covers `at` from its `created_at` through its end, both inclusive: `ended.at` once
+    /// it ended, `expires_at` while it is held. A millisecond stamp cannot order an event against
+    /// a lock taken or ended in the same millisecond, so that millisecond counts as covered (fail
+    /// closed). Among the locks that cover `at`, the rule is [`Self::check`]'s, shared in
+    /// `lock_decision`. Like `check`, it never waits, does no I/O and changes nothing. It reads
+    /// the table as it stands, without ending expired locks or forgetting old ones; a held lock
+    /// past its deadline still ends at its `expires_at`, so the answer is the same whether or not
+    /// a timer or a read has ended it yet.
+    ///
+    /// **Ended locks outlive any event a running run reads.** The table keeps an ended lock for an
+    /// hour (`limits::KEEP_ENDED_LOCK`), counted from when it left the held locks, never before
+    /// its end. A run lasts at most 900 s (claw-sdk's `Defaults::RUN_TIMEOUT_MAX`). A lock that
+    /// covered an event recorded during a run still in progress is either held, or ended no
+    /// earlier than that event and so under 900 s ago, and is in the table either way: such an
+    /// event can always be judged. An `at` from before the run started has no such bound. A lock
+    /// that ended over an hour ago may be forgotten, and then goes uncounted.
+    ///
+    /// **One clock.** `created_at`, `ended.at` and `expires_at` are [`EpochMillis::now`]
+    /// readings, wall-clock milliseconds since the Unix epoch. browseros-playwright stamps each
+    /// page event's `EventRecord::at_ms` with its own `now_ms()` (`events::event_hub`), which
+    /// reads the same `SystemTime` milliseconds. The two must stay one clock, or `at` is compared
+    /// against times measured on another. An expired lock's `ended.at` is its `expires_at`, not
+    /// the moment a timer or a read noticed the expiry, so a late timer never stretches a lock's
+    /// past.
+    ///
+    /// # Errors
+    /// `OwnerHasControl` when a lock that covered `at` refuses it, naming the oldest such lock.
+    pub fn check_at(
+        &self,
+        target: LockTarget,
+        effect: Effect,
+        at: EpochMillis,
+    ) -> Result<(), OwnerHasControl> {
+        let table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
+        let held = table.held.values().map(|held| &held.lock);
+        let ended = table.ended.iter().map(|(_, lock)| lock);
+        lock_decision::decide_at(held.chain(ended), target, effect, at)
+    }
+
     /// Whether a held lock names `tab`. Tab cleanup never closes a locked tab.
     #[must_use]
     pub fn is_locked(&self, tab: TabId) -> bool {
@@ -391,8 +436,9 @@ impl Locks {
     }
 
     /// The table, with every lock past its deadline already ended and announced, and locks that
-    /// ended over an hour ago forgotten. Every access but [`Self::check`] goes through here, so
-    /// the first one after a deadline ends that lock, whether or not its timer has run.
+    /// ended over an hour ago forgotten. Every access but the checks ([`Self::check`] and
+    /// [`Self::check_at`]) goes through here, so the first one after a deadline ends that lock,
+    /// whether or not its timer has run.
     fn table(&self) -> MutexGuard<'_, LockTable> {
         let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
         let now = Instant::now();

@@ -5,7 +5,8 @@
 //! them over HTTP through `browseros-service`, which is the only crate that knows the wire; the
 //! app adapts the types here to its dispatcher (decision 9). The parts:
 //! - [`Locks`] keeps the agent off a tab. The dispatcher's lock policy asks [`Locks::check`]
-//!   about every agent operation, synchronously; tab cleanup asks [`Locks::is_locked`].
+//!   about every agent operation, synchronously, and [`Locks::check_at`] asks it about a past
+//!   instant, such as when a page event was recorded; tab cleanup asks [`Locks::is_locked`].
 //! - [`Fits`] fits a tab to the owner's viewer on Neo's one screen (Xvnc) and one window,
 //!   follows the owner's own resizes, reads keyboard boxes and the browser bar for the owner's
 //!   page, and puts the tab, the window and the screen back as they were.
