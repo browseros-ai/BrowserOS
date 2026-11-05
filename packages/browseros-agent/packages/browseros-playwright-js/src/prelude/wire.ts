@@ -176,13 +176,16 @@ export type DownloadInfo = {
  * One event as Rust delivers it to one listener or wait. `event` is Playwright's name and
  * `page` the page it fires on; the context's `page` event names the new tab there. `seq` is the
  * record's place in Rust's log, which a `waitForEvent` whose predicate said no re-waits after.
+ * `at` is when Rust recorded it, in ms since the epoch, on the clock that stamps takeover lock
+ * times. claw-sdk's door reads it to withhold what a tab did while its owner held it; the prelude
+ * ignores it.
  *
  * Rust reads its log once per listener, from that listener's own position, so one opened tab
  * reaches the opener's `popup` listener and the context's `page` listener as two events, and a
  * listener attached late still gets events newer than its own stamp. A `page` may arrive
  * revived as a Page by the bootstrap, or as a raw brand.
  */
-export type EventRecord = { seq: number } & (
+export type EventRecord = { seq: number; at: number } & (
   | { event: 'popup'; page: PageBrand; popup: PageEntry }
   | { event: 'page'; page: PageBrand; url: string; opener: PageBrand | null }
   | { event: 'close'; page: PageBrand }

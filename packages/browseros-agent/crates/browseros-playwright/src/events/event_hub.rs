@@ -2,9 +2,9 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use browseros_core::TargetId;
+use browseros_trace::EpochMillis;
 use tokio::sync::Notify;
 use tokio::sync::futures::Notified;
 
@@ -40,9 +40,9 @@ struct EventLog {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct EventRecord {
     pub(crate) seq: u64,
-    /// Milliseconds since the Unix epoch, compared with the `Date.now()` stamps the prelude
-    /// takes when the script calls `waitForEvent` or `on`. Both read the same system clock in
-    /// the same process.
+    /// Milliseconds since the Unix epoch, from [`now_ms`]: the clock that stamps takeover's lock
+    /// times. The log also compares it with the `Date.now()` stamps the prelude takes when the
+    /// script calls `waitForEvent` or `on`, which read the same system clock in the same process.
     pub(crate) at_ms: u64,
     pub(crate) event: PageEvent,
 }
@@ -206,13 +206,13 @@ fn ptr_eq(known: &Weak<RunState>, run: &Arc<RunState>) -> bool {
     Weak::as_ptr(known) == Arc::as_ptr(run)
 }
 
-/// The wall clock in milliseconds since the Unix epoch, as `Date.now()` reads it.
+/// The wall clock in milliseconds since the Unix epoch: [`EpochMillis::now`], the function
+/// `browseros_takeover::Locks` stamps a lock's `created_at` and `ended.at` with. claw-sdk tells
+/// whether a lock held a tab when an event was recorded by comparing the two, so a second clock
+/// here (another source, unit or epoch) would misplace every event against every lock.
 pub(crate) fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| {
-            u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
-        })
+    // `EpochMillis::now` reads a clock set before 1970 as 0, so the conversion cannot fail.
+    u64::try_from(EpochMillis::now().millis()).unwrap_or(0)
 }
 
 /// Whether a subscription's listener, attached at `since_ms`, receives `record`.
@@ -225,6 +225,7 @@ mod tests {
     use std::sync::Arc;
 
     use browseros_core::TargetId;
+    use browseros_trace::EpochMillis;
 
     use super::{EventHub, LOG_CAPACITY};
     use crate::RunState;
@@ -271,6 +272,24 @@ mod tests {
             hub.read_after(10).lost,
             0,
             "a reader past them lost nothing"
+        );
+    }
+
+    /// claw-sdk compares `at_ms` with takeover lock times, which `EpochMillis::now` stamps.
+    #[test]
+    fn tests_that_a_record_is_stamped_on_the_lock_clock() {
+        let (hub, mut writer) = EventHub::new();
+        let before = EpochMillis::now().millis();
+        writer.record(closed("A"));
+        let after = EpochMillis::now().millis();
+        let stamped = hub
+            .read_after(0)
+            .records
+            .first()
+            .map(|record| i64::try_from(record.at_ms));
+        assert!(
+            matches!(stamped, Some(Ok(at)) if before <= at && at <= after),
+            "stamped {stamped:?}, outside the EpochMillis reads {before}..={after}"
         );
     }
 

@@ -18,12 +18,18 @@ use crate::{ErrorCode, PlaywrightError};
 const LISTING_RETRIES: u32 = 5;
 const LISTING_WAIT: Duration = Duration::from_millis(100);
 
-/// One event as the prelude receives it: `{ "seq": 12, "event": "popup", "page": .., .. }`.
-/// `seq` is the record's place in the log; a `waitForEvent` whose predicate rejects the event
-/// asks again with `after` set to it.
+/// One event as `events.wait` and `events.next` return it:
+/// `{ "seq": 12, "at": 1700000000123, "event": "popup", "page": .., .. }`. `seq` is the record's
+/// place in the log; a `waitForEvent` whose predicate rejects the event asks again with `after`
+/// set to it.
 #[derive(Debug, Serialize)]
 pub(crate) struct Delivered {
     pub(crate) seq: u64,
+    /// The record's [`EventRecord::at_ms`]: when the watcher recorded the event, not when the
+    /// page acted, in ms since the epoch from `EpochMillis::now`, the function that stamps
+    /// `browseros_takeover::Locks`' `created_at` and `ended.at`. claw-sdk's door compares `at`
+    /// with those to withhold what a page did while its owner held the tab.
+    at: u64,
     #[serde(flatten)]
     payload: Payload,
 }
@@ -258,6 +264,7 @@ pub(crate) async fn deliver(
     };
     Ok(Some(Delivered {
         seq: record.seq,
+        at: record.at_ms,
         payload,
     }))
 }
@@ -287,12 +294,20 @@ async fn popup_tab(
 
 #[cfg(test)]
 mod tests {
-    use browseros_core::{PageId, TabId};
+    use std::error::Error;
+
+    use browseros_core::{PageId, TabId, TargetId};
     use serde_json::json;
 
-    use super::{ConsoleMessage, Delivered, NewTab, Payload};
-    use crate::events::page_event::Location;
+    use super::{ConsoleMessage, Delivered, NewTab, Payload, Tabs, WindowPopup};
+    use crate::events::event_hub::EventRecord;
+    use crate::events::page_event::{Location, PageEvent};
+    use crate::events::{PageEventKind, Subscription};
+    use crate::op::Op;
+    use crate::op_scope::OpScope;
     use crate::page::PageHandle;
+    use crate::target::CallHeader;
+    use crate::test_env::TestEnv;
 
     /// Page `id` on tab `id * 100`.
     fn handle(id: u32) -> PageHandle {
@@ -304,6 +319,7 @@ mod tests {
     fn tests_that_events_serialize_as_the_prelude_reads_them() -> Result<(), serde_json::Error> {
         let popup = Delivered {
             seq: 8,
+            at: 1_700_000_000_008,
             payload: Payload::Popup {
                 page: handle(7),
                 popup: NewTab {
@@ -314,11 +330,12 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_value(&popup)?,
-            json!({ "seq": 8, "event": "popup", "page": { "$neo": "page", "id": 7, "tab": 700 },
+            json!({ "seq": 8, "at": 1_700_000_000_008_u64, "event": "popup", "page": { "$neo": "page", "id": 7, "tab": 700 },
                     "popup": { "page": { "$neo": "page", "id": 30, "tab": 3000 }, "url": "https://login.test/" } })
         );
         let tab = Delivered {
             seq: 8,
+            at: 1_700_000_000_008,
             payload: Payload::Page {
                 page: handle(30),
                 url: "https://login.test/".to_owned(),
@@ -327,11 +344,12 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_value(&tab)?,
-            json!({ "seq": 8, "event": "page", "page": { "$neo": "page", "id": 30, "tab": 3000 },
+            json!({ "seq": 8, "at": 1_700_000_000_008_u64, "event": "page", "page": { "$neo": "page", "id": 30, "tab": 3000 },
                     "url": "https://login.test/", "opener": { "$neo": "page", "id": 7, "tab": 700 } })
         );
         let console = Delivered {
             seq: 9,
+            at: 1_700_000_000_009,
             payload: Payload::Console {
                 page: handle(7),
                 message: ConsoleMessage {
@@ -344,9 +362,45 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_value(&console)?,
-            json!({ "seq": 9, "event": "console", "page": { "$neo": "page", "id": 7, "tab": 700 },
+            json!({ "seq": 9, "at": 1_700_000_000_009_u64, "event": "console", "page": { "$neo": "page", "id": 7, "tab": 700 },
                     "message": { "type": "log", "text": "hi", "timestamp": 5.0,
                                  "location": { "url": "", "lineNumber": 0, "columnNumber": 0 } } })
+        );
+        Ok(())
+    }
+
+    /// claw-sdk's door withholds an event by comparing its `at` with takeover lock times, so
+    /// `at` is the record's own stamp, not the time it was read.
+    #[tokio::test]
+    async fn tests_that_a_delivered_event_carries_its_record_time() -> Result<(), Box<dyn Error>> {
+        let env = TestEnv::new();
+        let op = Op::from_name("events.wait").ok_or("events.wait is an op")?;
+        let scope = OpScope::new(&env, op, CallHeader::default());
+        let target = TargetId("T".to_owned());
+        let subscription = Subscription::Page {
+            page: PageId(7),
+            tab: TabId(700),
+            target: target.clone(),
+            event: PageEventKind::Close,
+        };
+        let record = EventRecord {
+            seq: 3,
+            at_ms: 1_700_000_000_123,
+            event: PageEvent::Closed(target),
+        };
+        let delivered = super::deliver(
+            &scope,
+            &subscription,
+            &record,
+            &mut Tabs::default(),
+            WindowPopup::Fail,
+        )
+        .await?
+        .ok_or("a page's own close reaches its listener")?;
+        assert_eq!(
+            serde_json::to_value(&delivered)?,
+            json!({ "seq": 3, "at": 1_700_000_000_123_u64, "event": "close",
+                    "page": { "$neo": "page", "id": 7, "tab": 700 } })
         );
         Ok(())
     }

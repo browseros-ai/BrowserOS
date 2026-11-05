@@ -206,8 +206,15 @@ async fn tests_that_the_context_reports_new_tabs_and_a_page_reports_its_close() 
                 });
             closing?;
             let closed = closed?;
+            let until = now_ms()?;
             assert_eq!(closed["event"], json!("close"));
             assert_eq!(closed["page"], brand(&other));
+            assert!(
+                closed["at"]
+                    .as_u64()
+                    .is_some_and(|at| since <= at && at <= until),
+                "events.wait stamps the close with its record time: {closed}"
+            );
 
             let error = wait_for(&run, Some(&page), "load", now_ms()?)
                 .await
@@ -241,9 +248,10 @@ async fn tests_that_a_dialog_reaches_its_listener_and_takes_its_answer() -> Test
     with_page(|run, server, page| async move {
         let result = async {
             open(&run, &page, &server.url("/popups.html")).await?;
+            let since = now_ms()?;
             run.invoke(
                 "events.listen",
-                json!({ "page": brand(&page), "event": "dialog", "on": true, "since": now_ms()? }),
+                json!({ "page": brand(&page), "event": "dialog", "on": true, "since": since }),
             )
             .await?;
             // The pump, as the prelude runs it for page.on('dialog'), answers while the click
@@ -262,8 +270,15 @@ async fn tests_that_a_dialog_reaches_its_listener_and_takes_its_answer() -> Test
             let (pumped, clicked) = tokio::join!(pumped, click_soon(&run, &page, "#prompt"));
             clicked?;
             let pumped = pumped?;
+            let until = now_ms()?;
             let dialog = &pumped["events"][0];
             assert_eq!(dialog["event"], json!("dialog"), "{pumped}");
+            assert!(
+                dialog["at"]
+                    .as_u64()
+                    .is_some_and(|at| since <= at && at <= until),
+                "events.next stamps the dialog with its record time: {pumped}"
+            );
             assert_eq!(dialog["page"], brand(&page));
             assert_eq!(dialog["dialog"]["type"], json!("prompt"));
             assert_eq!(dialog["dialog"]["message"], json!("Name?"));
