@@ -17,35 +17,10 @@ import (
 
 func TestFormatStatusDataUsesHumanReadableSummary(t *testing.T) {
 	got := formatStatus(map[string]any{
-		"state":         "running",
-		"pid":           float64(123),
-		"uptime":        "5s",
-		"log_path":      "/tmp/browseros-dogfood/daemon.jsonl",
-		"browseros_dir": "/tmp/browseros-dogfood",
-		"ports": map[string]any{
-			"CDP":       float64(9015),
-			"Server":    float64(9115),
-			"Extension": float64(9315),
-		},
-	})
-	for _, want := range []string{
-		"State: running",
-		"PID: 123",
-		"Uptime: 5s",
-		"Ports: CDP=9015 Server=9115 Extension=9315",
-		"BrowserOS dir: /tmp/browseros-dogfood",
-		"Logs: /tmp/browseros-dogfood/daemon.jsonl",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("formatted status missing %q:\n%s", want, got)
-		}
-	}
-}
-
-func TestFormatStatusDataForClawOmitsExtensionPort(t *testing.T) {
-	got := formatStatus(map[string]any{
-		"target":    string(config.TargetClaw),
+		"target":    config.ClawTarget,
 		"state":     "running",
+		"pid":       float64(123),
+		"uptime":    "5s",
 		"state_dir": "/tmp/browseros-claw-dogfood",
 		"log_path":  "/tmp/browseros-dogfood/claw/daemon.jsonl",
 		"ports": map[string]any{
@@ -56,6 +31,9 @@ func TestFormatStatusDataForClawOmitsExtensionPort(t *testing.T) {
 	})
 	for _, want := range []string{
 		"Target: claw",
+		"State: running",
+		"PID: 123",
+		"Uptime: 5s",
 		"Ports: CDP=49337 API=9200",
 		"Claw state: /tmp/browseros-claw-dogfood",
 		"Logs: /tmp/browseros-dogfood/claw/daemon.jsonl",
@@ -102,7 +80,7 @@ func TestBuildRestartRequestRejectsForceWithoutPull(t *testing.T) {
 	}
 }
 
-func TestDaemonUnavailableErrorIncludesTargetCommands(t *testing.T) {
+func TestDaemonUnavailableErrorSuggestsStopAndStart(t *testing.T) {
 	dir := t.TempDir()
 	paths := runPaths{
 		Dir:    dir,
@@ -122,14 +100,14 @@ func TestDaemonUnavailableErrorIncludesTargetCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = daemonUnavailableError(paths, config.TargetClaw, errors.New("dial failed"))
+	err = daemonUnavailableError(paths, errors.New("dial failed"))
 	if err == nil {
 		t.Fatal("expected daemon unavailable error")
 	}
 	got := err.Error()
 	for _, want := range []string{
-		"browseros-dogfood --claw stop",
-		"browseros-dogfood --claw start-background",
+		"browseros-dogfood stop",
+		"browseros-dogfood start-background",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in %q", want, got)
@@ -137,7 +115,7 @@ func TestDaemonUnavailableErrorIncludesTargetCommands(t *testing.T) {
 	}
 }
 
-func TestDaemonUnavailableErrorIncludesTargetStartWhenNotRunning(t *testing.T) {
+func TestDaemonUnavailableErrorSuggestsStartWhenNotRunning(t *testing.T) {
 	dir := t.TempDir()
 	paths := runPaths{
 		Dir:    dir,
@@ -146,16 +124,12 @@ func TestDaemonUnavailableErrorIncludesTargetStartWhenNotRunning(t *testing.T) {
 		Socket: filepath.Join(dir, "daemon.sock"),
 	}
 
-	err := daemonUnavailableError(paths, config.TargetClaw, ipc.ErrDaemonNotRunning)
+	err := daemonUnavailableError(paths, ipc.ErrDaemonNotRunning)
 	if err == nil {
 		t.Fatal("expected daemon unavailable error")
 	}
-	got := err.Error()
-	if !strings.Contains(got, "browseros-dogfood --claw start-background") {
-		t.Fatalf("missing target-specific start command: %v", err)
-	}
-	if strings.Contains(got, "browseros-dogfood start-background") {
-		t.Fatalf("contains targetless start command: %v", err)
+	if !strings.Contains(err.Error(), "start it with `browseros-dogfood start-background`") {
+		t.Fatalf("missing start command: %v", err)
 	}
 }
 
@@ -198,7 +172,6 @@ func TestMonitorDaemonUntilRunningPrintsEntriesAndStops(t *testing.T) {
 
 func TestMonitorDaemonUntilRunningReturnsDaemonError(t *testing.T) {
 	err := monitorDaemonUntilRunning(context.Background(), daemonMonitor{
-		Target:       config.TargetClaw,
 		PollInterval: time.Millisecond,
 		Status: func() (ipc.Response, error) {
 			return ipc.Response{OK: true, Data: map[string]any{
@@ -214,8 +187,8 @@ func TestMonitorDaemonUntilRunningReturnsDaemonError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "server health check failed") {
 		t.Fatalf("error got %v", err)
 	}
-	if !strings.Contains(err.Error(), "browseros-dogfood --claw logs tail") {
-		t.Fatalf("error missing claw logs command: %v", err)
+	if !strings.Contains(err.Error(), "browseros-dogfood logs tail") {
+		t.Fatalf("error missing logs command: %v", err)
 	}
 }
 
@@ -225,7 +198,6 @@ func TestMonitorDaemonUntilRunningDetachesOnInterrupt(t *testing.T) {
 	close(detach)
 	err := monitorDaemonUntilRunning(context.Background(), daemonMonitor{
 		Out:          &out,
-		Target:       config.TargetClaw,
 		Detach:       detach,
 		PollInterval: time.Hour,
 		Status: func() (ipc.Response, error) {
@@ -243,7 +215,7 @@ func TestMonitorDaemonUntilRunningDetachesOnInterrupt(t *testing.T) {
 	if !strings.Contains(got, "Detached; daemon still running.") {
 		t.Fatalf("missing detach message in\n%s", out.String())
 	}
-	if !strings.Contains(got, "browseros-dogfood --claw logs tail") {
-		t.Fatalf("missing target-specific tail command in\n%s", out.String())
+	if !strings.Contains(got, "browseros-dogfood logs tail") {
+		t.Fatalf("missing tail command in\n%s", out.String())
 	}
 }

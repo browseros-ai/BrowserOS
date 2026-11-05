@@ -208,18 +208,9 @@ func stopOtherWatchRunOwners(baseDir string, identity WatchRunIdentity, currentS
 	}
 }
 
-// KillBrowserProcessesForDevProfiles kills BrowserOS instances using temporary dev/test profiles.
-func KillBrowserProcessesForDevProfiles(timeout time.Duration) (int, error) {
-	return killBrowserProcesses([]string{"/tmp/browseros-dev"}, true, timeout)
-}
-
 // KillBrowserProcessesForUserDataDirs kills BrowserOS instances using the given user-data dirs.
 func KillBrowserProcessesForUserDataDirs(userDataDirs []string, timeout time.Duration) (int, error) {
-	return killBrowserProcesses(userDataDirs, false, timeout)
-}
-
-func killBrowserProcesses(userDataDirs []string, includeDevTempProfiles bool, timeout time.Duration) (int, error) {
-	pids, err := currentBrowserProfilePIDs(userDataDirs, includeDevTempProfiles)
+	pids, err := currentBrowserProfilePIDs(userDataDirs)
 	if err != nil {
 		return 0, err
 	}
@@ -234,7 +225,7 @@ func killBrowserProcesses(userDataDirs []string, includeDevTempProfiles bool, ti
 
 	deadline := time.Now().Add(timeout)
 	for {
-		remaining, err := currentBrowserProfilePIDs(userDataDirs, includeDevTempProfiles)
+		remaining, err := currentBrowserProfilePIDs(userDataDirs)
 		if err != nil {
 			return 0, err
 		}
@@ -360,19 +351,15 @@ func processLive(pid int) bool {
 	return err == nil || err == syscall.EPERM
 }
 
-func currentBrowserProfilePIDs(userDataDirs []string, includeDevTempProfiles bool) ([]int, error) {
+func currentBrowserProfilePIDs(userDataDirs []string) ([]int, error) {
 	output, err := exec.Command("ps", "-axo", "pid=,pgid=,command=").Output()
 	if err != nil {
 		return nil, fmt.Errorf("listing processes: %w", err)
 	}
-	return browserProfilePIDsFromPSForUserDataDirs(string(output), userDataDirs, includeDevTempProfiles), nil
+	return browserProfilePIDsFromPSForUserDataDirs(string(output), userDataDirs), nil
 }
 
-func browserProfilePIDsFromPS(output string) []int {
-	return browserProfilePIDsFromPSForUserDataDirs(output, []string{"/tmp/browseros-dev"}, true)
-}
-
-func browserProfilePIDsFromPSForUserDataDirs(output string, userDataDirs []string, includeDevTempProfiles bool) []int {
+func browserProfilePIDsFromPSForUserDataDirs(output string, userDataDirs []string) []int {
 	var pids []int
 	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(line)
@@ -384,7 +371,7 @@ func browserProfilePIDsFromPSForUserDataDirs(output string, userDataDirs []strin
 			continue
 		}
 		command := strings.Join(fields[2:], " ")
-		if isBrowserProcessForUserDataDir(command, userDataDirs, includeDevTempProfiles) {
+		if isBrowserProcessForUserDataDir(command, userDataDirs) {
 			pids = append(pids, pid)
 		}
 	}
@@ -392,11 +379,7 @@ func browserProfilePIDsFromPSForUserDataDirs(output string, userDataDirs []strin
 	return pids
 }
 
-func isDevBrowserProcess(command string) bool {
-	return isBrowserProcessForUserDataDir(command, []string{"/tmp/browseros-dev"}, true)
-}
-
-func isBrowserProcessForUserDataDir(command string, userDataDirs []string, includeDevTempProfiles bool) bool {
+func isBrowserProcessForUserDataDir(command string, userDataDirs []string) bool {
 	if !isBrowserAppCommand(command) {
 		return false
 	}
@@ -408,9 +391,7 @@ func isBrowserProcessForUserDataDir(command string, userDataDirs []string, inclu
 			return true
 		}
 	}
-	return includeDevTempProfiles &&
-		(strings.Contains(command, "browseros-dev-") ||
-			strings.Contains(command, "browseros-test-"))
+	return false
 }
 
 func isBrowserAppCommand(command string) bool {

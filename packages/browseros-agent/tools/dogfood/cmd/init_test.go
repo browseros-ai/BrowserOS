@@ -13,14 +13,14 @@ import (
 
 func TestPrintInitNextStepsShowsInlineAndBackgroundStart(t *testing.T) {
 	var out bytes.Buffer
-	printInitNextSteps(&out, "/tmp/config.yaml", config.TargetClaw)
+	printInitNextSteps(&out, "/tmp/config.yaml")
 
 	got := out.String()
 	for _, want := range []string{
 		"Config written: /tmp/config.yaml",
 		"Start dogfood: BrowserOS neo",
-		"Inline:     browseros-dogfood --claw start",
-		"Background: browseros-dogfood --claw start-background",
+		"Inline:     browseros-dogfood start",
+		"Background: browseros-dogfood start-background",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in\n%s", want, got)
@@ -28,33 +28,32 @@ func TestPrintInitNextStepsShowsInlineAndBackgroundStart(t *testing.T) {
 	}
 }
 
-func TestLoadInitConfigPreservesExistingOtherTarget(t *testing.T) {
+func TestLoadInitConfigKeepsExistingSettings(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	cfg := config.Defaults(home)
-	if err := cfg.ApplyTarget(config.TargetBrowserOS); err != nil {
+
+	first, err := loadInitConfig(home, path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.DevUserDataDir = "/custom-browseros-profile"
-	cfg.BrowserOSDir = "/custom-browseros-state"
-	if err := config.Save(path, cfg); err != nil {
-		t.Fatal(err)
+	if first.DevUserDataDir != filepath.Join(home, ".config/browseros-dogfood/claw/profile") {
+		t.Fatalf("first run profile got %q", first.DevUserDataDir)
 	}
 
-	got, err := loadInitConfig(home, path, config.TargetClaw)
+	first.Branch = "dogfood"
+	first.DevUserDataDir = "/custom-claw-profile"
+	if err := config.Save(path, first); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadInitConfig(home, path)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if got.Target != config.TargetClaw {
-		t.Fatalf("target got %q want claw", got.Target)
-	}
-	browseros := got.Targets[string(config.TargetBrowserOS)]
-	if browseros.DevUserDataDir != "/custom-browseros-profile" || browseros.BrowserOSDir != "/custom-browseros-state" {
-		t.Fatalf("browseros target was not preserved: %+v", browseros)
-	}
-	if got.DevUserDataDir != filepath.Join(home, ".config/browseros-dogfood/claw/profile") {
-		t.Fatalf("active target profile got %q", got.DevUserDataDir)
+	if got.Branch != "dogfood" || got.DevUserDataDir != "/custom-claw-profile" {
+		t.Fatalf("existing settings were not kept: branch=%q profile=%q", got.Branch, got.DevUserDataDir)
 	}
 }
 

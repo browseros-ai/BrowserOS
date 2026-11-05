@@ -9,26 +9,25 @@ import (
 	"strings"
 
 	"browseros-dev/proc"
-
-	"gopkg.in/yaml.v3"
 )
 
 const (
-	targetDev     = "dev"
-	targetDogfood = "dogfood"
-	targetProd    = "prod"
+	targetDev  = "dev"
+	targetProd = "prod"
 
 	devDirName  = ".browseros-dev"
 	prodDirName = ".browseros"
 )
 
 type resetTargetOptions struct {
-	Target             string
-	BrowserOSDir       string
-	Ports              string
-	BrowserUserDataDir string
+	Target       string
+	BrowserOSDir string
+	Ports        string
 }
 
+// resetTarget is the machine state that cleanup and reset act on for one --target. Safe
+// cleanup stops its watch owners, browsers and ports and removes its temp directories.
+// Reset can also delete the Lima VM under LimaHome and then the BrowserOSDir state root.
 type resetTarget struct {
 	Name                string
 	Title               string
@@ -40,24 +39,6 @@ type resetTarget struct {
 	WatchRunStateDir    string
 	DeleteRootLabel     string
 	DeleteRootBody      string
-	Dogfood             *dogfoodRuntimeTarget
-}
-
-type dogfoodRuntimeTarget struct {
-	ConfigDir  string
-	LockPath   string
-	StatePath  string
-	SocketPath string
-}
-
-type dogfoodConfigFile struct {
-	BrowserOSDir   string `yaml:"browseros_dir"`
-	DevUserDataDir string `yaml:"dev_user_data_dir"`
-	Ports          struct {
-		CDP       int `yaml:"cdp"`
-		Server    int `yaml:"server"`
-		Extension int `yaml:"extension"`
-	} `yaml:"ports"`
 }
 
 func resolveResetTarget(root string, opts resetTargetOptions) (resetTarget, error) {
@@ -68,12 +49,10 @@ func resolveResetTarget(root string, opts resetTargetOptions) (resetTarget, erro
 	switch target {
 	case targetDev:
 		return resolveDevTarget(root, opts)
-	case targetDogfood:
-		return resolveDogfoodTarget(opts)
 	case targetProd:
 		return resolveProdTarget(opts)
 	default:
-		return resetTarget{}, fmt.Errorf("unsupported reset target %q", target)
+		return resetTarget{}, fmt.Errorf("unsupported reset target %q; use dev or prod", target)
 	}
 }
 
@@ -103,83 +82,11 @@ func resolveDevTarget(root string, opts resetTargetOptions) (resetTarget, error)
 		LimaHome:            filepath.Join(browserosDir, "lima"),
 		Ports:               &ports,
 		BrowserUserDataDirs: []string{"/tmp/browseros-dev", devProfile},
-		TempPrefixes:        []string{"browseros-test-", "browseros-dev-", clawWatchTempStatePrefix},
+		TempPrefixes:        []string{"browseros-dev-", clawWatchTempStatePrefix},
 		WatchRunStateDir:    watchRunStateDir,
 		DeleteRootLabel:     "Delete dev profile?",
 		DeleteRootBody:      "It removes BrowserOS dev data plus VM state.",
 	}, nil
-}
-
-func resolveDogfoodTarget(opts resetTargetOptions) (resetTarget, error) {
-	cfgDir, err := dogfoodConfigDir()
-	if err != nil {
-		return resetTarget{}, err
-	}
-	cfg, err := loadDogfoodConfig(filepath.Join(cfgDir, "config.yaml"))
-	if err != nil {
-		return resetTarget{}, err
-	}
-	applyDogfoodDefaults(&cfg, cfgDir)
-	browserosDir := firstNonEmpty(opts.BrowserOSDir, cfg.BrowserOSDir)
-	if browserosDir == "" {
-		return resetTarget{}, fmt.Errorf("dogfood browseros_dir is empty")
-	}
-	browserosDir, err = filepath.Abs(expandTilde(browserosDir))
-	if err != nil {
-		return resetTarget{}, err
-	}
-	ports, err := parsePorts(firstNonEmpty(opts.Ports, formatPorts(proc.Ports{
-		CDP:       cfg.Ports.CDP,
-		Server:    cfg.Ports.Server,
-		Extension: cfg.Ports.Extension,
-	})))
-	if err != nil {
-		return resetTarget{}, err
-	}
-	browserUserDataDir := firstNonEmpty(opts.BrowserUserDataDir, cfg.DevUserDataDir)
-	if browserUserDataDir == "" {
-		return resetTarget{}, fmt.Errorf("dogfood dev_user_data_dir is empty")
-	}
-	browserUserDataDir, err = filepath.Abs(expandTilde(browserUserDataDir))
-	if err != nil {
-		return resetTarget{}, err
-	}
-	return resetTarget{
-		Name:                targetDogfood,
-		Title:               "BrowserOS dogfood reset",
-		BrowserOSDir:        browserosDir,
-		LimaHome:            filepath.Join(browserosDir, "lima"),
-		Ports:               &ports,
-		BrowserUserDataDirs: []string{browserUserDataDir},
-		DeleteRootLabel:     "Delete dogfood BrowserOS state?",
-		DeleteRootBody:      "It removes dogfood-local BrowserOS server data plus VM state. It does not touch your source BrowserOS browser profile.",
-		Dogfood: &dogfoodRuntimeTarget{
-			ConfigDir:  cfgDir,
-			LockPath:   filepath.Join(cfgDir, "run.lock"),
-			StatePath:  filepath.Join(cfgDir, "state.json"),
-			SocketPath: filepath.Join(cfgDir, "daemon.sock"),
-		},
-	}, nil
-}
-
-func applyDogfoodDefaults(cfg *dogfoodConfigFile, cfgDir string) {
-	if cfg.BrowserOSDir == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			cfg.BrowserOSDir = filepath.Join(home, ".browseros-dogfood")
-		}
-	}
-	if cfg.DevUserDataDir == "" {
-		cfg.DevUserDataDir = filepath.Join(cfgDir, "profile")
-	}
-	if cfg.Ports.CDP == 0 {
-		cfg.Ports.CDP = 9015
-	}
-	if cfg.Ports.Server == 0 {
-		cfg.Ports.Server = 9115
-	}
-	if cfg.Ports.Extension == 0 {
-		cfg.Ports.Extension = 9315
-	}
 }
 
 func resolveProdTarget(opts resetTargetOptions) (resetTarget, error) {
@@ -197,6 +104,9 @@ func resolveProdTarget(opts resetTargetOptions) (resetTarget, error) {
 	}, nil
 }
 
+// resolveBrowserOSDir finds a target's state root. A debug claw-server writes its tool output
+// under BROWSEROS_DIR, else ~/.browseros-dev (release builds use ~/.browseros), so the dev root
+// follows the same override.
 func resolveBrowserOSDir(override string, dirName string) (string, error) {
 	if strings.TrimSpace(override) != "" {
 		return filepath.Abs(expandTilde(strings.TrimSpace(override)))
@@ -213,10 +123,18 @@ func resolveBrowserOSDir(override string, dirName string) (string, error) {
 	return filepath.Join(home, dirName), nil
 }
 
+// resolveTargetPorts returns explicit cdp,server,extension ports when given, else the ports
+// a plain watch prefers, so dev cleanup clears the ports watch binds.
 func resolveTargetPorts(root string, explicit string) (proc.Ports, error) {
 	if strings.TrimSpace(explicit) != "" {
 		return parsePorts(explicit)
 	}
+	return resolveWatchDefaultPorts(root)
+}
+
+// readEnvFilePorts reads the three BROWSEROS_*_PORT keys from .env.development, then from
+// the example file, and falls back to the built-in defaults.
+func readEnvFilePorts(root string) (proc.Ports, error) {
 	for _, path := range []string{
 		filepath.Join(root, ".env.development"),
 		filepath.Join(root, ".env.development.example"),
@@ -324,33 +242,6 @@ func parsePorts(value string) (proc.Ports, error) {
 	return proc.Ports{CDP: parsed[0], Server: parsed[1], Extension: parsed[2]}, nil
 }
 
-func formatPorts(ports proc.Ports) string {
-	return fmt.Sprintf("%d,%d,%d", ports.CDP, ports.Server, ports.Extension)
-}
-
-func dogfoodConfigDir() (string, error) {
-	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
-		return filepath.Join(expandTilde(xdg), "browseros-dogfood"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".config", "browseros-dogfood"), nil
-}
-
-func loadDogfoodConfig(path string) (dogfoodConfigFile, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return dogfoodConfigFile{}, fmt.Errorf("read dogfood config at %s: %w", path, err)
-	}
-	var cfg dogfoodConfigFile
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return dogfoodConfigFile{}, fmt.Errorf("parse dogfood config: %w", err)
-	}
-	return cfg, nil
-}
-
 func expandTilde(path string) string {
 	if path == "~" {
 		if home, err := os.UserHomeDir(); err == nil {
@@ -363,13 +254,4 @@ func expandTilde(path string) string {
 		}
 	}
 	return path
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }

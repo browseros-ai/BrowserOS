@@ -16,7 +16,7 @@ func TestClawWatchReusesStateAcrossWorktreeProfiles(t *testing.T) {
 	t.Setenv("BROWSERCLAW_DIR", "")
 	want := filepath.Join(home, ".browserclaw-dev")
 	for _, profile := range []string{"/tmp/browseros-dev-first", "/tmp/browseros-dev-second"} {
-		env, err := buildWatchEnv(proc.Ports{}, profile, true, false)
+		env, err := buildWatchEnv(proc.Ports{}, profile, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -39,7 +39,7 @@ func TestNewClawWatchCreatesSeparateTemporaryStateRoots(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		env, err := buildWatchEnv(proc.Ports{}, profile, true, true)
+		env, err := buildWatchEnv(proc.Ports{}, profile, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -71,7 +71,7 @@ func TestClawWatchStateOverrideWinsInPlainAndNewModes(t *testing.T) {
 	} {
 		t.Setenv("BROWSERCLAW_DIR", tc.override)
 		for _, fresh := range []bool{false, true} {
-			env, err := buildWatchEnv(proc.Ports{}, "/tmp/profile", true, fresh)
+			env, err := buildWatchEnv(proc.Ports{}, "/tmp/profile", fresh)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -89,19 +89,6 @@ func TestClawWatchStateOverrideWinsInPlainAndNewModes(t *testing.T) {
 	entries, err := os.ReadDir(tempRoot)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("an explicit override should not allocate temporary state: entries=%v, err=%v", entries, err)
-	}
-}
-
-func TestNewBrowserOSWatchKeepsItsExistingStateRoot(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("BROWSEROS_DIR", "")
-	env, err := buildWatchEnv(proc.Ports{}, "/tmp/profile", false, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := envValue(env, "BROWSEROS_DIR"); got != filepath.Join(home, ".browseros-dev") {
-		t.Fatalf("unexpected BrowserOS state root: %s", got)
 	}
 }
 
@@ -137,7 +124,7 @@ func TestDevCleanupRemovesTemporaryClawStateAndPreservesSavedState(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	env, err := buildWatchEnv(proc.Ports{}, profile, true, true)
+	env, err := buildWatchEnv(proc.Ports{}, profile, true)
 	if err != nil {
 		t.Fatal(err)
 	}

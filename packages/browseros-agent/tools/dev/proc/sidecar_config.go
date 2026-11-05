@@ -37,8 +37,10 @@ type sidecarDirectories struct {
 	Execution string `json:"execution"`
 }
 
-// sidecarFlags mixes key styles because each field belongs to a different server: the
-// BrowserOS server reads allow_remote_in_mcp, claw-server reads camelCase devMode.
+// sidecarFlags mixes key styles because the fields have different owners. allow_remote_in_mcp
+// mirrors the launch config that the browser's native BuildServerConfigJson writes, and
+// claw-server ignores it. claw-server reads only camelCase devMode, which the native config
+// never writes.
 type sidecarFlags struct {
 	AllowRemoteInMCP bool `json:"allow_remote_in_mcp"`
 	DevMode          bool `json:"devMode,omitempty"`

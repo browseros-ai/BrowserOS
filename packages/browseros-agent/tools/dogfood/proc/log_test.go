@@ -134,7 +134,7 @@ func TestStreamLinesLogsScannerErrors(t *testing.T) {
 	var mu sync.Mutex
 	longLine := strings.Repeat("x", 1024*1024+1)
 
-	streamLines(strings.NewReader(longLine), TagBrowser, &terminal, &file, &mu)
+	streamLines(strings.NewReader(longLine), TagAgent, &terminal, &file, &mu)
 
 	for name, got := range map[string]string{
 		"terminal": terminal.String(),
