@@ -19,8 +19,9 @@ pub struct Run {
     pub session_id: String,
     #[serde(rename = "status")]
     pub status: String,
-    #[serde(rename = "effects")]
-    pub effects: String,
+    /// As on `RunSummary`; absent while the run is `running`.
+    #[serde(rename = "effects", skip_serializing_if = "Option::is_none")]
+    pub effects: Option<String>,
     #[serde(rename = "error", skip_serializing_if = "Option::is_none")]
     pub error: Option<Box<models::OperationError>>,
     #[serde(rename = "hostRef", skip_serializing_if = "Option::is_none")]
@@ -40,9 +41,10 @@ pub struct Run {
     /// The host data the run was started with (`_meta[\"com.browseros.neo/run\"].host`).
     #[serde(rename = "host", skip_serializing_if = "Option::is_none")]
     pub host: Option<serde_json::Value>,
-    /// The script, masked. Absent when `codeWithheld` is set.
+    /// The script, masked. Stored when the run ends, so it is absent while the run is `running`, and when `codeWithheld` is set.
     #[serde(rename = "code", skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
+    /// `sensitive_input`: an operation typed into a password, card or code field, so the code may hold that value. `unavailable`: Neo stopped before the run ended, so its code was never stored.
     #[serde(rename = "codeWithheld", skip_serializing_if = "Option::is_none")]
     pub code_withheld: Option<String>,
     /// The script's return value, masked and bounded.
@@ -67,7 +69,6 @@ impl Run {
         id: String,
         session_id: String,
         status: String,
-        effects: String,
         started_at: i64,
         operation_count: i64,
         complete: bool,
@@ -77,7 +78,7 @@ impl Run {
             id,
             session_id,
             status,
-            effects,
+            effects: None,
             error: None,
             host_ref: None,
             idempotency_key: None,

@@ -192,8 +192,10 @@ impl TraceStore {
         )
         .execute(&mut *tx)
         .await?;
+        // Code reaches disk only at a run's end, so an interrupted run has none to show.
         sqlx::query(
-            "UPDATE runs SET status = 'interrupted', effects = 'unknown' WHERE ended_at IS NULL",
+            "UPDATE runs SET status = 'interrupted', effects = 'unknown', \
+             code_withheld = COALESCE(code_withheld, 'unavailable') WHERE ended_at IS NULL",
         )
         .execute(&mut *tx)
         .await?;
@@ -573,8 +575,6 @@ pub(crate) struct RunStartRow<'a> {
     pub(crate) id: RunId,
     pub(crate) session: SessionId,
     pub(crate) at: EpochMillis,
-    pub(crate) code: Option<&'a str>,
-    pub(crate) code_truncated: bool,
     pub(crate) host_ref: Option<&'a str>,
     pub(crate) idempotency_key: Option<&'a str>,
     pub(crate) host: Option<&'a Value>,
@@ -585,21 +585,26 @@ pub(crate) async fn insert_run(
     run: RunStartRow<'_>,
 ) -> Result<(), TraceError> {
     sqlx::query(
-        "INSERT INTO runs (id, session_id, started_at, status, code, code_truncated, host_ref, \
-         idempotency_key, host) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?) \
-         ON CONFLICT(id) DO NOTHING",
+        "INSERT INTO runs (id, session_id, started_at, status, host_ref, idempotency_key, host) \
+         VALUES (?, ?, ?, 'running', ?, ?, ?) ON CONFLICT(id) DO NOTHING",
     )
     .bind(run.id.to_string())
     .bind(run.session.to_string())
     .bind(run.at.millis())
-    .bind(run.code)
-    .bind(i64::from(run.code_truncated))
     .bind(run.host_ref)
     .bind(run.idempotency_key)
     .bind(run.host.map(Value::to_string))
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+/// What a run's end stores of its code.
+pub(crate) enum RunCode<'a> {
+    /// The masked, bounded code.
+    Stored { text: &'a str, truncated: bool },
+    /// No code, and why: `sensitive_input`, or `unavailable` when the writer never saw it.
+    Withheld(&'static str),
 }
 
 /// A run's end row, as the writer stores it.
@@ -610,7 +615,7 @@ pub(crate) struct RunEndRow<'a> {
     pub(crate) error: Option<&'a ErrorRecord>,
     pub(crate) result: Option<&'a Value>,
     pub(crate) result_truncated: bool,
-    pub(crate) withhold_code: Option<&'a str>,
+    pub(crate) code: RunCode<'a>,
     pub(crate) replay: Option<&'a Value>,
     pub(crate) replay_until: Option<EpochMillis>,
     pub(crate) gaps: u64,
@@ -656,6 +661,10 @@ pub(crate) async fn end_run(
     } else {
         RunEffects::None
     };
+    let (code, code_truncated, code_withheld) = match run.code {
+        RunCode::Stored { text, truncated } => (Some(text), truncated, None),
+        RunCode::Withheld(reason) => (None, false, Some(reason)),
+    };
     let error = run
         .error
         .map(serde_json::to_string)
@@ -664,8 +673,7 @@ pub(crate) async fn end_run(
     sqlx::query(
         "UPDATE runs SET ended_at = ?, status = ?, effects = ?, error = ?, result = ?, \
          result_truncated = ?, trace_gaps = ?, replay = ?, replay_until = ?, \
-         code_withheld = COALESCE(?, code_withheld), \
-         code = CASE WHEN ? IS NULL THEN code ELSE NULL END \
+         code = ?, code_truncated = ?, code_withheld = ? \
          WHERE id = ?",
     )
     .bind(run.at.millis())
@@ -677,8 +685,9 @@ pub(crate) async fn end_run(
     .bind(gaps)
     .bind(run.replay.map(Value::to_string))
     .bind(run.replay_until.map(EpochMillis::millis))
-    .bind(run.withhold_code)
-    .bind(run.withhold_code)
+    .bind(code)
+    .bind(i64::from(code_truncated))
+    .bind(code_withheld)
     .bind(&id)
     .execute(&mut **tx)
     .await?;
@@ -791,13 +800,14 @@ pub(crate) async fn sweep(
     let cutoff = now.plus_millis(-max_age).millis();
     let operations = sqlx::query(
         "DELETE FROM operations WHERE run_id IN \
-         (SELECT id FROM runs WHERE started_at < ? AND ended_at IS NOT NULL)",
+         (SELECT id FROM runs WHERE started_at < ? AND status != 'running')",
     )
     .bind(cutoff)
     .execute(&mut **tx)
     .await?
     .rows_affected();
-    let runs = sqlx::query("DELETE FROM runs WHERE started_at < ? AND ended_at IS NOT NULL")
+    // Interrupted runs have no end time but are finished: only a running run is kept.
+    let runs = sqlx::query("DELETE FROM runs WHERE started_at < ? AND status != 'running'")
         .bind(cutoff)
         .execute(&mut **tx)
         .await?

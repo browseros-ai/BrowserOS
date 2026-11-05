@@ -1,6 +1,6 @@
 /**
  * Shared plumbing for the OpenAPI codegen scripts (`claw-api.ts`, `hosted-api.ts`,
- * `claw-sdk-api.ts`).
+ * `claw-sdk-api.ts`). The two models-only contracts share `runRustModelsCodegen` whole.
  *
  * Both run the same pinned OpenAPI Generator image and normalize its output so a fresh
  * generation is byte-identical across machines. Their `--check` modes rely on that to
@@ -8,7 +8,8 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { readdirSync, readFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 export const OPENAPI_GENERATOR_IMAGE =
@@ -84,5 +85,65 @@ export function assertTreeMatches(
     throw new Error(
       `Generated ${label} is stale:\n${[...differences].map((line) => `  ${line}`).join('\n')}`,
     )
+  }
+}
+
+/**
+ * A contract whose spec generates only Rust models: `contracts/<name>/openapi.yaml` into
+ * `crates/<name>/src/generated`, with `<name>` also the generated package's name.
+ */
+export interface RustModelsContract {
+  name: string
+  /** How messages name the API, e.g. `hosted API`. */
+  label: string
+}
+
+/**
+ * Regenerates a models-only contract's crate, or with `--check` (run in CI) regenerates into a
+ * temporary directory and fails if the committed tree differs by a byte. `root` is
+ * `packages/browseros-agent`.
+ */
+export function runRustModelsCodegen(
+  contract: RustModelsContract,
+  root: string,
+  argv: string[],
+): void {
+  const target = join(root, `crates/${contract.name}/src/generated`)
+  const temporaryRoot = mkdtempSync(join(tmpdir(), `${contract.name}-codegen-`))
+  try {
+    runDocker([
+      'run',
+      '--rm',
+      '--user',
+      dockerUserMount(),
+      '-v',
+      `${root}:/local:ro`,
+      '-v',
+      `${temporaryRoot}:/out`,
+      OPENAPI_GENERATOR_IMAGE,
+      'generate',
+      '-i',
+      `/local/contracts/${contract.name}/openapi.yaml`,
+      '-g',
+      'rust',
+      '-o',
+      '/out/rust',
+      '--global-property',
+      'models,supportingFiles,modelDocs=false,modelTests=false,apis=false,apiDocs=false,apiTests=false',
+      '--additional-properties',
+      `packageName=${contract.name},packageVersion=1.0.0`,
+    ])
+    const models = join(temporaryRoot, 'rust/src/models')
+    rustfmtFiles(models)
+    if (argv.includes('--check')) {
+      assertTreeMatches(models, target, contract.label)
+      console.log(`The ${contract.label} generated output is current.`)
+    } else {
+      rmSync(target, { recursive: true, force: true })
+      cpSync(models, target, { recursive: true })
+      console.log(`Generated the ${contract.label} Rust models.`)
+    }
+  } finally {
+    rmSync(temporaryRoot, { recursive: true, force: true })
   }
 }

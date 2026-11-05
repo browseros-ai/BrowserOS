@@ -342,6 +342,12 @@ async fn a_crash_leaves_runs_interrupted_and_open_writes_unknown() {
         simple(submit, "locator.click", Effect::Write),
     );
     flushed(&h).await;
+    let running = h.store.run(run).await.ok().flatten();
+    assert_eq!(
+        running.and_then(|run| run.code),
+        None,
+        "code reaches disk only at the run's end"
+    );
     let Harness { dir, sink, .. } = h;
     drop(sink);
 
@@ -350,6 +356,7 @@ async fn a_crash_leaves_runs_interrupted_and_open_writes_unknown() {
     let Some(detail) = detail else {
         panic!("run not found");
     };
+    assert_eq!(detail.code_withheld.as_deref(), Some("unavailable"));
     assert_eq!(detail.summary.status, RunStatus::Interrupted);
     assert_eq!(detail.summary.effects, Some(RunEffects::Unknown));
     assert_eq!(detail.operations[0].delivery, Some(Delivery::NotSent));
@@ -360,6 +367,79 @@ async fn a_crash_leaves_runs_interrupted_and_open_writes_unknown() {
         ..SessionQuery::default()
     });
     assert_eq!(sessions.await.ok().map(|page| page.items.len()), Some(0));
+}
+
+#[tokio::test]
+async fn interrupted_runs_expire_like_finished_ones() {
+    let h = harness(WriterConfig::default()).await;
+    let run = start_run(&h.sink, SessionId::new(), "x", None);
+    flushed(&h).await;
+    let Harness { dir, sink, .. } = h;
+    drop(sink);
+
+    let reopened = open(&dir).await;
+    let writer = spawn_writer(
+        &reopened,
+        Redactor::new(
+            Arc::new(SecretSet::new(SecretSetConfig::default())),
+            RedactionLimits::default(),
+        ),
+        WriterConfig::default(),
+    );
+    let eight_days = 8 * 24 * 60 * 60 * 1000;
+    let swept = writer
+        .sweep(RetentionPolicy::default(), at(eight_days))
+        .await
+        .unwrap_or_else(|error| panic!("sweep: {error}"));
+    assert_eq!(swept.runs, 1);
+    assert!(reopened.run(run).await.ok().flatten().is_none());
+}
+
+#[tokio::test]
+async fn dropped_events_still_count_when_the_last_sink_is_gone() {
+    let h = harness(WriterConfig {
+        max_backlog: 0,
+        ..WriterConfig::default()
+    })
+    .await;
+    let session = SessionId::new();
+    let run = start_run(&h.sink, session, "x", None);
+    let click = OperationId::new(run, 1);
+    op_started(
+        &h.sink,
+        session,
+        simple(click, "locator.click", Effect::Write),
+    );
+    op_ended(
+        &h.sink,
+        click,
+        Delivery::Done,
+        None,
+        TargetSensitivity::Ordinary,
+    );
+    end_run(&h.sink, run, RunStatus::Ok, None);
+    let Harness { store, sink, .. } = h;
+    // The run's end is still queued when the last sink goes; the writer drains it.
+    drop(sink);
+    let mut summary = None;
+    for _ in 0..200 {
+        summary = store
+            .run(run)
+            .await
+            .ok()
+            .flatten()
+            .map(|run| run.summary)
+            .filter(|run| run.status == RunStatus::Ok);
+        if summary.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let Some(summary) = summary else {
+        panic!("the writer never wrote the run's end");
+    };
+    assert_eq!(summary.trace_gaps, 2);
+    assert_eq!(summary.effects, Some(RunEffects::Unknown));
 }
 
 #[tokio::test]

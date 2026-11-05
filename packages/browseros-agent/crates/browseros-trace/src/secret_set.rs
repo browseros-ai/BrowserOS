@@ -37,6 +37,14 @@ const URI_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'(')
     .remove(b')');
 
+/// The bytes form encoding (`application/x-www-form-urlencoded`, `URLSearchParams`, a submitted
+/// form) leaves alone. It escapes `!~'()` too, and writes a space as `+`.
+const FORM: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'*')
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_');
+
 /// A secret value. It has no `Serialize` or `Display`, prints as `[secret]` under `Debug`, and
 /// is zeroed when dropped.
 pub struct SecretValue(Zeroizing<String>);
@@ -259,12 +267,14 @@ fn rebuild(inner: &mut Inner) {
                 patterns.push(Zeroizing::new(escaped.to_string()));
             }
         }
-        let encoded = utf8_percent_encode(plain, URI_COMPONENT).to_string();
-        if encoded != plain {
-            if encoded.contains("%20") {
-                patterns.push(Zeroizing::new(encoded.replace("%20", "+")));
+        let component = utf8_percent_encode(plain, URI_COMPONENT).to_string();
+        let form = utf8_percent_encode(plain, FORM)
+            .to_string()
+            .replace("%20", "+");
+        for encoded in [component, form] {
+            if encoded != plain && !patterns.iter().any(|known| **known == encoded) {
+                patterns.push(Zeroizing::new(encoded));
             }
-            patterns.push(Zeroizing::new(encoded));
         }
     }
     inner.matcher = if patterns.is_empty() {
@@ -322,6 +332,17 @@ mod tests {
             masked(&set, "q=p%40ss+w%22rd"),
             "q=[private]",
             "form encoding writes spaces as +"
+        );
+    }
+
+    #[test]
+    fn form_encoding_escapes_punctuation_url_components_keep() {
+        let set = set_with(&["p!ss~word"]);
+        assert_eq!(masked(&set, "a?pw=p!ss~word"), "a?pw=[private]");
+        assert_eq!(
+            masked(&set, "pw=p%21ss%7Eword&next=1"),
+            "pw=[private]&next=1",
+            "URLSearchParams escapes ! and ~"
         );
     }
 

@@ -152,9 +152,9 @@ impl Redactor {
 fn shrink(value: &mut Value, remaining: &mut i64, max_string: usize) -> bool {
     match value {
         Value::String(text) => {
-            let room = usize::try_from(*remaining - 2).unwrap_or(0).min(max_string);
-            let (clipped, cut) = clip(text, room);
-            *remaining -= i64::try_from(clipped.len()).unwrap_or(i64::MAX) + 2;
+            let room = usize::try_from(*remaining).unwrap_or(0).min(max_string + 2);
+            let (clipped, cut) = clip_json(text, room);
+            *remaining -= json_len(&clipped);
             if cut {
                 *text = clipped;
             }
@@ -180,12 +180,17 @@ fn shrink(value: &mut Value, remaining: &mut i64, max_string: usize) -> bool {
             let mut kept = Map::with_capacity(map.len());
             let total = map.len();
             for (index, (key, mut child)) in std::mem::take(map).into_iter().enumerate() {
-                if *remaining <= 0 {
+                // Keys count like strings: clipped to the string limit, escapes included. An
+                // entry whose key alone uses up the budget is not kept.
+                let (key, key_cut) = clip_json(&key, max_string + 2);
+                let key_len = json_len(&key) + 1;
+                if *remaining - key_len <= 0 {
                     kept.insert("$more".to_string(), json!(total - index));
                     cut = true;
                     break;
                 }
-                *remaining -= i64::try_from(key.len()).unwrap_or(i64::MAX) + 3;
+                *remaining -= key_len;
+                cut |= key_cut;
                 cut |= shrink(&mut child, remaining, max_string);
                 kept.insert(key, child);
             }
@@ -196,6 +201,32 @@ fn shrink(value: &mut Value, remaining: &mut i64, max_string: usize) -> bool {
             *remaining -= i64::try_from(value.to_string().len()).unwrap_or(i64::MAX);
             false
         }
+    }
+}
+
+/// The bytes `text` takes as a JSON string: quotes and escapes included.
+fn json_len(text: &str) -> i64 {
+    serde_json::to_string(text).map_or(i64::MAX, |quoted| {
+        i64::try_from(quoted.len()).unwrap_or(i64::MAX)
+    })
+}
+
+/// Clips `text` so that it takes at most `room` bytes as a JSON string, escapes included.
+/// Text full of quotes or control characters escapes to several bytes per char, so the cut
+/// shrinks until the escaped form fits.
+fn clip_json(text: &str, room: usize) -> (String, bool) {
+    let room_bytes = i64::try_from(room).unwrap_or(i64::MAX);
+    if json_len(text) <= room_bytes {
+        return (text.to_string(), false);
+    }
+    let mut limit = room.saturating_sub(2);
+    loop {
+        let (clipped, _) = clip(text, limit);
+        let over = json_len(&clipped) - room_bytes;
+        if over <= 0 || limit == 0 {
+            return (clipped, true);
+        }
+        limit = limit.saturating_sub(usize::try_from(over).unwrap_or(usize::MAX).max(1));
     }
 }
 
@@ -308,6 +339,28 @@ mod tests {
             panic!("expected a string");
         };
         assert!(text.contains("…[+"), "{text}");
+    }
+
+    #[test]
+    fn huge_keys_and_escape_heavy_strings_stay_inside_the_budget() {
+        let redactor = redactor(RedactionLimits::default());
+        let key = "k".repeat(100_000);
+        let mut object = serde_json::Map::new();
+        object.insert(key, Value::Null);
+        let bounded = redactor.result(&Value::Object(object));
+        assert_eq!(bounded.truncation, Truncation::Cut);
+        assert!(
+            bounded.value.to_string().len() <= 2048 + 64,
+            "{} bytes",
+            bounded.value.to_string().len()
+        );
+
+        let quotes = "\"".repeat(5_000);
+        let bounded = redactor.result(&json!({ "q": quotes }));
+        assert_eq!(bounded.truncation, Truncation::Cut);
+        let text = bounded.value.to_string();
+        assert!(text.len() <= 2048 + 64, "{} bytes", text.len());
+        assert!(serde_json::from_str::<Value>(&text).is_ok());
     }
 
     #[test]

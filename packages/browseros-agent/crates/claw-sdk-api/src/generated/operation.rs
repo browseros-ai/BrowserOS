@@ -52,11 +52,12 @@ pub struct Operation {
     pub result: Option<Option<serde_json::Value>>,
     #[serde(rename = "resultTruncated", skip_serializing_if = "Option::is_none")]
     pub result_truncated: Option<bool>,
-    #[serde(rename = "outcome")]
-    pub outcome: String,
-    /// `not_sent`: no side effect was attempted. `done`: Neo has a definite answer. `unknown`: sent and never confirmed; never repeat it blindly.
-    #[serde(rename = "delivery")]
-    pub delivery: String,
+    /// Absent while the operation runs.
+    #[serde(rename = "outcome", skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    /// `not_sent`: no side effect was attempted. `done`: Neo has a definite answer. `unknown`: sent and never confirmed; never repeat it blindly. Absent while the operation runs: delivery is what the dispatcher decided when it ended, never a guess.
+    #[serde(rename = "delivery", skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<String>,
     #[serde(rename = "error", skip_serializing_if = "Option::is_none")]
     pub error: Option<Box<models::OperationError>>,
     #[serde(rename = "startedAt")]
@@ -80,8 +81,6 @@ impl Operation {
         name: String,
         kind: String,
         effect: String,
-        outcome: String,
-        delivery: String,
         started_at: i64,
         has_screenshot: bool,
     ) -> Operation {
@@ -98,8 +97,8 @@ impl Operation {
             args_truncated: None,
             result: None,
             result_truncated: None,
-            outcome,
-            delivery,
+            outcome: None,
+            delivery: None,
             error: None,
             started_at,
             sent_at: None,

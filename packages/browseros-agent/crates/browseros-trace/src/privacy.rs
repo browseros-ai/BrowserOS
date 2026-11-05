@@ -97,9 +97,17 @@ pub enum PrivacyError {
     NotCommitted(#[source] TraceError),
 }
 
+/// A session's flag. It refuses captures from the moment it is set; `committed` says whether
+/// it is also on disk, which is what `make_private` waits for before it returns.
+#[derive(Clone, Copy)]
+struct PrivateFlag {
+    record: PrivacyRecord,
+    committed: bool,
+}
+
 #[derive(Default)]
 struct State {
-    private: HashMap<SessionId, PrivacyRecord>,
+    private: HashMap<SessionId, PrivateFlag>,
     session_epochs: HashMap<SessionId, u64>,
     page_epochs: HashMap<PageKey, u64>,
     holds: HashMap<PageKey, DocumentKey>,
@@ -125,7 +133,16 @@ impl Privacy {
             secrets,
             store,
             state: Mutex::new(State {
-                private: loaded,
+                private: loaded
+                    .into_iter()
+                    .map(|(session, record)| {
+                        let flag = PrivateFlag {
+                            record,
+                            committed: true,
+                        };
+                        (session, flag)
+                    })
+                    .collect(),
                 ..State::default()
             }),
         })
@@ -137,8 +154,10 @@ impl Privacy {
         &self.secrets
     }
 
-    /// Makes `session` private, durably. Idempotent: an already private session keeps its first
-    /// record.
+    /// Makes `session` private, durably. Returns only once the flag is on disk, so a caller that
+    /// gets `Ok` may type a secret. An already private session keeps its first record. A flag
+    /// that is set but not yet committed (another call is committing it, or an earlier commit
+    /// failed) is committed again here rather than trusted. The commit is an idempotent upsert.
     ///
     /// # Errors
     /// When the flag could not be committed. It still holds in memory, so captures stay refused.
@@ -150,24 +169,37 @@ impl Privacy {
     ) -> Result<(), PrivacyError> {
         let record = {
             let mut state = self.lock();
-            if state.private.contains_key(&session) {
-                return Ok(());
+            match state.private.get(&session) {
+                Some(flag) if flag.committed => return Ok(()),
+                Some(flag) => flag.record,
+                None => {
+                    let record = PrivacyRecord { since: at, reason };
+                    state.private.insert(
+                        session,
+                        PrivateFlag {
+                            record,
+                            committed: false,
+                        },
+                    );
+                    *state.session_epochs.entry(session).or_default() += 1;
+                    record
+                }
             }
-            let record = PrivacyRecord { since: at, reason };
-            state.private.insert(session, record);
-            *state.session_epochs.entry(session).or_default() += 1;
-            record
         };
         self.store
             .persist_private(session, record)
             .await
-            .map_err(PrivacyError::NotCommitted)
+            .map_err(PrivacyError::NotCommitted)?;
+        if let Some(flag) = self.lock().private.get_mut(&session) {
+            flag.committed = true;
+        }
+        Ok(())
     }
 
     /// The session's privacy, when it is private.
     #[must_use]
     pub fn is_private(&self, session: SessionId) -> Option<PrivacyRecord> {
-        self.lock().private.get(&session).copied()
+        self.lock().private.get(&session).map(|flag| flag.record)
     }
 
     /// Blocks captures of `page` while `document` is loaded in it. This is
@@ -186,11 +218,15 @@ impl Privacy {
         }
     }
 
-    /// A page closed: forget its hold and epoch.
+    /// A page closed: its hold ends. Its epoch moves on and is kept, never removed. A guard begun
+    /// before the close then can never be admitted, even one a hold had already invalidated
+    /// (a missing epoch would read as 0 and match it again). Only held pages have an entry.
     pub fn page_closed(&self, page: &PageKey) {
         let mut state = self.lock();
         state.holds.remove(page);
-        state.page_epochs.remove(page);
+        if let Some(epoch) = state.page_epochs.get_mut(page) {
+            *epoch += 1;
+        }
     }
 
     /// Starts a capture of `page` for `session`, or `None` when it is not allowed right now.
@@ -218,7 +254,7 @@ impl Privacy {
         self.lock().control_displays += 1;
         ControlDisplay {
             privacy: Arc::clone(self),
-            input_seen: Mutex::new(false),
+            input_seen: tokio::sync::Mutex::new(false),
         }
     }
 
@@ -275,44 +311,33 @@ impl CaptureGuard {
 /// An open control display. Dropping it closes it.
 pub struct ControlDisplay {
     privacy: Arc<Privacy>,
-    input_seen: Mutex<bool>,
+    /// Held across the commits of the first input, so a second input waits for them. It turns
+    /// true only after every commit succeeded; a failed or cancelled first input leaves it false
+    /// and the next input tries again.
+    input_seen: tokio::sync::Mutex<bool>,
 }
 
 impl ControlDisplay {
-    /// The display's first input event is about to be forwarded. Every session live now
-    /// becomes private first. Later calls do nothing.
+    /// An input event is about to be forwarded. Before the first one, every session live now
+    /// becomes private, durably. Concurrent inputs wait for that, and later calls return at once.
     ///
     /// # Errors
-    /// When a flag could not be committed. The caller drops the input.
+    /// When a flag could not be committed. The caller drops the input; the next one retries.
     pub async fn first_input(
         &self,
         live: &[SessionId],
         at: EpochMillis,
     ) -> Result<(), PrivacyError> {
-        {
-            let mut seen = self
-                .input_seen
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            if *seen {
-                return Ok(());
-            }
-            *seen = true;
+        let mut seen = self.input_seen.lock().await;
+        if *seen {
+            return Ok(());
         }
         for session in live {
-            if let Err(error) = self
-                .privacy
+            self.privacy
                 .make_private(*session, PrivateReason::DisplayInput, at)
-                .await
-            {
-                // Retry on the next input: the flags set in memory still refuse captures.
-                *self
-                    .input_seen
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner) = false;
-                return Err(error);
-            }
+                .await?;
         }
+        *seen = true;
         Ok(())
     }
 }
@@ -337,6 +362,8 @@ mod tests {
     struct Store {
         committed: Mutex<Vec<(SessionId, PrivacyRecord)>>,
         fail: AtomicBool,
+        /// When set, a commit waits for a permit: the test holds a commit open.
+        gate: Option<tokio::sync::Semaphore>,
     }
 
     impl PrivacyStore for Store {
@@ -346,6 +373,12 @@ mod tests {
             record: PrivacyRecord,
         ) -> BoxFuture<'_, Result<(), TraceError>> {
             Box::pin(async move {
+                if let Some(gate) = &self.gate {
+                    gate.acquire()
+                        .await
+                        .map_err(|_| TraceError::Closed)?
+                        .forget();
+                }
                 if self.fail.load(Ordering::SeqCst) {
                     return Err(TraceError::Closed);
                 }
@@ -359,7 +392,11 @@ mod tests {
     }
 
     fn privacy() -> (Arc<Privacy>, Arc<Store>) {
-        let store = Arc::new(Store::default());
+        with_store(Store::default())
+    }
+
+    fn with_store(store: Store) -> (Arc<Privacy>, Arc<Store>) {
+        let store = Arc::new(store);
         let privacy = Privacy::new(
             Arc::new(SecretSet::new(SecretSetConfig::default())),
             store.clone(),
@@ -497,5 +534,134 @@ mod tests {
             loaded,
         );
         assert!(privacy.capture(session, page("t")).is_none());
+    }
+
+    fn commits(store: &Store) -> usize {
+        store.committed.lock().map(|c| c.len()).unwrap_or(0)
+    }
+
+    #[tokio::test]
+    async fn a_flag_whose_commit_failed_is_committed_again_before_ok() {
+        let (privacy, store) = privacy();
+        let session = SessionId::new();
+        store.fail.store(true, Ordering::SeqCst);
+        let at = EpochMillis::from_millis(1);
+        assert!(
+            privacy
+                .make_private(session, PrivateReason::SecretInput, at)
+                .await
+                .is_err()
+        );
+        store.fail.store(false, Ordering::SeqCst);
+        assert!(
+            privacy
+                .make_private(session, PrivateReason::SecretInput, at)
+                .await
+                .is_ok()
+        );
+        assert_eq!(
+            commits(&store),
+            1,
+            "the retry committed instead of trusting memory"
+        );
+        assert!(
+            privacy
+                .make_private(session, PrivateReason::Host, at)
+                .await
+                .is_ok()
+        );
+        assert_eq!(
+            commits(&store),
+            1,
+            "a committed flag is not committed twice"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_caller_waits_for_a_commit_in_flight() {
+        let (privacy, store) = with_store(Store {
+            gate: Some(tokio::sync::Semaphore::new(0)),
+            ..Store::default()
+        });
+        let session = SessionId::new();
+        let at = EpochMillis::from_millis(1);
+        let first = tokio::spawn({
+            let privacy = privacy.clone();
+            async move {
+                privacy
+                    .make_private(session, PrivateReason::SecretInput, at)
+                    .await
+            }
+        });
+        tokio::task::yield_now().await;
+        let second = privacy.make_private(session, PrivateReason::SecretInput, at);
+        tokio::pin!(second);
+        let early = tokio::time::timeout(std::time::Duration::from_millis(50), &mut second).await;
+        assert!(
+            early.is_err(),
+            "the second caller returned before anything was on disk"
+        );
+        if let Some(gate) = &store.gate {
+            gate.add_permits(2);
+        }
+        assert!(second.await.is_ok());
+        assert!(first.await.is_ok_and(|result| result.is_ok()));
+    }
+
+    #[test]
+    fn a_closed_page_never_readmits_a_capture_a_hold_invalidated() {
+        let (privacy, _) = privacy();
+        let session = SessionId::new();
+        let started = privacy.capture(session, page("t1"));
+        privacy.hold_document(page("t1"), DocumentKey("L1".into()));
+        privacy.page_closed(&page("t1"));
+        assert!(started.is_some_and(|guard| !guard.admit()));
+    }
+
+    #[tokio::test]
+    async fn display_input_waits_for_its_commits_and_retries_after_a_failure() {
+        let (privacy, store) = with_store(Store {
+            gate: Some(tokio::sync::Semaphore::new(0)),
+            ..Store::default()
+        });
+        let live = [SessionId::new(), SessionId::new()];
+        let at = EpochMillis::from_millis(1);
+        let display = Arc::new(privacy.control_display_opened());
+        let first = tokio::spawn({
+            let display = display.clone();
+            async move { display.first_input(&live, at).await }
+        });
+        tokio::task::yield_now().await;
+        let second = display.first_input(&live, at);
+        tokio::pin!(second);
+        let early = tokio::time::timeout(std::time::Duration::from_millis(50), &mut second).await;
+        assert!(
+            early.is_err(),
+            "a second input was forwarded before the sessions were private"
+        );
+        if let Some(gate) = &store.gate {
+            gate.add_permits(10);
+        }
+        assert!(first.await.is_ok_and(|result| result.is_ok()));
+        assert!(second.await.is_ok());
+        assert_eq!(commits(&store), 2);
+
+        let (privacy, store) = privacy_failing();
+        let display = privacy.control_display_opened();
+        let session = SessionId::new();
+        assert!(display.first_input(&[session], at).await.is_err());
+        store.fail.store(false, Ordering::SeqCst);
+        assert!(display.first_input(&[session], at).await.is_ok());
+        assert_eq!(
+            commits(&store),
+            1,
+            "the failed first input was retried, not skipped"
+        );
+    }
+
+    fn privacy_failing() -> (Arc<Privacy>, Arc<Store>) {
+        let (privacy, store) = privacy();
+        store.fail.store(true, Ordering::SeqCst);
+        (privacy, store)
     }
 }

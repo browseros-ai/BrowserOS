@@ -16,12 +16,14 @@
 //! rewrites the row with the precise redaction. A crash leaves the conservative copy.
 
 use crate::trace_store::{
-    self, OperationEndRow, OperationStartRow, RetentionPolicy, RunEndRow, RunStartRow, Swept,
+    self, OperationEndRow, OperationStartRow, RetentionPolicy, RunCode, RunEndRow, RunStartRow,
+    Swept,
 };
 use crate::{
-    Delivery, EpochMillis, OperationEnded, OperationId, OperationStarted, Outcome, PrivacyRecord,
-    PrivacyStore, RedactionPolicy, Redactor, RunEffects, RunEnded, RunId, RunStarted, RunStatus,
-    SessionEnded, SessionId, SessionStarted, TargetSensitivity, TraceError, TraceStore, Truncation,
+    Bounded, Delivery, EpochMillis, OperationEnded, OperationId, OperationStarted, Outcome,
+    PrivacyRecord, PrivacyStore, RedactionPolicy, Redactor, RunEffects, RunEnded, RunId,
+    RunStarted, RunStatus, SessionEnded, SessionId, SessionStarted, TargetSensitivity, TraceError,
+    TraceStore, Truncation,
 };
 use futures_util::future::BoxFuture;
 use serde_json::Value;
@@ -132,14 +134,52 @@ enum Command {
         now: EpochMillis,
         reply: oneshot::Sender<Result<Swept, TraceError>>,
     },
-    Flush(oneshot::Sender<()>),
+    Flush(oneshot::Sender<Result<(), TraceError>>),
+}
+
+/// Operation events dropped over the backlog cap, per run. Shared by every sink and the writer
+/// itself, so a run's count survives the last sink being dropped while its end is still queued.
+#[derive(Default)]
+struct DroppedEvents(Mutex<HashMap<RunId, u64>>);
+
+impl DroppedEvents {
+    fn count(&self, run: RunId) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(run)
+            .or_default() += 1;
+    }
+
+    /// The run's count, taken once.
+    fn take(&self, run: RunId) -> u64 {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&run)
+            .unwrap_or(0)
+    }
+}
+
+/// One command's work inside a batch, its reply already set aside.
+enum Work {
+    Event(Box<Event>),
+    Private {
+        session: SessionId,
+        record: PrivacyRecord,
+    },
+    Sweep {
+        policy: RetentionPolicy,
+        now: EpochMillis,
+    },
 }
 
 struct SinkInner {
     tx: mpsc::UnboundedSender<Command>,
     backlog: AtomicUsize,
     max_backlog: usize,
-    dropped: Mutex<HashMap<RunId, u64>>,
+    dropped: Arc<DroppedEvents>,
     events: broadcast::Sender<TraceRecordEvent>,
 }
 
@@ -196,11 +236,12 @@ impl TraceSink {
     /// Waits until everything sent before this call is committed.
     ///
     /// # Errors
-    /// When the writer has stopped.
+    /// When the writer has stopped, or a batch failed since the previous flush (`BatchLost`):
+    /// then some records sent before this call were rolled back.
     pub async fn flush(&self) -> Result<(), TraceError> {
         let (reply, done) = oneshot::channel();
         self.command(Command::Flush(reply))?;
-        done.await.map_err(|_| TraceError::Closed)
+        done.await.map_err(|_| TraceError::Closed)?
     }
 
     /// Deletes records past `policy`'s age, in order with every other write.
@@ -221,12 +262,7 @@ impl TraceSink {
         if self.inner.backlog.load(Ordering::Relaxed) < self.inner.max_backlog {
             return false;
         }
-        let mut dropped = self
-            .inner
-            .dropped
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        *dropped.entry(run).or_default() += 1;
+        self.inner.dropped.count(run);
         true
     }
 
@@ -242,17 +278,6 @@ impl TraceSink {
             self.inner.backlog.fetch_sub(1, Ordering::Relaxed);
             TraceError::Closed
         })
-    }
-}
-
-impl SinkInner {
-    /// The run's operation events dropped over the backlog cap, counted once.
-    fn take_dropped(&self, run: RunId) -> u64 {
-        self.dropped
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&run)
-            .unwrap_or(0)
     }
 }
 
@@ -278,12 +303,13 @@ impl PrivacyStore for TraceSink {
 #[must_use]
 pub fn spawn_writer(store: &TraceStore, redactor: Redactor, config: WriterConfig) -> TraceSink {
     let (tx, rx) = mpsc::unbounded_channel();
+    let dropped = Arc::new(DroppedEvents::default());
     let sink = TraceSink {
         inner: Arc::new(SinkInner {
             tx,
             backlog: AtomicUsize::new(0),
             max_backlog: config.max_backlog,
-            dropped: Mutex::new(HashMap::new()),
+            dropped: Arc::clone(&dropped),
             events: broadcast::channel(1024).0,
         }),
     };
@@ -292,6 +318,8 @@ pub fn spawn_writer(store: &TraceStore, redactor: Redactor, config: WriterConfig
         redactor,
         config,
         runs: HashMap::new(),
+        dropped,
+        lost_since_flush: None,
         // A weak handle: the writer must not keep its own channel open.
         sink: Arc::downgrade(&sink.inner),
     };
@@ -302,6 +330,10 @@ pub fn spawn_writer(store: &TraceStore, redactor: Redactor, config: WriterConfig
 /// What the writer remembers about a run while it is open.
 struct OpenRun {
     session: SessionId,
+    /// The masked, bounded code. It reaches disk only at the run's end, and only when no
+    /// operation turned out sensitive, so a withheld literal is never written, not even to the
+    /// WAL. `None` when the run's start was never seen.
+    code: Option<Bounded<String>>,
     sensitive: bool,
     gaps: u64,
     operations: HashMap<u32, OpenOperation>,
@@ -318,6 +350,9 @@ struct Writer {
     redactor: Redactor,
     config: WriterConfig,
     runs: HashMap<RunId, OpenRun>,
+    dropped: Arc<DroppedEvents>,
+    /// Why a batch failed since the last flush reply, so that flush reports the loss.
+    lost_since_flush: Option<String>,
     sink: std::sync::Weak<SinkInner>,
 }
 
@@ -341,33 +376,49 @@ impl Writer {
     }
 
     async fn commit(&mut self, batch: Vec<Command>) {
-        let mut published = Vec::new();
+        // Every reply is taken out of the batch before the transaction runs. A command that
+        // fails part-way through must not drop the replies of the commands after it: their
+        // callers would see `Closed` instead of the batch's real outcome.
+        let mut work = Vec::with_capacity(batch.len());
         let mut privacy_replies = Vec::new();
         let mut sweep_replies = Vec::new();
         let mut flushes = Vec::new();
+        for command in batch {
+            match command {
+                Command::Event(event) => work.push(Work::Event(event)),
+                Command::PersistPrivate {
+                    session,
+                    record,
+                    reply,
+                } => {
+                    work.push(Work::Private { session, record });
+                    privacy_replies.push(reply);
+                }
+                Command::Sweep { policy, now, reply } => {
+                    work.push(Work::Sweep { policy, now });
+                    sweep_replies.push(reply);
+                }
+                Command::Flush(reply) => flushes.push(reply),
+            }
+        }
+        let mut published = Vec::new();
+        let mut swept = Vec::new();
         let result = async {
             let mut tx = self.store.pool().begin().await?;
-            for command in batch {
-                match command {
-                    Command::Event(event) => {
+            for item in work {
+                match item {
+                    Work::Event(event) => {
                         if let Some(change) = self.apply(&mut tx, *event).await? {
                             published.push(change);
                         }
                     }
-                    Command::PersistPrivate {
-                        session,
-                        record,
-                        reply,
-                    } => {
+                    Work::Private { session, record } => {
                         trace_store::persist_private(&mut tx, session, record).await?;
                         published.push(TraceRecordEvent::SessionPrivate { session, record });
-                        privacy_replies.push(reply);
                     }
-                    Command::Sweep { policy, now, reply } => {
-                        sweep_replies
-                            .push((trace_store::sweep(&mut tx, policy, now).await?, reply));
+                    Work::Sweep { policy, now } => {
+                        swept.push(trace_store::sweep(&mut tx, policy, now).await?);
                     }
-                    Command::Flush(reply) => flushes.push(reply),
                 }
             }
             tx.commit().await?;
@@ -379,7 +430,7 @@ impl Writer {
                 for reply in privacy_replies {
                     let _ = reply.send(Ok(()));
                 }
-                for (swept, reply) in sweep_replies {
+                for (swept, reply) in swept.into_iter().zip(sweep_replies) {
                     let _ = reply.send(Ok(swept));
                 }
                 if let Some(sink) = self.sink.upgrade() {
@@ -392,18 +443,25 @@ impl Writer {
             Err(error) => {
                 tracing::error!(%error, "trace batch failed; its records are lost");
                 for reply in privacy_replies {
-                    let _ = reply.send(Err(TraceError::Corrupt(error.to_string())));
+                    let _ = reply.send(Err(TraceError::BatchLost(error.to_string())));
                 }
-                for (_, reply) in sweep_replies {
-                    let _ = reply.send(Err(TraceError::Corrupt(error.to_string())));
+                for reply in sweep_replies {
+                    let _ = reply.send(Err(TraceError::BatchLost(error.to_string())));
                 }
                 for run in self.runs.values_mut() {
                     run.gaps += 1;
                 }
+                self.lost_since_flush = Some(error.to_string());
             }
         }
-        for flush in flushes {
-            let _ = flush.send(());
+        if !flushes.is_empty() {
+            let lost = self.lost_since_flush.take();
+            for flush in flushes {
+                let _ = flush.send(match &lost {
+                    Some(reason) => Err(TraceError::BatchLost(reason.clone())),
+                    None => Ok(()),
+                });
+            }
         }
     }
 
@@ -438,8 +496,6 @@ impl Writer {
                         id: event.id,
                         session: event.session,
                         at: event.at,
-                        code: Some(&code.value),
-                        code_truncated: code.truncation == Truncation::Cut,
                         host_ref: host_ref.as_deref(),
                         idempotency_key: event.idempotency_key.as_deref(),
                         host: host.as_ref(),
@@ -450,6 +506,7 @@ impl Writer {
                     event.id,
                     OpenRun {
                         session: event.session,
+                        code: Some(code),
                         sensitive: false,
                         gaps: 0,
                         operations: HashMap::new(),
@@ -480,8 +537,6 @@ impl Writer {
                     id: event.id.run,
                     session: event.session,
                     at: event.at,
-                    code: None,
-                    code_truncated: false,
                     host_ref: None,
                     idempotency_key: None,
                     host: None,
@@ -510,6 +565,7 @@ impl Writer {
         .await?;
         let run = self.runs.entry(event.id.run).or_insert_with(|| OpenRun {
             session: event.session,
+            code: None,
             sensitive: false,
             gaps: 0,
             operations: HashMap::new(),
@@ -599,11 +655,7 @@ impl Writer {
         event: RunEnded,
     ) -> Result<Option<TraceRecordEvent>, TraceError> {
         let open = self.runs.remove(&event.id);
-        let dropped = self
-            .sink
-            .upgrade()
-            .map_or(0, |inner| inner.take_dropped(event.id));
-        let gaps = dropped + open.as_ref().map_or(0, |run| run.gaps);
+        let gaps = self.dropped.take(event.id) + open.as_ref().map_or(0, |run| run.gaps);
         let result = event
             .result
             .as_ref()
@@ -612,7 +664,16 @@ impl Writer {
             error.message = self.redactor.text(&error.message);
             error
         });
-        let sensitive = open.as_ref().is_some_and(|run| run.sensitive);
+        let code = match open.as_ref() {
+            Some(run) if run.sensitive => RunCode::Withheld("sensitive_input"),
+            Some(OpenRun {
+                code: Some(code), ..
+            }) => RunCode::Stored {
+                text: &code.value,
+                truncated: code.truncation == Truncation::Cut,
+            },
+            _ => RunCode::Withheld("unavailable"),
+        };
         let replay_window =
             i64::try_from(self.config.replay_window.as_millis()).unwrap_or(i64::MAX);
         let effects = trace_store::end_run(
@@ -626,7 +687,7 @@ impl Writer {
                 result_truncated: result
                     .as_ref()
                     .is_some_and(|result| result.truncation == Truncation::Cut),
-                withhold_code: sensitive.then_some("sensitive_input"),
+                code,
                 replay: event.replay.as_ref(),
                 replay_until: event
                     .replay
@@ -654,5 +715,46 @@ impl Writer {
             effects,
             at: event.at,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WriterConfig, spawn_writer};
+    use crate::{
+        EpochMillis, RedactionLimits, Redactor, RunId, RunStarted, SecretSet, SecretSetConfig,
+        SessionId, TraceError, TraceStore,
+    };
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn flush_reports_a_batch_that_was_rolled_back() {
+        let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir: {error}"));
+        let store = TraceStore::open(&dir.path().join("trace.db"))
+            .await
+            .unwrap_or_else(|error| panic!("open: {error}"));
+        let sink = spawn_writer(
+            &store,
+            Redactor::new(
+                Arc::new(SecretSet::new(SecretSetConfig::default())),
+                RedactionLimits::default(),
+            ),
+            WriterConfig::default(),
+        );
+        // Break the next batch: its run insert fails and the transaction rolls back.
+        let dropped = sqlx::query("DROP TABLE runs").execute(store.pool()).await;
+        assert!(dropped.is_ok());
+        sink.run_started(RunStarted {
+            id: RunId::new(),
+            session: SessionId::new(),
+            code: String::new(),
+            host_ref: None,
+            host: None,
+            idempotency_key: None,
+            at: EpochMillis::from_millis(1),
+        });
+        let first = sink.flush().await;
+        assert!(matches!(first, Err(TraceError::BatchLost(_))), "{first:?}");
+        assert!(sink.flush().await.is_ok(), "the loss is reported once");
     }
 }

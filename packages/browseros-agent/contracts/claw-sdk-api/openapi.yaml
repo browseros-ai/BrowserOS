@@ -859,7 +859,7 @@ components:
           x-extensible-enum: [available, withheld_private_input]
     RunSummary:
       type: object
-      required: [id, sessionId, status, effects, startedAt, operationCount, complete]
+      required: [id, sessionId, status, startedAt, operationCount, complete]
       properties:
         id:
           type: string
@@ -874,7 +874,8 @@ components:
           description: >-
             `none`: no write was sent. `done`: every write that was sent got a definite answer.
             `unknown`: at least one write was sent and never confirmed; check the page before
-            repeating anything.
+            repeating anything. Absent while the run is `running`: Neo reports what the dispatcher
+            decided and never guesses an answer before the run ends.
           x-extensible-enum: [none, done, unknown]
         error:
           $ref: '#/components/schemas/OperationError'
@@ -900,7 +901,7 @@ components:
           description: Operation events Neo dropped under disk pressure; zero or absent normally.
     Run:
       type: object
-      required: [id, sessionId, status, effects, startedAt, operationCount, complete, operations]
+      required: [id, sessionId, status, startedAt, operationCount, complete, operations]
       properties:
         id:
           type: string
@@ -911,6 +912,7 @@ components:
           x-extensible-enum: [running, ok, error, cancelled, timeout, interrupted]
         effects:
           type: string
+          description: As on `RunSummary`; absent while the run is `running`.
           x-extensible-enum: [none, done, unknown]
         error:
           $ref: '#/components/schemas/OperationError'
@@ -937,10 +939,16 @@ components:
           description: The host data the run was started with (`_meta["com.browseros.neo/run"].host`).
         code:
           type: string
-          description: The script, masked. Absent when `codeWithheld` is set.
+          description: >-
+            The script, masked. Stored when the run ends, so it is absent while the run is
+            `running`, and when `codeWithheld` is set.
         codeWithheld:
           type: string
-          x-extensible-enum: [sensitive_input]
+          description: >-
+            `sensitive_input`: an operation typed into a password, card or code field, so the code
+            may hold that value. `unavailable`: Neo stopped before the run ended, so its code was
+            never stored.
+          x-extensible-enum: [sensitive_input, unavailable]
         result:
           description: The script's return value, masked and bounded.
         resultTruncated:
@@ -974,7 +982,7 @@ components:
           type: string
     Operation:
       type: object
-      required: [id, runId, name, kind, effect, outcome, delivery, startedAt, hasScreenshot]
+      required: [id, runId, name, kind, effect, startedAt, hasScreenshot]
       properties:
         id:
           type: string
@@ -1010,12 +1018,14 @@ components:
           type: boolean
         outcome:
           type: string
+          description: Absent while the operation runs.
           x-extensible-enum: [ok, error, cancelled]
         delivery:
           type: string
           description: >-
             `not_sent`: no side effect was attempted. `done`: Neo has a definite answer.
-            `unknown`: sent and never confirmed; never repeat it blindly.
+            `unknown`: sent and never confirmed; never repeat it blindly. Absent while the operation
+            runs: delivery is what the dispatcher decided when it ended, never a guess.
           x-extensible-enum: [not_sent, done, unknown]
         error:
           $ref: '#/components/schemas/OperationError'

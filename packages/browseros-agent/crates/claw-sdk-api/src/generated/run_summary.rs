@@ -20,9 +20,9 @@ pub struct RunSummary {
     /// `interrupted`: Neo stopped (crashed or restarted) before the run ended.
     #[serde(rename = "status")]
     pub status: String,
-    /// `none`: no write was sent. `done`: every write that was sent got a definite answer. `unknown`: at least one write was sent and never confirmed; check the page before repeating anything.
-    #[serde(rename = "effects")]
-    pub effects: String,
+    /// `none`: no write was sent. `done`: every write that was sent got a definite answer. `unknown`: at least one write was sent and never confirmed; check the page before repeating anything. Absent while the run is `running`: Neo reports what the dispatcher decided and never guesses an answer before the run ends.
+    #[serde(rename = "effects", skip_serializing_if = "Option::is_none")]
+    pub effects: Option<String>,
     #[serde(rename = "error", skip_serializing_if = "Option::is_none")]
     pub error: Option<Box<models::OperationError>>,
     #[serde(rename = "hostRef", skip_serializing_if = "Option::is_none")]
@@ -48,7 +48,6 @@ impl RunSummary {
         id: String,
         session_id: String,
         status: String,
-        effects: String,
         started_at: i64,
         operation_count: i64,
         complete: bool,
@@ -57,7 +56,7 @@ impl RunSummary {
             id,
             session_id,
             status,
-            effects,
+            effects: None,
             error: None,
             host_ref: None,
             idempotency_key: None,
