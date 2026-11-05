@@ -103,11 +103,14 @@ retains the historical top-level `release-suite` concurrency group with
 nightly runs during cutover: an active or rerun family transaction cannot overlap
 a product transaction, while the product graph still succeeds on its own.
 
-Legacy records without a product field remain family records with identity
-`nightly-<source-sha>`. Inspect or recover those with the legacy CLI by omitting
-`--product`, or rerun failed jobs on the original family run. Their draft PRs,
-closed records, and pre-PR reservation branches remain allocation history. No
-automatic cancellation, closure, or migration of those records occurs.
+Legacy records without a product field were family records with identity
+`nightly-<source-sha>` that also reserved original BrowserOS components. Those
+components left with that product, so this repo can no longer inspect or recover
+them: omitting `--product` now resolves a neo-only family that rejects such
+records as incomplete. Their draft PRs, closed records, and pre-PR reservation
+branches remain allocation history; the one open family branch is listed in
+`_RETIRED_TRANSACTION_BRANCHES` in `release/suite.py`. No automatic
+cancellation, closure, or migration of those records occurs.
 
 Historical standalone extension-feed runs saved before this change do not have
 the shared publication lock; finish those runs before starting new nightlies.

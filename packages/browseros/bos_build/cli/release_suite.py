@@ -202,7 +202,7 @@ def reconcile_rolling_release_command(
 @app.command("inspect")
 def inspect(
     product: str = typer.Option(
-        "", "--product", help="Product scope; omit only for legacy family recovery"
+        "", "--product", help="Product scope (browserclaw)"
     ),
     mode: str = typer.Option(..., "--mode", help="Suite mode: nightly or full"),
     source_sha: str = typer.Option(..., "--source-sha"),
@@ -231,7 +231,7 @@ def inspect(
 @app.command("reconcile")
 def reconcile(
     product: str = typer.Option(
-        "", "--product", help="Product scope; omit only for legacy family recovery"
+        "", "--product", help="Product scope (browserclaw)"
     ),
     mode: str = typer.Option(..., "--mode", help="Suite mode: nightly or full"),
     source_sha: str = typer.Option(..., "--source-sha"),

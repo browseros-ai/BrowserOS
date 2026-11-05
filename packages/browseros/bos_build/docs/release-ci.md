@@ -11,7 +11,7 @@ Signed nightlies use independent product transactions through
 one signed browser, and merges only its product state before publishing its
 immutable browser artifacts and rolling prerelease.
 The shared allocation and publication locks protect versions and sibling feed
-entries. Historical family transactions remain recoverable; see
+entries. Historical family transactions are allocation history only; see
 [nightly-macos-ci.md](nightly-macos-ci.md) for ownership and cutover details.
 
 The `release-browserclaw.yml` full-release entrypoint retains its native lane

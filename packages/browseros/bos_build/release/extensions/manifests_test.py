@@ -518,6 +518,30 @@ class FrozenAgentEntryTest(unittest.TestCase):
                 outputs = self._run(channel, {})
                 self.assertEqual(outputs, self._committed(channel))
 
+    def test_allow_downgrade_keeps_agent_entry_byte_identical(self):
+        # The prod channel pins agent below bundled; --allow-downgrade (the
+        # neo rollback knob) must not drag the frozen bundled entry down.
+        for channel in ("alpha", "prod"):
+            with self.subTest(channel=channel):
+                committed = self._committed(channel)
+                publisher = FakePublisher(live=committed)
+                ExtensionsFeedModule(
+                    channel=channel,
+                    set_versions={"browserclaw": "0.2.1.0"},
+                    allow_downgrade=True,
+                    publisher=publisher,
+                    baseline_root=UPDATES,
+                ).execute(self._ctx())
+                outputs = {call.key: call.content for call in publisher.calls}
+                for key in (
+                    f"extensions/update-manifest{'.alpha' if channel == 'alpha' else ''}.xml",
+                    "extensions/bundled-manifest.xml",
+                ):
+                    self.assertEqual(
+                        _app_block(outputs[key], AGENT_ID),
+                        _app_block(committed[key], AGENT_ID),
+                    )
+
     def test_neo_bump_keeps_agent_entry_byte_identical(self):
         for channel in ("alpha", "prod"):
             with self.subTest(channel=channel):
