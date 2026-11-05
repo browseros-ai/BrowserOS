@@ -19,6 +19,7 @@ reruns it without Docker. The wire parsers it replays streams with live in leak_
 from __future__ import annotations
 
 import bisect
+import collections
 import contextlib
 import dataclasses
 import functools
@@ -432,6 +433,12 @@ _TYPING_ARGS = {
     "locator.fill": "value",
 }
 _TYPED_LITERAL = re.compile(r'keyboard\.type\(("(?:[^"\\]|\\.)*")\)')
+# Neo's own secrets, which the report never prints whole or in part though no plant holds
+# them: the text of a file the upload scenario's information probe echoed ("FILE {{…}}",
+# leak_plan.NEO_FILE_ECHO), to its closing braces or the end of its string, and the host
+# token the harness mints (leak_sdk.Session.token).
+_NEO_FILE_TEXT = re.compile(r'(?<=FILE \{\{)(?:(?!\}\})[^\n"\\])+')
+_HOST_TOKEN = re.compile(r"leak-[0-9a-f]{48}")
 _SPECIAL_FORMS = {
     Form.JSON: json.dumps(SPECIAL_TAIL)[1:-1],
     Form.HTML: html.escape(SPECIAL_TAIL),
@@ -472,9 +479,15 @@ def classify(slot: str, region: Region) -> SlotState:
         return SlotState.MASKED  # mask tokens, and at most a card's last four
     if len(expected) >= 4 and any(s in text for s in spellings):
         return SlotState.RAW
+    if _JSON_STRING.fullmatch(text):
+        # A main-world script's JSON.stringify(value), which D3's guard masks inside the
+        # quotes: what the string spells decides, by the same rules.
+        with contextlib.suppress(ValueError):
+            return classify(json.loads(text), region)
     return SlotState.OTHER
 
 
+_JSON_STRING = re.compile(r'"(?:[^"\\\x00-\x1f]|\\.)*"')
 _CUT = re.compile(r"…\[\+\d+ bytes\]$")  # how the trace store marks a truncated string
 _MASK_HEADS = ("[private]", "[redacted]", "•••• ")
 
@@ -725,6 +738,10 @@ class Detector:
             (start, end, placeholder(self.plants[pid]))
             for start, end, pid in self._raw_hits(text)
         ]
+        spans += [
+            (*m.span(), "⟨Neo's own file⟩") for m in _NEO_FILE_TEXT.finditer(text)
+        ]
+        spans += [(*m.span(), "⟨host token⟩") for m in _HOST_TOKEN.finditer(text)]
         marks = [(at, region) for at, region in self._marks(text) if region.short]
         where = [at for at, _ in marks]
         for m in _SLOT_VALUE.finditer(text) if marks else ():
@@ -991,6 +1008,8 @@ def decide(o: Observation) -> tuple[Verdict, str]:
 
     found (hit, or slot RAW)                -> LEAKED   values are fresh and never sent
                                                          by the harness: found = leaked
+    an op that answers nothing by contract  -> WITHHELD, N/A (not built) or INCONCLUSIVE
+                                                         as it was refused; else N/A (ran)
     unreachable by contract and not covered -> N/A (not built, if refused so)
     refusal that the contract names         -> WITHHELD
     refusal that means "not built"          -> N/A (not built)
@@ -1006,6 +1025,8 @@ def decide(o: Observation) -> tuple[Verdict, str]:
     if o.hit or o.slot is SlotState.RAW:
         return Verdict.LEAKED, "raw in its slot"
     refused = o.refusal is not None and o.refusal.key not in spec.answer_errors
+    if spec.void and not refused:
+        return Verdict.NOT_APPLICABLE, "ran; the op answers nothing by contract"
     if not o.reachable and not o.covered:  # before the refusal: it is not about them
         if refused and o.refusal.key in spec.not_built:
             return Verdict.NOT_APPLICABLE, f"not built ({o.refusal.key})"
@@ -1054,6 +1075,8 @@ def decide_pixels(o: Observation) -> tuple[Verdict, str]:
     if o.refusal:
         return Verdict.WITHHELD, o.refusal.key
     if p is None or p.private_since is None:
+        if o.channel is ChannelId.FRONT_VIEW:
+            return Verdict.NOT_APPLICABLE, "the private tab never came to the front"
         return Verdict.NOT_APPLICABLE, "BD-PIXELS: the tab was not private"
     if not p.before:
         return Verdict.INCONCLUSIVE, "no frame before privacy: liveness never shown"
@@ -1150,6 +1173,7 @@ class _Observer:
         self.detector = Detector(evidence.instances.values())
         self.offset = evidence.facts.clock_offset_ms if evidence.facts else 0
         self.private_since = self._private_since()
+        self.front_since = self._front_since()
         self.present_regions: set[str] = set()
         self.present_runs: dict[str, set[str]] = {}  # run id -> regions it proved
         self.phase_of_run: dict[str, Phase] = {}
@@ -1197,6 +1221,20 @@ class _Observer:
                     at = int(data["privacy"]["since"]) - self.offset
                     note(tabs.get(data["tabId"]), at)
         return since
+
+    def _front_since(self) -> dict[str, int]:
+        """Instance -> when the agent's bringToFront put its private tab in front of the
+        screen, on the host clock: where a view display must stop (decision 34). The
+        harness records it as the op's end, read in front at once after it."""
+        return {
+            s.instance: int(s.detail["since_ms"])
+            for s in self.ev.steps
+            if s.action == "front"
+            and s.instance
+            and s.detail.get("private")
+            and s.detail.get("in_front")
+            and not s.detail.get("during")
+        }
 
     def _op_starts(self) -> dict[str, tuple[int, str]]:
         """op id -> (start on the host clock, instance), from the run records fetched:
@@ -1274,7 +1312,10 @@ class _Observer:
         for region in instance.regions if instance else ():
             hit = hits.pop(region.id, None)
             live_before, live_after = live(before, region), live(after, region)
-            if not (live_before or live_after or hit):
+            # An op that answers nothing is judged on what it would expose, which the
+            # page may show only once the op ran (setContent, an upload) or not at all.
+            asked = spec.void and region.id in c.regions
+            if not (live_before or live_after or hit or asked):
                 continue
             present = (live_before or bool(c.trigger) or spec.types) and live_after
             if present:
@@ -1504,7 +1545,12 @@ class _Observer:
         instance = self.ev.instances.get(s.instance or "")
         if instance is None:
             return
-        since = self.private_since.get(instance.name)
+        era = (
+            self.front_since
+            if s.channel is ChannelId.FRONT_VIEW
+            else self.private_since
+        )
+        since = era.get(instance.name)
         refusal = Refusal("http", str(s.status)) if s.status not in (101, 200) else None
         frames = [] if refusal else self._frames(s)
         before = [a for a, _ in frames if since is None or a < since]
@@ -1867,9 +1913,11 @@ def is_fx_f(cell: Cell) -> bool:
 
 def is_xsite(cell: Cell) -> bool:
     """A cold read of a cross-site plant the page copied into the top document: no
-    sweep of the top's site sees the source frame, so only L2 can catch it."""
+    sweep of the top's site sees the source frame, so only L2 can catch it. Main-world
+    script reading that echo meets the same gap: its guard sweeps the page's site."""
     return (
-        _cold_text_leak(cell)
+        cell.verdict is Verdict.LEAKED
+        and SPECS[cell.channel].family in (Family.AGENT_TEXT, Family.AGENT_SCRIPT)
         and cell.phase is Phase.COLD
         and cell.region.exposure in ECHO_LIKE
         and not PLACES[cell.region.plant.location].same_site_as_top
@@ -1936,13 +1984,44 @@ class Residual:
 RESIDUALS: tuple[Residual, ...] = (
     Residual(
         # Not on the clipboard channels: any ServerCutText there is the flag failing,
-        # whatever value it carries, so a control's value there is a finding too.
+        # whatever value it carries, so a control's value there is a finding too. The
+        # agent's own upload buffer is one: a file input is a field no rule classifies.
         "CONTROL",
         Status.CONTROL,
         "a field no rule classifies, read back raw: the positive control",
         lambda cell: (
-            _kind_is(Kind.PLAIN)(cell)
+            (
+                _kind_is(Kind.PLAIN)(cell)
+                or (
+                    _kind_is(Kind.FILE)(cell)
+                    and cell.region.plant.origin is Origin.AGENT
+                )
+            )
             and SPECS[cell.channel].family is not Family.CLIPBOARD
+        ),
+    ),
+    Residual(
+        # The agent's read only: a record copies it by run, so Neo's own record of the
+        # upload op holding the file is a new leak.
+        "BD-UPLOAD",
+        Status.BY_DESIGN,
+        "a file from Neo's disk the agent uploaded and read back from the page: no rule "
+        "can tell its content is sensitive, and setInputFiles takes any path (owner "
+        "decision: the caller sandboxes)",
+        lambda cell: (
+            _kind_is(Kind.FILE)(cell)
+            and cell.region.plant.origin is Origin.FILE
+            and SPECS[cell.channel].family in AGENT_FAMILIES
+        ),
+    ),
+    Residual(
+        "UPLOAD-HELD",
+        Status.IN_FLIGHT,
+        "setInputFiles is held (script/method_unavailable) until the owner's call to "
+        "serve any path lands",
+        lambda cell: (
+            cell.verdict is Verdict.WITHHELD
+            and cell.channel in (ChannelId.UPLOAD, ChannelId.UPLOAD_BUFFER)
         ),
     ),
     Residual(
@@ -2109,30 +2188,72 @@ class Judgement:
         return code | (EXIT_HARNESS if self.failures else 0)
 
 
+def _tally(found: Sequence[Cell]) -> str:
+    """How many of these masked-or-leaked reads came back raw."""
+    if not found:
+        return "not measured"
+    leaked = [c for c in found if c.verdict is Verdict.LEAKED]
+    if leaked:
+        return f"raw in {len(leaked)} of {len(found)} reads"
+    return f"masked in all {len(found)} reads"
+
+
+def _judged(cell: Cell) -> bool:
+    """A read of a long sensitive value that came back masked or raw: what a headline
+    counts (short echoes are by design, the controls raw by definition)."""
+    return (
+        KINDS[cell.region.plant.kind].sensitive
+        and not cell.region.short
+        and cell.verdict in (Verdict.MASKED, Verdict.LEAKED)
+    )
+
+
 def _headline(cells: Sequence[Cell]) -> dict[str, str]:
-    """What the cold echo reads measured, by where the echoed field sits."""
+    """What the cold echo reads measured, by where the echoed field sits; what the
+    main-world family and setContent answered."""
 
     def cold_echoes(locations: Collection[Location]) -> str:
-        found = [
-            c
-            for c in cells
-            if c.phase is Phase.COLD
-            and c.region.exposure is Exposure.ECHO
-            and SPECS[c.channel].family is Family.AGENT_TEXT
-            and c.region.plant.location in locations
-            and KINDS[c.region.plant.kind].sensitive
-            and c.region.plant.origin is not Origin.HOST
-            and not c.region.short
-            and c.verdict in (Verdict.MASKED, Verdict.LEAKED)
-        ]
-        if not found:
-            return "not measured"
-        leaked = [c for c in found if c.verdict is Verdict.LEAKED]
-        if leaked:
-            return f"raw in {len(leaked)} of {len(found)} reads"
-        return f"masked in all {len(found)} reads"
+        return _tally(
+            [
+                c
+                for c in cells
+                if c.phase is Phase.COLD
+                and c.region.exposure is Exposure.ECHO
+                and SPECS[c.channel].family is Family.AGENT_TEXT
+                and c.region.plant.location in locations
+                and c.region.plant.origin is not Origin.HOST
+                and _judged(c)
+            ]
+        )
+
+    content_held = any(
+        c.channel is ChannelId.SET_CONTENT and c.verdict is Verdict.WITHHELD
+        for c in cells
+    )
+    content = (
+        "held (script/method_unavailable)"
+        if content_held
+        else _tally([c for c in cells if c.phase is Phase.AFTER_CONTENT and _judged(c)])
+    )
 
     held = [c for c in cells if c.residual == "EVAL-HELD"]
+    served = [
+        c
+        for c in cells
+        if SPECS[c.channel].family is Family.AGENT_SCRIPT and _judged(c)
+    ]
+    raw = collections.Counter(
+        c.residual or "new" for c in served if c.verdict is Verdict.LEAKED
+    )
+    script = [
+        f"held in {len({c.channel for c in held})} channels (script/method_unavailable)"
+        if held
+        else "",
+        f"served: {_tally(served)}"
+        + (f" ({', '.join(f'{n} {k}' for k, n in sorted(raw.items()))})" if raw else "")
+        if served
+        else "",
+    ]
     chords = [
         c
         for c in cells
@@ -2156,11 +2277,8 @@ def _headline(cells: Sequence[Cell]) -> dict[str, str]:
         ),
         "XSITE cross-site echo, cold (XO)": cold_echoes((Location.CROSS_SITE,)),
         "closed shadow root echo, cold (SC)": cold_echoes((Location.SHADOW_CLOSED,)),
-        "main-world script": (
-            f"held in {len({c.channel for c in held})} channels (script/method_unavailable)"
-            if held
-            else "not held"
-        ),
+        "main-world script": "; ".join(p for p in script if p) or "not measured",
+        "page.setContent, then reads of what it wrote": content,
     }
 
 
@@ -2202,6 +2320,10 @@ def judge(evidence: Evidence) -> Judgement:
         headline["requestId replay returns the stored reply"] = (
             f"{same} of {len(replays)}"
         )
+    headline["Neo's own files through setInputFiles (information)"] = _neo_files(
+        evidence.steps
+    )
+    headline.update(_fronts(evidence.steps))
     present = frozenset(
         region.plant.kind
         for proof in evidence.proofs.values()
@@ -2210,6 +2332,53 @@ def judge(evidence: Evidence) -> Judgement:
         if live(proof, region)
     )
     return Judgement(tuple(labelled), evidence.failures, headline, searched, present)
+
+
+def _neo_files(steps: Sequence[Step]) -> str:
+    """Whether the agent could read Neo's own secret files through setInputFiles, as the
+    run recorded it: information for the owner, never a verdict."""
+    said = []
+    for step in steps:
+        if step.action != "neo_file":
+            continue
+        d = step.detail
+        if not d.get("present"):
+            said.append(f"{d['file']}: not in this image")
+        elif d.get("readable"):
+            said.append(f"{d['file']}: readable")
+        else:
+            why = f" ({d['answer']})" if d.get("answer") else ""
+            said.append(f"{d['file']}: not readable{why}")
+    return "; ".join(said) or "not measured"
+
+
+def _fronts(steps: Sequence[Step]) -> dict[str, str]:
+    """What the agent's bringToFront did, as the harness read the front tab around it:
+    onto a private tab (the view rows judge the pixels), and during a takeover, whose
+    tab must stay in front unless the call was refused."""
+    out = {
+        "page.bringToFront onto a private tab": "not measured",
+        "page.bringToFront during a takeover": "not measured",
+    }
+    for step in steps:
+        if step.action != "front":
+            continue
+        d = step.detail
+        answer = str(d.get("answer"))
+        if d.get("during"):
+            stayed = d["during"] in d.get("after", ())
+            out["page.bringToFront during a takeover"] = (
+                f"{answer}; the takeover's tab "
+                + ("stayed in front" if stayed else "left the front")
+            )
+        else:
+            came = "came" if d.get("in_front") else "did not come"
+            out["page.bringToFront onto a private tab"] = (
+                f"sent; the private tab {came} to the front"
+                if answer == "sent"
+                else answer
+            )
+    return out
 
 
 _GLYPH = {0: "LEAK", 1: "??", 4: "held", 5: "ok", 6: "held", 7: "raw", 8: "·"}
@@ -2313,7 +2482,7 @@ def render_markdown(judgement: Judgement, evidence: Evidence) -> str:
     lines += [
         "",
         "legend: ok masked · held withheld by contract · LEAK new leak · ?? unproven · "
-        "a residual id (fx-f, xsite, short, l2, r1, r3, eval-held) a known residual · "
+        "a residual id (fx-f, xsite, short, l2, r1, r3, upload) a known residual · "
         "raw the control's expected read · nb not built · clean searched, nothing found "
         "(a channel the judge can only search) · · not applicable or not exercised. "
         "In the keyboard chord rows, held means Neo refused the chord and ok means Neo "

@@ -8,18 +8,22 @@ leak_sdk.py copies this file and leak_fixture/ to /tmp/leakfx and starts one pro
   thread: HTTP on 127.0.0.1:8800 for a.test, sub.a.test and b.test (--add-host)
     GET  /fx/fx.js                      the fixture script
     GET  /fx/<instance>/<location>      page.html, for every document of every instance
+                                        (a shell without fx.js for one the agent writes)
     GET  /fx/<instance>/<location>.json that document's slice (Cache-Control: no-store)
     GET  /fx/<instance>/dl              a small file for the download act
     POST /fx/<instance>/echo            the document after a submit: it shows the posted
                                         value, so only the echo remains (the nav-away case)
   main: JSON lines on stdin/stdout, one request at a time, each answered by its id
     put      an instance's slices: the only way values travel, and never in a URL
+    plant_file  a value written into a file on Neo's disk, for setInputFiles to upload
+    digest   sha256 of one of Neo's own files: compared, never sent
     state    each of the instance's tabs' __fx.state(): digests per region, never values,
              and the ids of the focused elements (where keyboard input lands)
     act      __fx.act(name), with a user gesture when asked
     focus    __fx.focus(region): the owner's click, through the iframe chain, selecting
              the field's text when asked
     targets  Target.getTargets: which documents really are out-of-process frames
+    front    Browser.getTabs' active tabs: what is in front of Neo's one screen
     clock    the container's Unix ms, for the host-to-Neo clock offset
     grep     needles over a directory tree (the profile scan): indexes, never needles
 
@@ -34,6 +38,7 @@ Standard library only (the image's python3).
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import socket
@@ -53,6 +58,7 @@ FIXTURE = ROOT / "leak_fixture"
 CDP_PORT = 9110
 FIXTURE_PORT = 8800
 SLICE_MARK = b"<!--FX-SLICE-->"
+FX_SCRIPT = b'<script src="/fx/fx.js"></script>'
 
 
 class WebSocket:
@@ -238,8 +244,13 @@ class Fixture:
     def __init__(self) -> None:
         self.instances: dict[str, dict] = {}
 
-    def page(self, inline: dict | None = None) -> bytes:
+    def page(self, inline: dict | None = None, *, shell: bool = False) -> bytes:
         html = (FIXTURE / "page.html").read_bytes()
+        if shell:
+            # A document the agent writes with setContent starts without the fixture's
+            # script: document.open keeps the window's realm, so the script the agent's
+            # HTML loads would otherwise run a second time and redeclare its globals.
+            return html.replace(FX_SCRIPT, b"")
         if inline is None:
             return html
         data = json.dumps(inline).replace("<", "\\u003c").encode()
@@ -277,7 +288,8 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 body = json.dumps(entry["slices"][parts[2][:-5]]).encode()
                 return self._send(200, body, "application/json")
             if parts[2] in entry["slices"]:
-                return self._send(200, FIX.page())
+                written = entry["slices"][parts[2]].get("written", False)
+                return self._send(200, FIX.page(shell=written))
         self._send(404, b"not found", "text/plain")
 
     def do_POST(self) -> None:
@@ -305,6 +317,26 @@ class Oracle:
     def put(self, instance: str, slices: dict, echoes: dict) -> dict:
         FIX.instances[instance] = {"slices": slices, "echoes": echoes}
         return {}
+
+    def plant_file(self, path: str, text: str) -> dict:
+        """A planted value into a file on Neo's disk, readable by Neo's user: the only way
+        a FILE value travels, never in a request to Neo. The agent then uploads it by
+        path, which is not a value."""
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+        target.chmod(0o644)
+        return {}
+
+    def digest(self, path: str) -> dict:
+        """sha256 of a file's bytes, or None when it is missing or empty: whether the
+        agent read one of Neo's own secret files is decided by digest, so the file never
+        crosses this pipe."""
+        try:
+            data = Path(path).read_bytes()
+        except OSError:
+            return {"sha256": None}
+        return {"sha256": hashlib.sha256(data).hexdigest() if data else None}
 
     def _tabs(self, instance: str) -> list[dict]:
         """The instance's tabs, main first: its main document and any popup it opened."""
@@ -396,6 +428,12 @@ class Oracle:
                 for t in infos
             ]
         }
+
+    def front(self) -> dict:
+        """The URLs of the tabs in front of Neo's one screen: BrowserOS's Browser.getTabs
+        active tabs, the read Neo's own front-tab watch makes."""
+        tabs = self.cdp.call("Browser.getTabs")["tabs"]
+        return {"front": [t.get("url", "") for t in tabs if t.get("isActive")]}
 
     def clock(self) -> dict:
         return {"ms": int(time.time() * 1000)}

@@ -27,8 +27,10 @@ from __future__ import annotations
 import argparse
 import contextlib
 import dataclasses
+import hashlib
 import io
 import json
+import re
 import secrets
 import subprocess
 import tarfile
@@ -41,6 +43,7 @@ from collections.abc import Callable, Collection, Iterator, Sequence
 from pathlib import Path
 
 from leak_judge import (
+    PIXEL_GRACE_MS,
     Capture,
     Evidence,
     Facts,
@@ -87,10 +90,14 @@ from leak_plan import (
     Plant,
     Region,
     assert_clean,
+    buffer_code,
     make_instance,
+    neo_file_code,
     plan_runs,
     registrable,
+    script_places,
     typing_code,
+    upload_path,
 )
 from leak_wire import (
     Agent,
@@ -113,6 +120,14 @@ FX_F_SUBJECT = "every sealed-world read is masked with its frame's whole site"
 TYPED_QUIET_S = 1.0
 # Values that reach the page as typing: held by claw-sdk until quiet, then registered.
 TYPED_ORIGINS = frozenset({Origin.OWNER, Origin.AGENT})
+# Neo's own secret files, by the environment variable naming each in the image: the host's
+# bearer token (leak_wire.Docker.run mounts it) and the CAPTCHA providers' keys
+# (Dockerfile; present only when the image was built with them).
+NEO_SECRET_FILES = (
+    ("host token", "CLAW_HOST_TOKEN_FILE"),
+    ("capsolver key", "BROWSEROS_CAPSOLVER_API_KEY_FILE"),
+    ("2captcha key", "BROWSEROS_2CAPTCHA_API_KEY_FILE"),
+)
 
 # ------------------------------------------------------------------------------------------
 # The scenarios, in the order they run. Each opens its own page instances and closes them.
@@ -145,15 +160,14 @@ def echoes(s: Session) -> None:
 
 def fields(s: Session) -> None:
     """Every read of a field in every location; the show-password flip after Neo's seal
-    watched it; and every way to run script or a built-in, which must refuse."""
+    watched it; and the CAPTCHA built-in, which needs a provider this image lacks."""
     page = s.open(Layout.FIELDS)
     for channel in FIELD_READS:
         s.read(page, channel, exposures=FIELD)
     s.act(page, Act.SHOW_PASSWORD)
     for channel in FIELD_READS:
         s.read(page, channel, exposures=FIELD, kinds={Kind.SHOW_PASSWORD})
-    for channel in SCRIPT_READS:
-        s.read(page, channel)
+    s.read(page, ChannelId.SOLVE_CAPTCHA)
     s.close(page)
 
 
@@ -218,6 +232,59 @@ def keys(s: Session) -> None:
     s.settle_typing(page)
     for channel in (ChannelId.INPUT_VALUE, ChannelId.TEXT_CONTENT, ChannelId.ARIA_AI):
         s.read(page, channel, Phase.WARM)
+    s.close(page)
+
+
+def script(s: Session) -> None:
+    """Script the agent runs in the page's main world, where no seal reaches: the guard
+    sweeps the frames the op can reach before and after it and masks what it found
+    (D3), so every value and echo a reader returns, in each spelling the guard covers,
+    must come back masked. Held today (script/method_unavailable).
+
+    Each planned run is the first touch of a page of its own. The guard registers what
+    it sweeps, and a run's reply is masked with everything registered, so an earlier op
+    of the same run could otherwise mask what a later op's own sweep missed.
+    """
+    for channel in SCRIPT_READS:
+        for at in script_places(channel):
+            page = s.open(Layout.SCRIPT)
+            s.read(page, channel, Phase.COLD, at=at)
+            s.close(page)
+    # The page's popup reads the page through window.opener: the guard must also sweep
+    # the tabs an opener links (fx-g-opener).
+    page = s.open(Layout.SCRIPT)
+    s.popup(page)
+    s.read(page, ChannelId.OPENER_EVALUATE, Phase.COLD)
+    s.close(page)
+
+
+def content(s: Session) -> None:
+    """page.setContent in its ordinary shape: the agent's HTML loads the fixture's frames,
+    whose fields plant themselves and stay, and the fixture's script, which echoes their
+    values into the top document and its title. setContent runs between the guard's
+    sweeps of the page's site, which register what they find, so every read of what it
+    wrote must come back masked. Held today (script/method_unavailable). A script that
+    copies values and removes their source before the second sweep is deliberate
+    exfiltration, out of scope and not probed."""
+    page = s.open(Layout.CONTENT, prove=False)  # a shell until the agent writes it
+    if s.write(page):
+        s.act(page, Act.ECHO_TITLE)
+        for channel in (ChannelId.TITLE, ChannelId.CONTENT, ChannelId.TEXT_CONTENT):
+            s.read(page, channel, Phase.AFTER_CONTENT)
+    s.close(page)
+
+
+def upload(s: Session) -> None:
+    """setInputFiles. The owner serves any path and leaves sandboxing to the caller, so
+    the agent can hand the page a file from Neo's disk that Neo never saw: the page's
+    echo of it reads back raw by design (BD-UPLOAD), and Neo's own records are judged as
+    usual. A {name, mimeType, buffer} payload is the agent's own value, a declared way in
+    like keyboard.type: the control. Then, as information for the owner, whether the
+    agent can read Neo's own secret files that way. Held today (UPLOAD-HELD)."""
+    page = s.open(Layout.UPLOAD)
+    if any([s.upload(page, plant) for plant in page.instance.plants]):
+        s.read(page, ChannelId.TEXT_CONTENT, exposures=ECHO)
+    s.neo_files(page)
     s.close(page)
 
 
@@ -295,6 +362,33 @@ def control(s: Session) -> None:
     s.close(page)
 
 
+def front(s: Session) -> None:
+    """page.bringToFront, which the owner serves: the tab really comes forward. With two
+    view displays open on another page (one following it, one showing what is in front),
+    the host makes a page private in the back and the agent brings it forward: no view
+    may show a private tab (decision 34), so a view frame later than the pixel grace
+    after the switch is a leak, a close or a refusal is held, and the private tab's
+    screencast stays refused. Then, during a takeover, the agent brings its other page
+    forward: the takeover's tab must stay in front, or the call be refused
+    (owner_has_control). Today the prelude refuses it (neo/unsupported)."""
+    shown, hidden = s.open(Layout.PIXELS), s.open(Layout.PIXELS)
+    with s.front_watch(hidden, shown) as watch:
+        watch.live()
+        s.make_private(hidden)  # in the back: the views stay open
+        watch.live()
+        switched = s.bring_to_front(hidden)
+        watch.settle()
+        s.past_grace(switched)
+        watch.retry()
+    s.close(shown)
+    s.close(hidden)
+    taken, other = s.open(Layout.PIXELS), s.open(Layout.PIXELS)
+    with s.takeover(taken):
+        s.bring_to_front(other, during=taken)
+    s.close(taken)
+    s.close(other)
+
+
 def host_secret(s: Session) -> None:
     """A value only the host knows, shown by the page with no field behind it. Cold it
     reads raw by design (L1 has nothing to sweep); once the host registers it, every exit
@@ -314,11 +408,15 @@ SCENARIOS: tuple[tuple[str, Callable[[Session], None]], ...] = (
     ("fields", fields),
     ("page_echoes", page_echoes),
     ("keys", keys),  # before any scenario makes a tab private: its tabs stay ordinary
+    ("script", script),
+    ("content", content),
+    ("upload", upload),
     ("pixels", pixels),
     # control runs before takeover: after a takeover in which the owner typed, a raw control
     # display's keys never reach the page (measured on ec1ded9; a functional bug, reported).
     ("control", control),  # its first input makes every open tab private
     ("takeover", takeover),
+    ("front", front),  # private tabs and a takeover of its own; closes them all
     ("host_secret", host_secret),
 )
 
@@ -631,6 +729,8 @@ class Session:
         goto reads nothing, so the instance stays cold."""
         assert self.oracle is not None
         index = len(self.instances) + 1
+        if index > 99:  # a region id holds its page's index in two digits (r<index><n>)
+            raise HarnessError("a run has room for 99 pages")
         instance = make_instance(layout, seed=self.seed, index=index, late=late)
         self.registrable += sum(
             registrable(p, typed=p.origin in TYPED_ORIGINS) for p in instance.plants
@@ -710,6 +810,17 @@ class Session:
         if act is Act.LATE_PLANT:
             self.guard.note_late_plant(page.instance)
 
+    def popup(self, page: Page, timeout: float = 15) -> None:
+        """The page opens its popup (a user gesture) and the popup's document boots, so a
+        read there can reach the page through window.opener. The page acts, not the
+        agent, so the instance stays cold."""
+        self.act(page, Act.POPUP)
+        deadline = time.monotonic() + timeout
+        while str(Location.POPUP) not in self.proof(page).documents:
+            if time.monotonic() > deadline:
+                raise HarnessError(f"{page.instance.name}: the popup never booted")
+            time.sleep(0.3)
+
     def proof(self, page: Page) -> Proof:
         assert self.oracle is not None
         state = self.oracle.call("state", instance=page.instance.name)
@@ -735,14 +846,17 @@ class Session:
         exposures: Collection[Exposure] | None = None,
         kinds: Collection[Kind] | None = None,
         trigger: Act | None = None,
-    ) -> None:
+        at: Location | None = None,
+    ) -> list[Capture]:
         """Exercise one agent channel on the page and record what came back: per planned
         run, a proof, the run, a proof. A COLD read is followed at once by a repeat of its
-        requestId, whose stored reply must be what the first call got."""
+        requestId, whose stored reply must be what the first call got. `at` keeps one
+        location's run of a probe planned per location. Returns the runs' captures."""
         runs = plan_runs(
-            SPECS[channel], page.instance, exposures=exposures, kinds=kinds
+            SPECS[channel], page.instance, exposures=exposures, kinds=kinds, at=at
         )
         self.guard.claim(page.instance, phase, len(runs))
+        captures: list[Capture] = []
         for planned in runs:
             request_id = f"{page.instance.name}.{self._id('q')}"
             before = self.proof(page)
@@ -762,6 +876,7 @@ class Session:
                 regions=tuple(r.id for r in planned.regions),
             )
             self.record(capture)
+            captures.append(capture)
             if phase is Phase.COLD:
                 again = self._run(
                     page.instance,
@@ -773,6 +888,147 @@ class Session:
                 )
                 self.record(again)
         self.guard.note_touched(page.instance)
+        return captures
+
+    def _answer(self, capture: Capture) -> str:
+        """What an op that answers nothing said: "sent", or its refusal's owner/code,
+        keyed by region (leak_plan.void_run) or the run's own."""
+        reply = parse_run_reply((self.out / capture.blob).read_bytes())
+        if reply.value == {"sent": True}:
+            return "sent"
+        value = reply.value if isinstance(reply.value, dict) else {}
+        refusals = [v for v in value.values() if isinstance(v, dict) and "err" in v]
+        fault = refusals[0] if refusals else reply.error
+        return f"{fault.get('owner')}/{fault.get('code')}" if fault else "no answer"
+
+    def _sent(self, capture: Capture) -> bool:
+        return self._answer(capture) == "sent"
+
+    def front_tabs(self) -> list[str]:
+        """The pages in front of Neo's screen, by instance name (a URL for any other)."""
+        assert self.oracle is not None
+        found = (
+            re.search(r"/fx/([^/]+)/", url)
+            for url in self.oracle.call("front")["front"]
+        )
+        return [m[1] if m else "" for m in found]
+
+    def bring_to_front(self, page: Page, *, during: Page | None = None) -> int:
+        """The agent brings `page`'s tab forward, with the front read just before and
+        after. Records what it answered and what came forward; returns when it ended
+        (host ms), from which a private page in front must be in no view (FRONT_VIEW).
+        `during` is a takeover's page, which must stay in front."""
+        before = self.front_tabs()
+        (capture,) = self.read(page, ChannelId.BRING_TO_FRONT)
+        after = self.front_tabs()
+        self.step(
+            "front",
+            page,
+            tab=page.tab,
+            answer=self._answer(capture),
+            private=page.instance.name in self.private_instances,
+            in_front=page.instance.name in after,
+            since_ms=capture.ended_ms,
+            before=before,
+            after=after,
+            during=during.instance.name if during else None,
+        )
+        return capture.ended_ms
+
+    def past_grace(self, since_ms: int) -> None:
+        """Wait until a stream opened now is past the pixel grace after `since_ms`, so no
+        frame it sends can be excused as one in flight at that moment."""
+        time.sleep(max(0.0, (since_ms + PIXEL_GRACE_MS + 500 - now()) / 1000))
+
+    def wait_live(
+        self, page: Page, regions: Sequence[Region], timeout: float = 6
+    ) -> bool:
+        """Proofs until every region shows its value, or the time is up."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if all(live(self.proof(page), r) for r in regions):
+                return True
+            time.sleep(0.3)
+        return False
+
+    def upload(self, page: Page, plant: Plant) -> bool:
+        """The agent uploads `plant` into its file input: a FILE plant by the path of the
+        file the oracle writes first, an AGENT plant as a {name, mimeType, buffer} payload
+        its run carries (the declared way in). Returns whether Neo ran it and the page
+        then showed the content, in its input and its echo."""
+        assert self.oracle is not None
+        (field,) = page.instance.field_regions(plant)
+        if plant.origin is Origin.FILE:
+            text = plant.secret.reveal()
+            self.oracle.call("plant_file", path=upload_path(field), text=text)
+            (capture,) = self.read(page, ChannelId.UPLOAD)
+        else:
+            before = self.proof(page)
+            capture = self._run(
+                page.instance,
+                ChannelId.UPLOAD_BUFFER,
+                Phase.ANY,
+                buffer_code(page.instance, field),
+                page=page,
+                inject=plant,
+            )
+            after = self.proof(page)
+            self.record(
+                dataclasses.replace(
+                    capture, proofs=(before.id, after.id), regions=(field.id,)
+                )
+            )
+            self.guard.note_touched(page.instance)
+        if not self._sent(capture):
+            return False
+        shown = self.wait_live(page, page.instance.regions_of(plant))
+        self.step("uploaded", page, plant=plant.id, shown=shown)
+        return shown
+
+    def neo_files(self, page: Page) -> None:
+        """Information for the owner, not a verdict: can the agent read Neo's own secret
+        files through setInputFiles? Each goes into the page's plain file input and the
+        agent reads its echo. The harness compares that echo's digest with the file's,
+        taken in the container, and records only the answer."""
+        assert self.oracle is not None
+        for label, variable in NEO_SECRET_FILES:
+            path = self.docker.exec("printenv", variable, check=False).decode().strip()
+            digest = self.oracle.call("digest", path=path)["sha256"] if path else None
+            if digest is None:
+                self.step("neo_file", page, file=label, present=False)
+                continue
+            capture = self._run(
+                page.instance, ChannelId.HARNESS, Phase.ANY, neo_file_code(path)
+            )
+            reply = parse_run_reply((self.out / capture.blob).read_bytes())
+            text = reply.value if isinstance(reply.value, str) else ""
+            echoed = re.fullmatch(r"FILE \{\{(.*)\}\}", text, re.DOTALL)
+            readable = bool(echoed) and (
+                hashlib.sha256(echoed[1].encode()).hexdigest() == digest
+            )
+            if reply.error is not None:
+                answer = f"{reply.error['owner']}/{reply.error['code']}"
+            else:
+                answer = "sent" if readable else "the echo is not the file"
+            self.step(
+                "neo_file",
+                page,
+                file=label,
+                present=True,
+                readable=readable,
+                answer=answer,
+            )
+
+    def write(self, page: Page) -> bool:
+        """The agent writes the page's top document with setContent (content_html).
+        Returns whether Neo ran it; then every value the page plants is proven present,
+        and reads of the page claim AFTER_CONTENT."""
+        (capture,) = self.read(page, ChannelId.SET_CONTENT)
+        if not self._sent(capture):
+            return False
+        self.wait_present(page)
+        self.guard.note_written(page.instance)
+        return True
 
     def focus(self, page: Page, region: Region, *, select: bool = False) -> None:
         """The page focuses `region`, as the owner's click would: through the iframe
@@ -1070,6 +1326,30 @@ class Session:
             watch.close()
 
     @contextlib.contextmanager
+    def front_watch(self, private: Page, shown: Page) -> Iterator[Watch]:
+        """Two view displays, one following `shown` (which brings it forward) and one
+        showing whatever is in front, recorded under `private`, the page the agent will
+        bring forward: they are judged from that moment (FRONT_VIEW). A retry asks for
+        both again and for the private tab's screencast."""
+
+        def opens(role: str) -> list[tuple[ChannelId, str]]:
+            views = [
+                (ChannelId.FRONT_VIEW, f"/v1/display?mode=view&followTab={shown.tab}"),
+                (ChannelId.FRONT_VIEW, "/v1/display?mode=view"),
+            ]
+            if role == "retry":
+                screencast = f"/v1/tabs/{private.tab}/screencast"
+                views.append((ChannelId.SCREENCAST, screencast))
+            return views
+
+        watch = Watch(self, private, opens)
+        try:
+            watch.open()
+            yield watch
+        finally:
+            watch.close()
+
+    @contextlib.contextmanager
     def takeover(self, page: Page) -> Iterator[Owner]:
         body = {
             "tabId": page.tab,
@@ -1268,11 +1548,27 @@ class Oracle:
 
 
 class Watch:
-    """The live pixel channels of one tab during a scenario."""
+    """The live pixel channels of one tab during a scenario: by default its screencast,
+    video and a view display following it. `opens` names others by role ("view" as the
+    watch opens, "retry" when it asks again); every stream is recorded under the page."""
 
-    def __init__(self, session: Session, page: Page) -> None:
+    def __init__(
+        self,
+        session: Session,
+        page: Page,
+        opens: Callable[[str], list[tuple[ChannelId, str]]] | None = None,
+    ) -> None:
         self.s, self.page = session, page
+        self.opens = opens or self._own
         self.readers: list[tuple[StreamReader | Display, ChannelId, str, str]] = []
+
+    def _own(self, role: str) -> list[tuple[ChannelId, str]]:
+        tab = self.page.tab
+        return [
+            (ChannelId.SCREENCAST, f"/v1/tabs/{tab}/screencast"),
+            (ChannelId.VIDEO, f"/v1/tabs/{tab}/video"),
+            (ChannelId.DISPLAY_VIEW, f"/v1/display?mode=view&followTab={tab}"),
+        ]
 
     def _paths(self, name: str) -> Path:
         return (
@@ -1282,18 +1578,15 @@ class Watch:
         )
 
     def _start(self, role: str) -> None:
-        tab, host, s = self.page.tab, self.s.host, self.s
-        for channel, path in (
-            (ChannelId.SCREENCAST, f"/v1/tabs/{tab}/screencast"),
-            (ChannelId.VIDEO, f"/v1/tabs/{tab}/video"),
-        ):
-            reader = host.stream(path, self._paths(channel.name.lower()))
+        s = self.s
+        for channel, path in self.opens(role):
+            reader: StreamReader | Display
+            if path.startswith("/v1/display"):
+                port = s.docker.port(9300)
+                reader = Display(port, path, s.token, self._paths("view"), watch=True)
+            else:
+                reader = s.host.stream(path, self._paths(channel.name.lower()))
             self.readers.append((reader, channel, path, role))
-        view = f"/v1/display?mode=view&followTab={tab}"
-        display = Display(
-            s.docker.port(9300), view, s.token, self._paths("view"), watch=True
-        )
-        self.readers.append((display, ChannelId.DISPLAY_VIEW, view, role))
 
     def open(self) -> None:
         self._start("view")
@@ -1408,13 +1701,7 @@ class Owner:
             raise HarnessError(f"{plant.id}: the typed value never showed")
 
     def _wait(self, regions: Sequence[Region], timeout: float = 6) -> bool:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            proof = self.s.proof(self.page)
-            if all(live(proof, r) for r in regions):
-                return True
-            time.sleep(0.3)
-        return False
+        return self.s.wait_live(self.page, regions, timeout)
 
     def copy_paste(self, plant: Plant) -> None:
         """Select all and copy in the plant's field, paste into the plain box; the paste

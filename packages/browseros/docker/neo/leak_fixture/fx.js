@@ -33,6 +33,7 @@ const FX = {
   facts: new Map(), // region id -> the dialog text or download name this page produced
   replies: new Map(), // top only: nonce -> callback for stateReply / focused
   rebased: 0, // copy layout: how many baseline tokens this page has made
+  uploads: new Map(), // file input region id -> the text the page read from its file
 };
 
 // The copy layout's two plain fields in MAIN (leak_plan.COPY_BASE, COPY_DROP): the baseline
@@ -101,6 +102,18 @@ function report(id, value) {
 }
 
 function mirror(input, region) {
+  if (input.type === "file") {
+    // An upload: the page reads the chosen file and holds its text as the field's value.
+    input.addEventListener("change", () => {
+      const file = input.files[0];
+      if (!file) return;
+      file.text().then((text) => {
+        FX.uploads.set(region.id, text);
+        report(region.id, text);
+      });
+    });
+    return;
+  }
   // What a React-controlled input does: the value attribute follows every edit.
   const update = () => {
     input.setAttribute("value", input.value);
@@ -191,13 +204,15 @@ function render() {
   for (const region of regionsWhere((r) => r.exposure === "echo" || r.exposure === "server_echo")) {
     echoes.append(el("p", { class: "echo", id: region.id }));
   }
-  for (const frame of slice.frames) if (!frame.late) addFrame(frame);
+  // A document the agent wrote with setContent brings its own frames (content_html).
+  if (!slice.written) for (const frame of slice.frames) if (!frame.late) addFrame(frame);
   for (const region of regionsWhere((r) => r.value !== undefined && r.exposure === "field")) {
     if (!region.late) plant(region);
   }
   for (const region of regionsWhere((r) => r.exposure === "field" || r.exposure === "pasted")) {
     if (FX.fields.get(region.id).value === "") report(region.id, "");
   }
+  if (slice.layout === "upload" && slice.location === "main") renderNeoFileInput();
   if (slice.layout === "pixels" || slice.layout === "owner") ACTS.repaint();
   if (slice.layout === "owner" && slice.location === "main") {
     // The owner opens the popup with a key on this button: on Neo's display only the
@@ -211,6 +226,21 @@ function render() {
     if (titled.length) document.title = titled.map((r) => echoText(r, sourceValue(r))).join(" ");
   }
   refreshEchoes();
+}
+
+// The upload layout's plain file input for Neo's own secret files, outside every plant
+// (leak_plan.NEO_FILE_INPUT): its echo "FILE {{text}}" is what the agent reads back, as
+// information for the owner. The report redacts that slot whole.
+function renderNeoFileInput() {
+  const input = el("input", { type: "file", id: "fx-upload" });
+  const echo = el("p", { id: "fx-upload-echo" });
+  input.addEventListener("change", () => {
+    const file = input.files[0];
+    if (file) file.text().then((text) => (echo.textContent = `FILE {{${text}}}`));
+  });
+  const label = el("label", {}, "Field upload ");
+  label.append(input);
+  document.body.append(label, echo);
 }
 
 function addFrame(frame) {
@@ -235,7 +265,8 @@ function ownState() {
   for (const region of FX.slice.regions) {
     let text = null;
     if (region.exposure === "field" || region.exposure === "pasted") {
-      text = FX.fields.has(region.id) ? FX.fields.get(region.id).value : null;
+      const input = FX.fields.get(region.id);
+      text = !input ? null : input.type === "file" ? (FX.uploads.get(region.id) ?? "") : input.value;
     } else if (region.exposure === "echo" || region.exposure === "server_echo") {
       const p = document.getElementById(region.id);
       text = p ? slotOf(p.textContent, region) : null;

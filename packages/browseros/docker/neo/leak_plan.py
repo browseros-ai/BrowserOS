@@ -138,6 +138,7 @@ class Kind(StrEnum):
     GAP_EARLY_TOGGLE = "gap_early_toggle"  # no rule on purpose: design risk R3
     GAP_UNLABELLED = "gap_unlabelled"  # no rule on purpose: design risk R1
     PLAIN = "plain"  # the control: not sensitive, reads back raw
+    FILE = "file"  # a file input: it holds what the page read from the uploaded file
 
 
 class Shape(StrEnum):
@@ -245,8 +246,17 @@ KINDS: Mapping[Kind, KindSpec] = {
         "gap:R1", "none: a card number in a plain box", False, Shape.CARD, _TEXT
     ),
     Kind.PLAIN: KindSpec("plain", "none: the control", False, Shape.TEXT, _TEXT),
+    Kind.FILE: KindSpec(
+        "file",
+        "none: no rule sees a file's content",
+        False,
+        Shape.TEXT,
+        (("type", "file"),),
+    ),
 }
 SENSITIVE_KINDS = tuple(k for k, s in KINDS.items() if s.sensitive)
+# Every kind a page's own form field can be: an upload's file input only in UPLOAD.
+FIELD_KINDS = tuple(k for k in Kind if k is not Kind.FILE)
 GAP_KINDS = (Kind.GAP_EARLY_TOGGLE, Kind.GAP_UNLABELLED)
 # The split code's form text: what makes its boxes one-time-code fields (codeSlot).
 SPLIT_FORM_TEXT = "Enter the verification code"
@@ -281,13 +291,17 @@ class Origin(StrEnum):
     PAGE = "page"  # the page's script set it (prefill, the page's own input events)
     OWNER = "owner"  # typed on the control display
     HOST = "host"  # known only to the host, which registers it with POST /v1/secrets
-    AGENT = "agent"  # typed by the agent's keyboard.type, in one run's code
+    AGENT = "agent"  # in one run's code: typed by keyboard.type, or an upload's buffer
+    FILE = (
+        "file"  # a file on Neo's disk, which the agent's setInputFiles hands the page
+    )
 
 
 # The declared ways a planted value may ride a request the harness sends, by origin: the
 # one request that hands it to Neo by design. assert_clean refuses a value anywhere else.
 # OWNER keys travel as RFB key events on the control display, which assert_clean never
-# reads (they are not text the harness formats), so they need no entry here.
+# reads (they are not text the harness formats), so they need no entry here; nor does a
+# FILE value, which the oracle writes onto Neo's disk and no request to Neo carries.
 DECLARED_WAYS_IN: Mapping[Origin, str] = {
     Origin.HOST: "http POST /v1/secrets",
     Origin.AGENT: "mcp tools/call run",
@@ -297,10 +311,10 @@ DECLARED_WAYS_IN: Mapping[Origin, str] = {
 class Secret:
     """One planted value. `str()`, `format()` and f-strings raise; only `reveal()` gives it.
 
-    reveal() has six callers, each a designed way in or a reader of the record: the
-    slices the oracle writes into the container, the owner's keystrokes, POST
-    /v1/secrets, the agent's typing run (`typing_code`), the evidence manifest, and the
-    judge's needles. Everything else handles plants by id, and `assert_clean` backs this
+    reveal() has eight callers, each a designed way in or a reader of the record: the
+    slices the oracle writes into the container, the file it writes on Neo's disk, the
+    owner's keystrokes, POST /v1/secrets, the agent's typing run (`typing_code`) and
+    upload buffer (`buffer_code`), the evidence manifest, and the judge's needles. Everything else handles plants by id, and `assert_clean` backs this
     up at the wire.
     """
 
@@ -395,6 +409,20 @@ class Layout(StrEnum):
     COPY = "copy"  # FIELDS, plus a plain baseline field and a paste box in MAIN
     LOCKED = "locked"  # FIELDS, every field read-only: an action waits on it in vain
     TYPED = "typed"  # empty fields the agent types into, with live echoes in MAIN
+    SCRIPT = "script"  # ECHOES, plus a popup document for reads through window.opener
+    # Same-site frames whose fields plant themselves, echoed and titled in a top document
+    # the agent writes with page.setContent (content_html): the fixture serves it a shell.
+    CONTENT = "content"
+    # A file input for a file on Neo's disk, one for the agent's own buffer, each echoed
+    # in MAIN; and the fixture's own plain input for Neo's secret files (information).
+    UPLOAD = "upload"
+
+
+# Documents a layout serves beyond those its regions sit in: the popup a SCRIPT page opens
+# holds nothing of its own; a main-world read in it reaches the page through window.opener.
+EXTRA_DOCUMENTS: Mapping[Layout, tuple[Location, ...]] = {
+    Layout.SCRIPT: (Location.POPUP,),
+}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -455,6 +483,7 @@ class Instance:
     def documents(self) -> tuple[Location, ...]:
         """Every document of the instance, parents before children (popup included)."""
         docs = {PLACES[r.location].document for r in self.regions}
+        docs |= set(EXTRA_DOCUMENTS.get(self.layout, ()))
         for doc in list(docs):
             while (parent := parent_document(doc)) is not None:
                 docs.add(parent)
@@ -494,6 +523,9 @@ class Instance:
             "location": str(document),
             "regions": regions,
             "frames": frames,
+            # The agent writes this document with setContent: the fixture serves a shell
+            # until then, and the fixture script the agent's HTML loads adds no frames.
+            "written": self.layout is Layout.CONTENT and document is Location.MAIN,
         }
 
     def server_echoes(self) -> dict[str, dict]:
@@ -607,8 +639,8 @@ def _layout_plants(layout: Layout) -> list[PlantSpec]:
             for loc in order
             for kind in SENSITIVE_KINDS
         ]
-    if layout is Layout.ECHOES:
-        return [(kind, Location.MAIN, page, False) for kind in Kind] + [
+    if layout in (Layout.ECHOES, Layout.SCRIPT):
+        return [(kind, Location.MAIN, page, False) for kind in FIELD_KINDS] + [
             (kind, loc, page, False)
             for loc in FRAME_MATRIX[1:]
             for kind in (Kind.PASSWORD, Kind.CC_CSC)
@@ -622,6 +654,20 @@ def _layout_plants(layout: Layout) -> list[PlantSpec]:
     if layout is Layout.PIXELS:
         kinds = (Kind.CC_NUMBER, Kind.OTP, Kind.PASSWORD, Kind.SHOW_PASSWORD)
         return [(kind, Location.MAIN, page, False) for kind in kinds]
+    if layout is Layout.UPLOAD:
+        return [
+            (Kind.FILE, Location.MAIN, Origin.FILE, False),
+            (Kind.FILE, Location.MAIN, Origin.AGENT, False),
+        ]
+    if layout is Layout.CONTENT:
+        # Frames of the page's site only: setContent runs between sweeps of that site, and
+        # a cross-site frame's echo is XSITE whatever the op (measured in "echoes").
+        frames = (Location.SAME_ORIGIN, Location.SAME_SITE, Location.NESTED)
+        return [
+            (kind, loc, page, False)
+            for loc in frames
+            for kind in (Kind.PASSWORD, Kind.CC_CSC)
+        ]
     if layout is Layout.OWNER:
         return (
             [
@@ -641,7 +687,7 @@ def _layout_plants(layout: Layout) -> list[PlantSpec]:
 def _layout_exposures(layout: Layout, plant: Plant) -> list[tuple[Exposure, Location]]:
     """The non-field regions of `plant` in `layout`, with where each sits."""
     main = Location.MAIN
-    if layout is Layout.ECHOES and plant.kind is not Kind.PLAIN:
+    if layout in (Layout.ECHOES, Layout.SCRIPT) and plant.kind is not Kind.PLAIN:
         return [(Exposure.ECHO, main)]
     if layout is Layout.FACTS:
         return [
@@ -653,6 +699,10 @@ def _layout_exposures(layout: Layout, plant: Plant) -> list[tuple[Exposure, Loca
         ]
     if layout is Layout.PIXELS and plant.kind is Kind.OTP:
         return [(Exposure.URL, main)]
+    if layout is Layout.CONTENT:
+        return [(Exposure.ECHO, main), (Exposure.TITLE, main)]
+    if layout is Layout.UPLOAD:
+        return [(Exposure.ECHO, main)]
     if layout is Layout.OWNER and plant.origin is Origin.OWNER:
         out = [(Exposure.ECHO, main)]
         if plant.navigates:
@@ -841,6 +891,8 @@ class Phase(StrEnum):
     # The agent just typed its own values: claw-sdk holds them, unregistered, until no
     # keystroke came for its quiet period (TYPED_QUIET); a run's reply is masked with them.
     AGENT_TYPED = "agent_typed"
+    # The agent wrote the page with setContent: its sweeps alone registered the values.
+    AFTER_CONTENT = "after_content"
 
 
 class PhaseError(AssertionError):
@@ -867,6 +919,7 @@ class PhaseGuard:
         self._typed: set[str] = (
             set()
         )  # the agent typed into it, nothing registered since
+        self._written: set[str] = set()  # the agent wrote the page with setContent
 
     def claim(self, instance: Instance, phase: Phase, runs: int) -> None:
         name = instance.name
@@ -880,6 +933,7 @@ class PhaseGuard:
             Phase.CONTROL_SETTLED: self._control == ("display", name),
             Phase.AFTER_RELEASE: name in self._released,
             Phase.AGENT_TYPED: name in self._typed,
+            Phase.AFTER_CONTENT: name in self._written,
         }[phase]
         if not ok:
             raise PhaseError(f"{name}: {phase} does not hold ({runs} runs)")
@@ -891,6 +945,10 @@ class PhaseGuard:
     def note_typed(self, instance: Instance) -> None:
         self._touched.add(instance.name)
         self._typed.add(instance.name)
+
+    def note_written(self, instance: Instance) -> None:
+        self._touched.add(instance.name)
+        self._written.add(instance.name)
 
     def note_registered(self, instance: Instance) -> None:
         self._touched.add(instance.name)
@@ -968,6 +1026,7 @@ class ChannelId(StrEnum):
     SCREENSHOT = "page.screenshot"
     PDF = "page.pdf"
     EVALUATE = "page.evaluate"
+    OPENER_EVALUATE = "page.evaluate (popup, window.opener)"
     FRAME_EVALUATE = "frame.evaluate"
     WAIT_FOR_FUNCTION = "page.waitForFunction"
     LOCATOR_EVALUATE = "locator.evaluate"
@@ -976,6 +1035,9 @@ class ChannelId(StrEnum):
     EVAL_ALL = "page.$$eval"
     HANDLE_EVALUATE = "elementHandle.evaluate"
     SET_CONTENT = "page.setContent"
+    UPLOAD = "locator.setInputFiles (path)"
+    UPLOAD_BUFFER = "locator.setInputFiles (buffer)"
+    BRING_TO_FRONT = "page.bringToFront"
     SOLVE_CAPTCHA = "neo.solveCaptcha"
     RUNS = "GET /v1/runs"
     RUN = "GET /v1/runs/{id}"
@@ -988,6 +1050,7 @@ class ChannelId(StrEnum):
     SCREENCAST = "/v1/tabs/{id}/screencast"
     VIDEO = "/v1/tabs/{id}/video"
     DISPLAY_VIEW = "/v1/display view"
+    FRONT_VIEW = "/v1/display view (private tab brought forward)"
     CLIPBOARD_VIEW = "clipboard to a view display"
     CLIPBOARD_CONTROL = "clipboard to a control display"
     TRACE_STORE = "trace.db, -wal, -shm"
@@ -1027,6 +1090,13 @@ class ChannelSpec:
     reads_echoes: bool = (
         False  # in ECHO_READS (scenario "echoes": a cold instance each)
     )
+    # In SCRIPT_READS (scenario "script"): main-world script, each planned run the first
+    # touch of a page of its own.
+    reads_script: bool = False
+    # The probe finds regions by selector, so it never asks for the closed root's. False
+    # for a main-world reader, which reaches what the page's own script can, the closed
+    # root included, through the page's own reference to it.
+    by_selector: bool = True
     after_release: bool = False  # in AFTER_RELEASE_READS
     l2_only: bool = False  # the design masks this exit with L2 only (residual BD-L2)
     # Some answers show only some of the regions they reach (a strict-mode error
@@ -1040,6 +1110,11 @@ class ChannelSpec:
     # The run puts the value in the page itself (the agent's typing): the proof after it
     # is the value's presence, as an armed run's is.
     types: bool = False
+    # The op answers nothing by contract (setContent, setInputFiles, bringToFront): its
+    # cells say only whether Neo ran it, refused it by contract or has not built it, for
+    # the regions it would expose whether or not the page shows them yet. A value found
+    # in its answer is still a leak.
+    void: bool = False
 
 
 def reach(
@@ -1147,16 +1222,327 @@ def on_event(event: str, then: str) -> CodeTemplate:
     return template
 
 
-def main_world(call: str) -> CodeTemplate:
-    """Main-world script asking for raw values: it must come back held. `call` uses IDS
-    (the region ids as a JSON array: ids only, never values) and ID (the first one)."""
+def void_run(ids: Sequence[str], call: str) -> str:
+    """The run of an op that answers nothing (ChannelSpec.void): `call`, then {sent:
+    true}. A refusal is caught and keyed by each region the op would expose, with its
+    owner and code: one the prelude throws itself (a buffer payload today) would reach
+    the run as the script's own error, its code lost."""
+    keyed = ", ".join(f"{json.dumps(i)}: refused" for i in ids)
+    return "\n".join(
+        [
+            "try {",
+            f"  await {call};",
+            "  return {sent: true};",
+            "} catch (e) {",
+            f"  const refused = {_CAUGHT};",
+            f"  return {{{keyed}}};",
+            "}",
+        ]
+    )
+
+
+def bring_to_front(
+    instance: Instance, regions: Sequence[Region], location: Location | None
+) -> str:
+    """page.bringToFront on the run's page: the tab really comes forward."""
+    return void_run([r.id for r in regions], "page.bringToFront()")
+
+
+def content_html(instance: Instance) -> str:
+    """The HTML the agent hands page.setContent: the fixture's script, then the top
+    document's frames, and no value. The script comes first so it listens before any
+    frame reports its values, inside an explicit <body> (one written before any content
+    would land in <head>, with no body yet to render into); it renders the echoes and
+    titles from the top's slice, whose `written` flag keeps it from adding the frames."""
+    frames = "".join(
+        f'<iframe id="{f["id"]}" src="{f["src"]}"></iframe>'
+        for f in instance.slice(Location.MAIN)["frames"]
+    )
+    return f'<body><script src="/fx/fx.js"></script>{frames}'
+
+
+def set_content(
+    instance: Instance, regions: Sequence[Region], location: Location | None
+) -> str:
+    """page.setContent with content_html, resolved once the page and its frames loaded."""
+    html = json.dumps(content_html(instance))
+    return void_run([r.id for r in regions], f"page.setContent({html})")
+
+
+# setInputFiles. The owner serves any path (the caller sandboxes), so the agent can hand
+# the page a file of Neo's disk, which the page reads and echoes: the oracle writes a
+# fresh value into a file here, outside the state dir, and no request to Neo carries it.
+UPLOAD_DIR = "/tmp/leakfx/up"
+# The UPLOAD page's plain file input and echo for Neo's own secret files, outside every
+# plant: whether the agent can read them is information for the owner, not a verdict.
+# The page echoes a file as "FILE {{<text>}}"; the report redacts that slot whole.
+NEO_FILE_INPUT = "fx-upload"
+NEO_FILE_ECHO = "fx-upload-echo"
+
+
+def upload_path(region: Region) -> str:
+    """Where the file a FILE plant's input is given sits: named by the region's id."""
+    return f"{UPLOAD_DIR}/{region.id}.txt"
+
+
+def upload(
+    instance: Instance, regions: Sequence[Region], location: Location | None
+) -> str:
+    """locator.setInputFiles with the path of the file the oracle wrote: a path, which
+    is not a value."""
+    (region,) = regions
+    path = json.dumps(upload_path(region))
+    return void_run([region.id], f"page.locator('#{region.id}').setInputFiles({path})")
+
+
+def buffer_code(instance: Instance, region: Region) -> str:
+    """locator.setInputFiles with a {name, mimeType, buffer} payload of an AGENT plant's
+    value: the one run that carries it, its own (as typing_code does), so assert_clean
+    admits it in this request alone. Buffer is Playwright's type; the runtime may lack
+    it, and then the payload is the value's bytes."""
+    assert region.plant.origin is Origin.AGENT and region.exposure is Exposure.FIELD
+    payload = "{name: 'upload.txt', mimeType: 'text/plain', buffer}"
+    return "\n".join(
+        [
+            f"const text = {json.dumps(region.expected())};",
+            "const buffer = typeof Buffer === 'function' ? Buffer.from(text)"
+            " : Uint8Array.from(text, (c) => c.charCodeAt(0));",
+            void_run(
+                [region.id], f"page.locator('#{region.id}').setInputFiles({payload})"
+            ),
+        ]
+    )
+
+
+def neo_file_code(path: str) -> str:
+    """One of Neo's own secret files into the UPLOAD page's plain input, then its echo,
+    which the run returns: what the agent could read that way."""
+    return "\n".join(
+        [
+            f"await page.locator('#{NEO_FILE_INPUT}').setInputFiles({json.dumps(path)});",
+            f"const echo = page.locator('#{NEO_FILE_ECHO}');",
+            "await echo.waitFor({state: 'visible', timeout: 5000});",
+            "return await echo.textContent();",
+        ]
+    )
+
+
+# Main-world reads (design D3's guard). The agent's function runs where the page's own
+# script does, so it reaches what the page can: its document, both shadow roots, and
+# same-origin frames, also behind a cross-origin one. The guard sweeps the frames the op
+# can reach before and after it and masks what it found in the result
+# (FieldValues::mask_json): a value of 4+ characters plain, JSON-escaped or
+# percent-encoded anywhere in a string, a shorter one only as a whole string. A probe
+# asks for exactly those spellings, so a raw answer is a leak and never the deliberate
+# encoding the threat model leaves out (base64, a short value inside longer text).
+LONG_SPELLINGS = ("plain", "json", "uri")
+SHORT_SPELLINGS = ("plain",)
+
+
+def spellings(region: Region) -> tuple[str, ...]:
+    return SHORT_SPELLINGS if region.short else LONG_SPELLINGS
+
+
+# How the top document's main world reaches each location it can, as steps the reader
+# walks: "frame" an iframe element by id, "child" a window's frames[i] (which a
+# cross-origin window still exposes), "shadow" an open root by its host's id, "closed" the
+# closed root through the page's own reference to it (fx.js keeps it in FX.closed). Only
+# documents of the top's origin: reading a cross-origin frame's document throws.
+MAIN_WORLD_STEPS: Mapping[Location, tuple[tuple[str, str | int | None], ...]] = {
+    Location.MAIN: (),
+    Location.SHADOW_OPEN: (("shadow", "host-open"),),
+    Location.SHADOW_CLOSED: (("closed", None),),
+    Location.SAME_ORIGIN: (("frame", "fr-so"),),
+    Location.NESTED: (("frame", "fr-xo"), ("child", 0)),
+}
+# A popup reaches the same through window.opener, but for the closed root: FX is a
+# binding of the page's realm, not a property of its window.
+OPENER_FIELDS = tuple(
+    loc for loc in MAIN_WORLD_STEPS if loc is not Location.SHADOW_CLOSED
+)
+# frame.evaluate runs in every frame of the matrix but the top (page.evaluate is that
+# one), reading the frame's own fields.
+FRAME_DOCUMENTS = (
+    Location.SAME_ORIGIN,
+    Location.SAME_SITE,
+    Location.CROSS_SITE,
+    Location.NESTED,
+)
+
+# The readers run in the page, so they hold nothing from the run's scope. Each returns a
+# region's value (a field) or text (an echo) in the spellings asked; `near` is a field's
+# label, whose anchor proves the read reached that field (run code names ids only).
+_SPELL = (
+    "const spell = {plain: (v) => v, json: (v) => JSON.stringify(v),"
+    " uri: (v) => encodeURIComponent(v)};"
+)
+# For page.evaluate and its relatives: [[id, steps, spellings], ...] -> {spelling: {id: {ok}}}.
+_MAIN_WORLD_READER = f"""\
+(want) => {{
+  {_SPELL}
+  // A window's document is read only when a step needs it: a cross-origin window on the
+  // way (b.test around the nested a.test frame) throws on .document, not on .frames.
+  const rootOf = (steps) => {{
+    let win = window;
+    let root = null;
+    const doc = () => root || win.document;
+    for (const [step, arg] of steps) {{
+      if (step === 'opener') {{ win = win.opener; root = null; }}
+      else if (step === 'frame') {{ win = doc().getElementById(arg).contentWindow; root = null; }}
+      else if (step === 'child') {{ win = win.frames[arg]; root = null; }}
+      else if (step === 'shadow') {{ root = doc().getElementById(arg).shadowRoot; }}
+      else if (step === 'closed') {{ root = FX.closed; }}
+    }}
+    return doc();
+  }};
+  const out = {{plain: {{}}, json: {{}}, uri: {{}}}};
+  for (const [id, steps, spellings] of want) {{
+    try {{
+      const el = rootOf(steps).getElementById(id);
+      const text = el.tagName === 'INPUT' ? el.value : el.textContent;
+      for (const s of spellings) out[s][id] = {{ok: spell[s](text)}};
+      const label = el.closest('label');
+      out.plain[id].near = label ? label.textContent : null;
+    }} catch (e) {{
+      out.plain[id] = {{err: String(e && e.message || e)}};
+    }}
+  }}
+  return out;
+}}"""
+# For locator.evaluate, $eval and elementHandle.evaluate: (element, spellings) -> {near, <spelling>}.
+_ELEMENT_READER = f"""\
+(el, spellings) => {{
+  {_SPELL}
+  const text = el.tagName === 'INPUT' ? el.value : el.textContent;
+  const label = el.closest('label');
+  const out = {{near: label ? label.textContent : null}};
+  for (const s of spellings) out[s] = spell[s](text);
+  return out;
+}}"""
+# For locator.evaluateAll and $$eval: (elements, {id: spellings}) -> [[id, element answer]].
+_ALL_READER = (
+    "(els, want) => els.filter((el) => el.id in want)"
+    f".map((el) => [el.id, ({_ELEMENT_READER})(el, want[el.id])])"
+)
+# The run side of the element scripts: each element's answer regrouped into the readers'
+# shape, and an op's refusal kept under its region with its owner and code.
+_GROUPED_HEAD = """\
+const out = {plain: {}, json: {}, uri: {}};
+const put = (id, r) => {
+  out.plain[id] = {ok: r.plain, near: r.near};
+  for (const s of ['json', 'uri']) if (s in r) out[s][id] = {ok: r[s]};
+};
+const fail = (id, e) => {
+  out.plain[id] = {err: String(e && e.message || e), owner: e && e.owner, code: e && e.code};
+};"""
+
+
+def _handle(instance: Instance, location: Location | None, handle: str) -> str:
+    """`const root` (the location's frameLocator chain) or `const frame` (its frame, for
+    the frame forms: $eval, $$eval, $, evaluate; the page itself for the top document).
+
+    A run's page lists only the frames its last navigation or wait reported, and a fresh
+    run has had neither (claw-sdk's prelude caches the tree; upstream lists it live). A
+    waitForURL on the URL the page is at already returns at once and refreshes it."""
+    if handle == "root":
+        return f"const root = {_root(instance, location)};"
+    if location in (None, Location.MAIN, Location.SHADOW_OPEN):
+        return "const frame = page;"
+    url = json.dumps(instance.url(location))
+    return (
+        f"await page.waitForURL({json.dumps(instance.url())});\n"
+        f"const frame = page.frames().find((f) => f.url() === {url});"
+    )
+
+
+def _read(head: Sequence[str], want: object, reader: str, call: str) -> str:
+    return "\n".join(
+        [
+            *head,
+            f"const WANT = {json.dumps(want)};",
+            f"const READ = {reader};",
+            f"return await {call};",
+        ]
+    )
+
+
+def top_read(call: str) -> CodeTemplate:
+    """A main-world read from the top document (page.evaluate, waitForFunction): `call`
+    applies READ to WANT and resolves to READ's answer."""
 
     def template(
         instance: Instance, regions: Sequence[Region], location: Location | None
     ) -> str:
-        ids = [r.id for r in regions]
-        return (
-            f"const IDS = {json.dumps(ids)};\nconst ID = IDS[0];\nreturn await {call};"
+        want = [[r.id, MAIN_WORLD_STEPS[r.location], spellings(r)] for r in regions]
+        return _read([], want, _MAIN_WORLD_READER, call)
+
+    return template
+
+
+def opener_read(
+    instance: Instance, regions: Sequence[Region], location: Location | None
+) -> str:
+    """page.evaluate in the popup the page opened, reading the page through
+    window.opener: the guard must sweep the tabs an opener links (fx-g-opener)."""
+    opener = (("opener", None),)
+    want = [
+        [r.id, (*opener, *MAIN_WORLD_STEPS[r.location]), spellings(r)] for r in regions
+    ]
+    head = [f"const popup = {_root(instance, Location.POPUP)};"]
+    return _read(head, want, _MAIN_WORLD_READER, "popup.evaluate(READ, WANT)")
+
+
+def frame_read(
+    instance: Instance, regions: Sequence[Region], location: Location | None
+) -> str:
+    """frame.evaluate in one frame of the matrix, reading that frame's own fields."""
+    want = [[r.id, (), spellings(r)] for r in regions]
+    head = [_handle(instance, location, "frame")]
+    return _read(head, want, _MAIN_WORLD_READER, "frame.evaluate(READ, WANT)")
+
+
+def element_read(handle: str, call: str) -> CodeTemplate:
+    """locator.evaluate and its relatives on each field of one location, one call per
+    element, each caught on its own: `call` applies READ to the element `id` names with
+    its `spellings`, through `root` or `frame` (`handle`)."""
+
+    def template(
+        instance: Instance, regions: Sequence[Region], location: Location | None
+    ) -> str:
+        lines = [
+            _handle(instance, location, handle),
+            f"const READ = {_ELEMENT_READER};",
+            _GROUPED_HEAD,
+        ]
+        for r in regions:
+            ident = json.dumps(r.id)
+            lines.append(
+                f"try {{ const id = {ident}, spellings = {json.dumps(spellings(r))};"
+                f" put(id, await {call}); }} catch (e) {{ fail({ident}, e); }}"
+            )
+        return "\n".join([*lines, "return out;"])
+
+    return template
+
+
+def all_read(handle: str, call: str) -> CodeTemplate:
+    """locator.evaluateAll and $$eval: one call over every input of one location, READ
+    keeping the fields WANT names (id -> spellings)."""
+
+    def template(
+        instance: Instance, regions: Sequence[Region], location: Location | None
+    ) -> str:
+        want = {r.id: spellings(r) for r in regions}
+        return "\n".join(
+            [
+                _handle(instance, location, handle),
+                f"const WANT = {json.dumps(want)};",
+                f"const READ = {_ALL_READER};",
+                _GROUPED_HEAD,
+                f"try {{ for (const [id, r] of await {call}) put(id, r); }}",
+                "catch (e) { for (const id of Object.keys(WANT)) fail(id, e); }",
+                "return out;",
+            ]
         )
 
     return template
@@ -1296,6 +1682,10 @@ EXPECT_FAILED = frozenset({"website/assertion_failed"})
 # (a closed shadow root): refused, nothing sent (browseros-playwright copy_refusal.rs).
 COPY_REFUSED = frozenset({"script/sensitive_copy_refused"})
 _COPY_OPS = frozenset({"keyboard.press", "locator.focus"})
+# A main-world method the prelude itself refuses (neo/unsupported) is not built yet.
+SCRIPT_NOT_BUILT = NOT_BUILT | {"neo/unsupported"}
+# page.evaluate and waitForFunction reach what the top document's own script can.
+_TOP_WORLD = reach(fields=tuple(MAIN_WORLD_STEPS), exposures=(Exposure.ECHO,))
 
 
 def _expect(matcher: str) -> CodeTemplate:
@@ -1724,106 +2114,171 @@ SPECS: Mapping[ChannelId, ChannelSpec] = {
             refusals=PIXEL_REFUSALS,
             ops=frozenset({"page.pdf"}),
         ),
+        # The main-world family: a cold page per planned run (scenario "script"). Held
+        # today (script/method_unavailable, EVAL-HELD); served, masked by the guard.
         ChannelSpec(
             ChannelId.EVALUATE,
             _S,
-            MAIN_FIELDS,
-            code=main_world(
-                "page.evaluate((ids) => ids.map((id) => document.getElementById(id).value), IDS)"
-            ),
+            _TOP_WORLD,
+            code=top_read("page.evaluate(READ, WANT)"),
             batch="page",
             refusals=HELD,
-            not_built=NOT_BUILT,
+            not_built=SCRIPT_NOT_BUILT,
             ops=frozenset({"page.evaluate"}),
+            reads_script=True,
+            by_selector=False,
+        ),
+        ChannelSpec(
+            ChannelId.OPENER_EVALUATE,
+            _S,
+            reach(fields=OPENER_FIELDS, exposures=(Exposure.ECHO,)),
+            code=opener_read,
+            batch="page",
+            refusals=HELD,
+            not_built=SCRIPT_NOT_BUILT,
+            ops=frozenset({"page.evaluate", "context.pages"}),
+            by_selector=False,
         ),
         ChannelSpec(
             ChannelId.FRAME_EVALUATE,
             _S,
-            MAIN_FIELDS,
-            code=main_world(
-                "page.frames()[0].evaluate((ids) => ids.map((id) => document.getElementById(id).value), IDS)"
-            ),
-            batch="page",
+            reach(fields=FRAME_DOCUMENTS),
+            code=frame_read,
+            batch="location",
             refusals=HELD,
-            not_built=NOT_BUILT,
+            not_built=SCRIPT_NOT_BUILT,
             ops=frozenset({"page.evaluate", "page.frames"}),
+            reads_script=True,
+            by_selector=False,
         ),
         ChannelSpec(
+            # Playwright resolves a JSHandle to the truthy value; Neo's holds the value
+            # itself, and jsonValue() returns it (prelude ValueHandle).
             ChannelId.WAIT_FOR_FUNCTION,
             _S,
-            MAIN_FIELDS,
-            code=main_world(
-                "page.waitForFunction((id) => document.getElementById(id).value.length > 0, ID, {timeout: 2000})"
+            _TOP_WORLD,
+            code=top_read(
+                "page.waitForFunction(READ, WANT, {timeout: 5000})"
+                ".then((h) => h.jsonValue())"
             ),
             batch="page",
             refusals=HELD,
-            not_built=NOT_BUILT,
+            not_built=SCRIPT_NOT_BUILT,
             ops=frozenset({"page.waitForFunction"}),
+            reads_script=True,
+            by_selector=False,
         ),
         ChannelSpec(
             ChannelId.LOCATOR_EVALUATE,
             _S,
-            MAIN_FIELDS,
-            code=main_world("page.locator('#' + ID).evaluate((el) => el.value)"),
-            batch="page",
+            reach(fields=AGENT_FIELDS),
+            code=element_read(
+                "root", "root.locator('#' + id).evaluate(READ, spellings)"
+            ),
+            batch="location",
             refusals=HELD,
-            not_built=NOT_BUILT,
+            not_built=SCRIPT_NOT_BUILT,
             ops=frozenset({"locator.evaluate"}),
+            reads_script=True,
         ),
         ChannelSpec(
             ChannelId.EVALUATE_ALL,
             _S,
-            MAIN_FIELDS,
-            code=main_world(
-                "page.locator('input').evaluateAll((els) => els.map((el) => el.value))"
-            ),
-            batch="page",
+            reach(fields=AGENT_FIELDS),
+            code=all_read("root", "root.locator('input').evaluateAll(READ, WANT)"),
+            batch="location",
             refusals=HELD,
-            not_built=NOT_BUILT,
+            not_built=SCRIPT_NOT_BUILT,
             ops=frozenset({"locator.evaluateAll"}),
+            reads_script=True,
         ),
         ChannelSpec(
             ChannelId.EVAL_ONE,
             _S,
-            MAIN_FIELDS,
-            code=main_world("page.$eval('#' + ID, (el) => el.value)"),
-            batch="page",
+            reach(fields=AGENT_FIELDS),
+            code=element_read("frame", "frame.$eval('#' + id, READ, spellings)"),
+            batch="location",
             refusals=HELD,
-            not_built=NOT_BUILT,
-            ops=frozenset({"locator.evaluate"}),
+            not_built=SCRIPT_NOT_BUILT,
+            ops=frozenset({"locator.evaluate", "page.frames"}),
+            reads_script=True,
         ),
         ChannelSpec(
             ChannelId.EVAL_ALL,
             _S,
-            MAIN_FIELDS,
-            code=main_world("page.$$eval('input', (els) => els.map((el) => el.value))"),
-            batch="page",
+            reach(fields=AGENT_FIELDS),
+            code=all_read("frame", "frame.$$eval('input', READ, WANT)"),
+            batch="location",
             refusals=HELD,
-            not_built=NOT_BUILT,
-            ops=frozenset({"locator.evaluateAll"}),
+            not_built=SCRIPT_NOT_BUILT,
+            ops=frozenset({"locator.evaluateAll", "page.frames"}),
+            reads_script=True,
         ),
         ChannelSpec(
             ChannelId.HANDLE_EVALUATE,
             _S,
-            MAIN_FIELDS,
-            code=main_world(
-                "page.$('#' + ID).then((h) => h.evaluate((el) => el.value))"
+            reach(fields=AGENT_FIELDS),
+            code=element_read(
+                "frame", "frame.$('#' + id).then((h) => h.evaluate(READ, spellings))"
             ),
-            batch="page",
+            batch="location",
             refusals=HELD,
-            not_built=NOT_BUILT,
-            ops=frozenset({"locator.elementHandle", "locator.evaluate"}),
+            not_built=SCRIPT_NOT_BUILT,
+            ops=frozenset({"locator.elementHandle", "locator.evaluate", "page.frames"}),
+            reads_script=True,
         ),
         ChannelSpec(
+            # Its HTML's scripts run in the main world, between the guard's sweeps of the
+            # page's site (scenario "content"); the reads of what it wrote are judged.
             ChannelId.SET_CONTENT,
             _S,
-            MAIN_FIELDS,
-            code=main_world(
-                "page.setContent('<p>neutral</p><script>document.title = document.body.textContent</script>')"
-            ),
+            reach(exposures=(Exposure.ECHO, Exposure.TITLE)),
+            code=set_content,
             batch="page",
             refusals=HELD,
+            not_built=SCRIPT_NOT_BUILT,
             ops=frozenset({"page.setContent"}),
+            void=True,
+        ),
+        # setInputFiles answers nothing; the page's echo of what it uploaded is read
+        # through textContent (scenario "upload"). Held today (UPLOAD-HELD).
+        ChannelSpec(
+            ChannelId.UPLOAD,
+            _A,
+            lambda r: r.exposure is Exposure.FIELD and r.plant.origin is Origin.FILE,
+            code=upload,
+            batch="region",
+            refusals=HELD,
+            not_built=SCRIPT_NOT_BUILT,
+            ops=frozenset({"locator.setInputFiles"}),
+            void=True,
+        ),
+        ChannelSpec(
+            # The payload carries the agent's own value (buffer_code), so the Session
+            # builds its run, as it does the typing run.
+            ChannelId.UPLOAD_BUFFER,
+            _A,
+            lambda r: r.exposure is Exposure.FIELD
+            and r.plant.kind is Kind.FILE
+            and r.plant.origin is Origin.AGENT,
+            refusals=HELD,
+            not_built=SCRIPT_NOT_BUILT,
+            ops=frozenset({"locator.setInputFiles"}),
+            void=True,
+        ),
+        ChannelSpec(
+            # It answers nothing; what it puts in front is judged on the view displays
+            # (FRONT_VIEW). Its fields are the page's, proven around it, which the view
+            # cells stand on. Refused while the owner has control, like any write.
+            ChannelId.BRING_TO_FRONT,
+            _A,
+            MAIN_FIELDS,
+            code=bring_to_front,
+            batch="page",
+            refusals=frozenset({"host/owner_has_control"}),
+            not_built=SCRIPT_NOT_BUILT,
+            ops=frozenset({"page.bringToFront"}),
+            void=True,
         ),
         ChannelSpec(
             ChannelId.SOLVE_CAPTCHA,
@@ -1844,6 +2299,9 @@ SPECS: Mapping[ChannelId, ChannelSpec] = {
         ChannelSpec(ChannelId.SCREENCAST, Family.LIVE_PIXELS, everything),
         ChannelSpec(ChannelId.VIDEO, Family.LIVE_PIXELS, everything),
         ChannelSpec(ChannelId.DISPLAY_VIEW, Family.LIVE_PIXELS, everything),
+        # A view display open while the agent brings a private tab forward, judged from
+        # that moment rather than from when the tab went private (it was in the back).
+        ChannelSpec(ChannelId.FRONT_VIEW, Family.LIVE_PIXELS, everything),
         ChannelSpec(ChannelId.CLIPBOARD_VIEW, Family.CLIPBOARD, everything),
         ChannelSpec(ChannelId.CLIPBOARD_CONTROL, Family.CLIPBOARD, everything),
         ChannelSpec(ChannelId.TRACE_STORE, Family.DISK, everything),
@@ -1859,7 +2317,7 @@ if set(SPECS) != set(ChannelId):  # a hand-synced list that cannot drift
 # Derived, never listed by hand: a new channel joins its scenarios through its flags.
 ECHO_READS = tuple(c for c, s in SPECS.items() if s.reads_echoes)
 FIELD_READS = tuple(c for c, s in SPECS.items() if s.reads_fields)
-SCRIPT_READS = tuple(c for c, s in SPECS.items() if s.family is Family.AGENT_SCRIPT)
+SCRIPT_READS = tuple(c for c, s in SPECS.items() if s.reads_script)
 PIXEL_READS = tuple(c for c, s in SPECS.items() if s.family is Family.AGENT_PIXELS)
 AFTER_RELEASE_READS = tuple(c for c, s in SPECS.items() if s.after_release)
 KEY_READS: Mapping[Layout, tuple[ChannelId, ...]] = {
@@ -1906,7 +2364,6 @@ UNPROBED_OPS: Mapping[str, str] = {
     },
     "locator.pressSequentially": "locator.press's runner (key_action.rs) typing text: "
     "press is probed, and the agent's typing is probed through keyboard.type",
-    "locator.setInputFiles": "held: it uploads files from Neo's disk (12427d0b9)",
     "keyboard.insertText": "keyboard.type's burst without key events (input_op.rs): "
     "the same focus walk marks a sensitive target, and it cannot copy",
     **{
@@ -1943,6 +2400,15 @@ UNPROBED_OPS: Mapping[str, str] = {
 }
 
 
+# Ops a probe exercises that ops.generated.ts does not list yet, with what serves them:
+# the probe answers n/a (not built) until then, and leak_sdk_test fails on any probed op
+# that is neither in the table nor here.
+AWAITED_OPS: Mapping[str, str] = {
+    "page.bringToFront": "sdk-playwright serves it (held-methods brief); until then the "
+    "prelude refuses it (neo/unsupported)",
+}
+
+
 @dataclasses.dataclass(frozen=True)
 class PlannedRun:
     location: Location | None  # None for page-level reads
@@ -1956,17 +2422,20 @@ def plan_runs(
     *,
     exposures: Collection[Exposure] | None = None,
     kinds: Collection[Kind] | None = None,
+    at: Location | None = None,
 ) -> tuple[PlannedRun, ...]:
     """The runs that exercise `spec` on the regions of `instance` it reaches (narrowed by
-    `exposures` and `kinds`), in the order the Session sends them. Regions no selector
-    reaches (the closed shadow root) are never asked for."""
+    `exposures` and `kinds`, and for a "location" batch to the run `at` one location), in
+    the order the Session sends them. Regions no selector reaches (the closed shadow
+    root) are asked for only by a probe that finds none by selector."""
     assert spec.code is not None, spec.id
+    assert at is None or spec.batch == "location", spec.id
     targets = spec.targets or spec.reaches
     regions = [
         r
         for r in instance.regions
         if targets(r)
-        and PLACES[r.location].agent_reachable
+        and (PLACES[r.location].agent_reachable or not spec.by_selector)
         and (exposures is None or r.exposure in exposures)
         and (kinds is None or r.plant.kind in kinds)
     ]
@@ -1980,7 +2449,7 @@ def plan_runs(
         for r in regions:
             key = Location.MAIN if r.location is Location.SHADOW_OPEN else r.location
             groups.setdefault(key, []).append(r)
-        order = [loc for loc in Location if loc in groups]
+        order = [loc for loc in Location if loc in groups and at in (None, loc)]
         return tuple(
             PlannedRun(loc, tuple(groups[loc]), spec.code(instance, groups[loc], loc))
             for loc in order
@@ -1996,6 +2465,14 @@ def plan_runs(
     if not regions and targets is not nothing:
         return ()
     return (PlannedRun(None, tuple(regions), spec.code(instance, regions, None)),)
+
+
+def script_places(channel: ChannelId) -> tuple[Location | None, ...]:
+    """Where a SCRIPT_READS probe's planned runs go, a fresh page each: one location per
+    run of a "location" batch, None for one run over the page. Read off a SCRIPT page's
+    plan, which every seed shares."""
+    page = make_instance(Layout.SCRIPT, seed="places", index=0)
+    return tuple(run.location for run in plan_runs(SPECS[channel], page))
 
 
 class Contamination(AssertionError):

@@ -18,6 +18,7 @@ import re
 import struct
 import tempfile
 import unittest
+import urllib.parse
 from pathlib import Path
 
 import leak_judge as J
@@ -37,9 +38,12 @@ RULES = AGENT / "crates/browseros-core/src/sensitive_fields/rules.json"
 OPS = AGENT / "packages/browseros-playwright-js/src/prelude/ops.generated.ts"
 
 
-def run_instances(n: int = 12) -> list[P.Instance]:
+def run_instances(n: int = 8) -> list[P.Instance]:
+    """n instances of every layout, as one run's: indices unique and two digits, as a
+    region id holds its instance's index in two (r<index><counter>)."""
+    assert n * len(P.Layout) <= 100
     return [
-        P.make_instance(layout, seed="unit", index=i * 10 + j)
+        P.make_instance(layout, seed="unit", index=i * len(P.Layout) + j)
         for i in range(n)
         for j, layout in enumerate(P.Layout)
     ]
@@ -323,6 +327,14 @@ class PhaseGuardTests(unittest.TestCase):
             self.guard.claim(self.inst, P.Phase.AGENT_TYPED, 1)
         self.guard.claim(self.inst, P.Phase.WARM, 1)
 
+    def test_after_content_holds_once_the_agent_wrote_the_page(self) -> None:
+        with self.assertRaises(P.PhaseError):
+            self.guard.claim(self.inst, P.Phase.AFTER_CONTENT, 1)
+        self.guard.note_written(self.inst)
+        self.guard.claim(self.inst, P.Phase.AFTER_CONTENT, 3)
+        with self.assertRaises(P.PhaseError):
+            self.guard.claim(self.inst, P.Phase.COLD, 1)
+
     def test_control_phases_follow_the_open_control(self) -> None:
         with self.assertRaises(P.PhaseError):
             self.guard.claim(self.inst, P.Phase.DURING_CONTROL, 1)
@@ -345,7 +357,20 @@ class ChannelTableTests(unittest.TestCase):
         self.assertNotIn(P.ChannelId.INPUT_VALUE, P.ECHO_READS)
         self.assertEqual(set(P.PIXEL_READS), {P.ChannelId.SCREENSHOT, P.ChannelId.PDF})
         self.assertTrue(all(P.SPECS[c].reads_fields for c in P.FIELD_READS))
-        self.assertIn(P.ChannelId.SET_CONTENT, P.SCRIPT_READS)
+        self.assertEqual(
+            set(P.SCRIPT_READS),
+            {
+                P.ChannelId.EVALUATE,
+                P.ChannelId.FRAME_EVALUATE,
+                P.ChannelId.WAIT_FOR_FUNCTION,
+                P.ChannelId.LOCATOR_EVALUATE,
+                P.ChannelId.EVALUATE_ALL,
+                P.ChannelId.EVAL_ONE,
+                P.ChannelId.EVAL_ALL,
+                P.ChannelId.HANDLE_EVALUATE,
+            },
+            "every served main-world read but the opener's, which needs the popup",
+        )
         self.assertNotIn(P.ChannelId.TO_HAVE_VALUE, P.FIELD_READS)
         self.assertIn(P.ChannelId.TO_HAVE_TEXT, P.KEY_READS[P.Layout.ECHOES])
         self.assertIn(P.ChannelId.FILL_CALL_LOG, P.KEY_READS[P.Layout.LOCKED])
@@ -371,6 +396,227 @@ class ChannelTableTests(unittest.TestCase):
         self.assertEqual(
             sorted(set(P.UNPROBED_OPS) & probed), [], "an excused op is probed"
         )
+        self.assertEqual(
+            sorted(probed - names - set(P.AWAITED_OPS)),
+            [],
+            "a probe names an op the crate lacks and nobody awaits",
+        )
+        self.assertNotIn("locator.setInputFiles", P.UNPROBED_OPS)
+        self.assertIn("page.bringToFront", probed)
+
+
+def want_of(code: str) -> object:
+    """The WANT a main-world probe's run code hands its reader: ids and paths only."""
+    found = re.search(r"^const WANT = (.*);$", code, re.MULTILINE)
+    assert found, code
+    return json.loads(found[1])
+
+
+class ScriptPlanTests(unittest.TestCase):
+    """The main-world probes' plan: where each runs, what it asks, in which spellings."""
+
+    def setUp(self) -> None:
+        self.inst = P.make_instance(P.Layout.SCRIPT, seed="sp", index=1)
+
+    def test_each_script_probe_is_one_run_on_a_page_of_its_own(self) -> None:
+        """A script read is cold only as the first touch of fresh values, in one run, so
+        each place a probe runs gets a page of its own; between them the places cover
+        every region the probe reaches, each once."""
+        for channel in P.SCRIPT_READS:
+            spec = P.SPECS[channel]
+            asked: list[str] = []
+            for at in P.script_places(channel):
+                runs = P.plan_runs(spec, self.inst, at=at)
+                with self.subTest(channel=channel, at=at):
+                    self.assertEqual(len(runs), 1)
+                asked += [r.id for r in runs[0].regions]
+            reached = [r.id for r in self.inst.regions if spec.reaches(r)]
+            with self.subTest(channel=channel):
+                self.assertEqual(sorted(asked), sorted(reached))
+
+    def test_long_values_are_asked_in_three_spellings_and_short_ones_whole(
+        self,
+    ) -> None:
+        """D3's guard masks a value of 4+ characters plain, JSON-escaped and
+        percent-encoded, and a shorter one only as a whole string: a probe asks for
+        exactly those, so a raw answer is a leak and never deliberate encoding."""
+        for channel in (P.ChannelId.EVALUATE, P.ChannelId.EVALUATE_ALL):
+            spec = P.SPECS[channel]
+            for run in P.plan_runs(spec, self.inst):
+                want = want_of(run.code)
+                pairs = (
+                    want.items()
+                    if isinstance(want, dict)
+                    else [(entry[0], entry[2]) for entry in want]
+                )
+                for region_id, spellings in pairs:
+                    short = self.inst.region(region_id).short
+                    with self.subTest(channel=channel, region=region_id):
+                        expected = ["plain"] if short else ["plain", "json", "uri"]
+                        self.assertEqual(spellings, expected)
+
+    def test_the_top_world_reaches_what_the_pages_own_script_can(self) -> None:
+        """page.evaluate runs in the top document: its fields, both shadow roots (the
+        closed one through the page's own reference), the same-origin frame, the a.test
+        frame inside b.test, and the echoes. Cross-origin frames stay out; a selector
+        probe never asks the closed root."""
+        (run,) = P.plan_runs(P.SPECS[P.ChannelId.EVALUATE], self.inst)
+        steps = {entry[0]: entry[1] for entry in want_of(run.code)}
+        places = {self.inst.region(i).location for i in steps}
+        self.assertEqual(
+            places,
+            {
+                P.Location.MAIN,
+                P.Location.SHADOW_OPEN,
+                P.Location.SHADOW_CLOSED,
+                P.Location.SAME_ORIGIN,
+                P.Location.NESTED,
+            },
+        )
+        for region_id, path in steps.items():
+            location = self.inst.region(region_id).location
+            with self.subTest(region=region_id):
+                self.assertEqual(
+                    path, json.loads(json.dumps(P.MAIN_WORLD_STEPS[location]))
+                )
+        for location in P.MAIN_WORLD_STEPS:
+            self.assertEqual(P.PLACES[location].host, P.PLACES[P.Location.MAIN].host)
+        for run in P.plan_runs(P.SPECS[P.ChannelId.LOCATOR_EVALUATE], self.inst):
+            self.assertNotIn(
+                P.Location.SHADOW_CLOSED, {r.location for r in run.regions}
+            )
+
+    def test_the_opener_probe_reads_the_page_from_its_popup(self) -> None:
+        (run,) = P.plan_runs(P.SPECS[P.ChannelId.OPENER_EVALUATE], self.inst)
+        self.assertIn("context.pages().find(", run.code)
+        for entry in want_of(run.code):
+            with self.subTest(region=entry[0]):
+                self.assertEqual(entry[1][0], ["opener", None])
+        self.assertNotIn(P.Location.SHADOW_CLOSED, {r.location for r in run.regions})
+
+    def test_a_script_page_serves_a_popup_with_nothing_of_its_own(self) -> None:
+        self.assertIn(P.Location.POPUP, self.inst.documents())
+        self.assertEqual(self.inst.slice(P.Location.POPUP)["regions"], [])
+        self.assertEqual(
+            [p.kind for p in self.inst.plants],
+            [
+                p.kind
+                for p in P.make_instance(P.Layout.ECHOES, seed="sp", index=2).plants
+            ],
+        )
+
+
+class UploadPlanTests(unittest.TestCase):
+    """setInputFiles' probes: a file on Neo's disk by path, the agent's own buffer, and
+    (as information) Neo's own secret files."""
+
+    def setUp(self) -> None:
+        self.inst = P.make_instance(P.Layout.UPLOAD, seed="up", index=1)
+        self.disk = self.inst.plant(origin=P.Origin.FILE)
+        self.buffer = self.inst.plant(origin=P.Origin.AGENT)
+
+    def test_an_upload_page_plants_a_file_on_neos_disk_and_an_agent_buffer(
+        self,
+    ) -> None:
+        """Each goes into a file input no rule classifies and is echoed in the top
+        document. Neither is in the page's slice: one sits in a file, the other in the
+        agent's run."""
+        for plant in (self.disk, self.buffer):
+            self.assertIs(plant.kind, P.Kind.FILE)
+            (field,) = self.inst.field_regions(plant)
+            self.assertEqual(dict(P.KINDS[plant.kind].attrs), {"type": "file"})
+            self.assertEqual(
+                [r.exposure for r in self.inst.regions_of(plant)],
+                [P.Exposure.FIELD, P.Exposure.ECHO],
+            )
+            self.assertEqual(P.registrable(plant, typed=True), 0)
+        main = self.inst.slice(P.Location.MAIN)["regions"]
+        self.assertFalse(any("value" in r for r in main))
+        self.assertNotIn(P.Kind.FILE, P.SENSITIVE_KINDS)
+        for layout in (P.Layout.ECHOES, P.Layout.SCRIPT, P.Layout.FIELDS):
+            kinds = {p.kind for p in P.make_instance(layout, seed="up", index=2).plants}
+            self.assertNotIn(P.Kind.FILE, kinds)
+
+    def test_the_path_upload_names_a_path_outside_the_state_dir_and_no_value(
+        self,
+    ) -> None:
+        (run,) = P.plan_runs(P.SPECS[P.ChannelId.UPLOAD], self.inst)
+        (field,) = self.inst.field_regions(self.disk)
+        self.assertEqual(run.regions, (field,))
+        path = P.upload_path(field)
+        self.assertIn(f"setInputFiles({json.dumps(path)})", run.code)
+        self.assertFalse(path.startswith("/data/browserclaw"))
+        P.assert_clean(run.code, [self.inst])
+
+    def test_the_buffer_upload_is_the_one_run_that_carries_its_own_value(self) -> None:
+        """A {name, mimeType, buffer} payload is the agent's value in its own code: a
+        declared way in, as typing is, and no other request may carry it."""
+        (field,) = self.inst.field_regions(self.buffer)
+        code = P.buffer_code(self.inst, field)
+        way = P.DECLARED_WAYS_IN[P.Origin.AGENT]
+        P.assert_clean(code, [self.inst], inject=self.buffer, way=way)
+        self.assertIn(".setInputFiles({name: 'upload.txt'", code)
+        with self.assertRaises(P.Contamination):
+            P.assert_clean(code, [self.inst])
+        self.assertIsNone(P.SPECS[P.ChannelId.UPLOAD_BUFFER].code)
+
+    def test_neos_own_files_are_asked_by_path_only(self) -> None:
+        code = P.neo_file_code("/run/neo-host-token")
+        self.assertIn('setInputFiles("/run/neo-host-token")', code)
+        self.assertIn(P.NEO_FILE_INPUT, code)
+        self.assertIn(P.NEO_FILE_ECHO, code)
+
+
+class ContentPlanTests(unittest.TestCase):
+    """page.setContent's probe: the agent's HTML and the page it writes."""
+
+    def setUp(self) -> None:
+        self.inst = P.make_instance(P.Layout.CONTENT, seed="cp", index=1)
+
+    def test_the_agents_html_brings_the_frames_and_the_echo_script_only(self) -> None:
+        """The HTML holds structure and fixture URLs, never a value or an anchor. The
+        echo script comes first, so it listens before any frame reports a value; the
+        frames are the top document's own."""
+        html = P.content_html(self.inst)
+        P.assert_clean(html, [self.inst])
+        self.assertTrue(html.startswith('<body><script src="/fx/fx.js"></script>'))
+        frames = [
+            (f["id"], f["src"]) for f in self.inst.slice(P.Location.MAIN)["frames"]
+        ]
+        self.assertEqual(
+            re.findall(r'<iframe id="([^"]+)" src="([^"]+)">', html), frames
+        )
+        (run,) = P.plan_runs(P.SPECS[P.ChannelId.SET_CONTENT], self.inst)
+        self.assertIn(json.dumps(html), run.code)
+
+    def test_only_the_written_top_document_is_marked_written(self) -> None:
+        """The fixture serves a written document as a shell and its script adds no frames:
+        the agent's HTML does both. Every other document renders itself as before."""
+        self.assertTrue(self.inst.slice(P.Location.MAIN)["written"])
+        for layout in P.Layout:
+            instance = P.make_instance(layout, seed="cp", index=2)
+            for document in instance.documents():
+                written = instance.slice(document)["written"]
+                with self.subTest(layout=layout, document=document):
+                    self.assertEqual(
+                        written,
+                        layout is P.Layout.CONTENT and document is P.Location.MAIN,
+                    )
+
+    def test_its_values_sit_in_frames_the_guards_site_sweep_covers(self) -> None:
+        """setContent runs between sweeps of every frame of the page's site: the planted
+        frames are that site's, long and short, each echoed and titled in the top."""
+        self.assertEqual(
+            {p.location for p in self.inst.plants},
+            {P.Location.SAME_ORIGIN, P.Location.SAME_SITE, P.Location.NESTED},
+        )
+        for plant in self.inst.plants:
+            self.assertTrue(P.PLACES[plant.location].same_site_as_top)
+            exposures = sorted(r.exposure for r in self.inst.regions_of(plant))
+            self.assertEqual(
+                exposures,
+                sorted([P.Exposure.FIELD, P.Exposure.ECHO, P.Exposure.TITLE]),
+            )
 
 
 class DetectorTests(unittest.TestCase):
@@ -482,6 +728,17 @@ class DetectorTests(unittest.TestCase):
         self.assertIs(J.classify("", field), J.SlotState.EMPTY)
         self.assertIs(J.classify("something else", field), J.SlotState.OTHER)
         self.assertIs(J.classify("•••• 0000", field), J.SlotState.OTHER)
+
+    def test_a_json_stringified_slot_is_read_by_what_it_spells(self) -> None:
+        """A main-world script may return JSON.stringify(value), and D3's guard masks the
+        value inside it: the JSON string of the mask is masked, the JSON string of the
+        value is raw, and the JSON string of anything else proves nothing."""
+        (field,) = self.inst.field_regions(self.pw)
+        value = field.expected()
+        self.assertIs(J.classify(json.dumps("[private]"), field), J.SlotState.MASKED)
+        self.assertIs(J.classify(json.dumps(value), field), J.SlotState.RAW)
+        self.assertIs(J.classify(json.dumps("something"), field), J.SlotState.OTHER)
+        self.assertIs(J.classify('"[private]', field), J.SlotState.OTHER)
 
     def test_a_value_attribute_split_by_a_page_boundary_is_no_slot(self) -> None:
         """A disk page can cut a string with page bytes. A value attribute with them
@@ -1660,6 +1917,586 @@ class KeysTests(EvidenceBase):
                         rf'unexpected value \\*"{value}',
                     ):
                         self.assertIsNone(re.search(form, text), form)
+
+
+MASK = "[private]"
+
+
+class ScriptTests(EvidenceBase):
+    """Main-world script (the evaluate family) through judge(): the grouped answer the
+    probes' readers return, every spelling of a region's text, held answers, and the
+    echo of a cross-site value that no sweep of the page's site sees."""
+
+    layout = P.Layout.SCRIPT
+
+    def field(self, kind: P.Kind, loc: P.Location = P.Location.MAIN) -> P.Region:
+        return self.inst.field_regions(self.inst.plant(kind, loc))[0]
+
+    def echo(self, loc: P.Location, kind: P.Kind = P.Kind.PASSWORD) -> P.Region:
+        return echo_of(self.inst, self.inst.plant(kind, loc))
+
+    @staticmethod
+    def grouped(reads: dict[P.Region, dict[str, str]]) -> dict:
+        """What the readers return: {spelling: {region id: {ok}}}, with `near` (the
+        field's label, which carries its anchor) beside each plain read of a field."""
+        out: dict = {"plain": {}, "json": {}, "uri": {}}
+        for region, spelled in reads.items():
+            for spelling, text in spelled.items():
+                out[spelling][region.id] = {"ok": text}
+            if region.exposure is P.Exposure.FIELD:
+                out["plain"][region.id]["near"] = f"Field {region.anchor} "
+        return out
+
+    def probe(self, channel: P.ChannelId, value: object, regions, **kw) -> None:
+        self.proof("p1", list(regions))
+        self.capture(
+            "c1",
+            channel,
+            self.reply(value, "run1", kw.pop("error", None)),
+            run_id="run1",
+            proofs=("p1", "p1"),
+            regions=tuple(r.id for r in kw.pop("asked", regions)),
+            **kw,
+        )
+
+    def verdicts(self, channel: P.ChannelId) -> dict[str, tuple]:
+        return {
+            c.region.id: (c.verdict, c.residual)
+            for c in self.judged()
+            if c.channel is channel
+        }
+
+    def test_a_main_world_read_is_judged_in_every_spelling_it_returns(self) -> None:
+        """A masked spelling is masked, a JSON string of the mask too; one raw spelling
+        leaks its region; the PLAIN control reads back raw; an echo is read in its
+        slot whatever spelling wraps it."""
+        pw, so = (
+            self.field(P.Kind.PASSWORD),
+            self.field(P.Kind.PASSWORD, P.Location.SAME_ORIGIN),
+        )
+        cvc, box = self.field(P.Kind.CC_CSC), self.field(P.Kind.OTP_SPLIT)
+        otp, plain = self.field(P.Kind.OTP), self.field(P.Kind.PLAIN)
+        echo = self.echo(P.Location.MAIN, P.Kind.WORD_PASSWORD)
+        masked = {"plain": MASK, "json": json.dumps(MASK), "uri": MASK}
+        echoed = f"ECHO {echo.anchor} {{{{{MASK}}}}}"
+        uri_echo = urllib.parse.quote(f"ECHO {echo.anchor} {{{{") + MASK
+        reads = {
+            pw: masked,
+            so: masked,
+            cvc: {"plain": MASK},
+            box: {"plain": MASK},
+            otp: {**masked, "json": json.dumps(otp.expected())},
+            plain: {
+                "plain": plain.expected(),
+                "json": json.dumps(plain.expected()),
+                "uri": plain.expected(),
+            },
+            echo: {
+                "plain": echoed,
+                "json": json.dumps(echoed),
+                "uri": uri_echo + urllib.parse.quote("}}"),
+            },
+        }
+        self.probe(P.ChannelId.EVALUATE, self.grouped(reads), reads, phase=P.Phase.COLD)
+        got = self.verdicts(P.ChannelId.EVALUATE)
+        masked_cell = (J.Verdict.MASKED, None)
+        self.assertEqual(
+            {r.id: got[r.id] for r in reads},
+            {
+                pw.id: masked_cell,
+                so.id: masked_cell,
+                cvc.id: masked_cell,
+                box.id: masked_cell,
+                otp.id: (J.Verdict.LEAKED, None),
+                plain.id: (J.Verdict.LEAKED, "CONTROL"),
+                echo.id: masked_cell,
+            },
+        )
+
+    def test_a_field_read_is_covered_by_the_anchor_its_label_carries(self) -> None:
+        """The anchor beside the value proves the reader read that field, whatever the
+        run's code named: a near label alone covers it; a read with neither keyed ok
+        nor anchor proves nothing."""
+        pw, otp = self.field(P.Kind.PASSWORD), self.field(P.Kind.OTP)
+        value = {"plain": {pw.id: {"near": f"Field {pw.anchor} "}}, "masked": MASK}
+        self.probe(P.ChannelId.EVALUATE, value, [pw, otp], phase=P.Phase.COLD)
+        got = self.verdicts(P.ChannelId.EVALUATE)
+        self.assertEqual(got[otp.id][0], J.Verdict.INCONCLUSIVE)
+        self.assertEqual(got[pw.id], (J.Verdict.MASKED, None))
+
+    def test_held_main_world_script_is_held_where_it_reaches(self) -> None:
+        """Today every main-world op answers script/method_unavailable: held (EVAL-HELD)
+        for each region the probe asked, n/a for what it cannot reach."""
+        pw, echo = self.field(P.Kind.PASSWORD), self.echo(P.Location.SAME_SITE)
+        ss = self.field(P.Kind.PASSWORD, P.Location.SAME_SITE)
+        error = {
+            "owner": "script",
+            "code": "method_unavailable",
+            "message": "page.evaluate is not available for now",
+        }
+        self.probe(
+            P.ChannelId.EVALUATE,
+            None,
+            [pw, echo, ss],
+            error=error,
+            asked=[pw, echo],
+            phase=P.Phase.COLD,
+        )
+        got = self.verdicts(P.ChannelId.EVALUATE)
+        held = (J.Verdict.WITHHELD, "EVAL-HELD")
+        self.assertEqual(got[pw.id], held)
+        self.assertEqual(got[echo.id], held)
+        self.assertEqual(got[ss.id], (J.Verdict.NOT_APPLICABLE, None))
+
+    def test_a_cross_site_echo_raw_in_main_world_script_is_xsite(self) -> None:
+        """The guard sweeps the page's site, so a b.test value the page copied into the
+        top document reads raw cold: by design (XSITE), as for a text read. A same-site
+        echo read raw is the guard missing a frame: a new leak."""
+        xo, ss = self.echo(P.Location.CROSS_SITE), self.echo(P.Location.SAME_SITE)
+        reads = {
+            r: {"plain": f"ECHO {r.anchor} {{{{{r.expected()}}}}}"} for r in (xo, ss)
+        }
+        self.probe(P.ChannelId.EVALUATE, self.grouped(reads), reads, phase=P.Phase.COLD)
+        got = self.verdicts(P.ChannelId.EVALUATE)
+        self.assertEqual(got[xo.id], (J.Verdict.LEAKED, "XSITE"))
+        self.assertEqual(got[ss.id], (J.Verdict.LEAKED, None))
+
+    def test_the_headline_counts_what_served_main_world_script_returned(self) -> None:
+        """Held, the headline counts held channels; served, it counts the reads of
+        sensitive values that came back masked and raw. The control is not counted."""
+        pw, otp = self.field(P.Kind.PASSWORD), self.field(P.Kind.OTP)
+        plain = self.field(P.Kind.PLAIN)
+        reads = {
+            pw: {"plain": MASK},
+            otp: {"plain": otp.expected()},
+            plain: {"plain": plain.expected()},
+        }
+        self.probe(P.ChannelId.EVALUATE, self.grouped(reads), reads, phase=P.Phase.COLD)
+        headline = J.judge(self.evidence()).headline["main-world script"]
+        self.assertEqual(headline, "served: raw in 1 of 2 reads (1 new)")
+
+    def test_an_element_scripts_answer_holds_one_outcome_per_element(self) -> None:
+        """locator.evaluate and its relatives answer each element on its own: a held op
+        is held there, an op not built is n/a, a masked one masked, a raw short value a
+        leak (the guard masks a whole short string)."""
+        pw, cur = self.field(P.Kind.PASSWORD), self.field(P.Kind.CURRENT_PASSWORD)
+        otp, cvc = self.field(P.Kind.OTP), self.field(P.Kind.CC_CSC)
+        held = {"err": "held", "owner": "script", "code": "method_unavailable"}
+        missing = {"err": "no handles", "owner": "neo", "code": "internal_error"}
+        value = self.grouped(
+            {otp: {"plain": MASK, "json": json.dumps(MASK), "uri": MASK}}
+        )
+        value["plain"].update({pw.id: held, cur.id: missing})
+        value["plain"][cvc.id] = {"ok": cvc.expected(), "near": f"Field {cvc.anchor} "}
+        self.probe(P.ChannelId.LOCATOR_EVALUATE, value, [pw, cur, otp, cvc])
+        got = self.verdicts(P.ChannelId.LOCATOR_EVALUATE)
+        self.assertEqual(
+            {r.id: got[r.id] for r in (pw, cur, otp, cvc)},
+            {
+                pw.id: (J.Verdict.WITHHELD, "EVAL-HELD"),
+                cur.id: (J.Verdict.NOT_APPLICABLE, None),
+                otp.id: (J.Verdict.MASKED, None),
+                cvc.id: (J.Verdict.LEAKED, None),
+            },
+        )
+
+
+class ContentTests(EvidenceBase):
+    """page.setContent through judge(): the op itself answers nothing, so its row says
+    only whether Neo ran it; the reads of what it wrote are judged as any read."""
+
+    layout = P.Layout.CONTENT
+
+    def regions(self, exposure: P.Exposure) -> list[P.Region]:
+        return [r for r in self.inst.regions if r.exposure is exposure]
+
+    def test_an_op_that_answers_nothing_says_only_whether_neo_ran_it(self) -> None:
+        """Before the op the shell shows nothing, so its cells stand on the regions it
+        would write: held by contract (EVAL-HELD), not built, or n/a once it ran. A
+        value in its answer is still a leak."""
+        echoes = self.regions(P.Exposure.ECHO)
+        self.proof("p0", [])
+        outcomes = {
+            "c1": {"error": {"owner": "script", "code": "method_unavailable"}},
+            "c2": {"error": {"owner": "neo", "code": "unsupported"}},
+            "c3": {"value": 1},
+            "c4": {"value": {"echo": echoes[0].plant.secret.reveal()}},
+        }
+        for ident, outcome in outcomes.items():
+            error = outcome.get("error")
+            if error:
+                error = {**error, "message": "setContent is not available for now"}
+            self.capture(
+                ident,
+                P.ChannelId.SET_CONTENT,
+                self.reply(outcome.get("value"), f"run{ident}", error),
+                run_id=f"run{ident}",
+                proofs=("p0", "p0"),
+                regions=tuple(r.id for r in echoes),
+                phase=P.Phase.ANY,
+            )
+        cells = [c for c in self.judged() if c.channel is P.ChannelId.SET_CONTENT]
+        by_source: dict[str, set] = {}
+        for c in cells:
+            if c.region.id in {r.id for r in echoes}:
+                by_source.setdefault(c.source, set()).add((c.verdict, c.residual))
+        self.assertEqual(by_source["c1"], {(J.Verdict.WITHHELD, "EVAL-HELD")})
+        headline = J.judge(self.evidence()).headline
+        self.assertEqual(
+            headline["page.setContent, then reads of what it wrote"],
+            "held (script/method_unavailable)",
+        )
+        self.assertEqual(by_source["c2"], {(J.Verdict.NOT_APPLICABLE, None)})
+        self.assertEqual(by_source["c3"], {(J.Verdict.NOT_APPLICABLE, None)})
+        leaked = {(c.verdict, c.residual) for c in cells if c.source == "c4"}
+        self.assertIn((J.Verdict.LEAKED, None), leaked)
+        why = {c.why for c in cells if c.source == "c2"}
+        self.assertEqual(why, {"not built (neo/unsupported)"})
+
+    def test_a_read_of_the_written_page_is_judged_as_any_read(self) -> None:
+        """After setContent the title, content and text are ordinary reads: a masked
+        echo is masked, a raw one is a new leak (its sweep should have caught it), a raw
+        CVC is by design (BD-SHORT)."""
+        long_titles = [r for r in self.regions(P.Exposure.TITLE) if not r.short]
+        short = next(r for r in self.regions(P.Exposure.TITLE) if r.short)
+        masked, raw = long_titles[0], long_titles[1]
+        title = " ".join(
+            f"ECHO {r.anchor} {{{{{text}}}}}"
+            for r, text in (
+                (masked, MASK),
+                (raw, raw.expected()),
+                (short, short.expected()),
+            )
+        )
+        self.proof("p1", [masked, raw, short])
+        self.capture(
+            "c1",
+            P.ChannelId.TITLE,
+            self.reply(title, "run1"),
+            run_id="run1",
+            proofs=("p1", "p1"),
+            regions=tuple(r.id for r in (masked, raw, short)),
+            phase=P.Phase.AFTER_CONTENT,
+        )
+        got = {
+            c.region.id: (c.verdict, c.residual)
+            for c in self.judged()
+            if c.channel is P.ChannelId.TITLE
+        }
+        self.assertEqual(got[masked.id], (J.Verdict.MASKED, None))
+        self.assertEqual(got[raw.id], (J.Verdict.LEAKED, None))
+        self.assertEqual(got[short.id], (J.Verdict.LEAKED, "BD-SHORT"))
+        headline = J.judge(self.evidence()).headline
+        self.assertEqual(
+            headline["page.setContent, then reads of what it wrote"],
+            "raw in 1 of 2 reads",
+        )
+
+
+# One RFB FramebufferUpdate: one 1x1 Raw rect at 32 bits per pixel.
+UPDATE = b"\x00\x00\x00\x01" + struct.pack(">HHHHi", 0, 0, 1, 1, 0) + b"\x00" * 4
+RFB_FORMAT = bytes([32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]).hex()
+
+
+class FrontTests(EvidenceBase):
+    """page.bringToFront through judge(): view displays against the moment a private
+    tab came to the front, the op's own row, and the headline."""
+
+    layout = P.Layout.PIXELS
+
+    def fields(self) -> list[P.Region]:
+        return [r for r in self.inst.regions if r.exposure is P.Exposure.FIELD]
+
+    def bring(self, ident: str, value: object) -> None:
+        """The agent's bringToFront on this page, its fields proven around it (what the
+        view cells of the page stand on)."""
+        self.proof(f"{ident}p", self.fields())
+        self.capture(
+            ident,
+            P.ChannelId.BRING_TO_FRONT,
+            self.reply(value, ident),
+            run_id=ident,
+            proofs=(f"{ident}p", f"{ident}p"),
+            regions=tuple(r.id for r in self.fields()),
+            phase=P.Phase.ANY,
+        )
+
+    def front_step(self, at: int, **detail: object) -> None:
+        detail = {"answer": "sent", "private": True, "in_front": True, **detail}
+        self.records.append(
+            J.encode(J.Step(at, "front", self.inst.name, "front", detail))
+        )
+
+    def view(self, ident: str, arrivals: list[int], **kw) -> None:
+        self.stream(
+            ident,
+            P.ChannelId.FRONT_VIEW,
+            UPDATE * len(arrivals),
+            instance=self.inst.name,
+            target="/v1/display?mode=view",
+            status=kw.pop("status", 101),
+            role=kw.pop("role", "view"),
+            geometry=(4, 4, RFB_FORMAT),
+            opened_ms=0,
+            chunks=tuple((n * len(UPDATE), at) for n, at in enumerate(arrivals)),
+            closed=kw.pop("closed", (9000, "close 4001")),
+        )
+
+    def views(self) -> dict[str, set]:
+        out: dict[str, set] = {}
+        for c in self.judged():
+            if c.channel is P.ChannelId.FRONT_VIEW:
+                out.setdefault(c.source, set()).add((c.verdict, c.why))
+        return out
+
+    def test_a_view_still_sending_after_a_private_tab_came_forward_leaks(self) -> None:
+        """No view while a private tab is in front (decision 34): a frame later than the
+        pixel grace after the switch leaks, whatever it shows; frames before it and none
+        after are masked; a view refused once the tab is in front is held."""
+        self.bring("b1", {"sent": True})
+        self.front_step(1000, since_ms=1000)
+        self.view("s1", [200, 1500, 1000 + J.PIXEL_GRACE_MS + 900])
+        self.view("s2", [200, 1500], closed=(1300, "close 4001"))
+        self.view("s3", [], status=409, role="retry", closed=(7000, "http 409"))
+        got = self.views()
+        self.assertEqual({v for v, _ in got["s1"]}, {J.Verdict.LEAKED})
+        self.assertEqual({v for v, _ in got["s2"]}, {J.Verdict.MASKED})
+        self.assertEqual({v for v, _ in got["s3"]}, {J.Verdict.WITHHELD})
+
+    def test_views_are_na_while_no_private_tab_came_forward(self) -> None:
+        """Refused or built nowhere, bringToFront never put the private tab in front:
+        the views had nothing to keep from anyone."""
+        self.bring(
+            "b1",
+            {
+                r.id: {"err": "x", "owner": "neo", "code": "unsupported"}
+                for r in self.fields()
+            },
+        )
+        self.front_step(1000, answer="neo/unsupported", in_front=False, since_ms=1000)
+        self.view("s1", [200, 1500, 9000])
+        self.assertEqual(
+            self.views()["s1"],
+            {(J.Verdict.NOT_APPLICABLE, "the private tab never came to the front")},
+        )
+
+    def test_the_ops_row_is_held_when_the_owner_has_control(self) -> None:
+        refusal = {"err": "x", "owner": "host", "code": "owner_has_control"}
+        self.bring("b1", {r.id: refusal for r in self.fields()})
+        self.bring("b2", {"sent": True})
+        got = {
+            (c.source, c.verdict)
+            for c in self.judged()
+            if c.channel is P.ChannelId.BRING_TO_FRONT
+        }
+        self.assertEqual(
+            got,
+            {("b1", J.Verdict.WITHHELD), ("b2", J.Verdict.NOT_APPLICABLE)},
+        )
+
+    def test_the_headline_says_what_bring_to_front_did(self) -> None:
+        self.front_step(
+            1000, since_ms=1000, before=["i01-pixels"], after=["i01-pixels"]
+        )
+        self.front_step(
+            2000,
+            answer="host/owner_has_control",
+            private=False,
+            in_front=False,
+            during="i09-pixels",
+            before=["i09-pixels"],
+            after=["i09-pixels"],
+        )
+        headline = J.judge(self.evidence()).headline
+        self.assertEqual(
+            headline["page.bringToFront onto a private tab"],
+            "sent; the private tab came to the front",
+        )
+        self.assertEqual(
+            headline["page.bringToFront during a takeover"],
+            "host/owner_has_control; the takeover's tab stayed in front",
+        )
+
+
+TOKEN = "leak-" + "0123456789abcdef" * 3
+
+
+class UploadTests(EvidenceBase):
+    """setInputFiles through judge(): the agent reads back a file Neo never saw (by
+    design), its own buffer (the control), Neo's records of each, and what the report
+    may say about Neo's own secret files."""
+
+    layout = P.Layout.UPLOAD
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.disk = self.inst.plant(origin=P.Origin.FILE)
+        self.buffer = self.inst.plant(origin=P.Origin.AGENT)
+
+    def echo(self, plant: P.Plant) -> P.Region:
+        return echo_of(self.inst, plant)
+
+    def read_back(self, plants: list[P.Plant], run: str = "read1") -> None:
+        """The agent reads the page's echoes of `plants` back raw."""
+        echoes = [self.echo(p) for p in plants]
+        self.proof(f"{run}p", echoes)
+        value = {
+            r.id: {"ok": f"ECHO {r.anchor} {{{{{r.expected()}}}}}"} for r in echoes
+        }
+        self.capture(
+            run,
+            P.ChannelId.TEXT_CONTENT,
+            self.reply(value, run),
+            run_id=run,
+            proofs=(f"{run}p", f"{run}p"),
+            regions=tuple(r.id for r in echoes),
+            phase=P.Phase.ANY,
+        )
+
+    def upload(self, ident: str, channel: P.ChannelId, plant: P.Plant, **reply) -> None:
+        (field,) = self.inst.field_regions(plant)
+        self.proof(f"{ident}p", [])
+        self.capture(
+            ident,
+            channel,
+            self.reply(reply.get("value", 1), ident, reply.get("error")),
+            run_id=ident,
+            proofs=(f"{ident}p", f"{ident}p"),
+            regions=(field.id,),
+            phase=P.Phase.ANY,
+        )
+
+    def record_of(self, ident: str, run: str, text: str) -> None:
+        body = json.dumps({"id": run, "result": text}).encode()
+        self.capture(ident, P.ChannelId.RUN, body, run_id=run, phase=P.Phase.ANY)
+
+    def cells(self, channel: P.ChannelId) -> dict[str, tuple]:
+        return {
+            c.region.id: (c.verdict, c.residual)
+            for c in self.judged()
+            if c.channel is channel
+        }
+
+    def test_a_file_from_neos_disk_read_back_raw_is_by_design(self) -> None:
+        """No rule can tell a file's content is sensitive, and the owner serves any
+        path: the agent's read of the page's echo is BD-UPLOAD, and the record of that
+        run inherits it. The agent's own buffer read back is the control."""
+        self.upload("up1", P.ChannelId.UPLOAD, self.disk)
+        self.read_back([self.disk, self.buffer])
+        echo = self.echo(self.disk)
+        self.record_of("h1", "read1", f"ECHO {echo.anchor} {{{{{echo.expected()}}}}}")
+        read = self.cells(P.ChannelId.TEXT_CONTENT)
+        self.assertEqual(read[echo.id], (J.Verdict.LEAKED, "BD-UPLOAD"))
+        self.assertEqual(read[self.echo(self.buffer).id], (J.Verdict.LEAKED, "CONTROL"))
+        self.assertEqual(
+            self.cells(P.ChannelId.RUN)[echo.id], (J.Verdict.LEAKED, "BD-UPLOAD")
+        )
+        (field,) = self.inst.field_regions(self.disk)
+        self.assertEqual(
+            self.cells(P.ChannelId.UPLOAD)[field.id], (J.Verdict.NOT_APPLICABLE, None)
+        )
+
+    def test_neo_keeping_the_uploaded_file_in_its_record_is_a_new_leak(self) -> None:
+        """The upload op answers nothing; if Neo's record of that op holds the file's
+        content, Neo kept a value it read from disk, which no agent read explains."""
+        self.upload("up1", P.ChannelId.UPLOAD, self.disk)
+        self.read_back([self.disk])
+        self.record_of("h1", "up1", f"uploaded {self.disk.secret.reveal()}")
+        self.assertEqual(
+            set(self.cells(P.ChannelId.RUN).values()), {(J.Verdict.LEAKED, None)}
+        )
+
+    def test_a_held_upload_is_held_until_served(self) -> None:
+        """Today a path upload answers script/method_unavailable (held, UPLOAD-HELD),
+        and the prelude refuses a payload (neo/unsupported, not built)."""
+        held = {"owner": "script", "code": "method_unavailable", "message": "held"}
+        refused = {"owner": "neo", "code": "unsupported", "message": "pass paths"}
+        self.upload("up1", P.ChannelId.UPLOAD, self.disk, value=None, error=held)
+        self.upload(
+            "up2", P.ChannelId.UPLOAD_BUFFER, self.buffer, value=None, error=refused
+        )
+        (disk,) = self.inst.field_regions(self.disk)
+        (buffer,) = self.inst.field_regions(self.buffer)
+        self.assertEqual(
+            self.cells(P.ChannelId.UPLOAD)[disk.id],
+            (J.Verdict.WITHHELD, "UPLOAD-HELD"),
+        )
+        self.assertEqual(
+            self.cells(P.ChannelId.UPLOAD_BUFFER)[buffer.id],
+            (J.Verdict.NOT_APPLICABLE, None),
+        )
+
+    def test_a_void_probe_keys_its_own_refusal_so_the_code_survives(self) -> None:
+        """A refusal the prelude throws (a payload, today) would reach the run as the
+        script's own error, so the probe catches it and keys it by the field: not built.
+        A run that went through answers {sent: true}: ran."""
+        (field,) = self.inst.field_regions(self.buffer)
+        code = P.buffer_code(self.inst, field)
+        self.assertIn("return {sent: true};", code)
+        self.assertIn(f'return {{"{field.id}": refused}};', code)
+        refused = {"err": "pass paths", "owner": "neo", "code": "unsupported"}
+        self.upload(
+            "up1", P.ChannelId.UPLOAD_BUFFER, self.buffer, value={field.id: refused}
+        )
+        self.upload("up2", P.ChannelId.UPLOAD_BUFFER, self.buffer, value={"sent": True})
+        got = {
+            c.source: (c.verdict, c.why)
+            for c in self.judged()
+            if c.channel is P.ChannelId.UPLOAD_BUFFER and c.region.id == field.id
+        }
+        self.assertEqual(
+            got,
+            {
+                "up1": (J.Verdict.NOT_APPLICABLE, "not built (neo/unsupported)"),
+                "up2": (
+                    J.Verdict.NOT_APPLICABLE,
+                    "ran; the op answers nothing by contract",
+                ),
+            },
+        )
+        layouts = {
+            P.ChannelId.UPLOAD: P.Layout.UPLOAD,
+            P.ChannelId.SET_CONTENT: P.Layout.CONTENT,
+        }
+        for channel, layout in layouts.items():
+            instance = P.make_instance(layout, seed="void", index=3)
+            for run in P.plan_runs(P.SPECS[channel], instance):
+                with self.subTest(channel=channel):
+                    self.assertIn("return {sent: true};", run.code)
+
+    def test_the_headline_says_whether_the_agent_read_neos_own_files(self) -> None:
+        self.step(1, "neo_file", file="host token", present=True, readable=True)
+        self.step(2, "neo_file", file="capsolver key", present=False)
+        self.step(
+            3,
+            "neo_file",
+            file="2captcha key",
+            present=True,
+            readable=False,
+            answer="script/method_unavailable",
+        )
+        headline = J.judge(self.evidence()).headline
+        self.assertEqual(
+            headline["Neo's own files through setInputFiles (information)"],
+            "host token: readable; capsolver key: not in this image; "
+            "2captcha key: not readable (script/method_unavailable)",
+        )
+
+    def test_the_report_never_prints_neos_own_files(self) -> None:
+        """A leak's context is a window of its answer, so a Neo secret beside a leaking
+        value could ride into the report: the host token and every echo of Neo's own
+        files are redacted wherever they sit."""
+        self.upload("up1", P.ChannelId.UPLOAD, self.disk)
+        key = f"k3y{TOKEN[5:20]}"
+        kept = f"uploaded {self.disk.secret.reveal()} FILE {{{{{TOKEN}}}}}"
+        self.record_of("h1", "up1", f"{kept} FILE {{{{{key}}}}} {TOKEN}")
+        evidence = self.evidence()
+        judgement = J.judge(evidence)
+        report = J.render_markdown(judgement, evidence)
+        self.assertIn("FILE {{⟨Neo's own file⟩", report, "the context reached them")
+        for output in (report, J.render_json(judgement, evidence)):
+            self.assertNotIn(TOKEN, output)
+            self.assertNotIn(TOKEN[5:20], output)
 
 
 class FinishTests(unittest.TestCase):
