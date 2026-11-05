@@ -97,6 +97,15 @@ describe('computeAffectedSuites', () => {
     ).toEqual(['claw-server', 'claw-server-quality', 'claw-mcp'])
   })
 
+  it('runs the Rust suites and its own check script for a claw-sdk change', () => {
+    expect(suiteNames([pkg('@browseros/claw-sdk', 'apps/claw-sdk')])).toEqual([
+      'claw-server',
+      'claw-server-quality',
+      'claw-sdk-quality',
+      'claw-mcp',
+    ])
+  })
+
   it('adds the build suite when scripts change', () => {
     expect(
       suiteNames([], ['packages/browseros-agent/scripts/build/server.ts']),
@@ -210,6 +219,7 @@ describe('computeAffectedSuites', () => {
       pkg('@browseros/app-onboard', 'apps/app-onboard'),
       pkg('@browseros/build-server-tools', 'packages/build-server-tools'),
       pkg('@browseros/claw-server', 'apps/claw-server'),
+      pkg('@browseros/claw-sdk', 'apps/claw-sdk'),
       pkg('@browseros/agent-cursor', 'packages/agent-cursor'),
     ]
     expect(new Set(suiteNames(allPackages))).toEqual(

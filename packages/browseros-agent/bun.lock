@@ -235,6 +235,10 @@
         "vite": "^7.3.6",
       },
     },
+    "apps/claw-sdk": {
+      "name": "@browseros/claw-sdk",
+      "version": "0.0.0",
+    },
     "apps/claw-server": {
       "name": "@browseros/claw-server",
       "version": "0.0.0",
@@ -683,6 +687,8 @@
     "@browseros/claw-app": ["@browseros/claw-app@workspace:apps/claw-app"],
 
     "@browseros/claw-onboard": ["@browseros/claw-onboard@workspace:apps/claw-onboard"],
+
+    "@browseros/claw-sdk": ["@browseros/claw-sdk@workspace:apps/claw-sdk"],
 
     "@browseros/claw-sdk-api-rust": ["@browseros/claw-sdk-api-rust@workspace:crates/claw-sdk-api"],
 

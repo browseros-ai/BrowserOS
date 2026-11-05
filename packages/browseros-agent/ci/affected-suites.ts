@@ -137,6 +137,16 @@ export const SUITES: Record<string, SuiteConfig> = {
     needs_browser: false,
     needs_rust: true,
   },
+  // The workspace quality suite already applies claw-sdk's [lints] table and
+  // clippy.toml. Only check.sh adds Google's rustfmt options and the forbidden
+  // dependency graph check, so it runs as its own suite.
+  'claw-sdk-quality': {
+    suite: 'claw-sdk-quality',
+    command: 'apps/claw-sdk/check.sh',
+    junit_path: 'test-results/claw-sdk-quality.xml',
+    needs_browser: false,
+    needs_rust: true,
+  },
   'claw-mcp': {
     suite: 'claw-mcp',
     command: 'bun run test:claw-mcp-contract',
@@ -172,6 +182,7 @@ const PACKAGE_SUITES: Record<string, string[]> = {
   // The build suite exercises scripts/build, which uses build-server-tools, so
   // an affected build-server-tools (or a scripts/ change, handled below) runs it.
   '@browseros/build-server-tools': ['build'],
+  '@browseros/claw-sdk': ['claw-sdk-quality'],
 }
 
 /**
@@ -186,7 +197,11 @@ export interface AffectedPackage {
 }
 
 function isRustPackage(path: string): boolean {
-  return path.startsWith('crates/') || path === 'apps/claw-server'
+  return (
+    path.startsWith('crates/') ||
+    path === 'apps/claw-server' ||
+    path === 'apps/claw-sdk'
+  )
 }
 
 const AGENT = 'packages/browseros-agent/'
