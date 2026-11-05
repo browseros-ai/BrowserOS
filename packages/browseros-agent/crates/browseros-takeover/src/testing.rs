@@ -157,7 +157,8 @@ impl FakeXvnc {
         self.shared.changes.send_modify(|changes| *changes += 1);
     }
 
-    /// Closes every open connection, as when Xvnc restarts.
+    /// Closes every open connection, as when Xvnc restarts. A dropped connection sends nothing
+    /// more, so a client learns of a change made after this returns only once it dials again.
     pub fn drop_connections(&self) {
         let mut state = self.shared.state();
         state.open.cancel();
@@ -231,7 +232,11 @@ impl Shared {
 /// One client's connection, until it closes, sends a message Xvnc would not take, or the fake
 /// drops it.
 async fn serve(shared: Arc<Shared>, mut socket: TcpStream, open: CancellationToken) {
+    // Biased, so the first poll after a drop ends the connection without running `converse`.
+    // Unbiased, `converse` could run first and answer a held request with a change made after
+    // the drop, and the client would see that change before it dials again.
     tokio::select! {
+        biased;
         () = open.cancelled() => {}
         _ = converse(&shared, &mut socket) => {}
     }

@@ -187,7 +187,8 @@ impl Rfb {
 
 #[cfg(test)]
 mod tests {
-    use super::Screen;
+    use super::{Rfb, Screen};
+    use crate::rfb_server::{self, UpdateRequest};
     use crate::testing::FakeXvnc;
     use crate::{PartError, ScreenSize, Xvnc};
     use std::time::Duration;
@@ -299,6 +300,37 @@ mod tests {
             "the watcher's first connection, the resize's, and the watcher's second"
         );
         watching.abort();
+        Ok(())
+    }
+
+    /// The test above counts on this: a connection the fake dropped carries no change made after
+    /// the drop, not even one that answers a request it holds. A fake that gets this wrong still
+    /// gets it right on about half of its drops, so the test drops 32 times.
+    #[tokio::test]
+    async fn a_connection_xvnc_dropped_carries_no_later_change() -> TestResult {
+        let xvnc = FakeXvnc::start(HOME).await?;
+        let on_change = rfb_server::update_request(UpdateRequest::OnChange);
+        for round in 0..32 {
+            let (mut rfb, init) = Rfb::connect(xvnc.addr()).await?;
+            assert!(
+                rfb.next_layout(init).await?.is_some(),
+                "the first update's layout"
+            );
+            // Two requests at once: the change answers the first, and the fake reads the second
+            // before this client sees that answer, so it holds the second when the drop comes.
+            rfb.write(&on_change.repeat(2)).await?;
+            xvnc.resize_from_viewer(PHONE);
+            let layout = rfb.next_layout(init).await?;
+            assert_eq!(layout.map(|layout| layout.size), Some(PHONE));
+
+            xvnc.drop_connections();
+            xvnc.resize_from_viewer(HOME);
+            let after = tokio::time::timeout(Duration::from_secs(3), rfb.next_layout(init)).await?;
+            assert!(
+                after.is_err(),
+                "round {round}: the dropped connection sent {after:?}"
+            );
+        }
         Ok(())
     }
 }
