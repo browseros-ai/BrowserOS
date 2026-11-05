@@ -540,14 +540,14 @@ mod tests {
         CoreError, FrameId, PageId, ProtocolSession, SessionId, connection::CdpConnection,
         frames::FrameTarget, sensitive_fields::SensitiveValues,
     };
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     };
-    use tokio::sync::{Notify, Semaphore, broadcast};
+    use tokio::sync::{Notify, Semaphore, broadcast, mpsc};
 
     #[derive(Debug, Clone)]
     struct Call {
@@ -563,6 +563,7 @@ mod tests {
         fail_ax_tree: bool,
         fail_capture: bool,
         child_loader_id: Option<&'static str>,
+        targeted: TargetedEvents,
     }
 
     impl CaptureConnection {
@@ -675,6 +676,10 @@ mod tests {
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             let (_tx, rx) = broadcast::channel(1);
             rx
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
 
         fn is_connected(&self) -> bool {
@@ -1005,6 +1010,7 @@ mod tests {
         document_responses: AtomicUsize,
         document_responded: Notify,
         loader_changed: AtomicBool,
+        targeted: TargetedEvents,
     }
 
     impl StageOverlapConnection {
@@ -1019,6 +1025,7 @@ mod tests {
                 document_responses: AtomicUsize::new(0),
                 document_responded: Notify::new(),
                 loader_changed: AtomicBool::new(false),
+                targeted: TargetedEvents::default(),
             }
         }
 
@@ -1121,6 +1128,10 @@ mod tests {
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             let (_tx, rx) = broadcast::channel(1);
             rx
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
 
         fn is_connected(&self) -> bool {

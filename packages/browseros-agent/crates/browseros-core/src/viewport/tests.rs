@@ -3,7 +3,7 @@
 //! harness.
 use super::*;
 use crate::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId};
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::{
@@ -11,7 +11,7 @@ use std::{
     error::Error,
     sync::{Arc, MutexGuard},
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -70,6 +70,7 @@ struct Fake {
 struct Native {
     state: std::sync::Mutex<Fake>,
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
 }
 
 impl Native {
@@ -114,6 +115,7 @@ impl Native {
                 chrome_version: "155.0.8315.26".to_string(),
             }),
             events,
+            targeted: TargetedEvents::default(),
         })
     }
 
@@ -403,6 +405,10 @@ impl CdpConnection for Native {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
     }
 
     fn is_connected(&self) -> bool {
@@ -1065,12 +1071,34 @@ async fn tests_that_views_without_viewports_refuse_and_prepare_nothing() -> Test
 
 impl Fixture {
     fn emit(&self, method: &str, params: Value, session: &str) {
-        let _ = self.native.events.send(CdpEvent {
+        let event = CdpEvent {
             method: method.to_string(),
             params,
             session_id: Some(SessionId::from(session)),
-        });
+        };
+        if let Some(event) = self.native.targeted.deliver(event) {
+            let _ = self.native.events.send(event);
+        }
     }
+}
+
+#[tokio::test]
+async fn tests_that_an_emitted_event_reaches_its_targeted_subscriber_and_not_the_broadcast()
+-> TestResult {
+    let fixture = Fixture::new(&[(1, 10)]);
+    let mut broadcast = fixture.native.events();
+    let mut targeted = fixture.native.events_targeted("Runtime.bindingCalled");
+    fixture.emit(
+        "Runtime.bindingCalled",
+        json!({ "name": "probe" }),
+        "session-1",
+    );
+    assert_eq!(targeted.try_recv()?.params["name"], "probe");
+    assert!(
+        broadcast.try_recv().is_err(),
+        "a method with a live targeted subscriber must bypass the broadcast"
+    );
+    Ok(())
 }
 
 /// What `future` returns, if it finishes within a moment in which an unblocked call would.

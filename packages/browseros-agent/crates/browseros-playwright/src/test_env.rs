@@ -3,11 +3,11 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::{BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, SessionId};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 use crate::{OpEnv, Refusal, RunState};
 
@@ -96,7 +96,10 @@ impl OpEnv for TestEnv {
 }
 
 /// A CDP connection that refuses every call and never delivers an event.
-struct Offline;
+#[derive(Default)]
+struct Offline {
+    targeted: TargetedEvents,
+}
 
 impl CdpConnection for Offline {
     fn send<'a>(
@@ -122,6 +125,11 @@ impl CdpConnection for Offline {
         broadcast::channel(1).1
     }
 
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        // Unlike the broadcast, open for as long as the connection lives, as the trait requires.
+        self.targeted.subscribe(method)
+    }
+
     fn is_connected(&self) -> bool {
         false
     }
@@ -133,7 +141,7 @@ impl CdpConnection for Offline {
 
 /// A browser session over [`Offline`].
 pub(crate) fn offline_session() -> Arc<BrowserSession> {
-    BrowserSession::new(Arc::new(Offline), BrowserSessionHooks::default())
+    BrowserSession::new(Arc::new(Offline::default()), BrowserSessionHooks::default())
 }
 
 fn offline_view() -> BrowserView {

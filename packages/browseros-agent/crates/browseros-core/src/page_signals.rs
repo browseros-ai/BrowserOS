@@ -736,14 +736,15 @@ fn clamp_chars(value: &str, max_chars: usize) -> String {
 mod tests {
     use super::{DocumentSince, PageSignals};
     use crate::{CdpConnection, PageId, SessionId};
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
     use std::{
+        error::Error,
         sync::{Arc, Mutex},
         time::Duration,
     };
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
 
     #[derive(Debug, Clone)]
     struct SentCall {
@@ -754,6 +755,7 @@ mod tests {
 
     struct TestConnection {
         sender: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
         sent: Mutex<Vec<SentCall>>,
     }
 
@@ -762,16 +764,20 @@ mod tests {
             let (sender, _receiver) = broadcast::channel(128);
             Arc::new(Self {
                 sender,
+                targeted: TargetedEvents::default(),
                 sent: Mutex::new(Vec::new()),
             })
         }
 
         fn emit(&self, method: &str, params: Value, session_id: Option<&str>) {
-            let _ = self.sender.send(CdpEvent {
+            let event = CdpEvent {
                 method: method.to_string(),
                 params,
                 session_id: session_id.map(SessionId::from),
-            });
+            };
+            if let Some(event) = self.targeted.deliver(event) {
+                let _ = self.sender.send(event);
+            }
         }
 
         fn sent_calls(&self) -> Vec<SentCall> {
@@ -818,6 +824,10 @@ mod tests {
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.sender.subscribe()
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
 
         fn is_connected(&self) -> bool {
@@ -1135,5 +1145,24 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn an_emitted_event_reaches_its_targeted_subscriber_and_not_the_broadcast()
+    -> Result<(), Box<dyn Error>> {
+        let connection = TestConnection::new();
+        let mut broadcast = connection.events();
+        let mut targeted = connection.events_targeted("Runtime.bindingCalled");
+        connection.emit(
+            "Runtime.bindingCalled",
+            json!({ "name": "probe" }),
+            Some("session-7"),
+        );
+        assert_eq!(targeted.try_recv()?.params["name"], "probe");
+        assert!(
+            broadcast.try_recv().is_err(),
+            "a method with a live targeted subscriber must bypass the broadcast"
+        );
+        Ok(())
     }
 }

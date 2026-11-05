@@ -4,7 +4,7 @@
 use super::ports::{CaptureTransport, SessionTabs, SessionView};
 use crate::CaptureResult;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use browseros_cdp::{CdpError, CdpEvent, SessionId};
+use browseros_cdp::{CdpError, CdpEvent, SessionId, TargetedEvents};
 use browseros_core::CdpConnection;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -32,8 +32,10 @@ pub struct ScriptedCdp {
     sent: Mutex<Vec<SentCommand>>,
     sent_changed: Notify,
     sessions: AtomicUsize,
-    frames: Mutex<Option<mpsc::UnboundedSender<CdpEvent>>>,
     events: broadcast::Sender<CdpEvent>,
+    /// Routes events as `CdpClient` does: a method someone took with `events_targeted`, such as
+    /// the hub's screencast frames, reaches every one of those subscribers and not the broadcast.
+    targeted: TargetedEvents,
     recordings: Mutex<HashMap<String, VecDeque<Vec<u8>>>>,
     failing_reads: Mutex<HashMap<String, usize>>,
     attach_delay: Mutex<Duration>,
@@ -46,8 +48,8 @@ impl ScriptedCdp {
             sent: Mutex::default(),
             sent_changed: Notify::new(),
             sessions: AtomicUsize::new(0),
-            frames: Mutex::default(),
             events: broadcast::channel(64).0,
+            targeted: TargetedEvents::default(),
             recordings: Mutex::default(),
             failing_reads: Mutex::default(),
             attach_delay: Mutex::new(Duration::ZERO),
@@ -79,26 +81,31 @@ impl ScriptedCdp {
 
     /// Delivers a screencast frame on `session`, as Chromium would after a page change.
     pub fn emit_frame(&self, session: &str, jpeg: &[u8], timestamp_seconds: f64) {
-        if let Some(frames) = lock(&self.frames).as_ref() {
-            let _ = frames.send(CdpEvent {
-                method: "Page.screencastFrame".to_string(),
-                params: json!({
-                    "data": BASE64.encode(jpeg),
-                    "sessionId": 7,
-                    "metadata": { "timestamp": timestamp_seconds },
-                }),
-                session_id: Some(SessionId::from(session)),
-            });
-        }
+        self.emit(CdpEvent {
+            method: "Page.screencastFrame".to_string(),
+            params: json!({
+                "data": BASE64.encode(jpeg),
+                "sessionId": 7,
+                "metadata": { "timestamp": timestamp_seconds },
+            }),
+            session_id: Some(SessionId::from(session)),
+        });
     }
 
     /// Detaches `session`, as when its tab closes.
     pub fn emit_detached(&self, session: &str) {
-        let _ = self.events.send(CdpEvent {
+        self.emit(CdpEvent {
             method: "Target.detachedFromTarget".to_string(),
             params: json!({ "sessionId": session }),
             session_id: None,
         });
+    }
+
+    fn emit(&self, event: CdpEvent) {
+        if let Some(event) = self.targeted.deliver(event) {
+            // No receiver is not an error: the browser does not wait for listeners either.
+            let _ = self.events.send(event);
+        }
     }
 
     /// Bytes the recording on `session` returns from its next `IO.read`.
@@ -201,10 +208,8 @@ impl CdpConnection for ScriptedCdp {
         self.events.subscribe()
     }
 
-    fn events_targeted(&self, _method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
-        let (tx, rx) = mpsc::unbounded_channel();
-        *lock(&self.frames) = Some(tx);
-        rx
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
     }
 
     fn is_connected(&self) -> bool {

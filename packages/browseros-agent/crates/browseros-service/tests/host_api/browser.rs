@@ -11,7 +11,7 @@
 use crate::support::BoxError;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use browseros_cdp::{CdpError, CdpEvent, SessionId};
+use browseros_cdp::{CdpError, CdpEvent, SessionId, TargetedEvents};
 use browseros_core::sensitive_fields::{SEALED_WORLD, seal_source};
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
 use futures_util::future::BoxFuture;
@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 
 /// What the `capture`-th capture returns: a JPEG's start and end markers around its number, so a
 /// test can tell which capture an operation's file holds.
@@ -64,6 +64,7 @@ pub(crate) struct ScriptedBrowser {
     hung: Mutex<Vec<usize>>,
     started: watch::Sender<usize>,
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
     /// The one window's state; openbox maximizes a normal window.
     window: Mutex<&'static str>,
 }
@@ -80,6 +81,7 @@ impl ScriptedBrowser {
             hung: Mutex::default(),
             started: watch::channel(0).0,
             events: broadcast::channel(16).0,
+            targeted: TargetedEvents::default(),
             window: Mutex::new("maximized"),
         })
     }
@@ -312,6 +314,10 @@ impl CdpConnection for ScriptedBrowser {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
     }
 
     fn is_connected(&self) -> bool {

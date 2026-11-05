@@ -382,9 +382,11 @@ async fn listen(
         tokio::select! {
             biased;
             _ = &mut stop => break,
-            // A transport without targeted delivery hands back a closed channel. Its `None` fails
-            // this pattern, which idles the branch for the round instead of ending the listener.
-            Some(call) = bindings.recv() => armed.journal(&call, &mut pending),
+            call = bindings.recv() => match call {
+                Some(call) => armed.journal(&call, &mut pending),
+                // Closed only once the connection is gone, as the broadcast then is too.
+                None => break,
+            },
             received = events.recv() => {
                 // The calls sent before this event are queued by now (see the module doc).
                 armed.journal_queued(&mut bindings, &mut pending);

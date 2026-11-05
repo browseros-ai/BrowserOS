@@ -426,7 +426,7 @@ mod tests {
     use browseros_core::{CdpConnection, FrameId, ProtocolSession, SessionId};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
 
     use super::{ContextWatch, Installed, SealedWorld};
     use crate::probe::{PROBE_PROTOCOL, ProbeFailure};
@@ -522,6 +522,10 @@ mod tests {
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.replies.events()
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.replies.events_targeted(method)
         }
 
         fn is_connected(&self) -> bool {
@@ -750,6 +754,34 @@ mod tests {
                 (FrameSeq(3), retired)
             );
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_event_a_command_causes_reaches_a_targeted_subscriber() -> TestResult {
+        let browser = Browser::new();
+        let mut broadcast = browser.events();
+        let mut targeted = browser.events_targeted("Runtime.executionContextCreated");
+        browser.on(
+            "Page.createIsolatedWorld",
+            "Runtime.executionContextCreated",
+            our_world(),
+        );
+        browser
+            .send(
+                "Page.createIsolatedWorld",
+                json!({}),
+                Some(&SessionId::from(SESSION)),
+            )
+            .await?;
+        assert_eq!(
+            targeted.try_recv()?.method,
+            "Runtime.executionContextCreated"
+        );
+        assert!(
+            broadcast.try_recv().is_err(),
+            "a method with a live targeted subscriber must bypass the broadcast"
+        );
         Ok(())
     }
 }

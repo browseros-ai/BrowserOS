@@ -16,10 +16,11 @@ use std::time::Duration;
 
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::sensitive_fields::{SEALED_WORLD, SensitiveKind};
+use browseros_core::testing::TestConnection;
 use browseros_core::{CdpConnection, FrameId, ProtocolSession, SessionId};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio::time;
 
 use crate::TypedBy;
@@ -192,6 +193,10 @@ impl CdpConnection for Recorder {
         self.inner.events()
     }
 
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.inner.events_targeted(method)
+    }
+
     fn is_connected(&self) -> bool {
         self.inner.is_connected()
     }
@@ -199,6 +204,21 @@ impl CdpConnection for Recorder {
     fn connection_epoch(&self) -> u64 {
         self.inner.connection_epoch()
     }
+}
+
+/// Offline, unlike the rest of this module: the recorder's own wiring needs no browser.
+#[test]
+fn tests_that_the_recorder_hands_its_targeted_subscriber_what_its_connection_emits() -> TestResult {
+    let connection = TestConnection::new([]);
+    let recorder = Recorder {
+        inner: Arc::clone(&connection) as Arc<dyn CdpConnection>,
+        sent: Mutex::default(),
+        swap: Mutex::default(),
+    };
+    let mut targeted = recorder.events_targeted("Runtime.bindingCalled");
+    connection.emit("Runtime.bindingCalled", json!({ "name": "probe" }), None);
+    assert_eq!(targeted.try_recv()?.params["name"], "probe");
+    Ok(())
 }
 
 /// One install as `FrameWorlds` runs it (session setup, then the watch, then the install),

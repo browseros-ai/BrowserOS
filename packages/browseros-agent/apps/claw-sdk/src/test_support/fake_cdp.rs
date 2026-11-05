@@ -4,11 +4,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::{future, mem};
 
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::{CdpConnection, SessionId, TabId};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 /// The one window every fake tab lives in.
 const WINDOW_ID: i64 = 1;
@@ -38,6 +38,7 @@ const EVENT_BACKLOG: usize = 1024;
 pub struct FakeCdp {
     state: Mutex<FakeState>,
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
 }
 
 /// One CDP call the fake received, for assertions. A plain data bag.
@@ -109,6 +110,7 @@ impl FakeCdp {
                 held_events: None,
             }),
             events: broadcast::channel(EVENT_BACKLOG).0,
+            targeted: TargetedEvents::default(),
         })
     }
 
@@ -264,8 +266,7 @@ impl FakeCdp {
     pub fn release_events(&self) {
         let held = self.lock().held_events.take().unwrap_or_default();
         for event in held {
-            // No receiver is not an error.
-            let _ = self.events.send(event);
+            self.publish(event);
         }
     }
 
@@ -336,6 +337,14 @@ impl FakeCdp {
         }
         drop(state);
         for event in events {
+            self.publish(event);
+        }
+    }
+
+    /// Hands `event` to its method's targeted subscribers, or to the broadcast when there are
+    /// none, as the real client does.
+    fn publish(&self, event: CdpEvent) {
+        if let Some(event) = self.targeted.deliver(event) {
             // No receiver is not an error.
             let _ = self.events.send(event);
         }
@@ -618,6 +627,10 @@ impl CdpConnection for FakeCdp {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
     }
 
     fn is_connected(&self) -> bool {

@@ -2,11 +2,11 @@
 //! session, and what it refuses before it touches the page.
 use super::*;
 use crate::{BrowserSession, BrowserSessionHooks, CdpConnection};
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use futures_util::future::BoxFuture;
 use std::error::Error;
 use std::sync::{Mutex, PoisonError};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -20,6 +20,7 @@ const BUTTON: i64 = 9;
 struct Native {
     calls: Mutex<Vec<(String, Value, Option<SessionId>)>>,
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
 }
 
 impl Native {
@@ -28,6 +29,7 @@ impl Native {
         Arc::new(Self {
             calls: Mutex::new(Vec::new()),
             events,
+            targeted: TargetedEvents::default(),
         })
     }
 
@@ -87,6 +89,10 @@ impl CdpConnection for Native {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
     }
 
     fn is_connected(&self) -> bool {

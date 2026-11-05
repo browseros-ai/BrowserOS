@@ -6,9 +6,11 @@ use super::{
     tab_capture::STOP_GRACE,
     testing::{ScriptedCdp, ScriptedTransport, StaticSessionTabs},
 };
+use browseros_cdp::SessionId;
+use browseros_core::CdpConnection;
 use futures_util::StreamExt;
 use serde_json::json;
-use std::{sync::Arc, time::Duration};
+use std::{error::Error, sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 struct Harness {
@@ -758,4 +760,23 @@ async fn a_watcher_ends_at_shutdown() {
     h.shutdown.cancel();
 
     assert!(next_watched(&mut watcher).await.is_none());
+}
+
+#[test]
+fn a_frame_reaches_every_targeted_subscriber_of_the_scripted_browser() -> Result<(), Box<dyn Error>>
+{
+    let browser = ScriptedCdp::new();
+    let mut broadcast = browser.events();
+    let mut first = browser.events_targeted("Page.screencastFrame");
+    let mut second = browser.events_targeted("Page.screencastFrame");
+    browser.emit_frame("capture-1", b"jpeg", 1.0);
+    for frames in [&mut first, &mut second] {
+        let frame = frames.try_recv()?;
+        assert_eq!(frame.session_id, Some(SessionId::from("capture-1")));
+    }
+    assert!(
+        broadcast.try_recv().is_err(),
+        "a method with a live targeted subscriber must bypass the broadcast"
+    );
+    Ok(())
 }

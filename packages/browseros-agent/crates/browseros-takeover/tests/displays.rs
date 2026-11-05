@@ -231,6 +231,10 @@ impl CdpConnection for Browser {
         self.script.events()
     }
 
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.script.events_targeted(method)
+    }
+
     fn is_connected(&self) -> bool {
         true
     }
@@ -1110,5 +1114,18 @@ async fn a_viewer_that_floods_while_its_first_input_waits_is_refused() -> TestRe
     h.flags.attempted(1).await?;
     control.send(&UPDATE.repeat(220_000));
     assert!(matches!(control.ended().await?, DisplayEnd::Refused(_)));
+    Ok(())
+}
+
+#[test]
+fn the_browser_hands_its_targeted_subscriber_what_its_script_emits() -> TestResult {
+    let script = TestConnection::new([]);
+    let browser = Browser {
+        script: Arc::clone(&script),
+        fields: Mutex::default(),
+    };
+    let mut bindings = browser.events_targeted("Runtime.bindingCalled");
+    script.emit("Runtime.bindingCalled", json!({ "name": "probe" }), None);
+    assert_eq!(bindings.try_recv()?.params["name"], "probe");
     Ok(())
 }

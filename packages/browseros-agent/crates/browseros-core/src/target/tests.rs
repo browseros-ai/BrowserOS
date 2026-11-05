@@ -6,6 +6,7 @@ use crate::{
     input::ClickOptions,
     pages::{PageManager, PageManagerHooks},
 };
+use browseros_cdp::TargetedEvents;
 use futures_util::future::BoxFuture;
 use std::{
     collections::VecDeque,
@@ -15,6 +16,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
+use tokio::sync::mpsc;
 
 type TestResult = Result<(), Box<dyn Error>>;
 #[derive(Clone, Debug)]
@@ -46,6 +48,7 @@ struct Native {
     state: Mutex<Fixture>,
     epoch: AtomicU64,
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
     attach_hold: Mutex<Option<Arc<tokio::sync::Notify>>>,
     attach_started: tokio::sync::Notify,
     detach_done: tokio::sync::Notify,
@@ -80,6 +83,7 @@ impl Native {
         Arc::new(Self {
             epoch: AtomicU64::new(1),
             events,
+            targeted: TargetedEvents::default(),
             attach_hold: Mutex::new(None),
             attach_started: tokio::sync::Notify::new(),
             detach_done: tokio::sync::Notify::new(),
@@ -122,6 +126,14 @@ impl Native {
                 replace_newest_on_attach: None,
             }),
         })
+    }
+    /// Offers `event` to its method's targeted subscribers and broadcasts it only when none
+    /// took it, as `CdpClient` does. Fails when the broadcast is needed and no one reads it.
+    fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<CdpEvent>> {
+        if let Some(event) = self.targeted.deliver(event) {
+            self.events.send(event)?;
+        }
+        Ok(())
     }
     fn lock(&self) -> MutexGuard<'_, Fixture> {
         self.state
@@ -652,6 +664,9 @@ impl CdpConnection for Native {
     }
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
+    }
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
     }
     fn send_at_epoch<'a>(
         &'a self,
@@ -1551,7 +1566,7 @@ async fn signal_projection_denies_foreign_reads_and_ownership_mutation() -> Test
         params: json!({"type":"confirm","message":"foreign-secret","url":"https://sales.test"}),
         session_id: Some(foreign_session.session_id),
     };
-    native.events.send(event)?;
+    native.emit(event)?;
     tokio::task::yield_now().await;
     assert_eq!(
         scoped
@@ -1564,7 +1579,7 @@ async fn signal_projection_denies_foreign_reads_and_ownership_mutation() -> Test
     assert!(scoped.signals().pending_dialog(&foreign).is_none());
     assert!(scoped.signals().pending_dialog(&own).is_none());
     assert!(scoped.signals().console_entries(&foreign).is_empty());
-    native.events.send(CdpEvent {
+    native.emit(CdpEvent {
         method: "Page.javascriptDialogOpening".into(),
         params: json!({"type":"confirm","message":"own-message"}),
         session_id: Some(own_session.session_id),
@@ -1592,12 +1607,12 @@ async fn event_projection_omits_foreign_page_events_and_closes_on_stale_context(
         .get_session(page_id(&scoped, 4).await?)
         .await?;
     let mut events = scoped.cdp_events();
-    native.events.send(CdpEvent {
+    native.emit(CdpEvent {
         method: "Runtime.consoleAPICalled".into(),
         params: json!({"type":"log","args":[]}),
         session_id: Some(foreign.session_id),
     })?;
-    native.events.send(CdpEvent {
+    native.emit(CdpEvent {
         method: "Runtime.consoleAPICalled".into(),
         params: json!({"type":"log","args":[]}),
         session_id: Some(own.session_id.clone()),
@@ -1605,7 +1620,7 @@ async fn event_projection_omits_foreign_page_events_and_closes_on_stale_context(
     let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv()).await??;
     assert_eq!(event.session_id, Some(own.session_id.clone()));
     native.epoch.store(2, Ordering::SeqCst);
-    native.events.send(CdpEvent {
+    native.emit(CdpEvent {
         method: "Runtime.consoleAPICalled".into(),
         params: json!({"type":"log","args":[]}),
         session_id: Some(own.session_id),
@@ -1637,7 +1652,7 @@ async fn navigation_load_wait_rechecks_scope_before_dialog_readback() -> TestRes
     )
     .await?;
     native.lock().tabs[0]["windowId"] = json!(12);
-    native.events.send(CdpEvent {
+    native.emit(CdpEvent {
         method: "Page.javascriptDialogOpening".into(),
         params: json!({"type":"confirm","message":"moved-tab-secret"}),
         session_id: Some(session.session_id),
@@ -1996,6 +2011,9 @@ impl CdpConnection for LegacyTransport {
     }
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.0.events()
+    }
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.0.events_targeted(method)
     }
     fn is_connected(&self) -> bool {
         self.0.is_connected()
@@ -3095,7 +3113,7 @@ async fn failed_default_view_exposes_no_global_events() -> TestResult {
     let view = default_view(native.clone()).await;
     assert!(view.admission_error().is_some());
     let mut events = view.cdp_events();
-    let _ = native.events.send(CdpEvent {
+    let _ = native.emit(CdpEvent {
         method: "Target.targetCreated".into(),
         params: json!({"targetInfo":{"targetId":"target-4","type":"page"}}),
         session_id: None,
@@ -3430,4 +3448,36 @@ async fn a_bound_view_never_loads_or_adopts_a_replaced_tab() -> TestResult {
     )
     .await;
     a_replaced_tab_is_not_loaded_or_adopted(bound, &native).await
+}
+
+#[test]
+fn an_emitted_event_reaches_its_targeted_subscriber_and_not_the_broadcast() -> TestResult {
+    let native = Native::new();
+    let mut broadcast = native.events();
+    let mut targeted = native.events_targeted("Runtime.bindingCalled");
+    native.emit(CdpEvent {
+        method: "Runtime.bindingCalled".into(),
+        params: json!({ "name": "probe" }),
+        session_id: None,
+    })?;
+    assert_eq!(targeted.try_recv()?.params["name"], "probe");
+    assert!(
+        broadcast.try_recv().is_err(),
+        "a method with a live targeted subscriber must bypass the broadcast"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_legacy_transport_hands_its_targeted_subscriber_what_the_browser_emits() -> TestResult {
+    let native = Native::new();
+    let legacy = LegacyTransport(native.clone());
+    let mut targeted = legacy.events_targeted("Runtime.bindingCalled");
+    native.emit(CdpEvent {
+        method: "Runtime.bindingCalled".into(),
+        params: json!({ "name": "probe" }),
+        session_id: None,
+    })?;
+    assert_eq!(targeted.try_recv()?.params["name"], "probe");
+    Ok(())
 }

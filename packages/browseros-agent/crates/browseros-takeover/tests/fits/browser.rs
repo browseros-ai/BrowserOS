@@ -20,7 +20,7 @@
 //! that takes a while. Those reads can be held, any method can be held until the test lets it go
 //! or made to hang, and a probe the test sets is read at each call and kept with it.
 
-use browseros_cdp::{CdpError, CdpEvent, SessionId};
+use browseros_cdp::{CdpError, CdpEvent, SessionId, TargetedEvents};
 use browseros_core::CdpConnection;
 use browseros_core::sensitive_fields::seal_source;
 use browseros_takeover::testing::FakeXvnc;
@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 
 /// Session ids are unique across every fake in the process: core keys its capture lock by
 /// session id, so two tests' `session-1` would wait on each other.
@@ -49,6 +49,7 @@ pub struct FakeBrowser {
     xvnc: Arc<FakeXvnc>,
     state: Mutex<State>,
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
     /// `false` while a test holds navigations: each `Page.navigate` then waits, subscribed, until
     /// it is `true` again.
     navigations: watch::Sender<bool>,
@@ -150,6 +151,7 @@ impl FakeBrowser {
                 calls: Vec::new(),
             }),
             events: broadcast::channel(16).0,
+            targeted: TargetedEvents::default(),
             navigations: watch::channel(true).0,
             sweep_reads: watch::channel(true).0,
             holds: Mutex::default(),
@@ -713,6 +715,10 @@ impl CdpConnection for FakeBrowser {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
     }
 
     fn is_connected(&self) -> bool {

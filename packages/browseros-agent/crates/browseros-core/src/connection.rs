@@ -63,14 +63,16 @@ pub trait CdpConnection: Send + Sync {
     fn events(&self) -> broadcast::Receiver<CdpEvent>;
 
     /// Every later event of `method` on a dedicated, unbounded channel that bypasses the
-    /// broadcast ring (see `browseros_cdp::TargetedEvents`). Each subscriber of a method gets
-    /// every one of its events, and while any subscriber is live, [`Self::events`] does not
-    /// carry the method: a reader that needs a method someone else takes here must take it here
-    /// too. Default: a closed channel; transports without targeted delivery yield no events here.
-    fn events_targeted(&self, _method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
-        let (_tx, rx) = mpsc::unbounded_channel();
-        rx
-    }
+    /// broadcast ring. Each subscriber of a method gets every one of its events, and while any
+    /// subscriber is live, [`Self::events`] does not carry the method: a reader that needs a
+    /// method someone else takes here must take it here too.
+    ///
+    /// Required of every transport, test doubles included, because a closed or unfed channel
+    /// starves its subscriber with no sign. `browseros_cdp::TargetedEvents` is the shared
+    /// router: subscribe through it, and offer each event to it before the broadcast, which
+    /// carries only what no subscriber took. A transport that never emits still subscribes
+    /// through a router it owns, so the channel stays open for as long as the transport lives.
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent>;
 
     fn is_connected(&self) -> bool;
     fn connection_epoch(&self) -> u64;

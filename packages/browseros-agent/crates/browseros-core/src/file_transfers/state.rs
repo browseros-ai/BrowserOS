@@ -435,16 +435,36 @@ fn belongs_to(
 mod tests {
     use super::TransferState;
     use crate::{CdpConnection, CoreError, ProtocolSession, SessionId};
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
-    use std::{sync::Arc, time::Duration};
-    use tokio::sync::broadcast;
+    use std::{error::Error, sync::Arc, time::Duration};
+    use tokio::sync::{broadcast, mpsc};
 
     /// Answers every command, except that Chromium refuses each one sent on `gone` as gone.
     struct Browser {
         gone: SessionId,
         events: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
+    }
+
+    impl Browser {
+        fn new(gone: &str) -> Arc<Self> {
+            Arc::new(Self {
+                gone: SessionId::from(gone),
+                events: broadcast::channel(16).0,
+                targeted: TargetedEvents::default(),
+            })
+        }
+
+        /// Offers `event` to its method's targeted subscribers and broadcasts it only when none
+        /// took it, as `CdpClient` does. Fails when the broadcast is needed and no one reads it.
+        fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<CdpEvent>> {
+            if let Some(event) = self.targeted.deliver(event) {
+                self.events.send(event)?;
+            }
+            Ok(())
+        }
     }
 
     impl CdpConnection for Browser {
@@ -487,6 +507,10 @@ mod tests {
             self.events.subscribe()
         }
 
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             true
         }
@@ -499,10 +523,7 @@ mod tests {
     #[tokio::test]
     async fn tests_that_a_child_frame_gone_during_setup_never_blocks_its_page()
     -> Result<(), CoreError> {
-        let browser = Arc::new(Browser {
-            gone: SessionId::from("child"),
-            events: broadcast::channel(16).0,
-        });
+        let browser = Browser::new("child");
         let transfers = TransferState::new(browser.clone());
         let root = ProtocolSession::for_session(browser.clone(), SessionId::from("root"));
         transfers.intercept(&root).await?;
@@ -510,8 +531,7 @@ mod tests {
         // The child iframe attaches under the intercepted page and dies before its own setup.
         let mut changes = transfers.changes();
         browser
-            .events
-            .send(CdpEvent {
+            .emit(CdpEvent {
                 method: "Target.attachedToTarget".into(),
                 params: json!({"sessionId":"child","targetInfo":{"type":"iframe"}}),
                 session_id: Some(SessionId::from("root")),
@@ -524,6 +544,25 @@ mod tests {
 
         transfers.intercept(&root).await?;
         assert!(!transfers.has_pending());
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_an_emitted_event_reaches_its_targeted_subscriber_and_not_the_broadcast()
+    -> Result<(), Box<dyn Error>> {
+        let browser = Browser::new("child");
+        let mut broadcast = browser.events();
+        let mut targeted = browser.events_targeted("Runtime.bindingCalled");
+        browser.emit(CdpEvent {
+            method: "Runtime.bindingCalled".into(),
+            params: json!({ "name": "probe" }),
+            session_id: Some(SessionId::from("root")),
+        })?;
+        assert_eq!(targeted.try_recv()?.params["name"], "probe");
+        assert!(
+            broadcast.try_recv().is_err(),
+            "a method with a live targeted subscriber must bypass the broadcast"
+        );
         Ok(())
     }
 }

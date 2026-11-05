@@ -590,7 +590,7 @@ fn collect_shadow_roots<'a>(node: &'a Value, roots: &mut Vec<&'a Value>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use browseros_core::{BrowserSession, CdpConnection, SessionId};
     use futures_util::future::BoxFuture;
     use serde_json::json;
@@ -601,7 +601,7 @@ mod tests {
             atomic::{AtomicBool, Ordering},
         },
     };
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
     type Call = (String, Value, Option<SessionId>, tokio::time::Instant);
@@ -615,6 +615,7 @@ mod tests {
         document: Mutex<Option<Value>>,
         page_open: AtomicBool,
         events: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
     }
     impl Native {
         fn new(widget_url: &'static str) -> Arc<Self> {
@@ -628,6 +629,7 @@ mod tests {
                 document: Mutex::new(None),
                 page_open: AtomicBool::new(true),
                 events: broadcast::channel(32).0,
+                targeted: TargetedEvents::default(),
             })
         }
         fn reply(
@@ -801,6 +803,9 @@ mod tests {
         }
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.events.subscribe()
+        }
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
         fn is_connected(&self) -> bool {
             true

@@ -321,12 +321,12 @@ mod tests {
     use std::sync::{Arc, Mutex, PoisonError};
     use std::time::Duration;
 
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use browseros_core::{CdpConnection, PageId, ProtocolSession, SessionId};
     use browseros_trace::ErrorOwner;
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
     use tokio::task;
     use tokio::time::{self, Instant};
 
@@ -584,6 +584,7 @@ mod tests {
     #[derive(Default)]
     struct Recording {
         sent: Mutex<Vec<(String, Value, Option<SessionId>)>>,
+        targeted: TargetedEvents,
     }
 
     impl CdpConnection for Recording {
@@ -611,6 +612,10 @@ mod tests {
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             broadcast::channel(1).1
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
 
         fn is_connected(&self) -> bool {

@@ -792,11 +792,11 @@ mod tests {
         testing::TestCall,
         timeouts,
     };
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
     use std::sync::{Arc, Mutex};
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
     use tokio::time::{Duration, Instant};
 
     #[derive(Clone, Copy)]
@@ -874,6 +874,7 @@ mod tests {
         state: Mutex<HarnessState>,
         target_role: &'static str,
         target_name: &'static str,
+        targeted: TargetedEvents,
     }
 
     impl HarnessConnection {
@@ -1182,6 +1183,10 @@ mod tests {
             rx
         }
 
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             true
         }
@@ -1361,6 +1366,7 @@ mod tests {
             }),
             target_role,
             target_name,
+            targeted: TargetedEvents::default(),
         });
         let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
         let pages = session.pages.list().await?;

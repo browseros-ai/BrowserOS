@@ -341,7 +341,7 @@ mod tests {
         BrowserSession, BrowserSessionHooks, CoreError, SessionId, connection::CdpConnection,
         timeouts,
     };
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
     use std::{
@@ -349,7 +349,10 @@ mod tests {
         sync::{Arc, Mutex},
         time::Duration,
     };
-    use tokio::{sync::broadcast, time::Instant};
+    use tokio::{
+        sync::{broadcast, mpsc},
+        time::Instant,
+    };
 
     #[derive(Debug)]
     struct HarnessState {
@@ -366,6 +369,7 @@ mod tests {
     struct HarnessConnection {
         state: Mutex<HarnessState>,
         events: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
     }
 
     impl HarnessConnection {
@@ -374,6 +378,7 @@ mod tests {
             Arc::new(Self {
                 state: Mutex::new(state),
                 events,
+                targeted: TargetedEvents::default(),
             })
         }
     }
@@ -445,6 +450,10 @@ mod tests {
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.events.subscribe()
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
 
         fn is_connected(&self) -> bool {

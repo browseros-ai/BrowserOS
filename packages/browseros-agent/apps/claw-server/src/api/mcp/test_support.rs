@@ -126,6 +126,7 @@ pub async fn tool_call_with_behavior(
 /// tab/window identity and group movement so routing errors have visible effects.
 pub(crate) struct ProfileConnection {
     events: tokio::sync::broadcast::Sender<browseros_cdp::CdpEvent>,
+    targeted: browseros_cdp::TargetedEvents,
     pub profiles: std::sync::Mutex<Vec<Value>>,
     pub windows: std::sync::Mutex<Vec<Value>>,
     pub tabs: std::sync::Mutex<Vec<Value>>,
@@ -158,6 +159,7 @@ impl ProfileConnection {
         let (events, _) = tokio::sync::broadcast::channel(8);
         Arc::new(Self {
             events,
+            targeted: browseros_cdp::TargetedEvents::default(),
             profiles: std::sync::Mutex::new(vec![
                 serde_json::json!({"browserProfileId":"eng", "name":"eng", "directory":"Synthetic-eng", "loaded":true, "browserContextId":"ctx-eng"}),
                 serde_json::json!({"browserProfileId":"ops", "name":"ops", "directory":"Synthetic-ops", "loaded":true, "browserContextId":"ctx-ops"}),
@@ -534,6 +536,12 @@ impl browseros_core::CdpConnection for ProfileConnection {
     }
     fn events(&self) -> tokio::sync::broadcast::Receiver<browseros_cdp::CdpEvent> {
         self.events.subscribe()
+    }
+    fn events_targeted(
+        &self,
+        method: &str,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<browseros_cdp::CdpEvent> {
+        self.targeted.subscribe(method)
     }
     fn is_connected(&self) -> bool {
         true

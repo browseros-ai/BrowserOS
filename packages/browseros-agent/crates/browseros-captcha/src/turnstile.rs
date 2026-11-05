@@ -1013,7 +1013,10 @@ mod tests {
 
     async fn script_context() -> browseros_mcp::framework::ToolCtx {
         use browseros_mcp::framework::{BrowserToolOptions, ToolCtx};
-        struct NoBrowser;
+        #[derive(Default)]
+        struct NoBrowser {
+            targeted: browseros_cdp::TargetedEvents,
+        }
         impl browseros_core::CdpConnection for NoBrowser {
             fn send<'a>(
                 &'a self,
@@ -1036,6 +1039,12 @@ mod tests {
             fn events(&self) -> tokio::sync::broadcast::Receiver<browseros_cdp::CdpEvent> {
                 tokio::sync::broadcast::channel(1).1
             }
+            fn events_targeted(
+                &self,
+                method: &str,
+            ) -> tokio::sync::mpsc::UnboundedReceiver<browseros_cdp::CdpEvent> {
+                self.targeted.subscribe(method)
+            }
             fn is_connected(&self) -> bool {
                 true
             }
@@ -1043,7 +1052,7 @@ mod tests {
                 1
             }
         }
-        let browser = browseros_core::Browser::new(Arc::new(NoBrowser));
+        let browser = browseros_core::Browser::new(Arc::new(NoBrowser::default()));
         ToolCtx::new(BrowserToolOptions {
             browser: browser.view().await,
             target: None,

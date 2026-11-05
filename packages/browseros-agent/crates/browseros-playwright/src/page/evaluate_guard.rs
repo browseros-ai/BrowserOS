@@ -901,7 +901,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use browseros_core::sensitive_fields::FieldValues;
     use browseros_core::{
         BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, CoreError, SessionId,
@@ -909,7 +909,7 @@ mod tests {
     use browseros_trace::ErrorOwner;
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
     use tokio::time::{self, Instant};
 
     use super::{
@@ -1060,12 +1060,14 @@ mod tests {
     /// [`HALF`] a pair. Every other command answers at once.
     struct SlowFrame {
         events: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
     }
 
     impl SlowFrame {
         fn new() -> Arc<Self> {
             Arc::new(Self {
                 events: broadcast::channel(16).0,
+                targeted: TargetedEvents::default(),
             })
         }
 
@@ -1154,6 +1156,10 @@ mod tests {
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.events.subscribe()
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
 
         fn is_connected(&self) -> bool {

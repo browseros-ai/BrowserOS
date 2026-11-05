@@ -500,23 +500,25 @@ impl FrameRegistry {
 mod tests {
     use super::FrameRegistry;
     use crate::{FrameId, PageId, ProtocolSession, SessionId, connection::CdpConnection};
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
     use std::sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     };
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
 
     struct NoopConnection {
         epoch: AtomicU64,
+        targeted: TargetedEvents,
     }
 
     impl Default for NoopConnection {
         fn default() -> Self {
             Self {
                 epoch: AtomicU64::new(1),
+                targeted: TargetedEvents::default(),
             }
         }
     }
@@ -545,6 +547,10 @@ mod tests {
             rx
         }
 
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             true
         }
@@ -560,6 +566,7 @@ mod tests {
     struct AttachConnection {
         oopif_target: &'static str,
         attach_session: &'static str,
+        targeted: TargetedEvents,
     }
 
     impl CdpConnection for AttachConnection {
@@ -601,6 +608,10 @@ mod tests {
             rx
         }
 
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             true
         }
@@ -615,6 +626,7 @@ mod tests {
         let cdp = Arc::new(AttachConnection {
             oopif_target: "deep-oopif",
             attach_session: "deep-oopif-session",
+            targeted: TargetedEvents::default(),
         });
         let registry = FrameRegistry::new(cdp.clone());
         let page_id = PageId(1);
@@ -651,6 +663,7 @@ mod tests {
         let cdp = Arc::new(AttachConnection {
             oopif_target: "unused",
             attach_session: "unused",
+            targeted: TargetedEvents::default(),
         });
         let registry = FrameRegistry::new(cdp.clone());
         let page_id = PageId(1);
@@ -781,6 +794,7 @@ mod tests {
     /// Reports a fixed set of live targets so reconcile can tell a dropped detach from a live frame.
     struct GetTargetsConnection {
         live_targets: Vec<&'static str>,
+        targeted: TargetedEvents,
     }
 
     impl CdpConnection for GetTargetsConnection {
@@ -817,6 +831,10 @@ mod tests {
             rx
         }
 
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             true
         }
@@ -830,6 +848,7 @@ mod tests {
     async fn lag_reconcile_drops_oopifs_whose_target_is_gone() {
         let cdp = Arc::new(GetTargetsConnection {
             live_targets: vec!["live-oopif"],
+            targeted: TargetedEvents::default(),
         });
         let registry = FrameRegistry::new(cdp);
         {
