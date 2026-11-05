@@ -73,9 +73,6 @@ class ServerResourceBuilderTest(unittest.TestCase):
         self.browseros = self.repo / "packages/browseros"
         self.agent.mkdir(parents=True)
         self.browseros.mkdir(parents=True)
-        server_manifest = self.agent / "apps/server/package.json"
-        server_manifest.parent.mkdir(parents=True)
-        server_manifest.write_text('{"version":"0.0.128"}\n')
         claw_manifest = self.agent / "apps/claw-server/Cargo.toml"
         claw_manifest.parent.mkdir(parents=True)
         claw_manifest.write_text(

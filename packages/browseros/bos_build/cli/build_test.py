@@ -682,7 +682,7 @@ class SourceProvenanceTest(unittest.TestCase):
             self.root / "packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET"
         )
         self.component = (
-            self.root / "packages/browseros-agent/apps/server/package.json"
+            self.root / "packages/browseros-agent/apps/claw-app/package.json"
         )
         for path, content in (
             (self.version, "BROWSEROS_MAJOR=0\n"),
