@@ -251,6 +251,42 @@ async fn exercise(
         .await?,
     )?;
     ensure_replaced(session, page, &dropped).await?;
+
+    // The audit layer redacts a fill only when the field reads as sensitive. That check
+    // resolves the ref first, so it must recover too, or the value is logged in the clear.
+    anyhow::ensure!(
+        // `ok` returns the content as JSON, so the quotes arrive escaped.
+        snapshot.contains(r#"textbox \"Password\" [ref=e2]"#),
+        "no password ref: {snapshot}"
+    );
+    let dropped = drop_page_session_unannounced(session, client, hidden, page).await?;
+    let fill = call(
+        ctx,
+        "act",
+        json!({"page": page, "kind": "fill", "ref": "e2", "value": "synthetic-pass"}),
+    )
+    .await?;
+    ok("password fill after the page session died", &fill)?;
+    anyhow::ensure!(
+        fill.audit_hints
+            .as_ref()
+            .is_some_and(|hints| hints.sensitive_refs.iter().any(|r| r == "e2")),
+        "the password fill was not marked for redaction: {:?}",
+        fill.audit_hints
+    );
+    ensure_replaced(session, page, &dropped).await?;
+
+    let dropped = drop_page_session_unannounced(session, client, hidden, page).await?;
+    ok(
+        "click after the page session died",
+        &call(
+            ctx,
+            "act",
+            json!({"page": page, "kind": "click", "ref": "e1"}),
+        )
+        .await?,
+    )?;
+    ensure_replaced(session, page, &dropped).await?;
     Ok(())
 }
 

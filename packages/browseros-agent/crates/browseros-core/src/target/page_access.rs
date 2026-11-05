@@ -1036,6 +1036,29 @@ mod frame_tests {
     }
 
     #[tokio::test]
+    async fn tests_that_a_ref_click_recovers_in_call_when_its_page_session_dies() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        native.split_tree.store(true, Ordering::SeqCst);
+        let snapshot = view.observe(page.clone()).await?.snapshot().await?;
+        let root = ref_named(&snapshot, "Root target")?;
+        native.kill("session-page")?;
+        native.mouse.lock().map_err(|_| "poisoned")?.clear();
+
+        view.input(page)
+            .await?
+            .click(&root, crate::input::ClickOptions::default())
+            .await?;
+        let mouse = native.mouse.lock().map_err(|_| "poisoned")?.clone();
+        let pressed = mouse
+            .iter()
+            .filter(|(_, event)| event["type"] == "mousePressed")
+            .map(|(session, _)| session.as_ref().map(SessionId::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(pressed, [Some("session-page-2")], "{mouse:?}");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn tests_that_goto_resends_a_navigation_its_dead_session_refused() -> TestResult {
         let (native, view, page) = fixture().await?;
         view.page_session(page.clone()).await?;
