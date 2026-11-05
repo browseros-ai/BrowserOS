@@ -14,23 +14,37 @@
 //!      Runtime.addBinding {JOURNAL_BINDING, executionContextName: SEALED_WORLD}
 //!      Page.addScriptToEvaluateOnNewDocument {seal_source(), SEALED_WORLD, runImmediately}
 //!    then sealed_frames' seal: closed shadow roots watched, any frame the script missed sealed
-//!  listener: Runtime.bindingCalled on an armed session ─▶ JournalEntry::parse ─▶ Pending
-//!            Pending ─ a second with no entry, a lag, disarm or drop ─▶ SecretSet
+//!  listener, from its own binding-call channel:
+//!            Runtime.bindingCalled on an armed session ─▶ JournalEntry::parse ─▶ Pending
+//!            Pending ─ a second with no entry, disarm or drop ─▶ SecretSet
+//!  listener, from the connection's broadcast:
 //!            Target.attachedToTarget, an iframe ─▶ worker: armed the same way, if its parent is
 //!            a lag ─▶ worker: every armed tab swept
 //!  disarm, or drop ─▶ the listener takes what was already sent, registers what it holds, waits
 //!                     for the worker's queued jobs, then removes its scripts
 //! ```
 //!
-//! **The listener never waits on the browser.** It reads the agent connection's one event
+//! **Binding calls come on a channel of the journal's own, never the broadcast.** browseros-cdp
+//! keeps a method that any reader takes with `events_targeted` off the connection's shared
+//! broadcast, and sdk-playwright takes `Runtime.bindingCalled` that way for as long as the
+//! process runs. A journal that read binding calls from the broadcast would get none, register
+//! nothing, and let what the owner typed reach the agent raw. browseros-cdp hands every targeted
+//! subscriber each call, so this one reads them beside sdk-playwright's. The channel is
+//! unbounded: a listener that falls behind delays an entry but never loses one.
+//!
+//! **The listener never waits on the browser.** Frame attaches and detaches still come on the
 //! broadcast, which every reader shares and which drops the oldest events a reader has not read
-//! once it is 4096 behind. A listener that armed frames and swept tabs itself stopped reading
-//! whenever a browser call stalled, and the entries the owner typed meanwhile could be dropped
-//! unread. So it takes each entry into `Pending` as it comes and hands browser work to a worker
-//! task, which runs it one job at a time, in the order the listener read the events. A lag can
-//! still happen if the listener goes unscheduled that long: then what it holds is registered, and
-//! the worker sweeps every armed tab. A lossless `events_targeted` subscriber is no option: core
-//! keeps one per method on a connection, and sdk-playwright needs `Runtime.bindingCalled` too.
+//! once it is 4096 behind. A listener that armed frames itself would stop reading whenever a
+//! browser call stalled, and miss the frames that attached meanwhile. So it takes each entry into
+//! `Pending` as it comes and hands browser work to a worker task, which runs it one job at a
+//! time, in the order the listener read the events. A lag can still happen if the listener goes
+//! unscheduled that long. It loses no entry, so what is held keeps its quiet period; it can lose
+//! an iframe's attach, so the worker sweeps every armed tab.
+//!
+//! **The two channels keep the browser's order where it matters.** The connection's reader hands
+//! over each binding call before it broadcasts any later event, so the listener takes the calls
+//! already queued before it handles a broadcast event. A call sent just before its frame
+//! detached is journaled while that session still counts as armed.
 //!
 //! **Who arms it** is the display's and the flow's business (decision 31): a takeover arms its
 //! tab at start, and every control display arms every open tab and calls
@@ -54,10 +68,10 @@
 //! sends the field's whole value, so registering each one made every prefix a 24-hour secret: a
 //! password that starts `https` registered `http`, which then masked every URL in the agent's
 //! results for a day. The listener keeps what it is sent in `Pending`, one latest value per
-//! field, and registers those with the set's full TTL once a second passes with no entry, before
-//! a lag's sweep, and at disarm or drop. The wait is safe: the tab is private by the owner's
-//! first input, so nothing captures its pixels; the sealed world masks the field in every read;
-//! and a takeover's tab is locked to the agent.
+//! field, and registers those with the set's full TTL once a second passes with no entry, and at
+//! disarm or drop. The wait is safe: the tab is private by the owner's first input, so nothing
+//! captures its pixels; the sealed world masks the field in every read; and a takeover's tab is
+//! locked to the agent.
 //!
 //! The binding stays at disarm (see [`ArmedJournal::disarm`]). Values are never logged: not a
 //! value, not a length, not a payload.
@@ -72,7 +86,7 @@ use browseros_trace::{SecretSet, SecretValue};
 use serde_json::json;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -103,9 +117,10 @@ impl Journal {
             sessions: Mutex::default(),
         });
         // Subscribed before any session is armed, so no entry is sent where no one listens.
+        let bindings = self.tabs.binding_calls();
         let events = self.tabs.events();
         let (stop, stopped) = oneshot::channel();
-        let listener = tokio::spawn(listen(Arc::clone(&armed), events, stopped));
+        let listener = tokio::spawn(listen(Arc::clone(&armed), bindings, events, stopped));
         for &tab in tabs {
             if let Err(error) = armed.arm_tab(tab).await {
                 tracing::warn!(tab = tab.0, %error, "the journal could not arm a tab");
@@ -230,11 +245,10 @@ impl Armed {
         }
     }
 
-    /// Takes one event without waiting on the browser: an entry into `pending`, a session that
-    /// went away, or a job for the worker.
-    fn on_event(&self, event: CdpEvent, pending: &mut Pending, jobs: &mpsc::UnboundedSender<Job>) {
+    /// Takes one broadcast event without waiting on the browser: a session that went away, or a
+    /// job for the worker.
+    fn on_event(&self, event: CdpEvent, jobs: &mpsc::UnboundedSender<Job>) {
         match event.method.as_str() {
-            "Runtime.bindingCalled" => self.journal(&event, pending),
             "Target.attachedToTarget" if event.params["targetInfo"]["type"] == "iframe" => {
                 // Refused only once the worker is gone, which leaves nothing to arm the frame.
                 let _ = jobs.send(Job::Frame(event));
@@ -249,7 +263,8 @@ impl Armed {
     }
 
     /// Takes one entry from an armed session's binding into `pending`. Another binding, or the
-    /// same one on a session this journal did not arm, is not this journal's to read.
+    /// same one on a session this journal did not arm, such as one sdk-playwright set up, is not
+    /// this journal's to read.
     fn journal(&self, event: &CdpEvent, pending: &mut Pending) {
         let armed = event
             .session_id
@@ -263,6 +278,17 @@ impl Armed {
             .and_then(JournalEntry::parse)
         {
             pending.note(entry.value);
+        }
+    }
+
+    /// Takes every binding call already queued, without waiting for more.
+    fn journal_queued(
+        &self,
+        bindings: &mut mpsc::UnboundedReceiver<CdpEvent>,
+        pending: &mut Pending,
+    ) {
+        while let Ok(call) = bindings.try_recv() {
+            self.journal(&call, pending);
         }
     }
 
@@ -281,8 +307,9 @@ impl Armed {
         }
     }
 
-    /// The broadcast dropped events the listener had not read, journal entries perhaps among
-    /// them, so every armed tab is swept: what is still in its fields gets registered.
+    /// The broadcast dropped events the listener had not read, perhaps the attach of an iframe
+    /// that is now unarmed, so every armed tab is swept: what every frame's fields hold gets
+    /// registered, a frame the journal never armed included.
     async fn sweep_tabs(&self) {
         let tabs = self
             .sessions()
@@ -341,9 +368,10 @@ async fn add_journal(session: &ProtocolSession) -> Result<String, CoreError> {
 }
 
 /// The listener: takes entries, and hands browser work to its worker, until stopped; then
-/// disarms. Until the stop it awaits nothing but events and the quiet period.
+/// disarms. Until the stop it awaits nothing but its two channels and the quiet period.
 async fn listen(
     armed: Arc<Armed>,
+    mut bindings: mpsc::UnboundedReceiver<CdpEvent>,
     mut events: broadcast::Receiver<CdpEvent>,
     mut stop: oneshot::Receiver<()>,
 ) {
@@ -354,38 +382,35 @@ async fn listen(
         tokio::select! {
             biased;
             _ = &mut stop => break,
-            received = events.recv() => match received {
-                Ok(event) => armed.on_event(event, &mut pending, &jobs),
-                Err(RecvError::Lagged(missed)) => {
-                    // With entries lost, what is held can no longer be told final from a
-                    // prefix, so it is registered as it stands, before the sweep: the sweep can
-                    // take seconds, and holding values through it would only keep them
-                    // unregistered longer.
-                    pending.register();
-                    tracing::warn!(
-                        missed,
-                        "the journal fell behind the browser's events; sweeping its tabs"
-                    );
-                    let _ = jobs.send(Job::Sweep);
+            // A transport without targeted delivery hands back a closed channel. Its `None` fails
+            // this pattern, which idles the branch for the round instead of ending the listener.
+            Some(call) = bindings.recv() => armed.journal(&call, &mut pending),
+            received = events.recv() => {
+                // The calls sent before this event are queued by now (see the module doc).
+                armed.journal_queued(&mut bindings, &mut pending);
+                match received {
+                    Ok(event) => armed.on_event(event, &jobs),
+                    // No entry was lost, so what is held stays on its quiet period.
+                    Err(RecvError::Lagged(missed)) => {
+                        tracing::warn!(
+                            missed,
+                            "the journal fell behind the browser's events; sweeping its tabs"
+                        );
+                        let _ = jobs.send(Job::Sweep);
+                    }
+                    Err(RecvError::Closed) => break,
                 }
-                Err(RecvError::Closed) => break,
-            },
-            // After the events, so an entry already sent extends what is held before the quiet
-            // period can end on it.
+            }
+            // After the binding calls, so an entry already sent extends what is held before the
+            // quiet period can end on it.
             () = quiet(pending.quiet_until) => pending.register(),
         }
     }
     // What the browser sent before the stop is already here: the owner's last keystrokes before
     // give-back. Register it, with what is held, before the scripts go.
-    loop {
-        match events.try_recv() {
-            Ok(event) if event.method == "Runtime.bindingCalled" => {
-                armed.journal(&event, &mut pending);
-            }
-            Ok(_) | Err(TryRecvError::Lagged(_)) => {}
-            Err(TryRecvError::Empty | TryRecvError::Closed) => break,
-        }
-    }
+    armed.journal_queued(&mut bindings, &mut pending);
+    // Read for the last time. Dropped now, it queues no calls while the scripts are removed.
+    drop(bindings);
     pending.register();
     // The worker ends once its queue is empty, so a frame it is arming has its script recorded
     // before the scripts are removed, and none is left behind.

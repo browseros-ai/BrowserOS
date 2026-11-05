@@ -141,6 +141,22 @@ async fn serve_browser(stream: TcpStream) {
             }),
             // Never answered, like an evaluation whose promise never settles.
             Some("Fixture.never") => continue,
+            // Sends the event the params describe ahead of the reply, so the client's reader
+            // has routed it by the time the request resolves.
+            Some("Fixture.emit") => {
+                let event = json!({
+                    "method": request["params"]["method"],
+                    "params": request["params"]["params"],
+                });
+                if socket
+                    .send(Message::Text(event.to_string().into()))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                json!({})
+            }
             _ => panic!("unexpected method: {}", request["method"]),
         };
         let response = json!({ "id": request["id"], "result": result });
@@ -409,5 +425,84 @@ async fn a_send_its_caller_abandons_frees_its_reply_slot() {
         tokio::task::yield_now().await;
     }
     assert!(freed, "an abandoned request kept its reply slot");
+    client.disconnect().await;
+}
+
+/// Has the loopback browser send one `method` event carrying `value`. Returns once the
+/// client's reader has routed it.
+async fn emit(client: &CdpClient, method: &str, value: u64) {
+    client
+        .send(
+            "Fixture.emit",
+            json!({ "method": method, "params": { "value": value } }),
+            None,
+        )
+        .await
+        .unwrap_or_else(|err| panic!("emit {method}: {err}"));
+}
+
+fn take(receiver: &mut mpsc::UnboundedReceiver<CdpEvent>) -> CdpEvent {
+    receiver
+        .try_recv()
+        .unwrap_or_else(|err| panic!("no targeted event: {err}"))
+}
+
+fn take_broadcast(receiver: &mut broadcast::Receiver<CdpEvent>) -> CdpEvent {
+    receiver
+        .try_recv()
+        .unwrap_or_else(|err| panic!("no broadcast event: {err}"))
+}
+
+#[tokio::test]
+async fn every_targeted_subscriber_gets_each_event_and_the_broadcast_none() {
+    let browser = LoopbackBrowser::start().await;
+    let client = browser.connect().await;
+    let mut broadcast = client.events();
+    let mut playwright = client.events_targeted("Runtime.bindingCalled");
+    let mut takeover = client.events_targeted("Runtime.bindingCalled");
+
+    emit(&client, "Runtime.bindingCalled", 1).await;
+    emit(&client, "Runtime.bindingCalled", 2).await;
+    emit(&client, "Page.loadEventFired", 3).await;
+
+    for subscriber in [&mut playwright, &mut takeover] {
+        for value in [1, 2] {
+            let event = take(subscriber);
+            assert_eq!(event.method, "Runtime.bindingCalled");
+            assert_eq!(event.params["value"], value);
+        }
+        assert!(
+            subscriber.try_recv().is_err(),
+            "the page event, which nobody took, is not here"
+        );
+    }
+    assert_eq!(
+        take_broadcast(&mut broadcast).params["value"],
+        3,
+        "the broadcast skipped both binding calls"
+    );
+    client.disconnect().await;
+}
+
+#[tokio::test]
+async fn a_dropped_targeted_subscriber_is_forgotten_and_the_others_still_receive() {
+    let browser = LoopbackBrowser::start().await;
+    let client = browser.connect().await;
+    let mut broadcast = client.events();
+    let mut kept = client.events_targeted("Runtime.bindingCalled");
+    let gone = client.events_targeted("Runtime.bindingCalled");
+    drop(gone);
+
+    emit(&client, "Runtime.bindingCalled", 1).await;
+    assert_eq!(take(&mut kept).params["value"], 1);
+
+    drop(kept);
+    emit(&client, "Runtime.bindingCalled", 2).await;
+    assert_eq!(
+        take_broadcast(&mut broadcast).params["value"],
+        2,
+        "the first call reached the subscriber still live; with none left, the broadcast \
+         carries the method again"
+    );
     client.disconnect().await;
 }

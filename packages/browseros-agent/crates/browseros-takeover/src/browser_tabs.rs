@@ -21,7 +21,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -121,9 +121,17 @@ impl BrowserTabs {
         self.session.protocol_session(id)
     }
 
-    /// Every CDP event on the agent connection, from now on.
+    /// The agent connection's shared event broadcast, from now on. It drops what a reader that
+    /// falls far behind has not read, and it carries no method that some reader takes on a
+    /// channel of its own, as [`Self::binding_calls`] does.
     pub(crate) fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.session.cdp_events()
+    }
+
+    /// Every `Runtime.bindingCalled` on the agent connection, from now on, on a channel of its
+    /// own that drops nothing. Each such channel gets every call, sdk-playwright's included.
+    pub(crate) fn binding_calls(&self) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.session.cdp_events_targeted("Runtime.bindingCalled")
     }
 }
 

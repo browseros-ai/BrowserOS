@@ -1,4 +1,6 @@
-use crate::{CdpError, CdpEvent, EventStream, SessionId, discovery::discover_websocket_url};
+use crate::{
+    CdpError, CdpEvent, EventStream, SessionId, TargetedEvents, discovery::discover_websocket_url,
+};
 use futures_util::{
     SinkExt, StreamExt,
     future::BoxFuture,
@@ -103,7 +105,10 @@ struct Inner {
     /// validate under this guard so reused browser IDs cannot reach a replacement.
     sink: Mutex<Option<WsSink>>,
     events_tx: broadcast::Sender<CdpEvent>,
-    targeted: std::sync::Mutex<HashMap<String, mpsc::UnboundedSender<CdpEvent>>>,
+    /// The methods consumers took with [`CdpClient::events_targeted`]. The reader offers every
+    /// event here first, and broadcasts only what no subscriber took. Kept across reconnects,
+    /// so a subscription outlives the socket it started on.
+    targeted: TargetedEvents,
     connected: AtomicBool,
     disconnecting: AtomicBool,
     epoch: AtomicU64,
@@ -128,7 +133,7 @@ impl CdpClient {
             pending: Mutex::new(HashMap::new()),
             sink: Mutex::new(None),
             events_tx,
-            targeted: std::sync::Mutex::new(HashMap::new()),
+            targeted: TargetedEvents::default(),
             connected: AtomicBool::new(false),
             disconnecting: AtomicBool::new(false),
             epoch: AtomicU64::new(0),
@@ -317,20 +322,17 @@ impl CdpClient {
         EventStream::new(method, self.events())
     }
 
-    /// Subscribe to one event method on a dedicated channel. Matching events
-    /// are delivered here INSTEAD of the shared broadcast ring and are freed
-    /// as soon as they are consumed — use for high-rate, large-payload events
-    /// (e.g. `Page.screencastFrame`) whose retention in the 4096-slot
-    /// broadcast ring would pin memory. One subscriber per method: a new
-    /// call replaces the previous one (whose channel closes); dropping the
-    /// receiver restores broadcast delivery for the method.
+    /// Subscribes to one event method on a dedicated, unbounded channel, for events too large
+    /// and frequent for the 4096-slot broadcast ring (`Page.screencastFrame`) or too important
+    /// to lose when a reader falls behind it (`Runtime.bindingCalled`).
+    ///
+    /// Every subscriber of a method gets each of its events: two journals read the same binding
+    /// calls (see [`TargetedEvents`]). While any receiver of the method is live, the broadcast
+    /// does not carry it, so another reader of the method must subscribe here as well. Once
+    /// every receiver is dropped, the broadcast carries the method again.
     #[must_use]
     pub fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
-        let (tx, rx) = mpsc::unbounded_channel();
-        if let Ok(mut targeted) = self.inner.targeted.lock() {
-            targeted.insert(method.to_string(), tx);
-        }
-        rx
+        self.inner.targeted.subscribe(method)
     }
 
     async fn send_frame(
@@ -562,29 +564,10 @@ async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
         params,
         session_id,
     };
-    let Some(event) = send_targeted(inner, event) else {
+    let Some(event) = inner.targeted.deliver(event) else {
         return;
     };
     let _ = inner.events_tx.send(event);
-}
-
-/// Hands the event to the method's targeted subscriber if one is live;
-/// returns the event back when it should fall through to the broadcast ring.
-fn send_targeted(inner: &Inner, event: CdpEvent) -> Option<CdpEvent> {
-    let Ok(mut targeted) = inner.targeted.lock() else {
-        return Some(event);
-    };
-    let Some(sender) = targeted.get(&event.method) else {
-        return Some(event);
-    };
-    match sender.send(event) {
-        Ok(()) => None,
-        Err(rejected) => {
-            let event = rejected.0;
-            targeted.remove(&event.method);
-            Some(event)
-        }
-    }
 }
 
 async fn start_keepalive(inner: Arc<Inner>) {

@@ -6,7 +6,7 @@
 use browseros_core::sensitive_fields::{JOURNAL_BINDING, SEALED_WORLD, seal_source};
 use browseros_core::testing::{TestCall, TestConnection, cdp_pending};
 use browseros_core::viewport::Viewports;
-use browseros_core::{BrowserSession, BrowserSessionHooks, SessionId, TabId};
+use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TabId};
 use browseros_takeover::{BrowserTabs, Journal, PartError};
 use browseros_trace::{SecretSet, SecretSetConfig};
 use serde_json::{Value, json};
@@ -160,20 +160,16 @@ impl Harness {
         );
     }
 
-    /// `count` distinct values, typed into one field after another, more than the scripted
-    /// broadcast holds in all. Sent in batches it can hold, so a listener that keeps reading
-    /// misses none of them.
-    async fn type_many_fields(&self, session: &SessionId, count: usize) -> Vec<String> {
+    /// `count` distinct values, typed into one field after another at once: more than the
+    /// scripted broadcast holds, which binding calls never pass through.
+    fn type_many_fields(&self, session: &SessionId, count: usize) -> Vec<String> {
         let values = (0..count)
             .map(|i| format!("MANYFIELDS_{i:03}"))
             .collect::<Vec<_>>();
-        for batch in values.chunks(16) {
-            self.send(
-                session,
-                &batch.iter().map(String::as_str).collect::<Vec<_>>(),
-            );
-            settle().await;
-        }
+        self.send(
+            session,
+            &values.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
         values
     }
 
@@ -301,6 +297,30 @@ async fn dropping_the_armed_journal_registers_what_it_was_sent_and_removes_its_s
     Ok(())
 }
 
+/// sdk-playwright takes `Runtime.bindingCalled` on the connection's targeted channel for as long
+/// as the process runs, which keeps every binding call off the broadcast. What the owner types
+/// still reaches the journal, and sdk-playwright still gets every call.
+#[tokio::test(start_paused = true)]
+async fn typing_reaches_the_journal_while_sdk_playwright_also_takes_binding_calls() -> TestResult {
+    let h = harness(&["page-script"])?;
+    let mut playwright = h.connection.events_targeted("Runtime.bindingCalled");
+    let armed = h.journal.arm(&[TabId(3)]).await;
+    let page = h.page_session()?;
+
+    let typed = "OWNERTYPED_9d4e";
+    h.type_keys(&page, typed);
+    tokio::time::sleep(QUIET * 2).await;
+    assert_eq!(h.masked(typed), "[private]");
+    assert_eq!(h.secrets.count(), 1, "the final value, not its prefixes");
+    assert_eq!(
+        std::iter::from_fn(|| playwright.try_recv().ok()).count(),
+        keys(typed).len(),
+        "sdk-playwright still got every call"
+    );
+    armed.disarm().await;
+    Ok(())
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_value_typed_on_an_armed_session_is_registered_and_a_repeat_refreshes_it() -> TestResult {
     let h = harness(&["page-script"])?;
@@ -404,11 +424,11 @@ async fn past_64_held_values_the_oldest_is_registered_at_once() -> TestResult {
     let values = (0..=64)
         .map(|i| format!("field-{i:02}"))
         .collect::<Vec<_>>();
-    // In batches the scripted broadcast can hold, so the listener never falls behind.
-    for batch in values.chunks(16) {
-        h.send(&page, &batch.iter().map(String::as_str).collect::<Vec<_>>());
-        settle().await;
-    }
+    h.send(
+        &page,
+        &values.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    settle().await;
     assert_eq!(h.masked("field-00 field-01"), "[private] field-01");
     assert_eq!(h.secrets.count(), 1);
     tokio::time::sleep(QUIET * 2).await;
@@ -495,8 +515,11 @@ fn a_runtime_shutting_down_still_registers_what_the_listener_read() -> TestResul
     Ok(())
 }
 
+/// A lag on the broadcast can lose an iframe's attach, so the tabs are swept. It loses no
+/// entry, since binding calls never pass through the broadcast, so what the journal holds waits
+/// out its quiet period: registering it at the lag could register a prefix.
 #[tokio::test(start_paused = true)]
-async fn a_lag_registers_what_the_journal_holds_before_its_sweep() -> TestResult {
+async fn a_lag_sweeps_the_tabs_and_leaves_what_is_held_to_its_quiet_period() -> TestResult {
     let h = harness(&["page-script"])?;
     let armed = h.journal.arm(&[TabId(3)]).await;
     let page = h.page_session()?;
@@ -505,20 +528,27 @@ async fn a_lag_registers_what_the_journal_holds_before_its_sweep() -> TestResult
 
     h.type_keys(&page, "BEFORELAG_7c1d");
     settle().await;
+    let walks = h.calls("Page.getFrameTree")?.len();
     h.flood();
     settle().await;
-    assert_eq!(
-        h.masked("BEFORELAG_7c1d"),
-        "[private]",
-        "registered at the lag, while the sweep is still stuck and inside the quiet period"
+    assert!(
+        h.calls("Page.getFrameTree")?.len() > walks,
+        "the lag's sweep walked the tab"
     );
-    assert_eq!(h.secrets.count(), 1);
+    assert_eq!(
+        h.secrets.count(),
+        0,
+        "nothing registered at the lag, inside the quiet period"
+    );
+    tokio::time::sleep(QUIET).await;
+    assert_eq!(h.masked("BEFORELAG_7c1d"), "[private]");
+    assert_eq!(h.secrets.count(), 1, "the final value, not its prefixes");
     armed.disarm().await;
     Ok(())
 }
 
-/// The broadcast drops what a reader that is behind has not read, so browser work that stalls
-/// must never keep the listener from reading.
+/// Browser work that stalls must never keep the listener from reading: an entry would wait
+/// behind it, and the broadcast drops the frame attaches a reader that is behind has not read.
 #[tokio::test(start_paused = true)]
 async fn a_frame_that_arms_slowly_holds_up_no_entry() -> TestResult {
     let h = harness(&["page-script", "frame-script"])?;
@@ -529,7 +559,7 @@ async fn a_frame_that_arms_slowly_holds_up_no_entry() -> TestResult {
     h.attach(&page, "oopif-7", "iframe");
     settle().await;
 
-    let typed = h.type_many_fields(&page, FLOOD + 20).await;
+    let typed = h.type_many_fields(&page, FLOOD + 20);
     tokio::time::sleep(QUIET + Duration::from_millis(100)).await;
     assert_eq!(
         h.calls(ADD_SCRIPT)?.len(),
@@ -551,7 +581,7 @@ async fn a_slow_catch_up_sweep_holds_up_no_entry() -> TestResult {
     h.flood();
     settle().await;
 
-    let typed = h.type_many_fields(&page, FLOOD + 20).await;
+    let typed = h.type_many_fields(&page, FLOOD + 20);
     tokio::time::sleep(QUIET + Duration::from_millis(100)).await;
     assert_eq!(h.unregistered(&typed), Vec::<&str>::new());
     armed.disarm().await;
@@ -601,6 +631,32 @@ async fn another_binding_or_a_session_it_did_not_arm_registers_nothing() -> Test
         !h.masks("AFTERWARDS_4"),
         "a disarmed journal registers nothing"
     );
+    Ok(())
+}
+
+/// Binding calls and frame detaches reach the journal on different channels. A value the owner
+/// typed into a frame just before it detached is still taken from an armed session.
+#[tokio::test(start_paused = true)]
+async fn a_value_typed_just_before_its_frame_detached_is_registered() -> TestResult {
+    let h = harness(&["page-script", "frame-script"])?;
+    let armed = h.journal.arm(&[TabId(3)]).await;
+    let page = h.page_session()?;
+    h.attach(&page, "oopif-7", "iframe");
+    eventually(|| Ok(h.calls(ADD_SCRIPT)?.len() == 2)).await?;
+
+    h.type_into(
+        &SessionId::from("oopif-7"),
+        JOURNAL_BINDING,
+        "LASTINFRAME_3b8a",
+    );
+    h.connection.emit(
+        "Target.detachedFromTarget",
+        json!({ "sessionId": "oopif-7" }),
+        Some(page),
+    );
+    tokio::time::sleep(QUIET * 2).await;
+    assert_eq!(h.masked("LASTINFRAME_3b8a"), "[private]");
+    armed.disarm().await;
     Ok(())
 }
 

@@ -3,12 +3,14 @@ mod discovery;
 mod error;
 mod events;
 mod generated;
+mod targeted;
 
 pub use client::{CdpClient, ConnectOptions, ReconnectPolicy};
 pub use discovery::discover_websocket_url;
 pub use error::CdpError;
 pub use events::{CdpEvent, EventStream};
 pub use generated::*;
+pub use targeted::TargetedEvents;
 
 use serde::{Deserialize, Serialize};
 use std::{fmt, hash::Hash};

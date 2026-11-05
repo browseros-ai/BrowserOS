@@ -62,9 +62,11 @@ pub trait CdpConnection: Send + Sync {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent>;
 
-    /// Dedicated single-method event channel that bypasses the broadcast
-    /// ring (see `CdpClient::events_targeted`). Default: a closed channel —
-    /// transports without targeted delivery yield no events here.
+    /// Every later event of `method` on a dedicated, unbounded channel that bypasses the
+    /// broadcast ring (see `browseros_cdp::TargetedEvents`). Each subscriber of a method gets
+    /// every one of its events, and while any subscriber is live, [`Self::events`] does not
+    /// carry the method: a reader that needs a method someone else takes here must take it here
+    /// too. Default: a closed channel; transports without targeted delivery yield no events here.
     fn events_targeted(&self, _method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
         let (_tx, rx) = mpsc::unbounded_channel();
         rx

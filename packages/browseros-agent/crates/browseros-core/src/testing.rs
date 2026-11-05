@@ -9,9 +9,14 @@
 //! no other connection in the process hands out. Core serializes captures with a process-wide
 //! lock per session id, so two tests whose fakes both answered `session-1` would wait on each
 //! other's captures.
+//!
+//! An emitted event goes where the browser connection would send it: through the same
+//! [`TargetedEvents`] routing as `CdpClient`, so a method some code took with `events_targeted`
+//! reaches every such receiver and not the broadcast. A test then sees a reader starve on the
+//! wrong channel just as it would against a browser.
 
 use crate::{CdpConnection, SessionId};
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::{
@@ -21,7 +26,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 const TEST_ERROR_KEY: &str = "__test_cdp_error";
 const TEST_PENDING_KEY: &str = "__test_cdp_pending";
@@ -63,6 +68,7 @@ pub struct TestConnection {
     id: u64,
     script: Mutex<Script>,
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
 }
 
 struct Script {
@@ -91,6 +97,7 @@ impl TestConnection {
                 attached: 0,
             }),
             events: broadcast::channel(64).0,
+            targeted: TargetedEvents::default(),
         })
     }
 
@@ -113,14 +120,19 @@ impl TestConnection {
             .map_err(|_| test_state_error())
     }
 
-    /// Delivers an event to every receiver of [`CdpConnection::events`], as the browser would.
+    /// Delivers an event as the browser connection would: to every receiver of
+    /// [`CdpConnection::events_targeted`] for its method, or, when there is none, to every
+    /// receiver of [`CdpConnection::events`].
     pub fn emit(&self, method: &str, params: Value, session: Option<SessionId>) {
-        // No receiver yet is not an error: the browser does not wait for listeners either.
-        let _ = self.events.send(CdpEvent {
+        let event = CdpEvent {
             method: method.to_string(),
             params,
             session_id: session,
-        });
+        };
+        if let Some(event) = self.targeted.deliver(event) {
+            // No receiver yet is not an error: the browser does not wait for listeners either.
+            let _ = self.events.send(event);
+        }
     }
 
     fn reply(
@@ -223,6 +235,10 @@ impl CdpConnection for TestConnection {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
     }
 
     fn is_connected(&self) -> bool {
@@ -356,6 +372,35 @@ mod tests {
             assert_eq!(event.params["frame"]["id"], "main");
             assert_eq!(event.session_id.as_ref(), Some(&session));
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_targeted_method_reaches_every_targeted_receiver_and_not_the_broadcast() -> TestResult
+    {
+        let connection = TestConnection::new([]);
+        let mut broadcast = connection.events();
+        let mut first = connection.events_targeted("Runtime.bindingCalled");
+        let mut second = connection.events_targeted("Runtime.bindingCalled");
+        connection.emit("Runtime.bindingCalled", json!({ "name": "early" }), None);
+        connection.emit("Page.loadEventFired", json!({}), None);
+        for receiver in [&mut first, &mut second] {
+            assert_eq!(receiver.try_recv()?.params["name"], "early");
+        }
+        assert_eq!(
+            broadcast.try_recv()?.method,
+            "Page.loadEventFired",
+            "the binding call stayed off the broadcast"
+        );
+
+        drop(first);
+        drop(second);
+        connection.emit("Runtime.bindingCalled", json!({ "name": "late" }), None);
+        assert_eq!(
+            broadcast.try_recv()?.params["name"],
+            "late",
+            "with no targeted receiver left, the broadcast carries the method again"
+        );
         Ok(())
     }
 

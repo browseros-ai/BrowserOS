@@ -24,9 +24,10 @@ use crate::world::SessionSetup;
 ///
 /// It takes `Runtime.bindingCalled` on the connection's dedicated channel for that method,
 /// not the shared event ring: the ring drops events when a reader lags, and a dropped entry is
-/// a secret the trace never learns to mask. The channel has one subscriber per connection,
-/// which is why claw-sdk builds one `Playwright` per browser connection; a second one would
-/// take the journal over. Nothing else in the process uses page bindings.
+/// a secret the trace never learns to mask. Every dedicated subscriber of a method gets each of
+/// its events, and browseros-takeover's control journal is another: during a takeover it arms
+/// the owner's frames with the same binding and reads the same calls. Each journal keeps only
+/// the entries from sessions it set up.
 #[derive(Debug)]
 pub(crate) struct Journal {
     task: JoinHandle<()>,
