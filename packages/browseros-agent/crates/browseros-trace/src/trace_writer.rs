@@ -352,22 +352,27 @@ impl TraceSink {
 }
 
 impl PrivacyStore for TraceSink {
+    // These send the command when called, not when the future first runs. `Privacy` calls them
+    // under its lock, so the queue, and the disk after it, sees a tab's writes in the order
+    // memory made them.
     fn persist_private(
         &self,
         tab: TabId,
         record: PrivacyRecord,
     ) -> BoxFuture<'_, Result<(), TraceError>> {
+        let (reply, done) = oneshot::channel();
+        let queued = self.command(Command::PersistPrivate { tab, record, reply });
         Box::pin(async move {
-            let (reply, done) = oneshot::channel();
-            self.command(Command::PersistPrivate { tab, record, reply })?;
+            queued?;
             done.await.map_err(|_| TraceError::Closed)?
         })
     }
 
     fn forget_private(&self, tab: TabId) -> BoxFuture<'_, Result<(), TraceError>> {
+        let (reply, done) = oneshot::channel();
+        let queued = self.command(Command::ForgetPrivate { tab, reply });
         Box::pin(async move {
-            let (reply, done) = oneshot::channel();
-            self.command(Command::ForgetPrivate { tab, reply })?;
+            queued?;
             done.await.map_err(|_| TraceError::Closed)?
         })
     }

@@ -21,6 +21,13 @@
 //! restarts. So a flag is forgotten when its tab closes ([`Privacy::tab_closed`]) and, when the
 //! browser link connects, for every tab that is not open ([`Privacy::retain_tabs`]). A flag
 //! that outlives its tab by mistake only over-protects the next tab with that id.
+//!
+//! The disk changes in the order memory does. Each flag and each delete is queued with the
+//! [`PrivacyStore`] under the lock that changes memory, so when a close races a `make_private`
+//! of the same tab, the disk ends where memory does. Queued after the lock is released, a
+//! delete could land before the flag it deletes and leave that flag on disk. Worse, it could
+//! land after a newer flag and erase it, and after a restart Neo would capture a tab that
+//! memory had kept private.
 
 use crate::{EpochMillis, SecretSet, TraceError};
 use browseros_core::TabId;
@@ -78,16 +85,20 @@ pub struct PrivacyRecord {
 
 /// Where private flags are made durable. The trace writer implements it, so a flag is committed
 /// in order with the records around it.
+///
+/// The store orders each write when the method is called, not when its future is first polled.
+/// [`Privacy`] calls while it holds its lock, so a call must not block, and the disk sees a
+/// tab's flags and deletes in the order memory made them.
 pub trait PrivacyStore: Send + Sync {
-    /// Commits `tab`'s flag. Returns once it is on disk. A tab that already has a durable flag
-    /// keeps its first one.
+    /// Queues the commit of `tab`'s flag. The future resolves once it is on disk. A tab that
+    /// already has a durable flag keeps its first one.
     fn persist_private(
         &self,
         tab: TabId,
         record: PrivacyRecord,
     ) -> BoxFuture<'_, Result<(), TraceError>>;
 
-    /// Deletes `tab`'s flag. Returns once the delete is on disk.
+    /// Queues the delete of `tab`'s flag. The future resolves once the delete is on disk.
     fn forget_private(&self, tab: TabId) -> BoxFuture<'_, Result<(), TraceError>>;
 }
 
@@ -116,6 +127,12 @@ struct State {
     /// begun before the tab went private would match it again.
     epochs: HashMap<TabId, u64>,
     control_displays: usize,
+}
+
+impl State {
+    fn epoch(&self, tab: TabId) -> u64 {
+        self.epochs.get(&tab).copied().unwrap_or(0)
+    }
 }
 
 /// Pixel privacy for the whole process, and the door to the secret set.
@@ -171,9 +188,9 @@ impl Privacy {
         reason: PrivateReason,
         at: EpochMillis,
     ) -> Result<(), PrivacyError> {
-        let record = {
+        let (epoch, commit) = {
             let mut state = self.lock();
-            match state.private.get(&tab) {
+            let record = match state.private.get(&tab) {
                 Some(flag) if flag.committed => return Ok(()),
                 Some(flag) => flag.record,
                 None => {
@@ -188,13 +205,18 @@ impl Privacy {
                     *state.epochs.entry(tab).or_default() += 1;
                     record
                 }
-            }
+            };
+            // Called under the lock, so the commit is queued ahead of the delete of any close
+            // that forgets this flag.
+            (state.epoch(tab), self.store.persist_private(tab, record))
         };
-        self.store
-            .persist_private(tab, record)
-            .await
-            .map_err(PrivacyError::NotCommitted)?;
-        if let Some(flag) = self.lock().private.get_mut(&tab) {
+        commit.await.map_err(PrivacyError::NotCommitted)?;
+        let mut state = self.lock();
+        // A moved epoch means a close forgot the flag this commit wrote. A flag set since then
+        // is on disk only once its own commit is.
+        if state.epoch(tab) == epoch
+            && let Some(flag) = state.private.get_mut(&tab)
+        {
             flag.committed = true;
         }
         Ok(())
@@ -213,7 +235,7 @@ impl Privacy {
         if state.private.contains_key(&tab) {
             return None;
         }
-        let epoch = state.epochs.get(&tab).copied().unwrap_or(0);
+        let epoch = state.epoch(tab);
         drop(state);
         Some(CaptureGuard {
             privacy: Arc::clone(self),
@@ -250,18 +272,17 @@ impl Privacy {
     /// that fails is logged and leaves the row, which only over-protects a later tab with this
     /// id. A tab that was not private has nothing to forget.
     pub async fn tab_closed(&self, tab: TabId) {
-        let forgotten = {
+        let forget = {
             let mut state = self.lock();
-            let forgotten = state.private.remove(&tab).is_some();
-            if forgotten {
-                *state.epochs.entry(tab).or_default() += 1;
+            if state.private.remove(&tab).is_none() {
+                return;
             }
-            forgotten
+            *state.epochs.entry(tab).or_default() += 1;
+            // Called under the lock, so the delete is queued after the commit of the flag it
+            // deletes and before the commit of any flag set after it.
+            self.store.forget_private(tab)
         };
-        if !forgotten {
-            return;
-        }
-        if let Err(error) = self.store.forget_private(tab).await {
+        if let Err(error) = forget.await {
             tracing::warn!(%error, tab = tab.0, "a closed tab's private flag stays on disk");
         }
     }
@@ -301,8 +322,7 @@ impl CaptureGuard {
     #[must_use]
     pub fn admit(&self) -> bool {
         let state = self.privacy.lock();
-        !state.private.contains_key(&self.tab)
-            && state.epochs.get(&self.tab).copied().unwrap_or(0) == self.epoch
+        !state.private.contains_key(&self.tab) && state.epoch(self.tab) == self.epoch
     }
 }
 
@@ -358,7 +378,10 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
-    /// A durable store in memory: `rows` is what a restart would load.
+    /// A durable store in memory: `rows` is what a restart would load. It writes a row when the
+    /// commit's future runs, not when the commit is called. No test in this module races a flag
+    /// against its delete, so the difference does not matter here. `tests/trace_store.rs` races
+    /// them on the real writer.
     #[derive(Default)]
     struct Store {
         rows: Mutex<HashMap<TabId, PrivacyRecord>>,
