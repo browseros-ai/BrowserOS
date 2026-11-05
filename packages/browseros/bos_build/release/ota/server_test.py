@@ -59,7 +59,7 @@ class LiveReleaseReuseTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        self.output = Path(self._tmp.name) / "appcast-server.alpha.xml"
+        self.output = Path(self._tmp.name) / "appcast-claw-server.alpha.xml"
         self.registry = SimpleNamespace(add=mock.Mock())
         self.ctx = cast(
             Context,
@@ -354,7 +354,7 @@ class BoundPayloadUploadTest(unittest.TestCase):
             os="linux",
             arch="x86_64",
         )
-        output = self.root / "appcast-server.alpha.xml"
+        output = self.root / "appcast-claw-server.alpha.xml"
         publisher = SimpleNamespace(fetch_live=lambda _: None)
         ctx = cast(
             Context,

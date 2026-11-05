@@ -52,8 +52,9 @@ function initFixture() {
   mustRun(source, ['git', 'init', '--initial-branch=main'])
   configureGit(source)
   mkdirSync(join(source, 'updates/server'), { recursive: true })
+  mkdirSync(join(source, 'updates/browser'), { recursive: true })
   writeFileSync(
-    join(source, 'updates/server/appcast-server.alpha.xml'),
+    join(source, 'updates/browser/appcast-claw.xml'),
     'server-old\n',
   )
   writeFileSync(
@@ -185,7 +186,7 @@ describe('commit-update-snapshot', () => {
     const fixture = initFixture()
     try {
       writeFileSync(
-        join(fixture.source, 'updates/server/appcast-server.alpha.xml'),
+        join(fixture.source, 'updates/browser/appcast-claw.xml'),
         'server-new\n',
       )
       writeFileSync(
@@ -231,7 +232,7 @@ exec "$SNAPSHOT_REAL_GIT" "$@"
           script,
           'main',
           'snapshot BrowserOS server alpha 1.2.3',
-          'updates/server/appcast-server.alpha.xml',
+          'updates/browser/appcast-claw.xml',
         ],
         {
           ...scriptEnv(fixture),
@@ -247,7 +248,7 @@ exec "$SNAPSHOT_REAL_GIT" "$@"
           'git',
           `--git-dir=${fixture.remote}`,
           'show',
-          'main:updates/server/appcast-server.alpha.xml',
+          'main:updates/browser/appcast-claw.xml',
         ]),
       ).toBe('server-new')
       expect(
@@ -273,7 +274,7 @@ exec "$SNAPSHOT_REAL_GIT" "$@"
           script,
           'main',
           'snapshot BrowserOS server alpha 1.2.3',
-          'updates/server/appcast-server.alpha.xml',
+          'updates/browser/appcast-claw.xml',
         ],
         scriptEnv(fixture),
       )
@@ -290,7 +291,7 @@ exec "$SNAPSHOT_REAL_GIT" "$@"
     const fixture = initFixture()
     try {
       writeFileSync(
-        join(fixture.source, 'updates/server/appcast-server.alpha.xml'),
+        join(fixture.source, 'updates/browser/appcast-claw.xml'),
         'server-new\n',
       )
       const result = run(
@@ -299,7 +300,7 @@ exec "$SNAPSHOT_REAL_GIT" "$@"
           script,
           'main',
           'snapshot BrowserOS server alpha 1.2.3',
-          'updates/server/appcast-server.alpha.xml',
+          'updates/browser/appcast-claw.xml',
         ],
         {
           ...scriptEnv(fixture),
@@ -315,7 +316,7 @@ exec "$SNAPSHOT_REAL_GIT" "$@"
           'git',
           `--git-dir=${fixture.remote}`,
           'show',
-          'main:updates/server/appcast-server.alpha.xml',
+          'main:updates/browser/appcast-claw.xml',
         ]),
       ).toBe('server-new')
     } finally {
@@ -350,7 +351,7 @@ exec "$SNAPSHOT_REAL_GIT" "$@"
     const fixture = initFixture()
     try {
       writeFileSync(
-        join(fixture.source, 'updates/server/appcast-server.alpha.xml'),
+        join(fixture.source, 'updates/browser/appcast-claw.xml'),
         'server-new\n',
       )
       writeFileSync(
@@ -364,7 +365,7 @@ exec "$SNAPSHOT_REAL_GIT" "$@"
           script,
           'main',
           'snapshot both feeds',
-          'updates/server/appcast-server.alpha.xml',
+          'updates/browser/appcast-claw.xml',
           'updates/server/appcast-claw-server.alpha.xml',
         ],
         scriptEnv(fixture),
@@ -378,7 +379,7 @@ exec "$SNAPSHOT_REAL_GIT" "$@"
         mustRun(fixture.remote, [
           'git',
           'show',
-          'main:updates/server/appcast-server.alpha.xml',
+          'main:updates/browser/appcast-claw.xml',
         ]),
       ).toBe('server-new')
       expect(

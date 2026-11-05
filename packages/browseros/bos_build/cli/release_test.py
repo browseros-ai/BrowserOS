@@ -158,13 +158,13 @@ class FeedPublisherCliTest(unittest.TestCase):
             result = invoke(
                 "feeds",
                 "publish-local",
-                "appcast.xml",
+                "appcast-claw.xml",
                 "extensions/bundled-manifest.xml",
             )
 
         self.assertEqual(result.exit_code, 0, plain_output(result))
         publisher.return_value.publish_staged.assert_called_once_with(
-            ["appcast.xml", "extensions/bundled-manifest.xml"],
+            ["appcast-claw.xml", "extensions/bundled-manifest.xml"],
             publish=False,
             allow_downgrade=False,
             repair_invalid_live=False,
@@ -180,14 +180,14 @@ class FeedPublisherCliTest(unittest.TestCase):
             result = invoke(
                 "feeds",
                 "publish-local",
-                "appcast.xml",
+                "appcast-claw.xml",
                 "--publish",
                 "--allow-downgrade",
             )
 
         self.assertEqual(result.exit_code, 0, plain_output(result))
         publisher.return_value.publish_staged.assert_called_once_with(
-            ["appcast.xml"],
+            ["appcast-claw.xml"],
             publish=True,
             allow_downgrade=True,
             repair_invalid_live=False,
@@ -203,13 +203,13 @@ class FeedPublisherCliTest(unittest.TestCase):
             result = invoke(
                 "feeds",
                 "publish-local",
-                "appcast-server.xml",
+                "appcast-claw-server.xml",
                 "--repair-invalid-live",
             )
 
         self.assertEqual(result.exit_code, 0, plain_output(result))
         publisher.return_value.publish_staged.assert_called_once_with(
-            ["appcast-server.xml"],
+            ["appcast-claw-server.xml"],
             publish=False,
             allow_downgrade=False,
             repair_invalid_live=True,
@@ -225,14 +225,14 @@ class FeedPublisherCliTest(unittest.TestCase):
             result = invoke(
                 "feeds",
                 "publish-local",
-                "appcast-server.xml",
+                "appcast-claw-server.xml",
                 "--repair-invalid-live",
                 "--publish",
             )
 
         self.assertEqual(result.exit_code, 0, plain_output(result))
         publisher.return_value.publish_staged.assert_called_once_with(
-            ["appcast-server.xml"],
+            ["appcast-claw-server.xml"],
             publish=True,
             allow_downgrade=False,
             repair_invalid_live=True,
@@ -266,7 +266,7 @@ class FeedPublisherCliTest(unittest.TestCase):
 
             result = subprocess.run(
                 ["bash", str(upload_script)],
-                input="13,15\nn\n",
+                input="7,9\nn\n",
                 text=True,
                 capture_output=True,
                 cwd=tmp_path,
