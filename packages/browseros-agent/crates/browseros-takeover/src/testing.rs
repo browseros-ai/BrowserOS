@@ -12,8 +12,12 @@
 //!
 //! The bytes are written and framed by hand, not with `rfb_server`'s or `rfb_client`'s parsers,
 //! so a parser bug cannot hide behind a fake that shares it.
+//!
+//! [`NoStamps`] is the stamp hook for displays built without the service.
 
-use crate::{ScreenSize, Xvnc};
+use crate::{ScreenSize, TaintStamps, Xvnc};
+use browseros_core::TabId;
+use futures_util::future::BoxFuture;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -396,4 +400,14 @@ async fn take(socket: &mut TcpStream, message: &mut Vec<u8>, count: usize) -> io
     let start = message.len();
     message.resize(start + count, 0);
     socket.read_exact(&mut message[start..]).await.map(drop)
+}
+
+/// A [`TaintStamps`] that stamps nothing. Displays built without the service have no reconcile
+/// that could end a flag, so no tab needs a stamp.
+pub struct NoStamps;
+
+impl TaintStamps for NoStamps {
+    fn stamp_all<'a>(&'a self, _: &'a [TabId]) -> BoxFuture<'a, ()> {
+        Box::pin(async {})
+    }
 }

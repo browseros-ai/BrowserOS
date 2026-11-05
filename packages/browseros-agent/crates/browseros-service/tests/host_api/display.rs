@@ -31,12 +31,12 @@ const SERVER_HANDSHAKE: usize = 12 + 2 + 4 + 24 + 3;
 /// An update request answered at once (not incremental).
 const UPDATE: [u8; 10] = [3, 0, 0, 0, 0, 0, 0, 1, 0, 1];
 /// Key `a` down, as noVNC sends it: a QEMU extended key event.
-const QEMU_A: [u8; 12] = [255, 0, 0, 1, 0, 0, 0, 0x61, 0, 0, 0, 0x1e];
+pub(crate) const QEMU_A: [u8; 12] = [255, 0, 0, 1, 0, 0, 0, 0x61, 0, 0, 0, 0x1e];
 
 /// The routes served as the app serves them: `host_service` on a Unix socket, with the peer rule
 /// and the token.
-struct Socket {
-    path: PathBuf,
+pub(crate) struct Socket {
+    pub(crate) path: PathBuf,
     server: JoinHandle<std::io::Result<()>>,
 }
 
@@ -46,7 +46,7 @@ impl Drop for Socket {
     }
 }
 
-fn serve(h: &Harness) -> Result<Socket, BoxError> {
+pub(crate) fn serve(h: &Harness) -> Result<Socket, BoxError> {
     let path = h.dir.path().join("display.sock");
     let listener = UnixListener::bind(&path)?;
     let auth = HostAuth {
@@ -60,14 +60,14 @@ fn serve(h: &Harness) -> Result<Socket, BoxError> {
 
 /// How a test viewer opens a display.
 #[derive(Clone, Copy)]
-struct Open<'a> {
+pub(crate) struct Open<'a> {
     query: &'a str,
     token: bool,
     binary: bool,
 }
 
 impl<'a> Open<'a> {
-    fn new(query: &'a str) -> Self {
+    pub(crate) fn new(query: &'a str) -> Self {
         Self {
             query,
             token: true,
@@ -76,7 +76,7 @@ impl<'a> Open<'a> {
     }
 }
 
-type Display = WebSocketStream<UnixStream>;
+pub(crate) type Display = WebSocketStream<UnixStream>;
 
 async fn open(socket: &Path, how: Open<'_>) -> Result<(Display, Response), WsError> {
     let stream = UnixStream::connect(socket).await?;
@@ -94,7 +94,7 @@ async fn open(socket: &Path, how: Open<'_>) -> Result<(Display, Response), WsErr
 }
 
 /// The refusal a display got instead of an upgrade: its status and the contract's `code`.
-async fn refused(socket: &Path, how: Open<'_>) -> Result<(u16, String), BoxError> {
+pub(crate) async fn refused(socket: &Path, how: Open<'_>) -> Result<(u16, String), BoxError> {
     match open(socket, how).await {
         Err(WsError::Http(response)) => {
             let body: serde_json::Value =
@@ -140,7 +140,10 @@ async fn closed(display: &mut Display) -> Result<(u16, String), BoxError> {
 }
 
 /// Opens a display and does the RFB handshake through it: Xvnc's handshake arrives untouched.
-async fn handshake(socket: &Path, how: Open<'_>) -> Result<(Display, Response), BoxError> {
+pub(crate) async fn handshake(
+    socket: &Path,
+    how: Open<'_>,
+) -> Result<(Display, Response), BoxError> {
     let (mut display, response) = open(socket, how).await?;
     assert_eq!(read(&mut display, 12).await?, b"RFB 003.008\n");
     display.send(Message::binary(HANDSHAKE)).await?;

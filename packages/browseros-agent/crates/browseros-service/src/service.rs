@@ -8,7 +8,8 @@
 //! that keeps state about tabs: the takeovers, `Privacy`, the fits, the locks, and the displays
 //! (a control display arms its journal on each tab that opens). A reconcile takes a
 //! [`Service::tab_fence`] before its listing, so `retain_tabs` keeps what a host changed on a
-//! tab that opened after it (`tab_stamps`).
+//! tab that opened after it, through a route or through a control display's first input
+//! (`tab_stamps`).
 
 use crate::event_log::{EventKind, EventLog, LogEvent};
 use crate::live_tabs::LiveTabs;
@@ -73,7 +74,9 @@ pub(crate) struct ServiceState {
     /// The capture hub behind the live views (`live_tabs`).
     pub(crate) live: Arc<CaptureHub>,
     /// The tabs each route changed, stamped before the change, against a reconcile's fence.
-    pub(crate) stamps: TabStamps,
+    /// `displays` holds it too, and a control display's first input stamps there the tabs it
+    /// makes private.
+    pub(crate) stamps: Arc<TabStamps>,
     /// Cancels the hub's shutdown token when the service is dropped, which ends every live
     /// stream and capture.
     _live_shutdown: DropGuard,
@@ -126,10 +129,14 @@ impl Service {
         let browser = BrowserTabs::new(browser, viewports);
         let journal = Journal::new(browser.clone(), Arc::clone(privacy.secrets()));
         let fits = Fits::new(browser.clone(), xvnc, Arc::clone(privacy.secrets()));
+        use browseros_takeover::TaintStamps;
+
+        let stamps = Arc::new(TabStamps::default());
         let displays = Displays::new(
             xvnc.addr,
             browser.clone(),
             Arc::clone(&privacy),
+            Arc::clone(&stamps) as Arc<dyn TaintStamps>,
             journal.clone(),
             Arc::clone(&locks),
             sink.clone(),
@@ -170,7 +177,7 @@ impl Service {
                 displays,
                 takeovers,
                 live,
-                stamps: TabStamps::default(),
+                stamps,
                 _live_shutdown: shutdown.drop_guard(),
             }),
         }
@@ -191,6 +198,10 @@ impl Service {
 
     /// The browser link saw a tab open. While a control display is open, the tab starts
     /// private and that display's journal arms on it: the owner may already be typing into it.
+    ///
+    /// It takes no stamp. So call it in order with each reconcile, never between a
+    /// [`Service::tab_fence`] and its [`Service::retain_tabs`], or that reconcile could end a
+    /// flag set there on a tab its listing lacks. The app's tab feed runs both in one loop.
     ///
     /// # Errors
     /// When the tab's private flag could not be committed. It still holds in memory, and the

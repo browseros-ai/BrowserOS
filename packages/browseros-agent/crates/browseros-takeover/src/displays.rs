@@ -21,7 +21,8 @@
 //! **The owner's first input waits.** On a control display, the first key, paste or click is
 //! held while, in this order:
 //! 1. every view display closes, and new views are refused while this display is open;
-//! 2. every open tab is made private, durably (`ControlDisplay::first_input`);
+//! 2. every open tab is stamped ([`TaintStamps`]), so a reconcile whose listing missed it keeps
+//!    its flag, and then made private, durably (`ControlDisplay::first_input`);
 //! 3. only then does the input go to Xvnc.
 //!
 //! Pixels that show what the owner typed exist only once Xvnc has their input. So a spectator
@@ -60,7 +61,7 @@ use crate::{ArmedJournal, BrowserTabs, Journal, Locks, PartError, follow, front_
 use browseros_core::TabId;
 use browseros_trace::{ControlDisplay, EpochMillis, Privacy, TaskId, TraceSink, TraceStore};
 use bytes::{Bytes, BytesMut};
-use futures_util::future::join_all;
+use futures_util::future::{BoxFuture, join_all};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use std::collections::HashMap;
 use std::io;
@@ -163,6 +164,18 @@ impl Drop for ViewsHold {
     }
 }
 
+/// Stamps the tabs a control display's first input is about to make private, before any of their
+/// flags is committed. After a browser reconnect, a reconcile ends what Neo keeps about every tab
+/// its listing lacks, unless the tab was stamped after the reconcile's fence. A tab the input
+/// makes private may have opened after that listing. The service implements this with the stamps
+/// its routes take (`browseros-service`'s `tab_stamps`). This crate cannot depend on the service,
+/// so `Displays` takes the stamps as a hook.
+pub trait TaintStamps: Send + Sync {
+    /// Returns once every tab in `tabs` is stamped. It waits while a reconcile is ending tab
+    /// state, and the first input waits with it.
+    fn stamp_all<'a>(&'a self, tabs: &'a [TabId]) -> BoxFuture<'a, ()>;
+}
+
 /// Every display in the process, and who may open one. The service builds one and its route
 /// admits and serves displays; a takeover holds views off and binds its control display.
 pub struct Displays {
@@ -170,6 +183,8 @@ pub struct Displays {
     pub(crate) browser: BrowserTabs,
     /// Control displays commit through it; views and follow read which tabs are private.
     pub(crate) privacy: Arc<Privacy>,
+    /// A control display's first input stamps here every tab it makes private, before it commits.
+    stamps: Arc<dyn TaintStamps>,
     journal: Journal,
     /// Follow pauses while a lock holds the tab it follows.
     pub(crate) locks: Arc<Locks>,
@@ -230,13 +245,19 @@ impl Table {
 }
 
 impl Displays {
-    /// No displays yet. `xvnc` is Xvnc's RFB address. Control displays commit privacy through
-    /// `privacy` and arm `journal`; follow reads `locks`, `sink`'s events and `store`.
+    /// No displays yet. `xvnc` is Xvnc's RFB address. Control displays stamp the tabs they make
+    /// private through `stamps`, then commit privacy through `privacy`, and arm `journal`; follow
+    /// reads `locks`, `sink`'s events and `store`.
     #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each part has a type of its own, so a swapped argument does not compile"
+    )]
     pub fn new(
         xvnc: SocketAddr,
         browser: BrowserTabs,
         privacy: Arc<Privacy>,
+        stamps: Arc<dyn TaintStamps>,
         journal: Journal,
         locks: Arc<Locks>,
         sink: TraceSink,
@@ -246,6 +267,7 @@ impl Displays {
             xvnc,
             browser,
             privacy,
+            stamps,
             journal,
             locks,
             sink,
@@ -752,8 +774,8 @@ impl<'a> Proxy<'a> {
     }
 
     /// Whether this input may go to Xvnc. The first time: every view closes, then every open tab
-    /// is made private, durably, and the input waits for both. When a commit fails it may not go,
-    /// and the next input tries again.
+    /// is stamped and made private, durably, and the input waits for that. When a commit fails it
+    /// may not go, and the next input tries again.
     ///
     /// The viewer is still read while the commit is pending, so its leaving ends the display at
     /// once and drops the commit. A store that never answers cannot keep the display open, nor
@@ -802,9 +824,9 @@ impl<'a> Proxy<'a> {
     }
 }
 
-/// Commits every open tab private for the first input on control display `id`, and returns how
-/// many there were; `None` when the input must be dropped. It borrows nothing from the proxy, so
-/// the viewer's bytes can still be framed while it waits.
+/// Stamps every open tab, then commits it private, for the first input on control display `id`,
+/// and returns how many there were; `None` when the input must be dropped. It borrows nothing
+/// from the proxy, so the viewer's bytes can still be framed while it waits.
 async fn make_open_tabs_private(
     displays: &Displays,
     id: u64,
@@ -821,6 +843,13 @@ async fn make_open_tabs_private(
             return None;
         }
     };
+    // Each tab is stamped before any flag is set, as a route stamps its tab before it changes it.
+    // A reconcile that sees one of these flags then sees its stamp too, and keeps the flag though
+    // its listing missed the tab. A reconcile that is already ending tab state holds the stamp
+    // table until it is done, so the stamps, and this commit, wait for it. Committed first, a
+    // flag could be ended as if its tab had closed, and views and screenshots would see a tab
+    // the owner may have typed into.
+    displays.stamps.stamp_all(&tabs).await;
     match control.first_input(&tabs, EpochMillis::now()).await {
         Ok(()) => Some(tabs.len()),
         Err(error) => {

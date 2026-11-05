@@ -48,12 +48,22 @@
 //! change and ends it. A close forgets the stamp before it ends anything, so it too waits out a
 //! reconcile's parts before it touches a tab's state.
 //!
-//! One change has no stamp. A control display's first input makes every open tab private inside
-//! `Displays`, and no route knows those tabs before it acts. If that input lands between a
-//! listing and its `retain_tabs`, a tab that opened after the listing loses its flag. The flag
-//! comes back when the tab feed reports the tab open, if the control display is open then.
+//! A control display's first input makes every open tab private inside `Displays`, and no route
+//! knows those tabs before it acts. So `Displays` stamps them itself, through the
+//! [`TaintStamps`] hook this table implements, after it lists them and before it commits their
+//! flags. Unlike a route, the input does not check its tabs again after the change. A tab that
+//! closes between the input's listing and its commit can keep its flag until the next reconcile,
+//! and the stamp's wait on a running reconcile widens that window. Such a flag over-protects a
+//! later tab with that id and never exposes one.
+//!
+//! A tab that opens while a control display is open starts private in
+//! [`Service::tab_opened`](crate::Service::tab_opened), with no stamp. The app's tab feed calls
+//! it in the same loop that runs each reconcile, from its fence to its `retain_tabs`, so it never
+//! lands in between.
 
 use browseros_core::TabId;
+use browseros_takeover::TaintStamps;
+use futures_util::future::BoxFuture;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{Mutex, MutexGuard};
@@ -89,8 +99,9 @@ impl TabStamps {
         TabFence(self.clock.load(Ordering::SeqCst))
     }
 
-    /// Stamps `tab` newer than every fence taken so far. A route calls it before it creates the
-    /// tab's state, and waits while a reconcile's [`Kept`] lives.
+    /// Stamps `tab` newer than every fence taken so far. A route, or a control display's first
+    /// input, calls it before it creates the tab's state, and waits while a reconcile's [`Kept`]
+    /// lives.
     pub(crate) async fn stamp(&self, tab: TabId) {
         let mut stamped = self.stamped.lock().await;
         let stamp = self.clock.fetch_add(1, Ordering::SeqCst) + 1;
@@ -118,6 +129,18 @@ impl TabStamps {
             tabs,
             _stamps: stamped,
         }
+    }
+}
+
+/// A control display's first input stamps each tab it is about to make private, as a route stamps
+/// the tab it is about to change.
+impl TaintStamps for TabStamps {
+    fn stamp_all<'a>(&'a self, tabs: &'a [TabId]) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            for &tab in tabs {
+                self.stamp(tab).await;
+            }
+        })
     }
 }
 

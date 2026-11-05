@@ -31,7 +31,8 @@
 //!  dispatcher lock policy (app) ─▶ Service::locks().check, synchronous
 //!  browser link tab events (app) ─▶ Service::tab_opened, tab_closed, retain_tabs
 //!       a reconcile's fence (app) ─▶ Service::tab_fence, before its listing; the routes that
-//!                                    change a tab stamp it first (tab_stamps)
+//!                                    change a tab, and a control display's first input, stamp
+//!                                    it first (tab_stamps)
 //! ```
 //!
 //! The app implements no trait for this crate. The takeover parts themselves live in

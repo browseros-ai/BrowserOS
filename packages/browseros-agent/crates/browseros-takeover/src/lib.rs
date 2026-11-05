@@ -32,7 +32,8 @@
 //!  POST /v1/tabs/{tabId}/sweep ─▶ sweep ─ sealed_frames, every frame ─▶ SecretSet
 //!  control (display, takeover) ─▶ Journal::arm ─ binding calls ─▶ SecretSet
 //!  GET /v1/display ─▶ Displays::admit ─ upgrade ─▶ Admitted::serve ─ RFB, filtered ─▶ Xvnc
-//!    control: first input ─▶ views close ─▶ every open tab private ─▶ the input goes on
+//!    control: first input ─▶ views close ─▶ every open tab stamped, then private ─▶ the input
+//!      goes on
 //!    view: follow ─ the task's operations ─▶ Browser.activateTab
 //!    views: tab.private, a 250 ms poll ─ a private tab in front ─▶ every view closes
 //!  POST /v1/takeovers ─▶ Takeovers::start ─▶ private, lock, views held, journal, fit
@@ -81,7 +82,7 @@ pub mod testing;
 
 pub use browser_tabs::BrowserTabs;
 pub use displays::{
-    Admitted, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow, ViewsHold,
+    Admitted, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow, TaintStamps, ViewsHold,
 };
 pub use fit_rule::FitMode;
 pub use fits::{BarAction, BarOutcome, BrowserBar, Fit, FitState, Fits, Fitted, Keyboard};

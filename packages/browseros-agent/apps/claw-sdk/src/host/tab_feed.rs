@@ -32,6 +32,10 @@ pub(crate) async fn reconcile(service: &Service, link: &BrowserLink) -> u64 {
 /// [`reconcile`] when the watch starts afresh or this feed falls behind it. `reconciled` is the
 /// watch start the last reconciliation covered.
 ///
+/// Each reconcile runs inline, from its fence to its `retain_tabs`, so no `tab_opened` lands in
+/// between. `tab_opened` takes no stamp and relies on that. A reconcile run beside this loop
+/// could end the flag of a tab that opened private after its listing.
+///
 /// The parts behind the service key their state by tab: a closed tab's locks end and its
 /// private flag is forgotten, a host hears `tab.closed`, and a tab that opens while a control
 /// display is open starts private. `tab_watch` sees every tab, so this covers tabs no op ever

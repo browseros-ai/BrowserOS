@@ -17,7 +17,7 @@ mod browser;
 use browser::{Call, FakeBrowser, SWEEP_READ};
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, TabId};
-use browseros_takeover::testing::FakeXvnc;
+use browseros_takeover::testing::{FakeXvnc, NoStamps};
 use browseros_takeover::{
     Admitted, BrowserTabs, DisplayEnd, DisplayRequest, Displays, FitState, Fits, Journal, LockEnd,
     LockTarget, Locks, OwnerHasControl, PartError, Reads, ReleaseReason, ScreenSize, Takeover,
@@ -169,6 +169,7 @@ async fn harness(tabs: &[i64]) -> Result<Harness, BoxError> {
         xvnc.addr(),
         tabs.clone(),
         Arc::clone(&privacy),
+        Arc::new(NoStamps),
         journal.clone(),
         Arc::clone(&locks),
         sink,

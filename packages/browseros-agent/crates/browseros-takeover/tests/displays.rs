@@ -12,7 +12,7 @@ use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::testing::{TestCall, TestConnection, cdp_error};
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TabId};
-use browseros_takeover::testing::FakeXvnc;
+use browseros_takeover::testing::{FakeXvnc, NoStamps};
 use browseros_takeover::{
     Admitted, BrowserTabs, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow, Journal,
     LockBinding, LockTtl, Locks, PartError, Reads, ScreenSize,
@@ -353,6 +353,7 @@ async fn harness_at(xvnc: FakeXvnc, addr: SocketAddr) -> Result<Harness, BoxErro
         addr,
         tabs.clone(),
         Arc::clone(&privacy),
+        Arc::new(NoStamps),
         Journal::new(tabs, secrets),
         Arc::clone(&locks),
         sink.clone(),
