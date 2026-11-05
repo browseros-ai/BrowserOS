@@ -3633,11 +3633,8 @@ class ReleaseDocumentationTest(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, self.release)
 
-    def test_readme_lists_both_independent_onboarding_bundles(self):
+    def test_readme_lists_the_independent_onboarding_bundle(self):
         for token in (
-            "apps/app-onboard/package.json",
-            "release-app-onboard.yml",
-            "app-onboard/v*",
             "apps/claw-onboard/package.json",
             "release-claw-onboard.yml",
             "claw-onboard/v*",
@@ -3661,7 +3658,6 @@ class ReleaseDocumentationTest(unittest.TestCase):
 
     def test_nightly_runbook_covers_product_transactions_and_family_cutover(self):
         for token in (
-            ".github/workflows/nightly-macos-browseros.yml",
             ".github/workflows/nightly-macos-browserclaw.yml",
             ".github/workflows/reusable-build-macos-nightly.yml",
             "nightly-<product>-<source-sha>",
