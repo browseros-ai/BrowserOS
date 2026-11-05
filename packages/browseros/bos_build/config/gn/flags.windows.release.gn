@@ -4,6 +4,8 @@ use_siso=false
 is_debug = false
 is_component_build = false
 is_official_build = true
+# Non-Chrome branded builds otherwise enable Chromium's test-only experiments.
+disable_fieldtrial_testing_config = true
 symbol_level = 0
 is_clang=true
 chrome_pgo_phase = 0
