@@ -6,6 +6,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use browseros_core::PageId;
+use browseros_core::sensitive_fields::{JournalEntry, SensitiveKind};
 use browseros_trace::{
     Delivery, EpochMillis, ErrorOwner, OperationId, Outcome, RequestId, RunEnded, RunId, RunQuery,
     RunStarted, RunStatus, RunSummary, SecretValue, TaskId, WriterConfig,
@@ -16,7 +18,7 @@ use tokio::runtime::Handle;
 use tokio::{task, time};
 
 use super::request_ledger::{Admission, LedgerLimits};
-use super::run_reply::{ReplyEffects, ReplyStatus};
+use super::run_reply::{ReplyDelivery, ReplyEffects, ReplyStatus};
 use super::{
     ReplyError, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest, RunService, RunTimeout,
 };
@@ -41,6 +43,21 @@ fn request(code: &str, meta: RunMeta) -> Result<RunRequest, TestError> {
         timeout: RunTimeout::from_millis(None)?,
         meta,
     })
+}
+
+/// One keystroke as the seal's journal reports it: the field's whole value.
+fn keystroke(value: &str) -> JournalEntry {
+    JournalEntry {
+        kind: SensitiveKind::Password,
+        value: value.to_owned().into(),
+    }
+}
+
+/// `text` as the process's secret set masks it now.
+fn masked(rig: &TestRig, text: &str) -> String {
+    let mut text = text.to_owned();
+    rig.secrets.mask_str(&mut text);
+    text
 }
 
 fn error_of(reply: &RunReply) -> Result<&ReplyError, TestError> {
@@ -251,20 +268,34 @@ fn after_the_replay_window_a_repeat_is_a_duplicate_naming_the_first_run() -> Res
             .restarted_service(GRACE)?
             .run(request("return 1;", meta(Some("call-3"), None)?)?)
             .await;
-        assert_eq!(
+        assert_ne!(
             repeat.id, first.id,
-            "the refusal names the run that already happened"
+            "the refusal is this call's own, so it never reads as the first run's reply"
         );
+        assert_eq!(repeat.effects, ReplyEffects::None, "this call sent nothing");
         let error = error_of(&repeat)?;
         assert_eq!(
-            (error.owner, error.code.as_str()),
-            (ErrorOwner::Host, "duplicate_request")
+            (error.owner, error.code.as_str(), error.delivery),
+            (
+                ErrorOwner::Host,
+                "duplicate_request",
+                Some(ReplyDelivery::NotSent)
+            )
+        );
+        assert!(
+            error.message.contains(&first.id.to_string()),
+            "it names the run that already happened: {}",
+            error.message
         );
         assert!(
             !error.retryable,
             "the first run happened; repeating it is not safe"
         );
-        assert_eq!(runs_of(&rig, "call-3").await?.len(), 1);
+        assert_eq!(
+            runs_of(&rig, "call-3").await?.len(),
+            1,
+            "the refusal is on the record without the request id, which stays the first run's"
+        );
         Ok(())
     })
 }
@@ -745,6 +776,63 @@ fn known_secrets_are_masked_in_the_reply() -> Result<(), TestError> {
         assert!(
             error_of(&thrown)?.message.contains("[private]"),
             "and in the error"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn a_value_typed_during_the_run_is_masked_in_its_reply_before_its_field_goes_quiet()
+-> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        for value in ["hunt", "hunte", "hunter", "hunter2"] {
+            rig.typed.note(PageId(1), None, keystroke(value));
+        }
+        let code = "return 'hunte or hunter2?';";
+        let reply = rig
+            .run_service(GRACE)
+            .run(request(code, meta(None, None)?)?)
+            .await;
+        assert_eq!(
+            reply.value,
+            json!("hunte or [private]?"),
+            "the reply is masked with the field's value before it goes quiet, and never its prefix"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn a_run_that_ends_while_another_field_is_typed_registers_none_of_it() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        // The owner is typing a password into another tab while an unrelated run goes on.
+        for value in ["hunt", "hunte"] {
+            rig.typed.note(PageId(1), None, keystroke(value));
+        }
+        let reply = rig
+            .run_service(GRACE)
+            .run(request("return 'it shows hunte';", meta(None, None)?)?)
+            .await;
+        assert_eq!(
+            reply.value,
+            json!("it shows [private]"),
+            "the reply is masked with what is typed so far"
+        );
+        assert_eq!(
+            masked(&rig, "hunte"),
+            "hunte",
+            "the run's end registered nothing: `hunte` may be a prefix"
+        );
+        for value in ["hunter", "hunter2"] {
+            rig.typed.note(PageId(1), None, keystroke(value));
+        }
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(250)).await;
+        assert_eq!(
+            masked(&rig, "hunte or hunter2"),
+            "hunte or [private]",
+            "the field went quiet: its final value is the secret, and its prefix never was"
         );
         Ok(())
     })

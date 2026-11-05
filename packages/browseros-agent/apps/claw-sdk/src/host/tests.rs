@@ -21,7 +21,7 @@ use tokio::task::JoinHandle;
 use tokio::{fs, time};
 use tokio_util::sync::CancellationToken;
 
-use super::{HostApi, HostInputs, TakeoverLock};
+use super::{FlagRecovery, HostApi, HostInputs, TakeoverLock};
 use crate::browser::{BrowserLink, TabRegistry};
 use crate::config::HostApiConfig;
 use crate::dispatch::{Caller, ErrorCode, MethodSpec, OperationError, Policy, PolicyCheck};
@@ -99,6 +99,7 @@ impl Host {
             xvnc: CLOSED_XVNC,
             // The fake browser has no CDP port, and no test here opens a live view to dial it.
             cdp_port: 0,
+            recovery: FlagRecovery::none(),
         };
         let host = HostApi::bind(&config, inputs).await?;
         let takeover = Arc::new(TakeoverLock::default());

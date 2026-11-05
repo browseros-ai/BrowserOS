@@ -7,6 +7,11 @@
 //!    ─ getByRef / aria-ref= on a printed ref ─ locator reads ─ reads inside the iframe
 //!  page.on('console') first: page.frames opens the lazy tab ─ events.listen ─ the event pump
 //!  context.pages() first: the run's init lists every tab
+//!  a local file (Neo's host token, /etc/hosts): the door refuses each goto to one, and the
+//!    page's own navigations to one (location, meta refresh, a link, an iframe, a popup, an
+//!    allowed load's redirect) read nothing local
+//!  a read between two keystrokes in a password field: the read masks the field, and only the
+//!    field's final value becomes a secret
 //! ```
 //!
 //! Like `e2e_browseros.rs`, it runs only when `CLAW_SDK_E2E_BROWSER` names a BrowserOS binary.
@@ -15,12 +20,18 @@
 pub mod browseros_rig;
 
 use std::error::Error;
+use std::fs;
 use std::future::Future;
+use std::net::Ipv4Addr;
+use std::path::Path;
 use std::pin::Pin;
 use std::time::Duration;
 
 use browseros_rig::{CaptchaKey, Rig, TestResult, browser_or_skip, outcome, run};
+use browseros_trace::RunId;
 use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tokio::time;
 
 /// The whole drive; see `e2e_browseros.rs` for why the budget sits inside the test.
@@ -72,6 +83,97 @@ for (let i = 0; i < 100 && heard.length === 0; i++) {
 return { heard: heard.slice(0, 1), title: await page.title() };
 "#;
 
+/// Every way a script could get a local file in front of a read. `LOCAL` (the files), `SERVER`
+/// (a web server on loopback) and `VIEW_SOURCE` are defined ahead of it. Each of the page's own
+/// navigations runs once to each file and once to a URL Neo allows, which the page reaches, so
+/// a route that read nothing local was refused rather than never tried.
+const LOCAL_READS: &str = r#"
+const tried = { gotos: {}, local: {}, allowed: {} };
+const attempt = async (url) => {
+  try {
+    await page.goto(url);
+    return { url: page.url(), title: await page.title(), content: clip(await page.content()) };
+  } catch (error) {
+    return { owner: error.owner, code: error.code, delivery: error.delivery };
+  }
+};
+// A run returns at most 256 KiB. A loaded file's text leads its document, so a clipped read
+// still shows it.
+const clip = (text) => (typeof text === 'string' ? text.slice(0, 4000) : text);
+// Every tab's document and every frame's text: wherever a loaded file would show.
+const everything = async () => {
+  const tabs = [];
+  for (const tab of context.pages()) {
+    const frames = [];
+    for (const frame of tab.frames()) {
+      frames.push(clip(await frame.locator('body').textContent({ timeout: 2000 }).catch((error) => error.code)));
+    }
+    tabs.push({ url: tab.url(), content: clip(await tab.content().catch((error) => error.code)), frames });
+  }
+  return tabs;
+};
+for (const url of [...LOCAL, 'chrome://version', VIEW_SOURCE, 'about:version']) {
+  tried.gotos[url] = await attempt(url);
+}
+// A loopback frame in a data: page is refused as a private network request, so the frame's
+// allowed URL is a data: one. A popup has none: with no user gesture, the popup blocker refuses
+// window.open whatever its URL, so that route pins the outcome alone.
+const routes = {
+  location: [(to) => `<script>location.href = ${JSON.stringify(to)}</script>`, SERVER + '/page'],
+  meta: [(to) => `<meta http-equiv="refresh" content="0;url=${to}">`, SERVER + '/page'],
+  link: [(to) => `<a id="to" href="${to}">to</a><script>document.getElementById('to').click()</script>`, SERVER + '/page'],
+  iframe: [(to) => `<iframe src="${to}"></iframe>`, 'data:text/html,reached'],
+  popup: [(to) => `<script>window.open(${JSON.stringify(to)})</script>`, null],
+};
+for (const [route, [html, allowed]] of Object.entries(routes)) {
+  const targets = LOCAL.map((to) => [to, tried.local]);
+  if (allowed) targets.push([allowed, tried.allowed]);
+  for (const [to, into] of targets) {
+    await page.goto('data:text/html,' + encodeURIComponent(html(to)));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    into[`${route} to ${to}`] = await everything();
+  }
+}
+// A load the door allows, redirected by its server: Chromium follows the redirect, not the door.
+for (const [path, into] of [['/to-hosts', tried.local], ['/to-secret', tried.local], ['/to-page', tried.allowed]]) {
+  into[`redirect ${path}`] = { load: await attempt(SERVER + path), tabs: await everything() };
+}
+return tried;
+"#;
+
+/// A page that types `SECRET` into its own password field a key every 150 ms, as autofill or
+/// the owner would, too fast for the field to go quiet before the last key, and shows the field
+/// in its title. The agent reads the page while it types, then waits until the field has gone
+/// quiet. The page builds the password from character codes, so its source shows none of it.
+const READ_WHILE_TYPING: &str = r#"
+const codes = Array.from(SECRET, (char) => char.charCodeAt(0));
+const html = '<title>Sign in</title><input type="password">'
+  + '<script>'
+  + 'const secret = String.fromCharCode(' + codes.join(',') + ');'
+  + 'const field = document.querySelector("input");'
+  + 'let keys = 4;'
+  + 'const type = () => {'
+  + '  field.value = secret.slice(0, keys);'
+  + '  field.dispatchEvent(new Event("input", { bubbles: true }));'
+  + '  document.title = "Signing in with " + field.value;'
+  + '  if (keys++ < secret.length) setTimeout(type, 150);'
+  + '};'
+  + 'type();'
+  + '</script>';
+await page.goto('data:text/html,' + encodeURIComponent(html));
+const read = { title: await page.title(), content: await page.content() };
+await new Promise((resolve) => setTimeout(resolve, 6000));
+return read;
+"#;
+
+/// Every prefix of `SECRET` four characters or longer (a shorter value is never a secret), and the
+/// whole password, as a later run's reply shows them.
+const PREFIXES_LATER: &str = r"
+const prefixes = [];
+for (let end = 4; end < SECRET.length; end++) prefixes.push(SECRET.slice(0, end));
+return { prefixes, whole: SECRET };
+";
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_playwright_script_reads_a_page_its_refs_and_its_frame() -> TestResult {
     on_browseros(|rig| Box::pin(drive(rig))).await
@@ -85,6 +187,17 @@ async fn a_fresh_tasks_first_call_can_be_a_console_listener() -> TestResult {
 #[tokio::test(flavor = "multi_thread")]
 async fn context_pages_lists_every_tab_in_a_runs_first_statement() -> TestResult {
     on_browseros(|rig| Box::pin(tabs_first(rig))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_script_reads_no_local_file_through_any_navigation() -> TestResult {
+    on_browseros(|rig| Box::pin(no_local_reads(rig))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_between_two_keystrokes_shows_the_field_to_no_one_and_registers_no_prefix()
+-> TestResult {
+    on_browseros(|rig| Box::pin(read_while_typing(rig))).await
 }
 
 /// `drive` on a fresh BrowserOS within the test's budget, with both processes' logs on failure.
@@ -216,4 +329,173 @@ async fn drive(rig: &Rig) -> TestResult {
     );
     client.cancel().await?;
     Ok(())
+}
+
+async fn read_while_typing(rig: &Rig) -> TestResult {
+    let secret = "hunter2-correct-horse";
+    let declared = format!("const SECRET = {};\n", json!(secret));
+    let reply = reply_of(
+        rig,
+        &format!("{declared}{READ_WHILE_TYPING}"),
+        "read-while-typing",
+    )
+    .await?;
+    let read = reply.get("value").ok_or("the script returns its read")?;
+    assert_eq!(
+        read.get("title"),
+        Some(&json!("Signing in with [private]")),
+        "the read masked the field's value where the page showed it: {read}"
+    );
+    let prefixes: Vec<&str> = (4..secret.len())
+        .filter_map(|end| secret.get(..end))
+        .collect();
+    for text in texts(read) {
+        assert!(
+            prefixes.iter().all(|prefix| !text.contains(prefix)),
+            "the read shows none of the field's value: {text}"
+        );
+    }
+    let later = reply_of(
+        rig,
+        &format!("{declared}{PREFIXES_LATER}"),
+        "read-while-typing",
+    )
+    .await?;
+    assert_eq!(
+        later.get("value"),
+        Some(&json!({ "prefixes": prefixes, "whole": "[private]" })),
+        "the field's final value is a secret, and no prefix the read found is: {later}"
+    );
+    Ok(())
+}
+
+async fn no_local_reads(rig: &Rig) -> TestResult {
+    // Stands in for Neo's host token and CAPTCHA key files: a file the browser's user can read,
+    // whose contents appear nowhere else.
+    let dir = tempfile::tempdir()?;
+    let secret = dir.path().join("host-token");
+    let marker = format!("neo-local-secret-{}", RunId::new());
+    fs::write(&secret, &marker)?;
+    let hosts = fs::read_to_string("/etc/hosts")?;
+    let server = format!("http://127.0.0.1:{}", serve_pages(&secret).await?);
+    let local = [
+        "file:///etc/hosts".to_owned(),
+        format!("file://{}", secret.display()),
+    ];
+    let view_source = format!("view-source:{server}/page");
+    let code = format!(
+        "const LOCAL = {};\nconst SERVER = {};\nconst VIEW_SOURCE = {};\n{LOCAL_READS}",
+        json!(local),
+        json!(server),
+        json!(view_source),
+    );
+    let reply = reply_of(rig, &code, "local-reads").await?;
+    let tried = reply
+        .get("value")
+        .ok_or("the script returns what it tried")?;
+
+    let refused = json!({ "owner": "script", "code": "invalid_input", "delivery": "not_sent" });
+    for url in local
+        .iter()
+        .map(String::as_str)
+        .chain(["chrome://version", view_source.as_str()])
+    {
+        assert_eq!(
+            tried.get("gotos").and_then(|gotos| gotos.get(url)),
+            Some(&refused),
+            "the door refuses a goto to {url}: {tried}"
+        );
+    }
+    assert_eq!(
+        tried.pointer("/gotos/about:version/url"),
+        Some(&json!("about:version")),
+        "an about: URL stays an about: page and never becomes chrome://version: {tried}"
+    );
+
+    let secrets: Vec<&str> = hosts
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.len() >= 8)
+        .chain([marker.as_str()])
+        .collect();
+    let local_reads = tried
+        .get("local")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("the routes to local files: {tried}"))?;
+    assert_eq!(
+        local_reads.len(),
+        12,
+        "five routes and a redirect, each to both files: {tried}"
+    );
+    for (route, read) in local_reads {
+        for text in texts(read) {
+            for secret in &secrets {
+                assert!(
+                    !text.contains(secret),
+                    "{route} read {secret:?} from a local file: {text}"
+                );
+            }
+        }
+    }
+    let allowed = tried
+        .get("allowed")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("the routes to allowed URLs: {tried}"))?;
+    assert_eq!(allowed.len(), 5, "four routes and a redirect: {tried}");
+    for (route, read) in allowed {
+        assert!(
+            texts(read).iter().any(|text| text.contains("reached")),
+            "{route} reaches a URL Neo allows, so the same route to a file was really tried: {read}"
+        );
+    }
+    Ok(())
+}
+
+/// Every string in `value`, however deep.
+fn texts(value: &Value) -> Vec<&str> {
+    match value {
+        Value::String(text) => vec![text.as_str()],
+        Value::Array(items) => items.iter().flat_map(texts).collect(),
+        Value::Object(fields) => fields.values().flat_map(texts).collect(),
+        Value::Null | Value::Bool(_) | Value::Number(_) => Vec::new(),
+    }
+}
+
+/// A web server on loopback for the cases Neo allows and for the redirects: `/page` says
+/// `reached`, and `/to-hosts`, `/to-secret` and `/to-page` redirect to `/etc/hosts`, `secret` and
+/// `/page`. Returns its port; it serves until the test's runtime ends.
+async fn serve_pages(secret: &Path) -> Result<u16, Box<dyn Error>> {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+    let port = listener.local_addr()?.port();
+    let secret = format!("file://{}", secret.display());
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let secret = secret.clone();
+            tokio::spawn(async move {
+                let mut request = [0_u8; 4096];
+                let read = stream.read(&mut request).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(request.get(..read).unwrap_or_default());
+                let response = match head.split(' ').nth(1) {
+                    Some("/to-hosts") => redirect("file:///etc/hosts"),
+                    Some("/to-secret") => redirect(&secret),
+                    Some("/to-page") => redirect("/page"),
+                    _ => {
+                        let body = "<title>reached</title><p>reached</p>";
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                    }
+                };
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+        }
+    });
+    Ok(port)
+}
+
+fn redirect(location: &str) -> String {
+    format!(
+        "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    )
 }

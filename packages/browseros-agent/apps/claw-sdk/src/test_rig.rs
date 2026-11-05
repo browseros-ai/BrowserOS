@@ -25,6 +25,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
+use crate::builtins::TypedValues;
 use crate::dispatch::{
     Dispatcher, ErrorCode, LeafError, Lifetime, Method, MethodSpec, OpCtx, OperationError,
     PageChange, PageTarget, RegistryBuilder, RegistryError, RunCtx, RunGuard, RunStart,
@@ -43,6 +44,9 @@ pub(crate) struct TestRig {
     pub(crate) store: TraceStore,
     pub(crate) sink: TraceSink,
     pub(crate) secrets: Arc<SecretSet>,
+    /// What the journal reported and the secret set has not learned yet; every run service
+    /// over this rig masks its replies with it.
+    pub(crate) typed: Arc<TypedValues>,
     pub(crate) dispatcher: Arc<Dispatcher>,
     /// What SIGTERM would cancel.
     pub(crate) shutdown: CancellationToken,
@@ -106,6 +110,7 @@ impl TestRig {
         let redactor = Redactor::new(Arc::clone(&secrets), RedactionLimits::default());
         let sink = spawn_writer(&store, redactor, writer, None);
         let dispatcher = dispatcher(&link, &tabs, &sink, &secrets)?;
+        let typed = TypedValues::start(Arc::clone(&secrets), tabs.subscribe_closed());
         Ok(Self {
             fake,
             link,
@@ -113,6 +118,7 @@ impl TestRig {
             store,
             sink,
             secrets,
+            typed,
             dispatcher,
             shutdown: CancellationToken::new(),
             dir,
@@ -152,6 +158,7 @@ impl TestRig {
             store: self.store.clone(),
             trace: self.sink.clone(),
             secrets: Arc::clone(&self.secrets),
+            typed: Arc::clone(&self.typed),
             shutdown: self.shutdown.clone(),
             orphan_grace,
         })

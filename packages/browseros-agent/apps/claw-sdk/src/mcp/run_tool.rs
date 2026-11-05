@@ -101,7 +101,7 @@ fn text(reply: &RunReply) -> String {
     }
     for note in &reply.unknown {
         lines.push(format!(
-            "[unknown outcome] {} was sent but not confirmed. Check the page before repeating it.",
+            "[unknown outcome] {} was sent but not confirmed. Take a snapshot before repeating it.",
             op_label(note)
         ));
     }
@@ -148,5 +148,42 @@ fn op_label(note: &OpNote) -> String {
     match &note.site {
         Some(site) => format!("{} at {site} (op {})", note.name, note.operation_id.seq),
         None => format!("{} (op {})", note.name, note.operation_id.seq),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use browseros_trace::{OperationId, RunId};
+    use serde_json::json;
+
+    use super::text;
+    use crate::run::RunReply;
+
+    #[test]
+    fn a_write_never_confirmed_tells_the_model_to_look_before_repeating_it()
+    -> Result<(), Box<dyn Error>> {
+        let id = RunId::new();
+        let reply: RunReply = serde_json::from_value(json!({
+            "id": id,
+            "status": "ok",
+            "effects": "unknown",
+            "value": null,
+            "unknown": [{
+                "operationId": OperationId::new(id, 7),
+                "name": "locator.click",
+                "site": "run:3:7",
+            }],
+        }))?;
+        assert_eq!(
+            text(&reply).lines().last(),
+            Some(
+                "[unknown outcome] locator.click at run:3:7 (op 7) was sent but not confirmed. \
+                 Take a snapshot before repeating it."
+            ),
+            "sdk-traces' wording, which zuzu's own warning used"
+        );
+        Ok(())
     }
 }

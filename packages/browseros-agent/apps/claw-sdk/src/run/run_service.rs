@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use super::request_ledger::{Admission, LedgerLimits, RunTicket};
 use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
 use crate::browser::{BrowserLink, PageRef, RunView, TabRegistry};
+use crate::builtins::TypedValues;
 use crate::config::Defaults;
 use crate::dispatch::{
     Dispatcher, ErrorCode, OperationError, PageFact, RunCtx, RunStart, StopReason,
@@ -33,6 +34,7 @@ pub(crate) struct RunService {
     store: TraceStore,
     trace: TraceSink,
     secrets: Arc<SecretSet>,
+    typed: Arc<TypedValues>,
     ledger: Arc<RequestLedger>,
     /// Cancelled on SIGTERM: every run stops as `neo / shutting_down` and records its end.
     shutdown: CancellationToken,
@@ -58,6 +60,8 @@ pub(crate) struct RunServiceParts {
     pub(crate) trace: TraceSink,
     /// The process's known secrets, masked out of every reply.
     pub(crate) secrets: Arc<SecretSet>,
+    /// Values typed into sensitive fields that the secret set has not learned yet.
+    pub(crate) typed: Arc<TypedValues>,
     /// Fires on SIGTERM.
     pub(crate) shutdown: CancellationToken,
     /// `Defaults::ORPHAN_GRACE` in the app.
@@ -75,6 +79,7 @@ impl RunService {
             store,
             trace,
             secrets,
+            typed,
             shutdown,
             orphan_grace,
         } = parts;
@@ -86,6 +91,7 @@ impl RunService {
             store,
             trace,
             secrets,
+            typed,
             shutdown,
             orphan_grace,
             #[cfg(test)]
@@ -114,7 +120,10 @@ impl RunService {
             }
             Admission::Join(first) => first.reply().await,
             Admission::Replay(reply) => reply,
-            Admission::Duplicate(first) => Arc::new(RunReply::duplicate(first)),
+            Admission::Duplicate(first) => {
+                let reply = RunReply::duplicate(handle.id(), first);
+                self.record_refused(request.code, request.meta, reply)
+            }
             Admission::Unavailable(error) => {
                 self.refuse_as(handle.id(), request.code, request.meta, &error)
             }
@@ -131,9 +140,7 @@ impl RunService {
         self.refuse_as(RunId::new(), code, meta, error)
     }
 
-    /// Records a refused call as a run that ended at once, so the reply's `id` resolves in the
-    /// trace. Without the request id, though: nothing ran, and a recorded request id would
-    /// make the store refuse that request's retry as a duplicate for good.
+    /// Refuses a call as run `id`, recorded.
     fn refuse_as(
         &self,
         id: RunId,
@@ -141,6 +148,14 @@ impl RunService {
         meta: RunMeta,
         error: &OperationError,
     ) -> Arc<RunReply> {
+        self.record_refused(code, meta, RunReply::refused(id, error, &self.secrets))
+    }
+
+    /// Records a refused call as a run that ended at once, so the reply's `id` resolves in the
+    /// trace. Without the request id, though: nothing ran, and a recorded request id would
+    /// make the store refuse that request's retry as a duplicate for good.
+    fn record_refused(&self, code: String, meta: RunMeta, reply: RunReply) -> Arc<RunReply> {
+        let id = reply.id;
         self.trace.run_started(RunStarted {
             id,
             code,
@@ -149,7 +164,6 @@ impl RunService {
             host_data: meta.host_data.map(HostData::into_value),
             at: EpochMillis::now(),
         });
-        let reply = RunReply::refused(id, error, &self.secrets);
         let end = reply.trace_end(None);
         self.trace.run_ended(RunEnded {
             id,
@@ -229,7 +243,15 @@ impl RunService {
         {
             ops.shutdown().await;
         }
-        let reply = Arc::new(RunReply::build(&run, end, &self.secrets));
+        // The reply is masked once, here. A value still held as typed into a sensitive field is
+        // no secret yet, and may be a prefix of one being typed elsewhere (sdk-traces decision
+        // 32), but the reply may show it, so it is masked with what is held too, and that stays
+        // held.
+        let mut reply = RunReply::build(&run, end, &self.secrets);
+        if let Some(held) = self.typed.held() {
+            reply.mask(&held);
+        }
+        let reply = Arc::new(reply);
         guard.finish(reply.trace_end(request_id.as_ref()));
         ticket.finish(reply);
     }

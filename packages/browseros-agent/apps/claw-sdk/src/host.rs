@@ -3,8 +3,9 @@
 //!
 //! ```text
 //!  startup ─ HostApi::bind: token file ─▶ host socket bound (or none) ─┐
-//!  the link's first connect ─▶ HostApi::serve ─ Service::start(store, sink, privacy,
-//!        session, viewports, screenshot jobs, xvnc, cdp port)
+//!  the link's first connect ─▶ HostApi::serve ─ after a replaced trace store, every open tab
+//!        made private (FlagRecovery) ─ Service::start(store, sink, privacy, session, viewports,
+//!        screenshot jobs, xvnc, cdp port)
 //!        ─▶ TakeoverLock armed with Service::locks
 //!        ─▶ Service::retain_tabs(a listing taken then, Service::tab_fence from before it)
 //!        ─▶ tab_feed
@@ -20,11 +21,13 @@
 //! socket, hands the service what it already holds, and adapts the service's locks and the
 //! browser link's tab listings to its own door. Nothing here implements a trait for the service.
 
+mod flag_recovery;
 mod host_api;
 mod tab_feed;
 mod takeover_lock;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use flag_recovery::FlagRecovery;
 pub(crate) use host_api::{HostApi, HostInputs};
 pub(crate) use takeover_lock::TakeoverLock;

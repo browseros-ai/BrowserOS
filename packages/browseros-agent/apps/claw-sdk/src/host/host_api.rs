@@ -11,7 +11,7 @@ use browseros_trace::{Privacy, ShotJobs, TraceSink, TraceStore};
 use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
-use super::{TakeoverLock, tab_feed};
+use super::{FlagRecovery, TakeoverLock, tab_feed};
 use crate::browser::BrowserLink;
 use crate::config::HostApiConfig;
 use crate::http::{BindError, HostListener};
@@ -53,6 +53,9 @@ pub(crate) struct HostInputs {
     /// views open a connection of their own to it, so their frames never queue behind the
     /// agent's commands.
     pub(crate) cdp_port: u16,
+    /// Pending when a replaced trace store lost the private flags: every open tab is made
+    /// private before the service starts.
+    pub(crate) recovery: Arc<FlagRecovery>,
 }
 
 /// The bound host listener and the auth in front of every request on it.
@@ -117,7 +120,16 @@ impl HostApi {
             screenshots,
             xvnc,
             cdp_port,
+            recovery,
         } = inputs;
+        // Before the service's camera and live views can capture a tab whose flag was lost.
+        if recovery.is_pending() {
+            let open = tokio::select! {
+                () = shutdown.cancelled() => return,
+                listing = link.watched_listing() => listing.open,
+            };
+            recovery.recover(&privacy, &open).await;
+        }
         let service = Service::start(ServiceInputs {
             store,
             sink,

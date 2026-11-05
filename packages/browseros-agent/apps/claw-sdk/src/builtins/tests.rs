@@ -10,13 +10,16 @@ use std::time::Duration;
 
 use browseros_captcha::CaptchaSolver;
 use browseros_captcha::config::{CAPSOLVER_KEY_FILE_ENV, CAPSOLVER_URL_ENV, CaptchaConfig};
+use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
 use browseros_core::{NativeCapabilities, PageId, TabId};
-use browseros_playwright::{ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, RunState};
+use browseros_playwright::{
+    ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, PlaywrightHooks, RunState, TypedBy,
+};
 use browseros_takeover::{Lock, LockBinding, LockTtl, Locks, Reads};
 use browseros_trace::{
-    Delivery, Effect, ErrorOwner, OperationId, OperationRow, Outcome, Privacy, RedactionLimits,
-    Redactor, RunId, RunStatus, SecretSet, SecretSetConfig, TraceSink, TraceStore, WriterConfig,
-    spawn_writer,
+    Delivery, Effect, EpochMillis, ErrorOwner, OperationId, OperationRow, Outcome, Privacy,
+    PrivateReason, RedactionLimits, Redactor, RunId, RunStatus, SecretSet, SecretSetConfig,
+    TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use futures_util::future::{self, Either};
 use serde::Deserialize;
@@ -33,12 +36,12 @@ use crate::dispatch::{
     OpFailure, OpReply, OperationError, PageTarget, PendingReply, Policy, PolicyCheck,
     RegistryBuilder, RegistryError, RunCtx, RunGuard, RunStart, StopReason, Visibility,
 };
-use crate::host::TakeoverLock;
+use crate::host::{FlagRecovery, TakeoverLock};
 use crate::test_support::FakeCdp;
 
 /// The built-ins' door on the fake browser, with the app's own rules in the app's order: the
-/// takeover lock over browseros-takeover's real `Locks`, then the CAPTCHA claims. A plain data
-/// bag.
+/// takeover lock over browseros-takeover's real `Locks`, then tab privacy, then the CAPTCHA
+/// claims. A plain data bag.
 struct Harness {
     fake: Arc<FakeCdp>,
     link: Arc<BrowserLink>,
@@ -51,6 +54,10 @@ struct Harness {
     takeover: Arc<TakeoverLock>,
     /// The facade every Playwright op of `dispatcher` runs on, as app.rs builds it.
     playwright: Arc<PlaywrightFacade>,
+    /// The privacy callbacks the facade's crate calls, for tests that play its journal.
+    hooks: Arc<PrivacyHooks>,
+    /// Tab privacy, which the host API's routes and a takeover set.
+    privacy: Arc<Privacy>,
     dispatcher: Arc<Dispatcher>,
     /// Keeps the store's directory for the test's life.
     _dir: TempDir,
@@ -92,8 +99,12 @@ impl Harness {
         takeover.arm(Arc::clone(&locks));
         let claims = Arc::new(CaptchaClaims::default());
         let privacy = Privacy::new(Arc::clone(&secrets), Arc::new(sink.clone()), HashMap::new());
-        let hooks = PrivacyHooks::new(privacy, Arc::clone(&tabs));
-        let playwright = PlaywrightFacade::start(Arc::clone(&link), Arc::new(hooks));
+        let hooks = Arc::new(PrivacyHooks::new(
+            Arc::clone(&privacy),
+            Arc::clone(&tabs),
+            FlagRecovery::none(),
+        ));
+        let playwright = PlaywrightFacade::start(Arc::clone(&link), Arc::clone(&hooks) as _);
         let mut registry = RegistryBuilder::default();
         let deps = BuiltinDeps {
             solver,
@@ -105,6 +116,7 @@ impl Harness {
             registry.build(),
             vec![
                 Arc::clone(&takeover) as Arc<dyn Policy>,
+                Arc::clone(&hooks) as Arc<dyn Policy>,
                 claims as Arc<dyn Policy>,
             ],
             secrets,
@@ -121,6 +133,8 @@ impl Harness {
             locks,
             takeover,
             playwright,
+            hooks,
+            privacy,
             dispatcher,
             _dir: dir,
         })
@@ -180,6 +194,11 @@ impl Harness {
     /// A tab the owner opened, as core names it.
     async fn owner_tab(&self, url: &str) -> Result<PageRef, Box<dyn Error>> {
         let tab = self.fake.open_tab(url, "Owner's");
+        self.listed(tab).await
+    }
+
+    /// The fake's `tab`, as core lists it.
+    async fn listed(&self, tab: TabId) -> Result<PageRef, Box<dyn Error>> {
         let run = self.link.view().ok_or("the link is up")?;
         let listing = run.view.list_pages().await?;
         let info = listing
@@ -291,6 +310,14 @@ fn page_of(entry: &Value) -> Result<PageRef, Box<dyn Error>> {
         id: PageId(u32::try_from(id)?),
         tab: TabId(tab),
     })
+}
+
+/// One keystroke as the seal's journal reports it: the field's whole value.
+fn keystroke(value: &str) -> JournalEntry {
+    JournalEntry {
+        kind: SensitiveKind::Password,
+        value: value.to_owned().into(),
+    }
 }
 
 /// `work`, or an error after 10 s: a deadlock fails the test instead of hanging it.
@@ -542,6 +569,48 @@ async fn concurrent_calls_on_the_lazy_page_open_one_tab() -> Result<(), Box<dyn 
 }
 
 #[tokio::test]
+async fn a_goto_that_opens_the_lazy_page_is_recorded_on_its_tab_and_holds_a_lock_unsettled()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    // A slow page: the navigation is still running when the owner takes the tab.
+    harness.fake.hang("Page.navigate");
+    let before = harness.fake.tabs();
+    let goto = json!({
+        "call": { "api": "page.goto", "timeoutMs": 30000 },
+        "page": { "$neo": "page", "id": null },
+        "url": "https://bank.example/",
+        "waitUntil": "load",
+    });
+    let pending = harness
+        .dispatcher
+        .submit(&run, Call::script("page.goto".to_owned(), goto, None));
+    within(async {
+        while harness.fake.count("Page.navigate") == 0 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    let tab = harness
+        .fake
+        .tabs()
+        .into_iter()
+        .find(|tab| !before.contains(tab))
+        .ok_or("the door opened the run's page for the goto")?;
+    assert_eq!(
+        harness.row(pending.operation()).await?.tab,
+        Some(tab),
+        "the goto is on the record of the tab it navigates, from its start"
+    );
+    let lock = harness.lock(tab, Reads::Allow).await?;
+    assert!(
+        !lock.settled,
+        "the agent's goto still navigates the tab, so the owner's lock is not settled"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn the_owners_lock_keeps_the_agent_off_their_tab() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
     let (run, _guard) = harness.run()?;
@@ -622,6 +691,59 @@ async fn the_owners_lock_keeps_the_agent_off_their_tab() -> Result<(), Box<dyn E
         (ErrorCode::OWNER_HAS_CONTROL, Delivery::NotSent),
         "reads: block refuses reads too: the owner may be typing a password"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_capture_that_ends_after_its_tab_went_private_is_withheld_closed_or_not()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    for closed in [false, true] {
+        for (op, capture, pixels) in [
+            ("page.screenshot", "Page.captureScreenshot", "cGl4ZWxz"),
+            ("page.pdf", "Page.printToPDF", "JVBERi0xLjQ="),
+        ] {
+            let owners = harness.owner_tab("https://bank.example/").await?;
+            harness.fake.answer(capture, json!({ "data": pixels }));
+            harness.fake.hold_next(capture);
+            let input =
+                json!({ "call": { "api": op, "timeoutMs": 30000 }, "page": handle(&owners) });
+            let sent = harness.fake.count(capture);
+            let pending = harness
+                .dispatcher
+                .submit(&run, Call::script(op.to_owned(), input, None));
+            // The browser took the capture while the tab was not private yet. The owner takes
+            // the tab before the pixels reach Neo, and may type a password into the frame they
+            // show. A tab that then closes ends its flag, but not what that frame shows.
+            within(async {
+                while harness.fake.count(capture) == sent {
+                    time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await?;
+            harness
+                .privacy
+                .make_private(owners.tab, PrivateReason::Takeover, EpochMillis::now())
+                .await?;
+            if closed {
+                harness.privacy.tab_closed(owners.tab).await;
+            }
+            harness.fake.release_held();
+            let withheld = failure(within(pending.wait()).await?)
+                .map_err(|error| format!("{op}, closed: {closed}: {error}"))?;
+            assert_eq!(
+                (
+                    withheld.error.owner(),
+                    withheld.error.code(),
+                    withheld.delivery
+                ),
+                (ErrorOwner::Host, ErrorCode::PAGE_PRIVATE, Delivery::NotSent),
+                "{op}, closed: {closed}: {}",
+                withheld.error
+            );
+        }
+    }
     Ok(())
 }
 
@@ -860,6 +982,36 @@ async fn the_janitor_closes_idle_agent_tabs_through_the_door() -> Result<(), Box
     assert!(
         !harness.is_open(held.tab).await?,
         "once the owner lets go, the next sweep closes it"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn no_tab_is_captured_until_neo_made_up_for_lost_private_flags() -> Result<(), Box<dyn Error>>
+{
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    harness.tabs.touched(&owners, None);
+    // A replaced trace store, before the host API has made the open tabs private.
+    let dir = tempfile::tempdir()?;
+    let recovery = FlagRecovery::before_replacing(&dir.path().join("trace.db")).await?;
+    let hooks = PrivacyHooks::new(
+        Arc::clone(&harness.privacy),
+        Arc::clone(&harness.tabs),
+        Arc::clone(&recovery),
+    );
+    assert_eq!(
+        hooks
+            .capture_allowed(owners.id.clone())
+            .err()
+            .map(|refusal| refusal.code),
+        Some("page_private".to_owned()),
+        "no capture while it is unknown which tabs were private"
+    );
+    recovery.recover(&harness.privacy, &[]).await;
+    assert!(
+        hooks.capture_allowed(owners.id.clone()).is_ok(),
+        "once the open tabs are private, a tab that is not may be captured"
     );
     Ok(())
 }
@@ -1386,23 +1538,46 @@ async fn the_ops_that_run_script_in_the_pages_main_world_are_held() -> Result<()
 }
 
 #[tokio::test]
-async fn a_goto_to_a_javascript_url_is_refused_before_it_is_sent() -> Result<(), Box<dyn Error>> {
+async fn a_goto_opens_only_http_https_data_and_about_urls() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
     let owners = harness.owner_tab("https://bank.example/").await?;
     let (run, _guard) = harness.run()?;
-    // Chromium runs each of these in the tab's main world, however the scheme is spelled.
-    for url in [
-        "javascript:void(document.title = document.querySelector('input[type=password]').value)",
-        " JavaScript:void(0)",
-        "java\tscript:void(0)",
-    ] {
-        let goto = json!({
+    // The browser fails every load it is sent, so a URL the door let through answers at once.
+    harness.fake.answer(
+        "Page.navigate",
+        json!({ "frameId": "frame", "errorText": "net::ERR_ABORTED" }),
+    );
+    let goto = |url: &str| {
+        json!({
             "call": { "api": "page.goto", "timeoutMs": 30000 },
             "page": handle(&owners),
             "url": url,
             "waitUntil": "load",
-        });
-        let (operation, reply) = harness.submit_op(&run, "page.goto", goto).await;
+        })
+    };
+    // Each would show the agent what it must not see (a local file such as Neo's host token,
+    // the browser's own pages, a page's source) or run script in the tab's main world, however
+    // the scheme is spelled.
+    for url in [
+        "file:///etc/hosts",
+        " FILE:///etc/hosts",
+        "fi\tle:///run/neo/host-token",
+        "view-source:https://bank.example/",
+        "chrome://version",
+        "devtools://devtools/bundled/inspector.html",
+        "chrome-extension://abcdefghijklmnop/popup.html",
+        "blob:https://bank.example/9d2c",
+        "filesystem:https://bank.example/temporary/x",
+        "javascript:void(document.title = document.querySelector('input[type=password]').value)",
+        " JavaScript:void(0)",
+        "java\tscript:void(0)",
+        // No scheme the URL Standard reads, so none to allow.
+        "bank.example/login",
+        // Its scheme is `localhost` to the URL Standard, as to the browser. Playwright's own goto
+        // would add `http://`; Neo reads the URL as written, and the script writes the scheme.
+        "localhost:3000/",
+    ] {
+        let (operation, reply) = harness.submit_op(&run, "page.goto", goto(url)).await;
         let refused = failure(reply)?;
         assert_eq!(
             (
@@ -1427,7 +1602,95 @@ async fn a_goto_to_a_javascript_url_is_refused_before_it_is_sent() -> Result<(),
     assert_eq!(
         harness.fake.count("Page.navigate"),
         0,
-        "no script URL reached the tab"
+        "no refused URL reached the tab"
+    );
+
+    let allowed = [
+        "http://bank.example/",
+        "HTTPS://bank.example/login",
+        "data:text/html,<p>made in the script</p>",
+        "about:blank",
+    ];
+    for url in allowed {
+        let failed = failure(harness.submit(&run, "page.goto", goto(url)).await)?;
+        assert_eq!(
+            (failed.error.code(), failed.delivery),
+            (ErrorCode::NAVIGATION_FAILED, Delivery::Done),
+            "{url:?} reached the browser: {}",
+            failed.error
+        );
+    }
+    let sent: Vec<Value> = harness
+        .fake
+        .calls()
+        .into_iter()
+        .filter(|call| call.method == "Page.navigate")
+        .map(|call| call.params["url"].clone())
+        .collect();
+    assert_eq!(
+        sent,
+        allowed.map(Value::from),
+        "each sent as the script wrote it"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_reload_reloads_only_a_page_on_an_allowed_scheme() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    // The owner opened a local file in a tab. The agent never navigated it, but a reload would
+    // load the file again for its next read.
+    let local = harness.owner_tab("file:///etc/hosts").await?;
+    let web = harness.owner_tab("https://bank.example/").await?;
+    let (run, _guard) = harness.run()?;
+    // The browser never finishes a reload, so one the door lets through times out once sent.
+    let reload = |page: &PageRef| {
+        json!({
+            "call": { "api": "page.reload", "timeoutMs": 500 },
+            "page": handle(page),
+            "waitUntil": "load",
+        })
+    };
+    let (operation, reply) = harness.submit_op(&run, "page.reload", reload(&local)).await;
+    let refused = failure(reply)?;
+    assert_eq!(
+        (
+            refused.error.owner(),
+            refused.error.code(),
+            refused.delivery
+        ),
+        (
+            ErrorOwner::Script,
+            ErrorCode::INVALID_INPUT,
+            Delivery::NotSent
+        ),
+        "{}",
+        refused.error
+    );
+    assert_eq!(
+        harness.fake.count("Page.reload"),
+        0,
+        "the browser never saw the reload"
+    );
+    let row = harness.row(operation).await?;
+    assert_eq!(
+        (
+            row.delivery,
+            row.error.map(|error| (error.owner, error.code))
+        ),
+        (
+            Some(Delivery::NotSent),
+            Some((ErrorOwner::Script, "invalid_input".to_owned()))
+        ),
+        "the trace says what the door refused"
+    );
+
+    let sent = failure(harness.submit(&run, "page.reload", reload(&web)).await)?;
+    assert_eq!(
+        (sent.error.code(), harness.fake.count("Page.reload")),
+        (ErrorCode::WAIT_TIMEOUT, 1),
+        "a page on the web reloads: {}",
+        sent.error
     );
     Ok(())
 }
@@ -1733,6 +1996,71 @@ async fn a_rule_that_refuses_the_crates_own_recheck_is_what_the_script_sees()
         harness.fake.count("Page.reload"),
         0,
         "the reload never reached the browser"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_field_typed_a_key_at_a_time_masks_its_final_value_and_no_prefix()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    // The owner's tab shows a prefix and the whole value, and every read's page facts come back
+    // through the door's mask.
+    let tab = harness
+        .fake
+        .open_tab("https://bank.example/", "hunte or hunter2?");
+    let page = harness.listed(tab).await?;
+    let (run, _guard) = harness.run()?;
+    let title = || async {
+        let reply = harness
+            .submit(&run, "page.opener", json!({ "page": handle(&page) }))
+            .await;
+        reply.pages.first().and_then(|fact| fact.title.clone())
+    };
+    for value in ["h", "hu", "hun", "hunt", "hunte", "hunter", "hunter2"] {
+        harness
+            .hooks
+            .field_entered(page.id.clone(), keystroke(value), TypedBy::NotAgent);
+    }
+    time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(250)).await;
+    assert_eq!(
+        title().await,
+        Some("hunte or [private]?".to_owned()),
+        "once the field went quiet its value is a secret, and `hunte`, a prefix, is still text"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_read_between_two_keystrokes_registers_no_prefix() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let tab = harness
+        .fake
+        .open_tab("https://bank.example/", "hunt, hunte or hunter2?");
+    let page = harness.listed(tab).await?;
+    let (run, _guard) = harness.run()?;
+    harness
+        .hooks
+        .field_entered(page.id.clone(), keystroke("hunt"), TypedBy::NotAgent);
+    // A read sweeps the field before the journal reports the next key. The read masked what it
+    // found out of its own result already.
+    harness.hooks.values_swept(
+        page.id.clone(),
+        &FieldValues::new(["hunte".to_owned().into()]),
+    );
+    for value in ["hunter", "hunter2"] {
+        harness
+            .hooks
+            .field_entered(page.id.clone(), keystroke(value), TypedBy::NotAgent);
+    }
+    time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(250)).await;
+    let reply = harness
+        .submit(&run, "page.opener", json!({ "page": handle(&page) }))
+        .await;
+    assert_eq!(
+        reply.pages.first().and_then(|fact| fact.title.clone()),
+        Some("hunt, hunte or [private]?".to_owned()),
+        "once the field went quiet its value is a secret, and the prefix the read saw is not"
     );
     Ok(())
 }

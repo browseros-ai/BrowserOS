@@ -34,10 +34,10 @@ mod run_ctx;
 mod tests;
 
 pub(crate) use dispatcher::{Call, CallSite, Caller, Dispatcher, OpReply, PageFact, PendingReply};
-pub(crate) use method::{Lifetime, Listing, Method, MethodSpec, Visibility};
+pub(crate) use method::{Lifetime, Listing, Method, MethodSpec, Output, Visibility};
 pub(crate) use op_ctx::{OpCtx, PageChange};
 pub(crate) use operation_error::{Answer, ErrorCode, LeafError, OpFailure, OperationError};
 pub(crate) use page_target::PageTarget;
-pub(crate) use policy::{Policy, PolicyCheck};
+pub(crate) use policy::{Policy, PolicyCheck, ResultHold};
 pub(crate) use registry::{Registry, RegistryBuilder, RegistryError};
 pub(crate) use run_ctx::{OpLine, OpsReport, RunCtx, RunEnd, RunGuard, RunStart, StopReason};

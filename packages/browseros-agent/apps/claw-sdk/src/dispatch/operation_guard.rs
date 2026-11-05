@@ -32,6 +32,9 @@ pub(super) struct OperationGuard {
 
 struct Open {
     state: Arc<OpState>,
+    /// The start record while it waits for the tab of the run's lazy page ([`StartTab::Lazy`]).
+    /// Whatever ends the op first sends it before the end record.
+    unsent: Option<OperationStarted>,
     spec: MethodSpec,
     site: Option<CallSite>,
     caller: Caller,
@@ -51,10 +54,22 @@ pub(super) struct OpStart {
     /// The raw input. The trace writer redacts it.
     pub(super) args: Value,
     /// The tab the call named, before the door checks it.
-    pub(super) tab: Option<TabId>,
+    pub(super) tab: StartTab,
     pub(super) site: Option<CallSite>,
     pub(super) caller: Caller,
     pub(super) reply: oneshot::Sender<OpReply>,
+}
+
+/// The tab an op's start record names.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum StartTab {
+    /// The tab the call named, or `None` for a method with no page: recorded at once.
+    Named(Option<TabId>),
+    /// The run's lazy page, which has no tab until the door opens it. The start is recorded
+    /// once the door resolved the page ([`OperationGuard::started_on`]), so the op is on its
+    /// tab's record before any rule runs: a lock's settle counts it as that tab's open write,
+    /// and the trace's screenshot and `?tab=` listings find it.
+    Lazy,
 }
 
 /// How the run step ended, as the door saw it.
@@ -159,7 +174,8 @@ impl Settlement {
 
 impl OperationGuard {
     /// Opens the op: records `op_started` before any rule runs, so refusals are on the record
-    /// too (skeleton D7 rule 3). A channel send; it never waits on disk.
+    /// too (skeleton D7 rule 3). A channel send; it never waits on disk. An op on the run's lazy
+    /// page holds its start until [`OperationGuard::started_on`], still before the rules.
     pub(super) fn start(
         trace: &TraceSink,
         secrets: &Arc<SecretSet>,
@@ -177,20 +193,28 @@ impl OperationGuard {
             caller,
             reply,
         } = start;
-        trace.op_started(OperationStarted {
+        let started = OperationStarted {
             id: state.id(),
             parent: state.parent_id(),
             name,
             kind: OperationKind::Builtin,
             effect: spec.effect,
-            tab,
+            tab: None,
             args,
             policy: redaction,
             at: EpochMillis::now(),
-        });
+        };
+        let unsent = match tab {
+            StartTab::Named(tab) => {
+                trace.op_started(OperationStarted { tab, ..started });
+                None
+            }
+            StartTab::Lazy => Some(started),
+        };
         Self {
             open: Some(Open {
                 state,
+                unsent,
                 spec,
                 site,
                 caller,
@@ -199,6 +223,16 @@ impl OperationGuard {
                 secrets: Arc::clone(secrets),
                 reply,
             }),
+        }
+    }
+
+    /// Records a held start ([`StartTab::Lazy`]) on the tab the door resolved. Called before the
+    /// rules run; a no-op for a start already recorded.
+    pub(super) fn started_on(&mut self, tab: Option<TabId>) {
+        if let Some(open) = &mut self.open
+            && let Some(started) = open.unsent.take()
+        {
+            open.trace.op_started(OperationStarted { tab, ..started });
         }
     }
 
@@ -232,6 +266,7 @@ impl Drop for OperationGuard {
 fn settle(open: Open, ending: Ending, pages: Vec<PageFact>, default_page: Option<PageRef>) {
     let Open {
         state,
+        unsent,
         spec,
         site,
         caller,
@@ -240,6 +275,11 @@ fn settle(open: Open, ending: Ending, pages: Vec<PageFact>, default_page: Option
         secrets,
         reply,
     } = open;
+    // An op that ended before the door resolved its page (a gate, a stop, a page that would not
+    // open) still has every op id on the record: its start goes first, with no tab.
+    if let Some(started) = unsent {
+        trace.op_started(started);
+    }
     let id = state.id();
     let sent_at = state.sent_at();
     let settlement = Settlement::decide(sent_at.is_some(), &spec, ending);

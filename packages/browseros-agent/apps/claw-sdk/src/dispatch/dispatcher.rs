@@ -11,12 +11,12 @@ use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 use super::op_ctx::{OpCore, OpState, PageChange, PageReport};
-use super::operation_guard::{Ending, OpStart, OperationGuard};
+use super::operation_guard::{Ending, OpStart, OperationGuard, StartTab};
 use super::page_target::TargetHandle;
 use super::registry::DecodedCall;
 use super::{
     ErrorCode, LeafError, MethodSpec, OpFailure, OperationError, PageTarget, Policy, PolicyCheck,
-    Registry, RunCtx, Visibility,
+    Registry, ResultHold, RunCtx, Visibility,
 };
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 
@@ -36,13 +36,16 @@ const UNKNOWN_METHOD: MethodSpec = MethodSpec::new("unknown", Effect::Write);
 /// ```text
 ///  submit ─ admit (sync): seq, name → method, decode, op_started ─┐ refused: answered now
 ///          └▶ task on the run's JoinSet ─ run_op:                 ▼
-///               gates ─ target (cached, tab checked) ─ rules ─ Method::call raced with
-///               the stop ─ reads checked again ─ page facts ─ OperationGuard::finish
+///               gates ─ target (cached, tab checked) ─ rules, their holds taken ─
+///               Method::call raced with the stop ─ reads checked again, holds asked ─
+///               page facts ─ OperationGuard::finish
 ///  OpCtx::invoke ─ the same admit and run_op, inline in the parent's task
 /// ```
 ///
 /// Everything up to the start record is synchronous, so every op id handed out is recorded
-/// and answered even if its task never runs.
+/// and answered even if its task never runs. An op on the run's lazy page records its start
+/// once the door opened the page, before the rules, and its guard records it on any path that
+/// ends the op sooner.
 pub(crate) struct Dispatcher {
     registry: Registry,
     /// Fixed at startup, in the one order the app writes down (see [`Policy`]).
@@ -343,9 +346,11 @@ impl Dispatcher {
         // The tab the call names, unchecked: the record lists what the script asked for, even
         // when the door then refuses it. A lazy default page has no tab until it opens.
         let tab = match target.as_ref().map(|target| &target.0) {
-            Some(TargetHandle::Page { tab, .. }) => Some(*tab),
-            Some(TargetHandle::RunDefault) => run.known_default_tab(),
-            None => None,
+            Some(TargetHandle::Page { tab, .. }) => StartTab::Named(Some(*tab)),
+            Some(TargetHandle::RunDefault) => run
+                .known_default_tab()
+                .map_or(StartTab::Lazy, |tab| StartTab::Named(Some(tab))),
+            None => StartTab::Named(None),
         };
         let start = OpStart {
             state: Arc::clone(&state),
@@ -382,7 +387,7 @@ impl Dispatcher {
     /// `op_ended` and the reply happen exactly once on every path.
     async fn run_op(self: Arc<Self>, run: Arc<RunCtx>, admitted: Admitted) {
         let Admitted {
-            guard,
+            mut guard,
             decoded,
             state,
             spec,
@@ -402,6 +407,7 @@ impl Dispatcher {
             Ok(resolved) => resolved,
             Err(ending) => return guard.finish(ending, Vec::new(), None),
         };
+        guard.started_on(page.as_ref().map(|page| page.tab));
         if let (Caller::Script, Some(page)) = (caller, &page) {
             self.tabs.touched(page, run.task_id());
         }
@@ -416,6 +422,11 @@ impl Dispatcher {
         if let Err(refusal) = self.check(&check) {
             return guard.finish(Ending::Refused(refusal), Vec::new(), default_page);
         }
+        let holds: Vec<ResultHold> = self
+            .policies
+            .iter()
+            .filter_map(|policy| policy.hold(&check))
+            .collect();
         let op = OpCore {
             run: Arc::clone(&run),
             dispatcher: Arc::clone(&self),
@@ -434,12 +445,18 @@ impl Dispatcher {
             result = decoded.run(op) => ending_of(&run, &state, result),
         };
         // A takeover that blocks reads may have begun while this read ran (sdk-traces D13,
-        // reads: block), so a read's result is released only past the rules again.
+        // reads: block), or a capture's tab may have gone private (D6), so a read's result is
+        // released only past the rules again, then past every hold taken at admission.
         let ending = match ending {
-            Ending::Returned(value) if spec.effect == Effect::Read => match self.check(&check) {
-                Ok(()) => Ending::Returned(value),
-                Err(refusal) => Ending::Refused(refusal),
-            },
+            Ending::Returned(value) if spec.effect == Effect::Read => {
+                match self
+                    .check(&check)
+                    .and_then(|()| holds.into_iter().try_for_each(|hold| hold()))
+                {
+                    Ok(()) => Ending::Returned(value),
+                    Err(refusal) => Ending::Refused(refusal),
+                }
+            }
             ending => ending,
         };
         let pages = self.page_facts(&run, page.as_ref(), &state).await;

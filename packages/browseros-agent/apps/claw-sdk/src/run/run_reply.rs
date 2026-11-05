@@ -128,7 +128,7 @@ impl RunReply {
         // Repeating a run is safe only when it changed nothing.
         let retryable = effects == ReplyEffects::None;
         let stopped = run.stop_reason().and_then(status_of_stop);
-        let (status, mut value, error) = match (stopped, end.outcome) {
+        let (status, value, error) = match (stopped, end.outcome) {
             (Some((status, reason)), _) => (
                 status,
                 Value::Null,
@@ -157,13 +157,7 @@ impl RunReply {
                 )),
             ),
         };
-        secrets.mask_json(&mut value);
-        let (mut logs, logs_dropped) = end.logs.into_parts();
-        // `RunLogs` masked each line before cutting it; this pass also catches a secret
-        // registered after the line was logged.
-        for line in &mut logs {
-            secrets.mask_str(&mut line.text);
-        }
+        let (logs, logs_dropped) = end.logs.into_parts();
         let mut reply = Self {
             id: run.id(),
             status,
@@ -175,8 +169,19 @@ impl RunReply {
             unknown: report.unknown.iter().map(OpNote::from).collect(),
             not_awaited: report.not_awaited.iter().map(OpNote::from).collect(),
         };
-        reply.mask_error(secrets);
+        reply.mask(secrets);
         reply
+    }
+
+    /// Replaces every value `secrets` knows in what the caller reads: the value, each console
+    /// line and the error's message. `RunLogs` masked each line before cutting it; this pass also
+    /// catches a secret registered after the line was logged.
+    pub(crate) fn mask(&mut self, secrets: &SecretSet) {
+        secrets.mask_json(&mut self.value);
+        for line in &mut self.logs {
+            secrets.mask_str(&mut line.text);
+        }
+        self.mask_error(secrets);
     }
 
     /// A call refused before it ran: nothing happened, so repeating it is safe.
@@ -201,22 +206,24 @@ impl RunReply {
         )
     }
 
-    /// A repeat of a `requestId` whose replay window has passed. It names the first run, whose
-    /// trace says what it did; this call ran nothing.
+    /// A repeat of a `requestId` whose replay window has passed, as call `id` (D14). It is this
+    /// call's own refusal: nothing ran and nothing was sent, while the first run's own id and
+    /// effects stay in the trace, which the message points to. Not retryable, because a repeat
+    /// gets the same refusal and the first run may have changed the page.
     #[must_use]
-    pub(crate) fn duplicate(first: RunId) -> Self {
+    pub(crate) fn duplicate(id: RunId, first: RunId) -> Self {
         let error = OperationError::host(
             ErrorCode::DUPLICATE_REQUEST,
             format_args!(
-                "this requestId already ran as run {first}, and its result is no longer kept; \
-                 look the run up in the trace instead of repeating it"
+                "this requestId already ran as run {first}, whose result is no longer kept, so \
+                 this call ran nothing; look that run up in the trace instead of repeating it"
             ),
         );
-        Self::failed(
-            first,
-            ReplyEffects::Unknown,
-            ReplyError::from_error(&error, false),
-        )
+        let error = ReplyError {
+            delivery: Some(ReplyDelivery::NotSent),
+            ..ReplyError::from_error(&error, false)
+        };
+        Self::failed(id, ReplyEffects::None, error)
     }
 
     /// The trace's end record, with this reply as the replay when a repeat of `request` could
@@ -378,7 +385,7 @@ mod tests {
     #[test]
     fn a_stored_replay_reads_back_as_the_same_reply() -> Result<(), Box<dyn Error>> {
         let id = RunId::new();
-        let mut reply = RunReply::duplicate(id);
+        let mut reply = RunReply::duplicate(id, RunId::new());
         reply.logs = vec![LogLine {
             level: LogLevel::Warn,
             text: "careful".to_owned(),

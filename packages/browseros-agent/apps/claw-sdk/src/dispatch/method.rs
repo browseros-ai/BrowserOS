@@ -55,6 +55,8 @@ pub(crate) struct MethodSpec {
     pub(crate) listing: Listing,
     /// A normal operation, or a background pull that the run's end cuts quietly.
     pub(crate) lifetime: Lifetime,
+    /// Whether the result holds the target tab's pixels, which a private tab never gives.
+    pub(crate) output: Output,
     /// Input fields (JSON pointers) the trace always stores as `[redacted]`.
     pub(crate) secret_args: &'static [&'static str],
     /// Input fields redacted when the target turned out to be a sensitive field.
@@ -71,6 +73,7 @@ impl MethodSpec {
             visibility: Visibility::Script,
             listing: Listing::Hidden,
             lifetime: Lifetime::Operation,
+            output: Output::Data,
             secret_args: &[],
             sensitive_args: &[],
         }
@@ -96,6 +99,18 @@ pub(crate) enum Listing {
     Grouped(&'static str),
     /// Not described, still callable (`neo.solveCaptcha` with no provider key).
     Hidden,
+}
+
+/// What a method's result holds, as far as tab privacy cares (sdk-traces D6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Output {
+    /// Values and text: the door masks known secrets out of them.
+    Data,
+    /// An image or a print of the target tab (`page.screenshot`, `page.pdf`). No mask reaches
+    /// into pixels, so the tab-privacy rule refuses the method while the tab is private, and
+    /// withholds its result if the tab went private at any point while it ran, closed since or
+    /// not.
+    Pixels,
 }
 
 /// Whether a method is a normal operation or a background pull.

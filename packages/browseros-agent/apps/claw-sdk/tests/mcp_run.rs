@@ -3,11 +3,13 @@
 //! headers themselves are the point.
 
 use std::error::Error;
+use std::fs;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use browseros_core::TabId;
 use browseros_trace::{
     Delivery, Effect, ErrorOwner, Outcome, RunQuery, RunStatus, RunSummary, TaskId, TraceStore,
 };
@@ -59,7 +61,11 @@ impl Neo {
     }
 
     async fn start_with(fake: Arc<FakeCdp>) -> Result<Self, Box<dyn Error>> {
-        let dir = tempfile::tempdir()?;
+        Self::start_in(tempfile::tempdir()?, fake).await
+    }
+
+    /// Started on a state directory the test prepared.
+    async fn start_in(dir: TempDir, fake: Arc<FakeCdp>) -> Result<Self, Box<dyn Error>> {
         let app = App::start_with_fake_browser(test_config(dir.path()), Arc::clone(&fake)).await?;
         let address = app.local_addr()?;
         let store = app.trace_store();
@@ -151,6 +157,17 @@ impl Neo {
                 }
                 time::sleep(Duration::from_millis(20)).await;
             }
+        })
+        .await?
+    }
+
+    /// Returns once the trace store holds `tab`'s private flag.
+    async fn until_private(&self, tab: TabId) -> TestResult {
+        within(PATIENCE, async {
+            while !self.store.private_tabs().await?.contains_key(&tab) {
+                time::sleep(Duration::from_millis(20)).await;
+            }
+            Ok(())
         })
         .await?
     }
@@ -695,6 +712,96 @@ fn ready_waits_for_the_browser_and_health_reports_it() -> TestResult {
             health.contains(r#""connected":true"#) && health.contains(r#""epoch":1"#),
             "{health}"
         );
+        Ok(())
+    })
+}
+
+/// A state directory whose trace store this build cannot open, as after a crash mid-write or a
+/// downgrade. The private flags the store held are gone with it.
+fn broken_trace_store() -> Result<TempDir, Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    fs::create_dir_all(dir.path().join("claw-sdk"))?;
+    fs::write(
+        dir.path().join("claw-sdk").join("trace.db"),
+        "not a trace store",
+    )?;
+    Ok(dir)
+}
+
+/// What a script gets from `tab.screenshot()` on the tab `pick` names: `captured`, or the
+/// error's code.
+async fn screenshot(client: &Client, pick: &str) -> Result<Option<Value>, Box<dyn Error>> {
+    let code = format!(
+        "const tab = {pick};\nreturn await tab.screenshot().then(() => 'captured', (error) => error.code);"
+    );
+    let result = run(client, json!({ "code": code }), None).await?;
+    Ok(result
+        .structured_content
+        .and_then(|mut reply| reply.get_mut("value").map(Value::take)))
+}
+
+/// Picks the owner's tab, which the tests below open on `https://bank.example/`.
+const OWNERS_TAB: &str =
+    "context.pages().find((tab) => tab.url().startsWith('https://bank.example'))";
+
+#[test]
+fn a_replaced_trace_store_makes_every_tab_open_at_the_restart_private() -> TestResult {
+    on_neo_runtime(async {
+        let dir = broken_trace_store()?;
+        let fake = FakeCdp::new();
+        // The owner's tab outlived the restart; its flag may have been one of those lost.
+        let owners = fake.open_tab("https://bank.example/", "Bank");
+        fake.answer("Page.captureScreenshot", json!({ "data": "cGl4ZWxz" }));
+        let neo = Neo::start_in(dir, fake).await?;
+        neo.until_ready().await?;
+        let client = neo.legacy_client().await?;
+
+        assert_eq!(
+            screenshot(&client, OWNERS_TAB).await?,
+            Some(json!("page_private")),
+            "a tab open across the restart is private, as its lost flag may have said"
+        );
+        neo.until_private(owners).await?;
+        assert_eq!(
+            screenshot(&client, "await context.newPage()").await?,
+            Some(json!("captured")),
+            "a tab that opened after the restart had no flag to lose"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn a_neo_stopped_before_it_made_up_for_a_replaced_store_leaves_it_to_the_next_start() -> TestResult
+{
+    let dir = broken_trace_store()?;
+    // The first Neo replaces the store, then stops before the browser ever links, so it makes no
+    // tab private. Dropping its runtime ends every task it started, as SIGKILL would.
+    let stopped = App::runtime()?;
+    stopped.block_on(async {
+        let unreachable = FakeCdp::new();
+        unreachable.set_reachable(false);
+        let app = App::start_with_fake_browser(test_config(dir.path()), unreachable).await?;
+        drop(app);
+        Ok::<_, Box<dyn Error>>(())
+    })?;
+    drop(stopped);
+
+    on_neo_runtime(async {
+        // The next start opens the fresh store without error, and the owner's tab is still open.
+        let fake = FakeCdp::new();
+        let owners = fake.open_tab("https://bank.example/", "Bank");
+        fake.answer("Page.captureScreenshot", json!({ "data": "cGl4ZWxz" }));
+        let neo = Neo::start_in(dir, fake).await?;
+        neo.until_ready().await?;
+        let client = neo.legacy_client().await?;
+
+        assert_eq!(
+            screenshot(&client, OWNERS_TAB).await?,
+            Some(json!("page_private")),
+            "the lost flags are still lost after another restart, so the tab is still private"
+        );
+        neo.until_private(owners).await?;
         Ok(())
     })
 }

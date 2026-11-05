@@ -28,7 +28,7 @@ use crate::builtins::{
 };
 use crate::config::{AppConfig, Defaults, HostedMode};
 use crate::dispatch::{Dispatcher, Policy, RegistryBuilder};
-use crate::host::{HostApi, HostInputs, TakeoverLock};
+use crate::host::{FlagRecovery, HostApi, HostInputs, TakeoverLock};
 use crate::http::agent_router;
 use crate::mcp::McpServer;
 use crate::run::{RunService, RunServiceParts};
@@ -136,16 +136,12 @@ impl App {
         link: impl FnOnce(NativeCapabilities, Arc<TabRegistry>) -> Arc<BrowserLink>,
     ) -> Result<Self, StartError> {
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, config.launch.server_port));
-        let agent = TcpListener::bind(address).await.map_err(|error| {
-            if error.kind() == io::ErrorKind::AddrInUse {
-                StartError::PortInUse(address)
-            } else {
-                StartError::Io(error)
-            }
-        })?;
+        let agent = TcpListener::bind(address)
+            .await
+            .map_err(|error| bind_error(address, error))?;
         log_startup(&config, address);
 
-        let store = open_trace(&config.env.state_dir.join("claw-sdk").join("trace.db")).await?;
+        let OpenedTrace { store, recovery } = open_trace(&config.env.state_dir).await?;
         // One secret set for the process: every exit a script or the trace sees is masked
         // with it, and sdk-traces' privacy and protected fills register into it.
         let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
@@ -173,6 +169,7 @@ impl App {
                 screenshots,
                 xvnc: config.env.xvnc,
                 cdp_port: config.launch.cdp_port,
+                recovery: Arc::clone(&recovery),
             },
         )
         .await
@@ -182,8 +179,8 @@ impl App {
         let native = NativeCapabilities::from_browseros_version(config.browseros_version());
         let browser = link(native, Arc::clone(&tabs));
         // browseros-playwright's privacy callbacks feed the same secret set the door masks with.
-        let hooks = PrivacyHooks::new(privacy, Arc::clone(&tabs));
-        let playwright = PlaywrightFacade::start(Arc::clone(&browser), Arc::new(hooks));
+        let hooks = Arc::new(PrivacyHooks::new(privacy, Arc::clone(&tabs), recovery));
+        let playwright = PlaywrightFacade::start(Arc::clone(&browser), Arc::clone(&hooks) as _);
 
         // One solver for the process: its paid-task budget and page reservations are its own.
         let solver = CaptchaSolver::new(config.captcha.clone()).map(Arc::new);
@@ -200,7 +197,7 @@ impl App {
         let takeover = Arc::new(TakeoverLock::default());
         let dispatcher = Arc::new(Dispatcher::new(
             methods,
-            rules(&takeover, &claims),
+            rules(&takeover, &hooks, &claims),
             Arc::clone(&secrets),
             trace.clone(),
             Arc::clone(&browser),
@@ -214,6 +211,7 @@ impl App {
             store: store.clone(),
             trace: trace.clone(),
             secrets: Arc::clone(&secrets),
+            typed: hooks.typed(),
             shutdown: shutdown.clone(),
             orphan_grace: Defaults::ORPHAN_GRACE,
         });
@@ -296,13 +294,18 @@ impl fmt::Debug for App {
 }
 
 /// The dispatcher's rules, in their one fixed order (design D7 rule 4): the takeover lock, then
-/// the CAPTCHA busy rule. The door runs them in this order for every op, so an owner's lock
-/// outranks a solve's claim when both would refuse. Tab privacy is not one of them: a tab can
-/// turn private while a screenshot waits, so browseros-playwright asks at the moment of capture
-/// instead (`PrivacyHooks::capture_allowed`).
-fn rules(takeover: &Arc<TakeoverLock>, claims: &Arc<CaptchaClaims>) -> Vec<Arc<dyn Policy>> {
+/// tab privacy, then the CAPTCHA busy rule. The door runs them in this order for every op, so an
+/// owner's lock outranks a solve's claim when both would refuse. Tab privacy refuses a capture
+/// of a private tab, and withholds one whose tab went private before its pixels arrived;
+/// browseros-playwright also asks right before each capture (`PrivacyHooks::capture_allowed`).
+fn rules(
+    takeover: &Arc<TakeoverLock>,
+    privacy: &Arc<PrivacyHooks>,
+    claims: &Arc<CaptchaClaims>,
+) -> Vec<Arc<dyn Policy>> {
     vec![
         Arc::clone(takeover) as Arc<dyn Policy>,
+        Arc::clone(privacy) as Arc<dyn Policy>,
         Arc::clone(claims) as Arc<dyn Policy>,
     ]
 }
@@ -349,27 +352,59 @@ async fn housekeeping(
     }
 }
 
+/// The trace store Neo starts on, and whether it owes private flags that a replaced store lost.
+/// A plain data bag.
+struct OpenedTrace {
+    store: TraceStore,
+    /// Pending after this start's replacement, or an earlier one's that never finished.
+    recovery: Arc<FlagRecovery>,
+}
+
 /// Opens the trace store, or, when the file does not open (a schema this build does not know,
 /// a corrupt file), moves it aside and opens a fresh one: Neo must not crash-loop on its own
 /// records. The old file is kept beside the new one for a human to look at.
-async fn open_trace(path: &Path) -> Result<TraceStore, StartError> {
-    match TraceStore::open(path).await {
-        Ok(store) => Ok(store),
+///
+/// A fresh store lost two things that keep Neo safe, and browseros-trace cannot read either from
+/// a file it refused to open. The private flags: every tab open at the browser link's first
+/// connect is made private instead ([`FlagRecovery`]), and a marker written before the old file
+/// moves keeps that owed at every start until it is done. The request ids: a host that retries a
+/// `requestId` from before the replacement runs it again, which nothing here can prevent, so it
+/// is logged as an error for the operator.
+async fn open_trace(state_dir: &Path) -> Result<OpenedTrace, StartError> {
+    let path = state_dir.join("claw-sdk").join("trace.db");
+    match TraceStore::open(&path).await {
+        Ok(store) => Ok(OpenedTrace {
+            store,
+            recovery: FlagRecovery::after_opening(&path).await,
+        }),
         Err(error) => {
             let aside = PathBuf::from(format!(
                 "{}.broken-{}",
                 path.display(),
                 EpochMillis::now().millis()
             ));
-            warn!(%error, path = %path.display(), aside = %aside.display(), "the trace store does not open; starting a fresh one");
-            fs::rename(path, &aside).await?;
+            error!(%error, path = %path.display(), aside = %aside.display(), "the trace store does not open; starting a fresh one. Its private flags are lost, so every tab open now is made private; its request ids are lost, so a requestId retried from before this start runs again");
+            let recovery = FlagRecovery::before_replacing(&path).await?;
+            fs::rename(&path, &aside).await?;
             for suffix in ["-wal", "-shm"] {
                 let sidecar = PathBuf::from(format!("{}{suffix}", path.display()));
                 // Absent when SQLite never wrote one.
                 let _ = fs::remove_file(sidecar).await;
             }
-            Ok(TraceStore::open(path).await?)
+            Ok(OpenedTrace {
+                store: TraceStore::open(&path).await?,
+                recovery,
+            })
         }
+    }
+}
+
+/// Why the agent port did not bind. Only a taken port is `PortInUse`, which `main` exits 2 on.
+fn bind_error(address: SocketAddr, error: io::Error) -> StartError {
+    if error.kind() == io::ErrorKind::AddrInUse {
+        StartError::PortInUse(address)
+    } else {
+        StartError::Io(error)
     }
 }
 

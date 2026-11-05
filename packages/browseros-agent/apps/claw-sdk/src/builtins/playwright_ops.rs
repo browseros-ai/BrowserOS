@@ -33,8 +33,8 @@ use super::PlaywrightFacade;
 use super::event_release::EventRelease;
 use crate::browser::PageRef;
 use crate::dispatch::{
-    ErrorCode, LeafError, Lifetime, Listing, Method, MethodSpec, OpCtx, OperationError, PageChange,
-    PageTarget, RegistryBuilder, RegistryError,
+    ErrorCode, LeafError, Lifetime, Listing, Method, MethodSpec, OpCtx, OperationError, Output,
+    PageChange, PageTarget, RegistryBuilder, RegistryError,
 };
 
 /// browseros-playwright's prelude, which the agent realm evaluates after its bootstrap: the
@@ -54,7 +54,8 @@ const PLAYWRIGHT_LINE: &str = "Playwright's API (as of 1.56) on `page`, `context
     fail with `internal_error`. Running script in the page (`page.evaluate`, \
     `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, `$eval`, `$$eval`, \
     `elementHandle.evaluate`, `page.setContent`, and their `frame` forms) is not available for \
-    now and fails with `method_unavailable`, and `goto` refuses `javascript:` URLs.";
+    now and fails with `method_unavailable`, and `goto` and `reload` open only `http`, `https`, \
+    `data` and `about` URLs.";
 
 /// The ops claw-sdk holds back for now: every op that runs the agent's script in the page's main
 /// world, where the page's own state and its same-origin frames are in reach and no seal masks
@@ -79,8 +80,9 @@ const PLAYWRIGHT_LINE: &str = "Playwright's API (as of 1.56) on `page`, `context
 /// sends under it: the `frame` forms send the page ops; `$eval`, `frame.$eval` and
 /// `elementHandle.evaluate` send `locator.evaluate`; `$$eval` and `frame.$$eval` send
 /// `locator.evaluateAll`. `elementHandle.$eval` and `$$eval` send nothing: the prelude refuses
-/// them itself. A served op that runs script only for some inputs is refused by input instead:
-/// `page.goto` to a `javascript:` URL ([`OpInput::navigates_to_script`]).
+/// them itself. A served op that does harm only for some inputs is refused by input instead:
+/// `page.goto` to a URL outside [`NAVIGABLE_SCHEMES`] ([`OpInput::refused_navigation`]), and
+/// `page.reload` of a page on one ([`refused_reload`]).
 const HELD: [Held; 5] = [
     Held {
         name: "page.evaluate",
@@ -109,6 +111,15 @@ const HELD: [Held; 5] = [
                   in an origin of their own",
     },
 ];
+
+/// The schemes a navigation may load (decision 27): the web, and documents the script makes
+/// itself. Every other scheme shows the agent what it must not see, or runs script where no sweep
+/// masks a field: `file:` reads Neo's host token and CAPTCHA key files, `chrome:` and `devtools:`
+/// the browser's own pages, `view-source:` a page's source, and `javascript:` runs in the tab's
+/// main world (decision 26). An allowlist, so a scheme nobody listed is refused too. `about:`
+/// is safe while Chromium loads every `about:` URL as an empty page and never as the `chrome:`
+/// page of the same name (`about:version`), which `tests/playwright_browseros.rs` pins.
+const NAVIGABLE_SCHEMES: [&str; 4] = ["http", "https", "data", "about"];
 
 /// A held op, and what a script uses meanwhile. A plain data bag.
 #[derive(Clone, Copy, Debug)]
@@ -182,6 +193,11 @@ impl Method for HeldOp {
     }
 }
 
+/// The ops whose result holds the page's pixels ([`Output::Pixels`]), which the door's
+/// tab-privacy rule refuses while the tab is private. Each is a crate op name, which a test checks.
+/// Once sdk-playwright marks capture ops in `OpSpec`, this reads the mark instead.
+const PIXEL_OPS: [&str; 2] = ["page.screenshot", "page.pdf"];
+
 /// One browseros-playwright op as a dispatcher method. Every op is this one type: the op is
 /// data (`Op`), and so is all the door reads about it, so the crate's op table is the only list.
 struct PlaywrightOp {
@@ -205,6 +221,11 @@ impl Method for PlaywrightOp {
                 OpLifetime::Operation => Lifetime::Operation,
                 OpLifetime::Background => Lifetime::Background,
             },
+            output: if PIXEL_OPS.contains(&spec.name) {
+                Output::Pixels
+            } else {
+                Output::Data
+            },
             sensitive_args: spec.sensitive_args,
             ..MethodSpec::new(spec.name, spec.effect)
         }
@@ -215,17 +236,20 @@ impl Method for PlaywrightOp {
     }
 
     async fn call(&self, op: &OpCtx<Self>, input: OpInput) -> Result<Value, LeafError> {
-        if self.pages == PageEffect::Navigates && input.navigates_to_script() {
-            return Err(LeafError::definite(OperationError::script(
-                ErrorCode::INVALID_INPUT,
-                "Neo does not open `javascript:` URLs: their script runs in the page's main \
-                 world, with no sweep to mask its fields. Read the page through locators instead.",
-            )));
+        if self.pages == PageEffect::Navigates
+            && let Some(refusal) = input.refused_navigation()
+        {
+            return Err(LeafError::definite(refusal));
         }
         let page = match &input.page {
             Some(_) => Some(op.page()?),
             None => None,
         };
+        if let (PageEffect::Reloads, Some(page)) = (self.pages, page)
+            && let Some(refusal) = refused_reload(op, page).await?
+        {
+            return Err(LeafError::definite(refusal));
+        }
         let pages = self.pages.of_call(&input);
         let input = input.resolved(page);
         let playwright = self.facade.get().await;
@@ -301,16 +325,24 @@ impl OpInput {
         self.json.get("runBeforeUnload") == Some(&Value::Bool(true))
     }
 
-    /// Whether the op navigates to a `javascript:` URL. Chromium runs one through
-    /// `Page.navigate` in the current document's main world, and only then reports the
-    /// navigation aborted, so such a `goto` is a `page.evaluate` with no evaluate guard around
-    /// it: the door refuses it before it is sent ([`HELD`] holds the ops that always run script).
-    fn navigates_to_script(&self) -> bool {
-        self.json
-            .get("url")
-            .and_then(Value::as_str)
-            .and_then(url_scheme)
-            .is_some_and(|scheme| scheme == "javascript")
+    /// The door's refusal of a navigation to a URL Neo does not open ([`NAVIGABLE_SCHEMES`]),
+    /// decided before anything is sent. Only `page.goto` names a URL (`frame.goto` sends that op
+    /// too); a reload goes where the tab is ([`refused_reload`]), and a history step where the
+    /// tab once went. A `javascript:` URL is one reason: Chromium runs it in the current
+    /// document's main world through `Page.navigate` and only then reports the navigation
+    /// aborted, a `page.evaluate` with no guard around it. What the door cannot see, the page's
+    /// own navigations and an allowed load's redirects, Chromium refuses to a local file itself
+    /// (`tests/playwright_browseros.rs` pins each).
+    fn refused_navigation(&self) -> Option<OperationError> {
+        let url = self.json.get("url")?.as_str()?;
+        let which = match url_scheme(url) {
+            Some(scheme) if NAVIGABLE_SCHEMES.contains(&scheme.as_str()) => return None,
+            Some(scheme) => format!("this one is `{scheme}:`"),
+            None => {
+                "this one has no scheme; write it whole, such as https://example.com/".to_owned()
+            }
+        };
+        Some(not_navigable(&which))
     }
 
     /// The input as the crate gets it (adapter contract, point 2; decision 25, input 2). The
@@ -332,6 +364,35 @@ impl OpInput {
         }
         json
     }
+}
+
+/// The door's refusal of `page.reload` on a page whose URL Neo does not open, decided before
+/// anything is sent, as a goto's is ([`OpInput::refused_navigation`]). The agent did not choose
+/// that URL: the owner may have opened a local file in the tab, which a reload would load again
+/// for the agent's next read. Core's cached URL can trail a navigation the page made on its own,
+/// so the page is refreshed once first (one `Browser.getTabInfo`).
+async fn refused_reload<M>(
+    op: &OpCtx<M>,
+    page: &PageRef,
+) -> Result<Option<OperationError>, LeafError> {
+    let shown = op.race(op.run().view().page(page.id.clone())).await?;
+    Ok(match url_scheme(&shown.url) {
+        Some(scheme) if NAVIGABLE_SCHEMES.contains(&scheme.as_str()) => None,
+        Some(scheme) => Some(not_navigable(&format!(
+            "this page is on a `{scheme}:` one, so Neo does not reload it"
+        ))),
+        None => Some(not_navigable(
+            "this page's URL has no scheme Neo can read, so Neo does not reload it",
+        )),
+    })
+}
+
+/// A navigation the door does not send: `script / invalid_input`, delivery `not_sent`.
+fn not_navigable(which: &str) -> OperationError {
+    OperationError::script(
+        ErrorCode::INVALID_INPUT,
+        format_args!("Neo opens only http, https, data and about URLs in a page, and {which}."),
+    )
 }
 
 /// Puts `resolved` in place of every lazy page brand in `value`.
@@ -390,6 +451,9 @@ enum PageEffect {
     Opens,
     /// A navigation: the target's URL may have changed, whatever the outcome.
     Navigates,
+    /// `page.reload`: a navigation too, to the URL the target is on, which the door checks
+    /// first ([`refused_reload`]).
+    Reloads,
     /// `page.close` with nothing that can veto it: once it succeeds, the target is gone by this
     /// run's hand.
     Closes,
@@ -400,7 +464,8 @@ impl PageEffect {
     fn of(name: &str) -> Self {
         match name {
             "context.newPage" => Self::Opens,
-            "page.goto" | "page.reload" | "page.goBack" | "page.goForward" => Self::Navigates,
+            "page.goto" | "page.goBack" | "page.goForward" => Self::Navigates,
+            "page.reload" => Self::Reloads,
             "page.close" => Self::Closes,
             _ => Self::Untracked,
         }
@@ -414,7 +479,7 @@ impl PageEffect {
     fn of_call(self, input: &OpInput) -> Self {
         match self {
             Self::Closes if input.runs_before_unload() => Self::Untracked,
-            Self::Untracked | Self::Opens | Self::Navigates | Self::Closes => self,
+            Self::Untracked | Self::Opens | Self::Navigates | Self::Reloads | Self::Closes => self,
         }
     }
 
@@ -432,11 +497,13 @@ impl PageEffect {
                     "context.newPage returned no page brand; the janitor will never close its tab"
                 ),
             },
-            (Self::Navigates, _, Some(page)) => op.report_page(page, PageChange::Navigated),
+            (Self::Navigates | Self::Reloads, _, Some(page)) => {
+                op.report_page(page, PageChange::Navigated);
+            }
             (Self::Closes, Ok(_), Some(page)) => op.report_page(page, PageChange::Closed),
             (Self::Untracked, ..)
             | (Self::Opens | Self::Closes, Err(_), _)
-            | (Self::Navigates | Self::Closes, _, None) => {}
+            | (Self::Navigates | Self::Reloads | Self::Closes, _, None) => {}
         }
     }
 }
@@ -588,7 +655,7 @@ mod tests {
     use browseros_trace::ErrorOwner;
     use serde_json::{Value, json};
 
-    use super::{HELD, OpInput, PageEffect, error_code, leaf_error};
+    use super::{HELD, OpInput, PIXEL_OPS, PageEffect, error_code, leaf_error};
     use crate::browser::PageRef;
     use crate::dispatch::{ErrorCode, PageTarget};
 
@@ -733,27 +800,31 @@ mod tests {
     }
 
     #[test]
-    fn a_navigation_runs_script_for_a_javascript_url_however_it_is_spelled()
-    -> Result<(), Box<dyn Error>> {
+    fn a_navigation_is_allowed_by_its_scheme_however_it_is_spelled() -> Result<(), Box<dyn Error>> {
         let page = json!({ "$neo": "page", "id": 7, "tab": 1007 });
-        for (url, runs_script) in [
-            ("javascript:void(document.title = 'x')", true),
-            ("JavaScript:void(0)", true),
+        for (url, allowed) in [
+            ("https://bank.example/file:///etc/hosts", true),
+            ("HTTP://bank.example/", true),
+            ("data:text/html,<script>document.title = 'x'</script>", true),
+            ("about:blank", true),
+            ("file:///etc/hosts", false),
+            ("JavaScript:void(0)", false),
             // The browser drops what surrounds a URL, and tabs and newlines inside it.
-            (" \u{1}java\tscr\nipt:void(0)", true),
-            ("https://bank.example/javascript:void(0)", false),
-            (
-                "data:text/html,<script>document.title = 'x'</script>",
-                false,
-            ),
-            ("about:blank", false),
-            // No scheme at all, so the browser never runs it as script.
-            ("/javascript:void(0)", false),
+            (" \u{1}fi\tl\ne:///etc/hosts", false),
+            (" \u{1}java\tscr\nipt:void(0)", false),
+            ("view-source:https://bank.example/", false),
+            // No scheme the URL Standard reads, so none to allow.
+            ("/etc/hosts", false),
             ("java script:void(0)", false),
         ] {
             let input = decoded(json!({ "page": page, "url": url, "waitUntil": "load" }))?;
-            assert_eq!(input.navigates_to_script(), runs_script, "{url:?}");
+            assert_eq!(input.refused_navigation().is_none(), allowed, "{url:?}");
         }
+        let reload = decoded(json!({ "page": page, "waitUntil": "load" }))?;
+        assert!(
+            reload.refused_navigation().is_none(),
+            "a reload names no URL: the door checks the one the page is on (refused_reload)"
+        );
         Ok(())
     }
 
@@ -764,6 +835,16 @@ mod tests {
                 Op::from_name(held.name).is_some(),
                 "{}: a renamed op would be served instead of held",
                 held.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_pixel_op_is_a_crate_op() {
+        for name in PIXEL_OPS {
+            assert!(
+                Op::from_name(name).is_some(),
+                "{name}: a renamed op would capture a private tab's pixels"
             );
         }
     }

@@ -29,8 +29,9 @@ const CLOSED_BACKLOG: usize = 256;
 /// else closes the tab.
 pub(crate) struct TabRegistry {
     state: Mutex<TabState>,
-    /// Tab closes, for features that keep their own per-tab state outside this registry
-    /// (sdk-traces' `Privacy::tab_closed`, live views ending their stream).
+    /// Tab closes, for state a feature keeps per tab outside this registry. Only tabs an op
+    /// touched are reported; sdk-traces' privacy and live views hear of every close from
+    /// `tab_watch`, through the host API's tab feed, instead.
     closed: broadcast::Sender<TabId>,
 }
 
