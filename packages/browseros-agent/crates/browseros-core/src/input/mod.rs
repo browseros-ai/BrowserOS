@@ -565,16 +565,20 @@ impl Input {
     /// Best-effort: true when the ref resolves to a password or payment-card field.
     /// Used by the audit layer to redact the value before it is persisted; a read
     /// failure returns false (the explicit `sensitive` flag is the deterministic path).
+    /// The read runs once more after a failure, as [`Self::evaluate_sensitive`] does.
     pub async fn ref_field_is_sensitive(&self, ref_id: &Ref) -> bool {
-        let Ok(resolved) = self.observer.resolve_ref(ref_id).await else {
-            return false;
-        };
-        PageJs::isolated(&resolved.session)
-            .call::<Option<bool>>(resolved.backend_node_id, &sensitive_field_fn(), &[])
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(false)
+        for _ in 0..SENSITIVE_CHECK_ATTEMPTS {
+            let Ok(resolved) = self.observer.resolve_ref(ref_id).await else {
+                continue;
+            };
+            if let Ok(sensitive) = PageJs::isolated(&resolved.session)
+                .call::<Option<bool>>(resolved.backend_node_id, &sensitive_field_fn(), &[])
+                .await
+            {
+                return sensitive.unwrap_or(false);
+            }
+        }
+        false
     }
 
     /// Best-effort: true when the currently focused element is a password or
@@ -600,22 +604,20 @@ impl Input {
         self.evaluate_sensitive(&expression).await
     }
 
-    /// Reads the page once more on a new attachment when its session was already dead, as
-    /// the input retry does. Otherwise the action that follows re-attaches and types a secret
-    /// this check reported as not sensitive.
+    /// Runs the check once more after any failure. A session can die between the isolated
+    /// world's setup and the script, and the action that follows then re-attaches and types a
+    /// secret this check reported as not sensitive. Unlike the input retry, a second read
+    /// repeats nothing the page sees, so it needs no proof that the first one never landed.
     async fn evaluate_sensitive(&self, expression: &str) -> bool {
-        for _ in 0..2 {
+        for _ in 0..SENSITIVE_CHECK_ATTEMPTS {
             let Ok(session) = self.page_session().await else {
-                return false;
+                continue;
             };
-            let (session, answered) = session.witnessed();
-            match PageJs::isolated(&session)
+            if let Ok(sensitive) = PageJs::isolated(&session)
                 .eval::<Option<bool>>(expression)
                 .await
             {
-                Ok(sensitive) => return sensitive.unwrap_or(false),
-                Err(_) if !answered.load(Ordering::SeqCst) => {}
-                Err(_) => return false,
+                return sensitive.unwrap_or(false);
             }
         }
         false
@@ -702,6 +704,10 @@ const SENSITIVE_FIELD_PREDICATE: &str = "(el)=>{\
 fn sensitive_field_fn() -> String {
     format!("function(){{const pred={SENSITIVE_FIELD_PREDICATE};return pred(this);}}")
 }
+
+/// Reads in the audit layer's sensitive-field checks: the first, and one after a failure that
+/// may have been a session dying mid-read.
+const SENSITIVE_CHECK_ATTEMPTS: usize = 2;
 
 /// Resolves the real focused element, descending shadow roots and same-origin
 /// iframes, then applies the predicate. `__PRED__` is replaced with the predicate.
