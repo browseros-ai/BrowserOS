@@ -18,6 +18,11 @@
 //!   displays to the owner, whose first input waits until every open tab is private. A view can
 //!   keep a tab, or a task's tab, in front.
 //!
+//! [`Takeovers`] is the v1 flow over them, zuzu's two moments: the owner opens the link (the tab
+//! goes private, the agent is locked out, spectators are held off, the journal is armed and the
+//! tab fitted), and the owner is done (all of it given back, the lock last). It holds nothing
+//! but what it took from the parts, so a new flow replaces it without touching them (D13).
+//!
 //! ```text
 //!  POST /v1/locks ─▶ BrowserTabs::page (is the tab open) ─▶ Locks::lock ─ settle ─▶ Lock
 //!  dispatcher lock Policy ─▶ Locks::check (sync)       tab cleanup ─▶ Locks::is_locked
@@ -30,13 +35,14 @@
 //!    control: first input ─▶ views close ─▶ every open tab private ─▶ the input goes on
 //!    view: follow ─ the task's operations ─▶ Browser.activateTab
 //!    views: tab.private, a 250 ms poll ─ a private tab in front ─▶ every view closes
+//!  POST /v1/takeovers ─▶ Takeovers::start ─▶ private, lock, views held, journal, fit
+//!  release, 10 s before the TTL, tab closed ─▶ Takeovers::release ─▶ displays closed, sweep,
+//!    journal disarmed, fit restored, views back, unlock
 //! ```
 //!
 //! The rules live apart from the I/O, as pure functions that test alone: the lock decision,
 //! the fit rule, the surface's plans, the RFB bytes both ways and the display's verdict table,
 //! the owner's address rule and follow's next activation, private targets included.
-//!
-//! The v1 takeover flow joins this crate next.
 
 #![deny(missing_docs)]
 #![deny(
@@ -69,6 +75,7 @@ mod sealed_frames;
 mod surface;
 mod surface_steps;
 mod sweep;
+mod takeovers;
 #[doc(hidden)]
 pub mod testing;
 
@@ -86,3 +93,6 @@ pub use part_error::PartError;
 pub use part_ids::{FitId, LockId, TakeoverId, UnknownId};
 pub use screen_size::{NotAScreenSize, ScreenSize, Xvnc};
 pub use sweep::{Swept, sweep};
+pub use takeovers::{
+    ReleaseReason, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl, Takeovers,
+};

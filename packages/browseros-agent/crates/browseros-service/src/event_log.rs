@@ -8,6 +8,7 @@
 //! ```text
 //!  TraceSink ─ broadcast ─▶ numbering task ─ hydrate: one store read ─▶ publish ─▶ ring
 //!  Locks ───── broadcast ─▶ lock task ─ the lock is the payload ──────▶ publish ─┤
+//!  Takeovers ─ broadcast ─▶ takeover task ─ the takeover is the payload ▶ publish ┤
 //!  Service::tab_closed ───────────────────────────────────────────────▶ publish ─┤
 //!                                                                                   │
 //!                                              each SSE client reads after its seq ◀┘
@@ -29,7 +30,7 @@ use crate::event_resume::{self, Bounds, Resume};
 use crate::limits::EVENT_RING;
 use crate::wire;
 use browseros_core::TabId;
-use browseros_takeover::Lock;
+use browseros_takeover::{Lock, Takeover};
 use browseros_trace::{
     EpochMillis, OperationId, PrivacyRecord, RunId, TaskId, TraceRecordEvent, TraceStore,
 };
@@ -50,6 +51,7 @@ pub(crate) enum EventKind {
     TabPrivate,
     TabClosed,
     LockState,
+    TakeoverState,
     StreamReset,
 }
 
@@ -64,6 +66,7 @@ impl EventKind {
             Self::TabPrivate => "tab.private",
             Self::TabClosed => "tab.closed",
             Self::LockState => "lock.state",
+            Self::TakeoverState => "takeover.state",
             Self::StreamReset => "stream.reset",
         }
     }
@@ -208,6 +211,12 @@ impl EventLog {
         tokio::spawn(lock_states(Arc::clone(self), changes));
     }
 
+    /// Starts the task that numbers takeover changes as `takeover.state` events, over `changes`,
+    /// a receiver the caller subscribed before this call. It ends when the takeovers are dropped.
+    pub(crate) fn follow_takeovers(self: &Arc<Self>, changes: broadcast::Receiver<Takeover>) {
+        tokio::spawn(takeover_states(Arc::clone(self), changes));
+    }
+
     /// Numbers `event` and appends it, dropping the oldest entry once the ring is full.
     pub(crate) fn publish(&self, event: LogEvent) {
         {
@@ -299,6 +308,27 @@ async fn lock_states(log: Arc<EventLog>, mut changes: broadcast::Receiver<Lock>)
             ),
             Err(RecvError::Lagged(missed)) => {
                 tracing::warn!(missed, "the event log fell behind the lock changes");
+                LogEvent::reset(EpochMillis::now())
+            }
+            Err(RecvError::Closed) => return,
+        };
+        log.publish(event);
+    }
+}
+
+/// The takeover task: each start and release is one `takeover.state` event about the takeover's
+/// tab, the way the lock task numbers lock changes.
+async fn takeover_states(log: Arc<EventLog>, mut changes: broadcast::Receiver<Takeover>) {
+    loop {
+        let event = match changes.recv().await {
+            Ok(takeover) => LogEvent::new(
+                EventKind::TakeoverState,
+                None,
+                Some(takeover.tab),
+                &wire::takeover_event(&takeover),
+            ),
+            Err(RecvError::Lagged(missed)) => {
+                tracing::warn!(missed, "the event log fell behind the takeover changes");
                 LogEvent::reset(EpochMillis::now())
             }
             Err(RecvError::Closed) => return,

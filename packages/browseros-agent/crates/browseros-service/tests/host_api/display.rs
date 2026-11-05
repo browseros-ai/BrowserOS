@@ -322,6 +322,54 @@ async fn a_view_closes_with_4001_when_the_host_makes_the_tab_in_front_private() 
     Ok(())
 }
 
+/// The takeover's `display` is a control display bound with `release=`: it is the only display
+/// while the takeover holds spectators off, its release closes it with 4002, and after that the
+/// same path is refused before any upgrade.
+#[tokio::test]
+async fn a_takeovers_display_closes_with_4002_at_its_release() -> TestResult {
+    let h = harness().await?;
+    h.browser.open_tab(12);
+    let socket = serve(&h)?;
+    let takeover = h.post("/v1/takeovers", r#"{"tabId": 12}"#).await?;
+    assert_eq!(takeover.status, 200, "{}", takeover.body);
+    let query = takeover.body["display"]
+        .as_str()
+        .and_then(|path| path.strip_prefix("/v1/display?"))
+        .ok_or("the takeover names its display")?
+        .to_owned();
+    assert_eq!(
+        refused(&socket.path, Open::new("mode=view")).await?,
+        (409, "display_paused".to_owned()),
+        "the takeover holds spectators off"
+    );
+    let (mut control, _) = handshake(&socket.path, Open::new(&query)).await?;
+
+    let id = takeover.body["id"].as_str().ok_or("an id")?;
+    let released = h.post(&format!("/v1/takeovers/{id}/release"), "").await?;
+    assert_eq!(released.status, 200, "{}", released.body);
+    let (code, reason) = closed(&mut control).await?;
+    assert_eq!(code, 4002, "{reason}");
+    assert!(reason.starts_with("released"), "{reason}");
+    assert_eq!(
+        refused(&socket.path, Open::new(&query)).await?,
+        (409, "takeover_released".to_owned())
+    );
+    assert_eq!(
+        refused(&socket.path, Open::new("mode=view")).await?,
+        (409, "display_paused".to_owned()),
+        "tab 12 stays private after the release, and it is in front"
+    );
+    h.browser.open_tab(13);
+    h.browser.bring_to_front(13);
+    let (_, response) = open(&socket.path, Open::new("mode=view")).await?;
+    assert_eq!(
+        response.status(),
+        101,
+        "spectators are back with tab 13 in front"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_text_frame_or_a_message_the_filter_refuses_closes_the_display() -> TestResult {
     let h = harness().await?;

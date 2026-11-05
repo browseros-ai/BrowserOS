@@ -20,7 +20,7 @@ pub struct TakeoverRequest {
     /// The lock's `reads`, as on `LockRequest`.
     #[serde(rename = "reads", skip_serializing_if = "Option::is_none")]
     pub reads: Option<String>,
-    /// The takeover lock's TTL. At most 20 minutes, the same fixed cap as a lock's.
+    /// The takeover lock's TTL. At most 20 minutes, the same fixed cap as a lock's. Neo releases the takeover 10 s before it ends.
     #[serde(rename = "ttlSeconds", skip_serializing_if = "Option::is_none")]
     pub ttl_seconds: Option<i32>,
 }

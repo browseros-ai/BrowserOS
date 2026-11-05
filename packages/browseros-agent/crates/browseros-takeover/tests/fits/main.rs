@@ -4,6 +4,10 @@
 //! The fits loop and the screen watcher run on real TCP and real time, so these tests wait
 //! for what the loop does with short deadlines rather than pausing the clock.
 
+#[allow(
+    dead_code,
+    reason = "the fake also answers the journal and the sweep, for the takeover flow's tests"
+)]
 mod browser;
 
 use browser::{CHROME_HEIGHT, FakeBrowser, Metrics};

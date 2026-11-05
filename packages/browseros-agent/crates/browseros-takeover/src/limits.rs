@@ -135,6 +135,24 @@ pub(crate) const CLOSE_SWEEP: Duration = Duration::from_secs(5);
 /// task starts. It also covers a trace event stream that lagged.
 pub(crate) const FOLLOW_TICK: Duration = Duration::from_secs(1);
 
+/// The give-back's budget: a takeover's release steps together, from closing the owner's display
+/// to restoring the fit. The unlock does not wait longer than this. The TTL release also starts
+/// this long before the lock's deadline, so a give-back that takes all of it still finishes
+/// while the agent is locked out, and a start waits for its journal and its fit only until then.
+pub(crate) const GIVE_BACK: Duration = Duration::from_secs(10);
+
+/// The shortest takeover (decision 6). Its TTL release comes 10 s before the end, so a much
+/// shorter one would end before the owner could do anything.
+pub(crate) const MIN_TAKEOVER_TTL: Duration = Duration::from_secs(60);
+
+/// How long a released takeover stays readable, for `GET /v1/takeovers/{id}` and an idempotent
+/// release. After that its id names nothing, so the released list stays bounded.
+pub(crate) const KEEP_RELEASED_TAKEOVER: Duration = Duration::from_secs(60 * 60);
+
+/// Takeover state changes the broadcast holds for a slow reader. The service's event log reads
+/// them at once; one that falls this far behind gets `stream.reset` instead.
+pub(crate) const TAKEOVER_CHANGES: usize = 256;
+
 /// How often the front-tab watch reads which tab is in front while any view display is open
 /// (decision 34). The browser sends no event when a tab comes to the front, so this bounds how
 /// long a view can show a private tab that the agent brought forward.

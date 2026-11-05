@@ -300,7 +300,8 @@ paths:
         `Content-Length`, `X-Tab-Id`, `X-Url` and `X-Frame-At` (Unix epoch ms, the browser's
         capture time). The stream ends when the tab closes or becomes private, and `tab.closed`
         or `tab.private` on `/v1/events` says which. Capture runs only while someone watches;
-        viewers of one tab and quality share one capture.
+        viewers of one tab and quality share one capture. A capture that cannot start is
+        `503 browser_unavailable`, before any byte is sent.
       parameters:
         - $ref: '#/components/parameters/TabId'
         - $ref: '#/components/parameters/Quality'
@@ -320,6 +321,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/NotLive'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /v1/tabs/{tabId}/video:
     get:
       operationId: getVideo
@@ -327,7 +330,9 @@ paths:
       description: |
         The initialization segment first, then one keyframe-led fragment about every 2 seconds,
         for Media Source Extensions or WebCodecs. It ends when the tab closes or becomes
-        private. A client that falls behind skips whole fragments.
+        private. A client that falls behind skips whole fragments. On a page that does not
+        repaint, no bytes arrive, not even the initialization segment, until it repaints. A
+        capture that cannot start is `503 browser_unavailable`, before any byte is sent.
       parameters:
         - $ref: '#/components/parameters/TabId'
         - $ref: '#/components/parameters/Quality'
@@ -347,6 +352,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/NotLive'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /v1/display:
     get:
       operationId: openDisplay
@@ -368,7 +375,9 @@ paths:
         latest operation targeted). Neither brings a private tab to the front. `followTab` and
         `followTask` are mutually exclusive, so sending both is `400 invalid_request`. A control
         display takes neither, and a view display takes no `release`. `release` ties a control
-        display to a takeover: releasing the takeover closes it.
+        display to a takeover: releasing the takeover closes it. A `release` that names no
+        takeover is `404 not_found`, and one whose takeover's release has begun is
+        `409 takeover_released`.
 
         A display ends with a WebSocket close frame that says why:
         - `4001` paused: the owner has control, or a private tab is in front; try again later;
@@ -491,11 +500,14 @@ paths:
       operationId: fitTab
       summary: Fit a tab to a viewer's screen. A takeover part.
       description: |
-        Brings the tab to the front, sizes Neo's screen to the viewer, and sets the tab to
-        mobile (a screen 600 px wide or less: touch, fullscreen) or desktop at that size. The
-        first fit of a tab records its viewport mode, window state, zoom and screen size, and
-        returns a new fit; while that fit is active, fitting the tab again refits it and returns
-        the same fit. While a mobile fit is active, pages the tab opens are pulled into it.
+        Brings the tab to the front, sizes Neo's screen to the viewer, resets the tab's zoom,
+        and sets it to mobile (a screen 600 px wide or less: mobile emulation at the screen's
+        size with touch, in a fullscreen window) or desktop (a maximized window, no emulation).
+        Neo has one screen and one window, so the window's state is recorded once, by the first
+        fit while no other is active, and put back at the last restore. Each tab's viewport mode
+        is recorded by its own first fit. The first fit of a tab returns a new fit; while that
+        fit is active, fitting the tab again refits it and returns the same fit. While a mobile
+        fit is active, pages the tab opens are pulled into it.
       parameters:
         - $ref: '#/components/parameters/TabId'
       requestBody:
@@ -570,8 +582,9 @@ paths:
       operationId: restoreFit
       summary: Put the tab back exactly as the fit found it. Idempotent.
       description: |
-        Resets zoom and restores the recorded viewport mode and window state. Neo's screen goes
-        back to its configured size unless another fit is active.
+        Resets zoom and puts back the tab's recorded viewport mode. The last restore, with no
+        other fit active, also puts Neo's screen back to its configured size and the window back
+        to the state the first fit recorded.
       parameters:
         - $ref: '#/components/parameters/FitId'
       responses:
@@ -617,9 +630,14 @@ paths:
       operationId: startTakeover
       summary: The v1 takeover flow, a thin composition of the parts. Start it when the owner opens the link.
       description: |
-        In order: make the tab private, lock the tab (with `reads` and the TTL), fit the tab to
-        `viewer` when given. The answer names the parts it holds and the display path to open. A
-        host may compose its own flow from the parts instead.
+        In order: make the tab private, durably; lock the agent out of the tab (with `reads` and
+        the TTL); hold view displays off; start collecting what the owner types into password,
+        card and code fields; and fit the tab to `viewer` when given. A private flag that cannot
+        be committed is `503 privacy_unavailable`, with nothing else done. A fit that fails
+        gives back the lock and the hold, and the tab stays private. The answer names the parts
+        it holds and `display`, the control display to open for the owner. A tab that already
+        has an active takeover gets that takeover back as it is. A host may compose its own flow
+        from the parts instead.
       requestBody:
         required: true
         content:
@@ -645,6 +663,10 @@ paths:
     get:
       operationId: getTakeover
       summary: One takeover. `wait` holds the request until its state differs from `state`.
+      description: |
+        Release is the only change a takeover goes through, so `wait` with `state=active` (the
+        default) answers as soon as the takeover is released, and `state=released` never waits.
+        A released takeover stays readable for an hour.
       parameters:
         - $ref: '#/components/parameters/TakeoverId'
         - name: wait
@@ -657,8 +679,11 @@ paths:
             default: 0
         - name: state
           in: query
+          description: The state the host last saw.
           schema:
             type: string
+            x-extensible-enum: [active, released]
+            default: active
       responses:
         '200':
           description: The takeover.
@@ -677,8 +702,17 @@ paths:
       operationId: releaseTakeover
       summary: Give the browser back. Idempotent; returns once the agent's lock is lifted.
       description: |
-        In order: close the takeover's display, sweep the tab, restore the fit, release the
-        lock. The lock's TTL or the tab closing releases it too.
+        In order: close the takeover's display (a display that took input first reads every
+        open tab's sensitive fields), sweep the tab, stop collecting what the owner types (what
+        was collected stays masked), restore the fit, let view displays back, and release the
+        lock, last. The steps share a 10 s budget. A step that fails does not stop the rest,
+        and once the budget is spent the lock is released while a step still running finishes.
+        A second release answers as the first did. Neo releases a takeover itself 10 s before
+        `expiresAt` (`expired`), so the steps run while the agent is still locked out, and when
+        its tab closes (`tab_closed`).
+
+        The tab stays private until it closes, so view displays are still refused while it is
+        in front of the screen.
       parameters:
         - $ref: '#/components/parameters/TakeoverId'
       requestBody:
@@ -693,6 +727,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Takeover'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -1298,7 +1334,9 @@ components:
           minimum: 60
           maximum: 1200
           default: 1200
-          description: The takeover lock's TTL. At most 20 minutes, the same fixed cap as a lock's.
+          description: >-
+            The takeover lock's TTL. At most 20 minutes, the same fixed cap as a lock's. Neo
+            releases the takeover 10 s before it ends.
     Takeover:
       type: object
       required: [id, tabId, state, lockId, display, createdAt, expiresAt]
@@ -1331,6 +1369,7 @@ components:
         expiresAt:
           type: integer
           format: int64
+          description: When the takeover's lock ends. Neo releases the takeover 10 s before.
     ViewerSize:
       type: object
       required: [width, height]

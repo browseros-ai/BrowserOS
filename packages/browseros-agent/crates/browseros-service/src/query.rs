@@ -192,6 +192,26 @@ pub(crate) fn fit_id(text: &str) -> Result<FitId, ApiError> {
         .map_err(|_| ApiError::not_found("no fit has this id"))
 }
 
+/// A takeover id (`tk_<uuid>`) in a path. Text that is not one names no takeover.
+pub(crate) fn takeover_id(text: &str) -> Result<TakeoverId, ApiError> {
+    text.parse()
+        .map_err(|_| ApiError::not_found("no takeover has this id"))
+}
+
+/// `GET /v1/takeovers/{takeoverId}`: how long to wait for the takeover's release. `wait` holds
+/// the request until the state differs from `state`, `active` when absent. Release is the only
+/// change a takeover goes through, so `state=released` has nothing to wait for: an active
+/// takeover already differs from it, and a released one never changes again.
+pub(crate) fn takeover(raw: Option<&str>) -> Result<Duration, ApiError> {
+    let params = Params::parse(raw);
+    let wait = Duration::from_secs(params.number("wait", 0..=MAX_WAIT_SECONDS)?.unwrap_or(0));
+    match params.get("state")? {
+        None | Some("active") => Ok(wait),
+        Some("released") => Ok(Duration::ZERO),
+        Some(_) => Err(ApiError::invalid("`state` must be active or released")),
+    }
+}
+
 /// A tab id in a path: the browser's integer id.
 pub(crate) fn tab_id(text: &str) -> Result<TabId, ApiError> {
     text.parse()
@@ -292,7 +312,9 @@ impl<'a> Params<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DisplayQuery, Inline, display, events, run, run_id, runs, tab_id, trace};
+    use super::{
+        DisplayQuery, Inline, display, events, run, run_id, runs, tab_id, takeover, trace,
+    };
     use crate::api_error::ErrorCode;
     use crate::limits::{DEFAULT_LIMIT, DEFAULT_TAIL};
     use axum::http::StatusCode;
@@ -373,6 +395,27 @@ mod tests {
             "include=recording",
         ] {
             assert!(refused(run(Some(raw))), "{raw}");
+        }
+    }
+
+    #[test]
+    fn a_takeover_is_waited_for_only_while_it_is_seen_active() {
+        assert_eq!(takeover(None).ok(), Some(Duration::ZERO));
+        assert_eq!(
+            takeover(Some("wait=60")).ok(),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            takeover(Some("wait=60&state=active")).ok(),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            takeover(Some("wait=60&state=released")).ok(),
+            Some(Duration::ZERO),
+            "nothing changes after the release"
+        );
+        for raw in ["wait=61", "state=expired", "state=active&state=released"] {
+            assert!(refused(takeover(Some(raw))), "{raw}");
         }
     }
 

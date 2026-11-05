@@ -27,6 +27,7 @@ pub(crate) enum ErrorCode {
     FitRestored,
     DisplayPaused,
     DisplayUnavailable,
+    TakeoverReleased,
 }
 
 impl ErrorCode {
@@ -46,6 +47,7 @@ impl ErrorCode {
             Self::FitRestored => "fit_restored",
             Self::DisplayPaused => "display_paused",
             Self::DisplayUnavailable => "display_unavailable",
+            Self::TakeoverReleased => "takeover_released",
         }
     }
 }
@@ -198,6 +200,12 @@ impl From<PartError> for ApiError {
                 "view displays are paused while the owner has control or a private tab is in \
                  front; try again later",
             ),
+            PartError::TakeoverReleased => Self::new(
+                StatusCode::CONFLICT,
+                ErrorCode::TakeoverReleased,
+                "the takeover was released",
+            ),
+            PartError::Privacy(error) => error.into(),
         }
     }
 }

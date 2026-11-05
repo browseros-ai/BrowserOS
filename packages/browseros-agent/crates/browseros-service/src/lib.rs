@@ -14,9 +14,11 @@
 //!                                router ─ x-request-id ─▶ records, screenshots, tab privacy,
 //!                                  │                       sweep, secrets, locks, fits
 //!                                  │                       └▶ TraceStore, Privacy, Locks, Fits
+//!                                  ├▶ /v1/takeovers ─▶ Takeovers ─ the flow over the parts above
 //!                                  ├▶ GET /v1/events ◀── EventLog ◀── TraceSink's events,
-//!                                  │                                  lock changes, tab.closed
+//!                                  │                     lock and takeover changes, tab.closed
 //!                                  └▶ GET /v1/display ─ WebSocket, RFB ─▶ Displays ─▶ Xvnc
+//!                                       release=<takeover> binds a control display to it
 //!
 //!  trace writer ─ ShotJobs ─▶ camera (screenshot_taker) ─ agent's BrowserSession ─▶ JPEG file
 //!       ▲                                  │
@@ -59,6 +61,7 @@ mod screenshot_taker;
 mod secret_routes;
 mod service;
 mod tab_routes;
+mod takeover_routes;
 mod wire;
 
 pub use host_auth::{HostAuth, HostToken, PeerRule, TokenError};

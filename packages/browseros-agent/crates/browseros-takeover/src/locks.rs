@@ -286,10 +286,29 @@ impl Locks {
     /// `NotFound` for an id no lock has (or one that ended over an hour ago); `TakeoverLock`
     /// for a takeover's lock, held or ended.
     pub fn unlock_host(&self, id: LockId) -> Result<Lock, PartError> {
+        self.unlock(id, LockBinding::Host)
+    }
+
+    /// Ends the lock `takeover` took, as the last step of its release. Idempotent, as
+    /// [`Self::unlock_host`] is.
+    ///
+    /// # Errors
+    /// `NotFound` for an id no lock has (or one that ended over an hour ago), or a host's lock;
+    /// `TakeoverLock` for another takeover's.
+    pub fn unlock_takeover(&self, id: LockId, takeover: TakeoverId) -> Result<Lock, PartError> {
+        self.unlock(id, LockBinding::Takeover(takeover))
+    }
+
+    /// Ends `id` for `by`. Only the binding that took a lock ends it before its TTL: a host
+    /// that ended a takeover's lock would let the agent act before that takeover's sweep.
+    fn unlock(&self, id: LockId, by: LockBinding) -> Result<Lock, PartError> {
         let mut table = self.table();
         let lock = table.get(id).cloned().ok_or(PartError::NotFound)?;
-        if let LockBinding::Takeover(_) = lock.binding {
-            return Err(PartError::TakeoverLock);
+        if lock.binding != by {
+            return Err(match lock.binding {
+                LockBinding::Takeover(_) => PartError::TakeoverLock,
+                LockBinding::Host => PartError::NotFound,
+            });
         }
         let ended = LockEnded {
             at: EpochMillis::now(),

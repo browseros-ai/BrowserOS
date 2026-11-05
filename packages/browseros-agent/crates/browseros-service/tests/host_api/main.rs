@@ -13,4 +13,5 @@ mod screenshots;
 mod socket;
 mod support;
 mod sweep;
+mod takeovers;
 mod waiting;

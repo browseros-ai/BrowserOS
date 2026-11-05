@@ -410,3 +410,53 @@ async fn the_host_ends_its_own_locks_but_never_a_takeovers() -> TestResult {
     ));
     Ok(())
 }
+
+#[tokio::test]
+async fn only_its_own_takeover_ends_a_takeovers_lock() -> TestResult {
+    let h = harness().await?;
+    let owner = TakeoverId::new();
+    let lock = h
+        .locks
+        .lock(
+            TabId(12),
+            Reads::Block,
+            ttl(60)?,
+            LockBinding::Takeover(owner),
+        )
+        .await;
+    assert!(matches!(
+        h.locks.unlock_takeover(lock.id, TakeoverId::new()),
+        Err(PartError::TakeoverLock)
+    ));
+    let host = h
+        .locks
+        .lock(TabId(13), Reads::Block, ttl(60)?, LockBinding::Host)
+        .await;
+    assert!(
+        matches!(
+            h.locks.unlock_takeover(host.id, owner),
+            Err(PartError::NotFound)
+        ),
+        "a takeover never ends a host's lock"
+    );
+    assert_eq!(
+        h.locks.check(LockTarget::Tab(TabId(12)), Effect::Write),
+        refused_by(&lock)
+    );
+
+    let released = h.locks.unlock_takeover(lock.id, owner)?;
+    assert_eq!(
+        released.ended.map(|ended| ended.cause),
+        Some(LockEnd::Released)
+    );
+    assert_eq!(
+        h.locks.check(LockTarget::Tab(TabId(12)), Effect::Write),
+        Ok(())
+    );
+    assert_eq!(
+        h.locks.unlock_takeover(lock.id, owner)?,
+        released,
+        "releasing again changes nothing"
+    );
+    Ok(())
+}

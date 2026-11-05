@@ -9,7 +9,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use browseros_core::TabId;
 use browseros_takeover::{
-    BarAction, BarOutcome, Fit, FitMode, FitState, Fitted, Lock, LockTtl, Reads, ScreenSize, Swept,
+    BarAction, BarOutcome, Fit, FitMode, FitState, Fitted, Lock, LockTtl, Reads, ReleaseReason,
+    ScreenSize, Swept, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl,
 };
 use browseros_trace::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationRow, Page, PageState,
@@ -279,11 +280,7 @@ pub(crate) fn lock_request(body: &[u8]) -> Result<(TabId, Reads, LockTtl), ApiEr
     } = serde_json::from_slice(body).map_err(|_| {
         not_the_body(r#"{"tabId": integer, "reads"?: "block" | "allow", "ttlSeconds": integer}"#)
     })?;
-    let reads = match reads.as_deref() {
-        None | Some("block") => Reads::Block,
-        Some("allow") => Reads::Allow,
-        Some(_) => return Err(ApiError::invalid("`reads` must be block or allow")),
-    };
+    let reads = self::reads(reads.as_deref())?;
     let ttl = u64::try_from(ttl_seconds)
         .ok()
         .map(Duration::from_secs)
@@ -387,8 +384,116 @@ pub(crate) fn fit(fit: &Fit) -> api::Fit {
 
 /// `POST /v1/tabs/{tabId}/fit`: the viewer's `{width, height}`, each 100 to 4096 px.
 pub(crate) fn viewer_request(body: &[u8]) -> Result<ScreenSize, ApiError> {
-    let api::ViewerSize { width, height } = serde_json::from_slice(body)
+    let viewer = serde_json::from_slice(body)
         .map_err(|_| not_the_body(r#"{"width": integer, "height": integer}"#))?;
+    viewer_size(viewer)
+}
+
+/// A takeover as the contract has it. `display` is the control display a host opens for the
+/// owner, bound to the takeover with `release=`, so the takeover's release closes it.
+pub(crate) fn takeover(takeover: &Takeover) -> api::Takeover {
+    let (state, release_reason, released_at) = match takeover.state {
+        TakeoverState::Active => ("active", None, None),
+        TakeoverState::Released { reason, at } => (
+            "released",
+            Some(match reason {
+                ReleaseReason::Done => "done",
+                ReleaseReason::Idle => "idle",
+                ReleaseReason::Host => "host",
+                ReleaseReason::Expired => "expired",
+                ReleaseReason::TabClosed => "tab_closed",
+            }),
+            Some(at.millis()),
+        ),
+    };
+    api::Takeover {
+        id: takeover.id.to_string(),
+        tab_id: takeover.tab.0,
+        state: state.to_string(),
+        release_reason: release_reason.map(str::to_string),
+        lock_id: takeover.lock.to_string(),
+        fit_id: takeover.fit.map(|fit| fit.to_string()),
+        display: format!("/v1/display?mode=control&release={}", takeover.id),
+        created_at: takeover.created_at.millis(),
+        released_at,
+        expires_at: takeover.expires_at.millis(),
+    }
+}
+
+/// `takeover.state`: the takeover as it stands, when it started and when it was released.
+pub(crate) fn takeover_event(takeover: &Takeover) -> api::Event {
+    let at = match takeover.state {
+        TakeoverState::Active => takeover.created_at,
+        TakeoverState::Released { at, .. } => at,
+    };
+    api::Event {
+        tab_id: Some(takeover.tab.0),
+        takeover: Some(Box::new(self::takeover(takeover))),
+        ..api::Event::new(EventKind::TakeoverState.as_str().to_string(), at.millis())
+    }
+}
+
+/// `POST /v1/takeovers`: the tab, an optional viewer (each side 100 to 4096 px), `reads`
+/// (`block` when absent) and a TTL of 60 s to 20 minutes (20 minutes when absent).
+pub(crate) fn takeover_request(body: &[u8]) -> Result<TakeoverRequest, ApiError> {
+    let api::TakeoverRequest {
+        tab_id,
+        viewer,
+        reads,
+        ttl_seconds,
+    } = serde_json::from_slice(body).map_err(|_| {
+        not_the_body(
+            r#"{"tabId": integer, "viewer"?: {"width": integer, "height": integer}, "reads"?: "block" | "allow", "ttlSeconds"?: integer}"#,
+        )
+    })?;
+    let ttl = match ttl_seconds {
+        None => Some(TakeoverTtl::MAX),
+        Some(seconds) => u64::try_from(seconds).ok().map(Duration::from_secs),
+    }
+    .and_then(TakeoverTtl::new)
+    .ok_or_else(|| {
+        ApiError::invalid(format!(
+            "`ttlSeconds` must be from {} to {}",
+            TakeoverTtl::MIN.as_secs(),
+            TakeoverTtl::MAX.as_secs()
+        ))
+    })?;
+    Ok(TakeoverRequest {
+        tab: TabId(tab_id),
+        viewer: viewer.map(|viewer| viewer_size(*viewer)).transpose()?,
+        reads: self::reads(reads.as_deref())?,
+        ttl,
+    })
+}
+
+/// `POST /v1/takeovers/{takeoverId}/release`'s optional body: none, `{}`, or `{"reason": ..}`
+/// with `done` (when absent), `idle` or `host`. `expired` and `tab_closed` are Neo's own reasons.
+pub(crate) fn release_request(body: &[u8]) -> Result<ReleaseReason, ApiError> {
+    if body.is_empty() {
+        return Ok(ReleaseReason::Done);
+    }
+    let api::ReleaseRequest { reason } = serde_json::from_slice(body)
+        .map_err(|_| not_the_body(r#"{"reason"?: "done" | "idle" | "host"}"#))?;
+    match reason.as_deref() {
+        None | Some("done") => Ok(ReleaseReason::Done),
+        Some("idle") => Ok(ReleaseReason::Idle),
+        Some("host") => Ok(ReleaseReason::Host),
+        Some(_) => Err(ApiError::invalid("`reason` must be done, idle or host")),
+    }
+}
+
+/// A lock's `reads`, as a lock and a takeover take it: `block` when absent.
+fn reads(text: Option<&str>) -> Result<Reads, ApiError> {
+    match text {
+        None | Some("block") => Ok(Reads::Block),
+        Some("allow") => Ok(Reads::Allow),
+        Some(_) => Err(ApiError::invalid("`reads` must be block or allow")),
+    }
+}
+
+/// A viewer's size, each side 100 to 4096 px, as a fit and a takeover take it.
+fn viewer_size(viewer: api::ViewerSize) -> Result<ScreenSize, ApiError> {
+    let api::ViewerSize { width, height } = viewer;
     let side = |side: i32| {
         u16::try_from(side)
             .ok()

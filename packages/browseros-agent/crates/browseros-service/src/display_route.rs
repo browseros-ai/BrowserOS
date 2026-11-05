@@ -2,8 +2,10 @@
 //! (admission, the filter, the owner's first input, follow and the close sweep) is
 //! `browseros_takeover::Displays`; this module is what is HTTP and WebSocket about it.
 //!
-//! 1. The query is parsed: a 400 for a bad or contradictory parameter. Any `release=` is a 404
-//!    for now: no takeover exists until the takeover flow binds its control display here.
+//! 1. The query is parsed: a 400 for a bad or contradictory parameter. `release=` binds a
+//!    control display to its takeover (`Takeovers::binding`): a 404 when no takeover has the id,
+//!    and a 409 `takeover_released` once its release has begun, so a host learns it from the
+//!    status and not from a socket that opens and closes with 4002.
 //! 2. The request must be a WebSocket upgrade.
 //! 3. `Displays::admit` runs before the upgrade, so a refusal is an HTTP status and not a socket
 //!    that opens and dies: 409 `display_paused` for a view while the owner has control or a
@@ -50,9 +52,10 @@ const RELEASED: u16 = 4002;
 /// Opens a display: parses, admits, then upgrades.
 ///
 /// # Errors
-/// 400 for a bad query, 404 for a `release` that names no takeover, 409 `display_paused` for a
-/// view while the owner has control or a private tab is in front, 503 `browser_unavailable` when
-/// the browser cannot list its tabs, and 503 `display_unavailable` when Xvnc is unreachable.
+/// 400 for a bad query, 404 for a `release` that names no takeover, 409 `takeover_released`
+/// for one whose release has begun, 409 `display_paused` for a view while the owner has
+/// control or a private tab is in front, 503 `browser_unavailable` when the browser cannot list
+/// its tabs, and 503 `display_unavailable` when Xvnc is unreachable.
 pub(crate) async fn open_display(
     State(state): State<Arc<ServiceState>>,
     RawQuery(raw): RawQuery,
@@ -61,9 +64,9 @@ pub(crate) async fn open_display(
     let request = match query::display(raw.as_deref())? {
         DisplayQuery::View(follow) => DisplayRequest::View { follow },
         DisplayQuery::Control(None) => DisplayRequest::Control { binding: None },
-        DisplayQuery::Control(Some(_)) => {
-            return Err(ApiError::not_found("no takeover has this id"));
-        }
+        DisplayQuery::Control(Some(takeover)) => DisplayRequest::Control {
+            binding: Some(state.takeovers.binding(takeover)?),
+        },
     };
     // Checked before admission, so a request that cannot become a WebSocket never registers a
     // display or dials Xvnc. Axum's status (400, 405 or 426) gets the contract's error body

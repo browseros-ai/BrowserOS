@@ -33,6 +33,7 @@ pub struct Takeover {
     pub created_at: i64,
     #[serde(rename = "releasedAt", skip_serializing_if = "Option::is_none")]
     pub released_at: Option<i64>,
+    /// When the takeover's lock ends. Neo releases the takeover 10 s before.
     #[serde(rename = "expiresAt")]
     pub expires_at: i64,
 }

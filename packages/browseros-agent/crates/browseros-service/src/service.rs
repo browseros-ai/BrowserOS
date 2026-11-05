@@ -1,12 +1,12 @@
 //! The host API's composition root. The app hands [`Service::start`] values it already owns
 //! and serves [`Service::router`] through [`host_service`](crate::host_service).
 //!
-//! The service also builds the takeover parts once, so the app reaches them through it rather
-//! than wiring each one: the lock policy and tab cleanup read [`Service::locks`], and the browser
-//! link's tab events go to [`Service::tab_opened`], [`Service::tab_closed`] and
-//! [`Service::retain_tabs`], which hand each event to every part that keeps state about tabs:
-//! `Privacy`, the fits, the locks, and the displays (a control display arms its journal on each
-//! tab that opens).
+//! The service also builds the takeover parts once, and the v1 takeover flow over them, so the
+//! app reaches them through it rather than wiring each one: the lock policy and tab cleanup read
+//! [`Service::locks`], and the browser link's tab events go to [`Service::tab_opened`],
+//! [`Service::tab_closed`] and [`Service::retain_tabs`], which hand each event to every part
+//! that keeps state about tabs: the takeovers, `Privacy`, the fits, the locks, and the displays
+//! (a control display arms its journal on each tab that opens).
 
 use crate::event_log::{EventKind, EventLog, LogEvent};
 use crate::screenshot_taker::Camera;
@@ -14,7 +14,7 @@ use crate::{router, wire};
 use axum::Router;
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, TabId};
-use browseros_takeover::{BrowserTabs, Displays, Fits, Journal, Locks, Xvnc};
+use browseros_takeover::{BrowserTabs, Displays, Fits, Journal, Locks, Takeovers, Xvnc};
 use browseros_trace::{EpochMillis, Privacy, PrivacyError, ShotJobs, TraceSink, TraceStore};
 use std::sync::Arc;
 
@@ -58,13 +58,15 @@ pub(crate) struct ServiceState {
     /// Neo's screen over RFB for `GET /v1/display`. Its control displays arm the control journal,
     /// which registers into the same secret set as `privacy` (decision 31).
     pub(crate) displays: Arc<Displays>,
+    /// The v1 takeover flow over the parts above (`/v1/takeovers`, and `release=` on a display).
+    pub(crate) takeovers: Arc<Takeovers>,
 }
 
 impl Service {
-    /// Starts the workers: the event log's numbering tasks, which subscribe to the writer and
-    /// to the locks before this returns, so every event from then on gets a number, and the
-    /// camera that answers the writer's screenshot jobs. It also puts Neo's screen and window
-    /// home, in the background (decision 30).
+    /// Starts the workers: the event log's numbering tasks, which subscribe to the writer, the
+    /// locks and the takeovers before this returns, so every event from then on gets a number,
+    /// and the camera that answers the writer's screenshot jobs. It also puts Neo's screen and
+    /// window home, in the background (decision 30).
     ///
     /// # Panics
     /// Outside a Tokio runtime, as `tokio::spawn` does.
@@ -95,11 +97,20 @@ impl Service {
             xvnc.addr,
             browser.clone(),
             Arc::clone(&privacy),
-            journal,
+            journal.clone(),
             Arc::clone(&locks),
             sink.clone(),
             store.clone(),
         );
+        let takeovers = Takeovers::new(
+            Arc::clone(&privacy),
+            Arc::clone(&locks),
+            Arc::clone(&fits),
+            Arc::clone(&displays),
+            journal,
+            browser.clone(),
+        );
+        events.follow_takeovers(takeovers.subscribe());
         // A Neo restart in the middle of a fit drops the fit, but would leave Xvnc at the
         // owner's size and the window fullscreen, and nothing else would ever put them back.
         // Best-effort and logged. A fit that takes the surface first wins; its release puts
@@ -118,6 +129,7 @@ impl Service {
                 locks,
                 fits,
                 displays,
+                takeovers,
             }),
         }
     }
@@ -147,10 +159,13 @@ impl Service {
         private
     }
 
-    /// The browser link saw a tab close: its fit is restored (so the screen does not stay at
-    /// the owner's size), its locks end, its private flag is forgotten, and then `tab.closed`
-    /// is published, so a host that reads it finds the tab's state already gone.
+    /// The browser link saw a tab close: its takeover is released first, while its lock still
+    /// holds, so the release lifts the lock itself and gives back what it took; then its fit is
+    /// restored (so the screen does not stay at the owner's size), its locks end, its private
+    /// flag is forgotten, and `tab.closed` is published, so a host that reads it finds the tab's
+    /// state already gone.
     pub async fn tab_closed(&self, tab: TabId) {
+        self.state.takeovers.tab_closed(tab).await;
         self.state.fits.tab_closed(tab).await;
         self.state.locks.tab_closed(tab);
         self.state.privacy.tab_closed(tab).await;
@@ -166,6 +181,7 @@ impl Service {
     /// tab ends, as if it closed: it closed while Neo was not watching, or the browser restarted
     /// and numbers its tabs from 1 again.
     pub async fn retain_tabs(&self, open: &[TabId]) {
+        self.state.takeovers.retain_tabs(open).await;
         self.state.fits.retain_tabs(open).await;
         self.state.locks.retain_tabs(open);
         self.state.privacy.retain_tabs(open).await;
