@@ -6,11 +6,9 @@ on:
       products:
         description: "Product set to build"
         type: choice
-        default: browseros
+        default: browserclaw
         options:
-          - browseros
           - browserclaw
-          - all
       upload_to_r2:
         description: "Upload release metadata/artifacts to R2"
         type: boolean
@@ -22,10 +20,10 @@ on:
   workflow_call:
     inputs:
       products:
-        description: "Product set to build: browseros, browserclaw, or all"
+        description: "Product set to build: browserclaw"
         required: false
         type: string
-        default: browseros
+        default: browserclaw
       upload_to_r2:
         description: "Upload release metadata/artifacts to R2"
         required: false
@@ -80,12 +78,6 @@ on:
         required: false
       R2_BUCKET:
         required: false
-      BROWSEROS_CONFIG_URL:
-        required: false
-      POSTHOG_API_KEY:
-        required: false
-      SENTRY_DSN:
-        required: false
       CLAW_POSTHOG_KEY:
         required: false
       ESIGNER_USERNAME:
@@ -116,23 +108,15 @@ jobs:
       - name: Resolve product matrix
         id: plan
         env:
-          PRODUCTS: ${{ inputs.products || 'browseros' }}
-          RESOURCE_MODE: ${{ inputs.resource_mode || 'published' }}
+          PRODUCTS: ${{ inputs.products || 'browserclaw' }}
         run: |
           set -euo pipefail
-          if [ "$PRODUCTS" = "all" ] && [ "$RESOURCE_MODE" = "source" ]; then
-            echo "::error::source mode builds one candidate product per lane"
-            exit 1
-          fi
           case "$PRODUCTS" in
-            all)
-              matrix='[{"product":"browseros"},{"product":"browserclaw"}]'
-              ;;
-            browseros|browserclaw)
+            browserclaw)
               matrix="$(jq -cn --arg product "$PRODUCTS" '[{product:$product}]')"
               ;;
             *)
-              echo "::error::products must be one of: browseros, browserclaw, all"
+              echo "::error::products must be browserclaw"
               exit 1
               ;;
           esac
@@ -261,9 +245,6 @@ jobs:
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
-      BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
-      POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
-      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
       ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
       ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}

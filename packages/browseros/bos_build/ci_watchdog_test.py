@@ -28,7 +28,7 @@ class WatchdogFilterTest(unittest.TestCase):
                 "labels": ["warp-custom-browseros-ubuntu-2204-x64-32x"],
             },
             {
-                "name": "Linux browser builds / build (browseros linux-x64)",
+                "name": "Linux browser builds / build (browserclaw linux-arm64)",
                 "status": "completed",
                 "labels": ["warp-custom-browseros-ubuntu-2204-x64-32x"],
             },
@@ -93,7 +93,7 @@ class WatchdogFilterTest(unittest.TestCase):
         expected_names = {
             "release-linux.yml": [
                 "Linux browser builds / build (browserclaw linux-x64)",
-                "Linux browser builds / build (browseros linux-x64)",
+                "Linux browser builds / build (browserclaw linux-arm64)",
             ],
             "release-windows.yml": [
                 "Windows browser builds / build (browserclaw windows-x64)",
@@ -126,7 +126,7 @@ class WatchdogFilterTest(unittest.TestCase):
 
         self.assertIn(
             {
-                "name": "Linux browser builds / build (browseros linux-x64)",
+                "name": "Linux browser builds / build (browserclaw linux-arm64)",
                 "status": "completed",
             },
             jobs,

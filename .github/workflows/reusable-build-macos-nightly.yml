@@ -36,8 +36,6 @@ on:
         description: Actions artifact containing the signed DMG
         value: ${{ jobs.build.outputs.artifact_name }}
     secrets:
-      BROWSEROS_CONFIG_URL:
-        required: true
       CLAW_POSTHOG_KEY:
         required: true
       MACOS_CERTIFICATE_NAME:
@@ -48,20 +46,14 @@ on:
         required: true
       MACOS_KEYCHAIN_PASSWORD:
         required: true
-      POSTHOG_API_KEY:
-        required: true
       PROD_MACOS_NOTARIZATION_APPLE_ID:
         required: true
       PROD_MACOS_NOTARIZATION_PWD:
         required: true
       PROD_MACOS_NOTARIZATION_TEAM_ID:
         required: true
-      PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64:
-        required: false
       PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64:
         required: false
-      SENTRY_DSN:
-        required: true
       SPARKLE_PRIVATE_KEY:
         required: true
 
@@ -107,10 +99,6 @@ jobs:
             exit 1
           fi
           case "$PRODUCT" in
-            browseros)
-              artifact_name="BrowserOS_v${BROWSER_VERSION}_arm64"
-              artifact_glob="BrowserOS_*.dmg"
-              ;;
             browserclaw)
               artifact_name="BrowserOS_neo_v${BROWSER_VERSION}_arm64"
               artifact_glob="BrowserOS_neo_*.dmg"
@@ -204,7 +192,6 @@ jobs:
           MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
           MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
           MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
-          PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64: ${{ secrets.PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64 }}
           PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64: ${{ secrets.PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64 }}
         shell: bash
         run: bash .github/scripts/macos-signing-keychain.sh setup
@@ -215,10 +202,8 @@ jobs:
           BROWSERCLAW_SERVER_RESOURCE_VERSION: ${{ inputs.product == 'browserclaw' && inputs.server_version || '' }}
           BROWSEROS_BUILD_RESERVATION_SHA: ${{ inputs.reservation_sha }}
           BROWSEROS_BUILD_SOURCE_SHA: ${{ inputs.source_sha }}
-          BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
           BROWSEROS_DEFER_R2_UPLOAD: "1"
           BROWSEROS_REPO: ${{ steps.inputs.outputs.browseros_repo }}
-          BROWSEROS_SERVER_RESOURCE_VERSION: ${{ inputs.product == 'browseros' && inputs.server_version || '' }}
           BUNDLED_EXTENSIONS_MANIFEST_URL: ${{ steps.inputs.outputs.browseros_repo }}/updates/extensions/bundled-manifest.xml
           BUNDLED_PRODUCT_EXTENSION_VERSION: ${{ inputs.extension_version }}
           CHROMIUM_SRC: ${{ steps.chromium_workspace.outputs.chromium_src }}
@@ -226,14 +211,11 @@ jobs:
           MACOS_CERTIFICATE_NAME: ${{ steps.macos_signing.outputs.codesign_identity }}
           MACOS_KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
           MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
-          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
-          PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH: ${{ steps.macos_signing.outputs.browseros_passkey_profile_path }}
           PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_PATH: ${{ steps.macos_signing.outputs.browserclaw_passkey_profile_path }}
           PROD_MACOS_NOTARIZATION_PWD: ${{ secrets.PROD_MACOS_NOTARIZATION_PWD }}
           PROD_MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_TEAM_ID }}
           PRODUCT: ${{ inputs.product }}
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           set -euo pipefail

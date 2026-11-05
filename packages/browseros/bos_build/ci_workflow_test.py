@@ -253,8 +253,8 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
         self.assertIn("git rev-parse HEAD)", sync["run"])
         self.assertEqual(download["uses"], "actions/download-artifact@v8")
         self.assertEqual(build_step["run"].count("uv run browseros build"), 1)
-        self.assertIn("-name 'BrowserOS_*.dmg'", stale_dmg_cleanup["run"])
         self.assertIn("-name 'BrowserOS_neo_*.dmg'", stale_dmg_cleanup["run"])
+        self.assertNotIn("-name 'BrowserOS_*.dmg'", stale_dmg_cleanup["run"])
         for value in (
             "--resource-mode",
             "--prepared-resources",
@@ -291,7 +291,7 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
         upload_index = next(
             index
             for index, step in enumerate(steps)
-            if step.get("name") == "Upload BrowserOS DMG artifact"
+            if step.get("name") == "Upload BrowserOS neo DMG artifact"
         )
         setup = steps[setup_index]
         build = steps[build_index]
@@ -299,7 +299,6 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
 
         self.assertIn("MACOS_CERTIFICATE_P12", secrets)
         self.assertIn("MACOS_CERTIFICATE_PWD", secrets)
-        self.assertIn("PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64", secrets)
         self.assertIn("PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64", secrets)
         self.assertLess(setup_index, build_index)
         self.assertLess(build_index, cleanup_index)
@@ -311,7 +310,6 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             "MACOS_CERTIFICATE_P12",
             "MACOS_CERTIFICATE_PWD",
             "MACOS_KEYCHAIN_PASSWORD",
-            "PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64",
             "PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64",
         ):
             self.assertEqual(setup["env"][name], f"${{{{ secrets.{name} }}}}")
@@ -322,10 +320,6 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
         self.assertEqual(
             build["env"]["MACOS_CERTIFICATE_NAME"],
             "${{ steps.macos_signing.outputs.codesign_identity }}",
-        )
-        self.assertEqual(
-            build["env"]["PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH"],
-            "${{ steps.macos_signing.outputs.browseros_passkey_profile_path }}",
         )
         self.assertEqual(
             build["env"]["PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_PATH"],
@@ -1510,18 +1504,18 @@ print(json.dumps({
                 )
                 self.assertEqual(deferrals, 2)
 
-    def test_macos_product_artifact_globs_do_not_overlap(self):
+    def test_macos_release_uploads_only_the_neo_dmg(self):
         workflow = self.load_workflow("release-macos.yml")
         upload_steps = {
             step["name"]: step
             for step in workflow["jobs"]["build"]["steps"]
             if str(step.get("uses", "")).startswith("actions/upload-artifact@")
         }
-        browseros_path = upload_steps["Upload BrowserOS DMG artifact"]["with"]["path"]
+        self.assertEqual(
+            set(upload_steps),
+            {"Upload lane manifest", "Upload BrowserOS neo DMG artifact"},
+        )
         neo_path = upload_steps["Upload BrowserOS neo DMG artifact"]["with"]["path"]
-
-        self.assertIn("/BrowserOS_*.dmg\n!", browseros_path)
-        self.assertIn("/BrowserOS_neo_*.dmg", browseros_path)
         self.assertTrue(neo_path.endswith("/BrowserOS_neo_*.dmg"))
 
     def test_top_level_release_changes_trigger_build_system_tests(self):
@@ -1587,11 +1581,11 @@ print(json.dumps({
             '--chromium-src "$chromium_src"',
             build["run"],
         )
-        for product in ("browseros", "browserclaw"):
-            self.assertEqual(
-                build["env"][f"{product.upper()}_CHROMIUM_SRC"],
-                "${{ steps.chromium_workspace.outputs." + product + "_chromium_src }}",
-            )
+        self.assertEqual(
+            build["env"]["BROWSERCLAW_CHROMIUM_SRC"],
+            "${{ steps.chromium_workspace.outputs.browserclaw_chromium_src }}",
+        )
+        self.assertNotIn("BROWSEROS_CHROMIUM_SRC", build["env"])
         self.assertIn("--profile release-ci", build["run"])
         self.assertIn("browseros source clean-outputs", build["run"])
         self.assertNotIn("--modules clean", build["run"])
@@ -1654,10 +1648,6 @@ class LinuxReleaseSelectionTest(unittest.TestCase):
                 {"product": "browserclaw", "arch": "x64"},
                 {"product": "browserclaw", "arch": "arm64"},
             ]),
-            ("all", "arm64", [
-                {"product": "browseros", "arch": "arm64"},
-                {"product": "browserclaw", "arch": "arm64"},
-            ]),
         )
         for products, arch, expected in cases:
             with self.subTest(products=products, arch=arch):
@@ -1675,6 +1665,8 @@ class LinuxReleaseSelectionTest(unittest.TestCase):
             ("all", "x64", "source"),
             ("browserclaw", "x64", "typo"),
             ("browserclaw", "all", "published"),
+            ("browseros", "x64", "published"),
+            ("all", "arm64", "published"),
         ):
             with self.subTest(products=products, arch=arch, mode=mode):
                 result, outputs = self.run_plan(products, arch, mode)
@@ -2729,25 +2721,13 @@ class ProductNightlyWorkflowTest(unittest.TestCase):
             "${{ inputs.onboarding_version }}",
         )
         self.assertIn(
-            "PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64",
-            triggers["workflow_call"]["secrets"],
-        )
-        self.assertIn(
             "PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64",
             triggers["workflow_call"]["secrets"],
         )
         setup = self.named_step(workflow, "build", "Import macOS signing certificate")
         self.assertEqual(
-            setup["env"]["PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64"],
-            "${{ secrets.PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64 }}",
-        )
-        self.assertEqual(
             setup["env"]["PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64"],
             "${{ secrets.PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64 }}",
-        )
-        self.assertEqual(
-            build["env"]["PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH"],
-            "${{ steps.macos_signing.outputs.browseros_passkey_profile_path }}",
         )
         self.assertEqual(
             build["env"]["PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_PATH"],
