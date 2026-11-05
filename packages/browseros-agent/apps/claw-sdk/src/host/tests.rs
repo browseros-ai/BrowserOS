@@ -97,6 +97,8 @@ impl Host {
             privacy,
             screenshots,
             xvnc: CLOSED_XVNC,
+            // The fake browser has no CDP port, and no test here opens a live view to dial it.
+            cdp_port: 0,
         };
         let host = HostApi::bind(&config, inputs).await?;
         let takeover = Arc::new(TakeoverLock::default());

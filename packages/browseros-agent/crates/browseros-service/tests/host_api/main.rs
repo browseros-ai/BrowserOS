@@ -6,6 +6,7 @@ mod display;
 mod errors;
 mod events;
 mod fits;
+mod live;
 mod locks;
 mod privacy;
 mod records;

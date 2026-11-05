@@ -49,6 +49,10 @@ pub(crate) struct HostInputs {
     /// Neo's screen, from `CLAW_XVNC_ADDR` and `NEO_SCREEN`. The service puts it home as it
     /// starts, so a fit a Neo restart cut short does not leave Xvnc at the owner's size.
     pub(crate) xvnc: Xvnc,
+    /// Chromium's CDP port (`ports.cdp`), the one the browser link dials. The service's live tab
+    /// views open a connection of their own to it, so their frames never queue behind the
+    /// agent's commands.
+    pub(crate) cdp_port: u16,
 }
 
 /// The bound host listener and the auth in front of every request on it.
@@ -112,6 +116,7 @@ impl HostApi {
             privacy,
             screenshots,
             xvnc,
+            cdp_port,
         } = inputs;
         let service = Service::start(ServiceInputs {
             store,
@@ -121,6 +126,7 @@ impl HostApi {
             viewports: link.viewports(),
             screenshots,
             xvnc,
+            cdp_port,
         });
         takeover.arm(Arc::clone(service.locks()));
         // Subscribed before the reconciling listing is taken, which happens while tab_watch

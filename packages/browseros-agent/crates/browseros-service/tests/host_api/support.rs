@@ -1,6 +1,7 @@
 //! The harness the host API tests share: a trace store in a temp dir, its writer, `Privacy`
-//! over the same secret set the writer masks with, a scripted browser, and the started
-//! service's router. Plus recorders for runs and operations, and a reader for the event stream.
+//! over the same secret set the writer masks with, a scripted browser, a scripted capture
+//! connection for the live views, and the started service's router. Plus recorders for runs and
+//! operations, and a reader for the event stream.
 
 use crate::browser::ScriptedBrowser;
 use axum::Router;
@@ -8,6 +9,8 @@ use axum::body::{Body, BodyDataStream, to_bytes};
 use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
 use axum::middleware::map_request;
+use browseros_capture::CaptureTransport;
+use browseros_capture::testing::{ScriptedCdp, ScriptedTransport};
 use browseros_core::TabId;
 use browseros_core::viewport::Viewports;
 use browseros_service::{HostAuth, HostToken, PeerInfo, Service, ServiceInputs, host_router};
@@ -62,6 +65,9 @@ pub(crate) struct Harness {
     pub(crate) browser: Arc<ScriptedBrowser>,
     /// Neo's screen, which the fits resize.
     pub(crate) xvnc: FakeXvnc,
+    /// The browser as the live views' own capture connection reaches it: the frames and
+    /// recording bytes a test emits, and the commands the capture hub sent.
+    pub(crate) capture: Arc<ScriptedCdp>,
     /// The started service, for what the app calls directly: the locks and the tab events.
     pub(crate) service: Service,
     /// The routes behind the host auth, as a host reaches them.
@@ -83,6 +89,8 @@ struct Boot {
     screen: ScreenSize,
     /// The window's state when the service starts.
     window: &'static str,
+    /// What the live views capture over, when not the scripted capture connection.
+    capture_transport: Option<Arc<dyn CaptureTransport>>,
 }
 
 /// A started service over a fresh store, with no camera: no screenshot is taken, and a run is
@@ -119,12 +127,25 @@ pub(crate) async fn harness_after_a_crash_mid_fit(screen: ScreenSize) -> Result<
     start(|sink| Arc::new(sink.clone()), boot).await
 }
 
+/// A started service whose live views capture over `transport` rather than the scripted
+/// capture connection.
+pub(crate) async fn harness_with_capture(
+    transport: Arc<dyn CaptureTransport>,
+) -> Result<Harness, BoxError> {
+    let boot = Boot {
+        capture_transport: Some(transport),
+        ..Boot::default()
+    };
+    start(|sink| Arc::new(sink.clone()), boot).await
+}
+
 impl Default for Boot {
     fn default() -> Self {
         Self {
             camera: false,
             screen: HOME_SCREEN,
             window: "maximized",
+            capture_transport: None,
         }
     }
 }
@@ -135,6 +156,7 @@ async fn start(
         camera,
         screen,
         window,
+        capture_transport,
     }: Boot,
 ) -> Result<Harness, BoxError> {
     let dir = tempfile::tempdir()?;
@@ -153,15 +175,21 @@ async fn start(
     let browser = ScriptedBrowser::new();
     browser.set_window(window);
     let xvnc = FakeXvnc::start(screen).await?;
-    let service = Service::start(ServiceInputs {
-        store: store.clone(),
-        sink: sink.clone(),
-        privacy: Arc::clone(&privacy),
-        browser: browser.session(),
-        viewports: Arc::new(Viewports::default()),
-        screenshots: jobs,
-        xvnc: xvnc.xvnc(HOME_SCREEN),
-    });
+    let capture = ScriptedCdp::new();
+    let service = Service::start_with_capture(
+        ServiceInputs {
+            store: store.clone(),
+            sink: sink.clone(),
+            privacy: Arc::clone(&privacy),
+            browser: browser.session(),
+            viewports: Arc::new(Viewports::default()),
+            screenshots: jobs,
+            xvnc: xvnc.xvnc(HOME_SCREEN),
+            // Never dialed: the live views capture over the transport below.
+            cdp_port: 0,
+        },
+        capture_transport.unwrap_or_else(|| Arc::new(ScriptedTransport(Arc::clone(&capture)))),
+    );
     // The service puts the screen home in the background as it starts. Waiting for that keeps
     // a test's own resizes, and its scripted refusals, the only ones after it.
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -177,6 +205,7 @@ async fn start(
         privacy,
         browser,
         xvnc,
+        capture,
         router: authenticated(&service)?,
         routes: service.router(),
         service,

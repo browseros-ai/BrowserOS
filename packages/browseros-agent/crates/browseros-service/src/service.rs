@@ -9,14 +9,17 @@
 //! (a control display arms its journal on each tab that opens).
 
 use crate::event_log::{EventKind, EventLog, LogEvent};
+use crate::live_tabs::LiveTabs;
 use crate::screenshot_taker::Camera;
 use crate::{router, wire};
 use axum::Router;
+use browseros_capture::{CaptureHub, CaptureTransport, CdpPortTransport};
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, TabId};
 use browseros_takeover::{BrowserTabs, Displays, Fits, Journal, Locks, Takeovers, Xvnc};
 use browseros_trace::{EpochMillis, Privacy, PrivacyError, ShotJobs, TraceSink, TraceStore};
 use std::sync::Arc;
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 /// What the app hands the service: values it already owns, no trait to implement.
 pub struct ServiceInputs {
@@ -38,6 +41,10 @@ pub struct ServiceInputs {
     /// Neo's screen: Xvnc's address and the size it rests at (the image's `NEO_SCREEN`). The
     /// fits resize it to the owner's viewer and put it back, and `GET /v1/display` shows it.
     pub xvnc: Xvnc,
+    /// Chromium's CDP port. Live views capture over a WebSocket of their own to it, never over
+    /// the agent's connection: frames are large and frequent, and there they would queue the
+    /// agent's commands and its keepalive behind them.
+    pub cdp_port: u16,
 }
 
 /// The host API, started. Cheap to clone.
@@ -60,18 +67,38 @@ pub(crate) struct ServiceState {
     pub(crate) displays: Arc<Displays>,
     /// The v1 takeover flow over the parts above (`/v1/takeovers`, and `release=` on a display).
     pub(crate) takeovers: Arc<Takeovers>,
+    /// The capture hub behind the live views (`live_tabs`).
+    pub(crate) live: Arc<CaptureHub>,
+    /// Cancels the hub's shutdown token when the service is dropped, which ends every live
+    /// stream and capture.
+    _live_shutdown: DropGuard,
 }
 
 impl Service {
     /// Starts the workers: the event log's numbering tasks, which subscribe to the writer, the
     /// locks and the takeovers before this returns, so every event from then on gets a number,
     /// and the camera that answers the writer's screenshot jobs. It also puts Neo's screen and
-    /// window home, in the background (decision 30).
+    /// window home, in the background (decision 30). Live views connect to the browser when the
+    /// first one opens.
     ///
     /// # Panics
     /// Outside a Tokio runtime, as `tokio::spawn` does.
     #[must_use]
     pub fn start(inputs: ServiceInputs) -> Self {
+        // A transport of this service's own. `CdpPortTransport` disconnects its previous client
+        // each time it reconnects, so one shared with another hub would cut that hub's streams.
+        let capture = Arc::new(CdpPortTransport::new(inputs.cdp_port));
+        Self::start_with_capture(inputs, capture)
+    }
+
+    /// [`Service::start`], with live views captured over `capture` instead of a connection to
+    /// `inputs.cdp_port`: tests pass `browseros_capture::testing`'s scripted browser.
+    ///
+    /// # Panics
+    /// Outside a Tokio runtime, as `tokio::spawn` does.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn start_with_capture(inputs: ServiceInputs, capture: Arc<dyn CaptureTransport>) -> Self {
         let ServiceInputs {
             store,
             sink,
@@ -80,6 +107,7 @@ impl Service {
             viewports,
             screenshots,
             xvnc,
+            cdp_port: _,
         } = inputs;
         let events = EventLog::start(store.clone(), sink.subscribe());
         let locks = Locks::new(store.clone(), sink.clone());
@@ -119,6 +147,12 @@ impl Service {
             let fits = Arc::clone(&fits);
             async move { fits.put_surface_home().await }
         });
+        let shutdown = CancellationToken::new();
+        let live = CaptureHub::new(
+            Arc::new(LiveTabs::new(browser.clone(), Arc::clone(&privacy))),
+            capture,
+            shutdown.clone(),
+        );
         Self {
             state: Arc::new(ServiceState {
                 store,
@@ -130,6 +164,8 @@ impl Service {
                 fits,
                 displays,
                 takeovers,
+                live,
+                _live_shutdown: shutdown.drop_guard(),
             }),
         }
     }

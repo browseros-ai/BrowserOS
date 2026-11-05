@@ -16,6 +16,7 @@ use browseros_core::sensitive_fields::{SEALED_WORLD, seal_source};
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -46,6 +47,8 @@ pub(crate) struct ScriptedBrowser {
     front: Mutex<Option<i64>>,
     /// What every tab's password, card and code fields hold, as the seal reports it to a sweep.
     fields: Mutex<Vec<String>>,
+    /// URLs a test set; any other tab is on `https://example.test/<tab>`.
+    urls: Mutex<HashMap<i64, String>>,
     /// `Browser.getTabs` fails, as when the browser is gone.
     unreachable: AtomicBool,
     captures: watch::Sender<Captures>,
@@ -61,6 +64,7 @@ impl ScriptedBrowser {
             tabs: Mutex::default(),
             front: Mutex::default(),
             fields: Mutex::default(),
+            urls: Mutex::default(),
             unreachable: AtomicBool::new(false),
             captures: watch::channel(Captures::Answer).0,
             started: watch::channel(0).0,
@@ -105,6 +109,14 @@ impl ScriptedBrowser {
             values.iter().map(|value| (*value).to_owned()).collect();
     }
 
+    /// The tab navigated: the browser reports `url` for it from now on.
+    pub(crate) fn set_url(&self, tab: i64, url: &str) {
+        self.urls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(tab, url.to_string());
+    }
+
     /// The browser stops answering `Browser.getTabs` from now on.
     pub(crate) fn become_unreachable(&self) {
         self.unreachable.store(true, Ordering::SeqCst);
@@ -145,12 +157,19 @@ impl ScriptedBrowser {
     }
 
     fn tab(&self, tab: i64) -> Value {
+        let url = self
+            .urls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&tab)
+            .cloned()
+            .unwrap_or_else(|| format!("https://example.test/{tab}"));
         let front = *self.front.lock().unwrap_or_else(PoisonError::into_inner);
         json!({
             "tabId": tab,
             "targetId": format!("target-{tab}"),
             "windowId": 1,
-            "url": format!("https://example.test/{tab}"),
+            "url": url,
             "title": format!("Tab {tab}"),
             "isActive": front.is_none_or(|front| front == tab),
             "isLoading": false,
@@ -182,9 +201,9 @@ impl ScriptedBrowser {
                 Err(CdpError::ConnectionLost)
             }
             "Browser.getTabs" => {
-                let tabs = self.lock_tabs().clone();
+                let open = self.lock_tabs().clone();
                 Ok(json!({
-                    "tabs": tabs.into_iter().map(|tab| self.tab(tab)).collect::<Vec<_>>(),
+                    "tabs": open.into_iter().map(|tab| self.tab(tab)).collect::<Vec<_>>(),
                 }))
             }
             "Browser.activateTab" => {

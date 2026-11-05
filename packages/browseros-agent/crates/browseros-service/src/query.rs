@@ -10,6 +10,7 @@ use crate::event_log::EventFilter;
 use crate::limits::{
     DEFAULT_LIMIT, DEFAULT_TAIL, MAX_INLINE_SCREENSHOTS, MAX_LIMIT, MAX_TAIL, MAX_WAIT_SECONDS,
 };
+use browseros_capture::Quality;
 use browseros_core::TabId;
 use browseros_takeover::{FitId, Follow, LockId, TakeoverId};
 use browseros_trace::{
@@ -168,6 +169,16 @@ pub(crate) fn display(raw: Option<&str>) -> Result<DisplayQuery, ApiError> {
     }
 }
 
+/// `GET /v1/tabs/{tabId}/screencast` and `/video`: `quality`, `high` when absent.
+pub(crate) fn live(raw: Option<&str>) -> Result<Quality, ApiError> {
+    match Params::parse(raw).get("quality")? {
+        None => Ok(Quality::High),
+        Some(text) => {
+            Quality::parse(text).ok_or_else(|| ApiError::invalid("`quality` must be low or high"))
+        }
+    }
+}
+
 /// A run id in a path. Text that is not one names no run.
 pub(crate) fn run_id(text: &str) -> Result<RunId, ApiError> {
     text.parse()
@@ -313,11 +324,12 @@ impl<'a> Params<'a> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DisplayQuery, Inline, display, events, run, run_id, runs, tab_id, takeover, trace,
+        DisplayQuery, Inline, display, events, live, run, run_id, runs, tab_id, takeover, trace,
     };
     use crate::api_error::ErrorCode;
     use crate::limits::{DEFAULT_LIMIT, DEFAULT_TAIL};
     use axum::http::StatusCode;
+    use browseros_capture::Quality;
     use browseros_core::TabId;
     use browseros_takeover::{Follow, TakeoverId};
     use browseros_trace::{EpochMillis, RunId, RunStatus, TaskId};
@@ -519,6 +531,22 @@ mod tests {
                 display(Some(raw)).is_err_and(|error| error.status == StatusCode::NOT_FOUND),
                 "{raw}"
             );
+        }
+    }
+
+    #[test]
+    fn live_quality_is_low_or_high_and_high_when_absent() {
+        assert_eq!(live(None).ok(), Some(Quality::High));
+        assert_eq!(live(Some("tab=3&other=1")).ok(), Some(Quality::High));
+        assert_eq!(live(Some("quality=low")).ok(), Some(Quality::Low));
+        assert_eq!(live(Some("quality=high")).ok(), Some(Quality::High));
+        for raw in [
+            "quality=medium",
+            "quality=",
+            "quality=LOW",
+            "quality=low&quality=high",
+        ] {
+            assert!(refused(live(Some(raw))), "{raw}");
         }
     }
 

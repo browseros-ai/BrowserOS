@@ -3,9 +3,9 @@
 //!
 //! zuzu (mirrord) is the only client. It reaches Neo over a Unix socket that the app binds;
 //! the app builds one [`Service`] from values it already holds (the trace store and sink,
-//! `Privacy`, the agent's browser session and viewports, the writer's screenshot jobs, and
-//! Xvnc's address and home size) and serves [`Service::router`] on that socket through
-//! [`host_service`]:
+//! `Privacy`, the agent's browser session and viewports, the writer's screenshot jobs, Xvnc's
+//! address and home size, and Chromium's CDP port) and serves [`Service::router`] on that socket
+//! through [`host_service`]:
 //!
 //! ```text
 //!  HostListener (app) ─ bind ─▶ axum::serve(listener, host_service(routes, auth))
@@ -17,6 +17,8 @@
 //!                                  ├▶ /v1/takeovers ─▶ Takeovers ─ the flow over the parts above
 //!                                  ├▶ GET /v1/events ◀── EventLog ◀── TraceSink's events,
 //!                                  │                     lock and takeover changes, tab.closed
+//!                                  ├▶ /v1/tabs/{id}/screencast, /video ◀── CaptureHub ◀── Chromium,
+//!                                  │  each frame admitted by a CaptureGuard     on its own CDP socket
 //!                                  └▶ GET /v1/display ─ WebSocket, RFB ─▶ Displays ─▶ Xvnc
 //!                                       release=<takeover> binds a control display to it
 //!
@@ -52,6 +54,7 @@ mod fit_routes;
 mod host_auth;
 mod host_service;
 mod limits;
+mod live_tabs;
 mod part_routes;
 mod query;
 mod record_routes;

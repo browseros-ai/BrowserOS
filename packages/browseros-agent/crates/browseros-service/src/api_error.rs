@@ -7,6 +7,7 @@
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use browseros_capture::CaptureError;
 use browseros_takeover::PartError;
 use browseros_trace::{PrivacyError, TraceError};
 use std::borrow::Cow;
@@ -18,6 +19,7 @@ pub(crate) enum ErrorCode {
     Unauthorized,
     NotFound,
     TabNotFound,
+    PagePrivate,
     Withheld,
     Expired,
     TakeoverLock,
@@ -38,6 +40,7 @@ impl ErrorCode {
             Self::Unauthorized => "unauthorized",
             Self::NotFound => "not_found",
             Self::TabNotFound => "tab_not_found",
+            Self::PagePrivate => "page_private",
             Self::Withheld => "withheld",
             Self::Expired => "expired",
             Self::TakeoverLock => "takeover_lock",
@@ -81,6 +84,24 @@ impl ApiError {
     /// 404 `not_found`.
     pub(crate) fn not_found(message: impl Into<Cow<'static, str>>) -> Self {
         Self::new(StatusCode::NOT_FOUND, ErrorCode::NotFound, message)
+    }
+
+    /// 404 `tab_not_found`: no open tab has the id.
+    pub(crate) fn tab_not_found() -> Self {
+        Self::new(
+            StatusCode::NOT_FOUND,
+            ErrorCode::TabNotFound,
+            "no open tab has this id",
+        )
+    }
+
+    /// 409 `page_private`: the tab is private, so nothing of it is captured.
+    pub(crate) fn page_private() -> Self {
+        Self::new(
+            StatusCode::CONFLICT,
+            ErrorCode::PagePrivate,
+            "the tab is private; nothing of it is captured",
+        )
     }
 
     /// 410 `withheld`: the image was not kept because its tab was private.
@@ -151,11 +172,7 @@ impl From<PartError> for ApiError {
     fn from(error: PartError) -> Self {
         match error {
             PartError::NotFound => Self::not_found("nothing has this id"),
-            PartError::TabNotFound(_) => Self::new(
-                StatusCode::NOT_FOUND,
-                ErrorCode::TabNotFound,
-                "no open tab has this id",
-            ),
+            PartError::TabNotFound(_) => Self::tab_not_found(),
             PartError::TakeoverLock => Self::new(
                 StatusCode::CONFLICT,
                 ErrorCode::TakeoverLock,
@@ -206,6 +223,28 @@ impl From<PartError> for ApiError {
                 "the takeover was released",
             ),
             PartError::Privacy(error) => error.into(),
+        }
+    }
+}
+
+/// A live view the capture hub could not open. The hub knows a tab as a "session" whose only
+/// tab is that tab (`live_tabs`), so an unknown session is a tab that is not open, and a
+/// session that is not live is a private tab. Every case is answered before a byte is sent.
+impl From<CaptureError> for ApiError {
+    fn from(error: CaptureError) -> Self {
+        match error {
+            CaptureError::SessionNotFound | CaptureError::NoOpenTab | CaptureError::TabNotFound => {
+                Self::tab_not_found()
+            }
+            CaptureError::SessionNotLive => Self::page_private(),
+            CaptureError::Browser(cause) => Self {
+                cause: Some(cause.to_string()),
+                ..Self::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    ErrorCode::BrowserUnavailable,
+                    "Neo could not start capturing the tab",
+                )
+            },
         }
     }
 }

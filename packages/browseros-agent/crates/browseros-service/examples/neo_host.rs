@@ -10,7 +10,8 @@
 //! ```
 //!
 //! - `--cdp-port <port>` (required): the browser's CDP port (9110 in Neo's container). The
-//!   client keeps reconnecting rather than exiting when the browser restarts.
+//!   client keeps reconnecting rather than exiting when the browser restarts. Live views
+//!   (`/v1/tabs/{tabId}/screencast`, `/video`) open a second connection to the same port.
 //! - `--dir <path>`: keep the trace file, the screenshots, the socket and the token file there,
 //!   and leave them at exit. Without it, a temp dir is used and removed at exit.
 //! - `--open <url>`: opens the URL in a new tab (`Target.createTarget`) before serving, and
@@ -212,6 +213,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             addr: args.xvnc,
             home: args.neo_screen,
         },
+        cdp_port: args.cdp_port,
     });
 
     // What the app does at startup: read the token file, bind the socket owner-and-group only,

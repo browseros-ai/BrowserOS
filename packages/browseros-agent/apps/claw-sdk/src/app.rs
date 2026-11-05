@@ -169,6 +169,7 @@ impl App {
                 privacy,
                 screenshots,
                 xvnc: config.env.xvnc,
+                cdp_port: config.launch.cdp_port,
             },
         )
         .await

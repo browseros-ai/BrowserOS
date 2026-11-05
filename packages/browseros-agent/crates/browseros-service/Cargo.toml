@@ -10,6 +10,7 @@ description = "The host API of hosted BrowserOS Neo (claw-sdk): the /v1 router, 
 [dependencies]
 axum = { workspace = true, features = ["ws"] }
 base64.workspace = true
+browseros-capture.workspace = true
 browseros-core.workspace = true
 browseros-takeover.workspace = true
 browseros-trace.workspace = true
@@ -20,6 +21,7 @@ serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 ulid.workspace = true
 url.workspace = true

@@ -10,7 +10,7 @@ use crate::api_error::ApiError;
 use crate::host_service::Authenticated;
 use crate::service::ServiceState;
 use crate::{
-    display_route, events_route, fit_routes, part_routes, record_routes, response_id,
+    display_route, events_route, fit_routes, live_tabs, part_routes, record_routes, response_id,
     secret_routes, tab_routes, takeover_routes,
 };
 use axum::extract::Request;
@@ -36,6 +36,8 @@ pub(crate) fn router(state: Arc<ServiceState>) -> Router {
         .route("/v1/events", get(events_route::stream_events))
         .route("/v1/tabs/{tab_id}/private", post(tab_routes::make_private))
         .route("/v1/tabs/{tab_id}/sweep", post(tab_routes::sweep_tab))
+        .route("/v1/tabs/{tab_id}/screencast", get(live_tabs::screencast))
+        .route("/v1/tabs/{tab_id}/video", get(live_tabs::video))
         .route("/v1/locks", post(part_routes::create_lock))
         .route(
             "/v1/locks/{lock_id}",
