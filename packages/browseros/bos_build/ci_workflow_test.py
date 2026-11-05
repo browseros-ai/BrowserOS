@@ -3400,7 +3400,6 @@ fi
         smoke_path = self.runner_temp / "browseros-ci-codesign-smoke-123-4"
 
         self.assertEqual(outputs["codesign_identity"], self.identity_sha1)
-        self.assertEqual(outputs["browseros_passkey_profile_path"], "")
         self.assertEqual(outputs["browserclaw_passkey_profile_path"], "")
         self.assertTrue(keychain_path.exists())
         self.assertTrue(state_path.exists())
@@ -3437,27 +3436,19 @@ fi
         self.assertFalse(keychain_path.exists())
         self.assertFalse(state_path.exists())
 
-    def test_setup_decodes_both_passkey_profiles_and_cleanup_removes_them(self):
+    def test_setup_decodes_the_passkey_profile_and_cleanup_removes_it(self):
         result = self._run_helper(
             "setup",
-            PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64="cHJvZmlsZS1ieXRlcw==",
             PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64="Y2xhdy1wcm9maWxlLWJ5dGVz",
         )
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         outputs = self._outputs()
-        browseros_profile_path = Path(outputs["browseros_passkey_profile_path"])
-        browserclaw_profile_path = Path(outputs["browserclaw_passkey_profile_path"])
-        self.assertEqual(browseros_profile_path.read_bytes(), b"profile-bytes")
-        self.assertEqual(browserclaw_profile_path.read_bytes(), b"claw-profile-bytes")
-        self.assertEqual(browseros_profile_path.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(browserclaw_profile_path.stat().st_mode & 0o777, 0o600)
+        profile_path = Path(outputs["browserclaw_passkey_profile_path"])
+        self.assertEqual(profile_path.read_bytes(), b"claw-profile-bytes")
+        self.assertEqual(profile_path.stat().st_mode & 0o777, 0o600)
         env_lines = self.github_env.read_text(encoding="utf-8").splitlines()
         self.assertIn(
-            f"PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_PATH={browseros_profile_path}",
-            env_lines,
-        )
-        self.assertIn(
-            f"PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_PATH={browserclaw_profile_path}",
+            f"PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_PATH={profile_path}",
             env_lines,
         )
 
@@ -3466,8 +3457,7 @@ fi
             MACOS_SIGNING_STATE_PATH=outputs["state_path"],
         )
         self.assertEqual(cleanup.returncode, 0, cleanup.stderr + cleanup.stdout)
-        self.assertFalse(browseros_profile_path.exists())
-        self.assertFalse(browserclaw_profile_path.exists())
+        self.assertFalse(profile_path.exists())
 
     def test_setup_uses_fingerprint_when_common_name_is_duplicated(self):
         result = self._run_helper("setup", CODESIGN_REJECT_COMMON_NAME="1")
