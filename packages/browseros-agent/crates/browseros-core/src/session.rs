@@ -300,11 +300,12 @@ impl BrowserSession {
     /// Drops `session_id` from every cache that routes commands by session. The detach listener
     /// and the connection's refusal path both use it. Removal is by value, so a late refusal
     /// for a dead session never evicts the session that replaced it. It sends nothing, so the
-    /// connection can run it from inside a send without recursing. It takes the page, frame and
-    /// signal registry locks, so no code may hold one of those locks across a send on this
-    /// session's connection.
+    /// connection can run it from inside a send without recursing. It takes the page, frame,
+    /// signal and file-transfer registry locks, so no code may hold one of those locks across a
+    /// send on this session's connection.
     pub(crate) async fn forget_session(&self, session_id: &SessionId) {
         self.page_signals.detach_session(session_id);
+        self.file_transfers.forget_session(session_id);
         self.pages.detach_session(session_id).await;
         self.frames.forget_session(session_id).await;
     }

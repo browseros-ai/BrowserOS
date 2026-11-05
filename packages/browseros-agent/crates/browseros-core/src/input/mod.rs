@@ -600,16 +600,25 @@ impl Input {
         self.evaluate_sensitive(&expression).await
     }
 
+    /// Reads the page once more on a new attachment when its session was already dead, as
+    /// the input retry does. Otherwise the action that follows re-attaches and types a secret
+    /// this check reported as not sensitive.
     async fn evaluate_sensitive(&self, expression: &str) -> bool {
-        let Ok(session) = self.page_session().await else {
-            return false;
-        };
-        PageJs::isolated(&session)
-            .eval::<Option<bool>>(expression)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(false)
+        for _ in 0..2 {
+            let Ok(session) = self.page_session().await else {
+                return false;
+            };
+            let (session, answered) = session.witnessed();
+            match PageJs::isolated(&session)
+                .eval::<Option<bool>>(expression)
+                .await
+            {
+                Ok(sensitive) => return sensitive.unwrap_or(false),
+                Err(_) if !answered.load(Ordering::SeqCst) => {}
+                Err(_) => return false,
+            }
+        }
+        false
     }
 
     async fn drawing_pointer(&self) -> Option<Pointer> {
@@ -656,10 +665,18 @@ impl Input {
     {
         let mut attempted = false;
         loop {
-            let result = action(self.page_session().await?).await;
+            // Run again only if the session was gone before anything reached the page. Once a
+            // command was answered, part of the action (a keyDown, a mouse press) may have
+            // landed, and running it again on a new attachment would repeat it.
+            let (session, answered) = self.page_session().await?.witnessed();
+            let result = action(session).await;
             match result {
                 Ok(value) => return Ok(value),
-                Err(err) if !attempted && err.is_retryable_session_loss() => {
+                Err(err)
+                    if !attempted
+                        && err.is_retryable_session_loss()
+                        && !answered.load(Ordering::SeqCst) =>
+                {
                     attempted = true;
                     let _ = self.pages.refresh(self.page_id.clone()).await;
                 }
