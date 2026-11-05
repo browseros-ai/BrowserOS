@@ -1,7 +1,7 @@
 /*
  * BrowserOS claw-sdk API
  *
- * The host-facing API of hosted BrowserOS Neo (claw-sdk): run and operation records, screenshots, the live view, the VNC display and owner takeover.  It is served on Neo's host listener, never on the agent's MCP port. That is a Unix socket by default (`[host_api] socket` in `neo.toml`), with a TCP bind only when `[host_api] tcp` is set. The same listener serves sdk-extensions' host API under `/host/v1`. Every request needs `Authorization: Bearer <token>` (`[host_api] token_file`); on the socket the peer's uid is checked too. Tokens are never accepted in query strings.  Ids: a run id is a UUIDv7; an operation id is `<runId>.<seq>`, where `seq` counts the run's operations in start order; a session id is the handle `run` returns in `_meta[\"com.browseros.neo/session\"]`.  Delivery keeps three answers apart so a client never repeats a write blindly: `not_sent` (no side effect was attempted), `done` (Neo has a definite answer) and `unknown` (sent, never confirmed).  Compatibility: changes within `/v1` are additive. New response fields and new values of an extensible enum (`x-extensible-enum`) can appear at any time, so clients must ignore fields and values they do not know. Fields are never removed or renamed within `/v1`.
+ * The host-facing API of hosted BrowserOS Neo (claw-sdk): run and operation records, screenshots, the live view, the VNC display and owner takeover. Takeover is offered as small stable parts (locks, fits, the typed-value sweep, plus `/private` and `/display`) and one thin flow over them (`/v1/takeovers`); a host may compose its own flow from the parts.  It is served on Neo's host listener, never on the agent's MCP port. That is a Unix socket by default (`[host_api] socket` in `neo.toml`), with a TCP bind only when `[host_api] tcp` is set. The same listener serves sdk-extensions' host API under `/host/v1`. Every request needs `Authorization: Bearer <token>` (`[host_api] token_file`); on the socket the peer's uid is checked too. Tokens are never accepted in query strings.  Ids: a run id is a UUIDv7 Neo creates for every run and returns in the result's `_meta[\"com.browseros.neo/run\"].id`; an operation id is `<runId>.<seq>`, where `seq` counts the run's operations in start order; a session id is the handle `run` returns in `_meta[\"com.browseros.neo/session\"]`. A host may also send its own optional `requestId` with a run (`_meta[\"com.browseros.neo/run\"] = {requestId?, hostData?}`): runs can then be looked up by it, and a repeat of it in the same session never runs again.  Delivery keeps three answers apart so a client never repeats a write blindly: `not_sent` (no side effect was attempted), `done` (Neo has a definite answer) and `unknown` (sent, never confirmed).  Compatibility: changes within `/v1` are additive. New response fields and new values of an extensible enum (`x-extensible-enum`) can appear at any time, so clients must ignore fields and values they do not know. Fields are never removed or renamed within `/v1`.
  *
  * The version of the OpenAPI document: 1.0.0
  *
@@ -17,49 +17,51 @@ pub struct Takeover {
     pub id: String,
     #[serde(rename = "sessionId")]
     pub session_id: String,
-    #[serde(rename = "page")]
-    pub page: Box<models::PageRef>,
+    #[serde(rename = "tabId")]
+    pub tab_id: i64,
     #[serde(rename = "state")]
     pub state: String,
     #[serde(rename = "releaseReason", skip_serializing_if = "Option::is_none")]
     pub release_reason: Option<String>,
-    /// False when an open takeover was returned instead.
-    #[serde(rename = "created", skip_serializing_if = "Option::is_none")]
-    pub created: Option<bool>,
+    #[serde(rename = "lockId")]
+    pub lock_id: String,
+    /// Present when the takeover was started with a viewer size.
+    #[serde(rename = "fitId", skip_serializing_if = "Option::is_none")]
+    pub fit_id: Option<String>,
+    /// The control display to open for the owner; it closes at release.
+    #[serde(rename = "display")]
+    pub display: String,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
-    #[serde(rename = "controlAt", skip_serializing_if = "Option::is_none")]
-    pub control_at: Option<i64>,
     #[serde(rename = "releasedAt", skip_serializing_if = "Option::is_none")]
     pub released_at: Option<i64>,
     #[serde(rename = "expiresAt")]
     pub expires_at: i64,
-    /// While in `control`, the path of this takeover's display.
-    #[serde(rename = "display", skip_serializing_if = "Option::is_none")]
-    pub display: Option<String>,
 }
 
 impl Takeover {
     pub fn new(
         id: String,
         session_id: String,
-        page: models::PageRef,
+        tab_id: i64,
         state: String,
+        lock_id: String,
+        display: String,
         created_at: i64,
         expires_at: i64,
     ) -> Takeover {
         Takeover {
             id,
             session_id,
-            page: Box::new(page),
+            tab_id,
             state,
             release_reason: None,
-            created: None,
+            lock_id,
+            fit_id: None,
+            display,
             created_at,
-            control_at: None,
             released_at: None,
             expires_at,
-            display: None,
         }
     }
 }

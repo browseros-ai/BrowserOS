@@ -1,7 +1,7 @@
 /*
  * BrowserOS claw-sdk API
  *
- * The host-facing API of hosted BrowserOS Neo (claw-sdk): run and operation records, screenshots, the live view, the VNC display and owner takeover.  It is served on Neo's host listener, never on the agent's MCP port. That is a Unix socket by default (`[host_api] socket` in `neo.toml`), with a TCP bind only when `[host_api] tcp` is set. The same listener serves sdk-extensions' host API under `/host/v1`. Every request needs `Authorization: Bearer <token>` (`[host_api] token_file`); on the socket the peer's uid is checked too. Tokens are never accepted in query strings.  Ids: a run id is a UUIDv7; an operation id is `<runId>.<seq>`, where `seq` counts the run's operations in start order; a session id is the handle `run` returns in `_meta[\"com.browseros.neo/session\"]`.  Delivery keeps three answers apart so a client never repeats a write blindly: `not_sent` (no side effect was attempted), `done` (Neo has a definite answer) and `unknown` (sent, never confirmed).  Compatibility: changes within `/v1` are additive. New response fields and new values of an extensible enum (`x-extensible-enum`) can appear at any time, so clients must ignore fields and values they do not know. Fields are never removed or renamed within `/v1`.
+ * The host-facing API of hosted BrowserOS Neo (claw-sdk): run and operation records, screenshots, the live view, the VNC display and owner takeover. Takeover is offered as small stable parts (locks, fits, the typed-value sweep, plus `/private` and `/display`) and one thin flow over them (`/v1/takeovers`); a host may compose its own flow from the parts.  It is served on Neo's host listener, never on the agent's MCP port. That is a Unix socket by default (`[host_api] socket` in `neo.toml`), with a TCP bind only when `[host_api] tcp` is set. The same listener serves sdk-extensions' host API under `/host/v1`. Every request needs `Authorization: Bearer <token>` (`[host_api] token_file`); on the socket the peer's uid is checked too. Tokens are never accepted in query strings.  Ids: a run id is a UUIDv7 Neo creates for every run and returns in the result's `_meta[\"com.browseros.neo/run\"].id`; an operation id is `<runId>.<seq>`, where `seq` counts the run's operations in start order; a session id is the handle `run` returns in `_meta[\"com.browseros.neo/session\"]`. A host may also send its own optional `requestId` with a run (`_meta[\"com.browseros.neo/run\"] = {requestId?, hostData?}`): runs can then be looked up by it, and a repeat of it in the same session never runs again.  Delivery keeps three answers apart so a client never repeats a write blindly: `not_sent` (no side effect was attempted), `done` (Neo has a definite answer) and `unknown` (sent, never confirmed).  Compatibility: changes within `/v1` are additive. New response fields and new values of an extensible enum (`x-extensible-enum`) can appear at any time, so clients must ignore fields and values they do not know. Fields are never removed or renamed within `/v1`.
  *
  * The version of the OpenAPI document: 1.0.0
  *
@@ -25,10 +25,9 @@ pub struct RunSummary {
     pub effects: Option<String>,
     #[serde(rename = "error", skip_serializing_if = "Option::is_none")]
     pub error: Option<Box<models::OperationError>>,
-    #[serde(rename = "hostRef", skip_serializing_if = "Option::is_none")]
-    pub host_ref: Option<String>,
-    #[serde(rename = "idempotencyKey", skip_serializing_if = "Option::is_none")]
-    pub idempotency_key: Option<String>,
+    /// The host's own id it sent with the run (`_meta[\"com.browseros.neo/run\"].requestId`), if any.
+    #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     #[serde(rename = "startedAt")]
     pub started_at: i64,
     #[serde(rename = "endedAt", skip_serializing_if = "Option::is_none")]
@@ -58,8 +57,7 @@ impl RunSummary {
             status,
             effects: None,
             error: None,
-            host_ref: None,
-            idempotency_key: None,
+            request_id: None,
             started_at,
             ended_at: None,
             operation_count,

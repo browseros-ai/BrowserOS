@@ -59,10 +59,8 @@ pub struct RunSummary {
     pub effects: Option<RunEffects>,
     /// Its uncaught error.
     pub error: Option<ErrorRecord>,
-    /// The host's reference for the call that started it.
-    pub host_ref: Option<String>,
-    /// Its idempotency key.
-    pub idempotency_key: Option<String>,
+    /// The host's own id for the request that started it.
+    pub request_id: Option<String>,
     /// When it was admitted.
     pub started_at: EpochMillis,
     /// When it ended.
@@ -79,7 +77,7 @@ pub struct RunDetail {
     /// The run.
     pub summary: RunSummary,
     /// The host data it was started with, masked.
-    pub host: Option<Value>,
+    pub host_data: Option<Value>,
     /// Its code, masked; `None` when withheld.
     pub code: Option<String>,
     /// Whether `code` was cut.
@@ -158,10 +156,8 @@ pub enum SessionState {
 pub struct RunQuery {
     /// Only this session's runs.
     pub session: Option<SessionId>,
-    /// Only runs with this host reference.
-    pub host_ref: Option<String>,
-    /// Only runs with this idempotency key.
-    pub idempotency_key: Option<String>,
+    /// Only runs started with this request id.
+    pub request_id: Option<String>,
     /// Only runs with this status.
     pub status: Option<RunStatus>,
     /// Only runs started at or after this time.

@@ -88,12 +88,12 @@ pub struct RunStarted {
     pub session: SessionId,
     /// The script, as given. The writer masks and bounds it.
     pub code: String,
-    /// The host's reference for the call that started it (zuzu's tool-call id).
-    pub host_ref: Option<String>,
-    /// The host's own data for the run (`_meta["com.browseros.neo/run"].host`).
-    pub host: Option<Value>,
-    /// The key that makes a repeated `run` return this run's result instead of running again.
-    pub idempotency_key: Option<String>,
+    /// The host's own id for this request (`_meta["com.browseros.neo/run"].requestId`, zuzu's
+    /// tool-call id). Optional. It is the host's lookup key, and admission refuses to run a
+    /// repeat of it in the same session. Stored verbatim: masking a key would break the lookup.
+    pub request_id: Option<String>,
+    /// The host's own data for the run (`_meta["com.browseros.neo/run"].hostData`). Optional.
+    pub host_data: Option<Value>,
     /// When it was admitted.
     pub at: EpochMillis,
 }
@@ -109,7 +109,8 @@ pub struct RunEnded {
     pub error: Option<ErrorRecord>,
     /// The script's return value. The writer masks and bounds it.
     pub result: Option<Value>,
-    /// The exact MCP result handed to the client, already masked, kept for idempotent replay.
+    /// The exact MCP result handed to the client, already masked, kept to answer a repeated
+    /// `request_id` without running again.
     pub replay: Option<Value>,
     /// When it ended.
     pub at: EpochMillis,

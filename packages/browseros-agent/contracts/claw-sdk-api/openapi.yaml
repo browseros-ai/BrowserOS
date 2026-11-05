@@ -4,7 +4,9 @@ info:
   version: 1.0.0
   description: |
     The host-facing API of hosted BrowserOS Neo (claw-sdk): run and operation records,
-    screenshots, the live view, the VNC display and owner takeover.
+    screenshots, the live view, the VNC display and owner takeover. Takeover is offered as small
+    stable parts (locks, fits, the typed-value sweep, plus `/private` and `/display`) and one
+    thin flow over them (`/v1/takeovers`); a host may compose its own flow from the parts.
 
     It is served on Neo's host listener, never on the agent's MCP port. That is a Unix socket by
     default (`[host_api] socket` in `neo.toml`), with a TCP bind only when `[host_api] tcp` is
@@ -12,9 +14,12 @@ info:
     needs `Authorization: Bearer <token>` (`[host_api] token_file`); on the socket the peer's
     uid is checked too. Tokens are never accepted in query strings.
 
-    Ids: a run id is a UUIDv7; an operation id is `<runId>.<seq>`, where `seq` counts the run's
-    operations in start order; a session id is the handle `run` returns in
-    `_meta["com.browseros.neo/session"]`.
+    Ids: a run id is a UUIDv7 Neo creates for every run and returns in the result's
+    `_meta["com.browseros.neo/run"].id`; an operation id is `<runId>.<seq>`, where `seq` counts the
+    run's operations in start order; a session id is the handle `run` returns in
+    `_meta["com.browseros.neo/session"]`. A host may also send its own optional `requestId` with a
+    run (`_meta["com.browseros.neo/run"] = {requestId?, hostData?}`): runs can then be looked up
+    by it, and a repeat of it in the same session never runs again.
 
     Delivery keeps three answers apart so a client never repeats a write blindly: `not_sent`
     (no side effect was attempted), `done` (Neo has a definite answer) and `unknown` (sent,
@@ -139,19 +144,15 @@ paths:
   /v1/runs:
     get:
       operationId: listRuns
-      summary: Runs, newest first. `hostRef` finds the run a host call produced.
+      summary: Runs, newest first. `requestId` finds the run a host request produced.
       parameters:
         - name: session
           in: query
           schema:
             type: string
-        - name: hostRef
+        - name: requestId
           in: query
-          schema:
-            type: string
-            maxLength: 200
-        - name: idempotencyKey
-          in: query
+          description: The host's own id it sent with the run, if it sent one.
           schema:
             type: string
             maxLength: 200
@@ -338,29 +339,6 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/NotLive'
-  /v1/sessions/{sessionId}/frames:
-    get:
-      operationId: getFrames
-      summary: The screencast as a WebSocket, for relays.
-      description: |
-        Upgrade to WebSocket. Each frame is a text message holding a `FrameHeader`, then one
-        binary message holding the JPEG. Close codes: 4001 `session_ended`, 4002 `tab_closed`,
-        4003 `session_private`, 4004 `server_shutdown`.
-      parameters:
-        - $ref: '#/components/parameters/SessionId'
-        - $ref: '#/components/parameters/Quality'
-        - $ref: '#/components/parameters/Tab'
-      responses:
-        '101':
-          description: Switching protocols.
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/NotLive'
   /v1/display:
     get:
       operationId: openDisplay
@@ -369,8 +347,10 @@ paths:
         `view` drops every input message. `control` forwards input. Its first input event makes
         every live session private before the event is forwarded, and every session that starts
         while it is open is private from the start. Private-field values are collected for
-        masking while it is open and when it closes. `follow` keeps that session's current page
-        in front of the screen while no owner has control.
+        masking while it is open and when it closes. View displays pause while a control
+        display has forwarded input. `follow` keeps that session's current page in front of the
+        screen while no owner has control. `release` ties a control display to a takeover:
+        releasing the takeover closes it.
       parameters:
         - name: mode
           in: query
@@ -382,6 +362,11 @@ paths:
           in: query
           schema:
             type: string
+        - name: release
+          in: query
+          description: A takeover id. Releasing that takeover closes this display.
+          schema:
+            type: string
       responses:
         '101':
           description: Switching protocols.
@@ -389,24 +374,215 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '503':
           $ref: '#/components/responses/Unavailable'
-  /v1/sessions/{sessionId}/takeovers:
+  /v1/locks:
     post:
-      operationId: offerTakeover
-      summary: Offer the owner one page of the session. The agent is unaffected until `control`.
-      description: Idempotent per session; an open takeover is returned with `created` false.
-      parameters:
-        - $ref: '#/components/parameters/SessionId'
+      operationId: createLock
+      summary: Lock the agent out of a session, a tab, or both. A takeover part.
+      description: |
+        While the lock is held, the agent's operations in that session, and its operations on
+        that tab from any session, fail with `host / owner_has_control` and delivery `not_sent`.
+        Writes are always refused; with `reads: block` (the default, from
+        `[takeover] block_reads`), operations that target a page there are refused too.
+        Operations with no page and no write still run. Taking a lock waits up to 2 s for the
+        locked session's in-flight writes; `settled` says whether they finished. Every lock has a
+        TTL, so a host that dies cannot lock a session forever.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/OfferTakeoverRequest'
+              $ref: '#/components/schemas/LockRequest'
       responses:
         '200':
-          description: The takeover.
+          description: The lock, held.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lock'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/locks/{lockId}:
+    get:
+      operationId: getLock
+      summary: One lock.
+      parameters:
+        - $ref: '#/components/parameters/LockId'
+      responses:
+        '200':
+          description: The lock.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lock'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: releaseLock
+      summary: Release a lock. Idempotent.
+      parameters:
+        - $ref: '#/components/parameters/LockId'
+      responses:
+        '200':
+          description: The lock, released.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lock'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/tabs/{tabId}/fit:
+    post:
+      operationId: fitTab
+      summary: Fit a tab to a viewer's screen. A takeover part.
+      description: |
+        Brings the tab to the front, sizes Neo's screen to the viewer, and sets the tab to
+        mobile (a screen 600 px wide or less: touch, fullscreen) or desktop at that size. The
+        first fit of a tab records its viewport mode, window state, zoom and screen size, and
+        returns a new fit; while that fit is active, fitting the tab again refits it and returns
+        the same fit. While a mobile fit is active, pages the tab opens are pulled into it.
+      parameters:
+        - $ref: '#/components/parameters/TabId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ViewerSize'
+      responses:
+        '200':
+          description: The fit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Fit'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/fits/{fitId}:
+    get:
+      operationId: getFit
+      summary: One fit, with the geometry the owner's page needs. Never values, labels or text.
+      parameters:
+        - $ref: '#/components/parameters/FitId'
+      responses:
+        '200':
+          description: The fit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Fit'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/fits/{fitId}/navigate:
+    post:
+      operationId: navigateFit
+      summary: The owner's browser bar, on the fitted tab. A lock does not refuse it.
+      parameters:
+        - $ref: '#/components/parameters/FitId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NavigateRequest'
+      responses:
+        '200':
+          description: Done, or a notice for the owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NavigateResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/fits/{fitId}/restore:
+    post:
+      operationId: restoreFit
+      summary: Put the tab back exactly as the fit found it. Idempotent.
+      description: |
+        Resets zoom and restores the recorded viewport mode and window state. Neo's screen goes
+        back to its configured size unless another fit is active.
+      parameters:
+        - $ref: '#/components/parameters/FitId'
+      responses:
+        '200':
+          description: The fit, restored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Fit'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/tabs/{tabId}/sweep:
+    post:
+      operationId: sweepTab
+      summary: Read the tab's sensitive fields into the known secrets list. A takeover part.
+      description: |
+        One pass over every frame of the tab: each value in a password, card or code field is
+        added to the known secrets list (masked everywhere from then on) with the session's
+        scope. The final catch for what the owner typed; values are never returned.
+      parameters:
+        - $ref: '#/components/parameters/TabId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SweepRequest'
+      responses:
+        '200':
+          description: How many values were added.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SweepResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/takeovers:
+    post:
+      operationId: startTakeover
+      summary: The v1 takeover flow, a thin composition of the parts. Start it when the owner opens the link.
+      description: |
+        In order: make the session private, lock the session and the tab (with the TTL), fit the
+        tab to `viewer` when given. The answer names the parts it holds and the display path to
+        open. A host may compose its own flow from the parts instead.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TakeoverRequest'
+      responses:
+        '200':
+          description: The takeover, active.
           content:
             application/json:
               schema:
@@ -417,6 +593,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /v1/takeovers/{takeoverId}:
     get:
       operationId: getTakeover
@@ -448,108 +626,13 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
-  /v1/takeovers/{takeoverId}/control:
-    post:
-      operationId: takeControl
-      summary: The owner opened the link. Make the session private, lock the agent out, front and fit the page.
-      description: |
-        While a takeover is in `control`, the agent's operations on the session and on the
-        page fail with `host / owner_has_control` and delivery `not_sent`. With
-        `[takeover] block_reads = false`, reads still run.
-      parameters:
-        - $ref: '#/components/parameters/TakeoverId'
-      responses:
-        '200':
-          description: In control.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Takeover'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '503':
-          $ref: '#/components/responses/Unavailable'
-  /v1/takeovers/{takeoverId}/viewer:
-    put:
-      operationId: setTakeoverViewer
-      summary: The owner's viewer size in CSS px. Resizes the screen and refits on a change.
-      parameters:
-        - $ref: '#/components/parameters/TakeoverId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ViewerSize'
-      responses:
-        '200':
-          description: The current view.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TakeoverView'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-  /v1/takeovers/{takeoverId}/view:
-    get:
-      operationId: getTakeoverView
-      summary: Geometry for the owner's page. Never field values, labels or page text.
-      parameters:
-        - $ref: '#/components/parameters/TakeoverId'
-      responses:
-        '200':
-          description: The view.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TakeoverView'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
-  /v1/takeovers/{takeoverId}/navigate:
-    post:
-      operationId: navigateTakeover
-      summary: The owner's browser bar.
-      parameters:
-        - $ref: '#/components/parameters/TakeoverId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/NavigateRequest'
-      responses:
-        '200':
-          description: Done, or a notice for the owner.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/NavigateResult'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
   /v1/takeovers/{takeoverId}/release:
     post:
       operationId: releaseTakeover
-      summary: Give the browser back. Returns once the agent's lock is lifted.
+      summary: Give the browser back. Idempotent; returns once the agent's lock is lifted.
+      description: |
+        In order: close the takeover's display, sweep the tab, restore the fit, release the
+        lock. The lock's TTL or the tab closing releases it too.
       parameters:
         - $ref: '#/components/parameters/TakeoverId'
       requestBody:
@@ -559,7 +642,7 @@ paths:
               $ref: '#/components/schemas/ReleaseRequest'
       responses:
         '200':
-          description: Released.
+          description: The takeover, released.
           content:
             application/json:
               schema:
@@ -568,22 +651,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
-  /v1/takeovers/{takeoverId}/display:
-    get:
-      operationId: openTakeoverDisplay
-      summary: The screen in control mode, valid only while this takeover is in `control`.
-      description: RFB over WebSocket, subprotocol `binary`. Closes when the takeover is released.
-      parameters:
-        - $ref: '#/components/parameters/TakeoverId'
-      responses:
-        '101':
-          description: Switching protocols.
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '409':
-          $ref: '#/components/responses/Conflict'
 components:
   securitySchemes:
     bearer:
@@ -609,6 +676,26 @@ components:
       required: true
       schema:
         type: string
+    LockId:
+      name: lockId
+      in: path
+      required: true
+      schema:
+        type: string
+    FitId:
+      name: fitId
+      in: path
+      required: true
+      schema:
+        type: string
+    TabId:
+      name: tabId
+      in: path
+      required: true
+      description: The browser's tab id (`PageRef.tabId`).
+      schema:
+        type: integer
+        format: int64
     Since:
       name: since
       in: query
@@ -672,8 +759,9 @@ components:
             $ref: '#/components/schemas/Error'
     NotFound:
       description: >-
-        Nothing has this id (`not_found`), or retention deleted it (`expired`), or `tab` is not
-        a tab the session has open (`tab_not_found`).
+        Nothing has this id (`not_found`): a session, run, operation, lock, fit, takeover or
+        tab. Or retention deleted it (`expired`), or `tab` is not a tab the session has open
+        (`tab_not_found`).
       content:
         application/json:
           schema:
@@ -694,8 +782,8 @@ components:
             $ref: '#/components/schemas/Error'
     Conflict:
       description: >-
-        The takeover is in the wrong state (`takeover_not_offered`, `takeover_not_in_control`,
-        `takeover_released`).
+        A part was already given back: the fit was restored (`fit_restored`), the lock released
+        (`lock_released`), or the takeover released (`takeover_released`).
       content:
         application/json:
           schema:
@@ -879,10 +967,9 @@ components:
           x-extensible-enum: [none, done, unknown]
         error:
           $ref: '#/components/schemas/OperationError'
-        hostRef:
+        requestId:
           type: string
-        idempotencyKey:
-          type: string
+          description: The host's own id it sent with the run (`_meta["com.browseros.neo/run"].requestId`), if any.
         startedAt:
           type: integer
           format: int64
@@ -916,10 +1003,9 @@ components:
           x-extensible-enum: [none, done, unknown]
         error:
           $ref: '#/components/schemas/OperationError'
-        hostRef:
+        requestId:
           type: string
-        idempotencyKey:
-          type: string
+          description: The host's own id it sent with the run (`_meta["com.browseros.neo/run"].requestId`), if any.
         startedAt:
           type: integer
           format: int64
@@ -934,9 +1020,9 @@ components:
         traceGaps:
           type: integer
           format: int64
-        host:
+        hostData:
           type: object
-          description: The host data the run was started with (`_meta["com.browseros.neo/run"].host`).
+          description: The host data the run was started with (`_meta["com.browseros.neo/run"].hostData`), if any; masked.
         code:
           type: string
           description: >-
@@ -1055,90 +1141,62 @@ components:
         data:
           type: string
           description: The image bytes, base64 with the standard alphabet and padding.
-    FrameHeader:
+    LockRequest:
       type: object
-      description: The text message that precedes each JPEG on `/frames`.
-      required: [tabId, at, bytes]
+      required: [ttlSeconds]
+      description: At least one of `session` and `tabId`.
       properties:
+        session:
+          type: string
         tabId:
           type: integer
           format: int64
-        url:
+        reads:
           type: string
-        at:
-          type: integer
-          format: int64
-          description: The browser's capture time, Unix epoch ms; the same clock as operations.
-        bytes:
-          type: integer
-          format: int32
-    OfferTakeoverRequest:
-      type: object
-      required: [page]
-      properties:
-        page:
-          type: integer
-          format: int32
-          minimum: 1
-          description: The session's page id.
+          description: '`block` refuses the agent''s page reads too; `allow` refuses only writes. Defaults to `[takeover] block_reads`.'
+          x-extensible-enum: [block, allow]
         ttlSeconds:
           type: integer
           format: int32
-          minimum: 60
+          minimum: 1
           maximum: 3600
-          description: Released by itself after this long; capped by `[takeover] max_minutes`.
-    Takeover:
+          description: The lock releases itself after this long; capped by `[takeover] max_minutes`.
+    Lock:
       type: object
-      required: [id, sessionId, page, state, createdAt, expiresAt]
+      required: [id, reads, settled, createdAt, expiresAt]
       properties:
         id:
           type: string
         sessionId:
           type: string
-        page:
-          $ref: '#/components/schemas/PageRef'
-        state:
+        tabId:
+          type: integer
+          format: int64
+        reads:
           type: string
-          x-extensible-enum: [offered, control, released]
-        releaseReason:
-          type: string
-          x-extensible-enum: [done, idle, host, expired, page_closed]
-        created:
+          x-extensible-enum: [block, allow]
+        settled:
           type: boolean
-          description: False when an open takeover was returned instead.
+          description: Whether the session's in-flight writes finished within 2 s of locking.
         createdAt:
-          type: integer
-          format: int64
-        controlAt:
-          type: integer
-          format: int64
-        releasedAt:
           type: integer
           format: int64
         expiresAt:
           type: integer
           format: int64
-        display:
+        releasedAt:
+          type: integer
+          format: int64
+          description: Present once released, by the host or by the TTL.
+    Fit:
+      type: object
+      required: [id, tabId, screen, fit, createdAt]
+      properties:
+        id:
           type: string
-          description: While in `control`, the path of this takeover's display.
-    ViewerSize:
-      type: object
-      required: [width, height]
-      properties:
-        width:
+        tabId:
           type: integer
-          format: int32
-          minimum: 100
-          maximum: 4096
-        height:
-          type: integer
-          format: int32
-          minimum: 100
-          maximum: 4096
-    TakeoverView:
-      type: object
-      required: [screen, fit]
-      properties:
+          format: int64
         screen:
           $ref: '#/components/schemas/ViewerSize'
         mode:
@@ -1146,17 +1204,25 @@ components:
           x-extensible-enum: [mobile, desktop]
         fit:
           type: string
+          description: '`partial` when the page did not report the size asked for; Neo does not retry.'
           x-extensible-enum: [pending, fitted, partial]
         keyboard:
-          $ref: '#/components/schemas/TakeoverKeyboard'
+          $ref: '#/components/schemas/FitKeyboard'
         browser:
-          $ref: '#/components/schemas/TakeoverBrowserBar'
+          $ref: '#/components/schemas/FitBrowserBar'
         popups:
           type: array
-          description: Pages the shared tab opened that stay where they are.
+          description: Pages the tab opened that stay where they are.
           items:
             type: string
-    TakeoverKeyboard:
+        createdAt:
+          type: integer
+          format: int64
+        restoredAt:
+          type: integer
+          format: int64
+          description: Present once restored.
+    FitKeyboard:
       type: object
       description: >-
         Boxes of the fields a phone keyboard opens for, in screen px, `[x, y, width, height]`.
@@ -1181,9 +1247,9 @@ components:
             maxItems: 4
             items:
               type: number
-    TakeoverBrowserBar:
+    FitBrowserBar:
       type: object
-      description: The shared tab's place, for the owner page's browser bar. Mobile only.
+      description: The tab's place, for the owner page's browser bar. Mobile fits only.
       required: [url, back, forward]
       properties:
         url:
@@ -1192,6 +1258,89 @@ components:
           type: boolean
         forward:
           type: boolean
+    SweepRequest:
+      type: object
+      required: [session]
+      properties:
+        session:
+          type: string
+          description: The session whose scope the values get in the known secrets list.
+    SweepResult:
+      type: object
+      required: [registered]
+      properties:
+        registered:
+          type: integer
+          format: int32
+          description: Values added to the known secrets list; the values are never returned.
+    TakeoverRequest:
+      type: object
+      required: [session, tabId]
+      properties:
+        session:
+          type: string
+        tabId:
+          type: integer
+          format: int64
+        viewer:
+          $ref: '#/components/schemas/ViewerSize'
+        reads:
+          type: string
+          x-extensible-enum: [block, allow]
+        ttlSeconds:
+          type: integer
+          format: int32
+          minimum: 60
+          maximum: 3600
+          description: The lock's TTL; capped by `[takeover] max_minutes`.
+    Takeover:
+      type: object
+      required: [id, sessionId, tabId, state, lockId, display, createdAt, expiresAt]
+      properties:
+        id:
+          type: string
+        sessionId:
+          type: string
+        tabId:
+          type: integer
+          format: int64
+        state:
+          type: string
+          x-extensible-enum: [active, released]
+        releaseReason:
+          type: string
+          x-extensible-enum: [done, idle, host, expired, tab_closed]
+        lockId:
+          type: string
+        fitId:
+          type: string
+          description: Present when the takeover was started with a viewer size.
+        display:
+          type: string
+          description: The control display to open for the owner; it closes at release.
+        createdAt:
+          type: integer
+          format: int64
+        releasedAt:
+          type: integer
+          format: int64
+        expiresAt:
+          type: integer
+          format: int64
+    ViewerSize:
+      type: object
+      required: [width, height]
+      properties:
+        width:
+          type: integer
+          format: int32
+          minimum: 100
+          maximum: 4096
+        height:
+          type: integer
+          format: int32
+          minimum: 100
+          maximum: 4096
     NavigateRequest:
       type: object
       required: [action]
@@ -1237,6 +1386,7 @@ components:
               session.page,
               session.private,
               session.ended,
+              lock.state,
               takeover.state,
             ]
         at:
@@ -1250,6 +1400,8 @@ components:
           $ref: '#/components/schemas/Operation'
         page:
           $ref: '#/components/schemas/PageRef'
+        lock:
+          $ref: '#/components/schemas/Lock'
         takeover:
           $ref: '#/components/schemas/Takeover'
     Error:
@@ -1269,8 +1421,8 @@ components:
               session_not_live,
               no_open_tab,
               session_private,
-              takeover_not_offered,
-              takeover_not_in_control,
+              lock_released,
+              fit_restored,
               takeover_released,
               privacy_unavailable,
               display_unavailable,

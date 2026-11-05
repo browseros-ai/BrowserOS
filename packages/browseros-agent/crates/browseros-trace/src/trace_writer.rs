@@ -42,7 +42,7 @@ pub struct WriterConfig {
     pub batch_window: Duration,
     /// Queued events past which operation events are dropped (and counted).
     pub max_backlog: usize,
-    /// How long a finished run's exact result is kept for idempotent replay.
+    /// How long a finished run's exact result is kept to answer a repeat of its request id.
     pub replay_window: Duration,
 }
 
@@ -482,23 +482,18 @@ impl Writer {
             Event::RunStarted(event) => {
                 trace_store::touch_session(tx, event.session, None, event.at).await?;
                 let code = self.redactor.code(&event.code);
-                let host = event
-                    .host
+                let host_data = event
+                    .host_data
                     .as_ref()
-                    .map(|host| self.redactor.host_data(host).value);
-                let host_ref = event
-                    .host_ref
-                    .as_deref()
-                    .map(|text| self.redactor.text(text));
+                    .map(|data| self.redactor.host_data(data).value);
                 trace_store::insert_run(
                     tx,
                     RunStartRow {
                         id: event.id,
                         session: event.session,
                         at: event.at,
-                        host_ref: host_ref.as_deref(),
-                        idempotency_key: event.idempotency_key.as_deref(),
-                        host: host.as_ref(),
+                        request_id: event.request_id.as_deref(),
+                        host_data: host_data.as_ref(),
                     },
                 )
                 .await?;
@@ -537,9 +532,8 @@ impl Writer {
                     id: event.id.run,
                     session: event.session,
                     at: event.at,
-                    host_ref: None,
-                    idempotency_key: None,
-                    host: None,
+                    request_id: None,
+                    host_data: None,
                 },
             )
             .await?;
@@ -748,9 +742,8 @@ mod tests {
             id: RunId::new(),
             session: SessionId::new(),
             code: String::new(),
-            host_ref: None,
-            host: None,
-            idempotency_key: None,
+            request_id: None,
+            host_data: None,
             at: EpochMillis::from_millis(1),
         });
         let first = sink.flush().await;

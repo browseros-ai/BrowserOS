@@ -55,9 +55,8 @@ fn start_run(sink: &TraceSink, session: SessionId, code: &str, key: Option<&str>
         id: run,
         session,
         code: code.to_string(),
-        host_ref: Some("tool-call-1".into()),
-        host: Some(json!({"ownerRun": "r1"})),
-        idempotency_key: key.map(str::to_string),
+        request_id: key.map(str::to_string),
+        host_data: Some(json!({"ownerRun": "r1"})),
         at: at(0),
     });
     run
@@ -159,7 +158,12 @@ async fn a_run_reads_back_as_a_tree_with_owners_and_deliveries() {
         client: Some("zuzu".into()),
         at: at(0),
     });
-    let run = start_run(&h.sink, session, "await page.goto(url)", None);
+    let run = start_run(
+        &h.sink,
+        session,
+        "await page.goto(url)",
+        Some("tool-call-1"),
+    );
     let goto = OperationId::new(run, 1);
     let fill = OperationId::new(run, 2);
     let host_call = OperationId::new(run, 3);
@@ -229,8 +233,8 @@ async fn a_run_reads_back_as_a_tree_with_owners_and_deliveries() {
     assert_eq!(detail.summary.status, RunStatus::Ok);
     assert_eq!(detail.summary.effects, Some(RunEffects::Done));
     assert_eq!(detail.summary.operation_count, 4);
-    assert_eq!(detail.summary.host_ref.as_deref(), Some("tool-call-1"));
-    assert_eq!(detail.host, Some(json!({"ownerRun": "r1"})));
+    assert_eq!(detail.summary.request_id.as_deref(), Some("tool-call-1"));
+    assert_eq!(detail.host_data, Some(json!({"ownerRun": "r1"})));
     let ops = &detail.operations;
     assert_eq!(
         ops.iter().map(|op| op.id.seq).collect::<Vec<_>>(),
@@ -443,7 +447,33 @@ async fn dropped_events_still_count_when_the_last_sink_is_gone() {
 }
 
 #[tokio::test]
-async fn an_idempotency_key_finds_the_run_and_its_replay_expires() {
+async fn two_runs_racing_with_one_request_id_lose_no_records() {
+    // Admission refuses a repeated request id, but two runs can race past it before either
+    // row is written. The store must keep both rather than fail the writer's batch.
+    let h = harness(WriterConfig::default()).await;
+    let session = SessionId::new();
+    let first = start_run(&h.sink, session, "a", Some("dup-1"));
+    let second = start_run(&h.sink, session, "b", Some("dup-1"));
+    end_run(&h.sink, first, RunStatus::Ok, None);
+    end_run(&h.sink, second, RunStatus::Ok, None);
+    flushed(&h).await;
+    assert!(h.store.run(first).await.ok().flatten().is_some());
+    assert!(h.store.run(second).await.ok().flatten().is_some());
+    let found = h
+        .store
+        .run_by_request(session, "dup-1")
+        .await
+        .ok()
+        .flatten();
+    assert_eq!(
+        found.map(|run| run.id),
+        Some(first),
+        "the earliest run answers the lookup"
+    );
+}
+
+#[tokio::test]
+async fn a_request_id_finds_the_run_and_its_replay_expires() {
     let h = harness(WriterConfig {
         replay_window: Duration::from_millis(100),
         ..WriterConfig::default()
@@ -454,11 +484,16 @@ async fn an_idempotency_key_finds_the_run_and_its_replay_expires() {
     end_run(&h.sink, run, RunStatus::Ok, None);
     flushed(&h).await;
 
-    let found = h.store.run_by_key(session, "key-1").await.ok().flatten();
+    let found = h
+        .store
+        .run_by_request(session, "key-1")
+        .await
+        .ok()
+        .flatten();
     assert_eq!(found.map(|run| run.id), Some(run));
     let other = h
         .store
-        .run_by_key(SessionId::new(), "key-1")
+        .run_by_request(SessionId::new(), "key-1")
         .await
         .ok()
         .flatten();
@@ -638,9 +673,8 @@ async fn retention_deletes_old_runs_and_empty_sessions() {
         id: old,
         session: old_session,
         code: "old".into(),
-        host_ref: None,
-        host: None,
-        idempotency_key: None,
+        request_id: None,
+        host_data: None,
         at: at(0),
     });
     let read = OperationId::new(old, 1);
@@ -671,9 +705,8 @@ async fn retention_deletes_old_runs_and_empty_sessions() {
         id: recent,
         session: new_session,
         code: "recent".into(),
-        host_ref: None,
-        host: None,
-        idempotency_key: None,
+        request_id: None,
+        host_data: None,
         at: at(eight_days),
     });
     flushed(&h).await;
@@ -736,19 +769,18 @@ async fn privacy_commits_through_the_writer_and_survives_a_reopen() {
 }
 
 #[tokio::test]
-async fn runs_page_newest_first_and_filter_by_host_ref() {
+async fn runs_page_newest_first_and_filter_by_request_id() {
     let h = harness(WriterConfig::default()).await;
     let session = SessionId::new();
     let mut ids = Vec::new();
-    for (offset, host_ref) in [(0, "a"), (10, "b"), (20, "a")] {
+    for (offset, request_id) in [(0, "a"), (10, "b"), (20, "a")] {
         let id = RunId::new();
         h.sink.run_started(RunStarted {
             id,
             session,
             code: String::new(),
-            host_ref: Some(host_ref.into()),
-            host: None,
-            idempotency_key: None,
+            request_id: Some(request_id.into()),
+            host_data: None,
             at: at(offset),
         });
         ids.push(id);
@@ -787,7 +819,7 @@ async fn runs_page_newest_first_and_filter_by_host_ref() {
     let by_ref = h
         .store
         .runs(RunQuery {
-            host_ref: Some("a".into()),
+            request_id: Some("a".into()),
             ..RunQuery::default()
         })
         .await

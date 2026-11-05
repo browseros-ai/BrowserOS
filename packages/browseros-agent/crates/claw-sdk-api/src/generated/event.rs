@@ -1,7 +1,7 @@
 /*
  * BrowserOS claw-sdk API
  *
- * The host-facing API of hosted BrowserOS Neo (claw-sdk): run and operation records, screenshots, the live view, the VNC display and owner takeover.  It is served on Neo's host listener, never on the agent's MCP port. That is a Unix socket by default (`[host_api] socket` in `neo.toml`), with a TCP bind only when `[host_api] tcp` is set. The same listener serves sdk-extensions' host API under `/host/v1`. Every request needs `Authorization: Bearer <token>` (`[host_api] token_file`); on the socket the peer's uid is checked too. Tokens are never accepted in query strings.  Ids: a run id is a UUIDv7; an operation id is `<runId>.<seq>`, where `seq` counts the run's operations in start order; a session id is the handle `run` returns in `_meta[\"com.browseros.neo/session\"]`.  Delivery keeps three answers apart so a client never repeats a write blindly: `not_sent` (no side effect was attempted), `done` (Neo has a definite answer) and `unknown` (sent, never confirmed).  Compatibility: changes within `/v1` are additive. New response fields and new values of an extensible enum (`x-extensible-enum`) can appear at any time, so clients must ignore fields and values they do not know. Fields are never removed or renamed within `/v1`.
+ * The host-facing API of hosted BrowserOS Neo (claw-sdk): run and operation records, screenshots, the live view, the VNC display and owner takeover. Takeover is offered as small stable parts (locks, fits, the typed-value sweep, plus `/private` and `/display`) and one thin flow over them (`/v1/takeovers`); a host may compose its own flow from the parts.  It is served on Neo's host listener, never on the agent's MCP port. That is a Unix socket by default (`[host_api] socket` in `neo.toml`), with a TCP bind only when `[host_api] tcp` is set. The same listener serves sdk-extensions' host API under `/host/v1`. Every request needs `Authorization: Bearer <token>` (`[host_api] token_file`); on the socket the peer's uid is checked too. Tokens are never accepted in query strings.  Ids: a run id is a UUIDv7 Neo creates for every run and returns in the result's `_meta[\"com.browseros.neo/run\"].id`; an operation id is `<runId>.<seq>`, where `seq` counts the run's operations in start order; a session id is the handle `run` returns in `_meta[\"com.browseros.neo/session\"]`. A host may also send its own optional `requestId` with a run (`_meta[\"com.browseros.neo/run\"] = {requestId?, hostData?}`): runs can then be looked up by it, and a repeat of it in the same session never runs again.  Delivery keeps three answers apart so a client never repeats a write blindly: `not_sent` (no side effect was attempted), `done` (Neo has a definite answer) and `unknown` (sent, never confirmed).  Compatibility: changes within `/v1` are additive. New response fields and new values of an extensible enum (`x-extensible-enum`) can appear at any time, so clients must ignore fields and values they do not know. Fields are never removed or renamed within `/v1`.
  *
  * The version of the OpenAPI document: 1.0.0
  *
@@ -25,6 +25,8 @@ pub struct Event {
     pub operation: Option<Box<models::Operation>>,
     #[serde(rename = "page", skip_serializing_if = "Option::is_none")]
     pub page: Option<Box<models::PageRef>>,
+    #[serde(rename = "lock", skip_serializing_if = "Option::is_none")]
+    pub lock: Option<Box<models::Lock>>,
     #[serde(rename = "takeover", skip_serializing_if = "Option::is_none")]
     pub takeover: Option<Box<models::Takeover>>,
 }
@@ -38,6 +40,7 @@ impl Event {
             run: None,
             operation: None,
             page: None,
+            lock: None,
             takeover: None,
         }
     }

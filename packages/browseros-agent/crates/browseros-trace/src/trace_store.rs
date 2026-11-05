@@ -49,9 +49,8 @@ CREATE TABLE IF NOT EXISTS runs (
   status TEXT NOT NULL,
   effects TEXT,
   error TEXT,
-  host_ref TEXT,
-  idempotency_key TEXT,
-  host TEXT,
+  request_id TEXT,
+  host_data TEXT,
   code TEXT,
   code_truncated INTEGER NOT NULL DEFAULT 0,
   code_withheld TEXT,
@@ -64,9 +63,10 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS runs_by_session ON runs(session_id, started_at);
 CREATE INDEX IF NOT EXISTS runs_by_start ON runs(started_at, id);
-CREATE INDEX IF NOT EXISTS runs_by_host_ref ON runs(host_ref) WHERE host_ref IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS runs_by_key ON runs(session_id, idempotency_key)
-  WHERE idempotency_key IS NOT NULL;
+-- Not unique on purpose: admission refuses a repeated request id, and a unique index here
+-- would fail a whole writer batch (and lose its records) if two runs ever raced past it.
+CREATE INDEX IF NOT EXISTS runs_by_request ON runs(request_id, session_id)
+  WHERE request_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS operations (
   run_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
@@ -95,8 +95,8 @@ CREATE TABLE IF NOT EXISTS operations (
 CREATE INDEX IF NOT EXISTS operations_by_session ON operations(session_id, started_at, run_id, seq);
 ";
 
-const RUN_SUMMARY_COLUMNS: &str = "id, session_id, status, effects, error, host_ref, \
-    idempotency_key, started_at, ended_at, operation_count, trace_gaps";
+const RUN_SUMMARY_COLUMNS: &str = "id, session_id, status, effects, error, request_id, \
+    started_at, ended_at, operation_count, trace_gaps";
 
 const OPERATION_COLUMNS: &str = "run_id, seq, parent_id, session_id, name, kind, attempt, \
     effect, page_id, tab_id, url, title, started_at, sent_at, ended_at, outcome, delivery, \
@@ -127,7 +127,7 @@ pub struct Swept {
     pub operations: u64,
     /// Sessions deleted.
     pub sessions: u64,
-    /// Idempotent-replay results dropped because their window passed.
+    /// Stored results for repeated request ids, dropped because their window passed.
     pub replays: u64,
 }
 
@@ -246,7 +246,7 @@ impl TraceStore {
     /// When the file cannot be read or a row is corrupt.
     pub async fn run(&self, id: RunId) -> Result<Option<RunDetail>, TraceError> {
         let Some(row) = sqlx::query(&format!(
-            "SELECT {RUN_SUMMARY_COLUMNS}, host, code, code_truncated, code_withheld, result, \
+            "SELECT {RUN_SUMMARY_COLUMNS}, host_data, code, code_truncated, code_withheld, result, \
              result_truncated FROM runs WHERE id = ?"
         ))
         .bind(id.to_string())
@@ -266,7 +266,7 @@ impl TraceStore {
         .collect::<Result<Vec<_>, _>>()?;
         Ok(Some(RunDetail {
             summary: run_summary(&row)?,
-            host: json_column(&row, "host")?,
+            host_data: json_column(&row, "host_data")?,
             code: row.try_get("code")?,
             code_truncated: row.try_get::<i64, _>("code_truncated")? != 0,
             code_withheld: row.try_get("code_withheld")?,
@@ -306,13 +306,9 @@ impl TraceStore {
             sql.push_str(" AND session_id = ?");
             binds.push(Bind::Text(session.to_string()));
         }
-        if let Some(host_ref) = query.host_ref {
-            sql.push_str(" AND host_ref = ?");
-            binds.push(Bind::Text(host_ref));
-        }
-        if let Some(key) = query.idempotency_key {
-            sql.push_str(" AND idempotency_key = ?");
-            binds.push(Bind::Text(key));
+        if let Some(request_id) = query.request_id {
+            sql.push_str(" AND request_id = ?");
+            binds.push(Bind::Text(request_id));
         }
         if let Some(status) = query.status {
             sql.push_str(" AND status = ?");
@@ -345,20 +341,21 @@ impl TraceStore {
         Ok(Page { items, next_cursor })
     }
 
-    /// The run with this idempotency key in `session`, if any.
+    /// The first run started with `request_id` in `session`, if any.
     ///
     /// # Errors
     /// When the file cannot be read or the row is corrupt.
-    pub async fn run_by_key(
+    pub async fn run_by_request(
         &self,
         session: SessionId,
-        key: &str,
+        request_id: &str,
     ) -> Result<Option<RunSummary>, TraceError> {
         sqlx::query(&format!(
-            "SELECT {RUN_SUMMARY_COLUMNS} FROM runs WHERE session_id = ? AND idempotency_key = ?"
+            "SELECT {RUN_SUMMARY_COLUMNS} FROM runs WHERE request_id = ? AND session_id = ? \
+             ORDER BY started_at, id LIMIT 1"
         ))
+        .bind(request_id)
         .bind(session.to_string())
-        .bind(key)
         .fetch_optional(&self.pool)
         .await?
         .as_ref()
@@ -575,9 +572,8 @@ pub(crate) struct RunStartRow<'a> {
     pub(crate) id: RunId,
     pub(crate) session: SessionId,
     pub(crate) at: EpochMillis,
-    pub(crate) host_ref: Option<&'a str>,
-    pub(crate) idempotency_key: Option<&'a str>,
-    pub(crate) host: Option<&'a Value>,
+    pub(crate) request_id: Option<&'a str>,
+    pub(crate) host_data: Option<&'a Value>,
 }
 
 pub(crate) async fn insert_run(
@@ -585,15 +581,14 @@ pub(crate) async fn insert_run(
     run: RunStartRow<'_>,
 ) -> Result<(), TraceError> {
     sqlx::query(
-        "INSERT INTO runs (id, session_id, started_at, status, host_ref, idempotency_key, host) \
-         VALUES (?, ?, ?, 'running', ?, ?, ?) ON CONFLICT(id) DO NOTHING",
+        "INSERT INTO runs (id, session_id, started_at, status, request_id, host_data) \
+         VALUES (?, ?, ?, 'running', ?, ?) ON CONFLICT(id) DO NOTHING",
     )
     .bind(run.id.to_string())
     .bind(run.session.to_string())
     .bind(run.at.millis())
-    .bind(run.host_ref)
-    .bind(run.idempotency_key)
-    .bind(run.host.map(Value::to_string))
+    .bind(run.request_id)
+    .bind(run.host_data.map(Value::to_string))
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -930,8 +925,7 @@ fn run_summary(row: &SqliteRow) -> Result<RunSummary, TraceError> {
             .map(|text| run_effects(text).ok_or_else(|| corrupt("effects", text)))
             .transpose()?,
         error: error_column(row, "error")?,
-        host_ref: row.try_get("host_ref")?,
-        idempotency_key: row.try_get("idempotency_key")?,
+        request_id: row.try_get("request_id")?,
         started_at: EpochMillis::from_millis(row.try_get("started_at")?),
         ended_at: time_column(row, "ended_at")?,
         operation_count: count_column(row, "operation_count")?,
