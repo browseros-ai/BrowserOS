@@ -155,9 +155,31 @@ struct Browser {
     script: Arc<TestConnection>,
     /// What every frame's password, card and code fields hold.
     fields: Mutex<Vec<String>>,
+    /// The tabs a test listed with [`Browser::list_tabs`]. Once set, `Browser.activateTab`
+    /// brings its tab to the front of them, as Chromium does; until then the front only moves
+    /// when a test moves it.
+    listed: Mutex<Option<Vec<i64>>>,
+    /// How long `Browser.activateTab` takes to bring its tab forward; none unless a test slows
+    /// it with [`Browser::slow_activation`].
+    activation: Mutex<Duration>,
 }
 
 impl Browser {
+    /// From now on the browser lists `tabs`, with `front` in front, and an activated tab comes
+    /// to the front of them.
+    fn list_tabs(&self, tabs: &[i64], front: i64) -> TestResult {
+        *self.listed.lock().unwrap_or_else(PoisonError::into_inner) = Some(tabs.to_vec());
+        open_tabs(&self.script, tabs, front)
+    }
+
+    /// From now on `Browser.activateTab` takes `delay` to bring its tab forward.
+    fn slow_activation(&self, delay: Duration) {
+        *self
+            .activation
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = delay;
+    }
+
     async fn answer(
         &self,
         epoch: Option<u64>,
@@ -166,6 +188,9 @@ impl Browser {
         session: Option<&SessionId>,
     ) -> Result<Value, CdpError> {
         let sweep_read = method == "Runtime.evaluate" && params["expression"] == SWEEP_READ;
+        let activated = (method == "Browser.activateTab")
+            .then(|| params["tabId"].as_i64())
+            .flatten();
         let reply = match epoch {
             Some(epoch) => {
                 self.script
@@ -174,6 +199,26 @@ impl Browser {
             }
             None => self.script.send(method, params, session).await,
         }?;
+        if activated.is_some() {
+            let delay = *self
+                .activation
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            tokio::time::sleep(delay).await;
+        }
+        if let Some(tab) = activated
+            && let Some(tabs) = self
+                .listed
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+            && tabs.contains(&tab)
+        {
+            open_tabs(&self.script, &tabs, tab).map_err(|error| CdpError::Protocol {
+                code: -1,
+                message: error.to_string(),
+            })?;
+        }
         if !sweep_read {
             return Ok(reply);
         }
@@ -344,6 +389,8 @@ async fn harness_at(xvnc: FakeXvnc, addr: SocketAddr) -> Result<Harness, BoxErro
     let browser = Arc::new(Browser {
         script: browser(&[3, 4], 3)?,
         fields: Mutex::default(),
+        listed: Mutex::default(),
+        activation: Mutex::default(),
     });
     let tabs = BrowserTabs::new(
         BrowserSession::new(
@@ -989,6 +1036,103 @@ async fn an_open_view_closes_when_a_private_tab_comes_to_the_front() -> TestResu
     Ok(())
 }
 
+/// sdk-privacy leak test finding 4: a control display's first input makes every open tab
+/// private, and the flag outlives the display. Once the tab the owner worked in closed, a
+/// private tab was left in front, and a view following the agent's next tab was refused before
+/// its follower could bring that tab forward. The screen stayed on the private tab, where a raw
+/// control display's keys then went.
+#[tokio::test]
+async fn a_follow_view_brings_its_tab_forward_over_a_private_tab_left_in_front() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4], 3)?;
+    h.make_private(3).await?;
+
+    let view = h.view(Some(Follow::Tab(TabId(4)))).await?;
+    view.send(HANDSHAKE);
+    assert_eq!(
+        h.received(0, 3).await?,
+        handshake_received(),
+        "the view shows tab 4"
+    );
+    assert_eq!(h.activated()?.first(), Some(&4), "brought forward first");
+    Ok(())
+}
+
+/// The front-tab watch polls every 250 ms. A view registered before its tab came forward could be
+/// closed by a poll that still saw the private tab it was replacing.
+#[tokio::test]
+async fn a_view_whose_tab_comes_forward_slowly_is_not_closed_by_the_tab_it_replaces() -> TestResult
+{
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4], 3)?;
+    h.browser.slow_activation(POLLS);
+    h.make_private(3).await?;
+
+    let view = h.view(Some(Follow::Tab(TabId(4)))).await?;
+    view.send(HANDSHAKE);
+    assert_eq!(
+        h.received(0, 3).await?,
+        handshake_received(),
+        "the view still shows tab 4"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_view_admitted_while_views_are_held_brings_nothing_forward() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4], 3)?;
+    let _hold = h.displays.hold_views_closed();
+    assert!(matches!(
+        h.displays
+            .admit(DisplayRequest::View {
+                follow: Some(Follow::Tab(TabId(4)))
+            })
+            .await,
+        Err(PartError::DisplayPaused)
+    ));
+    assert!(
+        h.activated()?.is_empty(),
+        "a takeover holding views keeps its tab in front"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_view_that_cannot_bring_its_tab_forward_is_still_refused_over_a_private_tab() -> TestResult
+{
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4], 3)?;
+    h.make_private(3).await?;
+    h.make_private(4).await?;
+    assert!(
+        matches!(
+            h.displays
+                .admit(DisplayRequest::View {
+                    follow: Some(Follow::Tab(TabId(4)))
+                })
+                .await,
+            Err(PartError::DisplayPaused)
+        ),
+        "its own tab is private: follow never brings it forward"
+    );
+    let task = TaskId::parse("checkout")?;
+    assert!(
+        matches!(
+            h.displays
+                .admit(DisplayRequest::View {
+                    follow: Some(Follow::Task(task))
+                })
+                .await,
+            Err(PartError::DisplayPaused)
+        ),
+        "a task with no operation yet names no tab to bring forward"
+    );
+    assert!(h.activated()?.is_empty());
+    assert_eq!(h.xvnc.connections(), 0, "a refused view never reaches Xvnc");
+    Ok(())
+}
+
 #[tokio::test]
 async fn follow_never_brings_a_private_tab_to_the_front() -> TestResult {
     let h = harness().await?;
@@ -1123,6 +1267,8 @@ fn the_browser_hands_its_targeted_subscriber_what_its_script_emits() -> TestResu
     let browser = Browser {
         script: Arc::clone(&script),
         fields: Mutex::default(),
+        listed: Mutex::default(),
+        activation: Mutex::default(),
     };
     let mut bindings = browser.events_targeted("Runtime.bindingCalled");
     script.emit("Runtime.bindingCalled", json!({ "name": "probe" }), None);

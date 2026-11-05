@@ -277,10 +277,12 @@ impl Displays {
     }
 
     /// Admits one display before its WebSocket upgrade. A view is refused while the owner has
-    /// control, and while a private tab is in front. Then the display is registered and gets its
-    /// own connection to Xvnc. A control display also opens `Privacy`'s control display, so tabs
-    /// that open from now on start private, and arms the journal on every open tab before it
-    /// returns, so the owner's first key cannot reach a tab the journal has not been armed on.
+    /// control, and while a private tab is in front; a view that follows a tab first brings that
+    /// tab forward when its follower would (`follow::bring_forward`). Then the display is
+    /// registered and gets its own connection to Xvnc. A control display also opens `Privacy`'s
+    /// control display, so tabs that open from now on start private, and arms the journal on
+    /// every open tab before it returns, so the owner's first key cannot reach a tab the journal
+    /// has not been armed on.
     ///
     /// A view is registered before the tab in front is read and Xvnc is dialed, so a tab that
     /// goes private or comes to the front after the read, and the owner's input during the
@@ -294,6 +296,16 @@ impl Displays {
     pub async fn admit(self: &Arc<Self>, request: DisplayRequest) -> Result<Admitted, PartError> {
         let (registration, role) = match request {
             DisplayRequest::View { follow } => {
+                if self.views_paused() {
+                    return Err(PartError::DisplayPaused);
+                }
+                // Before the view is registered: once it is, the front-tab watch may read the
+                // private tab this replaces and close the view, if the task's lookup or the
+                // activation outlasts one of its polls.
+                let shown = match &follow {
+                    Some(follow) => follow::bring_forward(follow, self).await,
+                    None => None,
+                };
                 let close = CancellationToken::new();
                 let (id, front_watch) = {
                     let mut table = self.table();
@@ -319,7 +331,14 @@ impl Displays {
                 {
                     return Err(PartError::DisplayPaused);
                 }
-                (registration, Role::View { close, follow })
+                (
+                    registration,
+                    Role::View {
+                        close,
+                        follow,
+                        shown,
+                    },
+                )
             }
             DisplayRequest::Control { binding } => {
                 let id = {
@@ -372,6 +391,12 @@ impl Displays {
     /// Whether any control display is open. Follow pauses while one is.
     pub(crate) fn control_open(&self) -> bool {
         !self.table().controls.is_empty()
+    }
+
+    /// Whether views are kept out: the owner typed on a control display, or a takeover holds
+    /// them closed.
+    pub(crate) fn views_paused(&self) -> bool {
+        self.table().views_paused()
     }
 
     /// Closes every open view. The front-tab watch calls it when a private tab is in front, or
@@ -547,6 +572,8 @@ enum Role {
     View {
         close: CancellationToken,
         follow: Option<Follow>,
+        /// The tab admission brought forward for `follow`, which its follower then need not.
+        shown: Option<TabId>,
     },
     Control {
         /// Open until the display's end: while it is, every tab that opens starts private.
@@ -599,7 +626,11 @@ impl Admitted {
         let displays = &registration.displays;
         let id = registration.id;
         let end = match role {
-            Role::View { close, follow } => {
+            Role::View {
+                close,
+                follow,
+                shown,
+            } => {
                 let closing = Closing::Paused(close);
                 let proxy =
                     Proxy::new(displays, id, None).run(server, from_viewer, to_viewer, &closing);
@@ -609,7 +640,7 @@ impl Admitted {
                         let mut proxy = pin!(proxy);
                         tokio::select! {
                             (end, _) = &mut proxy => end,
-                            () = follow::run(&follow, displays) => proxy.await.0,
+                            () = follow::run(&follow, displays, shown) => proxy.await.0,
                         }
                     }
                 }

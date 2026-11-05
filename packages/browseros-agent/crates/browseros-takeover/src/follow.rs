@@ -55,8 +55,42 @@ pub(crate) const fn next_activation(state: FollowState) -> Option<TabId> {
     }
 }
 
-/// The follow half of a view display's life. It runs until the display drops it.
-pub(crate) async fn run(follow: &Follow, displays: &Displays) {
+/// Brings a follow view's tab to the front as the view is admitted, before the view reads what
+/// is in front, when the follower would bring it there: the tab is known and not private, and
+/// nothing pauses following, views held by a takeover included. The state is read after the
+/// task's tab is looked up, just before the activation, so a takeover that began meanwhile keeps
+/// its tab in front. A private tab can be left in front with no view in sight: a control
+/// display's first input makes every open tab private, the flag outlives the display, and once
+/// the tab the owner worked in closes, the one behind it comes forward. Read first, that tab
+/// would refuse the view, its follower would never start, and the screen would stay on it.
+///
+/// Returns the tab it brought forward, which the follower then starts from as shown.
+pub(crate) async fn bring_forward(follow: &Follow, displays: &Displays) -> Option<TabId> {
+    let target = match follow {
+        Follow::Tab(tab) => Some(*tab),
+        Follow::Task(task) => last_tab(displays, task).await,
+    };
+    let state = FollowState {
+        target,
+        paused: displays.control_open()
+            || displays.views_paused()
+            || target.is_some_and(|tab| displays.locks.is_locked(tab)),
+        private: target.is_some_and(|tab| displays.privacy.is_private(tab).is_some()),
+        shown: None,
+    };
+    let tab = next_activation(state)?;
+    match displays.browser.activate(tab).await {
+        Ok(()) => Some(tab),
+        Err(error) => {
+            tracing::debug!(tab = tab.0, %error, "a new view could not bring its tab to the front");
+            None
+        }
+    }
+}
+
+/// The follow half of a view display's life, from the tab its admission brought forward
+/// (`shown`). It runs until the display drops it.
+pub(crate) async fn run(follow: &Follow, displays: &Displays, shown: Option<TabId>) {
     // Subscribed before the task's tab is read, so an operation between the two is not missed.
     let mut events = match follow {
         Follow::Task(_) => Some(displays.sink.subscribe()),
@@ -66,7 +100,7 @@ pub(crate) async fn run(follow: &Follow, displays: &Displays) {
         Follow::Tab(tab) => Some(*tab),
         Follow::Task(task) => last_tab(displays, task).await,
     };
-    let mut shown = None;
+    let mut shown = shown;
     let mut tick = tokio::time::interval(FOLLOW_TICK);
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
