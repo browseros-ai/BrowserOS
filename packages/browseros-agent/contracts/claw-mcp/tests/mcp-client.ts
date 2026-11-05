@@ -1,9 +1,10 @@
 /**
  * Minimal streamable-HTTP MCP client over raw fetch. The suite drives
  * the Rust server's `/mcp` with this instead of the SDK client so it
- * controls the wire exactly: no Origin/Sec-Fetch-Site headers (the
- * the server rejects browser-shaped requests), explicit `mcp-session-id`
- * handling, and raw access for the transport-hygiene cases.
+ * controls the wire exactly: no Origin header (the server rejects
+ * browser-originated requests, while Electron's Fetch metadata is allowed),
+ * explicit `mcp-session-id` handling, and raw access for the
+ * transport-hygiene cases.
  *
  * rmcp answers POSTs with SSE streams by default, so the response reader also
  * accepts a plain JSON body when the transport selects that representation.
