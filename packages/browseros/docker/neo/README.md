@@ -457,7 +457,9 @@ docker build --no-cache-filter neo --build-context neo-deb=/path/to/folder -t ne
 
 To run this checkout's claw-server in the image while developing it, use
 [`dev.sh`](dev.sh): `./dev.sh up` builds and starts it with the viewer on 16080 and MCP on
-19010, and its header explains how to test it through Neo's MCP tools.
+19010, and its header explains how to test it through Neo's MCP tools. `./dev.sh up --server
+claw-sdk` runs claw-sdk instead, with a dev-only kit to watch the browser, send runs and read
+each run's trace; [`devkit/HOWTO.md`](devkit/HOWTO.md) walks through it.
 
 An image can also run claw-sdk in place of claw-server. Those images are built and
 smoke-tested only for now, and none is published. A claw-sdk image serves no noVNC viewer on

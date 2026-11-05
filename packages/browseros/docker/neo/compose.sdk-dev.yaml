@@ -1,0 +1,36 @@
+# Dev only. `dev.sh up --server claw-sdk` layers this over compose.yaml so the
+# dev kit (devkit/) can reach claw-sdk's host API: runs, operations,
+# screenshots, events, locks, takeovers and the display. Nothing here is in the
+# image. The settings reach claw-sdk through the container's environment, which
+# the entrypoint and the browser hand to the server unchanged, so the release
+# image, entrypoint.sh and compose.yaml stay exactly as they ship.
+#
+#   NEO_DEV_HOME=... docker compose -p neo-dev -f compose.yaml -f compose.sdk-dev.yaml up -d --wait
+#
+# compose.yaml's viewer port (16080 in dev) stays mapped and answers nothing: a
+# claw-sdk image runs no noVNC server. The kit's gateway serves the viewer.
+services:
+  neo:
+    ports:
+      # The host API, on the Mac's loopback only. Docker's published ports
+      # bypass host firewalls, and whoever reaches this port with the token can
+      # read every trace and take over the browser.
+      - "127.0.0.1:${NEO_HOST_PORT:-19300}:9300"
+    environment:
+      # Serve the host API on TCP as well as its Unix socket. 0.0.0.0 inside
+      # the container so Docker's port forward reaches it; the mapping above is
+      # what keeps it off the network.
+      CLAW_HOST_TCP: 0.0.0.0:9300
+      # claw-sdk opens no host listener at all without a usable token.
+      CLAW_HOST_TOKEN_FILE: /run/neo-dev/host-token
+      # The socket's default, /data/browserclaw/host.sock, sits on dev.sh's bind
+      # mount of the Mac's $NEO_DEV_HOME/data. Docker Desktop's file sharing
+      # cannot hold a Unix socket: claw-sdk exits on chmod (EINVAL), then on the
+      # leftover file (EOPNOTSUPP), restarting in a loop. The kit uses TCP, so
+      # the socket only has to exist, and the container's own /tmp holds it.
+      CLAW_HOST_SOCKET: /tmp/claw-sdk-host.sock
+    volumes:
+      # dev.sh creates the token once, 0600, and never prints it. Docker
+      # Desktop's file sharing still lets the container's user read it, so the
+      # file never needs wider permissions. Read-only: Neo never writes it.
+      - "${NEO_DEV_HOME:?dev.sh sets NEO_DEV_HOME}/host-token:/run/neo-dev/host-token:ro"
