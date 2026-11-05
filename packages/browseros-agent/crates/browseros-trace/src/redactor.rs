@@ -12,7 +12,7 @@ use std::sync::Arc;
 /// What a redacted field becomes.
 pub const REDACTED: &str = "[redacted]";
 
-/// Size limits, in bytes of JSON text.
+/// Size limits, in bytes of JSON text, except `note_lines`, which counts lines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RedactionLimits {
     /// Any one string inside a value.
@@ -23,8 +23,16 @@ pub struct RedactionLimits {
     pub result: usize,
     /// A run's code.
     pub code: usize,
-    /// Messages, URLs, titles and host data.
+    /// Messages, URLs and titles.
     pub text: usize,
+    /// A run's host data. D14 lets a host send up to 4 KiB, and it is kept whole up to this
+    /// size: no string inside it is cut on its own, so the host reads back what it sent.
+    pub host_data: usize,
+    /// Any one line of an operation's notes.
+    pub note: usize,
+    /// The lines of an operation's notes that are kept. The rest are counted in one last
+    /// `…[+N lines]` line.
+    pub note_lines: usize,
 }
 
 impl Default for RedactionLimits {
@@ -35,6 +43,9 @@ impl Default for RedactionLimits {
             result: 2048,
             code: 64 * 1024,
             text: 2048,
+            host_data: 4096,
+            note: 1024,
+            note_lines: 64,
         }
     }
 }
@@ -91,7 +102,7 @@ impl Redactor {
             }
         }
         self.secrets.mask_json(&mut value);
-        self.bound(value, self.limits.args)
+        self.bound(value, self.limits.args, self.limits.string)
     }
 
     /// A result: masked and bounded.
@@ -99,15 +110,16 @@ impl Redactor {
     pub fn result(&self, result: &Value) -> Bounded<Value> {
         let mut value = result.clone();
         self.secrets.mask_json(&mut value);
-        self.bound(value, self.limits.result)
+        self.bound(value, self.limits.result, self.limits.string)
     }
 
-    /// Host data: masked and bounded like a message.
+    /// Host data: masked, then bounded by `host_data` alone. Neo never reads it, so no string
+    /// inside it is clipped to `string` the way a result's are.
     #[must_use]
     pub fn host_data(&self, host: &Value) -> Bounded<Value> {
         let mut value = host.clone();
         self.secrets.mask_json(&mut value);
-        self.bound(value, self.limits.text)
+        self.bound(value, self.limits.host_data, self.limits.host_data)
     }
 
     /// A message, URL or title: masked and clipped.
@@ -116,6 +128,27 @@ impl Redactor {
         let mut text = text.to_string();
         self.secrets.mask_str(&mut text);
         clip(&text, self.limits.text).0
+    }
+
+    /// An operation's notes, oldest first: the first `note_lines` lines, each masked, then
+    /// clipped to `note` bytes. Lines past them are dropped and counted in one last
+    /// `…[+N lines]` line. Each line is masked before it is clipped, so a cut never leaves part
+    /// of a secret behind.
+    #[must_use]
+    pub fn notes(&self, notes: Vec<String>) -> Vec<String> {
+        let total = notes.len();
+        let mut kept: Vec<String> = notes
+            .into_iter()
+            .take(self.limits.note_lines)
+            .map(|mut line| {
+                self.secrets.mask_str(&mut line);
+                clip(&line, self.limits.note).0
+            })
+            .collect();
+        if total > kept.len() {
+            kept.push(format!("…[+{} lines]", total - kept.len()));
+        }
+        kept
     }
 
     /// A run's code: masked and clipped.
@@ -134,9 +167,10 @@ impl Redactor {
         }
     }
 
-    fn bound(&self, mut value: Value, budget: usize) -> Bounded<Value> {
+    /// Cuts `value` to `budget` bytes of JSON, and any one string in it to `max_string`.
+    fn bound(&self, mut value: Value, budget: usize, max_string: usize) -> Bounded<Value> {
         let mut remaining = i64::try_from(budget).unwrap_or(i64::MAX);
-        let cut = shrink(&mut value, &mut remaining, self.limits.string);
+        let cut = shrink(&mut value, &mut remaining, max_string);
         Bounded {
             value,
             truncation: if cut {

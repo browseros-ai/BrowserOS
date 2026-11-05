@@ -147,6 +147,7 @@ pub(crate) fn operation(op: &OperationRow, inlined: &Inlined) -> api::Operation 
             .error
             .as_ref()
             .map(|error| Box::new(operation_error(error))),
+        notes: (!op.notes.is_empty()).then(|| op.notes.clone()),
         started_at: op.started_at.millis(),
         sent_at: op.sent_at.map(EpochMillis::millis),
         ended_at: op.ended_at.map(EpochMillis::millis),

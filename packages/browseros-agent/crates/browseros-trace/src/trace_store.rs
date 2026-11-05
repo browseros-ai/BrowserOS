@@ -97,6 +97,9 @@ CREATE TABLE IF NOT EXISTS operations (
   result TEXT,
   result_truncated INTEGER NOT NULL DEFAULT 0,
   error TEXT,
+  -- Its call-log lines, a JSON array of strings, masked and bounded. Written with its end, so
+  -- NULL while it runs, and when it noted nothing.
+  notes TEXT,
   -- The screenshot after it: NULL (none, or its job was dropped), 'stored' (a JPEG on disk,
   -- screenshot_bytes long), 'withheld' (its tab was private) or 'expired' (the disk cap
   -- deleted it).
@@ -139,7 +142,7 @@ const RUN_SUMMARY_COLUMNS: &str = "id, task_id, status, effects, error, request_
 
 const OPERATION_COLUMNS: &str = "run_id, seq, parent_id, name, kind, attempt, effect, \
     target_tab_id, page_id, tab_id, url, title, started_at, sent_at, ended_at, outcome, \
-    delivery, args, args_truncated, result, result_truncated, error, screenshot";
+    delivery, args, args_truncated, result, result_truncated, error, notes, screenshot";
 
 /// The most screenshot bytes kept on disk (D5): about 7,000 JPEGs of 150 KB.
 const SCREENSHOT_CAP_BYTES: u64 = 1 << 30;
@@ -848,6 +851,7 @@ pub(crate) struct OperationEndRow<'a> {
     pub(crate) args: Option<(&'a Value, bool)>,
     pub(crate) result: Option<(&'a Value, bool)>,
     pub(crate) error: Option<&'a ErrorRecord>,
+    pub(crate) notes: &'a [String],
     pub(crate) page: Option<&'a PageState>,
 }
 
@@ -861,11 +865,15 @@ pub(crate) async fn end_operation(
         .map(serde_json::to_string)
         .transpose()
         .map_err(json_error)?;
+    let notes = (!op.notes.is_empty())
+        .then(|| serde_json::to_string(op.notes))
+        .transpose()
+        .map_err(json_error)?;
     let page = op.page.cloned().unwrap_or_default();
     let updated = sqlx::query(
         "UPDATE operations SET ended_at = ?, outcome = ?, delivery = ?, sent_at = ?, \
          args = COALESCE(?, args), args_truncated = COALESCE(?, args_truncated), \
-         result = ?, result_truncated = ?, error = ?, \
+         result = ?, result_truncated = ?, error = ?, notes = ?, \
          page_id = ?, tab_id = ?, url = ?, title = ? \
          WHERE run_id = ? AND seq = ? AND outcome IS NULL",
     )
@@ -878,6 +886,7 @@ pub(crate) async fn end_operation(
     .bind(op.result.map(|(result, _)| result.to_string()))
     .bind(i64::from(op.result.is_some_and(|(_, cut)| cut)))
     .bind(error)
+    .bind(notes)
     .bind(page.page_id.map(i64::from))
     .bind(page.tab_id.map(|tab| tab.0))
     .bind(page.url)
@@ -1195,6 +1204,11 @@ fn operation_row(row: &SqliteRow) -> Result<OperationRow, TraceError> {
             .map(|text| delivery_named(text).ok_or_else(|| corrupt("delivery", text)))
             .transpose()?,
         error: error_column(row, "error")?,
+        notes: row
+            .try_get::<Option<String>, _>("notes")?
+            .map(|text| serde_json::from_str(&text).map_err(json_error))
+            .transpose()?
+            .unwrap_or_default(),
         started_at: EpochMillis::from_millis(row.try_get("started_at")?),
         sent_at: time_column(row, "sent_at")?,
         ended_at: time_column(row, "ended_at")?,

@@ -63,6 +63,9 @@ pub struct Operation {
     pub delivery: Option<String>,
     #[serde(rename = "error", skip_serializing_if = "Option::is_none")]
     pub error: Option<Box<models::OperationError>>,
+    /// Its call-log lines, oldest first, e.g. `waiting for getByRole('button')`. Masked and bounded: a long line ends in `…[+N bytes]`, and lines past the limit are counted in one last `…[+N lines]` line. They are stored with the operation's end, so the field is absent while it runs and when it noted nothing.
+    #[serde(rename = "notes", skip_serializing_if = "Option::is_none")]
+    pub notes: Option<Vec<String>>,
     #[serde(rename = "startedAt")]
     pub started_at: i64,
     #[serde(rename = "sentAt", skip_serializing_if = "Option::is_none")]
@@ -104,6 +107,7 @@ impl Operation {
             outcome: None,
             delivery: None,
             error: None,
+            notes: None,
             started_at,
             sent_at: None,
             ended_at: None,

@@ -268,3 +268,62 @@ async fn the_trace_tail_keeps_the_latest_matching_operations_with_their_runs() -
         .assert_error(StatusCode::BAD_REQUEST, "invalid_request");
     Ok(())
 }
+
+#[tokio::test]
+async fn an_operations_notes_read_back_masked_on_the_operation_and_its_run() -> TestResult {
+    let h = harness().await?;
+    let secret = "hunter2-swordfish";
+    let registered = h
+        .post(
+            "/v1/secrets",
+            &json!({"value": secret, "ttlSeconds": 600}).to_string(),
+        )
+        .await?;
+    assert_eq!(registered.status, StatusCode::NO_CONTENT);
+    let run = start_run(&h.sink, Start::default());
+    let click = OperationId::new(run, 1);
+    let title = OperationId::new(run, 2);
+    op_started(&h.sink, click, Op::write(3, 1));
+    h.sink.op_notes(
+        click,
+        vec![
+            "waiting for getByRole('button')".to_string(),
+            format!("  typed {secret}"),
+            "attempting click action".to_string(),
+        ],
+    );
+    op_ended(&h.sink, click, Delivery::Done, None);
+    op_started(
+        &h.sink,
+        title,
+        Op {
+            name: "page.title",
+            effect: Effect::Read,
+            tab: Some(3),
+            at: 2,
+        },
+    );
+    op_ended(&h.sink, title, Delivery::Done, None);
+    h.flushed().await?;
+
+    let notes = json!([
+        "waiting for getByRole('button')",
+        "  typed [private]",
+        "attempting click action"
+    ]);
+    let operation = h.get(&format!("/v1/operations/{click}")).await?;
+    assert_eq!(operation.status, StatusCode::OK);
+    assert_eq!(operation.body["notes"], notes);
+    let detail = h.get(&format!("/v1/runs/{run}")).await?;
+    assert_eq!(detail.status, StatusCode::OK);
+    assert_eq!(detail.body["operations"][0]["notes"], notes);
+    assert!(
+        detail.body["operations"][1].get("notes").is_none(),
+        "an operation that noted nothing has no notes: {}",
+        detail.body["operations"][1]
+    );
+    let quiet = h.get(&format!("/v1/operations/{title}")).await?;
+    assert_eq!(quiet.status, StatusCode::OK);
+    assert!(quiet.body.get("notes").is_none(), "{}", quiet.body);
+    Ok(())
+}

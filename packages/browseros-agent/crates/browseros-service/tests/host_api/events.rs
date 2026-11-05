@@ -6,6 +6,7 @@ use crate::support::{
 };
 use axum::http::StatusCode;
 use browseros_trace::{Delivery, OperationId};
+use serde_json::json;
 
 fn seqs(events: &[Sse]) -> Vec<u64> {
     events.iter().filter_map(Sse::seq).collect()
@@ -64,6 +65,26 @@ async fn live_events_arrive_in_order_with_ids() -> TestResult {
     assert_eq!(events[1].data["operation"]["id"], click.to_string());
     assert_eq!(events[1].data["tabId"], 4);
     assert_eq!(events[3].data["run"]["status"], "ok");
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_operations_end_event_carries_its_notes() -> TestResult {
+    let h = harness().await?;
+    let mut stream = EventStream::open(&h, "/v1/events", None).await?;
+    let run = start_run(&h.sink, Start::default());
+    let click = OperationId::new(run, 1);
+    op_started(&h.sink, click, Op::write(4, 1));
+    h.sink
+        .op_notes(click, vec!["attempting click action".to_string()]);
+    op_ended(&h.sink, click, Delivery::Done, None);
+
+    let events = stream.take(3).await?;
+    assert_eq!(events[2].kind, "operation.ended", "notes publish no event");
+    assert_eq!(
+        events[2].data["operation"]["notes"],
+        json!(["attempting click action"])
+    );
     Ok(())
 }
 

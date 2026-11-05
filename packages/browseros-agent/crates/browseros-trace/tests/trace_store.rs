@@ -16,6 +16,7 @@ use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fs, io};
 use tempfile::TempDir;
 
 struct Harness {
@@ -742,6 +743,161 @@ async fn registered_secrets_never_reach_the_file() {
     }
 }
 
+/// Host data whose compact JSON, the size the app checks, is exactly `bytes` long. It is one
+/// string, so a cut per string would show as much as a cut of the whole.
+fn host_data_of(bytes: usize) -> Value {
+    let empty = json!({"blob": ""}).to_string().len();
+    let data = json!({"blob": "x".repeat(bytes - empty)});
+    assert_eq!(data.to_string().len(), bytes);
+    data
+}
+
+#[tokio::test]
+async fn host_data_of_4_kib_is_stored_whole_and_a_larger_one_is_cut()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let h = harness(WriterConfig::default()).await;
+    let runs = [4096, 4097].map(|bytes| {
+        let run = RunId::new();
+        h.sink.run_started(RunStarted {
+            id: run,
+            code: "x".to_string(),
+            request_id: None,
+            task_id: None,
+            host_data: Some(host_data_of(bytes)),
+            at: at(0),
+        });
+        run
+    });
+    flushed(&h).await;
+    let mut stored = Vec::new();
+    for run in runs {
+        let detail = h.store.run(run).await?.ok_or("run not found")?;
+        stored.push(detail.host_data);
+    }
+
+    assert_eq!(stored[0], Some(host_data_of(4096)), "D14 allows 4 KiB");
+    let cut = stored[1]
+        .as_ref()
+        .and_then(|data| data["blob"].as_str())
+        .unwrap_or_default();
+    assert!(
+        cut.starts_with("xxx") && cut.ends_with(" bytes]") && cut.contains("…[+"),
+        "{cut}"
+    );
+    assert!(
+        stored[1]
+            .as_ref()
+            .is_some_and(|data| data.to_string().len() <= 4096),
+        "{stored:?}"
+    );
+    Ok(())
+}
+
+async fn notes_of(
+    store: &TraceStore,
+    id: OperationId,
+) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+    let row = store
+        .operation(id)
+        .await?
+        .ok_or_else(|| format!("{id} not found"))?;
+    Ok(row.notes)
+}
+
+#[tokio::test]
+async fn an_operations_notes_reach_its_record_with_its_end_masked_bounded_and_in_order()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let h = harness(WriterConfig::default()).await;
+    h.secrets
+        .register(SecretValue::new("hunter2-swordfish".into()), None);
+    let limits = RedactionLimits::default();
+    let run = start_in(&h.sink, None, 0);
+    let click = OperationId::new(run, 1);
+    let title = OperationId::new(run, 2);
+    op_started(&h.sink, simple(click, "locator.click", Effect::Write));
+    op_started(&h.sink, simple(title, "page.title", Effect::Read));
+    h.sink.op_notes(
+        click,
+        vec![
+            "waiting for getByRole('button')".to_string(),
+            "typed hunter2-swordfish into the field".to_string(),
+            "x".repeat(5 * limits.note),
+        ],
+    );
+    // A second call adds to the first, past the lines an operation keeps: 70 lines in all.
+    h.sink.op_notes(
+        click,
+        (3..limits.note_lines + 6)
+            .map(|step| format!("step {step}"))
+            .collect(),
+    );
+    flushed(&h).await;
+    assert_eq!(
+        notes_of(&h.store, click).await?,
+        Vec::<String>::new(),
+        "stored with the end"
+    );
+
+    op_ended(
+        &h.sink,
+        click,
+        Delivery::Done,
+        None,
+        TargetSensitivity::Ordinary,
+    );
+    op_ended(
+        &h.sink,
+        title,
+        Delivery::Done,
+        None,
+        TargetSensitivity::Ordinary,
+    );
+    h.sink.op_notes(click, vec!["after the end".to_string()]);
+    flushed(&h).await;
+
+    let notes = notes_of(&h.store, click).await?;
+    assert_eq!(notes.len(), limits.note_lines + 1, "{notes:?}");
+    assert_eq!(notes[0], "waiting for getByRole('button')");
+    assert_eq!(notes[1], "typed [private] into the field");
+    assert!(
+        notes[2].starts_with("xxx") && notes[2].contains("…[+") && notes[2].len() <= limits.note,
+        "{} bytes: {}",
+        notes[2].len(),
+        notes[2]
+    );
+    let steps: Vec<String> = (3..limits.note_lines)
+        .map(|step| format!("step {step}"))
+        .collect();
+    assert_eq!(notes[3..limits.note_lines], steps[..]);
+    assert_eq!(notes[limits.note_lines], "…[+6 lines]");
+    assert!(
+        !notes.iter().any(|line| line == "after the end"),
+        "notes never change once the operation has ended"
+    );
+    assert_eq!(notes_of(&h.store, title).await?, Vec::<String>::new());
+    let detail = h.store.run(run).await?.ok_or("run not found")?;
+    let in_run: Vec<Vec<String>> = detail
+        .operations
+        .iter()
+        .map(|op| op.notes.clone())
+        .collect();
+    assert_eq!(in_run, [notes, Vec::new()]);
+
+    // The database must be read; only the WAL may be absent (after a checkpoint). A read that
+    // fails must fail the test, or the scan would pass without looking at the file.
+    let bytes = fs::read(h.dir.path().join("claw-sdk/trace.db"))?;
+    let wal = match fs::read(h.dir.path().join("claw-sdk/trace.db-wal")) {
+        Ok(wal) => wal,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error.into()),
+    };
+    let needle = b"hunter2-swordfish";
+    for file in [&bytes, &wal] {
+        assert!(!file.windows(needle.len()).any(|window| window == needle));
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn over_the_backlog_operation_events_drop_but_lifecycle_events_do_not() {
     let h = harness(WriterConfig {
@@ -752,6 +908,8 @@ async fn over_the_backlog_operation_events_drop_but_lifecycle_events_do_not() {
     let run = start_in(&h.sink, None, 0);
     let click = OperationId::new(run, 1);
     op_started(&h.sink, simple(click, "locator.click", Effect::Write));
+    h.sink
+        .op_notes(click, vec!["attempting click action".to_string()]);
     op_ended(
         &h.sink,
         click,
@@ -765,7 +923,10 @@ async fn over_the_backlog_operation_events_drop_but_lifecycle_events_do_not() {
         panic!("the run's lifecycle must survive");
     };
     assert_eq!(summary.status, RunStatus::Ok);
-    assert_eq!(summary.trace_gaps, 2);
+    assert_eq!(
+        summary.trace_gaps, 2,
+        "the start and the end; a dropped note hides no write"
+    );
     assert_eq!(summary.operation_count, 0);
     assert_eq!(
         summary.effects,

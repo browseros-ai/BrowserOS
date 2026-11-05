@@ -1165,6 +1165,15 @@ components:
           x-extensible-enum: [not_sent, done, unknown]
         error:
           $ref: '#/components/schemas/OperationError'
+        notes:
+          type: array
+          description: >-
+            Its call-log lines, oldest first, e.g. `waiting for getByRole('button')`. Masked and
+            bounded: a long line ends in `…[+N bytes]`, and lines past the limit are counted in one
+            last `…[+N lines]` line. They are stored with the operation's end, so the field is
+            absent while it runs and when it noted nothing.
+          items:
+            type: string
         startedAt:
           type: integer
           format: int64

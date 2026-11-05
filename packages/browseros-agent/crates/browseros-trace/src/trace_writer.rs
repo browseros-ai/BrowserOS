@@ -18,7 +18,10 @@
 //! Redaction needs one fact that only the end of an operation knows: whether its target was
 //! sensitive. So the start row stores the input with both `secret` and `sensitive` paths
 //! redacted. The raw input stays in this task's memory while the operation is open, and the end
-//! rewrites the row with the precise redaction. A crash leaves the conservative copy.
+//! rewrites the row with the precise redaction. A crash leaves the conservative copy. An
+//! operation's notes wait in the same place and reach disk in its end's update, masked and
+//! bounded: whoever reads the end (its `operation.ended` event included) reads every note, and
+//! none arrive after it.
 //!
 //! Screenshots: the writer decides and accounts, and the camera only takes pictures. This task
 //! is the one that sees each operation's start (effect, tab) and end (outcome, error owner) in
@@ -51,6 +54,7 @@ use browseros_core::TabId;
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::mem;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -155,6 +159,7 @@ enum Event {
     RunStarted(RunStarted),
     RunEnded(RunEnded),
     OperationStarted(OperationStarted),
+    OperationNotes { id: OperationId, notes: Vec<String> },
     OperationEnded(OperationEnded),
 }
 
@@ -269,6 +274,20 @@ impl TraceSink {
             return;
         }
         self.send(Event::OperationStarted(event));
+    }
+
+    /// Call-log lines for an open operation, oldest first; each call adds to the lines before
+    /// it. The writer holds them with the operation and its [`op_ended`](Self::op_ended) stores
+    /// them, so send them first: lines that arrive after the end are dropped, and an
+    /// operation's notes never change once it has ended. Dropped too when the writer is far
+    /// behind, and not counted as a gap: a note records no effect, so losing one cannot hide a
+    /// write.
+    pub fn op_notes(&self, id: OperationId, notes: Vec<String>) {
+        if notes.is_empty() || self.inner.backlog.load(Ordering::Relaxed) >= self.inner.max_backlog
+        {
+            return;
+        }
+        self.send(Event::OperationNotes { id, notes });
     }
 
     /// An operation ended. Dropped (and counted) when the writer is far behind.
@@ -456,6 +475,8 @@ struct OpenOperation {
     effect: Effect,
     args: Value,
     policy: Arc<RedactionPolicy>,
+    /// Raw, like `args`: masked and bounded only when the end stores them.
+    notes: Vec<String>,
 }
 
 struct Writer {
@@ -509,7 +530,7 @@ impl Writer {
         // callers would see `Closed` instead of the batch's real outcome. Answers are set aside
         // the same way, so a rollback hands all of them on. The ones an earlier rollback handed
         // on go first: they were queued before this batch.
-        let mut answers = std::mem::take(&mut self.unstored);
+        let mut answers = mem::take(&mut self.unstored);
         let mut work = Vec::with_capacity(answers.len() + batch.len());
         work.extend(
             answers
@@ -585,8 +606,8 @@ impl Writer {
         // Jobs leave only once their operations' rows are on disk. A rolled-back batch drops
         // its jobs, and each dropped answer reports `Dropped` through the queue, so its run
         // still completes.
-        let planned = std::mem::take(&mut self.planned);
-        let answering = std::mem::take(&mut self.answering);
+        let planned = mem::take(&mut self.planned);
+        let answering = mem::take(&mut self.answering);
         match result {
             Ok(()) => {
                 self.settle(answering);
@@ -668,6 +689,16 @@ impl Writer {
                 })
             }
             Event::OperationStarted(event) => self.operation_started(tx, event).await?,
+            Event::OperationNotes { id, notes } => {
+                if let Some(open) = self
+                    .runs
+                    .get_mut(&id.run)
+                    .and_then(|run| run.operations.get_mut(&id.seq))
+                {
+                    open.notes.extend(notes);
+                }
+                None
+            }
             Event::OperationEnded(event) => self.operation_ended(tx, event).await?,
             Event::RunEnded(event) => return self.run_ended(tx, event, published).await,
         };
@@ -726,6 +757,7 @@ impl Writer {
                 effect: event.effect,
                 args: event.args,
                 policy: event.policy,
+                notes: Vec::new(),
             },
         );
         Ok(Some(TraceRecordEvent::OperationStarted {
@@ -742,7 +774,7 @@ impl Writer {
         tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         event: OperationEnded,
     ) -> Result<Option<TraceRecordEvent>, TraceError> {
-        let open = self.runs.get_mut(&event.id.run).and_then(|run| {
+        let mut open = self.runs.get_mut(&event.id.run).and_then(|run| {
             if event.target == TargetSensitivity::Sensitive {
                 run.sensitive = true;
             }
@@ -751,6 +783,10 @@ impl Writer {
         let precise = open
             .as_ref()
             .map(|open| self.redactor.args(&open.args, &open.policy, event.target));
+        let notes = open
+            .as_mut()
+            .map(|open| self.redactor.notes(mem::take(&mut open.notes)))
+            .unwrap_or_default();
         let result = event
             .result
             .as_ref()
@@ -779,6 +815,7 @@ impl Writer {
                     .as_ref()
                     .map(|result| (&result.value, result.truncation == Truncation::Cut)),
                 error: error.as_ref(),
+                notes: &notes,
                 page: page.as_ref(),
             },
         )

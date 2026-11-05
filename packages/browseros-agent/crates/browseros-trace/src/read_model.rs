@@ -42,6 +42,9 @@ pub struct OperationRow {
     pub delivery: Option<Delivery>,
     /// Its error, when it failed.
     pub error: Option<ErrorRecord>,
+    /// Its call-log lines, oldest first: masked, bounded. Empty while it runs, and when it noted
+    /// nothing.
+    pub notes: Vec<String>,
     /// When it was admitted.
     pub started_at: EpochMillis,
     /// When it marked itself sent.
