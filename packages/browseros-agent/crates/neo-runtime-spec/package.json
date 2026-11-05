@@ -1,0 +1,11 @@
+{
+  "name": "@browseros/neo-runtime-spec",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Neo's runtime contracts: a Rust crate, plus the generated TypeScript types under ts/.",
+  "scripts": {
+    "lint:rust": "cargo fmt --package neo-runtime-spec -- --check && cargo clippy --package neo-runtime-spec --all-targets --locked -- -D warnings",
+    "test:rust": "cargo test --package neo-runtime-spec --locked"
+  }
+}
