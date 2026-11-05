@@ -1,0 +1,2 @@
+# The spec hash covers these files' raw bytes; never rewrite their line endings.
+*.yml -text
