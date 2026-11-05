@@ -45,14 +45,14 @@ Arrows show requests; results return along the same paths.
 - Expose capabilities outside Playwright through the same code mode. Publish `.d.ts` definitions and teach the agent how to call them.
 - Provide REST endpoints for screencasts, screenshots, recordings, tool traces, and audit traces. Customer applications can use them independently of the agent's tool list.
 - Design the browser layer so Jev-like operations and reusable skills can build on it.
-- Design reusable skills, custom SDK methods, and their extension boundary now; leave Jev-like APIs for later.
+- Design reusable skills and customer plugins with PreToolUse and PostToolUse hooks now; leave Jev-like APIs for later.
 
 ### Still to decide
 
 - The exact boundary between the Rust library, its binary, and thin Go/JavaScript clients.
 - The exact tab/session reference the client passes to continue operating on an existing page.
 - Which CAPTCHA, secure form filling, takeover, and proxy features ship first.
-- Define how trusted host methods register and call back into protected browser operations. Operation-wrapping hooks are a separate feature.
+- Define plugin loading, hook payloads, return behavior, and the tool-execution boundary. Custom-method transports are out of scope for now.
 
 ## Misc LLD points
 
@@ -120,31 +120,12 @@ Under discussion; no engine or binding API has been selected.
 - Current design topic: reusing known website workflows through code mode.
 - Still to decide: instructions versus saved functions, discovery, creation and verification, storage, and loading into fresh runs.
 
-### Custom SDK methods
+### Hooks design
 
-Separate design: [Client-defined SDK methods](client-sdk-methods-design.md), starting with the customer requirement and the Go login example. Its HLD is a proposal; low-level choices remain open.
-
-#### Agreed direction
-
-- A registration provides a JavaScript method name, input schema, output schema, and handler.
-- Neo methods can call Rust handlers; customer methods can call trusted host handlers, such as Go code in mirrord.
-- Both appear as ordinary methods inside `neo.run`, such as `neo.solveCaptcha(page)` and `zuzu.auth.fill({ page, fields })`.
-- Generate `.d.ts` declarations from the registrations and expose them in the run description or a skill.
-
-#### Next to design
-
-- How a Go client registers its methods and receives calls from the Rust sidecar.
-- How page and locator objects become scoped references across that process boundary.
-- How a host handler calls a protected browser operation while its original JavaScript call is awaiting completion.
-- How cancellation, errors, and trace ownership propagate across both directions.
-
-### Operation hooks
-
-- Registering a new callable method and wrapping an existing operation are different mechanisms.
-- The reference document puts around-operation hooks after V1. The immediate design question is customer-defined methods, including the Go-handler round trip.
-
-Reference: section 3, registered SDK methods and its login sequence.
-https://docs.shadowfax92.workers.dev/chVZOHAd
+- Customers can customize behavior through plugins that register PreToolUse and PostToolUse handlers.
+- These are the only hook types in the current scope.
+- Reference: Pi's extension API. Custom-method callback and action-plan designs have been removed.
+- Separate design: [SDK hooks](hooks-design.md). The plugin runtime, hook payloads, and execution boundary remain to be decided.
 
 ## Appendix
 
