@@ -260,13 +260,17 @@ mod frame_tests {
     use super::*;
     use crate::{Browser, CdpConnection, NativeCapabilities, TargetBinding, TargetIntent};
     use browseros_cdp::{CdpError, CdpEvent};
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::{
+            Mutex,
+            atomic::{AtomicU64, Ordering},
+        },
     };
     use tokio::sync::broadcast;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
+    type Calls = Vec<(String, Option<SessionId>)>;
 
     /// A page `root` embedding the OOPIF `cross`, which holds the same-process frame `same`
     /// and the OOPIF `deep`: A -> B -> {B, A}. `split_tree` answers Page.getFrameTree as
@@ -276,10 +280,21 @@ mod frame_tests {
         split_tree: std::sync::atomic::AtomicBool,
         owner_changed: std::sync::atomic::AtomicBool,
         tab: Mutex<Value>,
-        calls: Mutex<Vec<(String, Option<SessionId>)>>,
+        calls: Mutex<Calls>,
         mouse: Mutex<Vec<(Option<SessionId>, Value)>>,
         epoch: AtomicU64,
         events: broadcast::Sender<CdpEvent>,
+        /// Attachments made per target. Each mints a fresh session id; the first keeps the
+        /// plain `session-<target>` name the frame tests address.
+        attachments: Mutex<HashMap<String, usize>>,
+        /// Sessions Chromium dropped without Neo hearing: every command sent on one is refused
+        /// as gone, and no detach event is emitted for it.
+        killed: Mutex<HashSet<SessionId>>,
+        /// Key events the page received, with the session that delivered each.
+        keys: Mutex<Vec<(Option<SessionId>, Value)>>,
+        /// Kills the session that delivers the next keyDown, right after delivering it: a
+        /// session that dies in the middle of an action.
+        kill_after_key_down: std::sync::atomic::AtomicBool,
     }
 
     impl Native {
@@ -298,6 +313,10 @@ mod frame_tests {
                 mouse: Mutex::new(Vec::new()),
                 epoch: AtomicU64::new(1),
                 events: broadcast::channel(32).0,
+                attachments: Mutex::new(HashMap::new()),
+                killed: Mutex::new(HashSet::new()),
+                keys: Mutex::new(Vec::new()),
+                kill_after_key_down: std::sync::atomic::AtomicBool::new(false),
             })
         }
 
@@ -308,6 +327,33 @@ mod frame_tests {
                 .map_err(|_| "poisoned")?
                 .iter()
                 .any(|(called, _)| called == method))
+        }
+
+        /// Drops `session` the way a lost `Target.detachedFromTarget` leaves it.
+        fn kill(&self, session: &str) -> TestResult {
+            self.killed
+                .lock()
+                .map_err(|_| "poisoned")?
+                .insert(session.into());
+            Ok(())
+        }
+
+        /// Every command sent since the last take, refused ones included.
+        fn take_calls(&self) -> Result<Calls, Box<dyn std::error::Error>> {
+            Ok(std::mem::take(
+                &mut *self.calls.lock().map_err(|_| "poisoned")?,
+            ))
+        }
+
+        fn mint_session(&self, target: &str) -> Result<String, CdpError> {
+            let mut attachments = self.attachments.lock().map_err(|_| CdpError::SessionGone)?;
+            let count = attachments.entry(target.to_owned()).or_default();
+            *count += 1;
+            Ok(if *count == 1 {
+                format!("session-{target}")
+            } else {
+                format!("session-{target}-{count}")
+            })
         }
 
         /// The document each session or same-process frame shows: its controls, then owners.
@@ -355,6 +401,15 @@ mod frame_tests {
                 .lock()
                 .map_err(|_| CdpError::SessionGone)?
                 .push((method.into(), session.cloned()));
+            if let Some(session) = session
+                && self
+                    .killed
+                    .lock()
+                    .map_err(|_| CdpError::SessionGone)?
+                    .contains(session)
+            {
+                return Err(CdpError::SessionGone);
+            }
             Ok(match method {
                 "Browser.getProfiles" => {
                     json!({"profiles":[{"browserProfileId":"eng","name":"eng","directory":"directory-eng","loaded":true,"browserContextId":"live-eng"}]})
@@ -369,7 +424,7 @@ mod frame_tests {
                     json!({"tab":self.tab.lock().map_err(|_| CdpError::SessionGone)?.clone()})
                 }
                 "Target.attachToTarget" => {
-                    json!({"sessionId":format!("session-{}", params["targetId"].as_str().unwrap_or_default())})
+                    json!({"sessionId":self.mint_session(params["targetId"].as_str().unwrap_or_default())?})
                 }
                 "Page.getFrameTree" => {
                     if self.split_tree.load(Ordering::SeqCst) {
@@ -409,7 +464,8 @@ mod frame_tests {
                     // Like Chromium, only the endpoint whose document holds the owner answers.
                     let backend = match (session.map(SessionId::as_str), params["frameId"].as_str())
                     {
-                        (Some("session-page"), Some("cross")) => 1,
+                        // Any attachment of the page, including one made after its first died.
+                        (Some(page), Some("cross")) if page.starts_with("session-page") => 1,
                         (Some("session-cross"), Some("same")) => 2,
                         (Some("session-cross"), Some("deep")) => 3,
                         _ => {
@@ -463,6 +519,38 @@ mod frame_tests {
                         .map_err(|_| CdpError::SessionGone)?
                         .push((session.cloned(), params));
                     json!({})
+                }
+                "Input.dispatchKeyEvent" => {
+                    if params["type"] == "keyDown"
+                        && self.kill_after_key_down.swap(false, Ordering::SeqCst)
+                        && let Some(session) = session
+                    {
+                        self.killed
+                            .lock()
+                            .map_err(|_| CdpError::SessionGone)?
+                            .insert(session.clone());
+                    }
+                    self.keys
+                        .lock()
+                        .map_err(|_| CdpError::SessionGone)?
+                        .push((session.cloned(), params));
+                    json!({})
+                }
+                // The focused element is a password field.
+                "Runtime.evaluate"
+                    if params["expression"]
+                        .as_str()
+                        .is_some_and(|expression| expression.contains("activeElement")) =>
+                {
+                    json!({"result":{"value":true}})
+                }
+                // A settled page, so a load wait ends on its first quiet interval.
+                "Runtime.evaluate"
+                    if params["expression"]
+                        .as_str()
+                        .is_some_and(|expression| expression.contains("__browseros_ready")) =>
+                {
+                    json!({"result":{"value":{"n":0,"installed":false,"showing":true,"complete":true}}})
                 }
                 "Runtime.evaluate" => json!({"result":{"value":session.map(SessionId::as_str)}}),
                 _ => json!({}),
@@ -883,6 +971,209 @@ mod frame_tests {
                 );
             }
         }
+        Ok(())
+    }
+
+    fn count(calls: &Calls, method: &str) -> usize {
+        calls.iter().filter(|(called, _)| called == method).count()
+    }
+
+    /// The sessions that received `method`: sent there and not refused as gone.
+    fn delivered_on(
+        native: &Native,
+        calls: &Calls,
+        method: &str,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let killed = native.killed.lock().map_err(|_| "poisoned")?;
+        Ok(calls
+            .iter()
+            .filter(|(called, _)| called == method)
+            .filter_map(|(_, session)| session.as_ref())
+            .filter(|session| !killed.contains(*session))
+            .map(|session| session.as_str().to_owned())
+            .collect())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_snapshot_recovers_in_call_when_its_page_session_dies() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        native.split_tree.store(true, Ordering::SeqCst);
+        let healthy = view.observe(page.clone()).await?.snapshot().await?;
+        native.kill("session-page")?;
+        native.take_calls()?;
+
+        let recovered = view.observe(page.clone()).await?.snapshot().await?;
+        for name in [
+            "Root target",
+            "Remote frame target",
+            "Nested frame target",
+            "Deep frame target",
+        ] {
+            ref_named(&recovered, name)?;
+        }
+        // The fixture has no clickable scan, so even a healthy capture reports that stage.
+        assert_eq!(recovered.coverage, healthy.coverage);
+        let calls = native.take_calls()?;
+        assert_eq!(count(&calls, "Target.attachToTarget"), 1, "{calls:?}");
+        assert!(
+            delivered_on(&native, &calls, "Accessibility.getFullAXTree")?
+                .iter()
+                .any(|session| session == "session-page-2"),
+            "{calls:?}"
+        );
+
+        view.observe(page).await?.snapshot().await?;
+        let calls = native.take_calls()?;
+        assert_eq!(count(&calls, "Target.attachToTarget"), 0, "{calls:?}");
+        assert!(
+            calls.iter().all(|(_, session)| session
+                .as_ref()
+                .is_none_or(|id| id.as_str() != "session-page")),
+            "{calls:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_late_refusal_for_a_dead_session_keeps_its_replacement() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        view.observe(page.clone()).await?.snapshot().await?;
+        native.kill("session-page")?;
+        view.observe(page.clone()).await?.snapshot().await?;
+        let late = view
+            .session
+            .cdp(
+                "Runtime.evaluate",
+                json!({"expression":"1"}),
+                Some(&SessionId::from("session-page")),
+            )
+            .await;
+        assert!(
+            matches!(late, Err(CoreError::Cdp(CdpError::SessionGone))),
+            "{late:?}"
+        );
+        native.take_calls()?;
+
+        view.observe(page).await?.snapshot().await?;
+        let calls = native.take_calls()?;
+        assert_eq!(count(&calls, "Target.attachToTarget"), 0, "{calls:?}");
+        assert!(
+            delivered_on(&native, &calls, "Accessibility.getFullAXTree")?
+                .iter()
+                .any(|session| session == "session-page-2"),
+            "{calls:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_ref_click_recovers_in_call_when_its_page_session_dies() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        native.split_tree.store(true, Ordering::SeqCst);
+        let snapshot = view.observe(page.clone()).await?.snapshot().await?;
+        let root = ref_named(&snapshot, "Root target")?;
+        native.kill("session-page")?;
+        native.mouse.lock().map_err(|_| "poisoned")?.clear();
+
+        view.input(page)
+            .await?
+            .click(&root, crate::input::ClickOptions::default())
+            .await?;
+        let mouse = native.mouse.lock().map_err(|_| "poisoned")?.clone();
+        let pressed = mouse
+            .iter()
+            .filter(|(_, event)| event["type"] == "mousePressed")
+            .map(|(session, _)| session.as_ref().map(SessionId::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(pressed, [Some("session-page-2")], "{mouse:?}");
+        Ok(())
+    }
+
+    /// The key events the page received, as `(session, type)` pairs.
+    fn key_events(native: &Native) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+        Ok(native
+            .keys
+            .lock()
+            .map_err(|_| "poisoned")?
+            .iter()
+            .map(|(session, event)| {
+                (
+                    session
+                        .as_ref()
+                        .map(SessionId::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    event["type"].as_str().unwrap_or_default().to_owned(),
+                )
+            })
+            .collect())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_key_press_recovers_in_call_when_its_page_session_was_dead() -> TestResult
+    {
+        let (native, view, page) = fixture().await?;
+        view.page_session(page.clone()).await?;
+        native.kill("session-page")?;
+
+        view.input(page).await?.press("Enter").await?;
+        assert_eq!(
+            key_events(&native)?,
+            [
+                ("session-page-2".to_owned(), "keyDown".to_owned()),
+                ("session-page-2".to_owned(), "keyUp".to_owned()),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_key_press_is_not_replayed_when_its_session_dies_midway() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        view.page_session(page.clone()).await?;
+        native.kill_after_key_down.store(true, Ordering::SeqCst);
+
+        let pressed = view.input(page).await?.press("Enter").await;
+        assert!(
+            matches!(pressed, Err(CoreError::Cdp(CdpError::SessionGone))),
+            "{pressed:?}"
+        );
+        // Enter reached the page once. Pressing it again on a new attachment could submit a
+        // form twice, so the press reports the lost session instead.
+        assert_eq!(
+            key_events(&native)?,
+            [("session-page".to_owned(), "keyDown".to_owned())]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_the_focused_field_check_survives_a_dead_page_session() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        view.page_session(page.clone()).await?;
+        native.kill("session-page")?;
+
+        assert!(view.input(page).await?.focused_field_is_sensitive().await);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_goto_resends_a_navigation_its_dead_session_refused() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        view.page_session(page.clone()).await?;
+        native.kill("session-page")?;
+        native.take_calls()?;
+
+        view.nav(page)
+            .await?
+            .goto("https://local.test/next")
+            .await?;
+        let calls = native.take_calls()?;
+        assert_eq!(
+            delivered_on(&native, &calls, "Page.navigate")?,
+            ["session-page-2"],
+            "{calls:?}"
+        );
         Ok(())
     }
 }

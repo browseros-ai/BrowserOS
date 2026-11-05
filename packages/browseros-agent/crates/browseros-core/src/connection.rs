@@ -3,7 +3,13 @@ use browseros_cdp::{CdpClient, CdpError, CdpEvent};
 use futures_util::future::BoxFuture;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 use tokio::sync::{broadcast, mpsc};
 
 pub const EXCLUDED_URL_PREFIXES: &[&str] = &[
@@ -173,6 +179,9 @@ pub struct ProtocolSession {
     session_id: Option<SessionId>,
     admission: Option<Arc<dyn ProtocolAdmission>>,
     epoch_guard: Option<EpochGuard>,
+    /// Set once the browser answers any command sent through this handle or its clones. See
+    /// [`Self::witnessed`].
+    answered: Option<Arc<AtomicBool>>,
 }
 
 /// Private capability carried by sessions returned from a bound view. It brackets every send,
@@ -201,6 +210,7 @@ impl ProtocolSession {
             session_id: None,
             admission: None,
             epoch_guard: None,
+            answered: None,
         }
     }
 
@@ -211,6 +221,7 @@ impl ProtocolSession {
             session_id: Some(session_id),
             admission: None,
             epoch_guard: None,
+            answered: None,
         }
     }
 
@@ -255,6 +266,23 @@ impl ProtocolSession {
         self.epoch_guard.as_ref()
     }
 
+    /// This handle, plus a flag the browser sets by answering any command sent through it. A
+    /// retry after a lost session asks the flag whether the session was already dead when the
+    /// work began: if nothing was answered, nothing reached the page and the work can run again
+    /// on a new attachment. Otherwise part of it may have landed, and running it again could
+    /// repeat an effect such as a key press.
+    pub(crate) fn witnessed(mut self) -> (Self, Arc<AtomicBool>) {
+        let answered = Arc::new(AtomicBool::new(false));
+        self.answered = Some(answered.clone());
+        (self, answered)
+    }
+
+    fn mark_answered(&self) {
+        if let Some(answered) = &self.answered {
+            answered.store(true, Ordering::SeqCst);
+        }
+    }
+
     pub async fn send<P, R>(&self, method: &str, params: P) -> Result<R, CoreError>
     where
         P: Serialize,
@@ -282,12 +310,16 @@ impl ProtocolSession {
                 )
                 .await
                 .map_err(|error| guard.transport_error(method, error))?;
+            self.mark_answered();
             guard.check(self.connection.as_ref())?;
             response
         } else {
-            self.connection
+            let response = self
+                .connection
                 .send(method, params.clone(), self.session_id.as_ref())
-                .await?
+                .await?;
+            self.mark_answered();
+            response
         };
         if let Some(admission) = &self.admission {
             admission.check(method, &params).await?;
@@ -320,12 +352,16 @@ impl ProtocolSession {
                 )
                 .await
                 .map_err(|error| guard.transport_error(method, error))?;
+            self.mark_answered();
             guard.check(self.connection.as_ref())?;
             response
         } else {
-            self.connection
+            let response = self
+                .connection
                 .send_raw_json(method, params_json, self.session_id.as_ref())
-                .await?
+                .await?;
+            self.mark_answered();
+            response
         };
         if let Some(admission) = &self.admission
             && let Some(params) = params

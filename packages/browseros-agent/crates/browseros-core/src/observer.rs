@@ -253,7 +253,21 @@ impl Observer {
         self.state.lock().await.refs.arrangement()
     }
 
+    /// Resolves a ref, rerun once on a fresh page session under the same rule as
+    /// [`Self::capture`]. Acting and the audit layer's sensitive-field check both start here, so
+    /// a ref that failed on a dead session would fail the act or, worse, let a password fill
+    /// through unredacted once the act itself re-attached.
     pub async fn resolve_ref(&self, ref_id: &Ref) -> Result<ResolvedElement, CoreError> {
+        let page_session = self.page_session().await?;
+        let result = self.resolve_ref_once(ref_id).await;
+        if result.is_err() && self.session_replaced(&page_session).await {
+            self.page_session().await?;
+            return self.resolve_ref_once(ref_id).await;
+        }
+        result
+    }
+
+    async fn resolve_ref_once(&self, ref_id: &Ref) -> Result<ResolvedElement, CoreError> {
         let entry = self
             .state
             .lock()
@@ -262,7 +276,6 @@ impl Observer {
             .get(ref_id)
             .cloned()
             .ok_or_else(|| CoreError::UnknownRef(ref_id.clone()))?;
-        let _page_session = self.page_session().await?;
         let mut target = self
             .frames
             .resolve_frame_target_with_epoch(
@@ -296,22 +309,57 @@ impl Observer {
         Ok(resolved)
     }
 
+    /// One capture, rerun once on a fresh page session when it failed and the page no longer
+    /// caches the session it read through. A dead page session is evicted on its first refused
+    /// command, but behind `PageAccess` the failure can surface as another error (a refused
+    /// frame session, a page with no attached session, a stale ref). So the rerun keys on the
+    /// cache, not on the error, and a failure on a live session is returned as it was.
     async fn capture(&self) -> Result<CaptureResult, CoreError> {
         let capture_started = Instant::now();
-        let initial_trace = CaptureTrace::new(self.page_id.clone(), 1);
-        let page_session = match self.page_session().await {
-            Ok(page_session) => page_session,
-            Err(error) => {
-                trace_stage(
-                    &initial_trace,
-                    None,
-                    SnapshotStage::Capture,
-                    capture_started,
-                    "failure",
-                );
-                return Err(error);
-            }
-        };
+        let page_session = self.capture_session(capture_started).await?;
+        let result = self.capture_on(&page_session, capture_started).await;
+        if result.is_err() && self.session_replaced(&page_session).await {
+            trace_stage(
+                &CaptureTrace::new(self.page_id.clone(), 1),
+                None,
+                SnapshotStage::Retry,
+                capture_started,
+                "session_replaced",
+            );
+            let page_session = self.capture_session(capture_started).await?;
+            return self.capture_on(&page_session, capture_started).await;
+        }
+        result
+    }
+
+    async fn capture_session(&self, capture_started: Instant) -> Result<PageSession, CoreError> {
+        self.page_session().await.inspect_err(|_| {
+            trace_stage(
+                &CaptureTrace::new(self.page_id.clone(), 1),
+                None,
+                SnapshotStage::Capture,
+                capture_started,
+                "failure",
+            );
+        })
+    }
+
+    /// Whether the page's cached session is no longer `used`, because it was evicted after a
+    /// refusal or a detach, or replaced by a re-attach, a new target or a reconnect.
+    async fn session_replaced(&self, used: &PageSession) -> bool {
+        self.pages
+            .get_attached_session(self.page_id.clone())
+            .await
+            .is_none_or(|current| current.session_id() != Some(&used.session_id))
+    }
+
+    /// Reads the page through `page_session`, again while the main document changes under the
+    /// read, up to `MAX_STABLE_CAPTURE_ATTEMPTS` reads.
+    async fn capture_on(
+        &self,
+        page_session: &PageSession,
+        capture_started: Instant,
+    ) -> Result<CaptureResult, CoreError> {
         let budget = SnapshotBudget::new();
         for attempt in 1..=MAX_STABLE_CAPTURE_ATTEMPTS {
             let attempt_started = Instant::now();
