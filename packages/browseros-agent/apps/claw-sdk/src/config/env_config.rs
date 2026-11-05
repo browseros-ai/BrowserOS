@@ -1,5 +1,9 @@
+use std::fmt::Display;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::str::FromStr;
+
+use browseros_takeover::Xvnc;
 
 use super::{ConfigError, Defaults};
 
@@ -22,6 +26,12 @@ pub(crate) struct EnvConfig {
     pub(crate) ignored_config_file: Option<PathBuf>,
     /// Where the host listener goes.
     pub(crate) host_api: HostApiConfig,
+    /// Neo's one screen, which browseros-takeover's fits resize to the owner's viewer and put
+    /// back home:
+    /// - `addr`: `CLAW_XVNC_ADDR`, a `host:port`, else `Defaults::XVNC_ADDR` (the image's Xvnc).
+    /// - `home`: `NEO_SCREEN`, the image's own `WxH` for Xvnc's geometry, read rather than
+    ///   duplicated, else `Defaults::SCREEN`.
+    pub(crate) xvnc: Xvnc,
 }
 
 /// Whether Chromium runs in hosted mode, where popups open as tabs Neo can drive.
@@ -43,7 +53,8 @@ pub(crate) enum HostedMode {
 pub(crate) struct HostApiConfig {
     /// `CLAW_HOST_SOCKET`, else `$BROWSERCLAW_DIR/host.sock`.
     pub(crate) socket: PathBuf,
-    /// `CLAW_HOST_TOKEN_FILE`, the bearer token the host presents. Without it there is no host
+    /// `CLAW_HOST_TOKEN_FILE`, the bearer token the host presents. Without it, or with a token
+    /// browseros-service refuses (empty, under 32 bytes, not visible ASCII), there is no host
     /// listener at all, and `run` still works.
     pub(crate) token_file: Option<PathBuf>,
     /// `CLAW_HOST_TCP`: a TCP address served in addition to the socket, only by explicit opt-in.
@@ -71,21 +82,17 @@ impl EnvConfig {
             Some(value) if value == "1" => HostedMode::On,
             value => HostedMode::Off { value },
         };
-        let tcp = match read("CLAW_HOST_TCP") {
-            Some(text) => {
-                let address: SocketAddr = text.parse().map_err(|error| ConfigError::Env {
-                    name: "CLAW_HOST_TCP",
-                    why: format!("{text:?} is not an address like 127.0.0.1:9300: {error}"),
-                })?;
-                Some(address)
-            }
-            None => None,
-        };
         let host_api = HostApiConfig {
             socket: read("CLAW_HOST_SOCKET")
                 .map_or_else(|| state_dir.join("host.sock"), PathBuf::from),
             token_file: read("CLAW_HOST_TOKEN_FILE").map(PathBuf::from),
-            tcp,
+            tcp: parse(&read, "CLAW_HOST_TCP", "an address like 127.0.0.1:9300")?,
+        };
+        let xvnc = Xvnc {
+            addr: parse(&read, "CLAW_XVNC_ADDR", "an address like 127.0.0.1:5900")?
+                .unwrap_or(Defaults::XVNC_ADDR),
+            home: parse(&read, "NEO_SCREEN", "a screen size like 1600x1000")?
+                .unwrap_or(Defaults::SCREEN),
         };
         Ok(Self {
             log_filter: read("CLAW_LOG").unwrap_or_else(|| Defaults::LOG_FILTER.to_owned()),
@@ -93,9 +100,31 @@ impl EnvConfig {
             native_version: read("CLAW_NATIVE_BROWSEROS_VERSION"),
             ignored_config_file: read("BROWSERCLAW_CONFIG_FILE").map(PathBuf::from),
             host_api,
+            xvnc,
             state_dir,
         })
     }
+}
+
+/// Parses a set variable, failing the start on a malformed value: a deployment that set one
+/// expects it honored, never silently replaced by the default.
+fn parse<T>(
+    read: &dyn Fn(&str) -> Option<String>,
+    name: &'static str,
+    like: &str,
+) -> Result<Option<T>, ConfigError>
+where
+    T: FromStr,
+    T::Err: Display,
+{
+    read(name)
+        .map(|text| {
+            text.parse().map_err(|error| ConfigError::Env {
+                name,
+                why: format!("{text:?} is not {like}: {error}"),
+            })
+        })
+        .transpose()
 }
 
 fn non_blank(value: Option<String>) -> Option<String> {
@@ -109,6 +138,8 @@ mod tests {
     use std::error::Error;
     use std::net::SocketAddr;
     use std::path::{Path, PathBuf};
+
+    use browseros_takeover::{ScreenSize, Xvnc};
 
     use super::{EnvConfig, HostApiConfig, HostedMode};
     use crate::config::{ConfigError, Defaults};
@@ -136,6 +167,13 @@ mod tests {
                     socket: PathBuf::from("/home/neo/.browserclaw/host.sock"),
                     token_file: None,
                     tcp: None,
+                },
+                xvnc: Xvnc {
+                    addr: Xvnc::NEO_ADDR,
+                    home: ScreenSize {
+                        width: 1600,
+                        height: 1000
+                    },
                 },
             },
             "an image that sets nothing gets the documented defaults"
@@ -198,6 +236,8 @@ mod tests {
             ("CLAW_HOST_SOCKET", "/run/mirror-neo/host.sock"),
             ("CLAW_HOST_TOKEN_FILE", "/run/mirror-neo/token"),
             ("CLAW_HOST_TCP", "127.0.0.1:9300"),
+            ("CLAW_XVNC_ADDR", " 127.0.0.1:5901 "),
+            ("NEO_SCREEN", "1280x800"),
         ])?;
         assert_eq!(config.log_filter, "debug", "CLAW_LOG");
         assert_eq!(
@@ -220,6 +260,18 @@ mod tests {
             },
             "zuzu's shared directory layout"
         );
+        let xvnc: SocketAddr = "127.0.0.1:5901".parse()?;
+        assert_eq!(
+            config.xvnc,
+            Xvnc {
+                addr: xvnc,
+                home: ScreenSize {
+                    width: 1280,
+                    height: 800
+                },
+            },
+            "an image that moves Xvnc or resizes its screen"
+        );
         Ok(())
     }
 
@@ -235,5 +287,23 @@ mod tests {
             ),
             "an opt-in that cannot be honored must not silently serve only the socket"
         );
+    }
+
+    #[test]
+    fn a_bad_xvnc_address_or_screen_fails() {
+        for (name, value) in [
+            ("CLAW_XVNC_ADDR", "localhost:5900"),
+            ("CLAW_XVNC_ADDR", "5900"),
+            ("NEO_SCREEN", "1600"),
+            ("NEO_SCREEN", "1600X1000"),
+            ("NEO_SCREEN", "0x1000"),
+        ] {
+            let error = env(&[("HOME", "/h"), (name, value)]);
+            assert!(
+                matches!(&error, Err(ConfigError::Env { name: failed, .. }) if *failed == name),
+                "{name}={value:?} must fail the start naming {name}, not fit a screen it was not \
+                 given: {error:?}"
+            );
+        }
     }
 }

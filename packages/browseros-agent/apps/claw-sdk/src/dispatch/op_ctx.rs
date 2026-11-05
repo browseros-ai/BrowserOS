@@ -21,13 +21,6 @@ use super::{
 use crate::browser::PageRef;
 
 /// How many call-log lines one op keeps; later lines are dropped.
-#[cfg_attr(
-    test,
-    expect(
-        dead_code,
-        reason = "OpCtx::note is untested: notes only reach the log"
-    )
-)]
 const NOTES_PER_OP: usize = 64;
 
 /// What a method gets for one op: its id, its run, its checked target, and the door's
@@ -174,13 +167,6 @@ impl<M> OpCtx<M> {
 
     /// One call-log line for the op's record. The first lines are kept; a runaway method
     /// cannot grow its op without bound.
-    #[cfg_attr(
-        test,
-        expect(
-            dead_code,
-            reason = "sdk-playwright's call log and the CAPTCHA events note through it"
-        )
-    )]
     pub(crate) fn note(&self, line: String) {
         let mut notes = lock(&self.core.state.notes);
         if notes.len() < NOTES_PER_OP {

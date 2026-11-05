@@ -5,13 +5,14 @@ use browseros_cdp::CdpError;
 use browseros_core::CoreError;
 use browseros_core::navigation::GotoOutcome;
 use browseros_core::pages::NewPageOptions;
-use browseros_trace::Effect;
+use browseros_trace::{Delivery, Effect};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::browser::PageRef;
 use crate::dispatch::{
-    ErrorCode, LeafError, Listing, Method, MethodSpec, OpCtx, OperationError, PageChange,
-    PageTarget, RegistryBuilder, RegistryError,
+    ErrorCode, LeafError, Listing, Method, MethodSpec, OpCtx, OpFailure, OperationError,
+    PageChange, PageTarget, RegistryBuilder, RegistryError,
 };
 
 /// The one line in the `run` description for all four.
@@ -34,7 +35,7 @@ pub(super) fn placeholder_page(builder: &mut RegistryBuilder) -> Result<(), Regi
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NewPageInput {
-    /// Loaded right after the tab opens, as `page.goto` would.
+    /// Loaded right after the tab opens, by a `page.goto` child op.
     #[serde(default)]
     url: Option<String>,
 }
@@ -111,7 +112,12 @@ impl Method for NewPage {
         // page facts, where the script can find it.
         op.report_page(&page, PageChange::Opened);
         if let Some(url) = input.url {
-            navigate(op, &page, &url).await?;
+            // A child op on the new tab, never a load inside this one: this op has no target,
+            // so the door's rules would check its writes as touching no page, and the trace
+            // would record the load on no tab. The owner can lock the tab as soon as it exists.
+            op.invoke("page.goto", json!({ "page": page, "url": url }))
+                .await
+                .map_err(load_failure)?;
         }
         Ok(page)
     }
@@ -137,7 +143,23 @@ impl Method for Goto {
         // Held through the load: a fixed-mode tab gets its viewport back first, so the site
         // lays out at the size the owner chose.
         let _viewport = op.viewport(page).await?;
-        navigate(op, page, &input.url).await
+        let nav = op.race(op.run().view().nav(page.id.clone())).await?;
+        op.recheck()?;
+        op.mark_sent();
+        // The page's own failures are peeled off inside the race, so they are the website's;
+        // whatever is left (a lost connection, a closed tab) keeps the door's classification.
+        let loaded = op
+            .race(async {
+                match nav.goto(&input.url).await {
+                    Ok(outcome) => Ok(Ok(outcome)),
+                    Err(error) => website_failure(error).map(Err),
+                }
+            })
+            .await;
+        // Whatever the outcome, the URL may have changed, so the door refreshes the page's facts.
+        op.report_page(page, PageChange::Navigated);
+        let GotoOutcome { status, download } = loaded??;
+        Ok(GotoOutput { status, download })
     }
 }
 
@@ -192,26 +214,15 @@ impl Method for Close {
     }
 }
 
-/// Loads `url` in `page` and waits for it, for `page.goto` and `context.newPage({ url })`.
-///
-/// The page's own failures are peeled off inside the race, so they are the website's; whatever
-/// is left (a lost connection, a closed tab) keeps the door's classification.
-async fn navigate<M>(op: &OpCtx<M>, page: &PageRef, url: &str) -> Result<GotoOutput, LeafError> {
-    let nav = op.race(op.run().view().nav(page.id.clone())).await?;
-    op.recheck()?;
-    op.mark_sent();
-    let loaded = op
-        .race(async {
-            match nav.goto(url).await {
-                Ok(outcome) => Ok(Ok(outcome)),
-                Err(error) => website_failure(error).map(Err),
-            }
-        })
-        .await;
-    // Whatever the outcome, the URL may have changed, so the door refreshes the page's facts.
-    op.report_page(page, PageChange::Navigated);
-    let GotoOutcome { status, download } = loaded??;
-    Ok(GotoOutput { status, download })
+/// `context.newPage({ url })`'s load failed as its child op: newPage fails with the load's
+/// error. The tab opened, so newPage was sent either way; the load's delivery says whether
+/// the outcome is known (`not_sent`: refused or failed before it left, `done`: the browser
+/// answered) or the page may have loaded (`unknown`).
+fn load_failure(failure: OpFailure) -> LeafError {
+    match failure.delivery {
+        Delivery::NotSent | Delivery::Done => LeafError::definite(failure.error),
+        Delivery::Unknown => LeafError::ambiguous(failure.error),
+    }
 }
 
 /// A navigation failure that is the page's doing, or the core error back for the door.

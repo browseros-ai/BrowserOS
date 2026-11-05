@@ -4,7 +4,8 @@
 //!
 //! ```text
 //!  --config <file> ─▶ LaunchConfig::read ──────┐
-//!  process env     ─▶ EnvConfig::from_lookup ──┴▶ AppConfig: parsed once in main, trusted after
+//!  process env     ─▶ EnvConfig::from_lookup ──┼▶ AppConfig: parsed once in main, trusted after
+//!                  ─▶ CaptchaConfig::from_lookup ┘ (browseros-captcha's provider key files)
 //!  Defaults: fixed values; changing one is a code change, reviewed like one
 //! ```
 //!

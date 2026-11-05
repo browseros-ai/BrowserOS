@@ -1,5 +1,5 @@
 //! `BrowserLink` and `tab_watch` against the fake browser: the connect loop, the one session,
-//! and closes noticed without anyone listing tabs.
+//! closes noticed without anyone listing tabs, and the tab events the host API learns from.
 
 use std::error::Error;
 use std::future;
@@ -9,9 +9,12 @@ use std::time::Duration;
 
 use browseros_core::sensitive_fields::SensitiveValues;
 use browseros_core::{NativeCapabilities, TabId, page_js};
+use tokio::sync::broadcast;
 use tokio::time;
 
-use crate::browser::{BrowserLink, LinkStatus, PageRef, TabRegistry};
+use crate::browser::{
+    BrowserLink, LinkStatus, PageRef, TabEvent, TabListing, TabRegistry, Watched,
+};
 use crate::test_support::FakeCdp;
 
 #[derive(Default)]
@@ -201,6 +204,116 @@ async fn a_reconnect_renews_discovery_and_catches_tabs_closed_meanwhile()
         discovered,
         vec![first, second],
         "discovery is asked for once per socket"
+    );
+    Ok(())
+}
+
+/// The next tab event, within 5 s of fake time.
+async fn next_event(
+    events: &mut broadcast::Receiver<TabEvent>,
+) -> Result<TabEvent, Box<dyn Error>> {
+    Ok(time::timeout(Duration::from_secs(5), events.recv()).await??)
+}
+
+#[tokio::test(start_paused = true)]
+async fn every_open_and_close_is_reported_in_order_under_its_socket() -> Result<(), Box<dyn Error>>
+{
+    let fake = FakeCdp::new();
+    let first = fake.open_tab("https://example.com/", "Example");
+    let link = start(&fake, &Arc::new(TabRegistry::new()));
+    let mut events = link.tab_events();
+    let watched = Watched {
+        epoch: 1,
+        generation: 1,
+    };
+    assert_eq!(
+        next_event(&mut events).await?,
+        TabEvent::Watching(watched),
+        "the first socket starts the watch, and the tabs it already had never count as opened"
+    );
+    assert_eq!(
+        link.watched_listing().await,
+        TabListing {
+            watched,
+            open: vec![first],
+        },
+        "a listing under the watch has what is already open"
+    );
+
+    let second = fake.open_tab("https://example.org/", "Other");
+    assert_eq!(
+        next_event(&mut events).await?,
+        TabEvent::Opened {
+            epoch: 1,
+            tab: second,
+        }
+    );
+    assert!(fake.close_tab(first), "the fake had the tab");
+    assert_eq!(
+        next_event(&mut events).await?,
+        TabEvent::Closed {
+            epoch: 1,
+            tab: first,
+        }
+    );
+
+    fake.drop_connection();
+    let epoch = fake.reconnect();
+    assert_eq!(
+        next_event(&mut events).await?,
+        TabEvent::Watching(Watched {
+            epoch,
+            generation: 2,
+        }),
+        "a new socket starts the watch afresh, under its own epoch"
+    );
+    assert_eq!(link.watched_listing().await.open, vec![second]);
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn only_a_listing_without_the_tab_turns_a_destroyed_target_into_a_close()
+-> Result<(), Box<dyn Error>> {
+    let fake = FakeCdp::new();
+    let kept = fake.open_tab("https://example.com/", "Kept");
+    let marker = fake.open_tab("https://example.org/", "Marker");
+    let link = start(&fake, &Arc::new(TabRegistry::new()));
+    let mut events = link.tab_events();
+    let started = next_event(&mut events).await?;
+    assert!(
+        matches!(started, TabEvent::Watching(_)),
+        "the watch starts first: {started:?}"
+    );
+
+    assert!(
+        fake.replace_target(kept),
+        "the tab swaps its page target and stays open: a destroyed target, not a close"
+    );
+    // Opened and closed inside one burst of events: no listing ever has this tab.
+    fake.hold_events();
+    let brief = fake.open_tab("https://example.net/", "Brief");
+    assert!(fake.close_tab(brief), "the fake had the tab");
+    fake.release_events();
+    assert_eq!(
+        next_event(&mut events).await?,
+        TabEvent::Closed {
+            epoch: 1,
+            tab: brief,
+        },
+        "its destroy was noted before the burst's one listing, which lacks it"
+    );
+    assert!(fake.close_tab(marker), "the fake had the tab");
+    assert_eq!(
+        next_event(&mut events).await?,
+        TabEvent::Closed {
+            epoch: 1,
+            tab: marker,
+        },
+        "nothing was reported for the tab that only changed target"
+    );
+    assert!(
+        link.watched_listing().await.open.contains(&kept),
+        "and it is still open"
     );
     Ok(())
 }

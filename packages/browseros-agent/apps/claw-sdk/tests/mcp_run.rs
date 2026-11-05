@@ -377,6 +377,45 @@ fn a_script_drives_a_page_through_the_built_ins() -> TestResult {
 }
 
 #[test]
+fn without_a_provider_key_solve_captcha_is_unlisted_and_throws_for_the_host() -> TestResult {
+    on_neo_runtime(async {
+        let neo = Neo::start().await?;
+        let client = neo.modern_client().await?;
+        let tools = client.list_tools(None).await?.tools;
+        let description = tools
+            .first()
+            .and_then(|tool| tool.description.as_deref())
+            .ok_or("run has a description")?;
+        assert!(
+            !description.contains("solveCaptcha"),
+            "a Neo without a key does not offer it: {description}"
+        );
+
+        // `neo` reaches the script as a parameter, like `page`.
+        let code = r"
+            try {
+              await neo.solveCaptcha(page);
+              return 'solved without a key';
+            } catch (e) {
+              return { name: e.name, code: e.code, owner: e.owner, delivery: e.delivery };
+            }";
+        let result = run(&client, json!({ "code": code }), None).await?;
+        assert_eq!(
+            result.structured_content,
+            Some(json!({ "value": {
+                "name": "NeoError",
+                "code": "captcha_unavailable",
+                "owner": "host",
+                "delivery": "not_sent",
+            } })),
+            "the deployment adds the key, so the host owns the failure: {result:?}"
+        );
+        client.cancel().await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn a_malformed_call_is_refused_with_its_owner_and_still_has_an_id() -> TestResult {
     on_neo_runtime(async {
         let neo = Neo::start().await?;

@@ -1,4 +1,7 @@
+use std::net::SocketAddr;
 use std::time::Duration;
+
+use browseros_takeover::{ScreenSize, Xvnc};
 
 /// Every fixed value in claw-sdk, as an associated constant (`Defaults::RUN_TIMEOUT`), in one
 /// place (design D2). None of them is a deployment setting: a change is a code change.
@@ -11,6 +14,15 @@ impl Defaults {
     pub(crate) const CDP_PORT: u16 = 49337;
     /// The log filter when `CLAW_LOG` is unset. rmcp logs every stateless request at info.
     pub(crate) const LOG_FILTER: &str = "info,rmcp=warn";
+    /// Xvnc's RFB address when `CLAW_XVNC_ADDR` is unset: where the Neo image's entrypoint pins
+    /// it.
+    pub(crate) const XVNC_ADDR: SocketAddr = Xvnc::NEO_ADDR;
+    /// Neo's screen size between takeover fits when `NEO_SCREEN` is unset, as the image's
+    /// Dockerfile and `entrypoint.sh` set it for Xvnc.
+    pub(crate) const SCREEN: ScreenSize = ScreenSize {
+        width: 1600,
+        height: 1000,
+    };
 
     /// A run's budget when the model sends no `timeout`. Fits two CAPTCHA solves (120 s each)
     /// plus page work, so a host sets nothing (decision 4).

@@ -1,7 +1,7 @@
 //! The CDP link and the one browser session.
 
 use std::future::Future;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use browseros_cdp::{CdpClient, CdpError, ConnectOptions, ReconnectPolicy};
@@ -12,15 +12,19 @@ use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, NativeCapabilities, PageId,
     page_js,
 };
+use tokio::sync::{SetOnce, broadcast, watch};
 use tokio::time;
 
-use super::TabRegistry;
-use super::tab_watch::tab_watch;
+use super::{TabEvent, TabListing, TabRegistry, Watched, tab_watch};
 
 /// The first retry after a failed first connect; it doubles up to [`LAST_RETRY`].
 const FIRST_RETRY: Duration = Duration::from_secs(1);
 /// The longest wait between first-connect attempts, as claw-server's reattach loop.
 const LAST_RETRY: Duration = Duration::from_secs(30);
+/// The pause before [`BrowserLink::watched_listing`] asks again after the browser did not answer.
+const LISTING_RETRY: Duration = Duration::from_secs(1);
+/// Tab events a slow reader may fall behind by before it sees `Lagged`, and reconciles instead.
+const TAB_EVENTS: usize = 1024;
 
 /// Neo's one link to Chromium.
 ///
@@ -29,13 +33,20 @@ const LAST_RETRY: Duration = Duration::from_secs(30);
 /// when the first connection lands. From then on the CDP client reconnects by itself, and this
 /// link only reports what the client sees.
 pub(crate) struct BrowserLink {
-    /// Hosted viewport modes, shared by every run's view, so leases are process-wide.
+    /// Hosted viewport modes, shared by every run's view and the host API's camera, so leases
+    /// are process-wide and a capture never overlaps a viewport change.
     viewports: Arc<Viewports>,
     /// Set once, on the first successful connect. `BrowserSession::new_with_native` spawns
-    /// tasks that never end, so a process has exactly one.
-    session: OnceLock<Arc<BrowserSession>>,
+    /// tasks that never end, so a process has exactly one. The host API waits on it
+    /// ([`BrowserLink::linked`]): it screenshots on this session, never on one of its own.
+    session: SetOnce<Arc<BrowserSession>>,
     /// Why the latest first-connect attempt failed; cleared once linked.
     last_error: Mutex<Option<String>>,
+    /// `tab_watch`'s opens and closes, in order. A reader that falls behind gets `Lagged` and
+    /// must reconcile against [`BrowserLink::watched_listing`], since it may have missed a close.
+    tab_events: broadcast::Sender<TabEvent>,
+    /// The watch start `tab_watch` is on: which socket's target events it follows, if any.
+    watched: watch::Sender<Option<Watched>>,
 }
 
 /// The browser as one run sees it: an unbound view and the CDP connection epoch it was taken
@@ -95,8 +106,10 @@ impl BrowserLink {
     {
         let link = Arc::new(Self {
             viewports: Arc::new(Viewports::default()),
-            session: OnceLock::new(),
+            session: SetOnce::new(),
             last_error: Mutex::new(None),
+            tab_events: broadcast::channel(TAB_EVENTS).0,
+            watched: watch::Sender::new(None),
         });
         tokio::spawn(connect_loop(Arc::clone(&link), native, tabs, connect));
         link
@@ -164,6 +177,43 @@ impl BrowserLink {
         self.session.get()?.pages.get_info(page.clone()).await
     }
 
+    /// The one session, once the first connect landed; until then this waits. The host API
+    /// starts on it, so its camera and its tab checks act on the agent's own connection.
+    pub(crate) async fn linked(&self) -> Arc<BrowserSession> {
+        Arc::clone(self.session.wait().await)
+    }
+
+    /// The process's viewports, which every run's view already shares.
+    #[must_use]
+    pub(crate) fn viewports(&self) -> Arc<Viewports> {
+        Arc::clone(&self.viewports)
+    }
+
+    /// `tab_watch`'s opens and closes from now on, in the order it saw them.
+    #[must_use]
+    pub(crate) fn tab_events(&self) -> broadcast::Receiver<TabEvent> {
+        self.tab_events.subscribe()
+    }
+
+    /// The open tabs, listed now on the socket `tab_watch` follows, so every tab that closes
+    /// after the listing reaches [`BrowserLink::tab_events`] as a close. Waits for the first
+    /// connect and for the watch to follow the current socket, and asks again while the
+    /// browser does not answer. As new as one `Browser.getTabs` round trip allows.
+    pub(crate) async fn watched_listing(&self) -> TabListing {
+        let session = self.linked().await;
+        let mut watched = self.watched.subscribe();
+        loop {
+            let current = *watched.borrow_and_update();
+            if let Some(current) = current
+                && let Some(listing) = tab_watch::watched_listing(&session, current).await
+            {
+                return listing;
+            }
+            // A new start (discovery on a new socket), or a pause before asking again.
+            let _ = time::timeout(LISTING_RETRY, watched.changed()).await;
+        }
+    }
+
     /// The one session, for tests that check how it was built.
     #[cfg(test)]
     pub(crate) fn session(&self) -> Option<&Arc<BrowserSession>> {
@@ -191,7 +241,11 @@ impl BrowserLink {
         let session = BrowserSession::new_with_native(connection, hooks, native);
         // sdk-privacy: snapshots show password, card and one-time-code values masked.
         session.set_sensitive_values(SensitiveValues::Mask);
-        tokio::spawn(tab_watch(Arc::clone(&session)));
+        tokio::spawn(tab_watch::tab_watch(
+            Arc::clone(&session),
+            self.tab_events.clone(),
+            self.watched.clone(),
+        ));
         // Cannot fail: this is the loop's only success, and nothing else sets the session.
         let _ = self.session.set(session);
         *self

@@ -1,14 +1,14 @@
 //! A fake browser behind core's `CdpConnection`.
 
 use std::collections::{HashMap, HashSet};
-use std::future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::{future, mem};
 
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::{CdpConnection, SessionId, TabId};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, oneshot};
 
 /// The one window every fake tab lives in.
 const WINDOW_ID: i64 = 1;
@@ -21,11 +21,15 @@ const EVENT_BACKLOG: usize = 1024;
 ///
 /// It models what the real seam does and core's own test connection cannot:
 /// - tabs that stay open or closed (`Browser.getTabs`, `getTabInfo`, `createTab`, `closeTab`);
-/// - target events only after `Target.setDiscoverTargets` on the current socket, as Chromium
-///   sends them;
+/// - target events only after `Target.setDiscoverTargets` on the current socket, which first
+///   announces every target that exists, as Chromium sends them; a tab can change target
+///   and stay open ([`FakeCdp::replace_target`]);
 /// - a socket that drops and comes back at a new epoch, with epoch-bound sends refused across
 ///   it (`send_at_epoch`, `send_raw_json_at_epoch`), which an unbound page open needs;
 /// - methods that never answer, for cancellation tests;
+/// - late news: a reply that was true when the browser sent it but arrives after other calls
+///   were answered ([`FakeCdp::hold_next`]), and target events that arrive late
+///   ([`FakeCdp::hold_events`]), so a test can order what Neo learns against what a host does;
 /// - `Page.navigate` arriving at a page [`FakeCdp::serve`] registered, so a load changes the
 ///   tab's URL and title the way a real document's `<title>` would.
 ///
@@ -57,17 +61,27 @@ struct FakeState {
     discovering: bool,
     tabs: Vec<FakeTab>,
     next_tab: i64,
+    /// Numbers the targets [`FakeCdp::replace_target`] makes, so each id is new.
+    replaced_targets: u64,
     calls: Vec<FakeCall>,
     hung: HashSet<String>,
     /// Canned answers that replace the fake's own for a method.
     answers: HashMap<String, Value>,
     /// URL -> the title of the document served there.
     served: HashMap<String, String>,
+    /// Methods whose next call is answered only on [`FakeCdp::release_held`].
+    hold_next: HashSet<String>,
+    /// One gate per held reply, opened by [`FakeCdp::release_held`].
+    held_replies: Vec<oneshot::Sender<()>>,
+    /// Target events waiting for [`FakeCdp::release_events`]; `None` while events flow.
+    held_events: Option<Vec<CdpEvent>>,
 }
 
 #[derive(Clone, Debug)]
 struct FakeTab {
     tab: i64,
+    /// The page target the tab shows now: `target-<tab>` until it is replaced.
+    target: String,
     url: String,
     title: String,
 }
@@ -85,10 +99,14 @@ impl FakeCdp {
                 discovering: false,
                 tabs: Vec::new(),
                 next_tab: FIRST_TAB_ID,
+                replaced_targets: 0,
                 calls: Vec::new(),
                 hung: HashSet::new(),
                 answers: HashMap::new(),
                 served: HashMap::new(),
+                hold_next: HashSet::new(),
+                held_replies: Vec::new(),
+                held_events: None,
             }),
             events: broadcast::channel(EVENT_BACKLOG).0,
         })
@@ -123,21 +141,39 @@ impl FakeCdp {
     pub fn open_tab(&self, url: &str, title: &str) -> TabId {
         let mut state = self.lock();
         let tab = state.add_tab(url, title);
-        let event = state.target_event("Target.targetCreated", tab);
+        let events = state.created_events(tab);
         drop(state);
-        self.emit(event);
+        self.emit(events);
         TabId(tab)
     }
 
     /// Closes a tab the way the owner would. `false` when the fake has no such tab.
     pub fn close_tab(&self, tab: TabId) -> bool {
         let mut state = self.lock();
-        if !state.remove_tab(tab.0) {
+        let Some(closed) = state.remove_tab(tab.0) else {
             return false;
-        }
-        let event = state.target_event("Target.targetDestroyed", tab.0);
+        };
+        let events = state.destroyed_events(&closed.target);
         drop(state);
-        self.emit(event);
+        self.emit(events);
+        true
+    }
+
+    /// The tab's page target is replaced while the tab stays open, as when Chromium swaps the
+    /// tab's contents: the new target is created, then the old one destroyed. `false` when the
+    /// fake has no such tab.
+    pub fn replace_target(&self, tab: TabId) -> bool {
+        let mut state = self.lock();
+        state.replaced_targets += 1;
+        let target = format!("target-{}.{}", tab.0, state.replaced_targets);
+        let Some(entry) = state.tabs.iter_mut().find(|entry| entry.tab == tab.0) else {
+            return false;
+        };
+        let old = mem::replace(&mut entry.target, target);
+        let mut events = state.created_events(tab.0);
+        events.extend(state.destroyed_events(&old));
+        drop(state);
+        self.emit(events);
         true
     }
 
@@ -182,6 +218,38 @@ impl FakeCdp {
         self.lock().answers.insert(method.to_owned(), result);
     }
 
+    /// The next call to `method` is answered as the browser would answer it at once, and its
+    /// events go out at once, but the reply reaches the caller only on
+    /// [`FakeCdp::release_held`]: a tab listing that was true when Chromium sent it and arrives
+    /// after a tab opened, or a tab that exists before `Browser.createTab` returns.
+    pub fn hold_next(&self, method: &str) {
+        self.lock().hold_next.insert(method.to_owned());
+    }
+
+    /// Delivers every reply [`FakeCdp::hold_next`] held back.
+    pub fn release_held(&self) {
+        let gates = mem::take(&mut self.lock().held_replies);
+        for gate in gates {
+            // A caller that stopped waiting is not an error.
+            let _ = gate.send(());
+        }
+    }
+
+    /// Target events from now on wait, in order, until [`FakeCdp::release_events`]: a browser
+    /// whose events reach Neo after the answers to calls made in the meantime.
+    pub fn hold_events(&self) {
+        self.lock().held_events.get_or_insert_with(Vec::new);
+    }
+
+    /// Sends every held target event, in the order the browser made them, and stops holding.
+    pub fn release_events(&self) {
+        let held = self.lock().held_events.take().unwrap_or_default();
+        for event in held {
+            // No receiver is not an error.
+            let _ = self.events.send(event);
+        }
+    }
+
     /// Serves a document titled `title` at `url`: a `Page.navigate` to it, on a tab's session,
     /// changes that tab's URL and title. A navigation to any other URL changes nothing.
     pub fn serve(&self, url: &str, title: &str) {
@@ -192,6 +260,16 @@ impl FakeCdp {
     #[must_use]
     pub fn calls(&self) -> Vec<FakeCall> {
         self.lock().calls.clone()
+    }
+
+    /// The open tabs, oldest first, including one whose `Browser.createTab` reply is held.
+    #[must_use]
+    pub fn tabs(&self) -> Vec<TabId> {
+        self.lock()
+            .tabs
+            .iter()
+            .map(|entry| TabId(entry.tab))
+            .collect()
     }
 
     /// How many calls to `method` the fake received.
@@ -214,21 +292,31 @@ impl FakeCdp {
         params: Value,
         session: Option<&SessionId>,
     ) -> Result<Value, CdpError> {
-        let reply = {
+        let (reply, gate) = {
             let mut state = self.lock();
             state.reply(expected, method, params, session)
         };
         match reply {
-            Reply::Now(result, event) => {
-                self.emit(event);
+            Reply::Now(result, events) => {
+                self.emit(events);
+                if let Some(gate) = gate {
+                    // Dropped only with the fake itself; the reply goes out either way.
+                    let _ = gate.await;
+                }
                 result
             }
             Reply::Never => future::pending().await,
         }
     }
 
-    fn emit(&self, event: Option<CdpEvent>) {
-        if let Some(event) = event {
+    fn emit(&self, events: Vec<CdpEvent>) {
+        let mut state = self.lock();
+        if let Some(held) = &mut state.held_events {
+            held.extend(events);
+            return;
+        }
+        drop(state);
+        for event in events {
             // No receiver is not an error.
             let _ = self.events.send(event);
         }
@@ -240,20 +328,23 @@ impl FakeCdp {
 }
 
 enum Reply {
-    Now(Result<Value, CdpError>, Option<CdpEvent>),
+    /// The answer, and the target events the call made the browser send.
+    Now(Result<Value, CdpError>, Vec<CdpEvent>),
     Never,
 }
 
 impl FakeState {
+    /// The reply, and the gate it waits behind when its method was held
+    /// ([`FakeCdp::hold_next`]). Only a call the browser answers uses up a hold.
     fn reply(
         &mut self,
         expected: Option<u64>,
         method: &str,
         params: Value,
         session: Option<&SessionId>,
-    ) -> Reply {
+    ) -> (Reply, Option<oneshot::Receiver<()>>) {
         if !self.connected {
-            return Reply::Now(Err(CdpError::NotConnected), None);
+            return (Reply::Now(Err(CdpError::NotConnected), Vec::new()), None);
         }
         if let Some(expected) = expected
             && expected != self.epoch
@@ -262,12 +353,12 @@ impl FakeState {
                 expected,
                 actual: self.epoch,
             };
-            return Reply::Now(Err(error), None);
+            return (Reply::Now(Err(error), Vec::new()), None);
         }
         let reply = if self.hung.contains(method) {
             Reply::Never
         } else if let Some(result) = self.answers.get(method) {
-            Reply::Now(Ok(result.clone()), None)
+            Reply::Now(Ok(result.clone()), Vec::new())
         } else {
             self.answer(method, &params, session)
         };
@@ -276,7 +367,12 @@ impl FakeState {
             params,
             epoch: self.epoch,
         });
-        reply
+        let gate = self.hold_next.remove(method).then(|| {
+            let (open, gate) = oneshot::channel();
+            self.held_replies.push(open);
+            gate
+        });
+        (reply, gate)
     }
 
     /// The fake's behavior per method. Anything it does not model answers `{}`.
@@ -286,11 +382,11 @@ impl FakeState {
                 let tabs: Vec<Value> = (0..self.tabs.len())
                     .filter_map(|index| self.tab_json(index))
                     .collect();
-                Reply::Now(Ok(json!({ "tabs": tabs })), None)
+                Reply::Now(Ok(json!({ "tabs": tabs })), Vec::new())
             }
             "Browser.getTabInfo" => {
                 let tab = tab_param(params).and_then(|tab| self.tab_reply(tab));
-                Reply::Now(tab.ok_or_else(no_tab), None)
+                Reply::Now(tab.ok_or_else(no_tab), Vec::new())
             }
             "Browser.createTab" => {
                 let url = params
@@ -298,20 +394,26 @@ impl FakeState {
                     .and_then(Value::as_str)
                     .unwrap_or("about:blank");
                 let tab = self.add_tab(url, url);
-                let event = self.target_event("Target.targetCreated", tab);
-                Reply::Now(self.tab_reply(tab).ok_or_else(no_tab), event)
+                let events = self.created_events(tab);
+                Reply::Now(self.tab_reply(tab).ok_or_else(no_tab), events)
             }
             "Browser.closeTab" => self.close_by_call(params),
             "Page.navigate" => {
                 self.arrive(params, session);
-                Reply::Now(Ok(json!({})), None)
+                Reply::Now(Ok(json!({})), Vec::new())
             }
             "Target.setDiscoverTargets" => {
                 self.discovering = params
                     .get("discover")
                     .and_then(Value::as_bool)
                     .unwrap_or(true);
-                Reply::Now(Ok(json!({})), None)
+                // Chromium announces every target that exists before it answers.
+                let tabs: Vec<i64> = self.tabs.iter().map(|entry| entry.tab).collect();
+                let events: Vec<CdpEvent> = tabs
+                    .into_iter()
+                    .flat_map(|tab| self.created_events(tab))
+                    .collect();
+                Reply::Now(Ok(json!({})), events)
             }
             "Target.attachToTarget" => {
                 let target = params
@@ -320,31 +422,31 @@ impl FakeState {
                     .unwrap_or_default();
                 Reply::Now(
                     Ok(json!({ "sessionId": format!("session-{target}") })),
-                    None,
+                    Vec::new(),
                 )
             }
-            _ => Reply::Now(Ok(json!({})), None),
+            _ => Reply::Now(Ok(json!({})), Vec::new()),
         }
     }
 
     /// `Browser.closeTab`, which names the tab by `tabId` (core's page manager) or by
     /// `targetId` (a bound view).
     fn close_by_call(&mut self, params: &Value) -> Reply {
+        let target = params.get("targetId").and_then(Value::as_str);
         let by_target = || {
-            params
-                .get("targetId")
-                .and_then(Value::as_str)
-                .and_then(|target| target.strip_prefix("target-"))
-                .and_then(|tab| tab.parse().ok())
+            self.tabs
+                .iter()
+                .find(|entry| Some(entry.target.as_str()) == target)
+                .map(|entry| entry.tab)
         };
         let Some(tab) = tab_param(params).or_else(by_target) else {
-            return Reply::Now(Err(no_tab()), None);
+            return Reply::Now(Err(no_tab()), Vec::new());
         };
-        if !self.remove_tab(tab) {
-            return Reply::Now(Err(no_tab()), None);
-        }
-        let event = self.target_event("Target.targetDestroyed", tab);
-        Reply::Now(Ok(json!({})), event)
+        let Some(closed) = self.remove_tab(tab) else {
+            return Reply::Now(Err(no_tab()), Vec::new());
+        };
+        let events = self.destroyed_events(&closed.target);
+        Reply::Now(Ok(json!({})), events)
     }
 
     /// A `Page.navigate` on a tab's session (`session-target-<tab>`, as `attachToTarget`
@@ -376,16 +478,17 @@ impl FakeState {
         self.next_tab += 1;
         self.tabs.push(FakeTab {
             tab,
+            target: format!("target-{tab}"),
             url: url.to_owned(),
             title: title.to_owned(),
         });
         tab
     }
 
-    fn remove_tab(&mut self, tab: i64) -> bool {
-        let before = self.tabs.len();
-        self.tabs.retain(|entry| entry.tab != tab);
-        self.tabs.len() < before
+    /// Takes the tab out, returning it as it was.
+    fn remove_tab(&mut self, tab: i64) -> Option<FakeTab> {
+        let index = self.tabs.iter().position(|entry| entry.tab == tab)?;
+        Some(self.tabs.remove(index))
     }
 
     /// A tab as Chromium's `Browser.TabInfo` describes it.
@@ -393,7 +496,7 @@ impl FakeState {
         let entry = self.tabs.get(index)?;
         Some(json!({
             "tabId": entry.tab,
-            "targetId": format!("target-{}", entry.tab),
+            "targetId": entry.target,
             "url": entry.url,
             "title": entry.title,
             "isActive": false,
@@ -406,13 +509,31 @@ impl FakeState {
         }))
     }
 
-    /// A target event, sent only while this socket asked for them.
-    fn target_event(&self, method: &str, tab: i64) -> Option<CdpEvent> {
-        (self.connected && self.discovering).then(|| CdpEvent {
+    /// `Target.targetCreated` for the tab's current page target, in Chromium's shape with the
+    /// `tabId` BrowserOS adds; none while this socket has not asked for target events.
+    fn created_events(&self, tab: i64) -> Vec<CdpEvent> {
+        let Some(entry) = self.tabs.iter().find(|entry| entry.tab == tab) else {
+            return Vec::new();
+        };
+        let info = json!({ "targetId": entry.target, "type": "page", "tabId": tab });
+        self.target_event("Target.targetCreated", json!({ "targetInfo": info }))
+    }
+
+    /// `Target.targetDestroyed`, which names only the target; none while this socket has not
+    /// asked for target events.
+    fn destroyed_events(&self, target: &str) -> Vec<CdpEvent> {
+        self.target_event("Target.targetDestroyed", json!({ "targetId": target }))
+    }
+
+    fn target_event(&self, method: &str, params: Value) -> Vec<CdpEvent> {
+        if !(self.connected && self.discovering) {
+            return Vec::new();
+        }
+        vec![CdpEvent {
             method: method.to_owned(),
-            params: json!({ "targetId": format!("target-{tab}") }),
+            params,
             session_id: None,
-        })
+        }]
     }
 }
 

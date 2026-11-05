@@ -31,11 +31,18 @@ const BOOTSTRAP: JsFile = JsFile {
     source: include_str!("js/bootstrap.js"),
 };
 /// Evaluated after the bootstrap, in order. Each adds parameters of the agent's function through
-/// `__neo.provide`; sdk-playwright's prelude replaces the page prelude's `page` and `context`.
-const PRELUDES: &[JsFile] = &[JsFile {
-    name: "page_prelude.js",
-    source: include_str!("js/page_prelude.js"),
-}];
+/// `__neo.provide`; sdk-playwright's prelude replaces the page prelude's `page` and `context`,
+/// and the neo prelude's `neo` stays.
+const PRELUDES: &[JsFile] = &[
+    JsFile {
+        name: "page_prelude.js",
+        source: include_str!("js/page_prelude.js"),
+    },
+    JsFile {
+        name: "neo_prelude.js",
+        source: include_str!("js/neo_prelude.js"),
+    },
+];
 /// The file name the agent's function compiles under. The bootstrap's call sites and the run's
 /// error locations find the agent's own frames by it.
 const AGENT_FILE: &str = "run";

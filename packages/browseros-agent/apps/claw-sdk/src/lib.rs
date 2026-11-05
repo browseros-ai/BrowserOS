@@ -24,6 +24,7 @@ mod config;
     )
 )]
 mod dispatch;
+mod host;
 mod http;
 mod logging;
 mod mcp;

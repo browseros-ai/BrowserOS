@@ -163,6 +163,11 @@ impl ErrorCode {
     /// The page did not load: a network error, a refused connection, a dialog in the way, or
     /// no answer within core's navigation timeout.
     pub(crate) const NAVIGATION_FAILED: Self = Self("navigation_failed");
+    /// A `neo.solveCaptcha` holds the page: another solve, or a write while one runs.
+    pub(crate) const PAGE_BUSY: Self = Self("page_busy");
+    /// This Neo has no CAPTCHA provider key, so `neo.solveCaptcha` is off. The deployment adds
+    /// one; the script cannot.
+    pub(crate) const CAPTCHA_UNAVAILABLE: Self = Self("captcha_unavailable");
 
     /// The stored and wire name.
     #[must_use]

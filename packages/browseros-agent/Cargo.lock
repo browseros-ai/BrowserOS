@@ -634,8 +634,11 @@ name = "claw-sdk"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "browseros-captcha",
  "browseros-cdp",
  "browseros-core",
+ "browseros-service",
+ "browseros-takeover",
  "browseros-trace",
  "clap",
  "claw-sdk",

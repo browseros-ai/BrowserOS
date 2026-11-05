@@ -21,7 +21,8 @@ use crate::config::HostApiConfig;
 /// It binds and serves; who may call is decided entirely by the make-service it is given. In
 /// the app that is browseros-service's `host_service(routes, auth)`, which carries the routes,
 /// the constant-time bearer check, the peer-uid check and the connect info. claw-sdk writes no
-/// auth and no connect-info layer of its own (decisions 12 and 16).
+/// auth and no connect-info layer of its own (decisions 12 and 16). Whether there is a host
+/// socket at all is `host::HostApi`'s call: none without a usable token.
 #[derive(Debug)]
 pub(crate) struct HostListener {
     unix: UnixListener,
@@ -51,15 +52,11 @@ pub(crate) enum BindError {
 }
 
 impl HostListener {
-    /// Binds the sockets, or returns `None` when no token file is configured: then there is no
-    /// host API, and `run` still works.
+    /// Binds the socket, and TCP when configured.
     ///
     /// The socket is mode 0660, so a host in the socket's group (zuzu's shared
     /// `/run/mirror-neo/`) can connect; the service's auth decides the rest.
-    pub(crate) async fn bind(config: &HostApiConfig) -> Result<Option<Self>, BindError> {
-        if config.token_file.is_none() {
-            return Ok(None);
-        }
+    pub(crate) async fn bind(config: &HostApiConfig) -> Result<Self, BindError> {
         let socket = &config.socket;
         if let Some(parent) = socket.parent() {
             fs::create_dir_all(parent)
@@ -80,11 +77,11 @@ impl HostListener {
             ),
             None => None,
         };
-        Ok(Some(Self {
+        Ok(Self {
             unix,
             socket: socket.clone(),
             tcp,
-        }))
+        })
     }
 
     /// The bound TCP address, when `CLAW_HOST_TCP` opted in.
@@ -197,9 +194,7 @@ mod tests {
     }
 
     async fn bound(config: &HostApiConfig) -> Result<HostListener, Box<dyn Error>> {
-        Ok(HostListener::bind(config)
-            .await?
-            .ok_or("a token file is configured, so there is a listener")?)
+        Ok(HostListener::bind(config).await?)
     }
 
     fn serve(listener: HostListener) -> (CancellationToken, JoinHandle<io::Result<()>>) {
@@ -222,21 +217,6 @@ mod tests {
             response.starts_with("HTTP/1.1 200") && response.ends_with("pong"),
             "the make-service's own response passes through unchanged: {response}"
         );
-    }
-
-    #[tokio::test]
-    async fn no_token_file_means_no_listener() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let config = HostApiConfig {
-            token_file: None,
-            ..config(dir.path(), None)
-        };
-        assert!(
-            HostListener::bind(&config).await?.is_none(),
-            "without a token there is no host API to protect, so nothing listens"
-        );
-        assert!(!config.socket.exists(), "and no socket file is created");
-        Ok(())
     }
 
     #[tokio::test]

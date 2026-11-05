@@ -15,4 +15,4 @@ mod fake_cdp;
 mod test_config;
 
 pub use fake_cdp::{FakeCall, FakeCdp};
-pub use test_config::test_config;
+pub use test_config::{CLOSED_XVNC, test_config};

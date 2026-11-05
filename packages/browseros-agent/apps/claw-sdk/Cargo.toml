@@ -86,8 +86,13 @@ test-support = []
 
 [dependencies]
 axum.workspace = true
+# neo.solveCaptcha: detection and the paid providers, one solver per process.
+browseros-captcha.workspace = true
 browseros-cdp.workspace = true
 browseros-core.workspace = true
+# The host API: its routes, auth and event log, and the takeover locks the door asks.
+browseros-service.workspace = true
+browseros-takeover.workspace = true
 browseros-trace.workspace = true
 clap.workspace = true
 futures-util.workspace = true

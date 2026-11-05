@@ -7,10 +7,12 @@ use std::sync::Arc;
 use std::{fmt, io};
 
 use axum::Router;
+use browseros_captcha::CaptchaSolver;
+use browseros_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
 use browseros_core::NativeCapabilities;
 use browseros_trace::{
-    EpochMillis, RedactionLimits, Redactor, RetentionPolicy, SecretSet, SecretSetConfig,
-    TraceError, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    EpochMillis, Privacy, RedactionLimits, Redactor, RetentionPolicy, SecretSet, SecretSetConfig,
+    TraceError, TraceSink, TraceStore, WriterConfig,
 };
 use tokio::net::TcpListener;
 use tokio::runtime::{Builder, Runtime};
@@ -21,9 +23,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::browser::{BrowserLink, TabRegistry};
-use crate::builtins::{self, TabJanitor};
+use crate::builtins::{self, BuiltinDeps, CaptchaClaims, TabJanitor};
 use crate::config::{AppConfig, Defaults, HostedMode};
 use crate::dispatch::{Dispatcher, Policy, RegistryBuilder};
+use crate::host::{HostApi, HostInputs, TakeoverLock};
 use crate::http::agent_router;
 use crate::mcp::McpServer;
 use crate::run::{RunService, RunServiceParts};
@@ -34,9 +37,13 @@ use crate::test_support::FakeCdp;
 /// long-lived part built.
 ///
 /// ```text
-///  start ─ bind the agent port (taken: exit 2) ─ trace store + SecretSet + writer
-///        ─ TabRegistry + BrowserLink (connects in the background) ─ Registry (built-ins)
-///        ─ Dispatcher ─ RunService ─ McpServer ─ housekeeping task ─ agent router
+///  start ─ bind the agent port (taken: exit 2) ─ trace store + SecretSet + writer (with the
+///          screenshot queue) + Privacy ─ host socket (with a usable token; bind failure: exit 1)
+///        ─ TabRegistry + BrowserLink (connects in the background) ─ CaptchaSolver (with a
+///          provider key) ─ Registry (built-ins)
+///        ─ Dispatcher (rules: the takeover lock, the CAPTCHA claims) ─ RunService ─ McpServer
+///        ─ host API task (starts browseros-service once the link connects, then serves the
+///          socket) ─ housekeeping task ─ agent router
 ///  serve ─ until SIGTERM ─ runs stop (shutting_down) ─ connections drain ─ trace flushed
 /// ```
 ///
@@ -67,6 +74,9 @@ pub enum StartError {
     /// The trace store could not be opened, even fresh.
     #[error("trace store: {0}")]
     Trace(#[from] TraceError),
+    /// A usable host token is configured, but its socket could not be bound.
+    #[error("host socket: {0}")]
+    HostSocket(String),
     /// Binding, serving or installing the signal handler failed.
     #[error("{0}")]
     Io(#[from] io::Error),
@@ -141,21 +151,48 @@ impl App {
             replay_window: Defaults::REPLAY_WINDOW,
             ..WriterConfig::default()
         };
-        // No screenshot queue yet: browseros-service's camera takes the other end once the host
-        // API is wired.
-        let trace = spawn_writer(&store, redactor, writer, None);
+        // The writer decides which ops get a screenshot; browseros-service's camera takes them
+        // once the browser links.
+        let (shots, screenshots) = browseros_trace::screenshot_queue();
+        let trace = browseros_trace::spawn_writer(&store, redactor, writer, Some(shots));
+        // Private flags committed by an earlier Neo still hold until their tabs are gone.
+        let privacy = Privacy::new(
+            Arc::clone(&secrets),
+            Arc::new(trace.clone()),
+            store.private_tabs().await?,
+        );
+        let host = HostApi::bind(
+            &config.env.host_api,
+            HostInputs {
+                store: store.clone(),
+                sink: trace.clone(),
+                privacy,
+                screenshots,
+                xvnc: config.env.xvnc,
+            },
+        )
+        .await
+        .map_err(|error| StartError::HostSocket(error.to_string()))?;
 
         let tabs = Arc::new(TabRegistry::new());
         let native = NativeCapabilities::from_browseros_version(config.browseros_version());
         let browser = link(native, Arc::clone(&tabs));
 
+        // One solver for the process: its paid-task budget and page reservations are its own.
+        let solver = CaptchaSolver::new(config.captcha.clone()).map(Arc::new);
+        let claims = Arc::new(CaptchaClaims::default());
         let mut methods = RegistryBuilder::default();
-        builtins::builtin_set(&mut methods)
+        let deps = BuiltinDeps {
+            solver,
+            claims: Arc::clone(&claims),
+        };
+        builtins::builtin_set(&mut methods, deps)
             .map_err(|error| StartError::Methods(error.to_string()))?;
         let methods = methods.build();
+        let takeover = Arc::new(TakeoverLock::default());
         let dispatcher = Arc::new(Dispatcher::new(
             methods,
-            rules(),
+            rules(&takeover, &claims),
             Arc::clone(&secrets),
             trace.clone(),
             Arc::clone(&browser),
@@ -173,8 +210,19 @@ impl App {
             orphan_grace: Defaults::ORPHAN_GRACE,
         });
         let mcp = McpServer::new(runs, dispatcher.registry());
+        tokio::spawn(host.serve(
+            Arc::clone(&browser),
+            Arc::clone(&takeover),
+            shutdown.clone(),
+        ));
         tokio::spawn(housekeeping(
-            TabJanitor::new(dispatcher, Arc::clone(&browser), tabs, trace.clone()),
+            TabJanitor::new(
+                dispatcher,
+                Arc::clone(&browser),
+                tabs,
+                trace.clone(),
+                takeover,
+            ),
             secrets,
             trace.clone(),
             shutdown.clone(),
@@ -239,11 +287,15 @@ impl fmt::Debug for App {
     }
 }
 
-/// The dispatcher's rules, in their one fixed order (design D7 rule 4): sdk-traces' takeover
-/// lock, then its tab privacy, then the CAPTCHA busy rule. Each lands as one entry here, and
-/// the door runs them in this order for every op.
-fn rules() -> Vec<Arc<dyn Policy>> {
-    Vec::new()
+/// The dispatcher's rules, in their one fixed order (design D7 rule 4): the takeover lock, then
+/// the CAPTCHA busy rule. Tab privacy's screenshot refusal joins between them with the first
+/// method that captures a page. The door runs them in this order for every op, so an owner's
+/// lock outranks a solve's claim when both would refuse.
+fn rules(takeover: &Arc<TakeoverLock>, claims: &Arc<CaptchaClaims>) -> Vec<Arc<dyn Policy>> {
+    vec![
+        Arc::clone(takeover) as Arc<dyn Policy>,
+        Arc::clone(claims) as Arc<dyn Policy>,
+    ]
 }
 
 /// Neo's periodic upkeep, one task until `shutdown`: every [`Defaults::HOUSEKEEPING_EVERY`] the
@@ -321,8 +373,8 @@ fn after(token: &CancellationToken, budget: time::Duration) -> impl Future<Outpu
     }
 }
 
-/// The start's facts and its warnings, one line each. The hosted-mode and host-listener lines
-/// are never failures: `run` works without either.
+/// The start's facts and its warnings, one line each. The hosted-mode and CAPTCHA lines are
+/// never failures: `run` works without either. `HostApi::bind` logs the host socket's own line.
 fn log_startup(config: &AppConfig, address: SocketAddr) {
     let launch = &config.launch;
     let env = &config.env;
@@ -334,6 +386,8 @@ fn log_startup(config: &AppConfig, address: SocketAddr) {
         browseros_version = config.browseros_version(),
         browseros_version_from_env = env.native_version.is_some(),
         state_dir = %env.state_dir.display(),
+        xvnc = %env.xvnc.addr,
+        screen = %env.xvnc.home,
         "claw-sdk serving"
     );
     if let HostedMode::Off { value } = &env.hosted_mode {
@@ -348,14 +402,19 @@ fn log_startup(config: &AppConfig, address: SocketAddr) {
             "claw-sdk reads no config file; BROWSERCLAW_CONFIG_FILE is ignored"
         );
     }
-    let host = &env.host_api;
-    match &host.token_file {
-        None => warn!("no host listener: CLAW_HOST_TOKEN_FILE is unset"),
-        Some(token_file) => warn!(
-            socket = %host.socket.display(),
-            tcp = ?host.tcp,
-            token_file = %token_file.display(),
-            "host listener not started: it serves browseros-service's routes, not built yet"
-        ),
+    // The key files were read before logging started, so this line is the operator's only
+    // word on a key file that could not be read.
+    let captcha = &config.captcha;
+    if captcha.has_provider() {
+        info!(
+            capsolver = captcha.capsolver.is_some(),
+            twocaptcha = captcha.twocaptcha.is_some(),
+            paid_task_limit = captcha.paid_task_limit,
+            "neo.solveCaptcha is on"
+        );
+    } else {
+        warn!(
+            "neo.solveCaptcha is off: no readable CAPTCHA provider key ({CAPSOLVER_KEY_FILE_ENV}, {TWOCAPTCHA_KEY_FILE_ENV}); a call fails host / captcha_unavailable"
+        );
     }
 }

@@ -8,11 +8,12 @@ use futures_util::future;
 use serde_json::json;
 use tokio::time::{self, Instant};
 
-use crate::browser::{BrowserLink, TabRegistry};
+use crate::browser::{BrowserLink, PageRef, TabRegistry};
 use crate::config::Defaults;
 use crate::dispatch::{
     Call, Caller, Dispatcher, OpReply, PendingReply, RunCtx, RunEnd, RunStart, StopReason,
 };
+use crate::host::TakeoverLock;
 
 /// The method the janitor submits for each idle tab.
 const CLOSE: &str = "page.close";
@@ -26,40 +27,50 @@ const SWEEP_BUDGET: Duration = Duration::from_secs(30);
 /// sessions nothing else ever frees them, and a hosted Neo runs for weeks.
 ///
 /// Each close is a `page.close` op that Neo submits through the dispatcher, in a run of its own
-/// with no `requestId` and no `taskId` (synthesis graft 8). The rules therefore apply to it: a
-/// tab the owner holds is refused by the takeover lock and stays open until a later sweep finds
-/// it free, and the trace records what Neo closed. Only `TabOrigin::Agent` tabs are candidates,
-/// so the owner's own tabs and popups are never closed. Neo's ops do not restart a tab's idle
-/// clock (only script ops do), so a refused tab stays a candidate.
+/// with no `requestId` and no `taskId` (synthesis graft 8), so the trace records what Neo closed.
+/// Only `TabOrigin::Agent` tabs are candidates, so the owner's own tabs and popups are never
+/// closed. A tab the owner holds is skipped (`TakeoverLock::is_locked`) and stays a candidate
+/// for a later sweep, since Neo's ops do not restart a tab's idle clock (only script ops do);
+/// skipping keeps a long takeover from leaving a refused close in the trace every minute. A lock
+/// taken between the skip and the close is still the door's to refuse: the close is an op like
+/// any other.
 pub(crate) struct TabJanitor {
     dispatcher: Arc<Dispatcher>,
     link: Arc<BrowserLink>,
     tabs: Arc<TabRegistry>,
     trace: TraceSink,
+    takeover: Arc<TakeoverLock>,
 }
 
 impl TabJanitor {
-    /// The janitor over the app's one dispatcher, link, tab registry and trace.
+    /// The janitor over the app's one dispatcher, link, tab registry, trace and takeover lock.
     #[must_use]
     pub(crate) fn new(
         dispatcher: Arc<Dispatcher>,
         link: Arc<BrowserLink>,
         tabs: Arc<TabRegistry>,
         trace: TraceSink,
+        takeover: Arc<TakeoverLock>,
     ) -> Self {
         Self {
             dispatcher,
             link,
             tabs,
             trace,
+            takeover,
         }
     }
 
     /// One pass, for the app's housekeeping to call every minute with `Instant::now()`. Returns
-    /// the sweep's run, or `None` when nothing was idle or the browser is not linked (no run is
-    /// recorded then; the next pass tries again).
+    /// the sweep's run, or `None` when nothing idle is free to close or the browser is not
+    /// linked (no run is recorded then; the next pass tries again).
     pub(crate) async fn sweep(&self, now: Instant) -> Option<RunId> {
-        let idle = self.tabs.idle_agent_tabs(Defaults::TAB_IDLE, now);
+        let idle: Vec<PageRef> = self
+            .tabs
+            .idle_agent_tabs(Defaults::TAB_IDLE, now)
+            .into_iter()
+            .filter(|page| !self.takeover.is_locked(page.tab))
+            .collect();
         if idle.is_empty() {
             return None;
         }

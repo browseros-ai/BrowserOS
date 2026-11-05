@@ -5,24 +5,18 @@
 //!                  mirrord reaches it. Serves /mcp (stateless rmcp, behind request_hygiene,
 //!                  which keeps web pages out) and /system/* for Chromium's supervisor.
 //!  host listener   a Unix socket ($BROWSERCLAW_DIR/host.sock), TCP only by CLAW_HOST_TCP, none
-//!                  without CLAW_HOST_TOKEN_FILE. Serves browseros-service's
-//!                  host_service(routes, auth), which owns the routes, the auth and the connect
-//!                  info; Neo only binds the sockets.
+//!                  without a usable CLAW_HOST_TOKEN_FILE (host::HostApi decides). Serves
+//!                  browseros-service's host_service(routes, auth), which owns the routes, the
+//!                  auth and the connect info; Neo only binds the sockets.
 //! ```
 //!
 //! Nothing here names a browser crate (STYLE.md P2): routes that need the browser get it through
 //! the parts `app.rs` hands them.
 
 mod agent_router;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "app.rs serves it once browseros-service provides host_service"
-    )
-)]
 mod host_listener;
 mod request_hygiene;
 mod system_routes;
 
 pub(crate) use agent_router::agent_router;
+pub(crate) use host_listener::{BindError, HostListener};

@@ -1,12 +1,17 @@
 //! A process config for tests, without a launch file or the real environment.
 
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::Path;
+
+use browseros_captcha::config::CaptchaConfig;
+use browseros_takeover::Xvnc;
 
 use crate::config::{AppConfig, Defaults, EnvConfig, HostApiConfig, HostedMode, LaunchConfig};
 
 /// The config Chromium would give a hosted Neo, with its state under `state_dir` and the agent
 /// port left to the OS (port 0; `App::local_addr` reports the one it got). There is no host
-/// listener, and the CDP port goes unused once the app starts on a `FakeCdp`.
+/// listener and no CAPTCHA provider key, whatever the test's environment holds, and the CDP
+/// port goes unused once the app starts on a `FakeCdp`. Neo's screen is [`CLOSED_XVNC`].
 #[must_use]
 pub fn test_config(state_dir: &Path) -> AppConfig {
     AppConfig {
@@ -27,6 +32,16 @@ pub fn test_config(state_dir: &Path) -> AppConfig {
                 token_file: None,
                 tcp: None,
             },
+            xvnc: CLOSED_XVNC,
         },
+        captcha: CaptchaConfig::default(),
     }
 }
+
+/// Neo's screen at a local port nothing listens on (discard, 9). The service puts the screen home
+/// as it starts; at Xvnc's real 5900 that could resize a developer's macOS Screen Sharing, while
+/// here the dial is refused at once and only logged.
+pub const CLOSED_XVNC: Xvnc = Xvnc {
+    addr: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 9)),
+    home: Defaults::SCREEN,
+};
