@@ -1,0 +1,362 @@
+// biome-ignore-all lint: Injected into an isolated world; kept byte-oriented like core's other page assets.
+// The sealed world (sdk-privacy L1). Runs once per document in Neo's own isolated world, named
+// SEALED_WORLD in seal.rs, before any other Neo code there.
+//
+// An isolated world shares the page's DOM but has its own JavaScript prototypes. Redefining the
+// getters a value can be read through therefore changes what Neo's code in this world reads and
+// leaves the page's own scripts untouched: every read of a password, card or one-time-code
+// field made from here returns "••••" (a card number keeps its last four). The native getters
+// survive only inside this closure, for jobs that never hand a value to the agent:
+//   kind(el)                 which fields are sensitive (also traces' sensitive_target)
+//   valueEquals(el, s)       expect(...).toHaveValue compares the real value, reports the mask
+//   rawLength(el)            selectText needs the real length
+//   sensitiveValues()        the sweep: Rust masks these exact values in a main-world result
+//   watch(root)              journal and sweep a closed shadow root Rust found
+//
+// The journal reports each value entered into a sensitive field through a CDP binding that was
+// added with executionContextName = this world, so only this world has it. Rust registers the
+// values with the secret set (sdk-traces' Privacy).
+//
+// Prototypes are per frame. Code here must never reach into another frame's document (it would
+// read through that frame's getters, which may not be sealed yet), so contentDocument and
+// contentWindow return null here; Rust hops frames itself and seals each one.
+//
+// seal.rs passes rules.json as the argument at the bottom; field_rules.rs evaluates the same
+// table over snapshot data, and the live parity test keeps the two evaluators in agreement.
+// biome-ignore format: Keep the injected script byte-oriented, like core's other page assets.
+(function (rules) {
+  if (globalThis.__clawSeal) return globalThis.__clawSeal.version;
+
+  var FIELD_MASK = "••••";
+  var desc = function (proto, name) { return Object.getOwnPropertyDescriptor(proto, name); };
+  var raw = {
+    inputValue: desc(HTMLInputElement.prototype, "value"),
+    inputDefault: desc(HTMLInputElement.prototype, "defaultValue"),
+    inputNumber: desc(HTMLInputElement.prototype, "valueAsNumber"),
+    textareaValue: desc(HTMLTextAreaElement.prototype, "value"),
+    textareaDefault: desc(HTMLTextAreaElement.prototype, "defaultValue"),
+    selectValue: desc(HTMLSelectElement.prototype, "value"),
+    attrValue: desc(Attr.prototype, "value"),
+    nodeValue: desc(Node.prototype, "nodeValue"),
+    textContent: desc(Node.prototype, "textContent"),
+    characterData: desc(CharacterData.prototype, "data"),
+    wholeText: desc(Text.prototype, "wholeText"),
+    innerText: desc(HTMLElement.prototype, "innerText"),
+    outerHTML: desc(Element.prototype, "outerHTML"),
+    innerHTML: desc(Element.prototype, "innerHTML"),
+    getAttribute: Element.prototype.getAttribute,
+    getAttributeNS: Element.prototype.getAttributeNS,
+    elementQueryAll: Element.prototype.querySelectorAll,
+    fragmentQueryAll: DocumentFragment.prototype.querySelectorAll,
+    documentQueryAll: Document.prototype.querySelectorAll,
+    closest: Element.prototype.closest,
+    getElementById: Document.prototype.getElementById,
+    selectionToString: Selection.prototype.toString,
+    addEventListener: EventTarget.prototype.addEventListener,
+    composedPath: Event.prototype.composedPath,
+    stringify: JSON.stringify,
+  };
+  var attr = function (el, name) { return raw.getAttribute.call(el, name); };
+  var text = function (node) { return node ? String(raw.textContent.get.call(node) || "") : ""; };
+  var lower = function (value) { return String(value || "").trim().toLowerCase(); };
+  var isInput = function (el) { return el instanceof HTMLInputElement; };
+  var isField = function (el) {
+    return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement;
+  };
+  var rawValue = function (el) {
+    if (el instanceof HTMLInputElement) return raw.inputValue.get.call(el);
+    if (el instanceof HTMLTextAreaElement) return raw.textareaValue.get.call(el);
+    if (el instanceof HTMLSelectElement) return raw.selectValue.get.call(el);
+    return "";
+  };
+
+  // ---- classification: the same table and order as field_rules.rs ----
+  var codeSlotContext = new RegExp(rules.codeSlot.context, "i");
+  var words = rules.words.map(function (rule) { return { kind: rule.kind, pattern: new RegExp(rule.pattern, "i") }; });
+  var wasPassword = new WeakSet();
+  var includes = function (list, value) { return list.indexOf(value) !== -1; };
+
+  // Rust classifies with Chromium's accessible name. This stand-in reads a label's text plus the
+  // alt, aria-label and title of elements inside it, so <label><img alt="Password"></label>
+  // names the field here too. It may read more words than the accessible name, never fewer of
+  // these, so a disagreement masks in the sealed world rather than leaking from it.
+  function labelText(node) {
+    var parts = [text(node)];
+    var inner = raw.elementQueryAll.call(node, "[alt],[aria-label],[title]");
+    for (var i = 0; i < inner.length; i++) parts.push(attr(inner[i], "alt"), attr(inner[i], "aria-label"), attr(inner[i], "title"));
+    return parts.filter(Boolean).join(" ");
+  }
+
+  function label(el) {
+    var parts = [];
+    var labels = el.labels;
+    if (labels) for (var i = 0; i < labels.length; i++) parts.push(labelText(labels[i]));
+    var labelledBy = attr(el, "aria-labelledby");
+    if (labelledBy) {
+      var root = el.getRootNode();
+      labelledBy.split(/\s+/).forEach(function (id) {
+        var node = root && root.getElementById ? root.getElementById(id) : raw.getElementById.call(document, id);
+        if (node) parts.push(labelText(node));
+      });
+    }
+    return parts.join(" ");
+  }
+
+  function wordsOf(el) {
+    return [attr(el, "name"), attr(el, "id"), attr(el, "aria-label"), attr(el, "placeholder"), attr(el, "title"), label(el)]
+      .filter(Boolean).join(" ");
+  }
+
+  /** null when the field holds no secret, else "password" | "one_time_code" | "card". */
+  function kind(el) {
+    if (!isField(el)) return null;
+    var type = isInput(el) ? lower(attr(el, "type")) : "";
+    if (isInput(el) && includes(rules.excludedTypes, type)) return null;
+    if (isInput(el)) observeTypes(el.getRootNode());
+    if (isInput(el) && (includes(rules.passwordTypes, type) || wasPassword.has(el))) return "password";
+    var tokens = lower(attr(el, "autocomplete")).split(/\s+/).filter(Boolean);
+    if (tokens.some(function (t) { return includes(rules.passwordTokens, t); })) return "password";
+    if (tokens.some(function (t) { return includes(rules.oneTimeCodeTokens, t); })) return "one_time_code";
+    if (tokens.some(function (t) { return rules.cardTokenPrefixes.some(function (p) { return t.indexOf(p) === 0; }); })) return "card";
+    var fieldWords = wordsOf(el);
+    var slot = rules.codeSlot;
+    var maxLength = attr(el, "maxlength");
+    var mode = lower(attr(el, "inputmode")) || type;
+    if (maxLength !== null && Number(maxLength) === slot.maxLength && includes(slot.inputModes, mode)) {
+      var form = raw.closest.call(el, "form");
+      if (form && (codeSlotContext.test(text(form).slice(0, rules.formTextLimit)) || codeSlotContext.test(fieldWords))) return "one_time_code";
+    }
+    for (var i = 0; i < words.length; i++) if (words[i].pattern.test(fieldWords)) return words[i].kind;
+    return null;
+  }
+
+  function luhn(digits) {
+    var sum = 0;
+    for (var i = 0; i < digits.length; i++) {
+      var n = Number(digits[digits.length - 1 - i]);
+      if (i % 2 === 1) { n *= 2; if (n > 9) n -= 9; }
+      sum += n;
+    }
+    return sum % 10 === 0;
+  }
+
+  /** mask_value.rs, in JavaScript. */
+  function mask(k, value) {
+    if (value === "" || value == null) return value;
+    var v = String(value);
+    if (k === "card" && /^[\d -]+$/.test(v)) {
+      var digits = v.replace(/[^\d]/g, "");
+      if (digits.length >= 13 && digits.length <= 19 && luhn(digits)) return FIELD_MASK + " " + digits.slice(-4);
+    }
+    return FIELD_MASK;
+  }
+
+  var masked = function (el, value) {
+    if (value === "" || value == null) return value;
+    var k = kind(el);
+    return k ? mask(k, value) : value;
+  };
+
+  // ---- shadow every getter a value can be read through ----
+  var shadowGet = function (proto, name, original, wrap) {
+    if (!original || !original.get) return;
+    Object.defineProperty(proto, name, {
+      configurable: original.configurable,
+      enumerable: original.enumerable,
+      set: original.set,
+      get: function () { return wrap(this, original.get.call(this)); },
+    });
+  };
+  shadowGet(HTMLInputElement.prototype, "value", raw.inputValue, masked);
+  shadowGet(HTMLInputElement.prototype, "defaultValue", raw.inputDefault, masked);
+  shadowGet(HTMLInputElement.prototype, "valueAsNumber", raw.inputNumber, function (el, v) { return kind(el) ? NaN : v; });
+  shadowGet(HTMLTextAreaElement.prototype, "value", raw.textareaValue, masked);
+  shadowGet(HTMLTextAreaElement.prototype, "defaultValue", raw.textareaDefault, masked);
+  shadowGet(HTMLSelectElement.prototype, "value", raw.selectValue, masked);
+  var valueAttrOfSensitive = function (a) {
+    return a && lower(a.name) === "value" && a.ownerElement && kind(a.ownerElement);
+  };
+  shadowGet(Attr.prototype, "value", raw.attrValue, function (a, v) { return valueAttrOfSensitive(a) ? masked(a.ownerElement, v) : v; });
+  // A <textarea>'s child text is its initial value (what a page prefilled), so it is masked
+  // like the value: read on its own, through its text node, or inside an ancestor's text.
+  var inSensitiveTextarea = function (n) {
+    return n instanceof Text && n.parentNode instanceof HTMLTextAreaElement && kind(n.parentNode);
+  };
+  var scrubText = function (root, v) {
+    if (!v || !(root instanceof Element || root instanceof DocumentFragment)) return v;
+    var areas = root instanceof Element ? raw.elementQueryAll.call(root, "textarea") : raw.fragmentQueryAll.call(root, "textarea");
+    for (var i = 0; i < areas.length; i++) {
+      var t = text(areas[i]);
+      if (t && kind(areas[i])) v = v.split(t).join(mask(kind(areas[i]), t));
+    }
+    return v;
+  };
+  var nodeText = function (n, v) {
+    if (n instanceof Attr) return valueAttrOfSensitive(n) ? masked(n.ownerElement, v) : v;
+    if (n instanceof HTMLTextAreaElement) return masked(n, v);
+    if (inSensitiveTextarea(n)) return masked(n.parentNode, v);
+    return scrubText(n, v);
+  };
+  shadowGet(Node.prototype, "nodeValue", raw.nodeValue, nodeText);
+  shadowGet(Node.prototype, "textContent", raw.textContent, nodeText);
+  shadowGet(CharacterData.prototype, "data", raw.characterData, nodeText);
+  shadowGet(Text.prototype, "wholeText", raw.wholeText, nodeText);
+  shadowGet(HTMLElement.prototype, "innerText", raw.innerText, function (el, v) {
+    return el instanceof HTMLTextAreaElement ? masked(el, v) : v;
+  });
+  Element.prototype.getAttribute = function (name) {
+    var v = raw.getAttribute.call(this, name);
+    return v && lower(name) === "value" ? masked(this, v) : v;
+  };
+  Element.prototype.getAttributeNS = function (ns, name) {
+    var v = raw.getAttributeNS.call(this, ns, name);
+    return v && !ns && lower(name) === "value" ? masked(this, v) : v;
+  };
+  // Markup: serialize, then replace each sensitive field's value="…" with its mask.
+  var escapeAttr = function (s) {
+    return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/ /g, "&nbsp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  };
+  var escapeText = function (s) {
+    return s.replace(/&/g, "&amp;").replace(/\u00a0/g, "&nbsp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  };
+  var scrubMarkup = function (root, html, includeRoot) {
+    var fields = Array.prototype.slice.call(raw.elementQueryAll.call(root, "input,textarea,select"));
+    if (includeRoot) fields.unshift(root);
+    for (var i = 0; i < fields.length; i++) {
+      if (fields[i] instanceof HTMLTextAreaElement) {
+        var t = text(fields[i]);
+        if (t && kind(fields[i])) {
+          var shown = mask(kind(fields[i]), t);
+          html = html.split(">" + escapeText(t) + "</textarea>").join(">" + shown + "</textarea>");
+        }
+      }
+      var v = raw.getAttribute.call(fields[i], "value");
+      if (!v || !kind(fields[i])) continue;
+      var m = masked(fields[i], v);
+      [escapeAttr(v), v.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/ /g, "&nbsp;")].forEach(function (form) {
+        html = html.split('value="' + form + '"').join('value="' + m + '"');
+      });
+    }
+    return html;
+  };
+  shadowGet(Element.prototype, "outerHTML", raw.outerHTML, function (el, html) { return scrubMarkup(el, html, true); });
+  shadowGet(Element.prototype, "innerHTML", raw.innerHTML, function (el, html) {
+    // A textarea's own innerHTML is its escaped text.
+    if (el instanceof HTMLTextAreaElement && kind(el) && html) return mask(kind(el), text(el));
+    return scrubMarkup(el, html, false);
+  });
+  // The focused control can sit inside a shadow root, where document.activeElement is only its
+  // host. Follow open roots, and the closed ones Rust handed to watch().
+  var deepActiveElement = function () {
+    var active = document.activeElement;
+    for (var depth = 0; depth < 32 && active; depth++) {
+      var root = active.shadowRoot;
+      if (!root) for (var i = 0; i < watched.length; i++) if (watched[i] !== document && watched[i].host === active) root = watched[i];
+      if (!root || !root.activeElement) break;
+      active = root.activeElement;
+    }
+    return active;
+  };
+  Selection.prototype.toString = function () {
+    var active = deepActiveElement();
+    return active && kind(active) ? "" : raw.selectionToString.call(this);
+  };
+  // Neo's code here never needs these; removing them keeps a forgotten read from working.
+  delete globalThis.FormData;
+  delete globalThis.XMLSerializer;
+  [HTMLIFrameElement.prototype, HTMLFrameElement.prototype, HTMLObjectElement.prototype, HTMLEmbedElement.prototype].forEach(function (proto) {
+    ["contentDocument", "contentWindow"].forEach(function (name) {
+      var original = desc(proto, name);
+      if (original) Object.defineProperty(proto, name, { configurable: original.configurable, enumerable: original.enumerable, get: function () { return null; } });
+    });
+    if (typeof proto.getSVGDocument === "function") proto.getSVGDocument = function () { return null; };
+  });
+
+  // ---- show-password toggles: once a password, always a password in this document ----
+  var notePasswords = function (root) {
+    var found = root === document ? raw.documentQueryAll.call(document, "input") : raw.fragmentQueryAll.call(root, "input");
+    for (var i = 0; i < found.length; i++) if (lower(attr(found[i], "type")) === "password") wasPassword.add(found[i]);
+  };
+  var typeWatcher = new MutationObserver(function (records) {
+    for (var i = 0; i < records.length; i++) {
+      var r = records[i];
+      if (lower(r.oldValue) === "password" || lower(attr(r.target, "type")) === "password") wasPassword.add(r.target);
+    }
+  });
+  // A MutationObserver on the document does not see changes inside shadow roots, so each root
+  // is observed on its own: at install for the roots found then, and from a field's first
+  // classification (kind) or sweep for roots that appear later.
+  var observedRoots = new WeakSet();
+  var observeTypes = function (root) {
+    if (!root || observedRoots.has(root) || !(root === document || root instanceof ShadowRoot)) return;
+    observedRoots.add(root);
+    notePasswords(root);
+    typeWatcher.observe(root, { subtree: true, attributes: true, attributeFilter: ["type"], attributeOldValue: true });
+  };
+
+  // ---- the journal ----
+  var journal = typeof globalThis.__neoJournal === "function" ? globalThis.__neoJournal : null;
+  delete globalThis.__neoJournal;
+  var lastSent = new WeakMap();
+  var record = function (event) {
+    var path = raw.composedPath.call(event);
+    var el = path && path[0];
+    var k = kind(el);
+    if (!k || !journal) return;
+    var value = rawValue(el);
+    if (!value || lastSent.get(el) === value) return;
+    lastSent.set(el, value);
+    journal(raw.stringify({ kind: k, value: value }));
+  };
+  var watched = [];
+  var watch = function (root) {
+    if (!root || watched.indexOf(root) !== -1) return;
+    watched.push(root);
+    raw.addEventListener.call(root, "input", record, true);
+    raw.addEventListener.call(root, "change", record, true);
+    observeTypes(root);
+  };
+  watch(document);
+
+  // The document, every open shadow root under it (querySelectorAll does not pierce them), and
+  // the closed ones Rust handed to watch(). Bounded so a huge page cannot stall a sweep.
+  var MAX_SWEEP_ELEMENTS = 50000;
+  var queryAll = function (root, selector) {
+    return root === document ? raw.documentQueryAll.call(document, selector) : raw.fragmentQueryAll.call(root, selector);
+  };
+  var sweepRoots = function () {
+    var roots = watched.slice();
+    var pending = [document];
+    var visited = 0;
+    while (pending.length && visited < MAX_SWEEP_ELEMENTS) {
+      var all = queryAll(pending.pop(), "*");
+      for (var i = 0; i < all.length && visited < MAX_SWEEP_ELEMENTS; i++, visited++) {
+        var open = all[i].shadowRoot;
+        if (open && roots.indexOf(open) === -1) { roots.push(open); pending.push(open); observeTypes(open); }
+      }
+    }
+    return roots;
+  };
+  sweepRoots();
+
+  globalThis.__clawSeal = {
+    version: 1,
+    kind: kind,
+    valueEquals: function (el, expected) { return rawValue(el) === expected; },
+    rawLength: function (el) { return String(rawValue(el) || "").length; },
+    /** Raw values of every sensitive field in this document and its shadow roots. */
+    sensitiveValues: function () {
+      var out = [];
+      sweepRoots().forEach(function (root) {
+        var found = queryAll(root, "input,textarea,select");
+        for (var i = 0; i < found.length; i++) {
+          var v = rawValue(found[i]);
+          if (v && kind(found[i]) && out.indexOf(v) === -1) out.push(v);
+        }
+      });
+      return out;
+    },
+    watch: watch,
+  };
+  return globalThis.__clawSeal.version;
+})(__RULES__)

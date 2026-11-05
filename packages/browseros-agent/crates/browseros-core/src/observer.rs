@@ -2,11 +2,12 @@ use crate::{
     CoreError, FrameId, PageId, ProtocolSession, Ref,
     frames::FrameRegistry,
     pages::{PageManager, PageSession},
+    sensitive_fields::{FieldValues, SensitiveValues, SensitiveValuesSetting},
     snapshot::{
         AxNode, DiffOptions, DocumentId, FrameError, FrameOwner, FrameReadStage, FrameSpan,
         RefEntry, RefMap, RenderOptions, SnapshotCoverage, SnapshotDiff, SnapshotObservation,
         SnapshotOptions, apply_snapshot_options, diff_snapshot_observations, ref_line,
-        render_snapshot,
+        render_snapshot, render_snapshot_masked,
     },
     target::page_access::PageAccess,
 };
@@ -99,6 +100,8 @@ struct CaptureResult {
     scope: Option<RefScope>,
     coverage: SnapshotCoverage,
     frames: Vec<FrameSpan>,
+    /// How sensitive values were shown in `text`.
+    sensitive: SensitiveValues,
 }
 
 impl CaptureResult {
@@ -132,6 +135,9 @@ struct Assembled {
     lines: Vec<String>,
     frames: Vec<FrameSpan>,
     frame_errors: Vec<FrameError>,
+    /// Raw values of the sensitive fields this frame and its children masked, so the whole
+    /// stitched snapshot can mask them wherever else they appear. Empty unless masking.
+    masked_values: FieldValues,
 }
 
 #[derive(Clone)]
@@ -142,6 +148,8 @@ struct CaptureContext {
     dom_snapshots: clickable::DomSnapshots,
     budget: SnapshotBudget,
     trace: CaptureTrace,
+    /// Read once per capture, so every frame of one snapshot follows the same choice.
+    sensitive: SensitiveValues,
 }
 
 #[derive(Debug, Default)]
@@ -150,6 +158,9 @@ struct ObserverState {
     /// The arrangement committed alongside `baseline`, so a later diff can say
     /// whether any control actually moved rather than whether any text did.
     baseline_arrangement: Option<u64>,
+    /// How sensitive values were shown in `baseline`. A diff against a baseline taken under the
+    /// other setting would print the old raw lines as "removed", so it starts fresh instead.
+    baseline_sensitive: Option<SensitiveValues>,
     refs: RefMap,
     ref_scope: Option<RefScope>,
 }
@@ -162,17 +173,29 @@ pub struct Observer {
     page_id: PageId,
     state: Arc<Mutex<ObserverState>>,
     access: Option<Arc<PageAccess>>,
+    /// The owning session's choice, shared, so it applies to observers made before it was set.
+    sensitive: SensitiveValuesSetting,
 }
 
 impl Observer {
     #[must_use]
     pub fn new(pages: Arc<PageManager>, frames: Arc<FrameRegistry>, page_id: PageId) -> Self {
+        Self::with_sensitive(pages, frames, page_id, SensitiveValuesSetting::default())
+    }
+
+    pub(crate) fn with_sensitive(
+        pages: Arc<PageManager>,
+        frames: Arc<FrameRegistry>,
+        page_id: PageId,
+        sensitive: SensitiveValuesSetting,
+    ) -> Self {
         Self {
             pages,
             frames,
             page_id,
             state: Arc::new(Mutex::new(ObserverState::default())),
             access: None,
+            sensitive,
         }
     }
 
@@ -183,6 +206,7 @@ impl Observer {
             page_id: self.page_id.clone(),
             state: self.state.clone(),
             access: Some(access),
+            sensitive: self.sensitive.clone(),
         }
     }
 
@@ -219,11 +243,20 @@ impl Observer {
     /// A diff plus the full capture it compared against the baseline, for a caller that reads
     /// that same capture again rather than whatever a later call commits.
     pub async fn diff_with_capture(&self) -> Result<(SnapshotDiff, SnapshotResult), CoreError> {
-        let (before, before_arrangement) = {
+        let (before, before_arrangement, before_sensitive) = {
             let state = self.state.lock().await;
-            (state.baseline.clone(), state.baseline_arrangement)
+            (
+                state.baseline.clone(),
+                state.baseline_arrangement,
+                state.baseline_sensitive,
+            )
         };
         let result = self.capture().await?;
+        let (before, before_arrangement) = if before_sensitive == Some(result.sensitive) {
+            (before, before_arrangement)
+        } else {
+            (None, None)
+        };
         let after_arrangement = result.refs.arrangement();
         self.commit(&result).await;
         let mut diff = diff_snapshot_observations(
@@ -313,6 +346,7 @@ impl Observer {
             }
         };
         let budget = SnapshotBudget::new();
+        let sensitive = self.sensitive.get();
         for attempt in 1..=MAX_STABLE_CAPTURE_ATTEMPTS {
             let attempt_started = Instant::now();
             let trace = CaptureTrace::new(self.page_id.clone(), attempt);
@@ -326,6 +360,7 @@ impl Observer {
                 dom_snapshots: clickable::DomSnapshots::default(),
                 budget: budget.clone(),
                 trace: trace.clone(),
+                sensitive,
             };
             let mut refs = refs;
             let frame_result = self.capture_root(&mut refs, context).await;
@@ -356,8 +391,12 @@ impl Observer {
                 if let Some(access) = &self.access {
                     access.fresh().await?;
                 }
+                let mut text = assembled.lines.join("\n");
+                // Echoes of a sensitive field's value elsewhere, in any frame. The masked values
+                // hold no newline, so line counts and every frame span stay valid.
+                assembled.masked_values.mask_str(&mut text);
                 return Ok(CaptureResult {
-                    text: assembled.lines.join("\n"),
+                    text,
                     refs,
                     url: after.url.clone(),
                     scope: ref_scope_from(&after),
@@ -365,6 +404,7 @@ impl Observer {
                         frame_errors: assembled.frame_errors,
                     },
                     frames: assembled.frames,
+                    sensitive,
                 });
             }
             trace_stage(
@@ -423,6 +463,7 @@ impl Observer {
                 cursor_hits,
                 cursor_error,
                 document_id,
+                fields,
             } = acquired;
             // A frame reports before the frames inside it, so errors read in document order.
             let mut frame_errors = Vec::new();
@@ -446,7 +487,16 @@ impl Observer {
                 cursor_hits: Some(cursor_hits),
                 base_depth,
             };
-            let rendered = render_snapshot(&nodes, &mut render_opts);
+            let (rendered, masked_values) = match &fields {
+                Some(fields) => {
+                    let masked = render_snapshot_masked(&nodes, &mut render_opts, fields);
+                    (masked.result, masked.values)
+                }
+                None => (
+                    render_snapshot(&nodes, &mut render_opts),
+                    FieldValues::default(),
+                ),
+            };
             let lines = if rendered.text.is_empty() {
                 Vec::new()
             } else {
@@ -468,6 +518,7 @@ impl Observer {
                     lines,
                     frames: Vec::new(),
                     frame_errors,
+                    masked_values,
                 };
             }
 
@@ -510,6 +561,7 @@ impl Observer {
 
             let mut out = Vec::with_capacity(lines.len());
             let mut frames = Vec::new();
+            let mut masked_values = masked_values;
             let mut parent_lines = lines.into_iter();
             let mut taken = 0;
             for (stitch, owner, child) in stitched {
@@ -532,6 +584,7 @@ impl Observer {
                         });
                         frames.extend(assembled.frames.into_iter().map(|span| span.shifted(start)));
                         frame_errors.extend(assembled.frame_errors);
+                        masked_values = masked_values.union(assembled.masked_values);
                         out.extend(assembled.lines);
                     }
                 }
@@ -548,6 +601,7 @@ impl Observer {
                 lines: out,
                 frames,
                 frame_errors,
+                masked_values,
             }
         })
     }
@@ -556,6 +610,7 @@ impl Observer {
         let mut state = self.state.lock().await;
         state.baseline = Some(result.observation());
         state.baseline_arrangement = Some(result.refs.arrangement());
+        state.baseline_sensitive = Some(result.sensitive);
         state.refs = result.refs.clone();
         state.ref_scope = result.scope.clone();
     }

@@ -10,6 +10,7 @@ use crate::{
     screenshot::{
         ScreenshotCaptureOptions, ScreenshotCaptureResult, capture_screenshot_with_annotations,
     },
+    sensitive_fields::{SensitiveValues, SensitiveValuesSetting},
     windows::WindowManager,
 };
 use browseros_cdp::CdpEvent;
@@ -36,6 +37,9 @@ pub struct BrowserSession {
     pub windows: Arc<WindowManager>,
     frames: Arc<FrameRegistry>,
     observers: Mutex<HashMap<PageId, Arc<Observer>>>,
+    /// How every observer of this session shows sensitive field values; see
+    /// [`Self::set_sensitive_values`].
+    sensitive: SensitiveValuesSetting,
 }
 
 impl BrowserSession {
@@ -108,6 +112,7 @@ impl BrowserSession {
             windows,
             frames,
             observers: Mutex::new(HashMap::new()),
+            sensitive: SensitiveValuesSetting::default(),
         });
         Self::spawn_detach_listener(session.clone());
         session
@@ -122,15 +127,30 @@ impl BrowserSession {
         &self.frames
     }
 
+    /// Chooses how snapshots of every page in this session show password, card and
+    /// one-time-code values. claw-sdk sets [`SensitiveValues::Mask`] once at startup; the
+    /// default keeps claw-server's output unchanged. Observers read the choice at each capture,
+    /// so it also covers pages observed before it was made.
+    pub fn set_sensitive_values(&self, mode: SensitiveValues) {
+        self.sensitive.set(mode);
+    }
+
+    /// The current choice of [`Self::set_sensitive_values`].
+    #[must_use]
+    pub fn sensitive_values(&self) -> SensitiveValues {
+        self.sensitive.get()
+    }
+
     pub async fn observe(&self, page_id: PageId) -> Arc<Observer> {
         let mut observers = self.observers.lock().await;
         if let Some(observer) = observers.get(&page_id) {
             return observer.clone();
         }
-        let observer = Arc::new(Observer::new(
+        let observer = Arc::new(Observer::with_sensitive(
             self.pages.clone(),
             self.frames.clone(),
             page_id.clone(),
+            self.sensitive.clone(),
         ));
         observers.insert(page_id, observer.clone());
         observer

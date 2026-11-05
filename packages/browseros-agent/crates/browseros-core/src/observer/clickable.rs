@@ -48,6 +48,7 @@ const INTERACTIVE_ROLES: &[&str] = &[
     "treeitem",
 ];
 const ELEMENT_NODE: i64 = 1;
+const TEXT_NODE: i64 = 3;
 
 /// Which document of a session's capture belongs to the frame being acquired.
 #[derive(Clone, Copy, Debug)]
@@ -118,7 +119,13 @@ pub(super) async fn find_clickables(
         return Err(FrameReadReason::NotFound);
     }
     let capture = snapshots.capture(session, budget).await?;
-    let selected = match document {
+    let selected = select_document(&capture, document).ok_or(FrameReadReason::NotFound)?;
+    Ok(clickables(selected, &capture.strings))
+}
+
+/// The frame's document within its session's capture.
+fn select_document(capture: &Capture, document: ClickableDocument) -> Option<&Document> {
+    match document {
         // Blink serializes the session's root frame first.
         ClickableDocument::SessionDefault => capture.documents.first(),
         ClickableDocument::BackendNode(id) => capture
@@ -126,9 +133,7 @@ pub(super) async fn find_clickables(
             .iter()
             .find(|document| document.nodes.backend_node_id.first() == Some(&id)),
         ClickableDocument::Unavailable => None,
-    };
-    let selected = selected.ok_or(FrameReadReason::NotFound)?;
-    Ok(clickables(selected, &capture.strings))
+    }
 }
 
 /// The rules over one captured document. A hit is an element that
@@ -335,6 +340,14 @@ impl<'a> View<'a> {
         self.document.nodes.backend_node_id.get(i).copied()
     }
 
+    fn node_value(&self, i: usize) -> Option<&'a str> {
+        self.string(*self.document.nodes.node_value.get(i)?)
+    }
+
+    fn is_text(&self, i: usize) -> bool {
+        self.document.nodes.node_type.get(i) == Some(&TEXT_NODE)
+    }
+
     fn attribute(&self, i: usize, name: &str) -> Option<&'a str> {
         let (pairs, _) = self.document.nodes.attributes.get(i)?.as_chunks::<2>();
         pairs.iter().find_map(|&[key, value]| {
@@ -417,6 +430,10 @@ struct Nodes {
     pseudo_type: RareStrings,
     #[serde(default)]
     is_clickable: RareBooleans,
+    /// Text nodes' contents. Read only for the text of a field's form (`form_fields`); the
+    /// capture's `inputValue` and `textValue` columns, which hold typed values, are never parsed.
+    #[serde(default)]
+    node_value: Vec<i64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -443,6 +460,9 @@ struct RareBooleans {
     #[serde(default)]
     index: Vec<i64>,
 }
+
+mod form_fields;
+pub(super) use form_fields::find_form_fields;
 
 #[cfg(test)]
 mod tests;

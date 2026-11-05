@@ -1,0 +1,66 @@
+<!doctype html>
+<!--
+  Fixture for tests/sensitive_fields_live.rs. Every field has a unique label (so its snapshot
+  line can be found) and a data-expect kind (what the shared rule table should say). The test
+  types a unique marker into each with trusted CDP input, so any read path can be searched for
+  it. Nothing here loads from the network.
+-->
+<html lang="en">
+<head><meta charset="utf-8"><title>sensitive fields</title></head>
+<body>
+<form id="login" action="about:blank" method="post">
+  <label>Email <input id="email" name="email" type="email" data-expect="none"></label>
+  <label>Password <input id="pw" name="password" type="password" autocomplete="current-password" data-expect="password"></label>
+  <label>Prefilled password <input id="pw_attr" name="prefilled" type="password" value="PWATTR_7d1q" data-expect="password"></label>
+  <label>Shown password <input id="pw_shown" name="shown" type="password" autocomplete="current-password" data-expect="password"></label>
+  <label>New password <input id="pw_new" name="fresh" type="text" autocomplete="new-password" data-expect="password"></label>
+  <label>Mirrored password <input id="pw_mirror" name="mirror" type="password" data-expect="password"></label>
+  <span id="pin_label">Account PIN</span> <input id="pin" name="pin" type="text" aria-labelledby="pin_label" data-expect="password">
+  <label for="pw_img"><img alt="Backup password" src="data:,"></label> <input id="pw_img" name="backup" data-expect="password">
+</form>
+<form id="pay">
+  <label>Card number <input id="cc_number" autocomplete="cc-number" data-expect="card"></label>
+  <label>Expiry <input id="cc_exp" autocomplete="cc-exp" data-expect="card"></label>
+  <label>CVC <input id="cc_csc" autocomplete="cc-csc" data-expect="card"></label>
+  <label>Name on card <input id="cc_name" autocomplete="cc-name" data-expect="card"></label>
+  <label>Card no. <input id="cc_noac" name="cardnumber" data-expect="card"></label>
+  <label>Expiry month
+    <select id="cc_month" autocomplete="cc-exp-month" data-expect="card">
+      <option value="">Month</option><option>01</option><option>06</option><option>12</option>
+    </select>
+  </label>
+</form>
+<form id="verify">
+  <p>Enter the verification code</p>
+  <label>One-time code <input id="otp_ac" autocomplete="one-time-code" data-expect="one_time_code"></label>
+  <label>Verification code <input id="otp_name" name="otp" inputmode="numeric" data-expect="one_time_code"></label>
+  <div>
+    <input id="d1" maxlength="1" inputmode="numeric" aria-label="digit 1" data-expect="one_time_code"><input id="d2" maxlength="1" inputmode="numeric" aria-label="digit 2" data-expect="one_time_code"><input id="d3" maxlength="1" inputmode="numeric" aria-label="digit 3" data-expect="one_time_code"><input id="d4" maxlength="1" inputmode="numeric" aria-label="digit 4" data-expect="one_time_code"><input id="d5" maxlength="1" inputmode="numeric" aria-label="digit 5" data-expect="one_time_code"><input id="d6" maxlength="1" inputmode="numeric" aria-label="digit 6" data-expect="one_time_code">
+  </div>
+</form>
+<label>Notes <textarea id="notes" data-expect="none"></textarea></label>
+<label>One-time backup codes <textarea id="otp_backup" data-expect="one_time_code">BACKUP_7777 BACKUP_8888</textarea></label>
+<label>Search <input id="search" type="search" data-expect="none"></label>
+<h2 id="echo">Code status</h2>
+<div id="open_host"></div>
+<div id="closed_host"></div>
+<iframe id="child" title="Child frame" srcdoc="<label>Iframe password <input id='pw_iframe' type='password' data-expect='password'></label>"></iframe>
+<script>
+  // What React does for a controlled input: mirror the typed value into the value attribute.
+  const mirror = document.getElementById('pw_mirror');
+  mirror.addEventListener('input', () => mirror.setAttribute('value', mirror.value));
+  const open = document.getElementById('open_host').attachShadow({ mode: 'open' });
+  open.innerHTML = "<label>Open shadow password <input id='pw_open' type='password' data-expect='password'></label>"
+    + "<label>Shadow code <input id='otp_shadow' autocomplete='one-time-code' data-expect='one_time_code'></label>"
+    + "<input id='pw_bare' type='password' aria-label='Bare field' data-expect='password'>";
+  const closed = document.getElementById('closed_host').attachShadow({ mode: 'closed' });
+  closed.innerHTML = "<label>Closed shadow password <input id='pw_closed' type='password' data-expect='password'></label>";
+  window.__fields = {
+    pw_open: open.getElementById('pw_open'),
+    otp_shadow: open.getElementById('otp_shadow'),
+    pw_bare: open.getElementById('pw_bare'),
+    pw_closed: closed.getElementById('pw_closed'),
+  };
+</script>
+</body>
+</html>

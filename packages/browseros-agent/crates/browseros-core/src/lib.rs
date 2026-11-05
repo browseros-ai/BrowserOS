@@ -16,6 +16,7 @@ pub mod payment_cards;
 pub mod pointer;
 pub mod profiles;
 pub mod screenshot;
+pub mod sensitive_fields;
 pub mod settle;
 pub mod snapshot;
 pub mod target;
