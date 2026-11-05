@@ -392,6 +392,14 @@ impl BrowserView {
             )),
         }
     }
+    /// The request this tab's fixed viewport mode was set with, exactly as given, whether or
+    /// not its current page session has it applied yet. `None` while the tab is in the default
+    /// mode, and on a view without `Viewports`. Setting it again restores the same mode, which
+    /// is how a takeover's fit puts back the agent's own emulation when it releases the tab.
+    #[must_use]
+    pub fn current_viewport(&self, page: &PageId) -> Option<crate::viewport::ViewportRequest> {
+        self.viewports.as_ref()?.current(page)
+    }
     /// Holds the page without changing anything, for work outside a page operation that must
     /// not overlap viewport changes, such as a background screenshot: a capture
     /// rewrites the page's emulation until it finishes.

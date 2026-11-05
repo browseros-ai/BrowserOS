@@ -311,6 +311,10 @@
       "name": "@browseros/browseros-service-rust",
       "version": "0.0.0",
     },
+    "crates/browseros-takeover": {
+      "name": "@browseros/browseros-takeover-rust",
+      "version": "0.0.0",
+    },
     "crates/browseros-trace": {
       "name": "@browseros/browseros-trace-rust",
       "version": "0.0.0",
@@ -661,6 +665,8 @@
     "@browseros/browseros-mcp-rust": ["@browseros/browseros-mcp-rust@workspace:crates/browseros-mcp"],
 
     "@browseros/browseros-service-rust": ["@browseros/browseros-service-rust@workspace:crates/browseros-service"],
+
+    "@browseros/browseros-takeover-rust": ["@browseros/browseros-takeover-rust@workspace:crates/browseros-takeover"],
 
     "@browseros/browseros-trace-rust": ["@browseros/browseros-trace-rust@workspace:crates/browseros-trace"],
 

@@ -789,7 +789,7 @@ mod tests {
         pointer::Pointer,
         snapshot::{AxNode, AxValue},
         target::BrowserView,
-        test_support::TestCall,
+        testing::TestCall,
         timeouts,
     };
     use browseros_cdp::{CdpError, CdpEvent};
@@ -942,13 +942,14 @@ mod tests {
             &'a self,
             method: &'a str,
             params: Value,
-            _session: Option<&'a crate::SessionId>,
+            session: Option<&'a crate::SessionId>,
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
             Box::pin(async move {
                 self.configure(|state| {
                     state.calls.push(TestCall {
                         method: method.to_string(),
                         params: params.clone(),
+                        session: session.cloned(),
                     });
                 })
                 .map_err(|err| CdpError::Protocol {

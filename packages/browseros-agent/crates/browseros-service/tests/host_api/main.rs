@@ -4,6 +4,7 @@
 mod browser;
 mod errors;
 mod events;
+mod locks;
 mod privacy;
 mod records;
 mod screenshots;

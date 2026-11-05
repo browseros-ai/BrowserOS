@@ -179,6 +179,9 @@ pub struct Viewports {
 /// A tab in a fixed mode. Default tabs have no entry.
 #[derive(Debug, Clone)]
 struct Tab {
+    /// The request as the caller gave it, which [`BrowserView::current_viewport`] hands back
+    /// so a takeover's fit can later put back exactly what it replaced.
+    request: ViewportRequest,
     fixed: Fixed,
     /// The page session on which the mode is wholly in place: emulation applied and the view
     /// pinned. It dies with that session. `None` while a change is pending: whatever failed or
@@ -226,6 +229,12 @@ impl Viewports {
 
     pub(crate) fn pointer_scale(&self, page: &PageId) -> f64 {
         self.tab(page).map_or(1.0, |tab| tab.fixed.scale())
+    }
+
+    /// The request the tab's fixed mode was set with, applied or still pending; `None` in the
+    /// default mode.
+    pub(crate) fn current(&self, page: &PageId) -> Option<ViewportRequest> {
+        self.tab(page).map(|tab| tab.request)
     }
 
     pub(crate) async fn set(
@@ -281,7 +290,7 @@ impl Viewports {
         };
         // Recorded as pending before anything is sent, and applied only once the view is
         // pinned: a step that fails or is cut short leaves the next operation to redo it.
-        let generation = self.begin(&page, fixed);
+        let generation = self.begin(&page, request, fixed);
         let chrome_version = self.chrome_version(view).await?;
         for (method, params) in fixed.commands(&chrome_version) {
             view.send_at_capture(method, params, Some(&session)).await?;
@@ -381,7 +390,7 @@ impl Viewports {
 
     /// Records `fixed` as the tab's mode, pending, and returns the generation its change runs
     /// under.
-    fn begin(&self, page: &PageId, fixed: Fixed) -> u64 {
+    fn begin(&self, page: &PageId, request: ViewportRequest, fixed: Fixed) -> u64 {
         let generation = self.next_generation();
         self.tabs
             .lock()
@@ -389,6 +398,7 @@ impl Viewports {
             .insert(
                 page.clone(),
                 Tab {
+                    request,
                     fixed,
                     applied: None,
                     generation,

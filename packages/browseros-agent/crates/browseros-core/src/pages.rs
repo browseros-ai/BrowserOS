@@ -933,7 +933,7 @@ fn find_by_tab(pages: &HashMap<PageId, PageInfo>, tab_id: TabId) -> Option<PageI
 #[cfg(test)]
 mod tests {
     use super::{NewPageOptions, PageManager, PageManagerHooks};
-    use crate::test_support::TestConnection;
+    use crate::testing::TestConnection;
     use serde_json::{Value, json};
     use std::error::Error;
 

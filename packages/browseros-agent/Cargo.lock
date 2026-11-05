@@ -450,6 +450,7 @@ dependencies = [
  "base64 0.22.1",
  "browseros-cdp",
  "browseros-core",
+ "browseros-takeover",
  "browseros-trace",
  "claw-sdk-api",
  "futures-util",
@@ -465,6 +466,20 @@ dependencies = [
  "tracing-subscriber",
  "ulid",
  "url",
+]
+
+[[package]]
+name = "browseros-takeover"
+version = "0.1.0"
+dependencies = [
+ "browseros-core",
+ "browseros-trace",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

@@ -1,6 +1,9 @@
-//! A scripted browser for the camera: the tabs a test opens, and how captures answer. It speaks
-//! the CDP the capture path sends (`Browser.getTabs`, `Browser.getTabInfo`,
+//! A scripted browser for the camera and the tab checks: the tabs a test opens, and how captures
+//! answer. It speaks the CDP the capture path sends (`Browser.getTabs`, `Browser.getTabInfo`,
 //! `Target.attachToTarget`, `Page.captureScreenshot`); every other command answers `{}`.
+//!
+//! It is not core's scripted `TestConnection`: captures that a test holds and releases need a
+//! reply that waits, which a canned reply cannot do.
 
 use crate::support::BoxError;
 use base64::Engine as _;
@@ -9,7 +12,7 @@ use browseros_cdp::{CdpError, CdpEvent, SessionId};
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
@@ -35,6 +38,8 @@ enum Captures {
 
 pub(crate) struct ScriptedBrowser {
     tabs: Mutex<Vec<i64>>,
+    /// `Browser.getTabs` fails, as when the browser is gone.
+    unreachable: AtomicBool,
     captures: watch::Sender<Captures>,
     started: watch::Sender<usize>,
     events: broadcast::Sender<CdpEvent>,
@@ -44,6 +49,7 @@ impl ScriptedBrowser {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             tabs: Mutex::default(),
+            unreachable: AtomicBool::new(false),
             captures: watch::channel(Captures::Answer).0,
             started: watch::channel(0).0,
             events: broadcast::channel(16).0,
@@ -60,6 +66,15 @@ impl ScriptedBrowser {
 
     pub(crate) fn open_tab(&self, tab: i64) {
         self.lock_tabs().push(tab);
+    }
+
+    pub(crate) fn close_tab(&self, tab: i64) {
+        self.lock_tabs().retain(|open| *open != tab);
+    }
+
+    /// The browser stops answering `Browser.getTabs` from now on.
+    pub(crate) fn become_unreachable(&self) {
+        self.unreachable.store(true, Ordering::SeqCst);
     }
 
     /// Captures wait from now until [`Self::release_captures`].
@@ -129,6 +144,9 @@ impl ScriptedBrowser {
 
     async fn reply(&self, method: &str, params: &Value) -> Result<Value, CdpError> {
         match method {
+            "Browser.getTabs" if self.unreachable.load(Ordering::SeqCst) => {
+                Err(CdpError::ConnectionLost)
+            }
             "Browser.getTabs" => Ok(json!({
                 "tabs": self.lock_tabs().iter().map(|tab| Self::tab(*tab)).collect::<Vec<_>>(),
             })),

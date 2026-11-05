@@ -20,6 +20,8 @@ pub mod sensitive_fields;
 pub mod settle;
 pub mod snapshot;
 pub mod target;
+#[doc(hidden)]
+pub mod testing;
 pub mod timeouts;
 pub mod types;
 pub mod viewport;
@@ -47,5 +49,3 @@ pub use types::{
 };
 
 mod session;
-#[cfg(test)]
-mod test_support;

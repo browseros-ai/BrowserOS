@@ -1,0 +1,24 @@
+[package]
+name = "browseros-takeover"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The owner's side of hosted BrowserOS Neo (claw-sdk): the takeover parts (the tab lock first) that keep the agent off a tab while its owner has it"
+
+[dependencies]
+browseros-core.workspace = true
+browseros-trace.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v7"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

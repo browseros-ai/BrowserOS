@@ -58,6 +58,8 @@ pub(crate) struct Harness {
     pub(crate) sink: TraceSink,
     pub(crate) privacy: Arc<Privacy>,
     pub(crate) browser: Arc<ScriptedBrowser>,
+    /// The started service, for what the app calls directly: the locks and the tab events.
+    pub(crate) service: Service,
     /// The routes behind the host auth, as a host reaches them.
     pub(crate) router: Router,
     /// `Service::router()` alone, for tests that serve it themselves.
@@ -117,6 +119,7 @@ async fn start(
         browser,
         router: authenticated(&service)?,
         routes: service.router(),
+        service,
     })
 }
 
@@ -164,6 +167,10 @@ impl Harness {
     pub(crate) async fn post(&self, uri: &str, body: &str) -> Result<Reply, BoxError> {
         self.call(Method::POST, uri, Body::from(body.to_string()))
             .await
+    }
+
+    pub(crate) async fn delete(&self, uri: &str) -> Result<Reply, BoxError> {
+        self.call(Method::DELETE, uri, Body::empty()).await
     }
 
     pub(crate) async fn call(

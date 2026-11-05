@@ -1492,6 +1492,65 @@ async fn tests_that_a_call_without_size_returns_to_the_mode_size() -> TestResult
 }
 
 #[tokio::test]
+async fn tests_that_current_viewport_hands_back_the_request_so_it_can_be_restored() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10), (2, 10)]);
+    let page = fixture.page(1).await?;
+    let neighbour = fixture.page(2).await?;
+    assert_eq!(fixture.view.current_viewport(&page), None, "a new tab");
+
+    let agent_mode = ViewportRequest::new(ViewportMode::Mobile, Some(150.0))?.with_size(Size {
+        width: 390,
+        height: 844,
+    })?;
+    fixture
+        .view
+        .set_viewport(page.clone(), agent_mode, &CancellationToken::new())
+        .await?;
+    assert_eq!(fixture.view.current_viewport(&page), Some(agent_mode));
+    assert_eq!(fixture.view.current_viewport(&neighbour), None);
+    let agent_metrics = fixture
+        .native
+        .only("Emulation.setDeviceMetricsOverride")?
+        .params;
+
+    // A fit records the mode, replaces it, and on release sets the recorded request again.
+    let recorded = fixture
+        .view
+        .current_viewport(&page)
+        .ok_or("no recorded mode")?;
+    fixture.set(&page, ViewportMode::Default, None).await?;
+    assert_eq!(fixture.view.current_viewport(&page), None);
+    fixture.native.clear_calls();
+    fixture
+        .view
+        .set_viewport(page.clone(), recorded, &CancellationToken::new())
+        .await?;
+    assert_eq!(fixture.view.current_viewport(&page), Some(agent_mode));
+    assert_eq!(
+        fixture
+            .native
+            .only("Emulation.setDeviceMetricsOverride")?
+            .params,
+        agent_metrics,
+        "the restored tab is emulated exactly as the agent had it"
+    );
+
+    // A change cut short is still the tab's mode: its next operation finishes it.
+    fixture.native.lock().fail = Some("Emulation.setVisibleSize");
+    let desktop = ViewportRequest::new(ViewportMode::Desktop, None)?;
+    let failed = fixture
+        .view
+        .set_viewport(page.clone(), desktop, &CancellationToken::new())
+        .await;
+    assert!(failed.is_err());
+    assert_eq!(fixture.view.current_viewport(&page), Some(desktop));
+
+    let without_viewports = BrowserView::unbound(fixture.session.clone(), None);
+    assert_eq!(without_viewports.current_viewport(&page), None);
+    Ok(())
+}
+
+#[tokio::test]
 async fn tests_that_a_held_page_makes_viewport_changes_wait() -> TestResult {
     let fixture = Fixture::new(&[(1, 10), (2, 10)]);
     let fixed = fixture.page(1).await?;

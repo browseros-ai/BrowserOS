@@ -603,7 +603,7 @@ fn annotation_number(ref_id: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{ScreenshotCaptureOptions, capture_plain_screenshot};
-    use crate::{ProtocolSession, test_support::TestConnection};
+    use crate::{ProtocolSession, testing::TestConnection};
     use serde_json::json;
 
     #[tokio::test]

@@ -11,6 +11,7 @@ use crate::limits::{
     DEFAULT_LIMIT, DEFAULT_TAIL, MAX_INLINE_SCREENSHOTS, MAX_LIMIT, MAX_TAIL, MAX_WAIT_SECONDS,
 };
 use browseros_core::TabId;
+use browseros_takeover::LockId;
 use browseros_trace::{
     EpochMillis, OperationId, RequestId, RunId, RunQuery, RunStatus, TailQuery, TaskId,
 };
@@ -118,6 +119,12 @@ pub(crate) fn run_id(text: &str) -> Result<RunId, ApiError> {
 pub(crate) fn operation_id(text: &str) -> Result<OperationId, ApiError> {
     text.parse()
         .map_err(|_| ApiError::not_found("no operation has this id"))
+}
+
+/// A lock id (`lk_<uuid>`) in a path. Text that is not one names no lock.
+pub(crate) fn lock_id(text: &str) -> Result<LockId, ApiError> {
+    text.parse()
+        .map_err(|_| ApiError::not_found("no lock has this id"))
 }
 
 /// A tab id in a path: the browser's integer id.

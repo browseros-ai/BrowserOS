@@ -196,6 +196,15 @@ impl DroppedEvents {
             .or_default() += 1;
     }
 
+    /// Whether any run that has not ended yet lost an operation event.
+    fn any(&self) -> bool {
+        !self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    }
+
     /// The run's count, taken once.
     fn take(&self, run: RunId) -> u64 {
         self.0
@@ -272,6 +281,16 @@ impl TraceSink {
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<TraceRecordEvent> {
         self.inner.events.subscribe()
+    }
+
+    /// Whether an operation event of a run that has not ended was dropped over the backlog cap.
+    /// While it is true the store cannot rule out an operation it never heard of, so a reader
+    /// that needs "nothing is in flight" (the takeover lock's settle) must not conclude it.
+    /// A run's drops clear when its end is recorded; batches lost to a failed commit are
+    /// reported by [`TraceSink::flush`] instead.
+    #[must_use]
+    pub fn lost_operation_events(&self) -> bool {
+        self.inner.dropped.any()
     }
 
     /// Waits until everything sent before this call is committed.

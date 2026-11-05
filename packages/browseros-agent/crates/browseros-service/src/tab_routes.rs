@@ -1,10 +1,10 @@
 //! `POST /v1/tabs/{tabId}/private`: the host makes a tab private, durably, before an owner
 //! types into it.
 //!
-//! The route does not check that the tab is open: that takes the browser, and this crate has
-//! no browser connection. A flag on a tab that is not open only over-protects. The browser
-//! link drops it when it reports the open tabs (`Privacy::retain_tabs`), and until then it
-//! covers whichever tab later opens with that id.
+//! A tab the browser does not have is a 404 `tab_not_found`; only the browser knows which tabs
+//! are open, so the route asks it (`BrowserTabs`) after the request parses and before the flag
+//! is committed. A tab that closes in between keeps a flag that only over-protects, until the
+//! browser link reports it closed (`Service::tab_closed`) or reconnects (`retain_tabs`).
 
 use crate::api_error::ApiError;
 use crate::service::ServiceState;
@@ -23,6 +23,7 @@ pub(crate) async fn make_private(
 ) -> Result<Json<api::Privacy>, ApiError> {
     let tab = query::tab_id(&tab)?;
     wire::private_request(&body)?;
+    service.browser.page(tab).await?;
     service
         .privacy
         .make_private(tab, PrivateReason::Host, EpochMillis::now())

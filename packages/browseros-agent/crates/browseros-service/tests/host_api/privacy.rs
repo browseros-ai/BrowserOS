@@ -14,6 +14,7 @@ use std::time::Duration;
 #[tokio::test]
 async fn a_private_tab_returns_its_record_and_keeps_the_first() -> TestResult {
     let h = harness().await?;
+    h.browser.open_tab(7);
     let first = h.post("/v1/tabs/7/private", "").await?;
     assert_eq!(first.status, StatusCode::OK, "{}", first.body);
     assert_eq!(first.body["private"], true);
@@ -41,6 +42,7 @@ async fn a_private_tab_returns_its_record_and_keeps_the_first() -> TestResult {
 #[tokio::test]
 async fn a_bad_privacy_request_changes_nothing() -> TestResult {
     let h = harness().await?;
+    h.browser.open_tab(8);
     for (uri, body) in [
         ("/v1/tabs/8/private", r#"{"reason":"owner"}"#),
         ("/v1/tabs/8/private", "not json"),
@@ -70,6 +72,7 @@ impl PrivacyStore for Unwritable {
 #[tokio::test]
 async fn a_flag_that_cannot_be_committed_is_a_503() -> TestResult {
     let h = harness_with(|_| Arc::new(Unwritable)).await?;
+    h.browser.open_tab(7);
     h.post("/v1/tabs/7/private", "")
         .await?
         .assert_error(StatusCode::SERVICE_UNAVAILABLE, "privacy_unavailable");

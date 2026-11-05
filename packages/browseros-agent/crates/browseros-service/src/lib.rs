@@ -11,16 +11,22 @@
 //!                                  │ PeerInfo per connection; peer rule, then bearer token
 //!                                  ▼
 //!                                router ─ x-request-id ─▶ records, screenshots, tab privacy,
-//!                                  │                       secrets
-//!                                  │                       └▶ TraceStore, Privacy
-//!                                  └▶ GET /v1/events ◀── EventLog ◀── TraceSink's events
+//!                                  │                       secrets, locks
+//!                                  │                       └▶ TraceStore, Privacy, Locks
+//!                                  └▶ GET /v1/events ◀── EventLog ◀── TraceSink's events,
+//!                                                                     lock changes, tab.closed
 //!
 //!  trace writer ─ ShotJobs ─▶ camera (screenshot_taker) ─ agent's BrowserSession ─▶ JPEG file
 //!       ▲                                  │
 //!       └──────── ShotAnswer ◀─────────────┘
+//!
+//!  dispatcher lock policy (app) ─▶ Service::locks().check, synchronous
+//!  browser link tab events (app) ─▶ Service::tab_opened, tab_closed, retain_tabs
 //! ```
 //!
-//! The app implements no trait for this crate.
+//! The app implements no trait for this crate. The takeover parts themselves live in
+//! `browseros-takeover`, which knows nothing of HTTP; this crate builds them once and serves
+//! their routes.
 
 #![deny(missing_docs)]
 #![deny(
@@ -38,6 +44,7 @@ mod events_route;
 mod host_auth;
 mod host_service;
 mod limits;
+mod part_routes;
 mod query;
 mod record_routes;
 mod response_id;

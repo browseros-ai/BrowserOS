@@ -455,6 +455,28 @@ async fn interrupted_runs_expire_like_finished_ones() {
     assert!(reopened.run(run).await.ok().flatten().is_none());
 }
 
+/// A reader that must rule out an operation in flight (the takeover lock's settle) learns
+/// that the trace dropped some, and the doubt ends once the run's end is recorded.
+#[tokio::test]
+async fn the_sink_says_when_a_running_run_lost_operation_events() {
+    let h = harness(WriterConfig {
+        max_backlog: 0,
+        ..WriterConfig::default()
+    })
+    .await;
+    assert!(!h.sink.lost_operation_events());
+    let run = start_in(&h.sink, None, 0);
+    let click = OperationId::new(run, 1);
+    op_started(&h.sink, simple(click, "locator.click", Effect::Write));
+    assert!(h.sink.lost_operation_events(), "the start was dropped");
+    end_run(&h.sink, run, RunStatus::Ok, None);
+    h.sink
+        .flush()
+        .await
+        .unwrap_or_else(|error| panic!("flush: {error}"));
+    assert!(!h.sink.lost_operation_events(), "the run ended");
+}
+
 #[tokio::test]
 async fn dropped_events_still_count_when_the_last_sink_is_gone() {
     let h = harness(WriterConfig {

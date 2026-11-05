@@ -8,6 +8,7 @@ use crate::limits::SECRET_TTL_SECONDS;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use browseros_core::TabId;
+use browseros_takeover::{Lock, LockTtl, Reads};
 use browseros_trace::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationRow, Page, PageState,
     PrivacyRecord, RunDetail, RunSummary, SecretValue, ShotState, TaskId, TraceTail,
@@ -224,6 +225,70 @@ pub(crate) fn tab_private_event(tab: TabId, record: PrivacyRecord) -> api::Event
             record.since.millis(),
         )
     }
+}
+
+/// `tab.closed`, once the tab's locks ended and its private flag was forgotten.
+pub(crate) fn tab_closed_event(tab: TabId, at: EpochMillis) -> api::Event {
+    api::Event {
+        tab_id: Some(tab.0),
+        ..api::Event::new(EventKind::TabClosed.as_str().to_string(), at.millis())
+    }
+}
+
+/// A lock, held, or ended with `releasedAt`: by the host, its takeover, its TTL or its tab
+/// closing. The contract has no field for the cause.
+pub(crate) fn lock(lock: &Lock) -> api::Lock {
+    api::Lock {
+        id: lock.id.to_string(),
+        tab_id: lock.tab.0,
+        reads: match lock.reads {
+            Reads::Block => "block",
+            Reads::Allow => "allow",
+        }
+        .to_string(),
+        settled: lock.settled,
+        created_at: lock.created_at.millis(),
+        expires_at: lock.expires_at.millis(),
+        released_at: lock.ended.map(|ended| ended.at.millis()),
+    }
+}
+
+/// `lock.state`: the lock as it stands, at the moment it was taken or ended.
+pub(crate) fn lock_event(lock: &Lock) -> api::Event {
+    let at = lock.ended.map_or(lock.created_at, |ended| ended.at);
+    api::Event {
+        tab_id: Some(lock.tab.0),
+        lock: Some(Box::new(self::lock(lock))),
+        ..api::Event::new(EventKind::LockState.as_str().to_string(), at.millis())
+    }
+}
+
+/// `POST /v1/locks`: the tab, `reads` (`block` when absent), and a TTL of 1 s to 20 minutes.
+pub(crate) fn lock_request(body: &[u8]) -> Result<(TabId, Reads, LockTtl), ApiError> {
+    let api::LockRequest {
+        tab_id,
+        reads,
+        ttl_seconds,
+    } = serde_json::from_slice(body).map_err(|_| {
+        not_the_body(r#"{"tabId": integer, "reads"?: "block" | "allow", "ttlSeconds": integer}"#)
+    })?;
+    let reads = match reads.as_deref() {
+        None | Some("block") => Reads::Block,
+        Some("allow") => Reads::Allow,
+        Some(_) => return Err(ApiError::invalid("`reads` must be block or allow")),
+    };
+    let ttl = u64::try_from(ttl_seconds)
+        .ok()
+        .map(Duration::from_secs)
+        .and_then(LockTtl::new)
+        .ok_or_else(|| {
+            ApiError::invalid(format!(
+                "`ttlSeconds` must be from {} to {}",
+                LockTtl::MIN.as_secs(),
+                LockTtl::MAX.as_secs()
+            ))
+        })?;
+    Ok((TabId(tab_id), reads, ttl))
 }
 
 /// `POST /v1/tabs/{tabId}/private`'s optional body: none, `{}`, or `{"reason": "host"}`.

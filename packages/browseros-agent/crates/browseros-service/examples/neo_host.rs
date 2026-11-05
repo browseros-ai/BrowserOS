@@ -19,6 +19,9 @@
 //!   else the first one `Browser.getTabs` lists), so the camera screenshots it without a
 //!   dispatcher. Nothing is clicked; only the record is fake.
 //! - `--fake-runs`: every 5 s, records a write and a read on tab 1.
+//! - `--lock-check`: prints what the app's lock policy (`Service::locks().check`) answers for a
+//!   write on that same tab, each time the answer changes: `allowed`, or `refused by <lock>`.
+//!   It stands in for the dispatcher, which would refuse the agent's next click there.
 //!
 //! It logs to stderr (`RUST_LOG`, `info` by default), including the camera's line for each
 //! screenshot it drops, and serves until Ctrl-C.
@@ -32,6 +35,7 @@ use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, TabId};
 use browseros_service::{HostAuth, HostToken, PeerRule, Service, ServiceInputs, host_service};
+use browseros_takeover::{LockTarget, Locks};
 use browseros_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, PageState, Privacy, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
@@ -56,6 +60,7 @@ struct Args {
     open: Option<String>,
     fake_writes: bool,
     fake_runs: bool,
+    lock_check: bool,
 }
 
 impl Args {
@@ -67,6 +72,7 @@ impl Args {
             open: None,
             fake_writes: false,
             fake_runs: false,
+            lock_check: false,
         };
         while let Some(arg) = args.next() {
             let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
@@ -80,6 +86,7 @@ impl Args {
                 "--open" => parsed.open = Some(value()?),
                 "--fake-writes" => parsed.fake_writes = true,
                 "--fake-runs" => parsed.fake_runs = true,
+                "--lock-check" => parsed.lock_check = true,
                 other => return Err(format!("unknown argument {other}")),
             }
         }
@@ -168,12 +175,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         println!("tab: {}", tab.0);
         println!("viewport: {}", viewport(&browser, tab).await?);
     }
-    if args.fake_writes {
+    if args.fake_writes || args.lock_check {
         let tab = match opened {
             Some(tab) => tab,
             None => first_tab(&browser).await?,
         };
-        tokio::spawn(record_fake_writes(sink.clone(), tab));
+        if args.fake_writes {
+            tokio::spawn(record_fake_writes(sink.clone(), tab));
+        }
+        if args.lock_check {
+            tokio::spawn(print_lock_checks(Arc::clone(service.locks()), tab));
+        }
     }
     if args.fake_runs {
         tokio::spawn(record_fake_runs(sink));
@@ -284,6 +296,24 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
             at: EpochMillis::now(),
         });
         println!("fake write: run {run} op {op} tab {}", tab.0);
+    }
+}
+
+/// Prints the lock policy's answer for a write on `tab` whenever it changes, checking every
+/// 100 ms: what the dispatcher would answer for the agent's next click there.
+async fn print_lock_checks(locks: Arc<Locks>, tab: TabId) {
+    let mut last = None;
+    let mut every = tokio::time::interval(Duration::from_millis(100));
+    loop {
+        every.tick().await;
+        let answer = match locks.check(LockTarget::Tab(tab), Effect::Write) {
+            Ok(()) => "allowed".to_string(),
+            Err(refused) => format!("refused by {}: {refused}", refused.lock),
+        };
+        if last.as_ref() != Some(&answer) {
+            println!("lock check: a write on tab {}: {answer}", tab.0);
+            last = Some(answer);
+        }
     }
 }
 

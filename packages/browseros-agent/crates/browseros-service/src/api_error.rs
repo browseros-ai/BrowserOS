@@ -7,6 +7,7 @@
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use browseros_takeover::PartError;
 use browseros_trace::{PrivacyError, TraceError};
 use std::borrow::Cow;
 
@@ -16,9 +17,12 @@ pub(crate) enum ErrorCode {
     InvalidRequest,
     Unauthorized,
     NotFound,
+    TabNotFound,
     Withheld,
     Expired,
+    TakeoverLock,
     PrivacyUnavailable,
+    BrowserUnavailable,
     InternalError,
 }
 
@@ -29,9 +33,12 @@ impl ErrorCode {
             Self::InvalidRequest => "invalid_request",
             Self::Unauthorized => "unauthorized",
             Self::NotFound => "not_found",
+            Self::TabNotFound => "tab_not_found",
             Self::Withheld => "withheld",
             Self::Expired => "expired",
+            Self::TakeoverLock => "takeover_lock",
             Self::PrivacyUnavailable => "privacy_unavailable",
+            Self::BrowserUnavailable => "browser_unavailable",
             Self::InternalError => "internal_error",
         }
     }
@@ -126,6 +133,34 @@ impl From<PrivacyError> for ApiError {
                 ErrorCode::PrivacyUnavailable,
                 "the private flag could not be committed",
             )
+        }
+    }
+}
+
+/// A takeover part's failure. The parts know nothing of HTTP, so this is where each becomes
+/// the contract's status and code.
+impl From<PartError> for ApiError {
+    fn from(error: PartError) -> Self {
+        match error {
+            PartError::NotFound => Self::not_found("nothing has this id"),
+            PartError::TabNotFound(_) => Self::new(
+                StatusCode::NOT_FOUND,
+                ErrorCode::TabNotFound,
+                "no open tab has this id",
+            ),
+            PartError::TakeoverLock => Self::new(
+                StatusCode::CONFLICT,
+                ErrorCode::TakeoverLock,
+                "this lock belongs to a takeover; release the takeover instead",
+            ),
+            PartError::Browser(cause) => Self {
+                cause: Some(cause.to_string()),
+                ..Self::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    ErrorCode::BrowserUnavailable,
+                    "Neo could not reach the browser",
+                )
+            },
         }
     }
 }

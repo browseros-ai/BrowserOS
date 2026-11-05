@@ -5,12 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "The host API of hosted BrowserOS Neo (claw-sdk): the /v1 router, the host auth and the event stream"
+description = "The host API of hosted BrowserOS Neo (claw-sdk): the /v1 router, the host auth, the event stream and the takeover parts' routes"
 
 [dependencies]
 axum.workspace = true
 base64.workspace = true
 browseros-core.workspace = true
+browseros-takeover.workspace = true
 browseros-trace.workspace = true
 claw-sdk-api.workspace = true
 futures-util.workspace = true

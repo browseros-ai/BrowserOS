@@ -94,6 +94,7 @@ async fn filters_keep_the_events_about_their_task_and_tab() -> TestResult {
     op_started(&h.sink, OperationId::new(b, 1), Op::write(4, 2));
     op_ended(&h.sink, OperationId::new(b, 1), Delivery::Done, None);
     end_run(&h.sink, b, None);
+    h.browser.open_tab(4);
     assert_eq!(
         h.post("/v1/tabs/4/private", "").await?.status,
         StatusCode::OK

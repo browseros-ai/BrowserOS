@@ -7,12 +7,15 @@
 //!
 //! ```text
 //!  TraceSink ─ broadcast ─▶ numbering task ─ hydrate: one store read ─▶ publish ─▶ ring
+//!  Locks ───── broadcast ─▶ lock task ─ the lock is the payload ──────▶ publish ─┤
+//!  Service::tab_closed ───────────────────────────────────────────────▶ publish ─┤
 //!                                                                                   │
 //!                                              each SSE client reads after its seq ◀┘
 //! ```
 //!
-//! `EventLog::publish` is the only way in, so a new source of events (a lock's state, say)
-//! joins the same numbering and resume by calling it.
+//! `EventLog::publish` is the only way in, so every source of events joins the same numbering
+//! and resume by calling it. Each source keeps its own events in order; the ring orders the
+//! sources by the moment each event is published.
 //!
 //! An event's JSON is built once, when it enters the ring, so a hundred clients cost one store
 //! read. Hydration reads the record as the store holds it when the task gets there, which can
@@ -26,6 +29,7 @@ use crate::event_resume::{self, Bounds, Resume};
 use crate::limits::EVENT_RING;
 use crate::wire;
 use browseros_core::TabId;
+use browseros_takeover::Lock;
 use browseros_trace::{
     EpochMillis, OperationId, PrivacyRecord, RunId, TaskId, TraceRecordEvent, TraceStore,
 };
@@ -44,6 +48,8 @@ pub(crate) enum EventKind {
     OperationStarted,
     OperationEnded,
     TabPrivate,
+    TabClosed,
+    LockState,
     StreamReset,
 }
 
@@ -56,6 +62,8 @@ impl EventKind {
             Self::OperationStarted => "operation.started",
             Self::OperationEnded => "operation.ended",
             Self::TabPrivate => "tab.private",
+            Self::TabClosed => "tab.closed",
+            Self::LockState => "lock.state",
             Self::StreamReset => "stream.reset",
         }
     }
@@ -194,6 +202,12 @@ impl EventLog {
         log
     }
 
+    /// Starts the task that numbers lock changes as `lock.state` events, over `changes`, a
+    /// receiver the caller subscribed before this call. It ends when the locks are dropped.
+    pub(crate) fn follow_locks(self: &Arc<Self>, changes: broadcast::Receiver<Lock>) {
+        tokio::spawn(lock_states(Arc::clone(self), changes));
+    }
+
     /// Numbers `event` and appends it, dropping the oldest entry once the ring is full.
     pub(crate) fn publish(&self, event: LogEvent) {
         {
@@ -264,6 +278,27 @@ async fn number(
             },
             Err(RecvError::Lagged(missed)) => {
                 tracing::warn!(missed, "the event log fell behind the trace writer");
+                LogEvent::reset(EpochMillis::now())
+            }
+            Err(RecvError::Closed) => return,
+        };
+        log.publish(event);
+    }
+}
+
+/// The lock task: each lock change is one `lock.state` event about the lock's tab. A lagged
+/// broadcast lost changes no client will see, so it publishes a reset, as the trace's does.
+async fn lock_states(log: Arc<EventLog>, mut changes: broadcast::Receiver<Lock>) {
+    loop {
+        let event = match changes.recv().await {
+            Ok(lock) => LogEvent::new(
+                EventKind::LockState,
+                None,
+                Some(lock.tab),
+                &wire::lock_event(&lock),
+            ),
+            Err(RecvError::Lagged(missed)) => {
+                tracing::warn!(missed, "the event log fell behind the lock changes");
                 LogEvent::reset(EpochMillis::now())
             }
             Err(RecvError::Closed) => return,
