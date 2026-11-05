@@ -32,6 +32,45 @@ const FIXTURE: &str = "http://127.0.0.1:8781/";
 struct HidesDetach {
     inner: CdpClient,
     hidden: Arc<Mutex<Vec<String>>>,
+    /// When set, the next script whose source contains this text finds its session dropped
+    /// just before it runs, after the isolated-world setup on that session already answered.
+    drop_before_script: Arc<Mutex<Option<&'static str>>>,
+}
+
+impl HidesDetach {
+    /// Sends `method`, first dropping its session unannounced when it is the armed script.
+    async fn send_script_aware(
+        &self,
+        method: &str,
+        params: Value,
+        session: Option<&SessionId>,
+        send: BoxFuture<'_, Result<Value, CdpError>>,
+    ) -> Result<Value, CdpError> {
+        let source = params
+            .get("expression")
+            .or_else(|| params.get("functionDeclaration"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let armed = matches!(method, "Runtime.evaluate" | "Runtime.callFunctionOn")
+            && session.is_some()
+            && self
+                .drop_before_script
+                .lock()
+                .is_ok_and(|mut armed| armed.take_if(|needle| source.contains(*needle)).is_some());
+        if armed && let Some(session) = session {
+            if let Ok(mut hidden) = self.hidden.lock() {
+                hidden.push(session.0.clone());
+            }
+            self.inner
+                .send(
+                    "Target.detachFromTarget",
+                    json!({"sessionId": session.0}),
+                    None,
+                )
+                .await?;
+        }
+        send.await
+    }
 }
 
 impl CdpConnection for HidesDetach {
@@ -41,7 +80,8 @@ impl CdpConnection for HidesDetach {
         params: Value,
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
-        CdpConnection::send(&self.inner, method, params, session)
+        let send = CdpConnection::send(&self.inner, method, params.clone(), session);
+        Box::pin(self.send_script_aware(method, params, session, send))
     }
 
     fn send_raw_json<'a>(
@@ -60,7 +100,14 @@ impl CdpConnection for HidesDetach {
         params: Value,
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
-        CdpConnection::send_at_epoch(&self.inner, expected_epoch, method, params, session)
+        let send = CdpConnection::send_at_epoch(
+            &self.inner,
+            expected_epoch,
+            method,
+            params.clone(),
+            session,
+        );
+        Box::pin(self.send_script_aware(method, params, session, send))
     }
 
     fn send_raw_json_at_epoch<'a>(
@@ -154,12 +201,16 @@ async fn tests_that_a_tab_recovers_after_its_page_session_dies_unannounced() -> 
         .ok()
         .and_then(|port| port.parse().ok())
         .unwrap_or(9005);
+    // As the claw server runs: scripts go to an isolated world, two commands each.
+    browseros_core::page_js::set_isolated_world_enabled(true);
     let client = CdpClient::connect(ConnectOptions::new(port)).await?;
     let hidden = Arc::new(Mutex::new(Vec::new()));
+    let drop_before_script = Arc::new(Mutex::new(None));
     let session = BrowserSession::new_with_native(
         Arc::new(HidesDetach {
             inner: client.clone(),
             hidden: hidden.clone(),
+            drop_before_script: drop_before_script.clone(),
         }),
         BrowserSessionHooks::default(),
         NativeCapabilities::from_browseros_version(Some("0.51.2.7")),
@@ -179,6 +230,10 @@ async fn tests_that_a_tab_recovers_after_its_page_session_dies_unannounced() -> 
         .and_then(|id| u32::try_from(id).ok())
         .ok_or_else(|| anyhow::anyhow!("open returned no page id"))?;
     let result = exercise(&ctx, &session, &client, &hidden, page).await;
+    let result = match result {
+        Ok(()) => checks_survive_a_drop_mid_script(&ctx, &session, &drop_before_script, page).await,
+        failed => failed,
+    };
     let _ = call(&ctx, "tabs", json!({"action": "close", "page": page})).await;
     result
 }
@@ -316,6 +371,62 @@ async fn exercise(
     );
     ensure_replaced(session, page, &dropped).await?;
     Ok(())
+}
+
+/// The audit layer's sensitive-field checks each run a script in two commands. A session that
+/// dies between them must not read as "not sensitive" while the act that follows re-attaches
+/// and types the secret.
+async fn checks_survive_a_drop_mid_script(
+    ctx: &ToolCtx,
+    session: &BrowserSession,
+    drop_before_script: &Mutex<Option<&'static str>>,
+    page: u32,
+) -> anyhow::Result<()> {
+    let arm = |needle| -> anyhow::Result<()> {
+        *drop_before_script
+            .lock()
+            .map_err(|_| anyhow::anyhow!("arm poisoned"))? = Some(needle);
+        Ok(())
+    };
+
+    // The focused-field check reads `document.activeElement`.
+    let before = attached_session(session, page).await?;
+    arm("activeElement")?;
+    let typed = call(
+        ctx,
+        "act",
+        json!({"page": page, "kind": "type", "text": "synthetic-mid-script"}),
+    )
+    .await?;
+    ok("typing after a drop mid-check", &typed)?;
+    anyhow::ensure!(
+        typed
+            .audit_hints
+            .as_ref()
+            .is_some_and(|hints| hints.redact_all_values),
+        "typing was not marked for redaction after a drop mid-check: {:?}",
+        typed.audit_hints
+    );
+    ensure_replaced(session, page, &before).await?;
+
+    // The ref check calls the shared predicate, which names `current-password`.
+    let before = attached_session(session, page).await?;
+    arm("current-password")?;
+    let fill = call(
+        ctx,
+        "act",
+        json!({"page": page, "kind": "fill", "ref": "e2", "value": "synthetic-mid-script"}),
+    )
+    .await?;
+    ok("password fill after a drop mid-check", &fill)?;
+    anyhow::ensure!(
+        fill.audit_hints
+            .as_ref()
+            .is_some_and(|hints| hints.sensitive_refs.iter().any(|r| r == "e2")),
+        "the password fill was not marked for redaction after a drop mid-check: {:?}",
+        fill.audit_hints
+    );
+    ensure_replaced(session, page, &before).await
 }
 
 /// A snapshot that read every frame it found.
