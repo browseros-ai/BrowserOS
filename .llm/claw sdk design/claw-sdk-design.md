@@ -12,6 +12,25 @@ These are living notes from our discussion. Agreed points are recorded below; op
 
 ## HLD
 
+### Four pillars
+
+```text
++--------------------------- Claw SDK ----------------------------+
+|                                                                |
+| +--------------+    +----------------+    +-------------------+ |
+| | 1 Client SDK |--->| 2 Code runtime |--->| 3 Rust browser    |--CDP--> Chromium
+| +--------------+    | Playwright JS  |    | layer             | |
+|                     +----------------+    +---------^---------+ |
+|                                                     |          |
+| +--------------+                                    |          |
+| | 4 REST APIs  |------------------------------------+          |
+| +--------------+                                               |
+|                                                                |
++----------------------------------------------------------------+
+```
+
+Arrows show requests; results return along the same paths.
+
 ### Agreed direction
 
 - Start a new SDK codebase and a new binary. Implement browser operations in Rust, using the existing tool logic as a reference.
