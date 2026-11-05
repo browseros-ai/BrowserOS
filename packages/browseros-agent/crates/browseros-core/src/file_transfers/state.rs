@@ -396,3 +396,100 @@ fn belongs_to(
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::TransferState;
+    use crate::{CdpConnection, CoreError, ProtocolSession, SessionId};
+    use browseros_cdp::{CdpError, CdpEvent};
+    use futures_util::future::BoxFuture;
+    use serde_json::{Value, json};
+    use std::{sync::Arc, time::Duration};
+    use tokio::sync::broadcast;
+
+    /// Answers every command, except that Chromium refuses each one sent on `gone` as gone.
+    struct Browser {
+        gone: SessionId,
+        events: broadcast::Sender<CdpEvent>,
+    }
+
+    impl CdpConnection for Browser {
+        fn send<'a>(
+            &'a self,
+            _method: &'a str,
+            _params: Value,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            let gone = session == Some(&self.gone);
+            Box::pin(async move {
+                if gone {
+                    Err(CdpError::SessionGone)
+                } else {
+                    Ok(json!({}))
+                }
+            })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            _method: &'a str,
+            _params_json: &'a str,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async { Ok("{}".to_string()) })
+        }
+
+        fn send_at_epoch<'a>(
+            &'a self,
+            _expected_epoch: u64,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            self.send(method, params, session)
+        }
+
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            self.events.subscribe()
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        fn connection_epoch(&self) -> u64 {
+            1
+        }
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_child_frame_gone_during_setup_never_blocks_its_page()
+    -> Result<(), CoreError> {
+        let browser = Arc::new(Browser {
+            gone: SessionId::from("child"),
+            events: broadcast::channel(16).0,
+        });
+        let transfers = TransferState::new(browser.clone());
+        let root = ProtocolSession::for_session(browser.clone(), SessionId::from("root"));
+        transfers.intercept(&root).await?;
+
+        // The child iframe attaches under the intercepted page and dies before its own setup.
+        let mut changes = transfers.changes();
+        browser
+            .events
+            .send(CdpEvent {
+                method: "Target.attachedToTarget".into(),
+                params: json!({"sessionId":"child","targetInfo":{"type":"iframe"}}),
+                session_id: Some(SessionId::from("root")),
+            })
+            .map_err(|error| CoreError::Message(error.to_string()))?;
+        tokio::time::timeout(Duration::from_secs(5), changes.changed())
+            .await
+            .map_err(|_| CoreError::Message("the attach was never observed".into()))?
+            .map_err(|error| CoreError::Message(error.to_string()))?;
+
+        transfers.intercept(&root).await?;
+        assert!(!transfers.has_pending());
+        Ok(())
+    }
+}

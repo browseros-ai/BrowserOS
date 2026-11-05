@@ -290,6 +290,11 @@ mod frame_tests {
         /// Sessions Chromium dropped without Neo hearing: every command sent on one is refused
         /// as gone, and no detach event is emitted for it.
         killed: Mutex<HashSet<SessionId>>,
+        /// Key events the page received, with the session that delivered each.
+        keys: Mutex<Vec<(Option<SessionId>, Value)>>,
+        /// Kills the session that delivers the next keyDown, right after delivering it: a
+        /// session that dies in the middle of an action.
+        kill_after_key_down: std::sync::atomic::AtomicBool,
     }
 
     impl Native {
@@ -310,6 +315,8 @@ mod frame_tests {
                 events: broadcast::channel(32).0,
                 attachments: Mutex::new(HashMap::new()),
                 killed: Mutex::new(HashSet::new()),
+                keys: Mutex::new(Vec::new()),
+                kill_after_key_down: std::sync::atomic::AtomicBool::new(false),
             })
         }
 
@@ -512,6 +519,30 @@ mod frame_tests {
                         .map_err(|_| CdpError::SessionGone)?
                         .push((session.cloned(), params));
                     json!({})
+                }
+                "Input.dispatchKeyEvent" => {
+                    if params["type"] == "keyDown"
+                        && self.kill_after_key_down.swap(false, Ordering::SeqCst)
+                        && let Some(session) = session
+                    {
+                        self.killed
+                            .lock()
+                            .map_err(|_| CdpError::SessionGone)?
+                            .insert(session.clone());
+                    }
+                    self.keys
+                        .lock()
+                        .map_err(|_| CdpError::SessionGone)?
+                        .push((session.cloned(), params));
+                    json!({})
+                }
+                // The focused element is a password field.
+                "Runtime.evaluate"
+                    if params["expression"]
+                        .as_str()
+                        .is_some_and(|expression| expression.contains("activeElement")) =>
+                {
+                    json!({"result":{"value":true}})
                 }
                 // A settled page, so a load wait ends on its first quiet interval.
                 "Runtime.evaluate"
@@ -1055,6 +1086,74 @@ mod frame_tests {
             .map(|(session, _)| session.as_ref().map(SessionId::as_str))
             .collect::<Vec<_>>();
         assert_eq!(pressed, [Some("session-page-2")], "{mouse:?}");
+        Ok(())
+    }
+
+    /// The key events the page received, as `(session, type)` pairs.
+    fn key_events(native: &Native) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+        Ok(native
+            .keys
+            .lock()
+            .map_err(|_| "poisoned")?
+            .iter()
+            .map(|(session, event)| {
+                (
+                    session
+                        .as_ref()
+                        .map(SessionId::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    event["type"].as_str().unwrap_or_default().to_owned(),
+                )
+            })
+            .collect())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_key_press_recovers_in_call_when_its_page_session_was_dead() -> TestResult
+    {
+        let (native, view, page) = fixture().await?;
+        view.page_session(page.clone()).await?;
+        native.kill("session-page")?;
+
+        view.input(page).await?.press("Enter").await?;
+        assert_eq!(
+            key_events(&native)?,
+            [
+                ("session-page-2".to_owned(), "keyDown".to_owned()),
+                ("session-page-2".to_owned(), "keyUp".to_owned()),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_key_press_is_not_replayed_when_its_session_dies_midway() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        view.page_session(page.clone()).await?;
+        native.kill_after_key_down.store(true, Ordering::SeqCst);
+
+        let pressed = view.input(page).await?.press("Enter").await;
+        assert!(
+            matches!(pressed, Err(CoreError::Cdp(CdpError::SessionGone))),
+            "{pressed:?}"
+        );
+        // Enter reached the page once. Pressing it again on a new attachment could submit a
+        // form twice, so the press reports the lost session instead.
+        assert_eq!(
+            key_events(&native)?,
+            [("session-page".to_owned(), "keyDown".to_owned())]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_the_focused_field_check_survives_a_dead_page_session() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        view.page_session(page.clone()).await?;
+        native.kill("session-page")?;
+
+        assert!(view.input(page).await?.focused_field_is_sensitive().await);
         Ok(())
     }
 
