@@ -30,6 +30,7 @@ impl fmt::Debug for TwoCaptchaClient {
 enum RequestKind {
     Create,
     Poll,
+    #[cfg(test)]
     Balance,
 }
 
@@ -55,6 +56,7 @@ impl TwoCaptchaClient {
     }
 
     // https://2captcha.com/api-docs/get-balance
+    #[cfg(test)]
     pub async fn get_balance(
         &self,
         deadline: Instant,

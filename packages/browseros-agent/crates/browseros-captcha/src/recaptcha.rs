@@ -874,7 +874,7 @@ pub async fn solve<P: CaptchaPage, B: CaptchaBackend>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::captcha::{
+    use crate::{
         events::{CaptchaEventBus, EventLog},
         reservation::TabReservations,
     };

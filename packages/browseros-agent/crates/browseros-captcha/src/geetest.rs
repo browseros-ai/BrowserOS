@@ -598,7 +598,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::services::captcha::{
+    use crate::{
         events::{CaptchaEventBus, EventLog},
         reservation::TabReservations,
         types::{

@@ -635,7 +635,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::services::captcha::{
+    use crate::{
         events::{CaptchaEventBus, EventLog},
         reservation::TabReservations,
         types::{
@@ -850,7 +850,7 @@ Object.defineProperty(globalThis, 'performance', {value:{timeOrigin:1,getEntries
     #[tokio::test]
     async fn tests_that_real_provider_clients_fall_back_with_fresh_aws_fields() -> anyhow::Result<()>
     {
-        use crate::services::captcha::{
+        use crate::{
             config::{
                 CAPSOLVER_KEY_FILE_ENV, CAPSOLVER_URL_ENV, CaptchaConfig, TWOCAPTCHA_KEY_FILE_ENV,
                 TWOCAPTCHA_URL_ENV,

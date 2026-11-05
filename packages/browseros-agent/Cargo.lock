@@ -322,6 +322,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "browseros-captcha"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "browseros-cdp",
+ "browseros-core",
+ "browseros-mcp",
+ "futures-util",
+ "rand 0.9.4",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "browseros-cdp"
 version = "0.1.0"
 dependencies = [
@@ -522,6 +548,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
+ "browseros-captcha",
  "browseros-cdp",
  "browseros-core",
  "browseros-mcp",

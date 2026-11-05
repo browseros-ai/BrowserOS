@@ -315,6 +315,7 @@ pub struct CapsolverClient {
 }
 
 impl CapsolverClient {
+    #[cfg(test)]
     pub fn new(config: &ProviderConfig, http: Client) -> Self {
         Self {
             config: config.clone(),
@@ -504,20 +505,6 @@ impl CapsolverClient {
             }
             delay = Duration::from_secs(2);
         }
-    }
-
-    pub async fn get_balance(&self) -> Result<f64, ProviderError> {
-        let response = self
-            .request(
-                "getBalance",
-                json!({}),
-                None,
-                Instant::now() + ATTEMPT_TIMEOUT,
-                &CancellationToken::new(),
-            )
-            .await?;
-        amount(&response["balance"])
-            .ok_or_else(|| self.error(ProviderErrorKind::BadRequest, "invalid balance", false))
     }
 
     async fn request(
@@ -812,7 +799,7 @@ mod tests {
     use tokio::{net::TcpListener, sync::Mutex, task::JoinHandle};
 
     use super::*;
-    use crate::services::captcha::{
+    use crate::{
         config::{CAPSOLVER_KEY_FILE_ENV, CAPSOLVER_URL_ENV, PAID_TASK_LIMIT_ENV},
         types::{
             ProviderName, RecaptchaParams, SolveAnswer, TileGrid, TilePuzzle, TurnstileParams,

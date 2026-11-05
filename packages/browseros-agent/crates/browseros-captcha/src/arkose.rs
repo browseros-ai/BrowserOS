@@ -675,7 +675,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::services::captcha::{
+    use crate::{
         events::{CaptchaEventBus, EventLog},
         reservation::TabReservations,
         types::{
@@ -981,11 +981,11 @@ mod tests {
     #[tokio::test]
     async fn tests_that_public_solve_dispatches_a_detected_arkose_widget() -> anyhow::Result<()> {
         use super::super::{
-            CaptchaService, LiveDriver, config::CaptchaConfig, providers::ProviderChain,
+            CaptchaSolver, LiveDriver, config::CaptchaConfig, providers::ProviderChain,
         };
 
         let page = FakePage::default();
-        let service = CaptchaService {
+        let service = CaptchaSolver {
             providers: ProviderChain::new(&CaptchaConfig::default()),
             reservations: Arc::default(),
             events: CaptchaEventBus::new(),

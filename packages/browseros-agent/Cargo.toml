@@ -11,6 +11,7 @@ repository = "https://github.com/browseros-ai/BrowserOS"
 [workspace.dependencies]
 harness-integrations = { path = "crates/harness-integrations" }
 browseros-cdp = { path = "crates/browseros-cdp" }
+browseros-captcha = { path = "crates/browseros-captcha" }
 browseros-core = { path = "crates/browseros-core" }
 browseros-decide = { path = "crates/browseros-decide" }
 browseros-mcp = { path = "crates/browseros-mcp" }
