@@ -1207,30 +1207,128 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
     Ok(())
 }
 
-/// The ops held back while sdk-playwright fixes the main world's leak (decision 25a).
-const HELD_OPS: [&str; 2] = ["page.evaluate", "page.waitForFunction"];
+/// The ops held back because they run the agent's script in the page's main world.
+const HELD_OPS: [&str; 5] = [
+    "page.evaluate",
+    "page.waitForFunction",
+    "locator.evaluate",
+    "locator.evaluateAll",
+    "page.setContent",
+];
+
+/// Each Playwright API that runs the agent's script in the main world, as the prelude sends it:
+/// the crate op its alias shares, and the input, whose `call.api` names the API. Some name the
+/// run's lazy page and some `owners_page`; the hold answers both before the door resolves a page.
+fn main_world_calls(owners_page: &Value) -> [(&'static str, Value); 10] {
+    let lazy = json!({ "$neo": "page", "id": null });
+    let field = json!({
+        "$neo": "element", "page": owners_page, "seq": 0, "node": 12,
+        "display": "locator('input[type=password]')",
+    });
+    let read_value = "(field) => field.value";
+    let read_values = "(fields) => fields.map((field) => field.value)";
+    [
+        (
+            "page.evaluate",
+            json!({
+                "call": { "api": "page.evaluate", "timeoutMs": 0 },
+                "page": lazy,
+                "expression": "() => document.querySelector('input[type=password]').value",
+                "isFunction": true,
+            }),
+        ),
+        (
+            "page.evaluate",
+            json!({
+                "call": { "api": "frame.evaluate", "timeoutMs": 0 },
+                "page": owners_page, "frame": "F1",
+                "expression": "() => document.querySelector('input[type=password]').value",
+                "isFunction": true,
+            }),
+        ),
+        (
+            "page.waitForFunction",
+            json!({
+                "call": { "api": "page.waitForFunction", "timeoutMs": 1000 },
+                "page": lazy,
+                "expression": "() => document.readyState === 'complete'",
+                "isFunction": true,
+                "polling": "raf",
+            }),
+        ),
+        (
+            "locator.evaluate",
+            json!({
+                "call": { "api": "locator.evaluate", "timeoutMs": 5000 },
+                "target": locator(owners_page), "strict": "strict",
+                "expression": read_value, "isFunction": true,
+            }),
+        ),
+        (
+            "locator.evaluate",
+            json!({
+                "call": { "api": "page.$eval", "timeoutMs": 0 },
+                "target": locator(&lazy), "strict": "firstMatch", "noWait": true,
+                "expression": read_value, "isFunction": true,
+            }),
+        ),
+        (
+            "locator.evaluate",
+            json!({
+                "call": { "api": "elementHandle.evaluate", "timeoutMs": 0 },
+                "target": field, "strict": "strict",
+                "expression": read_value, "isFunction": true,
+            }),
+        ),
+        (
+            "locator.evaluateAll",
+            json!({
+                "call": { "api": "locator.evaluateAll", "timeoutMs": 0 },
+                "target": locator(owners_page),
+                "expression": read_values, "isFunction": true,
+            }),
+        ),
+        (
+            "locator.evaluateAll",
+            json!({
+                "call": { "api": "page.$$eval", "timeoutMs": 0 },
+                "target": locator(&lazy),
+                "expression": read_values, "isFunction": true,
+            }),
+        ),
+        (
+            "page.setContent",
+            json!({
+                "call": { "api": "page.setContent", "timeoutMs": 30000 },
+                "page": lazy,
+                "html": "<script>document.title = window.appState.password</script>",
+                "waitUntil": "load",
+            }),
+        ),
+        (
+            "page.setContent",
+            json!({
+                "call": { "api": "frame.setContent", "timeoutMs": 30000 },
+                "page": owners_page, "frame": "F1",
+                "html": "<script>document.title = parent.document.cookie</script>",
+                "waitUntil": "load",
+            }),
+        ),
+    ]
+}
 
 #[tokio::test]
 async fn the_ops_that_run_script_in_the_pages_main_world_are_held() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
     let (run, _guard) = harness.run()?;
-    let lazy = json!({ "$neo": "page", "id": null });
-    let calls = [
-        json!({
-            "call": { "api": "page.evaluate", "timeoutMs": 0 },
-            "page": lazy,
-            "expression": "() => document.querySelector('input[type=password]').value",
-            "isFunction": true,
-        }),
-        json!({
-            "call": { "api": "page.waitForFunction", "timeoutMs": 1000 },
-            "page": lazy,
-            "expression": "() => document.readyState === 'complete'",
-            "isFunction": true,
-            "polling": "raf",
-        }),
-    ];
-    for (name, input) in HELD_OPS.into_iter().zip(calls) {
+    let calls = main_world_calls(&handle(&owners));
+    let tried: HashSet<&str> = calls.iter().map(|(name, _)| *name).collect();
+    assert_eq!(tried, HashSet::from(HELD_OPS), "every held op is tried");
+
+    let before = harness.fake.calls().len();
+    for (name, input) in calls {
+        let api = input["call"]["api"].clone();
         let (operation, reply) = harness.submit_op(&run, name, input).await;
         let refused = failure(reply)?;
         assert_eq!(
@@ -1244,7 +1342,7 @@ async fn the_ops_that_run_script_in_the_pages_main_world_are_held() -> Result<()
                 ErrorCode::METHOD_UNAVAILABLE,
                 Delivery::NotSent
             ),
-            "{name}: {}",
+            "{api} ({name}): {}",
             refused.error
         );
         assert!(
@@ -1252,19 +1350,84 @@ async fn the_ops_that_run_script_in_the_pages_main_world_are_held() -> Result<()
                 .error
                 .message()
                 .contains("held while a privacy fix lands"),
-            "{name}: the message says why, so the agent reads the page another way: {}",
+            "{api}: the message says why, so the agent reads the page another way: {}",
             refused.error
         );
         assert_eq!(
             harness.row(operation).await?.error.map(|error| error.code),
             Some("method_unavailable".to_owned()),
-            "{name}: the trace records the attempt"
+            "{api}: the trace records the attempt"
+        );
+    }
+    // The browser hears only the listings Neo makes in the background, never a page opened,
+    // attached to or run in.
+    let sent: Vec<String> = harness
+        .fake
+        .calls()
+        .into_iter()
+        .skip(before)
+        .map(|call| call.method)
+        .filter(|method| {
+            ![
+                "Browser.getTabs",
+                "Target.getTargets",
+                "Target.setDiscoverTargets",
+                "Browser.setDownloadBehavior",
+            ]
+            .contains(&method.as_str())
+        })
+        .collect();
+    assert_eq!(
+        sent,
+        Vec::<String>::new(),
+        "refused before the door resolves a page: nothing reached the browser"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_goto_to_a_javascript_url_is_refused_before_it_is_sent() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    let (run, _guard) = harness.run()?;
+    // Chromium runs each of these in the tab's main world, however the scheme is spelled.
+    for url in [
+        "javascript:void(document.title = document.querySelector('input[type=password]').value)",
+        " JavaScript:void(0)",
+        "java\tscript:void(0)",
+    ] {
+        let goto = json!({
+            "call": { "api": "page.goto", "timeoutMs": 30000 },
+            "page": handle(&owners),
+            "url": url,
+            "waitUntil": "load",
+        });
+        let (operation, reply) = harness.submit_op(&run, "page.goto", goto).await;
+        let refused = failure(reply)?;
+        assert_eq!(
+            (
+                refused.error.owner(),
+                refused.error.code(),
+                refused.delivery
+            ),
+            (
+                ErrorOwner::Script,
+                ErrorCode::INVALID_INPUT,
+                Delivery::NotSent
+            ),
+            "{url:?}: {}",
+            refused.error
+        );
+        assert_eq!(
+            harness.row(operation).await?.error.map(|error| error.code),
+            Some("invalid_input".to_owned()),
+            "{url:?}: the trace records the attempt"
         );
     }
     assert_eq!(
-        harness.fake.count("Browser.createTab"),
+        harness.fake.count("Page.navigate"),
         0,
-        "refused before the door opens the run's page: nothing reached the browser"
+        "no script URL reached the tab"
     );
     Ok(())
 }

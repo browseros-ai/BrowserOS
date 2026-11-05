@@ -66,7 +66,7 @@ A `requestId` never runs twice. A repeat while its run is going joins it and get
 | `run` | One `run` call from admission to reply: replay, joins, the orphan grace, and the deadline. |
 | `runtime` | The per-run QuickJS realm, the JS bootstrap and the `neo` prelude in `runtime/js/` plus browseros-playwright's prelude, and the strings-only bridge to the dispatcher. The only module that names rquickjs. |
 | `dispatch` | The door: `Dispatcher`, the `Method` trait, the `Registry`, the policy rules, and the error model. |
-| `builtins` | The methods Neo serves: every browseros-playwright op but the two held for a privacy fix (`page.evaluate`, `page.waitForFunction`), on the process's one `Playwright` (`playwright_ops.rs`, with the privacy hooks it reports to, and `event_release.rs`, which puts every event an event pull returns through the rules on its own tab) and `neo.solveCaptcha`; and the idle-tab janitor. |
+| `builtins` | The methods Neo serves: every browseros-playwright op but those that run script in the page's main world, held for privacy (`page.evaluate`, `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, `page.setContent`, and a `goto` to a `javascript:` URL), on the process's one `Playwright` (`playwright_ops.rs`, with the privacy hooks it reports to, and `event_release.rs`, which puts every event an event pull returns through the rules on its own tab) and `neo.solveCaptcha`; and the idle-tab janitor. |
 | `browser` | The CDP link to Chromium, its reconnects, and what Neo knows about each tab. |
 | `host` | The host API's lifecycle and the takeover lock the door checks. |
 | `test_rig` | The unit tests' rig: a fake browser, a real trace store, and test methods. |

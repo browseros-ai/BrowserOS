@@ -364,6 +364,113 @@ fn a_script_drives_a_page_through_the_playwright_api() -> TestResult {
 }
 
 #[test]
+fn every_api_that_runs_script_in_the_pages_main_world_is_held() -> TestResult {
+    on_neo_runtime(async {
+        let neo = Neo::start().await?;
+        let client = neo.modern_client().await?;
+        // Every such API a script reaches through the real prelude. An element handle needs a
+        // page with a sealed world, which the fake browser has not, so builtins/tests.rs sends
+        // `elementHandle.evaluate`'s call to the door instead.
+        let code = r"
+            const frame = page.mainFrame();
+            const field = page.locator('input[type=password]');
+            const html = '<script>document.title = window.appState.password</script>';
+            const attempts = {
+              'page.evaluate': () => page.evaluate(() => document.title),
+              'page.waitForFunction': () => page.waitForFunction(() => true),
+              'frame.evaluate': () => frame.evaluate(() => document.title),
+              'frame.waitForFunction': () => frame.waitForFunction(() => true),
+              'locator.evaluate': () => field.evaluate((el) => el.value),
+              'locator.evaluateAll': () => field.evaluateAll((els) => els.length),
+              'page.$eval': () => page.$eval('input', (el) => el.value),
+              'page.$$eval': () => page.$$eval('input', (els) => els.length),
+              'frame.$eval': () => frame.$eval('input', (el) => el.value),
+              'frame.$$eval': () => frame.$$eval('input', (els) => els.length),
+              'page.setContent': () => page.setContent(html),
+              'frame.setContent': () => frame.setContent(html),
+            };
+            const outcomes = {};
+            for (const [api, attempt] of Object.entries(attempts)) {
+              try {
+                await attempt();
+                outcomes[api] = 'served';
+              } catch (error) {
+                outcomes[api] = `${error.owner} / ${error.code} / ${error.delivery}`;
+              }
+            }
+            return outcomes;";
+        let result = run(
+            &client,
+            json!({ "code": code }),
+            Some(json!({ "taskId": "task-held" })),
+        )
+        .await?;
+        let refused = "script / method_unavailable / not_sent";
+        assert_eq!(
+            result.structured_content,
+            Some(json!({ "value": {
+                "page.evaluate": refused,
+                "page.waitForFunction": refused,
+                "frame.evaluate": refused,
+                "frame.waitForFunction": refused,
+                "locator.evaluate": refused,
+                "locator.evaluateAll": refused,
+                "page.$eval": refused,
+                "page.$$eval": refused,
+                "frame.$eval": refused,
+                "frame.$$eval": refused,
+                "page.setContent": refused,
+                "frame.setContent": refused,
+            } })),
+            "each is refused, with nothing sent"
+        );
+
+        let recorded = neo.until_status("task-held", RunStatus::Ok).await?;
+        let detail = neo
+            .store
+            .run(recorded.id)
+            .await?
+            .ok_or("the run is stored")?;
+        let ops: Vec<_> = detail
+            .operations
+            .iter()
+            .map(|op| {
+                let code = op.error.as_ref().map(|error| error.code.as_str());
+                (op.name.as_str(), code, op.delivery)
+            })
+            .collect();
+        let held = |name| (name, Some("method_unavailable"), Some(Delivery::NotSent));
+        assert_eq!(
+            ops,
+            [
+                held("page.evaluate"),
+                held("page.waitForFunction"),
+                held("page.evaluate"),
+                held("page.waitForFunction"),
+                held("locator.evaluate"),
+                held("locator.evaluateAll"),
+                held("locator.evaluate"),
+                held("locator.evaluateAll"),
+                held("locator.evaluate"),
+                held("locator.evaluateAll"),
+                held("page.setContent"),
+                held("page.setContent"),
+            ],
+            "the trace records each attempt as the crate op its API shares"
+        );
+        assert!(
+            !neo.fake
+                .calls()
+                .iter()
+                .any(|call| call.method == "Browser.createTab"),
+            "the run's page was never opened: nothing reached the browser"
+        );
+        client.cancel().await?;
+        Ok(())
+    })
+}
+
+#[test]
 fn without_a_provider_key_solve_captcha_is_unlisted_and_throws_for_the_host() -> TestResult {
     on_neo_runtime(async {
         let neo = Neo::start().await?;

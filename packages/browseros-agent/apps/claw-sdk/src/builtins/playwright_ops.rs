@@ -50,18 +50,38 @@ const PLAYWRIGHT_LINE: &str = "Playwright's API (as of 1.56) on `page`, `context
     `frame.locator`), reads (`textContent`, `innerText`, `getAttribute`, `count`, \
     `isVisible`, `page.content()`, `page.title()`), navigation (`goto`, `reload`, \
     `waitForURL`, `waitForLoadState`), `screenshot`, and events (`page.on`, `waitForEvent`). \
-    Actions (`click`, `fill`, `press`), `keyboard`, `mouse`, `expect` and `locator.evaluate` \
-    are not built yet and fail with `internal_error`. `page.evaluate` and \
-    `page.waitForFunction` are not available for now and fail with `method_unavailable`.";
+    Actions (`click`, `fill`, `press`), `keyboard`, `mouse` and `expect` are not built yet and \
+    fail with `internal_error`. Running script in the page (`page.evaluate`, \
+    `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, `$eval`, `$$eval`, \
+    `elementHandle.evaluate`, `page.setContent`, and their `frame` forms) is not available for \
+    now and fails with `method_unavailable`, and `goto` refuses `javascript:` URLs.";
 
-/// The ops claw-sdk holds back for now (decision 25a). Each sends the agent's script to the
-/// page's main world, where sdk-playwright is fixing a leak: the sweeps around it
-/// (`page/evaluate_guard.rs`) missed same-site frames on another CDP session, so a password in
-/// one came back raw. A held op's name answers `script / method_unavailable` with the reason, and
-/// the crate's op never runs. The reads that run in the sealed world (`page.title`, `page.content`,
-/// `setContent`) are served as usual. Serving these again is a commit of its own, once the fix
-/// lands.
-const HELD: [Held; 2] = [
+/// The ops claw-sdk holds back for now: every op that runs the agent's script in the page's main
+/// world, where the page's own state and its same-origin frames are in reach and no seal masks
+/// a field. A held op's name answers `script / method_unavailable` with the reason, and the
+/// crate's op never runs.
+/// - `page.evaluate` and `page.waitForFunction` (decision 25a) run it between the evaluate
+///   guard's sweeps (`page/evaluate_guard.rs`), which missed same-site frames on another CDP
+///   session, so a password in one came back raw. sdk-playwright is fixing that.
+/// - `locator.evaluate` and `locator.evaluateAll` run it on elements the same way. They are not
+///   built yet, and held before they are.
+/// - `page.setContent` writes the agent's HTML from the sealed world, but the scripts in that
+///   HTML run in the main world, with the page's origin and the state its own scripts keep, and
+///   no sweep at all.
+///
+/// `page.title` and `page.content` read in the sealed world and are served as usual. Serving an
+/// op again is a commit of its own, once a fix covers it.
+///
+/// The rule is the property, not this list: an op is held because it runs script in the main
+/// world. Once sdk-playwright marks such ops in `OpSpec`, `HELD` becomes "every op so marked",
+/// so a main-world op the crate adds later is held by default instead of served until someone
+/// lists it here. Until then each entry is a crate op name, which covers every API the prelude
+/// sends under it: the `frame` forms send the page ops; `$eval`, `frame.$eval` and
+/// `elementHandle.evaluate` send `locator.evaluate`; `$$eval` and `frame.$$eval` send
+/// `locator.evaluateAll`. `elementHandle.$eval` and `$$eval` send nothing: the prelude refuses
+/// them itself. A served op that runs script only for some inputs is refused by input instead:
+/// `page.goto` to a `javascript:` URL ([`OpInput::navigates_to_script`]).
+const HELD: [Held; 5] = [
     Held {
         name: "page.evaluate",
         instead: "read the page through locators (`textContent`, `innerText`, \
@@ -72,12 +92,29 @@ const HELD: [Held; 2] = [
         instead: "wait through a locator, which waits by itself, or through \
                   `page.waitForURL()` and `page.waitForLoadState()`",
     },
+    Held {
+        name: "locator.evaluate",
+        instead: "read the element with `textContent()`, `innerText()`, `getAttribute()` or \
+                  `inputValue()`",
+    },
+    Held {
+        name: "locator.evaluateAll",
+        instead: "read the matches with `allTextContents()`, `allInnerTexts()` or `count()`, \
+                  or one at a time through `nth()`",
+    },
+    Held {
+        name: "page.setContent",
+        instead: "open the HTML as a page of its own with \
+                  `page.goto('data:text/html,' + encodeURIComponent(html))`, whose scripts run \
+                  in an origin of their own",
+    },
 ];
 
 /// A held op, and what a script uses meanwhile. A plain data bag.
 #[derive(Clone, Copy, Debug)]
 struct Held {
-    /// The crate's op name, as the prelude sends it for every alias (`frame.evaluate` too).
+    /// The crate's op name, which the prelude sends for every alias of the API ([`HELD`] lists
+    /// them).
     name: &'static str,
     /// What the refusal suggests instead.
     instead: &'static str,
@@ -178,6 +215,13 @@ impl Method for PlaywrightOp {
     }
 
     async fn call(&self, op: &OpCtx<Self>, input: OpInput) -> Result<Value, LeafError> {
+        if self.pages == PageEffect::Navigates && input.navigates_to_script() {
+            return Err(LeafError::definite(OperationError::script(
+                ErrorCode::INVALID_INPUT,
+                "Neo does not open `javascript:` URLs: their script runs in the page's main \
+                 world, with no sweep to mask its fields. Read the page through locators instead.",
+            )));
+        }
         let page = match &input.page {
             Some(_) => Some(op.page()?),
             None => None,
@@ -257,6 +301,18 @@ impl OpInput {
         self.json.get("runBeforeUnload") == Some(&Value::Bool(true))
     }
 
+    /// Whether the op navigates to a `javascript:` URL. Chromium runs one through
+    /// `Page.navigate` in the current document's main world, and only then reports the
+    /// navigation aborted, so such a `goto` is a `page.evaluate` with no evaluate guard around
+    /// it: the door refuses it before it is sent ([`HELD`] holds the ops that always run script).
+    fn navigates_to_script(&self) -> bool {
+        self.json
+            .get("url")
+            .and_then(Value::as_str)
+            .and_then(url_scheme)
+            .is_some_and(|scheme| scheme == "javascript")
+    }
+
     /// The input as the crate gets it (adapter contract, point 2; decision 25, input 2). The
     /// lazy brand `{"$neo":"page","id":null}` names the run's page wherever it sits, so once the
     /// door resolved that page for this op, every one of them becomes it: `dragTo`'s `to.page`,
@@ -299,6 +355,28 @@ fn replace_lazy_brands(value: &mut Value, resolved: &Value) {
         }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
+}
+
+/// The scheme of `url` as the URL Standard reads it: leading and trailing C0 controls and spaces
+/// dropped, tabs and newlines removed wherever they are, then an ASCII letter and letters,
+/// digits, `+`, `-` or `.` up to the first `:`, lowercased. `None` when there is none. Chromium
+/// trims, strips and lowercases the same way, so ` JavaScript:` and `java\tscript:` are
+/// `javascript:` to it too; a scheme with any other character is no URL it navigates to.
+fn url_scheme(url: &str) -> Option<String> {
+    let mut scheme = String::new();
+    let chars = url
+        .trim_matches(|c: char| c <= ' ')
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'));
+    for c in chars {
+        match c {
+            ':' if !scheme.is_empty() => return Some(scheme),
+            'a'..='z' | 'A'..='Z' => scheme.push(c.to_ascii_lowercase()),
+            '0'..='9' | '+' | '-' | '.' if !scheme.is_empty() => scheme.push(c),
+            _ => return None,
+        }
+    }
+    None
 }
 
 /// What an op does to a page that the door keeps books on (`PageChange`): agent-opened marks
@@ -651,6 +729,31 @@ mod tests {
             drag,
             "the crate refuses the lazy brand rather than act on a tab the door never checked"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_navigation_runs_script_for_a_javascript_url_however_it_is_spelled()
+    -> Result<(), Box<dyn Error>> {
+        let page = json!({ "$neo": "page", "id": 7, "tab": 1007 });
+        for (url, runs_script) in [
+            ("javascript:void(document.title = 'x')", true),
+            ("JavaScript:void(0)", true),
+            // The browser drops what surrounds a URL, and tabs and newlines inside it.
+            (" \u{1}java\tscr\nipt:void(0)", true),
+            ("https://bank.example/javascript:void(0)", false),
+            (
+                "data:text/html,<script>document.title = 'x'</script>",
+                false,
+            ),
+            ("about:blank", false),
+            // No scheme at all, so the browser never runs it as script.
+            ("/javascript:void(0)", false),
+            ("java script:void(0)", false),
+        ] {
+            let input = decoded(json!({ "page": page, "url": url, "waitUntil": "load" }))?;
+            assert_eq!(input.navigates_to_script(), runs_script, "{url:?}");
+        }
         Ok(())
     }
 
