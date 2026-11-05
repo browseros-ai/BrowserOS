@@ -83,9 +83,14 @@ class ExtensionsFeedModule(Step):
 
         for name, version in self.set_versions.items():
             try:
-                extension_by_name(name)
+                extension = extension_by_name(name)
             except ValueError as e:
                 raise ValidationError(str(e))
+            if extension.frozen:
+                raise ValidationError(
+                    f"--set {name}= is not allowed: '{name}' is frozen and keeps "
+                    "its live/committed manifest entry"
+                )
             if not version:
                 raise ValidationError(f"--set {name}= is missing a version")
 

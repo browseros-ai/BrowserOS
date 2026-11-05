@@ -29,6 +29,8 @@ class ExtensionSpec:
     name: str
     extension_id: str
     in_update_feed: bool  # listed in update-manifest + extensions.json
+    # Re-emitted from the live/committed manifests on every run, never bumped.
+    frozen: bool = False
 
     def crx_key(self, version: str) -> str:
         return f"extensions/{self.name}-{version}.crx"
@@ -38,7 +40,11 @@ class ExtensionSpec:
 
 
 EXTENSIONS: Tuple[ExtensionSpec, ...] = (
-    ExtensionSpec("agent", BROWSEROS_AGENT_EXTENSION_ID, True),
+    # Installed original-BrowserOS clients still poll this manifest for the
+    # agent extension. Its source moved to browseros-human, which does not
+    # publish this manifest, so neo runs keep the entry byte-for-byte:
+    # dropping it would strand those clients and bumping it has no source.
+    ExtensionSpec("agent", BROWSEROS_AGENT_EXTENSION_ID, True, frozen=True),
     ExtensionSpec("bugreporter", BROWSEROS_BUG_REPORTER_EXTENSION_ID, True),
     ExtensionSpec("browserclaw", BROWSERCLAW_EXTENSION_ID, True),
 )

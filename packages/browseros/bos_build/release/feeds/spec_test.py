@@ -185,6 +185,11 @@ class ExtensionRegistryTest(unittest.TestCase):
         self.assertTrue(by_name["bugreporter"].in_update_feed)
         self.assertTrue(by_name["browserclaw"].in_update_feed)
 
+    def test_only_the_original_agent_entry_is_frozen(self):
+        self.assertEqual(
+            {ext.name for ext in EXTENSIONS if ext.frozen}, {"agent"}
+        )
+
     def test_crx_url_scheme(self):
         agent = extension_by_name("agent")
         self.assertEqual(

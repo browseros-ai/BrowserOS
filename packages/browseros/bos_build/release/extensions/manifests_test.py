@@ -17,10 +17,10 @@ BUGREPORTER_ID = "adlpneommgkgeanpaekgoaolcpncohkf"
 BROWSERCLAW_ID = "pjimfkbpehlcllblajnpfamdfjhhlgkc"
 
 LIVE_ALPHA_MANIFEST = render_update_manifest(
-    {"agent": "0.0.117.0", "bugreporter": "54.0.0.0"}
+    {"browserclaw": "0.0.117.0", "bugreporter": "54.0.0.0"}
 )
 LIVE_BUNDLED_MANIFEST = render_update_manifest(
-    {"agent": "0.0.115.0", "bugreporter": "52.0.0.0", "browserclaw": "0.0.0.2"}
+    {"browserclaw": "0.0.115.0", "bugreporter": "52.0.0.0", "agent": "0.0.0.2"}
 )
 
 
@@ -87,7 +87,7 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
         return module
 
     def test_regenerates_all_three_files_coherently(self):
-        self._run(set_versions={"agent": "0.0.118.0"})
+        self._run(set_versions={"browserclaw": "0.0.118.0"})
 
         self.assertEqual(
             [c.key for c in self.publisher.calls],
@@ -103,9 +103,9 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
         self.assertEqual(
             extract_manifest_versions(manifest),
             {
-                AGENT_ID: "0.0.118.0",
+                BROWSERCLAW_ID: "0.0.118.0",
                 BUGREPORTER_ID: "54.0.0.0",
-                BROWSERCLAW_ID: "0.0.0.2",
+                AGENT_ID: "0.0.0.2",
             },
         )
         # JSON points every update-feed id at the channel manifest URL.
@@ -113,16 +113,16 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
             "https://cdn.browseros.com/extensions/update-manifest.alpha.xml",
             json_content,
         )
-        self.assertIn(AGENT_ID, json_content)
-        self.assertIn(BUGREPORTER_ID, json_content)
         self.assertIn(BROWSERCLAW_ID, json_content)
+        self.assertIn(BUGREPORTER_ID, json_content)
+        self.assertIn(AGENT_ID, json_content)
         # Bundled retains all resolved extension versions.
         self.assertEqual(
             extract_manifest_versions(bundled),
             {
-                AGENT_ID: "0.0.118.0",
+                BROWSERCLAW_ID: "0.0.118.0",
                 BUGREPORTER_ID: "54.0.0.0",
-                BROWSERCLAW_ID: "0.0.0.2",
+                AGENT_ID: "0.0.0.2",
             },
         )
 
@@ -133,21 +133,21 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
         self.assertEqual(
             extract_manifest_versions(manifest),
             {
-                AGENT_ID: "0.0.117.0",
+                BROWSERCLAW_ID: "0.0.117.0",
                 BUGREPORTER_ID: "54.0.0.0",
-                BROWSERCLAW_ID: "0.0.0.2",
+                AGENT_ID: "0.0.0.2",
             },
         )
 
     def test_independent_product_pin_preserves_newer_live_sibling(self):
         live_versions = {
-            "agent": "0.0.120.0",
+            "browserclaw": "0.0.120.0",
             "bugreporter": "54.0.0.0",
-            "browserclaw": "0.0.0.4",
+            "agent": "0.0.0.4",
         }
         for name, version, sibling in (
-            ("agent", "0.0.121.0", BROWSERCLAW_ID),
-            ("browserclaw", "0.0.0.5", AGENT_ID),
+            ("browserclaw", "0.0.121.0", AGENT_ID),
+            ("agent", "0.0.0.5", BROWSERCLAW_ID),
         ):
             with self.subTest(product=name):
                 live = render_update_manifest(live_versions)
@@ -167,9 +167,9 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
         # Product A's snapshot merge is durable even if its R2 upload failed.
         # Product B must publish those committed pins along with its own bump.
         committed = render_update_manifest({
-            "agent": "0.0.120.0",
+            "browserclaw": "0.0.120.0",
             "bugreporter": "54.0.0.0",
-            "browserclaw": "0.0.0.4",
+            "agent": "0.0.0.4",
         })
         with TemporaryDirectory() as directory:
             baseline = Path(directory)
@@ -177,8 +177,8 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
             for name in ("update-manifest.alpha.xml", "bundled-manifest.xml"):
                 (baseline / "extensions" / name).write_text(committed)
             for product, version, sibling in (
-                ("agent", "0.0.121.0", BROWSERCLAW_ID),
-                ("browserclaw", "0.0.0.5", AGENT_ID),
+                ("browserclaw", "0.0.121.0", AGENT_ID),
+                ("agent", "0.0.0.5", BROWSERCLAW_ID),
             ):
                 with self.subTest(product=product):
                     self._run(
@@ -196,16 +196,16 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
             (baseline / "extensions").mkdir()
             (baseline / "extensions/update-manifest.xml").write_text(
                 render_update_manifest({
-                    "agent": "0.0.116.0",
+                    "browserclaw": "0.0.116.0",
                     "bugreporter": "53.0.0.0",
-                    "browserclaw": "0.0.0.2",
+                    "agent": "0.0.0.2",
                 })
             )
             (baseline / "extensions/bundled-manifest.xml").write_text(
                 render_update_manifest({
-                    "agent": "0.0.119.0",
+                    "browserclaw": "0.0.119.0",
                     "bugreporter": "54.0.0.0",
-                    "browserclaw": "0.0.0.3",
+                    "agent": "0.0.0.3",
                 })
             )
             publisher = FakePublisher(live={
@@ -214,24 +214,24 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
             })
             self._run(
                 channel="prod",
-                set_versions={"agent": "0.0.117.0"},
+                set_versions={"browserclaw": "0.0.117.0"},
                 publisher=publisher,
                 baseline_root=baseline,
             )
             manifest = extract_manifest_versions(publisher.calls[0].content)
             bundled = extract_manifest_versions(publisher.calls[2].content)
-            self.assertEqual(manifest[AGENT_ID], "0.0.117.0")
-            self.assertEqual(manifest[BROWSERCLAW_ID], "0.0.0.2")
-            self.assertEqual(bundled[AGENT_ID], "0.0.119.0")
-            self.assertEqual(bundled[BROWSERCLAW_ID], "0.0.0.3")
+            self.assertEqual(manifest[BROWSERCLAW_ID], "0.0.117.0")
+            self.assertEqual(manifest[AGENT_ID], "0.0.0.2")
+            self.assertEqual(bundled[BROWSERCLAW_ID], "0.0.119.0")
+            self.assertEqual(bundled[AGENT_ID], "0.0.0.3")
 
     def test_explicit_pin_cannot_regress_committed_channel_ahead_of_live(self):
         # A failed R2 upload does not make a merged channel version expendable,
         # even when the next publisher explicitly selects this same extension.
         committed = render_update_manifest({
-            "agent": "0.0.120.0",
+            "browserclaw": "0.0.120.0",
             "bugreporter": "54.0.0.0",
-            "browserclaw": "0.0.0.2",
+            "agent": "0.0.0.2",
         })
         with TemporaryDirectory() as directory:
             baseline = Path(directory)
@@ -240,9 +240,9 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
                 (baseline / "extensions" / name).write_text(committed)
             for publish in (False, True):
                 with self.subTest(publish=publish):
-                    with self.assertRaisesRegex(RuntimeError, "agent.*0.0.120.0"):
+                    with self.assertRaisesRegex(RuntimeError, "browserclaw.*0.0.120.0"):
                         self._run(
-                            set_versions={"agent": "0.0.118.0"},
+                            set_versions={"browserclaw": "0.0.118.0"},
                             baseline_root=baseline,
                             publish=publish,
                         )
@@ -256,9 +256,9 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
 
     def test_allow_downgrade_explicitly_overrides_committed_channel_pin(self):
         committed = render_update_manifest({
-            "agent": "0.0.120.0",
+            "browserclaw": "0.0.120.0",
             "bugreporter": "54.0.0.0",
-            "browserclaw": "0.0.0.2",
+            "agent": "0.0.0.2",
         })
         with TemporaryDirectory() as directory:
             baseline = Path(directory)
@@ -266,14 +266,14 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
             for name in ("update-manifest.alpha.xml", "bundled-manifest.xml"):
                 (baseline / "extensions" / name).write_text(committed)
             self._run(
-                set_versions={"agent": "0.0.118.0"},
+                set_versions={"browserclaw": "0.0.118.0"},
                 baseline_root=baseline,
                 allow_downgrade=True,
                 publish=True,
             )
             for index in (0, 2):
                 self.assertEqual(
-                    extract_manifest_versions(self.publisher.calls[index].content)[AGENT_ID],
+                    extract_manifest_versions(self.publisher.calls[index].content)[BROWSERCLAW_ID],
                     "0.0.118.0",
                 )
             self.assertTrue(all(call.allow_downgrade for call in self.publisher.calls))
@@ -293,13 +293,13 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
         publisher = FakePublisher(
             live={
                 "extensions/update-manifest.xml": render_update_manifest(
-                    {"agent": "0.0.118.0", "bugreporter": "54.0.0.0"}
+                    {"browserclaw": "0.0.118.0", "bugreporter": "54.0.0.0"}
                 ),
                 "extensions/bundled-manifest.xml": render_update_manifest(
                     {
-                        "agent": "0.0.119.0",
+                        "browserclaw": "0.0.119.0",
                         "bugreporter": "54.0.0.0",
-                        "browserclaw": "0.0.0.2",
+                        "agent": "0.0.0.2",
                     }
                 ),
             }
@@ -310,19 +310,19 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
         manifest = publisher.calls[0].content
         bundled = publisher.calls[2].content
         self.assertEqual(
-            extract_manifest_versions(manifest)[AGENT_ID], "0.0.118.0"
+            extract_manifest_versions(manifest)[BROWSERCLAW_ID], "0.0.118.0"
         )
         self.assertEqual(
-            extract_manifest_versions(manifest)[BROWSERCLAW_ID], "0.0.0.2"
+            extract_manifest_versions(manifest)[AGENT_ID], "0.0.0.2"
         )
-        self.assertEqual(extract_manifest_versions(bundled)[AGENT_ID], "0.0.119.0")
-        # Both agent crx versions are referenced somewhere — both checked.
+        self.assertEqual(extract_manifest_versions(bundled)[BROWSERCLAW_ID], "0.0.119.0")
+        # Both browserclaw crx versions are referenced somewhere — both checked.
         self.assertIn(
-            "https://cdn.browseros.com/extensions/agent-0.0.118.0.crx",
+            "https://cdn.browseros.com/extensions/browserclaw-0.0.118.0.crx",
             publisher.head_calls,
         )
         self.assertIn(
-            "https://cdn.browseros.com/extensions/agent-0.0.119.0.crx",
+            "https://cdn.browseros.com/extensions/browserclaw-0.0.119.0.crx",
             publisher.head_calls,
         )
 
@@ -330,13 +330,13 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
         publisher = FakePublisher(
             live={
                 "extensions/update-manifest.xml": render_update_manifest(
-                    {"agent": "0.0.118.0", "bugreporter": "54.0.0.0"}
+                    {"browserclaw": "0.0.118.0", "bugreporter": "54.0.0.0"}
                 ),
                 "extensions/bundled-manifest.xml": render_update_manifest(
                     {
-                        "agent": "0.0.119.0",
+                        "browserclaw": "0.0.119.0",
                         "bugreporter": "54.0.0.0",
-                        "browserclaw": "0.0.0.2",
+                        "agent": "0.0.0.2",
                     }
                 ),
             }
@@ -345,38 +345,38 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
         self._run(channel="prod", publisher=publisher, allow_downgrade=True)
 
         bundled = publisher.calls[2].content
-        self.assertEqual(extract_manifest_versions(bundled)[AGENT_ID], "0.0.118.0")
+        self.assertEqual(extract_manifest_versions(bundled)[BROWSERCLAW_ID], "0.0.118.0")
 
     def test_missing_version_with_no_live_source_raises(self):
         publisher = FakePublisher(live={})
 
-        with self.assertRaisesRegex(RuntimeError, "agent"):
+        with self.assertRaisesRegex(RuntimeError, "browserclaw"):
             self._run(publisher=publisher, set_versions={"bugreporter": "54.0.0.0"})
 
         self.assertEqual(publisher.calls, [])
 
     def test_missing_crx_refuses_before_any_write(self):
-        url = "https://cdn.browseros.com/extensions/agent-0.0.118.0.crx"
+        url = "https://cdn.browseros.com/extensions/browserclaw-0.0.118.0.crx"
         publisher = FakePublisher(live=_live_feeds(), head_status={url: 404})
 
-        with self.assertRaisesRegex(RuntimeError, "agent-0.0.118.0.crx"):
-            self._run(publisher=publisher, set_versions={"agent": "0.0.118.0"})
+        with self.assertRaisesRegex(RuntimeError, "browserclaw-0.0.118.0.crx"):
+            self._run(publisher=publisher, set_versions={"browserclaw": "0.0.118.0"})
 
         self.assertEqual(publisher.calls, [])
         self.assertIn(url, publisher.head_calls)
 
     def test_every_crx_in_output_head_checked(self):
-        self._run(set_versions={"agent": "0.0.118.0"})
+        self._run(set_versions={"browserclaw": "0.0.118.0"})
 
         expected = {
-            "https://cdn.browseros.com/extensions/agent-0.0.118.0.crx",
+            "https://cdn.browseros.com/extensions/browserclaw-0.0.118.0.crx",
             "https://cdn.browseros.com/extensions/bugreporter-54.0.0.0.crx",
-            "https://cdn.browseros.com/extensions/browserclaw-0.0.0.2.crx",
+            "https://cdn.browseros.com/extensions/agent-0.0.0.2.crx",
         }
         self.assertEqual(set(self.publisher.head_calls), expected)
 
     def test_dry_run_is_default_and_runs_single_pass(self):
-        self._run(set_versions={"agent": "0.0.118.0"})
+        self._run(set_versions={"browserclaw": "0.0.118.0"})
 
         self.assertEqual(len(self.publisher.calls), 3)
         self.assertTrue(all(not c.publish for c in self.publisher.calls))
@@ -393,7 +393,7 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
 
     def test_publish_preflights_all_three_before_writing(self):
         self._run(
-            set_versions={"agent": "0.0.118.0"}, publish=True, allow_downgrade=True
+            set_versions={"browserclaw": "0.0.118.0"}, publish=True, allow_downgrade=True
         )
 
         # Quiet preflight over the trio, then the writing pass.
@@ -463,20 +463,91 @@ class ExtensionsFeedModuleTest(unittest.TestCase):
             ExtensionsFeedModule(channel="beta", set_versions={}).validate(ctx)
 
 
+UPDATES = Path(__file__).resolve().parents[5] / "updates"
+APP_BLOCK = '  <app appid="{}">\n'
+
+
+def _app_block(manifest: str, extension_id: str) -> str:
+    """The exact <app> lines one extension occupies in a rendered manifest."""
+    start = manifest.index(APP_BLOCK.format(extension_id))
+    end = manifest.index("  </app>\n", start) + len("  </app>\n")
+    return manifest[start:end]
+
+
+class FrozenAgentEntryTest(unittest.TestCase):
+    """Original BrowserOS installs poll the agent entry; neo runs never move it."""
+
+    def _ctx(self):
+        return cast(
+            Context,
+            SimpleNamespace(env=SimpleNamespace(has_r2_config=lambda: True)),
+        )
+
+    def _committed(self, channel: str) -> dict:
+        suffix = ".alpha" if channel == "alpha" else ""
+        return {
+            key: (UPDATES / key).read_text(encoding="utf-8")
+            for key in (
+                f"extensions/update-manifest{suffix}.xml",
+                f"extensions/extensions{suffix}.json",
+                "extensions/bundled-manifest.xml",
+            )
+        }
+
+    def _run(self, channel: str, set_versions: dict) -> dict:
+        committed = self._committed(channel)
+        publisher = FakePublisher(live=committed)
+        ExtensionsFeedModule(
+            channel=channel,
+            set_versions=set_versions,
+            publisher=publisher,
+            baseline_root=UPDATES,
+        ).execute(self._ctx())
+        return {call.key: call.content for call in publisher.calls}
+
+    def test_set_on_frozen_agent_is_a_validation_error(self):
+        module = ExtensionsFeedModule(
+            channel="alpha", set_versions={"agent": "0.0.200.0"}
+        )
+        with self.assertRaisesRegex(ValidationError, "'agent' is frozen"):
+            module.validate(self._ctx())
+
+    def test_neo_run_reemits_committed_manifests_byte_identical(self):
+        for channel in ("alpha", "prod"):
+            with self.subTest(channel=channel):
+                outputs = self._run(channel, {})
+                self.assertEqual(outputs, self._committed(channel))
+
+    def test_neo_bump_keeps_agent_entry_byte_identical(self):
+        for channel in ("alpha", "prod"):
+            with self.subTest(channel=channel):
+                committed = self._committed(channel)
+                outputs = self._run(channel, {"browserclaw": "0.2.99.0"})
+                for key in (
+                    f"extensions/update-manifest{'.alpha' if channel == 'alpha' else ''}.xml",
+                    "extensions/bundled-manifest.xml",
+                ):
+                    self.assertEqual(
+                        _app_block(outputs[key], AGENT_ID),
+                        _app_block(committed[key], AGENT_ID),
+                    )
+                    self.assertIn('version="0.2.99.0"', outputs[key])
+
+
 class ParseSetOptionsTest(unittest.TestCase):
     def test_parses_name_version_pairs(self):
         self.assertEqual(
-            parse_set_options(["agent=0.0.118.0", "bugreporter=54.0.0.0"]),
-            {"agent": "0.0.118.0", "bugreporter": "54.0.0.0"},
+            parse_set_options(["browserclaw=0.0.118.0", "bugreporter=54.0.0.0"]),
+            {"browserclaw": "0.0.118.0", "bugreporter": "54.0.0.0"},
         )
 
     def test_malformed_entry_raises(self):
         with self.assertRaisesRegex(ValueError, "name=version"):
-            parse_set_options(["agent0.0.118.0"])
+            parse_set_options(["browserclaw0.0.118.0"])
 
     def test_empty_version_raises(self):
         with self.assertRaisesRegex(ValueError, "name=version"):
-            parse_set_options(["agent="])
+            parse_set_options(["browserclaw="])
 
 
 if __name__ == "__main__":
