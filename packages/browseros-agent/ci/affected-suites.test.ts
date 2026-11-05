@@ -95,7 +95,6 @@ describe('computeAffectedSuites', () => {
       ),
     ).toEqual(['release'])
     for (const nightlyWorkflow of [
-      '.github/workflows/nightly-macos-browseros.yml',
       '.github/workflows/nightly-macos-browserclaw.yml',
       '.github/workflows/reusable-build-macos-nightly.yml',
     ]) {

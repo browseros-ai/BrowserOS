@@ -22,12 +22,10 @@ DEFAULT_ENV_FILE = REPO_ROOT / ".env.production"
 
 RELEASE_WORKFLOW_FILES = (
     Path(".github/workflows/build-browseros.yml"),
-    Path(".github/workflows/release-browseros.yml"),
     Path(".github/workflows/release-browserclaw.yml"),
     Path(".github/workflows/release-windows.yml"),
     Path(".github/workflows/release-extension-feeds.yml"),
     Path(".github/workflows/release-extensions.yml"),
-    Path(".github/workflows/release-server.yml"),
     Path(".github/workflows/release-claw-onboard.yml"),
     Path(".github/workflows/release-claw-server.yml"),
     Path(".github/workflows/publish-server-ota.yml"),

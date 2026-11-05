@@ -851,13 +851,13 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             pull_request_paths,
         )
 
-    def test_app_onboard_release_changes_trigger_build_system_tests(self):
+    def test_claw_onboard_release_changes_trigger_build_system_tests(self):
         test_workflow = self.load_workflow("bos-build-tests.yml")
         triggers = test_workflow.get("on", test_workflow.get(True))
         pull_request_paths = triggers["pull_request"]["paths"]
 
         self.assertIn(
-            ".github/workflows/release-app-onboard.yml",
+            ".github/workflows/release-claw-onboard.yml",
             pull_request_paths,
         )
 
@@ -904,12 +904,6 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
 
 class ReleaseIntegrityWorkflowTest(unittest.TestCase):
     RELEASES = {
-        "release-browseros.yml": {
-            "product": "browseros",
-            "server_workflow": "release-server.yml",
-            "extension": "agent",
-            "onboarding_manifest": "apps/app-onboard/package.json",
-        },
         "release-browserclaw.yml": {
             "product": "browserclaw",
             "server_workflow": "release-claw-server.yml",
@@ -951,17 +945,14 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             with self.subTest(workflow=workflow_name):
                 workflow = self.load_workflow(workflow_name)
                 triggers = workflow.get("on", workflow.get(True))
-                if workflow_name == "release-browseros.yml":
-                    self.assertIsNone(triggers["workflow_dispatch"])
-                else:
-                    inputs = triggers["workflow_dispatch"]["inputs"]
-                    self.assertEqual(
-                        {
-                            name: (spec["type"], spec["options"], spec["default"])
-                            for name, spec in inputs.items()
-                        },
-                        self.NEO_DISPATCH_INPUTS,
-                    )
+                inputs = triggers["workflow_dispatch"]["inputs"]
+                self.assertEqual(
+                    {
+                        name: (spec["type"], spec["options"], spec["default"])
+                        for name, spec in inputs.items()
+                    },
+                    self.NEO_DISPATCH_INPUTS,
+                )
                 self.assertFalse(workflow["concurrency"]["cancel-in-progress"])
                 self.assertEqual(workflow["concurrency"]["queue"], "max")
                 self.assertEqual(workflow["permissions"], {})
@@ -1011,16 +1002,12 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                     server["with"]["ref"],
                     "${{ needs.preflight.outputs.source_sha }}",
                 )
-                if workflow_name == "release-browseros.yml":
-                    self.assertIs(server["with"]["publish_ota"], True)
-                    self.assertNotIn("defer_finalize", server["with"])
-                else:
-                    # draft-only defers finalize, which is what suppresses the
-                    # tag, latest alias, public release, OTA and reflection.
-                    self.assertEqual(server["with"]["publish_ota"], self.NEO_ALPHA)
-                    self.assertEqual(
-                        server["with"]["defer_finalize"], self.NEO_DRAFT_ONLY
-                    )
+                # draft-only defers finalize, which is what suppresses the
+                # tag, latest alias, public release, OTA and reflection.
+                self.assertEqual(server["with"]["publish_ota"], self.NEO_ALPHA)
+                self.assertEqual(
+                    server["with"]["defer_finalize"], self.NEO_DRAFT_ONLY
+                )
                 for pinned in ("version", "mode", "state_owner"):
                     self.assertNotIn(pinned, server["with"])
                 self.assertEqual(server["secrets"], "inherit")
@@ -1035,16 +1022,12 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                     extension["with"]["branch"],
                     "${{ needs.preflight.outputs.source_sha }}",
                 )
-                if workflow_name == "release-browseros.yml":
-                    self.assertIs(extension["with"]["publish_alpha_feed"], True)
-                    self.assertNotIn("defer_finalize", extension["with"])
-                else:
-                    self.assertEqual(
-                        extension["with"]["publish_alpha_feed"], self.NEO_ALPHA
-                    )
-                    self.assertEqual(
-                        extension["with"]["defer_finalize"], self.NEO_DRAFT_ONLY
-                    )
+                self.assertEqual(
+                    extension["with"]["publish_alpha_feed"], self.NEO_ALPHA
+                )
+                self.assertEqual(
+                    extension["with"]["defer_finalize"], self.NEO_DRAFT_ONLY
+                )
                 for pinned in ("version", "mode", "state_owner"):
                     self.assertNotIn(pinned, extension["with"])
                 self.assertEqual(extension["secrets"], "inherit")
@@ -1061,15 +1044,12 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             for job_name, (called_workflow, arch) in lanes.items():
                 with self.subTest(workflow=workflow_name, lane=job_name):
                     job = jobs[job_name]
-                    if workflow_name == "release-browseros.yml":
-                        self.assertNotIn("if", job)
-                    else:
-                        # No status function: the implicit success() still
-                        # requires preflight and both exact components.
-                        self.assertEqual(
-                            job["if"],
-                            f"needs.preflight.outputs.build_{job_name} == 'true'",
-                        )
+                    # No status function: the implicit success() still
+                    # requires preflight and both exact components.
+                    self.assertEqual(
+                        job["if"],
+                        f"needs.preflight.outputs.build_{job_name} == 'true'",
+                    )
                     self.assertEqual(
                         set(job["needs"]),
                         {"preflight", "server", "extension", "components"},
@@ -1100,10 +1080,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                     self.assertNotIn("prepared_resources_artifact", job["with"])
                     if job_name == "windows":
                         self.assertIs(job["with"]["sign"], True)
-                    if arch is not None and workflow_name == "release-browseros.yml":
-                        self.assertEqual(job["with"]["arch"], arch)
-                        self.assertNotIn("notify", job["with"])
-                    elif arch is not None:
+                    if arch is not None:
                         self.assertEqual(
                             job["with"]["arch"],
                             "${{ needs.preflight.outputs.macos_arch }}",
@@ -1132,27 +1109,23 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                 finalize = self.named_step(
                     workflow, "finalize", "Create or refresh browser draft"
                 )
-                if workflow_name == "release-browseros.yml":
-                    self.assertNotIn("if", jobs["finalize"])
-                    selection = ("--platforms all", "--macos-arch universal")
-                else:
-                    self.assertEqual(
-                        " ".join(jobs["finalize"]["if"].split()),
-                        NEO_FINALIZE_CONDITION,
-                    )
-                    selection = (
-                        '--platforms "$PLATFORMS"',
-                        '--macos-arch "$MACOS_ARCH"',
-                    )
-                    self.assertEqual(
-                        finalize["env"]["PLATFORMS"],
-                        "${{ needs.preflight.outputs.platforms }}",
-                    )
-                    self.assertEqual(
-                        finalize["env"]["MACOS_ARCH"],
-                        "${{ needs.preflight.outputs.macos_arch }}",
-                    )
-                    self.assertNotIn("inputs.", finalize["run"])
+                self.assertEqual(
+                    " ".join(jobs["finalize"]["if"].split()),
+                    NEO_FINALIZE_CONDITION,
+                )
+                selection = (
+                    '--platforms "$PLATFORMS"',
+                    '--macos-arch "$MACOS_ARCH"',
+                )
+                self.assertEqual(
+                    finalize["env"]["PLATFORMS"],
+                    "${{ needs.preflight.outputs.platforms }}",
+                )
+                self.assertEqual(
+                    finalize["env"]["MACOS_ARCH"],
+                    "${{ needs.preflight.outputs.macos_arch }}",
+                )
+                self.assertNotIn("inputs.", finalize["run"])
                 for token in (
                     "release github create",
                     f"--product {config['product']}",
@@ -1166,10 +1139,8 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
 
     def test_standalone_component_allocators_share_one_preparation_lock(self):
         workflows = (
-            "release-server.yml",
             "release-claw-server.yml",
             "release-claw-onboard.yml",
-            "release-app-onboard.yml",
             "release-extensions.yml",
         )
         for workflow_name in workflows:
@@ -1186,10 +1157,8 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
 
     def test_component_workflows_inspect_private_drafts_with_release_cli(self):
         for workflow_name in (
-            "release-server.yml",
             "release-claw-server.yml",
             "release-claw-onboard.yml",
-            "release-app-onboard.yml",
             "release-extensions.yml",
         ):
             text = (WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8")
@@ -1202,12 +1171,9 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
 
     def test_release_critical_concurrency_groups_retain_pending_runs(self):
         for workflow_name in (
-            "release-browseros.yml",
             "release-browserclaw.yml",
-            "release-server.yml",
             "release-claw-server.yml",
             "release-claw-onboard.yml",
-            "release-app-onboard.yml",
             "release-extensions.yml",
             "release-extension-feeds.yml",
             "release-linux.yml",
@@ -1220,7 +1186,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                 self.assertEqual(concurrency["queue"], "max")
 
     def test_component_reflection_waits_for_live_alpha_publication(self):
-        for workflow_name in ("release-server.yml", "release-claw-server.yml"):
+        for workflow_name in ("release-claw-server.yml",):
             workflow = self.load_workflow(workflow_name)
             reflect = workflow["jobs"]["reflect-version"]
             with self.subTest(workflow=workflow_name):
@@ -1244,10 +1210,8 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
         token = "${{ secrets.RELEASE_REFLECT_TOKEN || github.token }}"
         default_branch = "${{ steps.source.outputs.default_branch }}"
         for workflow_name in (
-            "release-server.yml",
             "release-claw-server.yml",
             "release-extensions.yml",
-            "release-app-onboard.yml",
             "release-claw-onboard.yml",
         ):
             workflow = self.load_workflow(workflow_name)
@@ -1282,7 +1246,6 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
 
     def test_reusable_components_have_one_validated_state_owner(self):
         for workflow_name in (
-            "release-server.yml",
             "release-claw-server.yml",
             "release-extensions.yml",
         ):
@@ -1304,7 +1267,6 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
 
     def test_server_latest_aliases_reconcile_monotonically_inside_retained_lock(self):
         expected_groups = {
-            "release-server.yml": "release-server",
             "release-claw-server.yml": "release-claw-server-rust",
         }
         for workflow_name, group in expected_groups.items():
@@ -1349,7 +1311,7 @@ key = option("--key")
 state = Path(os.environ["FAKE_AWS_STATE"])
 targets = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-x64")
 target = next(value for value in targets if key.endswith(f"-{value}.zip"))
-component = "artifacts/server" if key.startswith("artifacts/server/") else "claw-server-rust/prod-resources"
+component = "claw-server-rust/prod-resources"
 marker = state / target
 
 if operation == "copy-object":
@@ -1396,7 +1358,7 @@ print(json.dumps({
             ("1.2.3", "9" * 40, "exact", 0, False),
             ("1.2.3", "1" * 40, "f" * 64, 0, False),
         )
-        for workflow_name in ("release-server.yml", "release-claw-server.yml"):
+        for workflow_name in ("release-claw-server.yml",):
             script = self.named_step(
                 self.load_workflow(workflow_name),
                 "finalize",
@@ -1500,10 +1462,8 @@ print(json.dumps({
 
     def test_component_resolvers_include_immutable_r2_allocations(self):
         jobs = (
-            ("release-server.yml", "prepare", "Resolve release"),
             ("release-claw-server.yml", "prepare", "Resolve release"),
             ("release-claw-onboard.yml", "prepare", "Resolve release"),
-            ("release-app-onboard.yml", "prepare", "Resolve release"),
             ("release-extensions.yml", "prepare", "Resolve extension release"),
         )
         for workflow_name, job_name, step_name in jobs:
@@ -1544,14 +1504,11 @@ print(json.dumps({
                 ):
                     self.assertNotIn(token, text)
                 deferrals = text.count("defer_finalize")
-                if workflow_name == "release-browseros.yml":
-                    self.assertEqual(deferrals, 0)
-                else:
-                    self.assertEqual(
-                        text.count(f"defer_finalize: {self.NEO_DRAFT_ONLY}"),
-                        deferrals,
-                    )
-                    self.assertEqual(deferrals, 2)
+                self.assertEqual(
+                    text.count(f"defer_finalize: {self.NEO_DRAFT_ONLY}"),
+                    deferrals,
+                )
+                self.assertEqual(deferrals, 2)
 
     def test_macos_product_artifact_globs_do_not_overlap(self):
         workflow = self.load_workflow("release-macos.yml")
@@ -1572,9 +1529,7 @@ print(json.dumps({
         triggers = workflow.get("on", workflow.get(True))
         paths = triggers["pull_request"]["paths"]
         for workflow_name in (
-            "release-browseros.yml",
             "release-browserclaw.yml",
-            "release-server.yml",
             "release-claw-server.yml",
             "release-docker.yml",
             "release-extensions.yml",
@@ -2365,15 +2320,6 @@ class DeferredComponentAttachmentTest(unittest.TestCase):
 
 class ProductNightlyWorkflowTest(unittest.TestCase):
     PRODUCTS = {
-        "browseros": (
-            "BrowserOS",
-            "server",
-            "agent",
-            "server_version",
-            "agent_version",
-            "app_onboarding_version",
-            "appcast-server.alpha.xml",
-        ),
         "browserclaw": (
             "BrowserOS neo",
             "claw-server",
@@ -2478,7 +2424,7 @@ class ProductNightlyWorkflowTest(unittest.TestCase):
                 workflow = self.load_workflow(f"nightly-macos-{product}.yml")
                 jobs = workflow["jobs"]
                 build_name = f"build-{product}"
-                ota_name = "server-ota" if product == "browseros" else "claw-server-ota"
+                ota_name = "claw-server-ota"
                 self.assertEqual(
                     set(jobs),
                     {
@@ -2683,12 +2629,8 @@ class ProductNightlyWorkflowTest(unittest.TestCase):
                 for step in (baseline, committed):
                     for path in own_paths:
                         self.assertIn(path, step["run"])
-                    sibling = (
-                        "appcast-claw-server.alpha.xml"
-                        if product == "browseros"
-                        else "appcast-server.alpha.xml"
-                    )
-                    self.assertNotIn(sibling, step["run"])
+                    # browseros-human owns the original server feed key.
+                    self.assertNotIn("appcast-server.alpha.xml", step["run"])
                 self.assertEqual(artifact["run"].count("publish-browser-artifact"), 1)
                 self.assertIn(f"--product {product}", artifact["run"])
                 self.assertIn(
@@ -2725,7 +2667,6 @@ class ProductNightlyWorkflowTest(unittest.TestCase):
         workflow = self.load_workflow("bos-build-tests.yml")
         paths = workflow.get("on", workflow.get(True))["pull_request"]["paths"]
         for filename in (
-            "nightly-macos-browseros.yml",
             "nightly-macos-browserclaw.yml",
             "reusable-build-macos-nightly.yml",
         ):

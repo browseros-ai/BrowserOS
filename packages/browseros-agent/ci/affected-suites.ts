@@ -174,7 +174,6 @@ export function computeAffectedSuites(
       (f) =>
         f.startsWith(`${AGENT}scripts/release/`) ||
         f === '.github/workflows/build-browseros.yml' ||
-        f === '.github/workflows/nightly-macos-browseros.yml' ||
         f === '.github/workflows/nightly-macos-browserclaw.yml' ||
         f === '.github/workflows/reusable-build-macos-nightly.yml' ||
         f === '.github/workflows/publish-server-ota.yml' ||

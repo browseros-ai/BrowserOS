@@ -296,7 +296,6 @@ class FeedPublisherCliTest(unittest.TestCase):
         )
         repo_root = Path(__file__).resolve().parents[4]
         for workflow in (
-            "release-browseros.yml",
             "release-browserclaw.yml",
         ):
             self.assertNotIn(
