@@ -17,12 +17,12 @@
 //! A value shorter than 4 characters is not registered, since it would mask ordinary text; the
 //! sealed world still masks it in place.
 
-use crate::sealed_frames::{SealedFrame, script_value, seal_tab, step};
+use crate::sealed_frames::{SealedFrame, seal_tab, sealed_world, within_budget};
 use crate::{BrowserTabs, PartError};
 use browseros_core::sensitive_fields::FieldValues;
 use browseros_core::{CoreError, TabId};
 use browseros_trace::{Registration, SecretSet, SecretValue};
-use serde_json::json;
+use serde_json::Value;
 
 /// What one sweep did, in counts. The values themselves are never handed out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,15 +76,7 @@ pub async fn sweep(
 
 /// The raw values of the frame's sensitive fields, as the seal reports them to Neo alone.
 async fn sensitive_values(frame: &SealedFrame) -> Result<FieldValues, CoreError> {
-    let reply = step(
-        &frame.session,
-        "Runtime.evaluate",
-        json!({
-            "expression": "__clawSeal.sensitiveValues()",
-            "contextId": frame.context,
-            "returnByValue": true,
-        }),
-    )
-    .await?;
-    Ok(FieldValues::from_sweep(script_value(&reply)?))
+    let reading = sealed_world(&frame.session, &frame.frame).eval("__clawSeal.sensitiveValues()");
+    let values: Value = within_budget("the sweep's read", reading).await?;
+    Ok(FieldValues::from_sweep(&values))
 }

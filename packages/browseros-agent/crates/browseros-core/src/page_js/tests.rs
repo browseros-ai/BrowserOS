@@ -255,6 +255,111 @@ async fn tests_that_an_isolated_only_eval_never_falls_back_to_the_page_world()
 }
 
 #[tokio::test]
+async fn tests_that_a_named_world_eval_runs_in_that_world_and_never_in_the_page_world()
+-> Result<(), Box<dyn std::error::Error>> {
+    let connection = TestConnection::new([
+        (
+            "Page.createIsolatedWorld",
+            json!({ "executionContextId": 21 }),
+        ),
+        ("Runtime.evaluate", json!({ "result": { "value": 1 } })),
+        (
+            "Page.createIsolatedWorld",
+            cdp_error("No frame for given id found"),
+        ),
+        ("Runtime.evaluate", json!({ "result": { "value": 3 } })),
+    ]);
+    let session = session(&connection, "named-world-eval");
+    let frame = FrameId("child".into());
+    let sealed = PageJs::named_world(&session, "browseros-sdk").in_frame(&frame);
+
+    let version: i64 = sealed.eval("seal()").await?;
+    let refused = sealed.eval::<i64>("seal()").await;
+
+    assert_eq!(version, 1);
+    assert!(
+        matches!(refused, Err(CoreError::IsolatedWorldUnavailable)),
+        "{refused:?}"
+    );
+    let calls = connection.calls()?;
+    assert_eq!(
+        methods(&calls),
+        [
+            "Page.createIsolatedWorld",
+            "Runtime.evaluate",
+            "Page.createIsolatedWorld"
+        ]
+    );
+    assert_eq!(
+        calls[0].params,
+        json!({ "frameId": "child", "worldName": "browseros-sdk" })
+    );
+    assert_eq!(calls[1].params["contextId"], 21);
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_named_world_call_resolves_the_node_there_releases_it_and_never_reruns_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    let connection = TestConnection::new([
+        (
+            "Page.createIsolatedWorld",
+            json!({ "executionContextId": 21 }),
+        ),
+        (
+            "DOM.resolveNode",
+            json!({ "object": { "objectId": "sealed-root" } }),
+        ),
+        (
+            "Runtime.callFunctionOn",
+            json!({ "result": { "type": "undefined" } }),
+        ),
+        ("Runtime.releaseObject", json!({})),
+        (
+            "Page.createIsolatedWorld",
+            json!({ "executionContextId": 21 }),
+        ),
+        (
+            "DOM.resolveNode",
+            json!({ "object": { "objectId": "other-root" } }),
+        ),
+        (
+            "Runtime.callFunctionOn",
+            json!({ "result": { "value": { OTHER_DOCUMENT: true } } }),
+        ),
+        ("Runtime.releaseObject", json!({})),
+    ]);
+    let session = session(&connection, "named-world-call");
+    let frame = FrameId("child".into());
+    let sealed = PageJs::named_world(&session, "browseros-sdk").in_frame(&frame);
+
+    let watched: Value = sealed.call(41, "function(){watch(this)}", &[]).await?;
+    let elsewhere = sealed
+        .call::<Value>(42, "function(){watch(this)}", &[])
+        .await;
+
+    assert_eq!(watched, Value::Null);
+    assert!(
+        matches!(elsewhere, Err(CoreError::IsolatedWorldUnavailable)),
+        "{elsewhere:?}"
+    );
+    let calls = connection.calls()?;
+    assert_eq!(calls[0].params["worldName"], "browseros-sdk");
+    assert_eq!(
+        calls[1].params,
+        json!({ "backendNodeId": 41, "executionContextId": 21 })
+    );
+    assert_eq!(calls[2].params["objectId"], "sealed-root");
+    assert_eq!(calls[3].params, json!({ "objectId": "sealed-root" }));
+    assert_eq!(
+        calls.len(),
+        8,
+        "a node in another document is released, not called again in the page world"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn tests_that_isolated_eval_retries_once_in_a_fresh_world_when_the_context_went_stale()
 -> Result<(), Box<dyn std::error::Error>> {
     let connection = TestConnection::new([

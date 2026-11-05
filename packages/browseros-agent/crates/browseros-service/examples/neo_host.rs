@@ -50,7 +50,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use browseros_core::viewport::{ViewportMode, ViewportRequest, Viewports};
-use browseros_core::{BrowserSession, BrowserSessionHooks, BrowserView, TabId};
+use browseros_core::{BrowserSession, BrowserSessionHooks, BrowserView, PageJs, TabId};
 use browseros_service::{HostAuth, HostToken, PeerRule, Service, ServiceInputs, host_service};
 use browseros_takeover::{ArmedJournal, BrowserTabs, Journal, LockTarget, Locks, ScreenSize, Xvnc};
 use browseros_trace::{
@@ -412,20 +412,10 @@ async fn viewport(browser: &BrowserSession, tab: TabId) -> Result<String, Box<dy
     let pages = browser.pages.resolve_tab_ids(&[tab]).await?;
     let page = pages.get(&tab).cloned().ok_or("the opened tab closed")?;
     let session = browser.pages.get_session(page).await?;
-    let reply = browser
-        .cdp(
-            "Runtime.evaluate",
-            json!({
-                "expression": "JSON.stringify([innerWidth, innerHeight, devicePixelRatio])",
-                "returnByValue": true,
-            }),
-            Some(&session.session_id),
-        )
-        .await?;
-    Ok(reply["result"]["value"]
-        .as_str()
-        .ok_or("the page reported no viewport")?
-        .to_string())
+    // Window geometry reads the same in either world, so this needs no page JavaScript.
+    Ok(PageJs::isolated(&session.session)
+        .eval::<String>("JSON.stringify([innerWidth, innerHeight, devicePixelRatio])")
+        .await?)
 }
 
 /// One run with one write on `tab` every two seconds, for the camera to picture.

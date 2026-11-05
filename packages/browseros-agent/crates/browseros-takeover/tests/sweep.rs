@@ -82,6 +82,13 @@ fn world(context: i64) -> (&'static str, Value) {
     )
 }
 
+/// The worlds one sweep of `two_frames` asks for, in order, when every frame and root takes the
+/// seal: main's is 11 and the child's 12. Each frame's world is made before the binding, then
+/// asked for again by every script run there: the seals, the closed roots' watches, the reads.
+fn two_frame_worlds() -> [(&'static str, Value); 8] {
+    [11, 12, 11, 12, 11, 12, 11, 12].map(world)
+}
+
 /// What evaluating `seal_source()` answers: the seal's version.
 fn sealed() -> (&'static str, Value) {
     (
@@ -159,7 +166,14 @@ fn steps(calls: &[TestCall]) -> Vec<(String, Option<SessionId>)> {
                     p["backendNodeId"], p["executionContextId"]
                 ),
                 "Runtime.callFunctionOn" => {
-                    format!("{} on {}", text("functionDeclaration"), text("objectId"))
+                    // Core's PageJs wraps the function in its other-document guard.
+                    let function = text("functionDeclaration");
+                    let function = if function.contains(WATCH) {
+                        WATCH.to_owned()
+                    } else {
+                        function
+                    };
+                    format!("{function} on {}", text("objectId"))
                 }
                 "Runtime.releaseObject" => format!("release {}", text("objectId")),
                 _ => return None,
@@ -189,14 +203,12 @@ fn masks(secrets: &SecretSet, value: &str) -> bool {
 #[tokio::test]
 async fn every_frame_is_sealed_after_the_binding_and_closed_roots_are_watched_in_their_own_frame()
 -> TestResult {
-    let connection = browser([
-        world(11),
-        world(12),
+    let connection = browser(two_frame_worlds().into_iter().chain([
         sealed(),
         sealed(),
         found(&[]),
         found(&[]),
-    ])?;
+    ]))?;
     two_frames(&connection)?;
 
     let swept = sweep(&tabs(&connection), &secrets(), TabId(3)).await?;
@@ -218,15 +230,21 @@ async fn every_frame_is_sealed_after_the_binding_and_closed_roots_are_watched_in
             "world main in browseros-sdk".to_owned(),
             "world child in browseros-sdk".to_owned(),
             format!("binding {JOURNAL_BINDING} for {SEALED_WORLD}"),
+            "world main in browseros-sdk".to_owned(),
             "seal context 11".to_owned(),
+            "world child in browseros-sdk".to_owned(),
             "seal context 12".to_owned(),
+            "world main in browseros-sdk".to_owned(),
             "resolve 41 into context 11".to_owned(),
             format!("{WATCH} on closed-root"),
             "release closed-root".to_owned(),
+            "world child in browseros-sdk".to_owned(),
             "resolve 42 into context 12".to_owned(),
             format!("{WATCH} on closed-root"),
             "release closed-root".to_owned(),
+            "world main in browseros-sdk".to_owned(),
             format!("{READ} context 11"),
+            "world child in browseros-sdk".to_owned(),
             format!("{READ} context 12"),
         ],
         "the worlds, then the binding, then the seal; each closed root in its own frame's world, \
@@ -241,20 +259,21 @@ async fn every_frame_is_sealed_after_the_binding_and_closed_roots_are_watched_in
 
 #[tokio::test]
 async fn the_sweep_registers_each_distinct_value_long_enough_to_mask_and_counts_it() -> TestResult {
-    let connection = browser([
-        world(11),
-        world(12),
-        sealed(),
-        sealed(),
-        found(&["PWTYPED_4f7h", "987", ""]),
-        found(&["4111111111111111", "PWTYPED_4f7h"]),
-        world(11),
-        world(12),
-        sealed(),
-        sealed(),
-        found(&["PWTYPED_4f7h"]),
-        found(&[]),
-    ])?;
+    let connection = browser(
+        two_frame_worlds()
+            .into_iter()
+            .chain(two_frame_worlds())
+            .chain([
+                sealed(),
+                sealed(),
+                found(&["PWTYPED_4f7h", "987", ""]),
+                found(&["4111111111111111", "PWTYPED_4f7h"]),
+                sealed(),
+                sealed(),
+                found(&["PWTYPED_4f7h"]),
+                found(&[]),
+            ]),
+    )?;
     two_frames(&connection)?;
     let secrets = secrets();
     let tabs = tabs(&connection);
@@ -296,6 +315,10 @@ async fn a_frame_that_fails_is_skipped_and_the_rest_are_read() -> TestResult {
             "Page.createIsolatedWorld",
             cdp_error("No frame for given id found"),
         ),
+        // The main frame's seal, its closed root's watch and its read.
+        world(11),
+        world(11),
+        world(11),
         sealed(),
         found(&["PWTYPED_4f7h"]),
     ])?;
@@ -329,6 +352,11 @@ async fn a_frame_that_never_answers_is_skipped_after_its_budget() -> TestResult 
     let connection = browser([
         world(11),
         world(12),
+        // The two seals, then the main frame's closed root's watch and its read.
+        world(11),
+        world(12),
+        world(11),
+        world(11),
         sealed(),
         ("Runtime.evaluate", cdp_pending()),
         found(&["PWTYPED_4f7h"]),
@@ -369,6 +397,13 @@ async fn an_out_of_process_frame_is_sealed_and_read_on_its_own_session() -> Test
                 ] },
             ] } }),
         ),
+        // The page's world, then its seal; the frame's world, then its seal and its closed
+        // root's watch; then each frame's read.
+        world(11),
+        world(11),
+        world(21),
+        world(21),
+        world(21),
         world(11),
         world(21),
         sealed(),
@@ -417,10 +452,13 @@ async fn an_out_of_process_frame_is_sealed_and_read_on_its_own_session() -> Test
         [
             "world remote in browseros-sdk".to_owned(),
             format!("binding {JOURNAL_BINDING} for {SEALED_WORLD}"),
+            "world remote in browseros-sdk".to_owned(),
             "seal context 21".to_owned(),
+            "world remote in browseros-sdk".to_owned(),
             "resolve 61 into context 21".to_owned(),
             format!("{WATCH} on closed-root"),
             "release closed-root".to_owned(),
+            "world remote in browseros-sdk".to_owned(),
             format!("{READ} context 21"),
         ]
     );
@@ -431,9 +469,7 @@ async fn an_out_of_process_frame_is_sealed_and_read_on_its_own_session() -> Test
 /// every sweep and every arming resolves the roots again.
 #[tokio::test]
 async fn each_closed_roots_handle_is_released_whether_or_not_its_watch_ran() -> TestResult {
-    let connection = browser([
-        world(11),
-        world(12),
+    let connection = browser(two_frame_worlds().into_iter().chain([
         sealed(),
         sealed(),
         (
@@ -451,7 +487,7 @@ async fn each_closed_roots_handle_is_released_whether_or_not_its_watch_ran() -> 
         ("Runtime.callFunctionOn", cdp_error("Cannot find context")),
         found(&[]),
         found(&[]),
-    ])?;
+    ]))?;
     two_frames(&connection)?;
 
     sweep(&tabs(&connection), &secrets(), TabId(3)).await?;

@@ -9,6 +9,8 @@
 //! - [`PageJs::page_world`] is for scripts that need the page's own JavaScript: the agent's
 //!   `evaluate_in_page`, site globals, handlers the page assigned. They always run in the page's
 //!   main world.
+//! - [`PageJs::named_world`] is for scripts that belong to another component's isolated world,
+//!   such as claw-sdk's sealed world. They run there and nowhere else, never in the page world.
 //!
 //! An isolated script must behave the same in either world. With the rollout switch
 //! ([`set_isolated_world_enabled`]) off every script runs in the page world, and with it on a
@@ -79,6 +81,8 @@ pub struct PageJs<'a> {
     session: &'a ProtocolSession,
     frame: Option<&'a FrameId>,
     isolated: bool,
+    /// The isolated world's name: [`WORLD_NAME`], or the one [`PageJs::named_world`] was given.
+    world: &'a str,
     /// Never falls back to the page world: see [`PageJs::isolated_only`].
     strict: bool,
     user_gesture: bool,
@@ -113,11 +117,26 @@ impl<'a> PageJs<'a> {
         Self::new(session, false)
     }
 
+    /// Scripts that belong to another component's isolated world, such as claw-sdk's sealed world
+    /// (`sensitive_fields::SEALED_WORLD`). Chromium keeps one world per name in a document, so
+    /// they share that world's globals and never see BrowserOS's own. Strict like
+    /// [`isolated_only`](Self::isolated_only), whatever the rollout switch: a frame that cannot get
+    /// the world is an error, never the page world. An empty `name` would make a new world on
+    /// every call.
+    #[must_use]
+    pub fn named_world(session: &'a ProtocolSession, name: &'a str) -> Self {
+        Self {
+            world: name,
+            ..Self::isolated_only(session)
+        }
+    }
+
     fn new(session: &'a ProtocolSession, isolated: bool) -> Self {
         Self {
             session,
             frame: None,
             isolated,
+            world: WORLD_NAME,
             strict: false,
             user_gesture: false,
             timeout: None,
@@ -345,7 +364,7 @@ impl<'a> PageJs<'a> {
             .session
             .send(
                 "Page.createIsolatedWorld",
-                json!({ "frameId": frame.as_str(), "worldName": WORLD_NAME }),
+                json!({ "frameId": frame.as_str(), "worldName": self.world }),
             )
             .await?;
         Ok(world.execution_context_id)

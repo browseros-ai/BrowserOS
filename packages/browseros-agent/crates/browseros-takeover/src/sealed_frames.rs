@@ -17,10 +17,16 @@
 //! [`TargetFrames::seal`] then works on one target's session:
 //! 1. `Page.createIsolatedWorld {frameId, worldName: SEALED_WORLD}` for each frame;
 //! 2. `Runtime.addBinding {name: JOURNAL_BINDING, executionContextName: SEALED_WORLD}`;
-//! 3. `Runtime.evaluate(seal_source())` in each world. It seals a document once, and a second
-//!    run changes nothing;
-//! 4. `__clawSeal.watch(root)` on each closed shadow root, resolved into its own frame's world,
-//!    then `Runtime.releaseObject` on the root's handle.
+//! 3. `seal_source()` in each frame's sealed world. It seals a document once, and a second run
+//!    changes nothing;
+//! 4. `__clawSeal.watch(this)` on each closed shadow root, called on the root's node in its own
+//!    frame's sealed world.
+//!
+//! **Scripts go through core's `PageJs::named_world`**, the one path for page JavaScript
+//! (`page_js_guard`): steps 3 and 4 here, and the sweep's read. It asks Chromium for the frame's
+//! sealed world on every script, never runs one in the page's own world, and releases the node
+//! handle a call resolves, which would otherwise live as long as its document while every sweep
+//! and every arming resolves the roots again.
 //!
 //! **The `browseros-sdk` world, not core's `browseros`.** Core's page scripts run in `browseros`
 //! and read raw values to place the caret and check fills, so sealing that world would break
@@ -33,16 +39,20 @@
 //! `Runtime.addBinding` reaches every world of that name that already exists, but a world made
 //! later only on a session with Runtime enabled, and core does not enable it on OOPIF sessions.
 //! So the sweep adds the binding too: a frame it seals can still journal once the journal arms.
+//! Step 3 asks for the world again, so a frame whose document was replaced after step 1 is
+//! sealed in its new document's world. On an OOPIF session the journal has not armed, that world
+//! has no binding and its seal never journals; the sweep still reads it.
 //!
-//! **A frame that fails is skipped.** Every step gets [`FRAME_BUDGET`]. A frame or a frame target
-//! that errs or stalls is logged and left out, and the rest go on; only the page itself failing
-//! fails the tab. Nothing here reads a field's value, so nothing here can log one.
+//! **A frame that fails is skipped.** Every step and every script gets [`FRAME_BUDGET`]. A frame
+//! or a frame target that errs or stalls is logged and left out, and the rest go on; only the
+//! page itself failing fails the tab. Nothing here reads a field's value, and an exception a
+//! script throws comes from Neo's own code in the sealed world, so nothing here can log one.
 
 use crate::limits::FRAME_BUDGET;
 use crate::{BrowserTabs, PartError};
 use browseros_cdp::CdpError;
 use browseros_core::sensitive_fields::{JOURNAL_BINDING, SEALED_WORLD, seal_source};
-use browseros_core::{CoreError, FrameId, PageId, ProtocolSession, TabId};
+use browseros_core::{CoreError, FrameId, PageId, PageJs, ProtocolSession, TabId};
 use serde_json::{Value, json};
 use std::future::Future;
 
@@ -57,8 +67,11 @@ pub(crate) struct SealedFrame {
     pub(crate) session: ProtocolSession,
     /// The frame.
     pub(crate) frame: FrameId,
-    /// The sealed world's execution context in the frame's current document.
-    pub(crate) context: i64,
+}
+
+/// `frame`'s sealed world, on `session`, the session of the target that hosts the frame.
+pub(crate) fn sealed_world<'a>(session: &'a ProtocolSession, frame: &'a FrameId) -> PageJs<'a> {
+    PageJs::named_world(session, SEALED_WORLD).in_frame(frame)
 }
 
 /// Seals every frame of the tab, and gives back the frames that took the seal.
@@ -194,7 +207,7 @@ impl TargetFrames {
         let mut worlds = Vec::new();
         for frame in &self.frames {
             match create_world(&self.session, frame).await {
-                Ok(context) => worlds.push((frame, context)),
+                Ok(()) => worlds.push(frame),
                 Err(error) => skipped(frame, &error),
             }
         }
@@ -209,21 +222,20 @@ impl TargetFrames {
             tracing::warn!(%error, "the journal's binding was not added; frames sealed now cannot journal");
         }
         let mut sealed = Vec::new();
-        for (frame, context) in worlds {
-            match install_seal(&self.session, context).await {
+        for frame in worlds {
+            match install_seal(&self.session, frame).await {
                 Ok(()) => sealed.push(SealedFrame {
                     session: self.session.clone(),
                     frame: frame.clone(),
-                    context,
                 }),
                 Err(error) => skipped(frame, &error),
             }
         }
         for root in &self.closed_roots {
-            let Some(world) = sealed.iter().find(|sealed| sealed.frame == root.frame) else {
+            if !sealed.iter().any(|sealed| sealed.frame == root.frame) {
                 continue;
-            };
-            if let Err(error) = watch(&self.session, root.backend_node, world.context).await {
+            }
+            if let Err(error) = watch(&self.session, root).await {
                 tracing::warn!(
                     frame = root.frame.as_str(),
                     %error,
@@ -292,26 +304,21 @@ fn list_frames(tree: &Value, frames: &mut Vec<FrameId>) {
     }
 }
 
-async fn create_world(session: &ProtocolSession, frame: &FrameId) -> Result<i64, CoreError> {
-    let world = step(
+/// Makes `frame`'s sealed world exist, so the binding added after it reaches it (step 1).
+async fn create_world(session: &ProtocolSession, frame: &FrameId) -> Result<(), CoreError> {
+    step(
         session,
         "Page.createIsolatedWorld",
         json!({ "frameId": frame.as_str(), "worldName": SEALED_WORLD }),
     )
-    .await?;
-    world["executionContextId"]
-        .as_i64()
-        .ok_or_else(|| CoreError::Message("Page.createIsolatedWorld gave no context".into()))
+    .await
+    .map(drop)
 }
 
-async fn install_seal(session: &ProtocolSession, context: i64) -> Result<(), CoreError> {
-    let reply = step(
-        session,
-        "Runtime.evaluate",
-        json!({ "expression": seal_source(), "contextId": context, "returnByValue": true }),
-    )
-    .await?;
-    if script_value(&reply)?.is_number() {
+async fn install_seal(session: &ProtocolSession, frame: &FrameId) -> Result<(), CoreError> {
+    let version: Value =
+        within_budget("the seal", sealed_world(session, frame).eval(seal_source())).await?;
+    if version.is_number() {
         Ok(())
     } else {
         Err(CoreError::Message(
@@ -320,58 +327,16 @@ async fn install_seal(session: &ProtocolSession, context: i64) -> Result<(), Cor
     }
 }
 
-/// Watches one closed shadow root, through the remote object its node resolves into in the
-/// sealed world. The object is released whether or not the watch ran: it would otherwise live
-/// as long as the root's document, and every sweep and every arming resolves the roots again.
-async fn watch(
-    session: &ProtocolSession,
-    backend_node: i64,
-    context: i64,
-) -> Result<(), CoreError> {
-    let resolved = step(
-        session,
-        "DOM.resolveNode",
-        json!({ "backendNodeId": backend_node, "executionContextId": context }),
-    )
-    .await?;
-    let object = resolved["object"]["objectId"]
-        .as_str()
-        .ok_or_else(|| CoreError::Message("the closed shadow root did not resolve".into()))?;
-    let watched = step(
-        session,
-        "Runtime.callFunctionOn",
-        json!({ "objectId": object, "functionDeclaration": WATCH, "returnByValue": true }),
-    )
-    .await;
-    let released = step(
-        session,
-        "Runtime.releaseObject",
-        json!({ "objectId": object }),
-    )
-    .await;
-    if let Err(error) = released {
-        tracing::debug!(%error, "a closed shadow root's handle was not released; it goes with its document");
-    }
-    script_value(&watched?).map(drop)
+/// Watches one closed shadow root, called on its node in its own frame's sealed world.
+async fn watch(session: &ProtocolSession, root: &ClosedRoot) -> Result<(), CoreError> {
+    let watching = sealed_world(session, &root.frame).call::<Value>(root.backend_node, WATCH, &[]);
+    within_budget("a closed shadow root's watch", watching)
+        .await
+        .map(drop)
 }
 
 fn skipped(frame: &FrameId, error: &CoreError) {
     tracing::warn!(frame = frame.as_str(), %error, "the sealed world skipped a frame");
-}
-
-/// What a script in the sealed world returned by value, or the exception it threw. The
-/// exception's description comes from Neo's own code there, never from a field.
-pub(crate) fn script_value(reply: &Value) -> Result<&Value, CoreError> {
-    match reply.get("exceptionDetails") {
-        Some(exception) => Err(CoreError::PageScript(
-            exception["exception"]["description"]
-                .as_str()
-                .or_else(|| exception["text"].as_str())
-                .unwrap_or("the script threw")
-                .to_owned(),
-        )),
-        None => Ok(&reply["result"]["value"]),
-    }
 }
 
 /// One CDP call on a frame's target, within [`FRAME_BUDGET`].
@@ -383,8 +348,9 @@ pub(crate) async fn step(
     within_budget(method, session.send_value(method, params)).await
 }
 
-/// `work`, or a timeout error naming `what` once [`FRAME_BUDGET`] passes.
-async fn within_budget<T>(
+/// `work`, or a timeout error naming `what` once [`FRAME_BUDGET`] passes. A `PageJs` call
+/// dropped mid-script still releases the node handle it resolved.
+pub(crate) async fn within_budget<T>(
     what: &str,
     work: impl Future<Output = Result<T, CoreError>>,
 ) -> Result<T, CoreError> {
