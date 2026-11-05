@@ -197,6 +197,10 @@ async fn writes_and_page_failures_get_a_job_and_each_touched_tab_one_at_run_end(
         vec![(1, TabId(3)), (3, TabId(4)), (6, TabId(5))],
         "a write on a tab and a website failure on a tab"
     );
+    // Answered before the run ends, so no job is out on a tab to fold its run-end shot into.
+    for job in after {
+        job.answer.send(Shot::Dropped);
+    }
     end_run(&h.sink, run, 100);
     let at_end = waiting_jobs(&mut h).await?;
     assert_eq!(
@@ -214,6 +218,43 @@ async fn writes_and_page_failures_get_a_job_and_each_touched_tab_one_at_run_end(
             root.join(format!("{run}/2.jpg")),
             root.join(format!("{run}/4.jpg"))
         ]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_tab_with_a_job_out_when_its_run_ends_gets_no_run_end_shot() -> TestResult {
+    let mut h = harness().await?;
+    let mut events = h.sink.subscribe();
+    let run = start_run(&h.sink, 0);
+    let op = |seq| OperationId::new(run, seq);
+    operation(&h.sink, op(1), Effect::Write, Some(3), None);
+    operation(&h.sink, op(2), Effect::Read, Some(3), None);
+    operation(&h.sink, op(3), Effect::Write, Some(4), None);
+    operation(&h.sink, op(4), Effect::Read, Some(4), None);
+    let mut after = waiting_jobs(&mut h).await?.into_iter();
+    let (Some(on_3), Some(on_4)) = (after.next(), after.next()) else {
+        return Err("a job per write expected".into());
+    };
+    take(on_4, b"\xff\xd8 tab 4 \xff\xd9").await?;
+    end_run(&h.sink, run, 100);
+    let at_end = waiting_jobs(&mut h).await?;
+    assert_eq!(
+        jobs_of(&at_end),
+        vec![(4, TabId(4))],
+        "tab 3's write job is out, and pictures the tab as the run left it"
+    );
+    assert!(!is_complete(&h.store, run).await?, "two jobs out");
+
+    take(on_3, b"\xff\xd8 tab 3 \xff\xd9").await?;
+    for job in at_end {
+        take(job, b"\xff\xd8 tab 4 at the end \xff\xd9").await?;
+    }
+    completed(&mut events, run).await?;
+    assert_eq!(h.store.screenshot(op(2)).await?, ShotRead::None);
+    assert_eq!(
+        h.store.screenshot(op(1)).await?,
+        ShotRead::Jpeg(b"\xff\xd8 tab 3 \xff\xd9".to_vec())
     );
     Ok(())
 }

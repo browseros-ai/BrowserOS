@@ -13,13 +13,25 @@ pub(crate) const SSE_KEEP_ALIVE: Duration = Duration::from_secs(15);
 /// The longest `wait=` a request may hold, in seconds.
 pub(crate) const MAX_WAIT_SECONDS: u64 = 60;
 
-/// How long one screenshot capture may take before its job answers `Dropped` (decision 21).
+/// How long one screenshot capture attempt may take before it is aborted (decision 21). A busy
+/// renderer can take longer, so the attempt is retried (decision 37).
 pub(crate) const CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// The longest one capture holds the camera. Past `CAPTURE_TIMEOUT` its job is already
-/// answered, but the next job waits for it, so a stuck capture still counts against the
-/// camera's concurrency of 1; at this cap it is aborted.
-pub(crate) const STUCK_CAPTURE_CAP: Duration = Duration::from_secs(10);
+/// Capture attempts per screenshot job: the first and two retries. Only an attempt past
+/// `CAPTURE_TIMEOUT` is retried.
+pub(crate) const CAPTURE_ATTEMPTS: u32 = 3;
+
+/// The pause before a retry, which gives a busy renderer time to finish its work.
+pub(crate) const CAPTURE_BACKOFF: Duration = Duration::from_millis(500);
+
+/// The longest one job holds the camera, its attempts and pauses together; past it the job
+/// answers `Dropped`. Three attempts and two pauses take 7 s, so it binds only if those grow.
+pub(crate) const CAPTURE_BUDGET: Duration = Duration::from_secs(8);
+
+/// The screenshot jobs that may wait for the camera on one tab (decision 37). A newer job drops
+/// the tab's oldest waiting one, which answers `Dropped`: a capture that far behind its
+/// operation would show the page long after it.
+pub(crate) const MAX_WAITING_PER_TAB: usize = 4;
 
 /// JPEG quality of operation screenshots: about 150 KB at 1600×913 (D7).
 pub(crate) const SCREENSHOT_QUALITY: i64 = 60;

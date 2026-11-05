@@ -5,6 +5,9 @@
 //! - When a run ends: each tab the run touched whose last operation got none, so every tab the
 //!   run acted on has a picture of how the run left it. The shot belongs to that operation, so
 //!   it never shares a file with an operation's own shot.
+//! - Except a tab with one of the run's jobs still out (decision 37). That job is answered only
+//!   after the run's end reached the writer, so its picture shows the tab as the run left it,
+//!   and a second capture would only repeat it. The run-end shot folds into it.
 //!
 //! Switching to the `run_end` mode (R5) is a change to this file alone.
 
@@ -26,9 +29,13 @@ pub(crate) fn after_op(
 }
 
 /// The tabs one run touched, each with its last operation (by admission order) and whether that
-/// operation got a screenshot job.
+/// operation got a screenshot job; and the run's jobs still out.
 #[derive(Debug, Default)]
-pub(crate) struct TouchedTabs(BTreeMap<TabId, LastOp>);
+pub(crate) struct TouchedTabs {
+    last: BTreeMap<TabId, LastOp>,
+    /// Each job still out: its operation's seq, and its tab.
+    out: BTreeMap<u32, TabId>,
+}
 
 #[derive(Clone, Copy, Debug)]
 struct LastOp {
@@ -39,27 +46,33 @@ struct LastOp {
 impl TouchedTabs {
     /// Operation `seq` on `tab` was admitted: it is the tab's last operation now.
     pub(crate) fn admitted(&mut self, tab: TabId, seq: u32) {
-        let last = self.0.entry(tab).or_insert(LastOp { seq, shot: false });
+        let last = self.last.entry(tab).or_insert(LastOp { seq, shot: false });
         if seq >= last.seq {
             *last = LastOp { seq, shot: false };
         }
     }
 
-    /// Operation `seq` on `tab` got a screenshot job.
+    /// Operation `seq` on `tab` got a screenshot job, which is out until it is answered.
     pub(crate) fn shot(&mut self, tab: TabId, seq: u32) {
-        if let Some(last) = self.0.get_mut(&tab)
+        self.out.insert(seq, tab);
+        if let Some(last) = self.last.get_mut(&tab)
             && last.seq == seq
         {
             last.shot = true;
         }
     }
 
+    /// Operation `seq`'s job was answered, whatever the answer.
+    pub(crate) fn answered(&mut self, seq: u32) {
+        self.out.remove(&seq);
+    }
+
     /// The run-end jobs, `(tab, seq)` in tab order: each touched tab whose last operation got
-    /// none.
+    /// none and that has no job out.
     pub(crate) fn run_end(&self) -> Vec<(TabId, u32)> {
-        self.0
+        self.last
             .iter()
-            .filter(|(_, last)| !last.shot)
+            .filter(|(tab, last)| !last.shot && !self.out.values().any(|out| out == *tab))
             .map(|(tab, last)| (*tab, last.seq))
             .collect()
     }
@@ -160,14 +173,42 @@ mod tests {
         tabs.admitted(TabId(4), 3);
         tabs.shot(TabId(4), 3);
         tabs.admitted(TabId(5), 4);
-        // A job for an operation that is no longer its tab's last does not cover the tab.
+        // An answered job for an operation that is no longer its tab's last does not cover the
+        // tab: its picture was taken before the run ended.
         tabs.admitted(TabId(6), 5);
         tabs.admitted(TabId(6), 6);
         tabs.shot(TabId(6), 5);
+        for seq in [1, 3, 5] {
+            tabs.answered(seq);
+        }
         assert_eq!(
             tabs.run_end(),
             vec![(TabId(3), 2), (TabId(5), 4), (TabId(6), 6)]
         );
+    }
+
+    #[test]
+    fn a_run_end_shot_folds_into_a_job_still_out_on_its_tab() {
+        let mut tabs = TouchedTabs::default();
+        // A write whose job is out, then a read.
+        tabs.admitted(TabId(3), 1);
+        tabs.shot(TabId(3), 1);
+        tabs.admitted(TabId(3), 2);
+        // The same, with the job answered before the run ended.
+        tabs.admitted(TabId(4), 3);
+        tabs.shot(TabId(4), 3);
+        tabs.admitted(TabId(4), 4);
+        tabs.answered(3);
+        // Two jobs, the older one still out.
+        tabs.admitted(TabId(5), 5);
+        tabs.shot(TabId(5), 5);
+        tabs.admitted(TabId(5), 6);
+        tabs.shot(TabId(5), 6);
+        tabs.admitted(TabId(5), 7);
+        tabs.answered(6);
+        // A tab only read, beside the tabs with jobs out.
+        tabs.admitted(TabId(6), 8);
+        assert_eq!(tabs.run_end(), vec![(TabId(4), 4), (TabId(6), 8)]);
     }
 
     #[test]

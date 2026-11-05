@@ -28,6 +28,7 @@ url.workspace = true
 
 [dev-dependencies]
 browseros-cdp.workspace = true
+serde.workspace = true
 sqlx.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

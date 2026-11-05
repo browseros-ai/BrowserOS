@@ -23,7 +23,9 @@
 //! Screenshots: the writer decides and accounts, and the camera only takes pictures. This task
 //! is the one that sees each operation's start (effect, tab) and end (outcome, error owner) in
 //! order, so it applies the rule (`screenshot_rule`), makes a `ShotJob` per screenshot, and
-//! counts each run's unanswered jobs. A batch's jobs go to the camera only after the batch
+//! counts each run's unanswered jobs. It also sees each answer in order with the run's end, so
+//! the rule knows which of a run's jobs are still out when the run ends: a tab with one out
+//! gets no run-end shot of its own. A batch's jobs go to the camera only after the batch
 //! commits, so no job names an operation whose end is not on disk. Each answer comes back on
 //! the command queue and is stored in a later batch, so no JPEG I/O happens in a transaction.
 //! An answer comes off its run's count only when its batch commits, and a batch that rolls back
@@ -424,7 +426,7 @@ struct OpenRun {
     sensitive: bool,
     gaps: u64,
     operations: HashMap<u32, OpenOperation>,
-    /// Each tab's last operation, for the run-end screenshots.
+    /// Each tab's last operation and the jobs still out, for the run-end screenshots.
     tabs: TouchedTabs,
     /// Screenshot jobs made for the run and not answered yet.
     pending: u32,
@@ -558,6 +560,11 @@ impl Writer {
                     }
                     Work::Screenshot { op, shot } => {
                         trace_store::store_screenshot(&mut tx, op, shot).await?;
+                        // Only run-end shots read this, so it need not wait for the commit: an
+                        // answer that a rollback hands on is taken off again, which is a no-op.
+                        if let Some(run) = self.runs.get_mut(&op.run) {
+                            run.tabs.answered(op.seq);
+                        }
                         if self.answered(op.run)
                             && trace_store::complete_run(&mut tx, op.run).await?
                         {

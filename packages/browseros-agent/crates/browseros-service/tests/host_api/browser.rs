@@ -22,8 +22,16 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 
-/// What every capture returns: a JPEG's start and end markers around a little data.
-pub(crate) const JPEG: &[u8] = b"\xff\xd8\xff\xe0 scripted page \xff\xd9";
+/// What the `capture`-th capture returns: a JPEG's start and end markers around its number, so a
+/// test can tell which capture an operation's file holds.
+pub(crate) fn jpeg(capture: usize) -> Vec<u8> {
+    [
+        b"\xff\xd8\xff\xe0 scripted capture ".as_slice(),
+        capture.to_string().as_bytes(),
+        b" \xff\xd9",
+    ]
+    .concat()
+}
 
 /// Session ids are unique across every scripted browser in the process: core serializes
 /// captures with a process-wide lock per session id, so two tests' `session-1` would wait on
@@ -52,6 +60,8 @@ pub(crate) struct ScriptedBrowser {
     /// `Browser.getTabs` fails, as when the browser is gone.
     unreachable: AtomicBool,
     captures: watch::Sender<Captures>,
+    /// Captures, by number, that never answer whatever `captures` says.
+    hung: Mutex<Vec<usize>>,
     started: watch::Sender<usize>,
     events: broadcast::Sender<CdpEvent>,
     /// The one window's state; openbox maximizes a normal window.
@@ -67,6 +77,7 @@ impl ScriptedBrowser {
             urls: Mutex::default(),
             unreachable: AtomicBool::new(false),
             captures: watch::channel(Captures::Answer).0,
+            hung: Mutex::default(),
             started: watch::channel(0).0,
             events: broadcast::channel(16).0,
             window: Mutex::new("maximized"),
@@ -136,6 +147,14 @@ impl ScriptedBrowser {
         self.captures.send_replace(Captures::Hang);
     }
 
+    /// The `number`-th capture never answers, as one a busy renderer keeps waiting.
+    pub(crate) fn hang_capture(&self, number: usize) {
+        self.hung
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(number);
+    }
+
     /// Waits (up to 5 s) until `count` captures have started.
     pub(crate) async fn captures_started(&self, count: usize) -> Result<(), BoxError> {
         let mut started = self.started.subscribe();
@@ -180,9 +199,18 @@ impl ScriptedBrowser {
     }
 
     async fn capture(&self) -> Result<Value, CdpError> {
-        self.started.send_modify(|started| *started += 1);
+        let mut number = 0;
+        self.started.send_modify(|started| {
+            *started += 1;
+            number = *started;
+        });
+        let hung = self
+            .hung
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&number);
         let mut captures = self.captures.subscribe();
-        if *captures.borrow_and_update() == Captures::Hang {
+        if hung || *captures.borrow_and_update() == Captures::Hang {
             std::future::pending::<()>().await;
         }
         if captures
@@ -192,7 +220,7 @@ impl ScriptedBrowser {
         {
             return Err(CdpError::ConnectionLost);
         }
-        Ok(json!({ "data": STANDARD.encode(JPEG) }))
+        Ok(json!({ "data": STANDARD.encode(jpeg(number)) }))
     }
 
     async fn reply(&self, method: &str, params: &Value) -> Result<Value, CdpError> {

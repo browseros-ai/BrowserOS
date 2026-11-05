@@ -9,39 +9,53 @@
 //! show the cursor, and a `clip` from one may reset the agent's emulation.
 //!
 //! ```text
-//!  ShotJobs ─▶ waiting (one job per tab) ─▶ one job at a time:
+//!  ShotJobs ─▶ waiting (in order, a few per tab) ─▶ one job at a time:
 //!    privacy.capture(tab) ─ None ─────────────────────────────────────────▶ Withheld
-//!    tab → page and target ─ tab closed, dialog open ──────────────────────▶ Dropped
-//!    hold the viewport, capture ─ error, or past CAPTURE_TIMEOUT ──────────▶ Dropped
-//!    guard.admit() ─ false ────────────────────────────────────────────────▶ Withheld
-//!    write the JPEG at the job's path ─────────────────────────────────────▶ Taken
+//!    tab → page and target ─ tab closed, dialog open ─────────────────────▶ Dropped
+//!    hold the viewport, capture ─ error ──────────────────────────────────▶ Dropped
+//!      past CAPTURE_TIMEOUT: aborted, then again from the lookup after CAPTURE_BACKOFF,
+//!        unless the tab went private meanwhile ───────────────────────────▶ Withheld
+//!        CAPTURE_ATTEMPTS all timed out, or CAPTURE_BUDGET spent ─────────▶ Dropped
+//!    guard.admit() ─ false ───────────────────────────────────────────────▶ Withheld
+//!    write the JPEG at the job's path ────────────────────────────────────▶ Taken
 //! ```
 //!
 //! **Privacy order.** The capture guard is taken before any browser call, so a tab that goes
 //! private at any later point (during the lookup, the capture or the decode) fails `admit`, and
 //! nothing is written. A tab that is already private costs no browser call at all.
 //!
-//! **Coalescing.** A newer job on a tab replaces the one waiting for it, and the replaced job's
-//! answer reports `Dropped` as it is dropped. The newer job shows the page later, so the camera
-//! never falls behind the agent.
+//! **In order, bounded per tab.** Jobs are taken in the order the writer made them, so each
+//! write's screenshot is its own capture, taken after it (decision 37). At most
+//! `MAX_WAITING_PER_TAB` wait on one tab: a newer job drops the tab's oldest, whose answer
+//! reports `Dropped`, so a burst of writes on one tab cannot leave the camera far behind the
+//! agent. The writer folds a run-end shot into a job still out on its tab, so a run's end adds
+//! no second capture of a tab whose write is still waiting here.
 //!
-//! **Concurrency 1.** A capture past `CAPTURE_TIMEOUT` answers `Dropped` at once, but the next
-//! job waits for it up to `STUCK_CAPTURE_CAP`, as claw-server's in-flight slot does. Then it is
-//! aborted, which releases the tab's viewport.
+//! **Retries, concurrency 1.** A busy renderer answers late, not never, so an attempt past
+//! `CAPTURE_TIMEOUT` is aborted and the job tries again after `CAPTURE_BACKOFF`, up to
+//! `CAPTURE_ATTEMPTS` inside `CAPTURE_BUDGET`, before it answers `Dropped` (decision 37). The
+//! abort is what makes a retry a fresh capture: core holds a per-session capture lock for the
+//! whole capture, so a second request would only queue behind the stuck one. It also releases
+//! the tab's viewport at once, and the next job never waits on a capture already given up. A
+//! private tab, a closed tab, an open dialog and a failed call are answered at once and never
+//! retried, and a tab that goes private between attempts gets no further capture.
 //!
 //! **Off the agent's path.** The writer hands jobs over an unbounded queue and never waits. A
 //! capture holds the tab's viewport shared, as the agent's ordinary operations do, so it delays
 //! only what holds the tab alone: a viewport change, or an operation on a tab in a fixed
-//! viewport mode, by at most one capture (`STUCK_CAPTURE_CAP` if it is stuck). A takeover's
-//! fitted tab is private, so it is never captured.
+//! viewport mode, by at most one attempt (`CAPTURE_TIMEOUT`); the pause before a retry holds
+//! nothing. A takeover's fitted tab is private, so it is never captured.
 
-use crate::limits::{CAPTURE_TIMEOUT, SCREENSHOT_QUALITY, STUCK_CAPTURE_CAP};
+use crate::limits::{
+    CAPTURE_ATTEMPTS, CAPTURE_BACKOFF, CAPTURE_BUDGET, CAPTURE_TIMEOUT, MAX_WAITING_PER_TAB,
+    SCREENSHOT_QUALITY,
+};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use browseros_core::screenshot::{ScreenshotCaptureOptions, ScreenshotFormat};
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserView, TabId};
-use browseros_trace::{OperationId, Privacy, Shot, ShotJob, ShotJobs};
+use browseros_trace::{CaptureGuard, OperationId, Privacy, Shot, ShotJob, ShotJobs};
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Arc;
@@ -92,32 +106,8 @@ impl Camera {
             answer.send(Shot::Withheld);
             return;
         };
-        let started = Instant::now();
-        let mut capture = tokio::spawn(capture(
-            Arc::clone(&self.browser),
-            Arc::clone(&self.viewports),
-            tab,
-        ));
-        let pixels = match tokio::time::timeout(CAPTURE_TIMEOUT, &mut capture).await {
-            Ok(Ok(pixels)) => pixels,
-            Ok(Err(panicked)) => Err(Missed::Failed(panicked.to_string())),
-            Err(_) => {
-                tracing::warn!(%op, tab = tab.0, "screenshot capture timed out; dropped");
-                answer.send(Shot::Dropped);
-                if tokio::time::timeout_at(started + STUCK_CAPTURE_CAP, &mut capture)
-                    .await
-                    .is_err()
-                {
-                    capture.abort();
-                }
-                return;
-            }
-        };
-        let shot = match pixels {
-            Err(missed) => {
-                missed.log(op, tab);
-                Shot::Dropped
-            }
+        let shot = match self.capture(&guard, op, tab).await {
+            Err(missed) => missed.answer(op, tab),
             // After the pixels arrive and before any byte is kept: the tab may have gone private
             // since the guard was taken (D6's epoch rule).
             Ok(_) if !guard.admit() => Shot::Withheld,
@@ -133,20 +123,72 @@ impl Camera {
         };
         answer.send(shot);
     }
+
+    /// Captures `tab`, retrying an attempt that runs past `CAPTURE_TIMEOUT`. Each attempt runs
+    /// as its own task, so a panic in it is a failed capture rather than the camera's end.
+    async fn capture(
+        &self,
+        guard: &CaptureGuard,
+        op: OperationId,
+        tab: TabId,
+    ) -> Result<Vec<u8>, Missed> {
+        let deadline = Instant::now() + CAPTURE_BUDGET;
+        let mut attempts = 1;
+        loop {
+            let mut running = tokio::spawn(attempt(
+                Arc::clone(&self.browser),
+                Arc::clone(&self.viewports),
+                tab,
+            ));
+            let limit = deadline.min(Instant::now() + CAPTURE_TIMEOUT);
+            let joined = match tokio::time::timeout_at(limit, &mut running).await {
+                Ok(joined) => joined,
+                // Awaited after the abort, so the attempt's viewport hold and core's capture
+                // lock are released before the pause. One that finished as the timeout fired
+                // still counts.
+                Err(_) => {
+                    running.abort();
+                    running.await
+                }
+            };
+            match joined {
+                Ok(pixels) => return pixels,
+                Err(error) if error.is_cancelled() => {}
+                Err(panicked) => return Err(Missed::Failed(panicked.to_string())),
+            }
+            let retry_at = Instant::now() + CAPTURE_BACKOFF;
+            if attempts == CAPTURE_ATTEMPTS || retry_at >= deadline {
+                return Err(Missed::TimedOut(attempts));
+            }
+            tracing::debug!(%op, tab = tab.0, attempts, "screenshot capture timed out; retrying");
+            tokio::time::sleep_until(retry_at).await;
+            if !guard.admit() {
+                return Err(Missed::WentPrivate);
+            }
+            attempts += 1;
+        }
+    }
 }
 
-/// The jobs not started yet: at most one per tab, oldest tab first.
+/// The jobs not started yet, oldest first, at most `MAX_WAITING_PER_TAB` on one tab.
 #[derive(Default)]
 struct Waiting(VecDeque<ShotJob>);
 
 impl Waiting {
-    /// Queues `job`, replacing the job already waiting on its tab. The replaced job is dropped
-    /// here, and its answer reports `Dropped`.
+    /// Queues `job` behind every job waiting. On a tab already at the bound, the tab's oldest
+    /// waiting job is dropped here, and its answer reports `Dropped`.
     fn push(&mut self, job: ShotJob) {
-        match self.0.iter_mut().find(|waiting| waiting.tab == job.tab) {
-            Some(waiting) => *waiting = job,
-            None => self.0.push_back(job),
+        let on_tab = self
+            .0
+            .iter()
+            .filter(|waiting| waiting.tab == job.tab)
+            .count();
+        if on_tab >= MAX_WAITING_PER_TAB
+            && let Some(oldest) = self.0.iter().position(|waiting| waiting.tab == job.tab)
+        {
+            drop(self.0.remove(oldest));
         }
+        self.0.push_back(job);
     }
 
     fn pop(&mut self) -> Option<ShotJob> {
@@ -167,23 +209,32 @@ enum Missed {
     Dialog,
     /// The browser refused or failed, or the capture task panicked.
     Failed(String),
+    /// Every attempt ran past `CAPTURE_TIMEOUT`; how many there were.
+    TimedOut(u32),
+    /// The tab went private while a retry waited, so it got none.
+    WentPrivate,
 }
 
 impl Missed {
-    /// The one log line for a dropped job. A closed tab or an open dialog is ordinary.
-    fn log(&self, op: OperationId, tab: TabId) {
+    /// The job's answer, with its one log line. A closed tab or an open dialog is ordinary.
+    fn answer(self, op: OperationId, tab: TabId) -> Shot {
         match self {
+            Self::WentPrivate => return Shot::Withheld,
             Self::Closed => tracing::debug!(%op, tab = tab.0, "screenshot dropped: tab closed"),
             Self::Dialog => tracing::debug!(%op, tab = tab.0, "screenshot dropped: dialog open"),
             Self::Failed(error) => {
                 tracing::warn!(%op, tab = tab.0, %error, "screenshot capture failed; dropped");
             }
+            Self::TimedOut(attempts) => {
+                tracing::warn!(%op, tab = tab.0, attempts, "screenshot capture timed out; dropped");
+            }
         }
+        Shot::Dropped
     }
 }
 
-/// Finds the tab's page and captures it, as a JPEG at the tab's own size.
-async fn capture(
+/// One attempt: finds the tab's page and captures it, as a JPEG at the tab's own size.
+async fn attempt(
     browser: Arc<BrowserSession>,
     viewports: Arc<Viewports>,
     tab: TabId,

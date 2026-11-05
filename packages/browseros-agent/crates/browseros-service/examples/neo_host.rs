@@ -29,6 +29,13 @@
 //!   `DELETE /surface/journal` disarms it, `POST /surface/runs <json>` records a run with that
 //!   result (`{"runId"}`, committed when it answers) so a mask can be read back from
 //!   `/v1/runs/{id}`, and `GET /surface/secrets` counts the secret set (`{"count"}`).
+//!   `POST /surface/paint-run {"tab": N, "colors": [[r, g, b], ..], "busyMs": n}` records one
+//!   run of real writes on tab N, each repainting the page in its color with its number in
+//!   large type. A write waits for the screenshot of the one before, so no picture can show a
+//!   later write; a read of the tab and the run's end follow the last write at once, while its
+//!   job is still out. With `busyMs`, the page's main thread then stays busy that long, as a
+//!   heavy script keeps a renderer busy. It answers `{"runId", "writes": [..], "read"}` once the
+//!   end is committed.
 //! - `--xvnc <addr>`: Xvnc's RFB address for the fits and `GET /v1/display` (`127.0.0.1:5900`,
 //!   the image's).
 //! - `--neo-screen <WxH>`: the size the screen rests at between fits (`NEO_SCREEN` from the
@@ -58,8 +65,8 @@ use browseros_takeover::{ArmedJournal, BrowserTabs, Journal, LockTarget, Locks, 
 use browseros_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, PageState, Privacy, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
-    SecretSet, SecretSetConfig, TargetSensitivity, TaskId, TraceSink, TraceStore, WriterConfig,
-    screenshot_queue, spawn_writer,
+    SecretSet, SecretSetConfig, ShotRead, TargetSensitivity, TaskId, TraceSink, TraceStore,
+    WriterConfig, screenshot_queue, spawn_writer,
 };
 use serde_json::{Value, json};
 use std::error::Error;
@@ -201,6 +208,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         armed: Arc::default(),
         sink: sink.clone(),
         secrets: Arc::clone(privacy.secrets()),
+        browser: Arc::clone(&browser),
+        store: store.clone(),
     };
     let service = Service::start(ServiceInputs {
         store,
@@ -274,13 +283,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 /// The test-only calls `--surface-calls` serves: the control journal as the display and the
-/// takeover flow will arm it, a run whose result the writer masks, and the secret set's size.
+/// takeover flow will arm it, a run whose result the writer masks, the secret set's size, and a
+/// run of real writes for the camera.
 #[derive(Clone)]
 struct SurfaceCalls {
     journal: Journal,
     armed: Arc<tokio::sync::Mutex<Option<ArmedJournal>>>,
     sink: TraceSink,
     secrets: Arc<SecretSet>,
+    browser: Arc<BrowserSession>,
+    store: TraceStore,
 }
 
 type SurfaceReply = Result<Json<Value>, (StatusCode, String)>;
@@ -291,6 +303,7 @@ impl SurfaceCalls {
             .route("/surface/journal", post(Self::arm).delete(Self::disarm))
             .route("/surface/runs", post(Self::fake_run))
             .route("/surface/secrets", get(Self::count))
+            .route("/surface/paint-run", post(Self::paint_run))
             .with_state(self)
     }
 
@@ -359,6 +372,169 @@ impl SurfaceCalls {
     async fn count(State(calls): State<Self>) -> SurfaceReply {
         Ok(Json(json!({ "count": calls.secrets.count() })))
     }
+
+    /// Records one run of real writes on a tab, each repainting it, then a read and the end.
+    async fn paint_run(State(calls): State<Self>, body: Bytes) -> SurfaceReply {
+        let bad = |error: String| (StatusCode::BAD_REQUEST, error);
+        let failed = |error: browseros_core::CoreError| {
+            (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
+        };
+        let request: PaintRun =
+            serde_json::from_slice(&body).map_err(|error| bad(error.to_string()))?;
+        if request.colors.is_empty() {
+            return Err(bad("colors must be [[r, g, b], ..]".into()));
+        }
+        let tab = TabId(request.tab);
+        let colors = request.colors;
+        let busy_ms = request.busy_ms;
+        let pages = calls
+            .browser
+            .pages
+            .resolve_tab_ids(&[tab])
+            .await
+            .map_err(failed)?;
+        let page = pages
+            .get(&tab)
+            .cloned()
+            .ok_or_else(|| bad(format!("no open tab {}", tab.0)))?;
+        let session = calls
+            .browser
+            .pages
+            .get_session(page)
+            .await
+            .map_err(failed)?;
+
+        let run = RunId::new();
+        calls.sink.run_started(RunStarted {
+            id: run,
+            code: "for (const color of colors) await paint(color); return await page.title()"
+                .into(),
+            request_id: None,
+            task_id: TaskId::parse("surface").ok(),
+            host_data: None,
+            at: EpochMillis::now(),
+        });
+        let last = colors.len();
+        let mut writes = Vec::new();
+        let mut painted = Ok(());
+        for (seq, color) in (1..).zip(colors) {
+            if let Some(previous) = writes.last() {
+                calls.screenshot_taken(*previous).await;
+            }
+            let write = OperationId::new(run, seq);
+            let busy = if writes.len() + 1 == last { busy_ms } else { 0 };
+            calls.operation_started(write, "page.evaluate", Effect::Write, tab);
+            painted = PageJs::isolated(&session.session)
+                .eval::<bool>(&paint(color, seq, busy))
+                .await
+                .map(drop);
+            calls.operation_ended(write, painted.is_ok());
+            writes.push(write);
+            if painted.is_err() {
+                break;
+            }
+        }
+        let read = OperationId::new(run, u32::try_from(writes.len() + 1).unwrap_or(u32::MAX));
+        calls.operation_started(read, "page.title", Effect::Read, tab);
+        calls.operation_ended(read, true);
+        calls.sink.run_ended(RunEnded {
+            id: run,
+            status: if painted.is_ok() {
+                RunStatus::Ok
+            } else {
+                RunStatus::Error
+            },
+            error: None,
+            result: None,
+            replay: None,
+            at: EpochMillis::now(),
+        });
+        calls
+            .sink
+            .flush()
+            .await
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+        painted.map_err(failed)?;
+        println!(
+            "paint run: {run}, {} write(s) on tab {}",
+            writes.len(),
+            tab.0
+        );
+        Ok(Json(json!({
+            "runId": run.to_string(),
+            "writes": writes.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "read": read.to_string(),
+        })))
+    }
+
+    /// Waits up to 15 s for `op`'s screenshot to be stored or withheld. A dropped one reads as
+    /// none, so it waits the whole time.
+    async fn screenshot_taken(&self, op: OperationId) {
+        let _ = tokio::time::timeout(Duration::from_secs(15), async {
+            while matches!(self.store.screenshot(op).await, Ok(ShotRead::None)) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+    }
+
+    fn operation_started(&self, id: OperationId, name: &str, effect: Effect, tab: TabId) {
+        self.sink.op_started(OperationStarted {
+            id,
+            parent: None,
+            name: name.into(),
+            kind: OperationKind::Builtin,
+            effect,
+            tab: Some(tab),
+            args: Value::Null,
+            policy: Arc::default(),
+            at: EpochMillis::now(),
+        });
+    }
+
+    fn operation_ended(&self, id: OperationId, ok: bool) {
+        self.sink.op_ended(OperationEnded {
+            id,
+            outcome: if ok { Outcome::Ok } else { Outcome::Error },
+            delivery: Delivery::Done,
+            sent_at: Some(EpochMillis::now()),
+            result: None,
+            error: None,
+            page_after: None,
+            target: TargetSensitivity::Ordinary,
+            at: EpochMillis::now(),
+        });
+    }
+}
+
+/// `[r, g, b]` with each part 0 to 255.
+/// `POST /surface/paint-run`: the writes to record on one tab. Typed and strict, so a mistyped
+/// `busyMs` is a 400 rather than a quiet 0 that would let the retry check pass without a busy
+/// renderer.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PaintRun {
+    tab: i64,
+    /// One `[r, g, b]` per write, painted in order.
+    colors: Vec<[u8; 3]>,
+    /// How long the page keeps its renderer busy after each write; 0 when absent.
+    #[serde(default)]
+    busy_ms: u64,
+}
+
+/// A script that repaints the whole page in `color`, with `write`'s number in large white type,
+/// then keeps the page's main thread busy for `busy_ms` once it has returned.
+fn paint([red, green, blue]: [u8; 3], write: u32, busy_ms: u64) -> String {
+    format!(
+        "(() => {{ const color = 'rgb({red}, {green}, {blue})'; \
+         document.documentElement.style.background = color; \
+         document.body.style.background = color; \
+         document.body.innerHTML = '<h1 style=\"font: bold 96px sans-serif; color: white; \
+         margin: 120px\">write {write}</h1>'; \
+         if ({busy_ms} > 0) setTimeout(() => {{ \
+           const end = Date.now() + {busy_ms}; while (Date.now() < end) {{}} }}, 0); \
+         return true; }})()"
+    )
 }
 
 /// Opens `url` in a new tab and returns its tab id, once `Browser.getTabs` lists it.

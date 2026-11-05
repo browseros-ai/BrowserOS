@@ -473,6 +473,7 @@ dependencies = [
  "claw-sdk-api",
  "futures-util",
  "percent-encoding",
+ "serde",
  "serde_json",
  "sha2",
  "sqlx",

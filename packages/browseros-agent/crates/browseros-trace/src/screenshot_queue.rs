@@ -4,14 +4,14 @@
 //! ```text
 //!  op ends (rule) ─▶ writer ─ ShotJob {op, tab, path, answer} ─▶ ShotJobs ─▶ camera
 //!  run ends ─▶ writer: a job per touched tab whose last op got none ─┘          │ writes the
-//!                                                                               │ JPEG at path
+//!                      and that has no job out on it                            │ JPEG at path
 //!  writer ◀─ ShotAnswer::send(Shot), or its drop ◀───────────────────────────────┘
 //!    stores the answer's state in its next batch, and marks the run complete once the run has
 //!    ended and none of its jobs is unanswered
 //! ```
 //!
 //! Every job gets exactly one answer, and the type enforces it: [`ShotAnswer::send`] consumes the
-//! answer, and an answer dropped unsent answers [`Shot::Dropped`]. A job the camera replaces,
+//! answer, and an answer dropped unsent answers [`Shot::Dropped`]. A job the camera drops,
 //! gives up on, never reads, or loses to a panic still answers. The writer holds a run
 //! incomplete until every job it made for the run is answered, so one lost answer would hold the
 //! run incomplete for the life of the process.
@@ -27,8 +27,8 @@ use tokio::sync::mpsc;
 
 /// The queue between the writer ([`ShotQueue`], given to
 /// [`spawn_writer`](crate::spawn_writer)) and the camera ([`ShotJobs`]). Unbounded on purpose:
-/// the writer never waits on the camera, and the camera coalesces to one job per tab as fast as
-/// it reads.
+/// the writer never waits on the camera, and the camera reads every job as soon as it is free,
+/// keeping a few per tab.
 #[must_use]
 pub fn screenshot_queue() -> (ShotQueue, ShotJobs) {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -55,7 +55,7 @@ impl ShotJobs {
         self.0.recv().await
     }
 
-    /// A job if one is waiting, so the camera can coalesce everything queued.
+    /// A job if one is waiting, so the camera can take in everything queued before it picks.
     pub fn try_recv(&mut self) -> Option<ShotJob> {
         self.0.try_recv().ok()
     }
@@ -85,8 +85,8 @@ pub enum Shot {
     /// The tab was private before the capture, or went private before the pixels were kept.
     /// Nothing was written. Read back as 410 `withheld`.
     Withheld,
-    /// No picture: a newer job on the tab replaced it, the tab closed, or the capture failed or
-    /// timed out. Nothing was written, and the operation keeps no screenshot.
+    /// No picture: too many newer jobs waited on its tab, the tab closed, or the capture failed
+    /// or timed out on every attempt. Nothing was written, and the operation keeps no screenshot.
     Dropped,
 }
 
