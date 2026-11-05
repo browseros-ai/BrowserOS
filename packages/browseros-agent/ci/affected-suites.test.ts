@@ -83,6 +83,17 @@ describe('computeAffectedSuites', () => {
     ).toEqual(['agent-cursor', 'build'])
   })
 
+  it('tests that a vendored Playwright or engine asset change selects the engine freshness suite', () => {
+    for (const changed of [
+      'packages/browseros-agent/crates/browseros-playwright/assets/injected.js',
+      'packages/browseros-agent/crates/browseros-playwright/assets/prelude.js',
+      'packages/browseros-agent/crates/browseros-playwright/tests/data/probe-protocol.json',
+      'packages/browseros-agent/crates/browseros-playwright/third_party/playwright/packages/injected/src/injectedScript.ts',
+    ]) {
+      expect(suiteNames([], [changed])).toEqual(['browseros-playwright-js'])
+    }
+  })
+
   it('maps any affected Rust crate to all three Rust suites', () => {
     expect(
       suiteNames([
@@ -221,6 +232,10 @@ describe('computeAffectedSuites', () => {
       pkg('@browseros/claw-server', 'apps/claw-server'),
       pkg('@browseros/claw-sdk', 'apps/claw-sdk'),
       pkg('@browseros/agent-cursor', 'packages/agent-cursor'),
+      pkg(
+        '@browseros/browseros-playwright-js',
+        'packages/browseros-playwright-js',
+      ),
     ]
     expect(new Set(suiteNames(allPackages))).toEqual(
       new Set(

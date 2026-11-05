@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta charset="utf-8"><title>History</title><script src="events.js"></script></head>
+<body>
+<!-- A page history steps load anew. BrowserOS keeps even `no-store` pages in its back/forward
+     cache, and a restore from it fires no load event, so real Playwright's goBack times out
+     there as Neo's does (measured); the unload listener keeps this page out of the cache.
+     `?name=<text>` names it. -->
+<p id="name">History</p>
+<script>
+  const name = new URLSearchParams(location.search).get('name')
+  if (name !== null) document.getElementById('name').textContent = name
+  addEventListener('unload', () => {})
+</script>
+</body></html>

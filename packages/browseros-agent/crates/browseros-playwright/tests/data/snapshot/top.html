@@ -1,0 +1,23 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Snapshot top</title></head>
+<body data-children="B:child.html C:side.html">
+<h1>Checkout</h1>
+<input type="password" aria-label="Code">
+<div aria-label="Chrome 1">Chrome 1</div>
+<div aria-label="Status"><span>Ready</span> <button>Retry</button></div>
+<p>Plain paragraph</p>
+<a href="/help">Help</a>
+<input placeholder="Search">
+<script>
+// Builds the iframes in data-children on these sites (one server, three sites, so each child
+// is an out-of-process iframe): A = 127.0.0.1, B = localhost, C = [::1]. They are inserted in
+// order during parsing, so frames attach, and Playwright numbers them, the same way every run.
+const ORIGIN = { A: '127.0.0.1', B: 'localhost', C: '[::1]' }
+for (const spec of document.body.dataset.children.split(' ')) {
+  const [site, file] = spec.split(':')
+  const frame = document.createElement('iframe')
+  frame.src = `http://${ORIGIN[site]}:${location.port}/snapshot/${file}`
+  frame.style.cssText = 'width:90%;height:240px;display:block'
+  document.body.append(frame)
+}
+</script>
+</body></html>

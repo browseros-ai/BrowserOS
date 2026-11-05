@@ -1,0 +1,111 @@
+{
+  "json": [
+    {
+      "role": "generic",
+      "active": true,
+      "ref": "e1",
+      "children": [
+        {
+          "role": "heading",
+          "name": "Checkout",
+          "level": 1,
+          "ref": "e2"
+        },
+        {
+          "role": "textbox",
+          "name": "Code",
+          "ref": "e3"
+        },
+        {
+          "role": "generic",
+          "ref": "e4",
+          "text": "Chrome 1"
+        },
+        {
+          "role": "generic",
+          "ref": "e5",
+          "children": [
+            "Ready",
+            {
+              "role": "button",
+              "name": "Retry",
+              "ref": "e6"
+            }
+          ]
+        },
+        {
+          "role": "paragraph",
+          "ref": "e7",
+          "text": "Plain paragraph"
+        },
+        {
+          "role": "link",
+          "name": "Help",
+          "ref": "e8",
+          "cursor": "pointer",
+          "url": "/help"
+        },
+        {
+          "role": "textbox",
+          "name": "Search",
+          "ref": "e9"
+        },
+        {
+          "role": "iframe",
+          "ref": "e10",
+          "children": [
+            {
+              "role": "generic",
+              "ref": "f1e1",
+              "children": [
+                {
+                  "role": "button",
+                  "name": "Child button",
+                  "ref": "f1e2"
+                },
+                {
+                  "role": "paragraph",
+                  "ref": "f1e3",
+                  "text": "Confirm your code [private]"
+                },
+                {
+                  "role": "iframe",
+                  "ref": "f1e4",
+                  "children": [
+                    {
+                      "role": "generic",
+                      "ref": "f3e1",
+                      "children": [
+                        {
+                          "role": "button",
+                          "name": "Deep button",
+                          "ref": "f3e2"
+                        },
+                        {
+                          "role": "textbox",
+                          "name": "Deep field",
+                          "ref": "f3e3"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "role": "iframe",
+          "ref": "e11"
+        }
+      ]
+    }
+  ],
+  "partial": [
+    {
+      "ref": "e11",
+      "frame": "http://[::1]:42051/snapshot/side.html",
+      "reason": "timeout after 2000 ms"
+    }
+  ]
+}

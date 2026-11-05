@@ -146,7 +146,11 @@ impl BrowserSession {
         self.native
     }
 
-    pub(crate) fn frames(&self) -> &Arc<FrameRegistry> {
+    /// The registry of every attached page's frame endpoints. Libraries that drive frames
+    /// themselves, such as browseros-playwright's frame hops, resolve sessions here, so OOPIF
+    /// attachment and its fixes stay in one table.
+    #[must_use]
+    pub fn frames(&self) -> &Arc<FrameRegistry> {
         &self.frames
     }
 

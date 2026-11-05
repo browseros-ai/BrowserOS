@@ -1,0 +1,296 @@
+# Every known difference between Runner P (real Playwright 1.64.1) and Runner N (Neo) after
+# diff.mjs's normalization. One entry per case and JSON pointer into the normalized outcome:
+#
+#   case    the case file's name
+#   path    where the outcomes differ
+#   kind    decided   Neo differs on purpose; the reason cites the decision
+#           finding   a gap to close; route names the unit that owns the fix
+#   route   (findings) the unit to route it to
+#   reason  why they differ
+#   p, n    each runner's value there, "(absent)" for a missing key
+#
+# diff.mjs fails when an entry's values stop matching or the difference goes away, so an entry
+# is deleted in the commit that closes it. `diff.mjs --stubs` prints new entries to fill in.
+- case: captures
+  path: /returned/base64Start
+  kind: finding
+  route: sdk-skeleton bootstrap (bytes brand), J4 prelude
+  reason: Playwright returns a Node Buffer, so toString('base64') is base64. The skeleton's
+    {"$neo":"bytes"} brand revives to a plain Uint8Array (Runner N's mock_bootstrap.js does the
+    same), whose toString() joins the byte values, so a script that forwards a screenshot as
+    base64 sends the wrong text. A Uint8Array whose toString takes Buffer's encodings ('base64',
+    'hex', 'utf8') would close it.
+  p: iVBORw0KGgoA
+  n: 137,80,78,71
+- case: captures
+  path: /returned/unknownType/threw/message
+  kind: finding
+  route: R10 screenshot, J4 prelude
+  reason: Upstream's client checks type against png, jpeg and webp before it sends anything. Neo
+    leaves the check to the op's decode, so the message is serde's, and webp is refused although
+    CDP's Page.captureScreenshot takes format webp.
+  p: "page.screenshot: type: expected one of (png|jpeg|webp)"
+  n: "page.screenshot: type: unknown variant `gif`, expected `png` or `jpeg`"
+- case: context-pages
+  path: /returned/gotoAfterClose/threw/message
+  kind: finding
+  route: J4 prelude
+  reason: Upstream fails any call on a closed page with TargetClosedError's "Target page, context
+    or browser has been closed". Neo's op answers "Unknown page 2. List pages to see what is
+    open." The prelude already knows the page is closed (isClosed() is true) and could throw
+    upstream's message without invoking.
+  p: "page.goto: Target page, context or browser has been closed"
+  n: "page.goto: Unknown page 2. List pages to see what is open."
+- case: goto-responses
+  path: /returned/afterTimeout
+  kind: finding
+  route: J4 prelude, R13 Runner N mock
+  reason: "After a goto that committed and then timed out waiting for load, upstream's page.url()
+    is the new URL. Neo's prelude keeps the URL it had (about:blank): the timeout error carries
+    no URL, and Runner N's mock bootstrap sends no page facts. Inferred, not measured: the real
+    skeleton's envelope page facts may carry the committed URL and close this."
+  p: http://127.0.0.1:<port>/slow.html?timeout
+  n: about:blank
+- case: goto-responses
+  path: /returned/missing/returned/contentType
+  kind: decided
+  reason: "decisions.md (reviewed P and I): goto's response comes from the main document's
+    Navigation Timing entry without the Network domain, so headers() is {}."
+  p: text/plain; charset=utf-8
+  n: null
+- case: goto-responses
+  path: /returned/page/returned/contentType
+  kind: decided
+  reason: "decisions.md (reviewed P and I): goto's response comes from the main document's
+    Navigation Timing entry without the Network domain, so headers() is {}."
+  p: text/html; charset=utf-8
+  n: null
+- case: goto-responses
+  path: /returned/redirect/returned/contentType
+  kind: decided
+  reason: "decisions.md (reviewed P and I): goto's response comes from the main document's
+    Navigation Timing entry without the Network domain, so headers() is {}."
+  p: text/html; charset=utf-8
+  n: null
+- case: nest-f6-unreadable-frame
+  path: /returned/withinFourSeconds
+  kind: decided
+  reason: "decisions.md (per-frame budget, measured 2.006 s by R6) and D22 F6: Neo returns once
+    the hung frame's own 2 s budget runs out. Upstream waits on the hung frame until the call's
+    whole timeout (8 s here)."
+  p: false
+  n: true
+- case: nest-f7-navigated-frame
+  path: /returned/navigated/A1/threw/message
+  kind: decided
+  reason: "decisions.md (build start): a new frame seq for every committed document. a1 navigated,
+    so its old ref fails at once (element_detached). Upstream keeps a child frame's seq across
+    navigations and waits for the old ref in the new document until the timeout."
+  p: "locator.textContent: Timeout <n>ms exceeded."
+  n: "locator.textContent: f1e1 is not on the page any more; take a new snapshot"
+- case: nest-f7-navigated-frame
+  path: /returned/navigated/A1/threw/name
+  kind: decided
+  reason: "decisions.md (build start): a new frame seq for every committed document. a1 navigated,
+    so its old ref fails at once (element_detached). Upstream keeps a child frame's seq across
+    navigations and waits for the old ref in the new document until the timeout."
+  p: TimeoutError
+  n: Error
+- case: nest-f7-navigated-frame
+  path: /returned/navigated/B2/threw/message
+  kind: decided
+  reason: 'decisions.md (build start): a new frame seq for every committed document, so a ref into
+    a frame that navigated or detached fails at once as website / element_detached and never
+    acts in another document. Upstream says "Invalid frame in aria-ref selector" for a frame
+    that is gone; Neo says the ref is not on the page any more and asks for a new snapshot.'
+  p: 'locator.textContent: Invalid frame in aria-ref selector "aria-ref=f2e1"'
+  n: "locator.textContent: f2e1 is not on the page any more; take a new snapshot"
+- case: nest-f7-navigated-frame
+  path: /returned/navigated/B3/threw/message
+  kind: decided
+  reason: 'decisions.md (build start): a new frame seq for every committed document, so a ref into
+    a frame that navigated or detached fails at once as website / element_detached and never
+    acts in another document. Upstream says "Invalid frame in aria-ref selector" for a frame
+    that is gone; Neo says the ref is not on the page any more and asks for a new snapshot.'
+  p: 'locator.textContent: Invalid frame in aria-ref selector "aria-ref=f3e1"'
+  n: "locator.textContent: f3e1 is not on the page any more; take a new snapshot"
+- case: nest-f7-navigated-frame
+  path: /returned/removed/B1/threw/message
+  kind: decided
+  reason: 'decisions.md (build start): a new frame seq for every committed document, so a ref into
+    a frame that navigated or detached fails at once as website / element_detached and never
+    acts in another document. Upstream says "Invalid frame in aria-ref selector" for a frame
+    that is gone; Neo says the ref is not on the page any more and asks for a new snapshot.'
+  p: 'locator.textContent: Invalid frame in aria-ref selector "aria-ref=f4e1"'
+  n: "locator.textContent: f4e1 is not on the page any more; take a new snapshot"
+- case: nest-f7-navigated-frame
+  path: /returned/removed/C4/threw/message
+  kind: decided
+  reason: 'decisions.md (build start): a new frame seq for every committed document, so a ref into
+    a frame that navigated or detached fails at once as website / element_detached and never
+    acts in another document. Upstream says "Invalid frame in aria-ref selector" for a frame
+    that is gone; Neo says the ref is not on the page any more and asks for a new snapshot.'
+  p: 'locator.textContent: Invalid frame in aria-ref selector "aria-ref=f5e1"'
+  n: "locator.textContent: f5e1 is not on the page any more; take a new snapshot"
+- case: popups
+  path: /returned/kinds/window
+  kind: decided
+  reason: "decisions.md (reviewed P and I): window.open with window features opens a popup window
+    on BrowserOS neo 0.52.1.1, even hosted, which Neo cannot drive, so waitForEvent('popup')
+    fails neo / unsupported with a hint. Upstream drives the window as a page."
+  p:
+    returned:
+      closed: true
+      listed: true
+      listedAfterClose: false
+      opener: page
+      url: http://127.0.0.1:<port>/child.html?name=Window
+  n:
+    threw:
+      message: "page.waitForEvent: the popup (http://127.0.0.1:<port>/child.html?name=Window) opened
+        as a separate window, which Neo cannot drive; Neo drives popups that open as tabs"
+      name: Error
+- case: snapshot-ai
+  path: /returned/unknownRef/threw/message
+  kind: finding
+  route: R4 resolver, J2 probe
+  reason: For e999, a number this document never minted, Neo says it "is not on the page any
+    more", the wording for a removed element. The probe's ref counter can tell a number above it
+    (never printed) from a removed element, and say it is not a ref on this page.
+  p: "locator.textContent: Timeout <n>ms exceeded."
+  n: "locator.textContent: e21 is not on the page any more; take a new snapshot"
+- case: snapshot-ai
+  path: /returned/unknownRef/threw/name
+  kind: decided
+  reason: "Strict refs (D3, frames_live's never-printed refs test): a ref the page never printed
+    fails at once. Upstream's aria-ref engine finds nothing and waits until the timeout."
+  p: TimeoutError
+  n: Error
+- case: snapshot-locator
+  path: /returned/missingAi/threw/message
+  kind: decided
+  reason: 'decisions.md (R6 snapshots): locator.ariaSnapshot waits for its element in both modes,
+    as every other locator op does, so a missing element is a TimeoutError. Upstream 1.64.1
+    fails at once in ai mode ("does not match any element") and waits only in the default mode.'
+  p: 'locator.ariaSnapshot: Selector "#never" does not match any element'
+  n: "locator.ariaSnapshot: Timeout <n>ms exceeded."
+- case: snapshot-locator
+  path: /returned/missingAi/threw/name
+  kind: decided
+  reason: 'decisions.md (R6 snapshots): locator.ariaSnapshot waits for its element in both modes,
+    as every other locator op does, so a missing element is a TimeoutError. Upstream 1.64.1
+    fails at once in ai mode ("does not match any element") and waits only in the default mode.'
+  p: Error
+  n: TimeoutError
+- case: snapshot-ref-lifetime
+  path: /returned/afterDefaultSnapshot
+  kind: decided
+  reason: "decisions.md (build start): the same accumulating ref map. Upstream drops the ai refs
+    when a default-mode page snapshot runs."
+  p:
+    threw:
+      message: "locator.textContent: Timeout <n>ms exceeded."
+      name: TimeoutError
+  n:
+    returned: Save
+- case: snapshot-ref-lifetime
+  path: /returned/afterLocatorSnapshot
+  kind: decided
+  reason: "decisions.md (build start): Neo's aria-ref engine keeps a per-document map that
+    accumulates across snapshots. Upstream's built-in engine knows only the frame's latest
+    snapshot, so a locator's own snapshot drops the page snapshot's refs in that frame."
+  p:
+    threw:
+      message: "locator.textContent: Timeout <n>ms exceeded."
+      name: TimeoutError
+  n:
+    returned: Cancel
+- case: snapshot-sensitive
+  path: /returned/echo/returned
+  kind: decided
+  reason: "D14 and sdk-privacy: every string a read returns is masked with its frame's sweep
+    (Codex reads review finding 1), so a one-time code the page echoes in ordinary text reads
+    \"[private]\" through textContent. Upstream returns the page's text raw."
+  p: Confirm your code 482913
+  n: Confirm your code [private]
+
+- case: snapshot-sensitive
+  path: /returned/ai/returned
+  kind: decided
+  reason: "D14 and sdk-privacy: the sealed world reads password, card and one-time-code values
+    masked (\"••••\", \"•••• 1111\"), and the snapshot's sweep masks the code where the page
+    echoes it as text (\"[private]\"). Upstream prints every value raw."
+  p: |-
+    - generic [active] [ref=e1]:
+      - generic [ref=e2]:
+        - text: User
+        - textbox "User" [ref=e3]: ada
+      - generic [ref=e4]:
+        - text: Password
+        - textbox "Password" [ref=e5]: hunter22
+      - generic [ref=e6]:
+        - text: Card number
+        - textbox "Card number" [ref=e7]: "4111111111111111"
+      - generic [ref=e8]:
+        - text: Code
+        - textbox "Code" [ref=e9]: "482913"
+      - paragraph [ref=e10]: Confirm your code 482913
+  n: |-
+    - generic [active] [ref=e1]:
+      - generic [ref=e2]:
+        - text: User
+        - textbox "User" [ref=e3]: ada
+      - generic [ref=e4]:
+        - text: Password
+        - textbox "Password" [ref=e5]: ••••
+      - generic [ref=e6]:
+        - text: Card number
+        - textbox "Card number" [ref=e7]: •••• 1111
+      - generic [ref=e8]:
+        - text: Code
+        - textbox "Code" [ref=e9]: ••••
+      - paragraph [ref=e10]: Confirm your code [private]
+- case: snapshot-sensitive
+  path: /returned/snapshot/returned
+  kind: decided
+  reason: "D14 and sdk-privacy: the sealed world reads password, card and one-time-code values
+    masked (\"••••\", \"•••• 1111\"), and the snapshot's sweep masks the code where the page
+    echoes it as text (\"[private]\"). Upstream prints every value raw."
+  p: |-
+    - text: User
+    - textbox "User": ada
+    - text: Password
+    - textbox "Password": hunter22
+    - text: Card number
+    - textbox "Card number": "4111111111111111"
+    - text: Code
+    - textbox "Code": "482913"
+    - paragraph: Confirm your code 482913
+  n: |-
+    - text: User
+    - textbox "User": ada
+    - text: Password
+    - textbox "Password": ••••
+    - text: Card number
+    - textbox "Card number": •••• 1111
+    - text: Code
+    - textbox "Code": ••••
+    - paragraph: Confirm your code [private]
+- case: wait-for-load-state
+  path: /returned/badState/threw/message
+  kind: finding
+  route: J4 prelude
+  reason: "Upstream's client checks the state before its API wrapper, so the message has no
+    \"page.waitForLoadState: \" prefix. Neo's prelude adds it. Cosmetic."
+  p: "state: expected one of (load|domcontentloaded|networkidle|commit)"
+  n: "page.waitForLoadState: state: expected one of (load|domcontentloaded|networkidle|commit)"
+- case: nest-f6-unreadable-frame
+  path: /returned/frameD
+  kind: decided
+  reason: "decisions.md (per-frame budget) and D22 F6: a frame that misses its 2 s budget is a
+    partial entry, printed as a \"# partial: <url> not read (<reason>)\" line under its iframe.
+    Upstream prints the hung frame's iframe empty and says nothing."
+  p: "  - iframe [ref=e1]"
+  n: >2-
+      - iframe [ref=e1]
+        # partial: http://hang.localtest.me:<port>/nest/hang.html?hang not read (timeout after <n>ms)

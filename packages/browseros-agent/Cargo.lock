@@ -443,6 +443,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "browseros-playwright"
+version = "0.1.0"
+dependencies = [
+ "browseros-cdp",
+ "browseros-core",
+ "browseros-trace",
+ "futures-util",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "sha2",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "browseros-service"
 version = "0.1.0"
 dependencies = [

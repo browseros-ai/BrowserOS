@@ -299,6 +299,14 @@ impl PageManager {
             .map(|info| info.tab_id)
     }
 
+    /// Whether core opened `page` for the agent, registering it from its own create reply, as
+    /// opposed to adopting it from the browser's tab list. Only such tabs get focus emulation
+    /// (#2778) and file-chooser interception when core attaches to them. An adopted, closed or
+    /// unknown page is `false`.
+    pub async fn is_agent_created(&self, page: &PageId) -> bool {
+        self.state.lock().await.agent_created.contains(page)
+    }
+
     pub async fn get_session(&self, page_id: PageId) -> Result<PageSession, CoreError> {
         let reconnected = self.ensure_connected().await?;
         let mut info = self.state.lock().await.pages.get(&page_id).cloned();
@@ -727,7 +735,7 @@ impl PageManager {
         // ack. Emulating focus keeps a tab the agent opened rendering at full
         // speed. Scoped to agent-created tabs so an adopted user tab keeps its
         // real focus state; best-effort, so it never fails attach (#2778).
-        let is_agent_created = self.state.lock().await.agent_created.contains(&page_id);
+        let is_agent_created = self.is_agent_created(&page_id).await;
         // Intercept before the page is exposed to any caller. Adopted user tabs retain their
         // native picker; explicit upload on one borrows interception for that operation only.
         if is_agent_created && let Some(transfers) = &self.file_transfers {

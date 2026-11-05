@@ -6,9 +6,12 @@
 //!   sensitive fields before and after the script and masks their values in its result.
 //!
 //! Matching follows `browseros-trace`'s `SecretSet`: each value in its plain, JSON-escaped and
-//! percent-encoded forms, leftmost-longest, replaced by the same `[private]` token. Unlike the
-//! secret set these values are short-lived (one capture or one op) and are never registered
-//! here; the caller decides whether to register them with sdk-traces' `Privacy`.
+//! percent-encoded forms, leftmost-longest, replaced by the same `[private]` token. It adds the
+//! two forms the HTML serializer writes (text and attribute value), because serialized markup
+//! reaches the agent too: sdk-playwright's `page.content()`, and a main-world script that
+//! returns `outerHTML`. Unlike the secret set these values are short-lived (one capture or one
+//! op) and are never registered here; the caller decides whether to register them with
+//! sdk-traces' `Privacy`.
 
 use aho_corasick::{AhoCorasick, MatchKind};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
@@ -205,6 +208,16 @@ fn build_matcher(values: &[Zeroizing<String>], newlines: Newlines) -> Option<Aho
             }
             patterns.push(Zeroizing::new(encoded));
         }
+        for markup in [Markup::Text, Markup::Attribute] {
+            let escaped = html_escaped(plain, markup);
+            // The serializer leaves newlines raw, so the plain form's newline rule applies.
+            if *escaped != plain
+                && (newlines == Newlines::Included || !escaped.contains('\n'))
+                && !patterns.contains(&escaped)
+            {
+                patterns.push(escaped);
+            }
+        }
     }
     if patterns.is_empty() {
         return None;
@@ -214,6 +227,31 @@ fn build_matcher(values: &[Zeroizing<String>], newlines: Newlines) -> Option<Aho
         .build(patterns.iter().map(|pattern| pattern.as_str()))
         .map_err(|error| tracing::error!(%error, "field-value matcher could not be built"))
         .ok()
+}
+
+/// Where the HTML serializer writes a string.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Markup {
+    Text,
+    Attribute,
+}
+
+/// `value` as Chromium's HTML serializer writes it (`outerHTML`, `innerHTML`). Measured on
+/// BrowserOS (Chromium 155): `&`, `<`, `>` and U+00A0 become entities in text and in attribute
+/// values, and `"` in attribute values only. Built in a zeroizing buffer, as it holds the value.
+fn html_escaped(value: &str, markup: Markup) -> Zeroizing<String> {
+    let mut escaped = Zeroizing::new(String::with_capacity(value.len()));
+    for character in value.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '\u{a0}' => escaped.push_str("&nbsp;"),
+            '"' if markup == Markup::Attribute => escaped.push_str("&quot;"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
 }
 
 #[cfg(test)]
@@ -238,6 +276,25 @@ mod tests {
         assert!(!text.contains("482913"));
         assert!(!text.contains("w0rd"));
         assert_eq!(text.matches(ECHO_MASK).count(), 4);
+    }
+
+    #[test]
+    fn html_escaped_echoes_are_masked_in_text_and_attributes() {
+        let set = values(&["typed&\"secret<3>\u{a0}x"]);
+        let markup = "<p data-echo=\"typed&amp;&quot;secret&lt;3&gt;&nbsp;x\">\
+                      you typed typed&amp;\"secret&lt;3&gt;&nbsp;x</p>";
+        let mut text = markup.to_string();
+        assert!(set.mask_str(&mut text));
+        assert_eq!(
+            text,
+            format!("<p data-echo=\"{ECHO_MASK}\">you typed {ECHO_MASK}</p>")
+        );
+        let mut leaf = json!({ "html": markup });
+        assert!(set.mask_json(&mut leaf));
+        assert_eq!(
+            leaf,
+            json!({ "html": format!("<p data-echo=\"{ECHO_MASK}\">you typed {ECHO_MASK}</p>") })
+        );
     }
 
     #[test]

@@ -18,6 +18,11 @@ const testSuites = {
       argv: [bun, 'run', 'test'],
     },
     {
+      label: 'browseros-playwright engine tests',
+      cwd: resolve(projectRoot, 'packages/browseros-playwright-js'),
+      argv: [bun, 'run', 'test'],
+    },
+    {
       label: 'diagnostics tests',
       cwd: resolve(projectRoot, 'packages/diagnostics'),
       argv: [bun, 'run', 'test'],

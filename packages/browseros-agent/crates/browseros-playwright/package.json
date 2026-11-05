@@ -1,0 +1,9 @@
+{
+  "name": "@browseros/browseros-playwright-rust",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint:rust": "cargo fmt --package browseros-playwright -- --check --config imports_granularity=Module,hex_literal_case=Lower,format_macro_matchers=true && cargo clippy --package browseros-playwright --all-targets --locked -- -D warnings",
+    "test:rust": "cargo test --package browseros-playwright --locked"
+  }
+}

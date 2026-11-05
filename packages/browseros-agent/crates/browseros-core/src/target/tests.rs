@@ -830,6 +830,24 @@ async fn focus_and_working_window_are_placement_while_pin_is_restriction() -> Te
     Ok(())
 }
 #[tokio::test]
+async fn agent_created_names_only_tabs_core_opened() -> TestResult {
+    let scoped = view(Native::new(), None).await;
+    let adopted = page_id(&scoped, 2).await?;
+    let opened = scoped
+        .new_page("about:blank", NewPageOptions::default())
+        .await?
+        .page_id;
+    assert!(
+        scoped.is_agent_created(&opened).await,
+        "core registered this tab from its own create reply"
+    );
+    assert!(
+        !scoped.is_agent_created(&adopted).await,
+        "a tab found in the browser's list is adopted, not created"
+    );
+    Ok(())
+}
+#[tokio::test]
 async fn legacy_or_missing_metadata_never_admits_and_popup_ids_fail_before_mutation() -> TestResult
 {
     let native = Native::new();

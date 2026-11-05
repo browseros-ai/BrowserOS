@@ -18,6 +18,12 @@
       "!tools/captcha-testbed/fixtures/pages",
       "!crates/browseros-core/tests/data/captured",
       "!crates/browseros-core/src/assets/agent-cursor.js",
+      "!crates/browseros-playwright/third_party",
+      "!crates/browseros-playwright/assets",
+      "!crates/browseros-playwright/tests/data",
+      "!crates/browseros-playwright/tests/conformance/pages",
+      "!crates/browseros-playwright/tests/conformance/cases",
+      "!packages/browseros-playwright-js/tests/data",
       "!apps/server/src/lib/db/migrations"
     ]
   },

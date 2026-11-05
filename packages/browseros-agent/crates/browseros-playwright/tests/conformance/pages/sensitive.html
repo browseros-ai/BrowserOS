@@ -1,0 +1,11 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Sensitive</title><script src="events.js"></script></head>
+<body>
+<!-- Fields sdk-privacy treats as sensitive (a password, a card number, a one-time code), one
+     ordinary field, and a paragraph that echoes the code as page text. Neo reads the sensitive
+     values masked; the page's own world sees them raw. -->
+<label>User <input id="user" autocomplete="username" value="ada"></label>
+<label>Password <input id="password" type="password" value="hunter22"></label>
+<label>Card number <input id="card" autocomplete="cc-number" value="4111111111111111"></label>
+<label>Code <input id="code" autocomplete="one-time-code" value="482913"></label>
+<p id="echo">Confirm your code 482913</p>
+</body></html>

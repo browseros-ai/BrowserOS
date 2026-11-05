@@ -13,3 +13,7 @@ docs/videos/** filter=lfs diff=lfs merge=lfs -text
 
 # This Chromium CDP protocol file is hashed as raw bytes; never rewrite line endings.
 packages/browseros-agent/crates/browseros-cdp/protocol/protocol.json -text
+
+# Vendored Playwright sources are kept byte-identical to upstream (sync.sh, the engine
+# freshness test). Upstream's LICENSE has CRLF line endings, so no conversion, no whitespace checks.
+packages/browseros-agent/crates/browseros-playwright/third_party/playwright/** -text -whitespace

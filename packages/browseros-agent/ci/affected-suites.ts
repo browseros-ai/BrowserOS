@@ -108,6 +108,13 @@ export const SUITES: Record<string, SuiteConfig> = {
     needs_browser: false,
     needs_rust: false,
   },
+  'browseros-playwright-js': {
+    suite: 'browseros-playwright-js',
+    command: '(cd packages/browseros-playwright-js && bun run test)',
+    junit_path: 'test-results/browseros-playwright-js.xml',
+    needs_browser: false,
+    needs_rust: false,
+  },
   build: {
     suite: 'build',
     command: 'bun run ./scripts/run-bun-test.ts ./scripts/build',
@@ -179,6 +186,7 @@ const PACKAGE_SUITES: Record<string, string[]> = {
   '@browseros/claw-onboard': ['claw-onboard'],
   '@browseros/app-onboard': ['app-onboard'],
   '@browseros/agent-cursor': ['agent-cursor', 'build'],
+  '@browseros/browseros-playwright-js': ['browseros-playwright-js'],
   // The build suite exercises scripts/build, which uses build-server-tools, so
   // an affected build-server-tools (or a scripts/ change, handled below) runs it.
   '@browseros/build-server-tools': ['build'],
@@ -250,6 +258,19 @@ export function computeAffectedSuites(
     keys.add('agent-cursor')
     keys.add('build')
   }
+  // The crate's assets and probe-protocol.json are built from the vendored sources in the
+  // Rust crate, which is not a dependency of the build package, so a change to any of them
+  // must rerun the freshness test.
+  if (
+    changedFiles.some(
+      (f) =>
+        f.startsWith(`${AGENT}crates/browseros-playwright/assets/`) ||
+        f.startsWith(`${AGENT}crates/browseros-playwright/third_party/`) ||
+        f ===
+          `${AGENT}crates/browseros-playwright/tests/data/probe-protocol.json`,
+    )
+  )
+    keys.add('browseros-playwright-js')
   if (
     changedFiles.some(
       (f) =>

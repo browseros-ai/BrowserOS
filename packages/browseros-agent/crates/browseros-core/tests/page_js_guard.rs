@@ -1,6 +1,8 @@
-//! Keeps page JavaScript on one path. Every `Runtime.evaluate` and `Runtime.callFunctionOn` that
-//! BrowserOS sends goes through `browseros_core::page_js`, which decides the world a script runs
-//! in. A raw send anywhere else would run in the page's own world whatever the caller intended.
+//! Keeps page JavaScript on known paths. Every `Runtime.evaluate` and `Runtime.callFunctionOn`
+//! that BrowserOS sends goes through `browseros_core::page_js`, which decides the world a script
+//! runs in, or through the browseros-playwright files in `ALLOWED`, which own its sealed
+//! `browseros-sdk` world and its main-world `page.evaluate`. A raw send anywhere else would run
+//! in the page's own world whatever the caller intended.
 //!
 //! A send is recognised by the method literal in argument position (followed by a comma), which
 //! leaves the CDP policy tables and error labels that merely name the methods alone.
@@ -11,7 +13,14 @@ use std::{
 };
 
 const METHODS: &[&str] = &["\"Runtime.evaluate\"", "\"Runtime.callFunctionOn\""];
-const ALLOWED: &[&str] = &["crates/browseros-core/src/page_js.rs"];
+const ALLOWED: &[&str] = &[
+    "crates/browseros-core/src/page_js.rs",
+    // `PageJs` cannot name browseros-playwright's sealed world. These files install it, speak
+    // its probe protocol, and run main-world scripts between two sweeps of field values.
+    "crates/browseros-playwright/src/world/sealed_world.rs",
+    "crates/browseros-playwright/src/probe/probe_call.rs",
+    "crates/browseros-playwright/src/page/evaluate_guard.rs",
+];
 const SKIPPED_DIRS: &[&str] = &["target", "node_modules", "dist", "tests"];
 
 #[test]
@@ -48,10 +57,26 @@ fn tests_that_page_javascript_is_only_sent_through_page_js() -> std::io::Result<
     assert!(
         offenders.is_empty(),
         "page JavaScript must go through browseros_core::PageJs, which picks the isolated or the \
-         page world:\n{}",
+         page world, or through the browseros-playwright files in ALLOWED:\n{}",
         offenders.join("\n")
     );
     Ok(())
+}
+
+/// An entry whose file is gone guards nothing: a renamed file would send page script unchecked
+/// while the list still read as if it were reviewed.
+#[test]
+fn tests_that_every_allowed_file_exists() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let missing: Vec<&str> = ALLOWED
+        .iter()
+        .copied()
+        .filter(|allowed| !workspace.join(allowed).is_file())
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "ALLOWED names files that do not exist; rename the entry with its file: {missing:?}"
+    );
 }
 
 fn collect_rust_files(dir: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {

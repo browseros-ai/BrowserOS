@@ -18,6 +18,7 @@ browseros-decide = { path = "crates/browseros-decide" }
 browseros-mcp = { path = "crates/browseros-mcp" }
 browseros-service = { path = "crates/browseros-service" }
 browseros-takeover = { path = "crates/browseros-takeover" }
+browseros-playwright = { path = "crates/browseros-playwright" }
 browseros-trace = { path = "crates/browseros-trace" }
 claw-api = { path = "crates/claw-api" }
 claw-sdk-api = { path = "crates/claw-sdk-api" }

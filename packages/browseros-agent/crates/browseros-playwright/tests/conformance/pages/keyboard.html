@@ -1,0 +1,14 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Keyboard</title><script src="events.js"></script></head>
+<body>
+<!-- Keyboard logging: events.js records every keydown, keyup and input with key, code and the
+     modifiers held; the field shows what the keys produced, and a shortcut handler records
+     that it saw ControlOrMeta+K. -->
+<label>Typing <input id="typing" autofocus></label>
+<label>Area <textarea id="area"></textarea></label>
+<script>
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'k' && (event.ctrlKey || event.metaKey))
+      window.__events.push({ type: 'shortcut', key: 'k' })
+  })
+</script>
+</body></html>

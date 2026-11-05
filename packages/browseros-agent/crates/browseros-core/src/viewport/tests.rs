@@ -1313,6 +1313,39 @@ async fn tests_that_desktop_and_default_pointer_input_is_not_scaled() -> TestRes
 }
 
 #[tokio::test]
+async fn tests_that_the_pointer_scale_is_one_without_a_viewport_override() -> TestResult {
+    let fixture = Fixture::new(&[(1, 10), (2, 10)]);
+    let zoomed = fixture.page(1).await?;
+    let natural = fixture.page(2).await?;
+    let without_modes = BrowserView::unbound(fixture.session.clone(), None);
+    assert_eq!(
+        fixture.view.pointer_scale(&zoomed),
+        1.0,
+        "a default tab is not emulated, so its input is not scaled"
+    );
+    assert_eq!(
+        without_modes.pointer_scale(&zoomed),
+        1.0,
+        "a view without viewport modes never scales input"
+    );
+
+    fixture
+        .set(&zoomed, ViewportMode::Mobile, Some(150.0))
+        .await?;
+    assert_eq!(
+        fixture.view.pointer_scale(&zoomed),
+        1.5,
+        "a 150% mobile preview takes main-frame input in its scaled space"
+    );
+    assert_eq!(
+        fixture.view.pointer_scale(&natural),
+        1.0,
+        "the zoom belongs to the tab it was set on"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn tests_that_page_scripts_cannot_fake_or_fail_the_check() -> TestResult {
     let fixture = Fixture::new(&[(1, 10)]);
     fixture.native.lock().tampered = true;

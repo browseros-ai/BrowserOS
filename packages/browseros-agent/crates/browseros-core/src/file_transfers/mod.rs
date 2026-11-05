@@ -200,20 +200,7 @@ impl FileTransfers {
         // this interface into a filesystem existence probe through its error messages.
         self.view.page(page.clone()).await?;
         // Fail before clicking or consuming a chooser, so fixing a bad path is retryable.
-        for file in files {
-            let path = PathBuf::from(file);
-            let metadata = tokio::fs::metadata(&path)
-                .await
-                .map_err(|error| CoreError::Message(format!("Cannot upload {file}: {error}")))?;
-            if !metadata.is_file() {
-                return Err(CoreError::Message(format!(
-                    "Upload path is not a file: {file}"
-                )));
-            }
-            tokio::fs::File::open(&path).await.map_err(|error| {
-                CoreError::Message(format!("Cannot read upload file {file}: {error}"))
-            })?;
-        }
+        check_local_files(files).await?;
         if let Some(reference) = reference {
             if self.pending_chooser(page.clone()).await?.is_some() {
                 return Err(CoreError::Message(
@@ -295,6 +282,41 @@ impl FileTransfers {
             })?;
             self.select_chooser(page, &chooser, files).await
         }
+    }
+
+    /// Sets `files` on a file input the caller found itself, such as browseros-playwright's
+    /// `setInputFiles` on an element of its sealed world. A backend node id resolves only on
+    /// the session of the target that holds the node, so `session` must be the endpoint the
+    /// node was resolved in: the page's root session or a frame's session from
+    /// [`crate::frames::FrameRegistry`]. Core admits `page` and trusts the caller that
+    /// `session` belongs to it, the same split browseros-playwright uses for every call of an
+    /// operation.
+    ///
+    /// The rules are those of [`Self::upload`] with a file-input ref. Transfers on one page run
+    /// one at a time, admission comes before any local-path check, every path must be a
+    /// readable file, a single-file input refuses several files, and an empty `files` clears
+    /// the selection. It neither opens nor finishes a file chooser.
+    pub async fn upload_node(
+        &self,
+        page: PageId,
+        session: &ProtocolSession,
+        backend_node_id: i64,
+        files: &[String],
+    ) -> Result<(), CoreError> {
+        let lock = self.state.operation(page.clone());
+        let _operation = lock.lock_owned().await;
+        self.view.page(page).await?;
+        check_local_files(files).await?;
+        let node = session
+            .send_value("DOM.describeNode", json!({"backendNodeId":backend_node_id}))
+            .await?;
+        if !is_file_input(&node["node"]) {
+            return Err(CoreError::Message(
+                "Node is not a file input element".into(),
+            ));
+        }
+        let multiple = has_attribute(&node["node"], "multiple");
+        set_files(session, backend_node_id, multiple, files).await
     }
 
     async fn select_chooser(
@@ -403,6 +425,26 @@ impl Drop for InterceptionLease {
     }
 }
 
+/// Fails unless every path names a regular file this process can open. Callers run it after
+/// admission and before touching the page.
+async fn check_local_files(files: &[String]) -> Result<(), CoreError> {
+    for file in files {
+        let path = PathBuf::from(file);
+        let metadata = tokio::fs::metadata(&path)
+            .await
+            .map_err(|error| CoreError::Message(format!("Cannot upload {file}: {error}")))?;
+        if !metadata.is_file() {
+            return Err(CoreError::Message(format!(
+                "Upload path is not a file: {file}"
+            )));
+        }
+        tokio::fs::File::open(&path).await.map_err(|error| {
+            CoreError::Message(format!("Cannot read upload file {file}: {error}"))
+        })?;
+    }
+    Ok(())
+}
+
 async fn set_files(
     session: &ProtocolSession,
     node: i64,
@@ -483,3 +525,6 @@ async fn downloaded_file(path: PathBuf) -> Result<DownloadedFile, CoreError> {
         path.display()
     )))
 }
+
+#[cfg(test)]
+mod tests;

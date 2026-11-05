@@ -16,7 +16,18 @@
     "scripts/dev/inspect-ui.ts",
     "scripts/patch-windows-exe.ts",
     "packages/agent-cursor/src/index.ts",
-    "packages/agent-cursor/scripts/classic-entry.ts"
+    "packages/agent-cursor/scripts/classic-entry.ts",
+    "packages/browseros-playwright-js/src/probe/index.ts",
+    "packages/browseros-playwright-js/src/prelude/index.ts",
+    "packages/browseros-playwright-js/scripts/build.ts",
+    "packages/browseros-playwright-js/scripts/probe-smoke.mjs",
+    "packages/browseros-playwright-js/scripts/capture-goldens.mjs",
+    "packages/browseros-playwright-js/scripts/port-keyboard-layout.ts",
+    "packages/browseros-playwright-js/scripts/capture-snapshot-fixture.mjs",
+    "packages/browseros-playwright-js/src/stubs/highlight.ts",
+    "packages/browseros-playwright-js/src/stubs/consoleApi.ts",
+    "packages/browseros-playwright-js/src/stubs/selectorEngine.ts",
+    "packages/browseros-playwright-js/src/stubs/protocol/structs.ts"
   ],
   "ignoreDependencies": [
     "tailwind-scrollbar-hide",
@@ -46,7 +57,9 @@
     "packages/cdp-protocol/src/generated/**",
     ".agents/skills/**",
     ".claude/skills/**",
-    "packages/agent-cursor/playground/**"
+    "packages/agent-cursor/playground/**",
+    "crates/browseros-playwright/third_party/**",
+    "crates/browseros-playwright/assets/**"
   ],
   "rules": {
     "unused-files": "warn",

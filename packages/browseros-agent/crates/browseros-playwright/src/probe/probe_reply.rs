@@ -1,0 +1,403 @@
+//! What the probe answers, as `protocol.ts` types it (`ProbeReply` and its parts).
+//!
+//! Replies are parsed here, at the boundary, into these variants. A shape this build cannot
+//! read means the page asset and the crate disagree, which is `neo / internal`, never a guess
+//! at what the page meant.
+
+#![expect(
+    dead_code,
+    reason = "the protocol is mirrored whole, and each op family reads its own replies"
+)]
+
+use browseros_core::sensitive_fields::{FieldValues, SensitiveKind};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
+
+use crate::probe::probe_request::ElementState;
+use crate::world::{FrameSeq, Pin};
+
+/// The protocol version this build speaks. It must equal `PROTOCOL` in protocol.ts and the
+/// version in `tests/data/probe-protocol.lock`, and it moves with every change to the
+/// contract: a world keeps the probe an earlier build installed, and the install replaces that
+/// probe only when its number differs (`engine_source`), so a shape changed under the same
+/// number reaches this build in the old shape. The lock's test catches a change without a bump.
+pub(crate) const PROBE_PROTOCOL: u32 = 4;
+
+/// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
+/// the world has no booted probe.
+#[derive(Debug, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub(crate) enum ProbeReply {
+    /// What `boot` and `describe` return. `seq` is the document's seq as the world knows it.
+    Described {
+        protocol: u32,
+        seq: FrameSeq,
+        url: String,
+        /// Only from a boot that replaced the world's numbering: the seq it held before. Under
+        /// another epoch that is a seq an earlier `Playwright` printed refs under.
+        #[serde(default)]
+        retired: Option<FrameSeq>,
+    },
+    /// Zero matches. `stale_ref` names a ref that can never match in this document again, so
+    /// the op fails at once instead of waiting for it.
+    None {
+        #[serde(default)]
+        stale_ref: Option<String>,
+    },
+    /// Upstream's `strict mode violation: <locator> resolved to N elements: ...`.
+    Strict {
+        message: String,
+    },
+    /// One element, pinned. `sensitive` is the seal's `kind(el)`.
+    Element {
+        pin: Pin,
+        preview: String,
+        sensitive: Option<SensitiveKind>,
+    },
+    /// An `<iframe>` or `<frame>`, pinned. `key` names it in this world's ref map, for the
+    /// child frame's parent link.
+    Frame {
+        pin: Pin,
+        key: String,
+        preview: String,
+        visible: bool,
+        src: String,
+    },
+    /// Upstream's non-retriable "resolved to <div>, <iframe> was expected".
+    NotFrame {
+        preview: String,
+    },
+    /// The pinned element is gone or was evicted: back to the outer retry loop.
+    Detached,
+    /// The first state that does not hold.
+    State {
+        missing: ElementState,
+    },
+    /// Measured, not armed: frame-local CSS pixels.
+    Measured {
+        pin: Pin,
+        rect: Rect,
+        point: Point,
+        in_view: bool,
+        transformed: bool,
+        sensitive: Option<SensitiveKind>,
+    },
+    /// Upstream's description of what intercepts pointer events.
+    Covered {
+        by: String,
+    },
+    /// The interceptor is armed with `token`.
+    Armed {
+        rect: Rect,
+        point: Point,
+        token: u32,
+    },
+    Verdict {
+        hit: Hit,
+    },
+    /// A parent frame's iframe origin (`None` when transformed) and its hit test.
+    FrameBox {
+        origin: Option<Point>,
+        hit: Option<Hit>,
+    },
+    /// A read's or an edit's result, already masked by the seal.
+    Value {
+        value: Value,
+    },
+    /// One element's read, masked by the seal and then, at decode (`reply_of`), every string
+    /// in it with `sweep`: the raw values of the document's sensitive fields, for Rust's mask
+    /// and the host's `values_swept`, never for the agent. `sensitive` is the seal's `kind` of
+    /// the element the value came from.
+    Read {
+        value: Value,
+        sensitive: Option<SensitiveKind>,
+        #[serde(deserialize_with = "field_values")]
+        sweep: FieldValues,
+    },
+    /// A `readAll`: how many matched, and one value per match where the read has values,
+    /// masked at decode with `sweep` as a `Read` is.
+    Values {
+        count: u32,
+        values: Vec<Value>,
+        #[serde(deserialize_with = "field_values")]
+        sweep: FieldValues,
+    },
+    /// One frame's `ariaSnapshotJSON`, its rendered iframes and the raw values of its
+    /// sensitive fields (for Rust's mask, never for the agent).
+    Snapshot {
+        json: Value,
+        iframes: Vec<SnapshotIframe>,
+        #[serde(deserialize_with = "field_values")]
+        sweep: FieldValues,
+    },
+    /// One `expect` poll.
+    Expect {
+        matches: bool,
+        #[serde(default)]
+        received: Option<Value>,
+        #[serde(default)]
+        aria_snapshot: Option<String>,
+    },
+    /// Raw values of this document's sensitive fields.
+    Sweep {
+        #[serde(deserialize_with = "field_values")]
+        values: FieldValues,
+    },
+    /// The focused element.
+    Focused {
+        sensitive: bool,
+        iframe: Option<Pin>,
+    },
+    UrlMatch {
+        matches: bool,
+        url: String,
+    },
+    /// A `document` read: text the seal masked where it serializes a field, and the raw values
+    /// of the document's sensitive fields, for Rust's mask of echoes in it.
+    DocumentText {
+        text: String,
+        #[serde(deserialize_with = "field_values")]
+        sweep: FieldValues,
+    },
+    /// `setContent` replaced the document, and the world answers `uninstalled` from now on.
+    Replaced,
+    /// An error thrown in the page, classified by the probe.
+    Error {
+        message: String,
+        class: ErrorClass,
+    },
+    /// The world has no booted probe (its document was replaced, or nothing installed it).
+    Uninstalled,
+}
+
+impl ProbeReply {
+    /// The reply's `kind` as protocol.ts spells it, for messages about a reply that did not
+    /// fit its request.
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            Self::Described { .. } => "described",
+            Self::None { .. } => "none",
+            Self::Strict { .. } => "strict",
+            Self::Element { .. } => "element",
+            Self::Frame { .. } => "frame",
+            Self::NotFrame { .. } => "notFrame",
+            Self::Detached => "detached",
+            Self::State { .. } => "state",
+            Self::Measured { .. } => "measured",
+            Self::Covered { .. } => "covered",
+            Self::Armed { .. } => "armed",
+            Self::Verdict { .. } => "verdict",
+            Self::FrameBox { .. } => "frameBox",
+            Self::Value { .. } => "value",
+            Self::Read { .. } => "read",
+            Self::Values { .. } => "values",
+            Self::Snapshot { .. } => "snapshot",
+            Self::Expect { .. } => "expect",
+            Self::Sweep { .. } => "sweep",
+            Self::Focused { .. } => "focused",
+            Self::UrlMatch { .. } => "urlMatch",
+            Self::DocumentText { .. } => "documentText",
+            Self::Replaced => "replaced",
+            Self::Error { .. } => "error",
+            Self::Uninstalled => "uninstalled",
+        }
+    }
+}
+
+/// How the probe classified an error thrown in the page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ErrorClass {
+    /// One of Playwright's own errors about the element the script chose, such as "Not a
+    /// checkbox or radio button".
+    Script,
+    /// A selector the engine rejects.
+    Selector,
+    /// A Playwright feature Neo refuses here.
+    Unsupported,
+    /// A probe bug.
+    Internal,
+}
+
+/// A point in one frame's CSS pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Point {
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+}
+
+/// A rect in one frame's CSS pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Rect {
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) width: f64,
+    pub(crate) height: f64,
+}
+
+/// `"done"`, or upstream's description of the element the pointer events reached instead.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum Hit {
+    Done(HitDone),
+    Missed {
+        #[serde(rename = "hitTargetDescription")]
+        by: String,
+    },
+}
+
+/// The string `"done"`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub(crate) enum HitDone {
+    #[serde(rename = "done")]
+    Done,
+}
+
+/// A rendered `<iframe>` in one frame's snapshot, for Rust to hop into.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SnapshotIframe {
+    pub(crate) r#ref: String,
+    pub(crate) depth: u32,
+    pub(crate) src: String,
+}
+
+/// The seal's raw values go straight into `FieldValues`, which never prints them.
+fn field_values<'de, D: Deserializer<'de>>(deserializer: D) -> Result<FieldValues, D::Error> {
+    let sweep = Value::deserialize(deserializer)?;
+    Ok(FieldValues::from_sweep(&sweep))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::fmt::Write as _;
+
+    use serde_json::{Value, json};
+    use sha2::{Digest, Sha256};
+
+    use super::{Hit, PROBE_PROTOCOL, ProbeReply};
+
+    const PROTOCOL: &str = include_str!("../../tests/data/probe-protocol.json");
+    const LOCK: &str = include_str!("../../tests/data/probe-protocol.lock");
+
+    #[test]
+    fn tests_that_the_contract_changes_only_with_a_protocol_bump() -> Result<(), Box<dyn Error>> {
+        let digest = Sha256::digest(PROTOCOL.as_bytes());
+        let mut hash = String::with_capacity(64);
+        for byte in digest {
+            write!(hash, "{byte:02x}")?;
+        }
+        let record = format!("{PROBE_PROTOCOL} {hash}");
+        let locked = LOCK
+            .lines()
+            .find(|line| !line.starts_with('#') && !line.trim().is_empty())
+            .ok_or("probe-protocol.lock records no version")?;
+        let (version, locked_hash) = locked
+            .split_once(' ')
+            .ok_or("a lock line is `<version> <sha256>`")?;
+        assert_eq!(
+            version,
+            PROBE_PROTOCOL.to_string(),
+            "PROBE_PROTOCOL moved: record `{record}` in tests/data/probe-protocol.lock"
+        );
+        assert_eq!(
+            locked_hash, hash,
+            "probe-protocol.json changed under protocol {PROBE_PROTOCOL}: a world that kept the \
+             old probe would answer the old shapes. Bump PROTOCOL in protocol.ts and \
+             PROBE_PROTOCOL here, rebuild, and record the line this test then prints"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_the_protocol_number_is_the_assets() -> Result<(), Box<dyn Error>> {
+        let protocol: Value = serde_json::from_str(PROTOCOL)?;
+        assert_eq!(
+            protocol["protocol"].as_u64(),
+            Some(u64::from(PROBE_PROTOCOL)),
+            "an install refuses a probe of another protocol, so the two must move together"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_every_example_reply_decodes() -> Result<(), Box<dyn Error>> {
+        let protocol: Value = serde_json::from_str(PROTOCOL)?;
+        let examples = protocol["replies"]
+            .as_array()
+            .ok_or("probe-protocol.json has no replies")?;
+        let mut kinds: Vec<&str> = Vec::new();
+        for example in examples {
+            let reply = serde_json::from_value::<ProbeReply>(example.clone())
+                .map_err(|error| format!("{example} does not decode: {error}"))?;
+            let kind = example["kind"].as_str().unwrap_or_default();
+            assert_eq!(reply.kind(), kind, "messages name a reply as the wire does");
+            kinds.push(kind);
+        }
+        let per_request = protocol["replyKinds"]
+            .as_object()
+            .ok_or("probe-protocol.json has no replyKinds")?
+            .values();
+        let any_request = protocol["anyRequest"].as_array().into_iter().flatten();
+        for kind in per_request
+            .filter_map(Value::as_array)
+            .flatten()
+            .chain(any_request)
+            .filter_map(Value::as_str)
+        {
+            assert!(
+                kinds.contains(&kind),
+                "every reply kind a request may produce has an example Rust decodes: {kind}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_a_reply_this_build_cannot_read_is_refused() {
+        for bad in [
+            json!({ "kind": "described", "protocol": 1, "seq": 0 }),
+            json!({ "kind": "element", "pin": 3, "preview": "<b>", "sensitive": "pin_code" }),
+            json!({ "kind": "none", "staleRef": "e5", "extra": true }),
+            json!({ "kind": "teleported" }),
+        ] {
+            assert!(
+                serde_json::from_value::<ProbeReply>(bad.clone()).is_err(),
+                "{bad} is not a reply"
+            );
+        }
+    }
+
+    #[test]
+    fn tests_that_a_hit_is_done_or_names_what_was_hit() -> Result<(), Box<dyn Error>> {
+        let done: ProbeReply = serde_json::from_value(json!({ "kind": "verdict", "hit": "done" }))?;
+        assert!(matches!(done, ProbeReply::Verdict { hit: Hit::Done(_) }));
+        let missed: ProbeReply = serde_json::from_value(
+            json!({ "kind": "verdict", "hit": { "hitTargetDescription": "<div id=\"x\">" } }),
+        )?;
+        assert!(
+            matches!(&missed, ProbeReply::Verdict { hit: Hit::Missed { by } } if by == "<div id=\"x\">"),
+            "{missed:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_a_sweep_never_prints_its_values() -> Result<(), Box<dyn Error>> {
+        let reply: ProbeReply =
+            serde_json::from_value(json!({ "kind": "sweep", "values": ["hunter2"] }))?;
+        assert!(
+            !format!("{reply:?}").contains("hunter2"),
+            "swept values are secrets (STYLE P4)"
+        );
+        Ok(())
+    }
+}

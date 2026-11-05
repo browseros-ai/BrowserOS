@@ -311,6 +311,10 @@
       "name": "@browseros/browseros-mcp-rust",
       "version": "0.0.0",
     },
+    "crates/browseros-playwright": {
+      "name": "@browseros/browseros-playwright-rust",
+      "version": "0.0.0",
+    },
     "crates/browseros-service": {
       "name": "@browseros/browseros-service-rust",
       "version": "0.0.0",
@@ -381,6 +385,14 @@
         "@browseros/shared": "workspace:*",
         "@modelcontextprotocol/server": "^2.1.0",
         "zod": "^4.5.2",
+      },
+    },
+    "packages/browseros-playwright-js": {
+      "name": "@browseros/browseros-playwright-js",
+      "version": "0.0.0",
+      "devDependencies": {
+        "acorn": "^8.17.0",
+        "linkedom": "^0.18.13",
       },
     },
     "packages/build-server-tools": {
@@ -667,6 +679,10 @@
     "@browseros/browseros-core-rust": ["@browseros/browseros-core-rust@workspace:crates/browseros-core"],
 
     "@browseros/browseros-mcp-rust": ["@browseros/browseros-mcp-rust@workspace:crates/browseros-mcp"],
+
+    "@browseros/browseros-playwright-js": ["@browseros/browseros-playwright-js@workspace:packages/browseros-playwright-js"],
+
+    "@browseros/browseros-playwright-rust": ["@browseros/browseros-playwright-rust@workspace:crates/browseros-playwright"],
 
     "@browseros/browseros-service-rust": ["@browseros/browseros-service-rust@workspace:crates/browseros-service"],
 

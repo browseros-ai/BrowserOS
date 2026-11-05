@@ -309,11 +309,15 @@
     journal(raw.stringify({ kind: k, value: value }));
   };
   var watched = [];
+  // A repeat watch adds the listeners again: adding one that is already there changes nothing,
+  // and document.open() (sdk-playwright's setContent) removes every listener of the document
+  // while this world and its seal live on.
   var watch = function (root) {
-    if (!root || watched.indexOf(root) !== -1) return;
-    watched.push(root);
+    if (!root) return;
     raw.addEventListener.call(root, "input", record, true);
     raw.addEventListener.call(root, "change", record, true);
+    if (watched.indexOf(root) !== -1) return;
+    watched.push(root);
     observeTypes(root);
   };
   watch(document);

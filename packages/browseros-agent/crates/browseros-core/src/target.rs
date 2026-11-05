@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeSet, HashMap},
+    convert::Infallible,
     sync::Arc,
 };
 use tokio::sync::broadcast;
@@ -1131,13 +1132,22 @@ impl BrowserView {
             None => observer,
         })
     }
+    /// The factor core multiplies pointer coordinates by before it dispatches them on `page`'s
+    /// root session. A zoomed mobile preview takes them in its scaled on-screen space, so the
+    /// factor is its zoom divided by 100. Every other page, and every view without viewport
+    /// modes, uses 1.0. OOPIF sessions take their own coordinates unscaled. Callers that send
+    /// `Input.dispatchMouseEvent` themselves apply it so their input lands where core's would.
+    /// It reads cached state and does not admit the page.
+    #[must_use]
+    pub fn pointer_scale(&self, page: &PageId) -> f64 {
+        self.viewports
+            .as_ref()
+            .map_or(1.0, |viewports| viewports.pointer_scale(page))
+    }
     pub async fn input(&self, page: PageId) -> Result<Input, CoreError> {
         let access = self.page_access(page.clone()).await?;
         let observer = self.session.observe(page.clone()).await;
-        let scale = self
-            .viewports
-            .as_ref()
-            .map_or(1.0, |viewports| viewports.pointer_scale(&page));
+        let scale = self.pointer_scale(&page);
         let input = match access {
             Some(access) => Input::new(
                 Arc::new(observer.with_access(access.clone())),
@@ -1162,8 +1172,33 @@ impl BrowserView {
         page: PageId,
         o: ScreenshotCaptureOptions,
     ) -> Result<ScreenshotCaptureResult, CoreError> {
+        let Ok(capture) = self
+            .screenshot_checked(page, o, || Ok::<(), Infallible>(()))
+            .await?;
+        Ok(capture)
+    }
+
+    /// [`Self::screenshot`] with the caller's last word on the capture: `before_capture` runs
+    /// after the page is admitted, inside the session's capture lock, once the pointer is
+    /// hidden, with no await before `Page.captureScreenshot`. A privacy check placed before this
+    /// call would miss a page that turned private during those waits. A refusal sends no capture
+    /// and comes back as `Ok(Err(refusal))`.
+    pub async fn screenshot_checked<E>(
+        &self,
+        page: PageId,
+        o: ScreenshotCaptureOptions,
+        before_capture: impl FnOnce() -> Result<(), E>,
+    ) -> Result<Result<ScreenshotCaptureResult, E>, CoreError> {
         if self.epoch_guard()?.is_none() {
-            return self.session.screenshot(page, o).await;
+            let session = self.session.pages.get_session(page.clone()).await?;
+            let observer = self.session.observe(page).await;
+            return crate::screenshot::capture_screenshot_checked(
+                session.session,
+                observer,
+                o,
+                before_capture,
+            )
+            .await;
         }
         let access = self
             .page_access(page.clone())
@@ -1171,9 +1206,13 @@ impl BrowserView {
             .ok_or_else(|| cdp_policy::unsupported("Page.captureScreenshot"))?;
         let session = access.session().await?;
         let observer = Arc::new(self.session.observe(page).await.with_access(access.clone()));
-        let capture =
-            crate::screenshot::capture_screenshot_with_annotations(session.session, observer, o)
-                .await?;
+        let capture = crate::screenshot::capture_screenshot_checked(
+            session.session,
+            observer,
+            o,
+            before_capture,
+        )
+        .await?;
         access.fresh().await?;
         Ok(capture)
     }
@@ -1416,6 +1455,14 @@ impl BrowserView {
     }
     pub async fn tab_id_of(&self, page: PageId) -> Option<TabId> {
         self.session.pages.get_tab_id(page).await
+    }
+    /// Whether core opened this tab for the agent, as
+    /// [`PageManager::is_agent_created`](crate::pages::PageManager::is_agent_created) defines
+    /// it. Any other tab, such as a popup or the user's own tab, keeps its real focus state, so
+    /// a caller that needs focus emulation there turns it on per action. It reads the registry
+    /// and does not admit the page.
+    pub async fn is_agent_created(&self, page: &PageId) -> bool {
+        self.session.pages.is_agent_created(page).await
     }
     pub fn signals(&self) -> &Arc<PageSignals> {
         // This synchronous API exposes a read-only cache projection. Callers must perform the

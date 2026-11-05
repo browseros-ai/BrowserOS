@@ -8,9 +8,12 @@ use std::{
 use tokio::sync::{Mutex, broadcast};
 use tracing::warn;
 
+/// One frame's CDP endpoint, as [`FrameRegistry::resolve_frame_target`] found it.
 #[derive(Debug, Clone)]
 pub struct FrameTarget {
     pub session: ProtocolSession,
+    /// `{ "frameId": .. }` for a same-process child, whose session also serves its parent, so
+    /// accessibility reads must name the frame. Empty for page and OOPIF sessions.
     pub ax_params: Value,
     /// Root and OOPIF sessions already inspect the intended document. Same-process children share
     /// their nearest parent target session, so cursor acquisition must target the resolved child
@@ -18,8 +21,12 @@ pub struct FrameTarget {
     pub cursor_uses_session_default: bool,
 }
 
-/// Which CDP session reads each page and frame. None of its locks is held across a send on
-/// `cdp`, because a send refused as gone takes them to forget its session (see
+/// Which CDP session reaches each frame of each attached page. A page's own session is
+/// registered when core attaches the tab. Out-of-process iframes (OOPIFs) arrive through
+/// auto-attach events or are attached on demand, and a same-process child shares the session of
+/// the parent it was found through. A new connection epoch clears every entry, because flattened
+/// session ids belong to one websocket. None of its locks is held across a send on `cdp`,
+/// because a send refused as gone takes them to forget its session (see
 /// `BrowserSession::forget_session`).
 pub struct FrameRegistry {
     cdp: Arc<dyn CdpConnection>,
@@ -93,6 +100,13 @@ impl FrameRegistry {
         Ok(())
     }
 
+    /// The endpoint for the main frame (`None`) or one of `page_id`'s child frames. A known OOPIF
+    /// answers on its own session. A `cross_process` child (its owner element has no
+    /// `contentDocument` in the parent) that has not attached yet is attached by its target id.
+    /// Any other child shares `same_process_parent`'s session. Without a parent it reuses the
+    /// session it inherited before, else the page's. Passing the parent also records the
+    /// parent-to-child link that frame admission climbs later. The page must already be
+    /// attached. `BrowserView::page_session` attaches it.
     pub async fn resolve_frame_target(
         &self,
         page_id: PageId,
