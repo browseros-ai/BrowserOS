@@ -272,12 +272,32 @@ BrowserOS can use [Google Antigravity](https://github.com/google-antigravity/ant
     For Vertex AI, set `GOOGLE_GENAI_USE_VERTEXAI=True`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` and run `gcloud auth application-default login` instead.
   </Step>
   <Step title="Start the bridge">
+    From the repo root, in the same shell where `GEMINI_API_KEY` is set:
     ```bash
+    pip install -r packages/browseros-agent/tools/antigravity-bridge/requirements.txt
     python packages/browseros-agent/tools/antigravity-bridge/antigravity_bridge.py --port 8765
     ```
+    Check it is up with `curl http://127.0.0.1:8765/v1/models`. You should see `gemini-3.8-flash` in the list.
   </Step>
   <Step title="Add the provider">
-    In **Settings → AI**, add **Antigravity**. Base URL `http://127.0.0.1:8765/v1`, model `gemini-3.8-flash` (or any model the SDK accepts). Leave API Key empty unless you set `ANTIGRAVITY_BRIDGE_TOKEN`.
+    Open **Settings → AI & Agents**. Under **Runs on this machine**, click **Add** next to **Antigravity (local bridge)**.
+
+    ![Antigravity in the provider list](/images/byollm--antigravity-provider-list.png)
+
+    The dialog opens with Provider Type **Antigravity** and Base URL `http://127.0.0.1:8765/v1` already filled in.
+
+    ![Antigravity add-provider dialog](/images/byollm--antigravity-add-dialog.png)
+  </Step>
+  <Step title="Configure and save">
+    - **Provider Name**: e.g. `Antigravity`
+    - **Model**: `gemini-3.8-flash` (or any model the SDK accepts)
+    - **API Key**: leave empty unless you started the bridge with `ANTIGRAVITY_BRIDGE_TOKEN`
+
+    ![Configured Antigravity provider](/images/byollm--antigravity-provider-config.png)
+
+    <Note>
+    **Test** and **Save** go through the BrowserOS server, so run them inside BrowserOS. This screenshot comes from the extension loaded in plain Chromium, where no server is available, so it shows "Server URL not available". That message does not come from the bridge.
+    </Note>
   </Step>
 </Steps>
 
