@@ -2,10 +2,12 @@
 //!
 //! Agent scripts call the Playwright API they already know. Element work (selector resolution,
 //! strict mode, actionability states, hit tests) runs in the page's sealed isolated world
-//! (`browseros-sdk`), using Playwright's own `InjectedScript` built from the unmodified sources
-//! under `third_party/playwright/`. Retries, timeouts, frame hops and every decision stay in
-//! Rust, which also sends the trusted input. The isolated world shares the page's DOM but not
-//! its JavaScript, so the page can neither see nor tamper with the engine.
+//! (`browseros-sdk`), using Playwright's own `InjectedScript` built from the sources vendored
+//! unmodified under `third_party/playwright/`; the build only has the engine mask field values
+//! out of page text before it cuts or quotes that text (its README says where). Retries,
+//! timeouts, frame hops and every decision stay in Rust, which also sends the trusted input.
+//! The isolated world shares the page's DOM but not its JavaScript, so the page can neither see
+//! nor tamper with the engine.
 //!
 //! Licensing: Playwright is Apache-2.0. `THIRD_PARTY_NOTICES.md` carries its `LICENSE` and
 //! `NOTICE` and must ship next to any binary that embeds this crate.

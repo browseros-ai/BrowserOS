@@ -14,6 +14,17 @@
  * `bun scripts/build.ts` writes them, and `--check` fails when a committed copy is stale. The
  * crate embeds the assets with include_str!, so Cargo needs no build step. Use Bun 1.4.2, the
  * repo's packageManager: other versions emit other bytes.
+ *
+ * The page asset puts Neo's mask on page text before the engine cuts or re-encodes it for a
+ * preview or a locator hint (src/probe/page-mask.ts says why). The vendored files stay
+ * byte-identical; the build does it at resolution and load:
+ *
+ *   @isomorphic/stringUtils from injectedScript.ts and selectorGenerator.ts
+ *       resolves to src/probe/masked-strings.ts, upstream's module with its trim and quote
+ *       helpers masking their input first
+ *   selectorGenerator.ts
+ *       loads with `maskPageText` called first in suitableTextAlternatives (its cuts at a word
+ *       and a number) and escapeClassName (its CSS escapes), two functions of its own
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, relative, resolve, sep } from 'node:path'
@@ -37,9 +48,54 @@ const STUBS: Record<string, string> = {
   './consoleApi': resolve(packageRoot, 'src/stubs/consoleApi.ts'),
 }
 
+const injectedSource = (file: string) =>
+  resolve(vendorRoot, 'packages/injected/src', file)
+const SELECTOR_GENERATOR = injectedSource('selectorGenerator.ts')
+
+/** The engine files whose string helpers mask page text first (masked-strings.ts). */
+const MASKED_STRING_IMPORTERS = new Set([
+  injectedSource('injectedScript.ts'),
+  SELECTOR_GENERATOR,
+])
+
 /**
- * The stand-ins, and upstream's `@isomorphic/*` alias (its tsconfig) pointed at the vendored
- * copy. This package's own sources import vendored modules by relative path.
+ * The selector generator's own functions that cut or escape page text, each with the line it
+ * opens with upstream. The build fails when one is not there exactly once, so an upgrade that
+ * renames or reshapes one stops here until its mask is reviewed again.
+ */
+const MASKED_GENERATOR_FUNCTIONS = [
+  {
+    opening: 'function suitableTextAlternatives(text: string) {',
+    input: 'text',
+  },
+  {
+    opening: 'function escapeClassName(className: string): string {',
+    input: 'className',
+  },
+]
+
+/** selectorGenerator.ts with each of MASKED_GENERATOR_FUNCTIONS masking its input first. */
+function maskedSelectorGenerator(source: string): string {
+  let masked = source
+  for (const { opening, input } of MASKED_GENERATOR_FUNCTIONS) {
+    const [, ...rest] = masked.split(opening)
+    if (rest.length !== 1)
+      throw new Error(
+        `selectorGenerator.ts opens \`${opening}\` ${rest.length} times, not once: review Neo's mask (src/probe/page-mask.ts)`,
+      )
+    masked = masked.replace(
+      opening,
+      `${opening}\n  ${input} = maskPageText(${input});`,
+    )
+  }
+  const pageMask = resolve(packageRoot, 'src/probe/page-mask.ts')
+  return `import { maskPageText } from ${JSON.stringify(pageMask)};\n${masked}`
+}
+
+/**
+ * The stand-ins, Neo's mask on the engine's preview and hint text, and upstream's
+ * `@isomorphic/*` alias (its tsconfig) pointed at the vendored copy. This package's own
+ * sources import vendored modules by relative path.
  */
 const vendored: BunPlugin = {
   name: 'vendored-playwright',
@@ -48,6 +104,19 @@ const vendored: BunPlugin = {
       const stub = STUBS[args.path]
       if (!stub) throw new Error(`No stub for ${args.path}`)
       return { path: stub }
+    })
+    build.onResolve({ filter: /^@isomorphic\/stringUtils$/ }, (args) =>
+      MASKED_STRING_IMPORTERS.has(args.importer)
+        ? { path: resolve(packageRoot, 'src/probe/masked-strings.ts') }
+        : undefined,
+    )
+    build.onLoad({ filter: /selectorGenerator\.ts$/ }, async (args) => {
+      if (args.path !== SELECTOR_GENERATOR)
+        throw new Error(
+          `${args.path} is not the vendored selector generator that Neo's mask was reviewed on`,
+        )
+      const source = await Bun.file(args.path).text()
+      return { contents: maskedSelectorGenerator(source), loader: 'ts' }
     })
     build.onResolve({ filter: /^@isomorphic\// }, (args) => ({
       path: resolve(
@@ -114,8 +183,11 @@ ${prelude}`
       text: `/*
  * Neo's probe with Playwright ${tag} (${commit}), packages/injected InjectedScript.
  * Playwright: Copyright (c) Microsoft Corporation. Licensed under the Apache License, Version 2.0.
- * Built unmodified from crates/browseros-playwright/third_party/playwright, with
+ * Built from crates/browseros-playwright/third_party/playwright, with
  * packages/browseros-playwright-js/src/probe, by packages/browseros-playwright-js/scripts/build.ts.
+ * Changed by Neo: selectorGenerator.ts's suitableTextAlternatives and escapeClassName mask
+ * their input first (Neo's maskPageText), and injectedScript.ts and selectorGenerator.ts import
+ * Neo's masked stringUtils helpers; every other upstream module is built unmodified.
  * Do not edit. Notices: crates/browseros-playwright/THIRD_PARTY_NOTICES.md.
  */
 ${injected}`,

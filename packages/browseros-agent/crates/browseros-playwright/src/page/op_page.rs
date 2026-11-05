@@ -53,6 +53,11 @@ impl<'op> OpPage<'op> {
         &self.admitted.id
     }
 
+    /// The `Playwright` the op runs in, whose hooks learn every value a sweep finds.
+    pub(crate) fn playwright(&self) -> &'op Playwright {
+        self.pw
+    }
+
     /// The tab's sealed worlds.
     pub(crate) fn frames(&self) -> &FrameWorlds {
         self.state.frames()

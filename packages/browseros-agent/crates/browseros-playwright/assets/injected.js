@@ -1,8 +1,11 @@
 /*
  * Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.
  * Playwright: Copyright (c) Microsoft Corporation. Licensed under the Apache License, Version 2.0.
- * Built unmodified from crates/browseros-playwright/third_party/playwright, with
+ * Built from crates/browseros-playwright/third_party/playwright, with
  * packages/browseros-playwright-js/src/probe, by packages/browseros-playwright-js/scripts/build.ts.
+ * Changed by Neo: selectorGenerator.ts's suitableTextAlternatives and escapeClassName mask
+ * their input first (Neo's maskPageText), and injectedScript.ts and selectorGenerator.ts import
+ * Neo's masked stringUtils helpers; every other upstream module is built unmodified.
  * Do not edit. Notices: crates/browseros-playwright/THIRD_PARTY_NOTICES.md.
  */
 (() => {
@@ -1550,8 +1553,87 @@
     return { kind: "replaced" };
   }
 
+  // packages/browseros-playwright-js/src/probe/page-mask.ts
+  var ECHO_MASK = "[private]";
+  var MIN_LENGTH = 4;
+  var running;
+  function underMask(mask, run) {
+    const call = {
+      forms: mask === undefined ? undefined : formsOf(mask),
+      unmasked: false
+    };
+    const outer = running;
+    running = call;
+    try {
+      const value = run();
+      return { value, needsMask: call.unmasked };
+    } finally {
+      running = outer;
+    }
+  }
+  function maskPageText(text) {
+    const call = running;
+    if (!call)
+      return text;
+    if (!call.forms) {
+      call.unmasked = true;
+      return text;
+    }
+    return replaceForms(text, call.forms);
+  }
+  function formsOf(mask) {
+    const forms = new Set;
+    for (const value of mask) {
+      if ([...value].length < MIN_LENGTH)
+        continue;
+      const encoded = encodeURIComponent(value);
+      for (const form of [
+        value,
+        JSON.stringify(value).slice(1, -1),
+        encoded,
+        encoded.replaceAll("%20", "+"),
+        htmlEscaped(value, false),
+        htmlEscaped(value, true),
+        whiteSpaceNormalized(value),
+        flatString(value)
+      ])
+        if ([...form].length >= MIN_LENGTH)
+          forms.add(form);
+    }
+    return [...forms];
+  }
+  function htmlEscaped(value, attribute) {
+    return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll(" ", "&nbsp;").replaceAll('"', attribute ? "&quot;" : '"');
+  }
+  function whiteSpaceNormalized(value) {
+    return value.replace(/[\u200b\u00ad]/g, "").trim().replace(/\s+/g, " ");
+  }
+  function flatString(value) {
+    return value.split(" ").map((chunk) => chunk.replace(/\r\n/g, `
+`).replace(/[​­]/g, "").replace(/\s\s*/g, " ")).join(" ").trim();
+  }
+  function replaceForms(text, forms) {
+    const found = [];
+    for (const form of forms) {
+      for (let start = text.indexOf(form);start !== -1; start = text.indexOf(form, start + 1))
+        found.push({ start, end: start + form.length });
+    }
+    if (found.length === 0)
+      return text;
+    found.sort((a, b) => a.start - b.start || b.end - a.end);
+    let masked = "";
+    let cursor = 0;
+    for (const { start, end } of found) {
+      if (start < cursor)
+        continue;
+      masked += text.slice(cursor, start) + ECHO_MASK;
+      cursor = end;
+    }
+    return masked + text.slice(cursor);
+  }
+
   // packages/browseros-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 4;
+  var PROTOCOL = 6;
 
   // crates/browseros-playwright/third_party/playwright/packages/injected/src/domUtils.ts
   var globalOptions = {};
@@ -3085,6 +3167,23 @@
   // crates/browseros-playwright/third_party/playwright/packages/isomorphic/locatorUtils.ts
   function splitTestIdAttributeNames(testIdAttributeName) {
     return testIdAttributeName.split(",");
+  }
+
+  // packages/browseros-playwright-js/src/probe/masked-strings.ts
+  function trimStringWithEllipsis2(input, cap) {
+    return trimStringWithEllipsis(maskPageText(input), cap);
+  }
+  function escapeForTextSelector2(text, exact) {
+    return escapeForTextSelector(typeof text === "string" ? maskPageText(text) : text, exact);
+  }
+  function escapeForAttributeSelector2(value, exact) {
+    return escapeForAttributeSelector(typeof value === "string" ? maskPageText(value) : value, exact);
+  }
+  function quoteCSSAttributeValue2(text) {
+    return quoteCSSAttributeValue(maskPageText(text));
+  }
+  function escapeRegExp2(s) {
+    return escapeRegExp(maskPageText(s));
   }
 
   // crates/browseros-playwright/third_party/playwright/packages/injected/src/ariaSnapshotDistiller.ts
@@ -5709,7 +5808,7 @@
     {
       for (const attr of ["data-testid", "data-test-id", "data-test"]) {
         if (!testIdAttributeNames.includes(attr) && element.getAttribute(attr))
-          candidates.push({ engine: "css", selector: `[${attr}=${quoteCSSAttributeValue(element.getAttribute(attr))}]`, score: kOtherTestIdScore });
+          candidates.push({ engine: "css", selector: `[${attr}=${quoteCSSAttributeValue2(element.getAttribute(attr))}]`, score: kOtherTestIdScore });
       }
       const idAttr = element.getAttribute("id");
       if (idAttr && !isGuidLike(idAttr))
@@ -5719,42 +5818,42 @@
     if (element.nodeName === "IFRAME" || element.nodeName === "FRAME") {
       for (const attribute of ["name", "title"]) {
         if (element.getAttribute(attribute))
-          candidates.push({ engine: "css", selector: `${escapeNodeName(element)}[${attribute}=${quoteCSSAttributeValue(element.getAttribute(attribute))}]`, score: kIframeByAttributeScore });
+          candidates.push({ engine: "css", selector: `${escapeNodeName(element)}[${attribute}=${quoteCSSAttributeValue2(element.getAttribute(attribute))}]`, score: kIframeByAttributeScore });
       }
       for (const testIdAttr of testIdAttributeNames) {
         if (element.getAttribute(testIdAttr))
-          candidates.push({ engine: "css", selector: `[${testIdAttr}=${quoteCSSAttributeValue(element.getAttribute(testIdAttr))}]`, score: kTestIdScore });
+          candidates.push({ engine: "css", selector: `[${testIdAttr}=${quoteCSSAttributeValue2(element.getAttribute(testIdAttr))}]`, score: kTestIdScore });
       }
       penalizeScoreForLength([candidates]);
       return candidates;
     }
     for (const testIdAttr of testIdAttributeNames) {
       if (element.getAttribute(testIdAttr))
-        candidates.push({ engine: "internal:testid", selector: `[${testIdAttr}=${escapeForAttributeSelector(element.getAttribute(testIdAttr), true)}]`, score: kTestIdScore });
+        candidates.push({ engine: "internal:testid", selector: `[${testIdAttr}=${escapeForAttributeSelector2(element.getAttribute(testIdAttr), true)}]`, score: kTestIdScore });
     }
     if (element.nodeName === "INPUT" || element.nodeName === "TEXTAREA") {
       const input = element;
       if (input.placeholder) {
-        candidates.push({ engine: "internal:attr", selector: `[placeholder=${escapeForAttributeSelector(input.placeholder, true)}]`, score: kPlaceholderScoreExact });
+        candidates.push({ engine: "internal:attr", selector: `[placeholder=${escapeForAttributeSelector2(input.placeholder, true)}]`, score: kPlaceholderScoreExact });
         for (const alternative of suitableTextAlternatives(input.placeholder))
-          candidates.push({ engine: "internal:attr", selector: `[placeholder=${escapeForAttributeSelector(alternative.text, false)}]`, score: kPlaceholderScore - alternative.scoreBonus });
+          candidates.push({ engine: "internal:attr", selector: `[placeholder=${escapeForAttributeSelector2(alternative.text, false)}]`, score: kPlaceholderScore - alternative.scoreBonus });
       }
     }
     const labels = getElementLabels(injectedScript._evaluator._cacheText, element, { skipRefsInsideElement: options.noText });
     for (const label of labels) {
       const labelText = label.normalized;
-      candidates.push({ engine: "internal:label", selector: escapeForTextSelector(labelText, true), score: kLabelScoreExact });
+      candidates.push({ engine: "internal:label", selector: escapeForTextSelector2(labelText, true), score: kLabelScoreExact });
       for (const alternative of suitableTextAlternatives(labelText))
-        candidates.push({ engine: "internal:label", selector: escapeForTextSelector(alternative.text, false), score: kLabelScore - alternative.scoreBonus });
+        candidates.push({ engine: "internal:label", selector: escapeForTextSelector2(alternative.text, false), score: kLabelScore - alternative.scoreBonus });
     }
     const ariaRole = getAriaRole(element);
     if (ariaRole && !["none", "presentation"].includes(ariaRole))
       candidates.push({ engine: "internal:role", selector: ariaRole, score: kRoleWithoutNameScore });
     if (element.getAttribute("name") && ["BUTTON", "FORM", "FIELDSET", "FRAME", "IFRAME", "INPUT", "KEYGEN", "OBJECT", "OUTPUT", "SELECT", "TEXTAREA", "MAP", "META", "PARAM"].includes(element.nodeName))
-      candidates.push({ engine: "css", selector: `${escapeNodeName(element)}[name=${quoteCSSAttributeValue(element.getAttribute("name"))}]`, score: kCSSInputTypeNameScore });
+      candidates.push({ engine: "css", selector: `${escapeNodeName(element)}[name=${quoteCSSAttributeValue2(element.getAttribute("name"))}]`, score: kCSSInputTypeNameScore });
     if (["INPUT", "TEXTAREA"].includes(element.nodeName) && element.getAttribute("type") !== "hidden") {
       if (element.getAttribute("type"))
-        candidates.push({ engine: "css", selector: `${escapeNodeName(element)}[type=${quoteCSSAttributeValue(element.getAttribute("type"))}]`, score: kCSSInputTypeNameScore });
+        candidates.push({ engine: "css", selector: `${escapeNodeName(element)}[type=${quoteCSSAttributeValue2(element.getAttribute("type"))}]`, score: kCSSInputTypeNameScore });
     }
     if (["INPUT", "TEXTAREA", "SELECT"].includes(element.nodeName) && element.getAttribute("type") !== "hidden")
       candidates.push({ engine: "css", selector: escapeNodeName(element), score: kCSSInputTypeNameScore + 1 });
@@ -5768,15 +5867,15 @@
     if (!options.noText) {
       const title = element.getAttribute("title");
       if (title) {
-        candidates.push([{ engine: "internal:attr", selector: `[title=${escapeForAttributeSelector(title, true)}]`, score: kTitleScoreExact }]);
+        candidates.push([{ engine: "internal:attr", selector: `[title=${escapeForAttributeSelector2(title, true)}]`, score: kTitleScoreExact }]);
         for (const alternative of suitableTextAlternatives(title))
-          candidates.push([{ engine: "internal:attr", selector: `[title=${escapeForAttributeSelector(alternative.text, false)}]`, score: kTitleScore - alternative.scoreBonus }]);
+          candidates.push([{ engine: "internal:attr", selector: `[title=${escapeForAttributeSelector2(alternative.text, false)}]`, score: kTitleScore - alternative.scoreBonus }]);
       }
       const alt = element.getAttribute("alt");
       if (alt && ["APPLET", "AREA", "IMG", "INPUT"].includes(element.nodeName)) {
-        candidates.push([{ engine: "internal:attr", selector: `[alt=${escapeForAttributeSelector(alt, true)}]`, score: kAltTextScoreExact }]);
+        candidates.push([{ engine: "internal:attr", selector: `[alt=${escapeForAttributeSelector2(alt, true)}]`, score: kAltTextScoreExact }]);
         for (const alternative of suitableTextAlternatives(alt))
-          candidates.push([{ engine: "internal:attr", selector: `[alt=${escapeForAttributeSelector(alternative.text, false)}]`, score: kAltTextScore - alternative.scoreBonus }]);
+          candidates.push([{ engine: "internal:attr", selector: `[alt=${escapeForAttributeSelector2(alternative.text, false)}]`, score: kAltTextScore - alternative.scoreBonus }]);
       }
     }
     const text = options.noText ? "" : elementText(injectedScript._evaluator._cacheText, element).normalized;
@@ -5784,16 +5883,16 @@
     if (text) {
       if (isTargetNode) {
         if (text.length <= 80)
-          candidates.push([{ engine: "internal:text", selector: escapeForTextSelector(text, true), score: kTextScoreExact }]);
+          candidates.push([{ engine: "internal:text", selector: escapeForTextSelector2(text, true), score: kTextScoreExact }]);
         for (const alternative of textAlternatives)
-          candidates.push([{ engine: "internal:text", selector: escapeForTextSelector(alternative.text, false), score: kTextScore - alternative.scoreBonus }]);
+          candidates.push([{ engine: "internal:text", selector: escapeForTextSelector2(alternative.text, false), score: kTextScore - alternative.scoreBonus }]);
       }
       const cssToken = { engine: "css", selector: escapeNodeName(element), score: kCSSTagNameScore };
       for (const alternative of textAlternatives)
-        candidates.push([cssToken, { engine: "internal:has-text", selector: escapeForTextSelector(alternative.text, false), score: kTextScore - alternative.scoreBonus }]);
+        candidates.push([cssToken, { engine: "internal:has-text", selector: escapeForTextSelector2(alternative.text, false), score: kTextScore - alternative.scoreBonus }]);
       if (isTargetNode && text.length <= 80) {
-        const re = new RegExp("^" + escapeRegExp(text) + "$");
-        candidates.push([cssToken, { engine: "internal:has-text", selector: escapeForTextSelector(re, false), score: kTextScoreRegex }]);
+        const re = new RegExp("^" + escapeRegExp2(text) + "$");
+        candidates.push([cssToken, { engine: "internal:has-text", selector: escapeForTextSelector2(re, false), score: kTextScoreRegex }]);
       }
     }
     const ariaRole = getAriaRole(element);
@@ -5803,24 +5902,24 @@
       const accessibleDescription = getElementAccessibleDescription(element, false);
       const ariaDescription = options.noText && accessibleDescription.derivedFromContent ? "" : accessibleDescription.text;
       if (ariaName && !ariaName.match(/^\p{Co}+$/u)) {
-        const roleToken = { engine: "internal:role", selector: `${ariaRole}[name=${escapeForAttributeSelector(ariaName, true)}]`, score: kRoleWithNameScoreExact };
+        const roleToken = { engine: "internal:role", selector: `${ariaRole}[name=${escapeForAttributeSelector2(ariaName, true)}]`, score: kRoleWithNameScoreExact };
         candidates.push([roleToken]);
         for (const alternative of suitableTextAlternatives(ariaName))
-          candidates.push([{ engine: "internal:role", selector: `${ariaRole}[name=${escapeForAttributeSelector(alternative.text, false)}]`, score: kRoleWithNameScore - alternative.scoreBonus }]);
+          candidates.push([{ engine: "internal:role", selector: `${ariaRole}[name=${escapeForAttributeSelector2(alternative.text, false)}]`, score: kRoleWithNameScore - alternative.scoreBonus }]);
         if (ariaDescription) {
-          candidates.push([{ engine: "internal:role", selector: `${ariaRole}[name=${escapeForAttributeSelector(ariaName, true)}][description=${escapeForAttributeSelector(ariaDescription, true)}]`, score: kRoleWithNameScoreExact + 1 }]);
+          candidates.push([{ engine: "internal:role", selector: `${ariaRole}[name=${escapeForAttributeSelector2(ariaName, true)}][description=${escapeForAttributeSelector2(ariaDescription, true)}]`, score: kRoleWithNameScoreExact + 1 }]);
           for (const alternative of suitableTextAlternatives(ariaName))
-            candidates.push([{ engine: "internal:role", selector: `${ariaRole}[name=${escapeForAttributeSelector(alternative.text, false)}][description=${escapeForAttributeSelector(ariaDescription, false)}]`, score: kRoleWithNameScore - alternative.scoreBonus + 1 }]);
+            candidates.push([{ engine: "internal:role", selector: `${ariaRole}[name=${escapeForAttributeSelector2(alternative.text, false)}][description=${escapeForAttributeSelector2(ariaDescription, false)}]`, score: kRoleWithNameScore - alternative.scoreBonus + 1 }]);
         }
       } else {
         const roleToken = { engine: "internal:role", selector: `${ariaRole}`, score: kRoleWithoutNameScore };
         if (ariaDescription)
-          candidates.push([{ engine: "internal:role", selector: `${ariaRole}[description=${escapeForAttributeSelector(ariaDescription, true)}]`, score: kRoleWithoutNameScore + 1 }]);
+          candidates.push([{ engine: "internal:role", selector: `${ariaRole}[description=${escapeForAttributeSelector2(ariaDescription, true)}]`, score: kRoleWithoutNameScore + 1 }]);
         for (const alternative of textAlternatives)
-          candidates.push([roleToken, { engine: "internal:has-text", selector: escapeForTextSelector(alternative.text, false), score: kTextScore - alternative.scoreBonus }]);
+          candidates.push([roleToken, { engine: "internal:has-text", selector: escapeForTextSelector2(alternative.text, false), score: kTextScore - alternative.scoreBonus }]);
         if (!options.noText && isTargetNode && text.length <= 80) {
-          const re = new RegExp("^" + escapeRegExp(text) + "$");
-          candidates.push([roleToken, { engine: "internal:has-text", selector: escapeForTextSelector(re, false), score: kTextScoreRegex }]);
+          const re = new RegExp("^" + escapeRegExp2(text) + "$");
+          candidates.push([roleToken, { engine: "internal:has-text", selector: escapeForTextSelector2(re, false), score: kTextScoreRegex }]);
         }
       }
     }
@@ -5828,7 +5927,7 @@
     return candidates;
   }
   function makeSelectorForId(id) {
-    return /^[a-zA-Z][a-zA-Z0-9\-\_]+$/.test(id) ? "#" + id : `[id=${quoteCSSAttributeValue(id)}]`;
+    return /^[a-zA-Z][a-zA-Z0-9\-\_]+$/.test(id) ? "#" + id : `[id=${quoteCSSAttributeValue2(id)}]`;
   }
   function cssFallback(injectedScript, targetElement, options) {
     const root = options.root ?? targetElement.ownerDocument;
@@ -5954,6 +6053,7 @@
     return match[1].trimEnd();
   }
   function suitableTextAlternatives(text) {
+    text = maskPageText(text);
     let result = [];
     {
       const match = text.match(/^([\d.,]+)[^.,\w]/);
@@ -5986,6 +6086,7 @@
     return node.nodeName.toLocaleLowerCase().replace(/[:\.]/g, (char) => "\\" + char);
   }
   function escapeClassName(className) {
+    className = maskPageText(className);
     let result = "";
     for (let i = 0;i < className.length; i++)
       result += cssEscapeCharacter(className, i);
@@ -7405,7 +7506,7 @@ ${value.stack}`;
           attrs.push(` ${name}="${value}"`);
       }
       attrs.sort((a, b) => a.length - b.length);
-      const attrText = trimStringWithEllipsis(attrs.join(""), 500);
+      const attrText = trimStringWithEllipsis2(attrs.join(""), 500);
       if (this._autoClosingTags.has(element.nodeName))
         return oneLine(`<${element.nodeName.toLowerCase()}${attrText}/>`);
       const children = element.childNodes;
@@ -7416,7 +7517,7 @@ ${value.stack}`;
           onlyText = onlyText && children[i].nodeType === Node.TEXT_NODE;
       }
       const text = onlyText ? element.textContent || "" : children.length ? "…" : "";
-      return oneLine(`<${element.nodeName.toLowerCase()}${attrText}>${trimStringWithEllipsis(text, 50)}</${element.nodeName.toLowerCase()}>`);
+      return oneLine(`<${element.nodeName.toLowerCase()}${attrText}>${trimStringWithEllipsis2(text, 50)}</${element.nodeName.toLowerCase()}>`);
     }
     _generateSelectors(elements) {
       this._evaluator.begin();
@@ -8116,22 +8217,20 @@ ${value.stack}`;
     if (found.kind !== "one")
       return found;
     const { element } = found;
-    const preview = world.injected.previewNode(element);
     if (request.want === "element")
       return {
         kind: "element",
         pin: world.pins.add(element),
-        preview,
+        preview: world.injected.previewNode(element),
         sensitive: world.seal.kind(element)
       };
     const src = frameSource(element);
     if (src === undefined)
-      return { kind: "notFrame", preview };
+      return { kind: "notFrame", preview: world.injected.previewNode(element) };
     return {
       kind: "frame",
       pin: world.pins.add(element),
       key: world.refs.frameKey(element),
-      preview,
       visible: world.injected.utils.isElementVisible(element),
       src
     };
@@ -8572,6 +8671,7 @@ ${value.stack}`;
     document: documentText
   };
   var UNINSTALLED = { kind: "uninstalled" };
+  var NEEDS_MASK = { kind: "needsMask" };
   function described(world) {
     return {
       kind: "described",
@@ -8585,6 +8685,19 @@ ${value.stack}`;
     const refs = new RefMap;
     let world;
     let lastSeq;
+    function answer(booted, request, scope) {
+      try {
+        if (request.op === "pinned")
+          return pinned(booted, request);
+        if (request.op === "setContent")
+          return replaceDocument(booted, request, () => {
+            world = undefined;
+          });
+        return dispatch(booted, request.op, request, scope);
+      } catch (error) {
+        return errorReply(classify(error), error instanceof Error ? error.message : String(error));
+      }
+    }
     return {
       boot(options) {
         const { frameSeq, epoch } = parseBootOptions(options);
@@ -8602,25 +8715,23 @@ ${value.stack}`;
         lastSeq = frameSeq;
         return retired === undefined ? described(world) : { ...described(world), retired };
       },
-      call(request, root) {
-        if (!world)
+      call(request, root, mask) {
+        const booted = world;
+        if (!booted)
           return UNINSTALLED;
         if (!hasKnownOp(request))
           return errorReply("internal", "not a probe request");
+        if (!isMask(mask))
+          return errorReply("internal", "not a probe mask");
         const scope = root instanceof Node ? root : undefined;
-        try {
-          if (request.op === "pinned")
-            return pinned(world, request);
-          if (request.op === "setContent")
-            return replaceDocument(world, request, () => {
-              world = undefined;
-            });
-          return dispatch(world, request.op, request, scope);
-        } catch (error) {
-          return errorReply(classify(error), error instanceof Error ? error.message : String(error));
-        }
+        const callMask = mask === undefined ? undefined : [...mask, ...booted.seal.sensitiveValues()];
+        const { value, needsMask } = underMask(callMask, () => answer(booted, request, scope));
+        return needsMask ? NEEDS_MASK : value;
       }
     };
+  }
+  function isMask(mask) {
+    return mask === undefined || Array.isArray(mask) && mask.every((value) => typeof value === "string");
   }
   function dispatch(world, op, request, root) {
     const handler = HANDLERS[op];

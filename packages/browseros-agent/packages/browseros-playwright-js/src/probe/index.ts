@@ -13,16 +13,21 @@
  * The seal comes first in the same script, so a seal that throws leaves no engine behind,
  * and `boot` refuses a world without one. After that every request is one CALL_FUNCTION
  * (protocol.ts). Each request family has its own handler file; this one owns the lifecycle
- * (boot and re-key), the dispatch table and the error replies.
+ * (boot and re-key), the dispatch table, the error replies, and the gate that answers
+ * `needsMask` for a reply whose page text the engine cut without the call's mask
+ * (page-mask.ts).
  */
 import { isInvalidSelectorError } from '../../../../crates/browseros-playwright/third_party/playwright/packages/isomorphic/selectorParser'
 import { RefMap } from './aria-ref'
 import { documentText, replaceDocument } from './document'
+import { underMask } from './page-mask'
 import {
   type BootOptions,
   type Described,
   type ErrorClass,
   type ErrorReply,
+  type Mask,
+  type NeedsMask,
   type NeoProbe,
   PROTOCOL,
   type ProbeRequest,
@@ -77,6 +82,7 @@ const HANDLERS: Handlers = {
 }
 
 const UNINSTALLED: Uninstalled = { kind: 'uninstalled' }
+const NEEDS_MASK: NeedsMask = { kind: 'needsMask' }
 
 function described(world: World): Described {
   return {
@@ -96,6 +102,31 @@ function createProbe(): NeoProbe {
   // The seq of the last boot, kept when setContent unboots: whoever booted it may still hold
   // refs printed under it, so the next boot hands it to Rust to retire.
   let lastSeq: number | undefined
+
+  /** One request's reply in `booted`, the error replies included. */
+  function answer(
+    booted: World,
+    request: ProbeRequest,
+    scope: Node | undefined,
+  ): unknown {
+    try {
+      if (request.op === 'pinned') return pinned(booted, request)
+      // document.open() keeps the window, and with it this world and this probe. From the
+      // moment it returns, the engine, the seq, every pin and every ref belong to the old
+      // document, so the probe unboots: the next request answers `uninstalled`, and Rust
+      // boots the new document under a new seq, as for any other new document.
+      if (request.op === 'setContent')
+        return replaceDocument(booted, request, () => {
+          world = undefined
+        })
+      return dispatch(booted, request.op, request, scope)
+    } catch (error) {
+      return errorReply(
+        classify(error),
+        error instanceof Error ? error.message : String(error),
+      )
+    }
+  }
 
   return {
     boot(options) {
@@ -122,31 +153,38 @@ function createProbe(): NeoProbe {
         : { ...described(world), retired }
     },
 
-    call(request, root) {
-      if (!world) return UNINSTALLED
+    call(request, root, mask) {
+      const booted = world
+      if (!booted) return UNINSTALLED
       if (!hasKnownOp(request))
         return errorReply('internal', 'not a probe request')
+      if (!isMask(mask)) return errorReply('internal', 'not a probe mask')
       // On a context call CALL_FUNCTION passes the world's global as `root`.
       const scope = root instanceof Node ? root : undefined
-      try {
-        if (request.op === 'pinned') return pinned(world, request)
-        // document.open() keeps the window, and with it this world and this probe. From the
-        // moment it returns, the engine, the seq, every pin and every ref belong to the old
-        // document, so the probe unboots: the next request answers `uninstalled`, and Rust
-        // boots the new document under a new seq, as for any other new document.
-        if (request.op === 'setContent')
-          return replaceDocument(world, request, () => {
-            world = undefined
-          })
-        return dispatch(world, request.op, request, scope)
-      } catch (error) {
-        return errorReply(
-          classify(error),
-          error instanceof Error ? error.message : String(error),
-        )
-      }
+      // Rust's mask is the site as its sweep found it, a round trip or more ago, and this
+      // frame's fields may have been typed into since. Read now, in the same synchronous call
+      // as every cut, this frame's own values are never newer than the mask; Rust's sweep
+      // after the call catches another frame of the site that changed (resolve::masked_call).
+      const callMask =
+        mask === undefined
+          ? undefined
+          : [...mask, ...booted.seal.sensitiveValues()]
+      // A reply that holds page text the engine cut or quoted without a mask never leaves
+      // the page: Rust is asked for the mask instead, and sends the request again with it.
+      const { value, needsMask } = underMask(callMask, () =>
+        answer(booted, request, scope),
+      )
+      return needsMask ? NEEDS_MASK : value
     },
   }
+}
+
+/** No mask, or Rust's: an array of strings. */
+function isMask(mask: unknown): mask is Mask | undefined {
+  return (
+    mask === undefined ||
+    (Array.isArray(mask) && mask.every((value) => typeof value === 'string'))
+  )
 }
 
 /** `op` travels beside the request so the table lookup and the request agree on one op. */

@@ -308,7 +308,6 @@ const REPLY_EXAMPLES: {
       kind: 'frame',
       pin: 4,
       key: '#1',
-      preview: '<iframe id="pay" src="https://pay.example/frame"></iframe>',
       visible: true,
       src: 'https://pay.example/frame',
     },
@@ -446,6 +445,7 @@ const REPLY_EXAMPLES: {
     },
     { kind: 'error', class: 'internal', message: 'not built yet' },
   ],
+  needsMask: [{ kind: 'needsMask' }],
   uninstalled: [{ kind: 'uninstalled' }],
 }
 
@@ -456,7 +456,7 @@ export function protocolDocument() {
     callFunction: CALL_FUNCTION,
     replyKinds: REPLY_KINDS,
     byHandle: ['pinned'],
-    anyRequest: ['error', 'uninstalled'],
+    anyRequest: ['error', 'uninstalled', 'needsMask'],
     requests: Object.values(REQUEST_EXAMPLES).flat(),
     replies: Object.values(REPLY_EXAMPLES).flat(),
   }

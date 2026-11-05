@@ -10,6 +10,11 @@
 //! hostile page could have defined `__neoProbe` and read the request. An object id carries its
 //! renderer isolate's id, and the same call on a stale handle fails with "Cannot find context
 //! with specified id", which [`ProbeFailure::from_core`] reads as gone.
+//!
+//! A call may carry a [`ProbeMask`], the values of every sensitive field of its frame's site,
+//! as `CALL_FUNCTION`'s third argument. The probe masks page text with it before Playwright's
+//! engine cuts or quotes that text for a preview or a locator hint; a call without one whose
+//! reply would hold such text answers `needsMask` (`resolve::Resolver` asks again with it).
 
 use std::error::Error;
 use std::fmt;
@@ -17,6 +22,7 @@ use std::fmt;
 use browseros_cdp::CdpError;
 use browseros_core::CoreError;
 use browseros_core::page_js::is_stale_context;
+use browseros_core::sensitive_fields::FieldValues;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -26,10 +32,34 @@ use crate::probe::probe_request::ProbeRequest;
 use crate::world::{Pin, SealedWorld};
 
 /// The function declaration every request is sent with. It must equal `CALL_FUNCTION` in
-/// protocol.ts (a test checks it against probe-protocol.json). `this` is the world's global
-/// on a world call and the element on an element call; a world without a booted probe
-/// answers `uninstalled`, which Rust treats like a stale context.
-pub(crate) const CALL_FUNCTION: &str = "function (request, root) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this) : { kind: \"uninstalled\" }; }";
+/// protocol.ts (a test checks it against probe-protocol.json). It runs on the world's global,
+/// with the request, an element handle's node or null as the call's root, and the call's mask
+/// when it has one; a world without a booted probe answers `uninstalled`, which Rust treats
+/// like a stale context.
+pub(crate) const CALL_FUNCTION: &str = "function (request, root, mask) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, mask) : { kind: \"uninstalled\" }; }";
+
+/// The values of one frame's site that a call hands the probe as protocol.ts's `Mask`: those
+/// long enough to be masked wherever they occur (`FieldValues::registrable`). A short value is
+/// masked only where a whole string equals it, which no cut can make of it, so it stays out.
+/// They go only to a world of that site, whose own page script could read those fields anyway,
+/// and only into its sealed world. It borrows the values, keeping no copy of its own, never
+/// prints and has no `Serialize` (STYLE P4): [`call_arguments`] is the one place that encodes
+/// them.
+#[derive(Clone, Copy)]
+pub(crate) struct ProbeMask<'a>(&'a FieldValues);
+
+impl<'a> ProbeMask<'a> {
+    /// The mask of `values`.
+    pub(crate) fn of(values: &'a FieldValues) -> Self {
+        Self(values)
+    }
+}
+
+impl fmt::Debug for ProbeMask<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("[field values]")
+    }
+}
 
 /// Why a probe call or an install produced no reply.
 #[derive(Debug)]
@@ -144,22 +174,7 @@ pub(crate) async fn call(
     world: &SealedWorld,
     request: &ProbeRequest,
 ) -> Result<ProbeReply, ProbeFailure> {
-    let request = serde_json::to_value(request).map_err(|error| {
-        ProbeFailure::Broken(format!("a probe request did not encode: {error}"))
-    })?;
-    let params = json!({
-        "objectId": world.global(),
-        "functionDeclaration": CALL_FUNCTION,
-        "arguments": [{ "value": request }],
-        "returnByValue": true,
-        "awaitPromise": true,
-    });
-    let called = world
-        .session()
-        .send::<_, Value>("Runtime.callFunctionOn", params)
-        .await
-        .map_err(ProbeFailure::from_core)?;
-    reply_of(called)
+    send(world, request, None, None).await
 }
 
 /// One request about an element handle's node (`root`, a remote object in this world), which
@@ -176,13 +191,31 @@ pub(crate) async fn call_on(
     request: &ProbeRequest,
     root: &str,
 ) -> Result<ProbeReply, ProbeFailure> {
-    let request = serde_json::to_value(request).map_err(|error| {
-        ProbeFailure::Broken(format!("a probe request did not encode: {error}"))
-    })?;
+    send(world, request, Some(root), None).await
+}
+
+/// [`call`], or [`call_on`] with `root`, carrying `mask`: what a request whose reply previews
+/// page text is sent with, so that it never answers `needsMask`.
+pub(crate) async fn call_masked(
+    world: &SealedWorld,
+    request: &ProbeRequest,
+    root: Option<&str>,
+    mask: ProbeMask<'_>,
+) -> Result<ProbeReply, ProbeFailure> {
+    send(world, request, root, Some(mask)).await
+}
+
+/// One `Runtime.callFunctionOn` of [`CALL_FUNCTION`] on the world's global.
+async fn send(
+    world: &SealedWorld,
+    request: &ProbeRequest,
+    root: Option<&str>,
+    mask: Option<ProbeMask<'_>>,
+) -> Result<ProbeReply, ProbeFailure> {
     let params = json!({
         "objectId": world.global(),
         "functionDeclaration": CALL_FUNCTION,
-        "arguments": [{ "value": request }, { "objectId": root }],
+        "arguments": call_arguments(request, root, mask)?,
         "returnByValue": true,
         "awaitPromise": true,
     });
@@ -192,13 +225,40 @@ pub(crate) async fn call_on(
         .await
         .map_err(|error| match ProbeFailure::from_core(error) {
             ProbeFailure::Cdp(CoreError::Cdp(CdpError::Protocol { message, .. }))
-                if message.contains("same JavaScript world") =>
+                if root.is_some() && message.contains("same JavaScript world") =>
             {
                 ProbeFailure::Gone
             }
             failure => failure,
         })?;
     reply_of(called)
+}
+
+/// [`CALL_FUNCTION`]'s `arguments` for one call: the request, the root (null when only a mask
+/// follows), and the mask's values long enough to be masked wherever they occur, encoded here
+/// by hand because nothing else may encode them.
+fn call_arguments(
+    request: &ProbeRequest,
+    root: Option<&str>,
+    mask: Option<ProbeMask<'_>>,
+) -> Result<Vec<Value>, ProbeFailure> {
+    let request = serde_json::to_value(request).map_err(|error| {
+        ProbeFailure::Broken(format!("a probe request did not encode: {error}"))
+    })?;
+    let mut arguments = vec![json!({ "value": request })];
+    match (root, mask) {
+        (Some(root), _) => arguments.push(json!({ "objectId": root })),
+        (None, Some(_)) => arguments.push(json!({ "value": null })),
+        (None, None) => {}
+    }
+    if let Some(ProbeMask(values)) = mask {
+        let values = values
+            .registrable()
+            .map(|value| Value::String(value.to_owned()))
+            .collect();
+        arguments.push(json!({ "value": Value::Array(values) }));
+    }
+    Ok(arguments)
 }
 
 /// The reply in a by-value `Runtime.callFunctionOn` result; `uninstalled` is `Gone`. The
@@ -281,16 +341,38 @@ fn is_uninstalled(preview: Option<&ObjectPreview>) -> bool {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::marker::PhantomData;
 
     use browseros_cdp::CdpError;
     use browseros_core::CoreError;
     use browseros_core::sensitive_fields::FieldValues;
+    use serde::Serialize;
     use serde_json::{Value, json};
 
-    use super::{CALL_FUNCTION, ProbeFailure, reply_of};
+    use super::{CALL_FUNCTION, ProbeFailure, ProbeMask, call_arguments, reply_of};
     use crate::probe::probe_reply::ProbeReply;
+    use crate::probe::probe_request::ProbeRequest;
 
     const PROTOCOL: &str = include_str!("../../tests/data/probe-protocol.json");
+
+    /// `<Serializes<T>>::YES` is the inherent `true` when `T: Serialize`, and the trait's
+    /// `false` otherwise.
+    struct Serializes<T>(PhantomData<T>);
+
+    trait NotSerialize {
+        const YES: bool = false;
+    }
+
+    impl<T> NotSerialize for Serializes<T> {}
+
+    impl<T: Serialize> Serializes<T> {
+        const YES: bool = true;
+    }
+
+    // A mask is raw field values, which never print, serialize or log (STYLE P4): the build
+    // fails once it can be serialized, and the check sees a type that can.
+    const _: () = assert!(!<Serializes<ProbeMask<'static>>>::YES);
+    const _: () = assert!(<Serializes<ProbeRequest>>::YES);
 
     #[test]
     fn tests_that_the_call_function_is_the_one_the_probe_documents() -> Result<(), Box<dyn Error>> {
@@ -299,6 +381,28 @@ mod tests {
             protocol["callFunction"].as_str(),
             Some(CALL_FUNCTION),
             "Rust sends protocol.ts's CALL_FUNCTION, byte for byte"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_a_mask_holds_only_long_values_and_never_prints() -> Result<(), Box<dyn Error>> {
+        let values = FieldValues::from_sweep(&json!(["hunter2", "987"]));
+        let mask = ProbeMask::of(&values);
+        let arguments = call_arguments(&ProbeRequest::Sweep, None, Some(mask))?;
+        assert_eq!(
+            arguments,
+            [
+                json!({ "value": { "op": "sweep" } }),
+                json!({ "value": null }),
+                json!({ "value": ["hunter2"] }),
+            ],
+            "the mask is CALL_FUNCTION's third argument, and a short value is masked only \
+             whole, which no cut makes of it"
+        );
+        assert!(
+            !format!("{mask:?}").contains("hunter2"),
+            "a mask is secrets (STYLE P4)"
         );
         Ok(())
     }

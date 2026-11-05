@@ -1,0 +1,25 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Hops</title></head>
+<body><h1 id="note">Hops</h1>
+<script>
+// Two iframes, so `frameLocator('iframe')` is a strict violation inside its frame hop: a
+// same-origin password field, and an empty frame. The page copies the field's typed value into
+// both iframes' title and fallback text, and into its heading, which is no iframe at all.
+for (const [title, src] of [['field', '/site_copy/field.html'], ['empty', 'about:blank']]) {
+  const frame = document.createElement('iframe');
+  frame.title = title;
+  frame.src = src;
+  document.body.append(frame);
+}
+window.field = () => frames[0].document.querySelector('input');
+window.copyField = () => {
+  const value = field().value;
+  // Long enough that a preview's 50-character cut falls inside the value.
+  const line = `The name this account was opened under is ${value} tail`;
+  for (const frame of document.querySelectorAll('iframe')) {
+    frame.title = line;
+    frame.textContent = line;
+  }
+  document.getElementById('note').textContent = line;
+  return value.length;
+};
+</script></body></html>

@@ -16,6 +16,13 @@
 //! of another site copies its hidden same-site sibling's password into its own heading, which
 //! an ai-mode snapshot stitches in.
 //!
+//! Playwright's engine cuts page text inside the page: a preview at 50 characters, a locator
+//! hint at a word or a number. A secret cut short no longer matches a mask of whole values, so
+//! previews and hints must hold no part of it at all, not even its first three characters. A
+//! fifth page (`tests/data/site_copy/hops.html`) has them raised inside a frame hop. One test
+//! keeps typing into the field while `page.$` previews the copy, so each sweep after the call
+//! finds a value the call lacked and the handle is withheld.
+//!
 //! The last test prints what reads cost; run it with `--nocapture`.
 //!
 //! Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005), for example
@@ -56,6 +63,7 @@ fn site_copy_pages() -> HashMap<String, Page> {
         ("field", include_str!("data/site_copy/field.html")),
         ("pair", include_str!("data/site_copy/pair.html")),
         ("sibling", include_str!("data/site_copy/sibling.html")),
+        ("hops", include_str!("data/site_copy/hops.html")),
     ]
     .into_iter()
     .map(|(name, body)| {
@@ -103,18 +111,45 @@ async fn type_and_copy(run: &LiveRun, page: &TestPage, secret: &str) -> TestResu
     Ok(())
 }
 
+/// One chunk of a locator: a CSS selector, parsed as the prelude sends it.
+fn css(selector: &str) -> Value {
+    json!({ "parts": [{
+        "name": "css",
+        "body": [{ "simples": [{ "selector": { "css": selector, "functions": [] }, "combinator": "" }] }],
+        "source": selector,
+    }] })
+}
+
 /// A locator for one CSS selector in the main frame, as the prelude sends `page.locator(..)`.
 fn at(page: &TestPage, selector: &str) -> Value {
     json!({
         "$neo": "locator",
         "page": brand(page),
-        "chunks": [{ "parts": [{
-            "name": "css",
-            "body": [{ "simples": [{ "selector": { "css": selector, "functions": [] }, "combinator": "" }] }],
-            "source": selector,
-        }] }],
+        "chunks": [css(selector)],
         "display": format!("locator('{selector}')"),
     })
+}
+
+/// `page.frameLocator(frame).locator(selector)`: a hop through `frame` in the main frame.
+fn through(page: &TestPage, frame: &str, selector: &str) -> Value {
+    json!({
+        "$neo": "locator",
+        "page": brand(page),
+        "chunks": [css(frame), css(selector)],
+        "display": format!("frameLocator('{frame}').locator('{selector}')"),
+    })
+}
+
+/// The fixtures' long copy of the secret, previewed: masked, then cut at 50 characters, so the
+/// cut falls inside the mask (`tests/data/site_copy/top.html` and `hops.html`).
+const LONG_TEXT: &str = "The name this account was opened under is [privat…";
+
+/// The longest start of `secret`, three characters or more, that `shown` holds.
+fn leaked_start<'a>(shown: &str, secret: &'a str) -> Option<&'a str> {
+    (3..=secret.len())
+        .rev()
+        .filter_map(|end| secret.get(..end))
+        .find(|start| shown.contains(start))
 }
 
 /// One read of the top document and its input; `call.api` names the method the script ran.
@@ -133,10 +168,14 @@ enum Expect {
     Is(Value),
     /// The read succeeds, and each of these is part of one of the result's strings.
     Shows(Vec<&'static str>),
-    /// The read fails with `code`, and its message previews each of these.
+    /// The read succeeds, and each of these is part of one of the result's strings: previews,
+    /// whose text the engine cuts, so they hold no start of the secret either.
+    Previews(Vec<String>),
+    /// The read fails with `code`, and its message previews each of these. Its previews and
+    /// locator hints hold no start of the secret.
     Fails {
         code: ErrorCode,
-        previews: Vec<&'static str>,
+        previews: Vec<String>,
     },
 }
 
@@ -150,6 +189,11 @@ impl Expect {
         if shown.contains(secret) {
             return Some(format!("holds {secret} raw: {shown}"));
         }
+        if matches!(self, Self::Previews(_) | Self::Fails { .. })
+            && let Some(start) = leaked_start(&shown, secret)
+        {
+            return Some(format!("holds {start:?}, the start of {secret}: {shown}"));
+        }
         let met = match (self, got) {
             (Self::Is(want), Ok(value)) => value == want,
             (Self::Shows(parts), Ok(value)) => {
@@ -158,10 +202,18 @@ impl Expect {
                     .iter()
                     .all(|part| texts.iter().any(|text| text.contains(part)))
             }
+            (Self::Previews(parts), Ok(value)) => {
+                let texts = strings(value);
+                parts
+                    .iter()
+                    .all(|part| texts.iter().any(|text| text.contains(part.as_str())))
+            }
             (Self::Fails { code, previews }, Err(error)) => {
                 let message = error.to_string();
                 error.error_code() == Some(*code)
-                    && previews.iter().all(|preview| message.contains(preview))
+                    && previews
+                        .iter()
+                        .all(|preview| message.contains(preview.as_str()))
             }
             _ => false,
         };
@@ -194,8 +246,8 @@ struct Case {
 }
 
 /// Every sealed-world read of the top document whose output holds page text: the document
-/// reads, each element read string, a handle's preview, a strict violation's previews, and the
-/// snapshots, each with what it must return.
+/// reads, each element read string, a handle's preview, a strict violation's previews and
+/// locator hints, and the snapshots, each with what it must return.
 fn reads(page: &TestPage, field: FieldFrame) -> Vec<Case> {
     let case = |read, expect| Case { read, expect };
     let document = |api: &'static str| Read {
@@ -224,7 +276,7 @@ fn reads(page: &TestPage, field: FieldFrame) -> Vec<Case> {
         FieldFrame::Stitched => vec!["Signed in with [private]", "••••"],
         FieldFrame::Unreached => vec!["Signed in with [private]"],
     };
-    vec![
+    let mut cases = vec![
         case(document("page.title"), Expect::Is(json!("[private]"))),
         case(
             document("page.content"),
@@ -251,27 +303,9 @@ fn reads(page: &TestPage, field: FieldFrame) -> Vec<Case> {
         ),
         case(every("locator.allTextContents"), both()),
         case(every("locator.allInnerTexts"), both()),
-        case(
-            Read {
-                api: "page.$",
-                op: "locator.elementHandle",
-                input: json!({ "target": at(page, "h1"), "strict": "firstMatch", "noWait": true }),
-            },
-            Expect::Shows(vec![
-                r#"<h1 class="who" data-who="[private]">Signed in with [private]</h1>"#,
-            ]),
-        ),
-        // Two matches, on purpose: the strict violation's message previews both.
-        case(
-            element("locator.textContent", ".who"),
-            Expect::Fails {
-                code: ErrorCode::StrictModeViolation,
-                previews: vec![
-                    r#"1) <h1 class="who" data-who="[private]">Signed in with [private]</h1>"#,
-                    r#"2) <p class="who">[private]</p>"#,
-                ],
-            },
-        ),
+    ];
+    cases.extend(cut_reads(page));
+    cases.extend([
         case(
             snapshot("default"),
             Expect::Shows(vec!["Signed in with [private]"]),
@@ -285,6 +319,56 @@ fn reads(page: &TestPage, field: FieldFrame) -> Vec<Case> {
             Expect::Shows(vec!["Signed in with [private]"]),
         ),
         case(snapshot("ai"), Expect::Shows(ai_shows)),
+    ]);
+    cases
+}
+
+/// The reads of the top document whose output holds Playwright's own previews and locator
+/// hints: a handle's preview, and a strict violation's message.
+fn cut_reads(page: &TestPage) -> Vec<Case> {
+    let case = |read, expect| Case { read, expect };
+    let element = |api: &'static str, selector: &str| Read {
+        api,
+        op: api,
+        input: json!({ "target": at(page, selector), "strict": "strict" }),
+    };
+    let handle = |selector: &str| Read {
+        api: "page.$",
+        op: "locator.elementHandle",
+        input: json!({ "target": at(page, selector), "strict": "firstMatch", "noWait": true }),
+    };
+    vec![
+        case(
+            handle("h1"),
+            Expect::Previews(vec![
+                r#"<h1 class="who" data-who="[private]">Signed in with [private]</h1>"#.to_owned(),
+            ]),
+        ),
+        // A preview cuts its text at 50 characters, which here falls inside the secret.
+        case(
+            handle("#long"),
+            Expect::Previews(vec![format!(r#"<div id="long">{LONG_TEXT}</div>"#)]),
+        ),
+        // Two matches, on purpose: the strict violation's message previews both, and hints at a
+        // locator for each, which the engine builds from the text it cuts at a word or a number.
+        case(
+            element("locator.textContent", ".who"),
+            Expect::Fails {
+                code: ErrorCode::StrictModeViolation,
+                previews: vec![
+                    r#"1) <h1 class="who" data-who="[private]">Signed in with [private]</h1>"#
+                        .to_owned(),
+                    r#"2) <p class="who">[private]</p>"#.to_owned(),
+                ],
+            },
+        ),
+        case(
+            element("locator.textContent", "h1, #long"),
+            Expect::Fails {
+                code: ErrorCode::StrictModeViolation,
+                previews: vec![format!(r#"2) <div id="long">{LONG_TEXT}</div>"#)],
+            },
+        ),
     ]
 }
 
@@ -456,6 +540,128 @@ async fn tests_that_a_snapshot_masks_a_child_frame_s_copy_from_a_hidden_frame_of
             assert!(
                 swept.iter().any(|value| value == secret),
                 "the host is told of {secret}: {swept:?}"
+            );
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+/// A frame hop raises Playwright's own previews too (`tests/data/site_copy/hops.html`): a
+/// `frameLocator` that matches two iframes is a strict violation inside the hop, and one that
+/// matches an element that is no iframe names what it matched. The page copied the secret into
+/// both iframes and into its heading, long enough that each preview's cut falls inside it.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_frame_hop_masks_its_previews_before_they_are_cut() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let server = FixtureServer::start(site_copy_pages()).await?;
+    let url = server.url("127.0.0.1", "/site_copy/hops.html");
+    on_page(LiveRun::connect().await?, &url, |run, page| async move {
+        let result = async {
+            let secret = "zq-hop-secret-85";
+            type_and_copy(&run, &page, secret).await?;
+            let iframe = |src: &str| {
+                format!(
+                    r#"<iframe src="{src}" title="The name this account was opened under is [private] tail">{LONG_TEXT}</iframe>"#
+                )
+            };
+            let cases = [
+                (
+                    through(&page, "iframe", "body"),
+                    Expect::Fails {
+                        code: ErrorCode::StrictModeViolation,
+                        previews: vec![
+                            format!("1) {}", iframe("/site_copy/field.html")),
+                            format!("2) {}", iframe("about:blank")),
+                        ],
+                    },
+                ),
+                (
+                    through(&page, "#note", "body"),
+                    Expect::Fails {
+                        code: ErrorCode::InvalidInput,
+                        previews: vec![format!(
+                            r#"resolved to <h1 id="note">{LONG_TEXT}</h1>, <iframe> was expected"#
+                        )],
+                    },
+                ),
+            ];
+            let mut wrong = Vec::new();
+            for (target, expect) in cases {
+                let display = target["display"].to_string();
+                let read = Read {
+                    api: "locator.textContent",
+                    op: "locator.textContent",
+                    input: json!({ "target": target, "strict": "strict" }),
+                };
+                let got = invoke(&run, &read).await;
+                if let Some(mismatch) = expect.mismatch(&got, secret) {
+                    wrong.push(format!("{display}: {mismatch}"));
+                }
+            }
+            assert!(
+                wrong.is_empty(),
+                "the page copied {secret} into what a frame hop previews, so the hop's errors \
+                 show it masked; these did not:\n{}",
+                wrong.join("\n")
+            );
+            let swept = run.swept();
+            assert!(
+                swept.iter().any(|value| value == secret),
+                "the hop swept its frame's site for the mask, and the host is told of {secret}: \
+                 {swept:?}"
+            );
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+/// Types a new value into the same-site field and copies it into the top document on every
+/// message task, so the page changes the field between any two of Neo's round trips.
+const KEEP_TYPING: &str = "(() => {
+  const channel = new MessageChannel();
+  let typed = 0;
+  channel.port1.onmessage = () => {
+    field().value = `churn-secret-${typed++}`;
+    copyField();
+    channel.port2.postMessage(null);
+  };
+  channel.port2.postMessage(null);
+  return true;
+})()";
+
+/// A preview cut while a field of the site keeps changing. The sweep after the call finds a
+/// value the call lacked, the call goes once more with it, and the sweep after that finds
+/// another, so the handle is withheld rather than shown with a value the mask may have missed.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_preview_is_withheld_while_a_field_of_the_site_keeps_changing() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let server = FixtureServer::start(site_copy_pages()).await?;
+    let url = server.url("127.0.0.1", "/site_copy/top.html?inproc");
+    on_page(LiveRun::connect().await?, &url, |run, page| async move {
+        let result = async {
+            type_and_copy(&run, &page, "churn-secret-first").await?;
+            run.eval(&page, KEEP_TYPING).await?;
+            let read = Read {
+                api: "page.$",
+                op: "locator.elementHandle",
+                input: json!({ "target": at(&page, "#long"), "strict": "firstMatch", "noWait": true }),
+            };
+            let error = match invoke(&run, &read).await {
+                Ok(handle) => return Err(format!("the handle was not withheld: {handle}").into()),
+                Err(error) => error,
+            };
+            assert_eq!(error.error_code(), Some(ErrorCode::Unsupported), "{error}");
+            assert!(
+                error.to_string().contains("changed while Neo read the page"),
+                "withheld for the field that kept changing, not a missed sweep: {error}"
             );
             Ok(())
         }

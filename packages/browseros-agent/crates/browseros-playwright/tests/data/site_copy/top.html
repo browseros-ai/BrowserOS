@@ -1,5 +1,5 @@
 <!doctype html><html><head><meta charset="utf-8"><title>Top</title></head>
-<body><h1 class="who">Top</h1><p class="who">nobody</p><input id="echo" aria-label="Echo"><div id="host"></div>
+<body><h1 class="who">Top</h1><p class="who">nobody</p><input id="echo" aria-label="Echo"><div id="long"></div><div id="host"></div>
 <script>
 // The page holds no sensitive field of its own. A frame of its site does, embedded one of three
 // ways (the query string):
@@ -26,6 +26,8 @@ window.copyField = () => {
   heading.dataset.who = value;
   line.textContent = value;
   document.getElementById('echo').value = value;
+  // Long enough that a preview's 50-character cut falls inside the value.
+  document.getElementById('long').textContent = `The name this account was opened under is ${value} tail`;
   document.title = value;
   return value.length;
 };

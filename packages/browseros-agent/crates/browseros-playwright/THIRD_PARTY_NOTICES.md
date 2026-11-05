@@ -1,8 +1,12 @@
 # Third-party notices
 
 `browseros-playwright` embeds `assets/injected.js`, a bundle built from Playwright's own
-sources, unmodified, vendored under `third_party/playwright/` (see its `README.md` and
-`VERSION`). It also compiles Rust ports of two Playwright data files,
+sources, vendored unmodified under `third_party/playwright/` (see its `README.md` and
+`VERSION`). The build changes one of them: in `packages/injected/src/selectorGenerator.ts`, the
+functions `suitableTextAlternatives` and `escapeClassName` first pass their input through
+Neo's `maskPageText`, and that file and `injectedScript.ts` import Neo's wrappers of
+`isomorphic/stringUtils.ts` helpers, which do the same
+(`packages/browseros-playwright-js/scripts/build.ts`). The bundle's header says so too. It also compiles Rust ports of two Playwright data files,
 `src/input/us_keyboard_layout.rs` and `src/input/mac_editing_commands.rs`, generated from the
 vendored files with their headers kept. Playwright is licensed under the Apache License,
 Version 2.0. Its `NOTICE` and `LICENSE` follow verbatim, with upstream's CRLF line endings

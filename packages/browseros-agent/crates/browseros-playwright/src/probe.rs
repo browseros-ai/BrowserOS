@@ -14,12 +14,19 @@
 //! every request and reply to `tests/data/probe-protocol.json`, and the tests here decode each
 //! one, so a shape that changes on one side fails the other's build. The probe owns three
 //! things in its world: the pin table, the armed hit-target interceptor and the ref map.
+//!
+//! A request whose reply holds page text that Playwright's engine cuts or quotes (a preview,
+//! a strict violation's hints) needs its frame's site's values first, as a [`ProbeMask`]: the
+//! probe masks the text with them before the engine shortens it, since a value cut short no
+//! longer matches Rust's mask of whole values. Without one it answers `needsMask`.
 
 mod probe_call;
 mod probe_reply;
 mod probe_request;
 
-pub(crate) use probe_call::{ProbeFailure, call, call_on, pinned_object, reply_of};
+pub(crate) use probe_call::{
+    ProbeFailure, ProbeMask, call, call_masked, call_on, pinned_object, reply_of,
+};
 pub(crate) use probe_reply::{
     ErrorClass, PROBE_PROTOCOL, PageText, Point, ProbeReply, Rect, SnapshotIframe,
 };

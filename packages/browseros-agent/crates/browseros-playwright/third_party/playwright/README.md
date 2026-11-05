@@ -30,6 +30,20 @@ Playwright checkout is a plain `diff -r`. `sync.sh` writes `SHA256SUMS`, and the
   read "Copyright 2017 Google Inc., modifications copyright Microsoft Corporation", Apache-2.0.
 - `sync.sh`, `VERSION`, `SHA256SUMS` and this README are ours.
 
+## What the engine build changes
+
+Nothing here is edited, but `packages/browseros-playwright-js/scripts/build.ts` changes what the
+bundle runs in one place. Neo masks field values out of page text before the engine cuts or
+quotes that text for a preview or a locator hint, because a value cut short no longer matches
+a mask of whole values (`packages/browseros-playwright-js/src/probe/page-mask.ts`):
+
+- `injectedScript.ts` and `selectorGenerator.ts` import `@isomorphic/stringUtils` as Neo's
+  `src/probe/masked-strings.ts`, upstream's module with its trim and quote helpers masking
+  their input first.
+- `selectorGenerator.ts` is loaded with `maskPageText` called first in two of its own
+  functions, `suitableTextAlternatives` (its cuts at a word and a number) and `escapeClassName`
+  (its CSS escapes). The build fails when either opening line is not there exactly once.
+
 ## What is deliberately not here
 
 - `highlight.ts`, `highlight.css` and `consoleApi.ts`. They are the inspector overlay and the
@@ -53,7 +67,9 @@ Playwright checkout is a plain `diff -r`. `sync.sh` writes `SHA256SUMS`, and the
 3. If upstream added a runtime import, the engine build fails on the unresolved path. Add the
    file to `FILES` in `sync.sh` and to this README, then sync again.
 4. Rebuild the assets with `bun run build` in `packages/browseros-playwright-js` (Bun 1.4.2,
-   the repo's pinned version). Its test fails while `crates/browseros-playwright/assets/`
+   the repo's pinned version). If it fails on a masked generator function, or the crate's
+   engine guard fails, review every place the new preview and hint code cuts or quotes page
+   text before moving the mask. Its test fails while `crates/browseros-playwright/assets/`
    or `crates/browseros-playwright/tests/data/probe-protocol.json` is stale. Then run
    `node scripts/probe-smoke.mjs` there against a throwaway browser.
 5. Port the keyboard tables with `bun scripts/port-keyboard-layout.ts` there, and record new

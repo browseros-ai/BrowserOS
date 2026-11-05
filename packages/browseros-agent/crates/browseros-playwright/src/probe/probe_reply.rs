@@ -23,10 +23,10 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 4;
+pub(crate) const PROBE_PROTOCOL: u32 = 6;
 
-/// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
-/// the world has no booted probe.
+/// One reply; `kind` is the tag. Any request may also answer `error`, `uninstalled` when the
+/// world has no booted probe, and `needsMask` when it came without the mask its reply needs.
 #[derive(Debug, Deserialize)]
 #[serde(
     tag = "kind",
@@ -62,11 +62,10 @@ pub(crate) enum ProbeReply {
         sensitive: Option<SensitiveKind>,
     },
     /// An `<iframe>` or `<frame>`, pinned. `key` names it in this world's ref map, for the
-    /// child frame's parent link.
+    /// child frame's parent link. It carries no preview, so a hop needs no mask.
     Frame {
         pin: Pin,
         key: String,
-        preview: String,
         visible: bool,
         src: String,
     },
@@ -168,6 +167,10 @@ pub(crate) enum ProbeReply {
     },
     /// `setContent` replaced the document, and the world answers `uninstalled` from now on.
     Replaced,
+    /// The reply would have held page text Playwright's engine cut or quoted (a preview, a
+    /// strict violation's hints), and the call carried no mask to put on it first: the request
+    /// goes again with its frame's site's values (`probe::call_masked`).
+    NeedsMask,
     /// An error thrown in the page, classified by the probe.
     Error {
         message: String,
@@ -205,6 +208,7 @@ impl ProbeReply {
             Self::UrlMatch { .. } => "urlMatch",
             Self::DocumentText { .. } => "documentText",
             Self::Replaced => "replaced",
+            Self::NeedsMask => "needsMask",
             Self::Error { .. } => "error",
             Self::Uninstalled => "uninstalled",
         }

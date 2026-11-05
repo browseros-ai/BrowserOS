@@ -1,6 +1,6 @@
 {
-  "protocol": 4,
-  "callFunction": "function (request, root) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this) : { kind: \"uninstalled\" }; }",
+  "protocol": 6,
+  "callFunction": "function (request, root, mask) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, mask) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
       "described"
@@ -80,7 +80,8 @@
   ],
   "anyRequest": [
     "error",
-    "uninstalled"
+    "uninstalled",
+    "needsMask"
   ],
   "requests": [
     {
@@ -800,19 +801,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 4,
+      "protocol": 6,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 4,
+      "protocol": 6,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 4,
+      "protocol": 6,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -844,7 +845,6 @@
       "kind": "frame",
       "pin": 4,
       "key": "#1",
-      "preview": "<iframe id=\"pay\" src=\"https://pay.example/frame\"></iframe>",
       "visible": true,
       "src": "https://pay.example/frame"
     },
@@ -1145,6 +1145,9 @@
       "kind": "error",
       "class": "internal",
       "message": "not built yet"
+    },
+    {
+      "kind": "needsMask"
     },
     {
       "kind": "uninstalled"

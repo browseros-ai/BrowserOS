@@ -28,7 +28,8 @@ use crate::op::Op;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{
-    self, PROBE_PROTOCOL, ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Want,
+    self, PROBE_PROTOCOL, ParsedSelector, ProbeFailure, ProbeMask, ProbeReply, ProbeRequest,
+    ProbeTarget, Want,
 };
 use crate::target::{CallHeader, Strictness};
 use crate::test_support::fixture_server::{FixtureServer, Page};
@@ -58,6 +59,20 @@ fn resolve(target: ParsedSelector, want: Want) -> ProbeRequest {
         strictness: Strictness::Strict,
         want,
     }
+}
+
+/// `resolve { want: element }` with the world's own sweep as its mask, as an op sends a request
+/// whose reply previews page text: these pages' site holds no other field.
+async fn resolve_element(
+    world: &SealedWorld,
+    target: ParsedSelector,
+) -> TestResult<Result<ProbeReply, ProbeFailure>> {
+    let swept = probe::call(world, &ProbeRequest::Sweep).await;
+    let Ok(ProbeReply::Sweep { values }) = swept else {
+        return Err(format!("no sweep: {swept:?}").into());
+    };
+    let request = resolve(target, Want::Element);
+    Ok(probe::call_masked(world, &request, None, ProbeMask::of(&values)).await)
 }
 
 async fn fixtures() -> TestResult<FixtureServer> {
@@ -433,7 +448,7 @@ async fn tests_that_the_probe_reads_a_password_masked_while_the_page_reads_it_ra
     let scope = OpScope::new(&env, count_op()?, CallHeader::default());
     let world = main_world(&live, &scope, &tab).await?;
 
-    let resolved = probe::call(&world, &resolve(css("#pw")?, Want::Element)).await;
+    let resolved = resolve_element(&world, css("#pw")?).await?;
     let Ok(ProbeReply::Element {
         preview, sensitive, ..
     }) = resolved
@@ -483,7 +498,7 @@ async fn tests_that_a_strict_csp_page_still_installs() -> TestResult {
     let env = live.env();
     let scope = OpScope::new(&env, count_op()?, CallHeader::default());
     let world = main_world(&live, &scope, &tab).await?;
-    let resolved = probe::call(&world, &resolve(css("#name")?, Want::Element)).await;
+    let resolved = resolve_element(&world, css("#name")?).await?;
     assert!(
         matches!(resolved, Ok(ProbeReply::Element { .. })),
         "{resolved:?}"
@@ -508,11 +523,7 @@ async fn tests_that_a_second_playwright_rekeys_the_world_so_old_refs_fail() -> T
     let Ok(ProbeReply::Frame { key, pin, .. }) = frame else {
         return Err(format!("the iframe did not resolve: {frame:?}").into());
     };
-    let by_key = probe::call(
-        &world,
-        &resolve(ParsedSelector::frame_key(&key)?, Want::Element),
-    )
-    .await;
+    let by_key = resolve_element(&world, ParsedSelector::frame_key(&key)?).await?;
     assert!(
         matches!(by_key, Ok(ProbeReply::Element { .. })),
         "{by_key:?}"

@@ -16,19 +16,30 @@ import type { AriaSnapshotJSON } from '../../../../crates/browseros-playwright/t
 import type { ParsedSelector } from '../../../../crates/browseros-playwright/third_party/playwright/packages/isomorphic/selectorParser'
 
 /**
- * Bumped on any shape change. `boot` reports it, and an install whose number differs from
- * Rust's PROBE_PROTOCOL fails as `neo / internal` (the engine asset is stale).
+ * Bumped on any shape change, and on any change to what Rust relies on the probe doing (such
+ * as `Mask`). `boot` reports it, and an install whose number differs from Rust's
+ * PROBE_PROTOCOL fails as `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 4
+export const PROTOCOL = 6
 
 /**
- * The function declaration Rust sends with every request. `this` is the world's global
- * object on a context call and the element on an object-id call, so the probe treats a
- * root that is not a Node as "no root". A world whose probe is gone (or never booted)
- * answers `uninstalled`, which Rust treats like a stale context: install again, once.
+ * The function declaration Rust sends with every request. Rust calls it on the world's global
+ * object, with the request, an element handle's node as the call's root (or null), and the
+ * call's mask (or nothing), so the probe treats a root that is not a Node as "no root". A
+ * world whose probe is gone (or never booted) answers `uninstalled`, which Rust treats like a
+ * stale context: install again, once.
  */
 export const CALL_FUNCTION =
-  'function (request, root) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this) : { kind: "uninstalled" }; }'
+  'function (request, root, mask) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, mask) : { kind: "uninstalled" }; }'
+
+/**
+ * The raw values of every sensitive field of the call's frame's site (Rust's site sweep), each
+ * at least four characters long. The probe masks page text with them, and with its own frame's
+ * values as they are during the call, before Playwright's engine cuts or quotes it for a preview
+ * or a locator hint (page-mask.ts). Rust relies on the second part: a reply's `sweep` is part
+ * of the mask its text was cut under. Never for the agent.
+ */
+export type Mask = string[]
 
 /** An element this world resolved earlier in the same op; see `Pins` in world.ts. */
 export type Pin = number
@@ -270,12 +281,14 @@ export type ResolvedElement = {
   preview: string
   sensitive: SensitiveKind | null
 }
-/** `key` names the iframe in this world's ref map, for the child frame's parent link. */
+/**
+ * `key` names the iframe in this world's ref map, for the child frame's parent link. A hop
+ * needs no preview of the iframe, so building one does not cost every hop a mask.
+ */
 export type ResolvedFrame = {
   kind: 'frame'
   pin: Pin
   key: string
-  preview: string
   visible: boolean
   src: string
 }
@@ -355,6 +368,12 @@ export type DocumentText = {
 }
 /** The document was replaced and this world unbooted: later requests answer `uninstalled`. */
 export type Replaced = { kind: 'replaced' }
+/**
+ * The reply would have held page text the engine cuts or quotes (a preview, a strict
+ * violation's hints), and the call came without a mask: Rust sweeps the frame's site and
+ * sends the request again with one. Any request may answer it.
+ */
+export type NeedsMask = { kind: 'needsMask' }
 export type ErrorReply = { kind: 'error'; message: string; class: ErrorClass }
 export type Uninstalled = { kind: 'uninstalled' }
 
@@ -382,6 +401,7 @@ export type ProbeReply =
   | UrlMatch
   | DocumentText
   | Replaced
+  | NeedsMask
   | ErrorReply
   | Uninstalled
 export type ReplyKind = ProbeReply['kind']
@@ -390,9 +410,9 @@ export type ReplyKind = ProbeReply['kind']
 export type ValueOp = Exclude<Op, 'pinned'>
 
 /**
- * The replies each request may produce besides `error` and `uninstalled`, which any request
- * may produce. Handlers are typed against it (ReplyTo), and probe-protocol.json carries it so
- * Rust can decode each request's reply as exactly its own.
+ * The replies each request may produce besides `error`, `uninstalled` and `needsMask`, which
+ * any request may produce. Handlers are typed against it (ReplyTo), and probe-protocol.json
+ * carries it so Rust can decode each request's reply as exactly its own.
  */
 export const REPLY_KINDS = {
   describe: ['described'],
@@ -418,6 +438,7 @@ export type ReplyTo<O extends ValueOp> =
   | Extract<ProbeReply, { kind: (typeof REPLY_KINDS)[O][number] }>
   | ErrorReply
   | Uninstalled
+  | NeedsMask
 
 /** What `boot` takes: this document's frame seq, and the `Playwright` instance's epoch. */
 export type BootOptions = { frameSeq: number; epoch: string }
@@ -431,6 +452,9 @@ export type NeoProbe = {
    * seal failed never leaves a usable engine behind.
    */
   boot(options: BootOptions): Described
-  /** One request; see CALL_FUNCTION. Answers `uninstalled` until `boot` has run. */
-  call(request: unknown, root?: unknown): unknown
+  /**
+   * One request, with the call's root and mask; see CALL_FUNCTION. Answers `uninstalled` until
+   * `boot` has run.
+   */
+  call(request: unknown, root?: unknown, mask?: unknown): unknown
 }

@@ -144,21 +144,20 @@ export function resolve(
   const found = resolveTarget(world, request.target, request.strictness, root)
   if (found.kind !== 'one') return found
   const { element } = found
-  const preview = world.injected.previewNode(element)
   if (request.want === 'element')
     return {
       kind: 'element',
       pin: world.pins.add(element),
-      preview,
+      preview: world.injected.previewNode(element),
       sensitive: world.seal.kind(element),
     }
   const src = frameSource(element)
-  if (src === undefined) return { kind: 'notFrame', preview }
+  if (src === undefined)
+    return { kind: 'notFrame', preview: world.injected.previewNode(element) }
   return {
     kind: 'frame',
     pin: world.pins.add(element),
     key: world.refs.frameKey(element),
-    preview,
     visible: world.injected.utils.isElementVisible(element),
     src,
   }

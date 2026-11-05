@@ -8,7 +8,6 @@ use serde_json::Value;
 use crate::backoff::Backoff;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
-use crate::page::site_sweep::{self, ReadMask, SiteSweep};
 use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, Read};
 use crate::read::element_handle::{self, Located};
 use crate::read::element_read;
@@ -125,9 +124,8 @@ async fn poll_selector(
             frame_visible,
             read: Read::Located,
         };
-        // Its preview reaches the call log and the handle: page text.
-        let swept = |world| SiteSweep::of(&page, world);
-        let landed = match resolver.attempt_alongside(request, swept).await {
+        // Its preview reaches the call log and the handle: the site's values go with it.
+        let landed = match resolver.attempt_masked(request).await {
             Ok(landed) => landed,
             Err(error)
                 if state.met_without_element()
@@ -156,7 +154,7 @@ async fn poll_selector(
                 sweep,
             } => {
                 element_read::mark_sensitive(scope, sensitive);
-                let value = site.values(pw, scope, page.id(), sweep)?.mask(value);
+                let value = site.with_own(pw, page.id(), sweep).mask(value);
                 element_read::read_value(scope, value)?
             }
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {
@@ -169,10 +167,7 @@ async fn poll_selector(
             ProbeReply::None { stale_ref: Some(_) } if state.met_without_element() => {
                 return Ok(Value::Null);
             }
-            other => {
-                let mask = ReadMask::Site(site);
-                return Err(site_sweep::refused(pw, scope, &page, world, other, mask).await);
-            }
+            other => return Err(site.refused(scope, other)),
         };
         scope.log(located.log_line());
         matched.store(true, Ordering::Relaxed);

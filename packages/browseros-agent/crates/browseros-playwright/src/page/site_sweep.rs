@@ -17,6 +17,15 @@
 //!          └─ SiteValues: each PageText, document text and strict message masked once
 //! ```
 //!
+//! Playwright's engine cuts some page text inside the page before any of this can mask it: a
+//! preview keeps 50 characters, a locator hint keeps the words before a cut. So those replies
+//! need the site's values in the page first ([`SiteValues::probe_mask`]): a read whose reply
+//! always previews (`located`, `pins`) sweeps before its call and sends them along
+//! (`Resolver::attempt_masked`), and any other request that meets such text, a strict
+//! violation say, answers `needsMask` and is asked again with them (`resolve::remask`). Either
+//! way the site is swept once more after a reply with cut text in it, because a field of
+//! another frame may have changed in between ([`SiteValues::lacks_any_of`]).
+//!
 //! A frame of another site is never swept: its script cannot reach the read frame's
 //! documents, so whatever it holds can only arrive by a message the frame chose to send.
 
@@ -27,7 +36,7 @@ use serde_json::Value;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::page::evaluate_guard::{self, FRAME_BUDGET, Found, TreeFrame, Unswept};
-use crate::probe::{PageText, ProbeReply};
+use crate::probe::{PageText, ProbeMask, ProbeReply};
 use crate::world::SealedWorld;
 use crate::{ErrorCode, Playwright, PlaywrightError, resolve};
 
@@ -138,6 +147,57 @@ impl SiteValues {
     pub(crate) fn into_values(self) -> FieldValues {
         self.0
     }
+
+    /// The values as a probe call carries them, to mask page text before the engine cuts it.
+    pub(crate) fn probe_mask(&self) -> ProbeMask<'_> {
+        ProbeMask::of(&self.0)
+    }
+
+    /// Whether `after`, the site swept again once a call that carried these values answered,
+    /// holds a value the call's page text may have been cut without: one long enough to be in
+    /// a mask that neither these values nor `own` hold. `own` is the sweep a reply came with,
+    /// the probe's own frame as the call found it, which the probe added to these.
+    pub(crate) fn lacks_any_of(&self, own: Option<&FieldValues>, after: &Self) -> bool {
+        let holds = |values: &FieldValues, value: &str| values.registrable().any(|v| v == value);
+        after
+            .0
+            .registrable()
+            .any(|value| !holds(&self.0, value) && !own.is_some_and(|own| holds(own, value)))
+    }
+
+    /// These values and `other`'s.
+    pub(crate) fn union(self, other: Self) -> Self {
+        Self(self.0.union(other.0))
+    }
+
+    /// These values and `own`, the sweep a reply came with: the read frame's own fields as the
+    /// call found them, after this site's sweep. Any of them go to the host as well.
+    pub(crate) fn with_own(self, pw: &Playwright, page: &PageId, own: FieldValues) -> Self {
+        if own.is_empty() {
+            return self;
+        }
+        pw.hooks().values_swept(page.clone(), &own);
+        Self(self.0.union(own))
+    }
+
+    /// A reply that ends an op with the page text in it masked: a strict violation's message
+    /// and a not-an-iframe preview. Every other reply holds no page text.
+    pub(crate) fn mask_reply(&self, reply: ProbeReply) -> ProbeReply {
+        match reply {
+            ProbeReply::Strict { message } => ProbeReply::Strict {
+                message: self.mask_text(message),
+            },
+            ProbeReply::NotFrame { preview } => ProbeReply::NotFrame {
+                preview: self.mask_text(preview),
+            },
+            other => other,
+        }
+    }
+
+    /// `resolve::refused` of `reply`, its page text masked first.
+    pub(crate) fn refused(&self, scope: &OpScope<'_>, reply: ProbeReply) -> PlaywrightError {
+        resolve::refused(scope, self.mask_reply(reply))
+    }
 }
 
 /// A reply that ends a read in `world`. A strict violation previews each match's markup, page
@@ -160,12 +220,7 @@ pub(crate) async fn refused(
         ReadMask::Textless => SiteSweep::of(page, world).await,
     };
     match site.values(pw, scope, page.id(), FieldValues::default()) {
-        Ok(values) => resolve::refused(
-            scope,
-            ProbeReply::Strict {
-                message: values.mask_text(message),
-            },
-        ),
+        Ok(values) => values.refused(scope, ProbeReply::Strict { message }),
         Err(withheld) => withheld,
     }
 }
