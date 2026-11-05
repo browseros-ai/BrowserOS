@@ -21,41 +21,19 @@
 //! solver on, and a provider URL on a closed local port: its page holds no CAPTCHA, so the solve
 //! ends at detection, which is the real crate on the real browser.
 
-use std::env;
+#[path = "support/browseros_rig.rs"]
+pub mod browseros_rig;
+
 use std::error::Error;
-use std::fs::{self, File};
-use std::net::{Ipv4Addr, TcpListener};
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::Duration;
 
-use browseros_trace::{Delivery, Effect, Outcome, RunId, RunStatus, TraceStore};
-use claw_sdk::test_support::CLOSED_XVNC;
-use rmcp::ServiceExt;
-use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ClientInfo, MetaObject, ProtocolVersion,
-    RequestMetaObject,
+use browseros_rig::{
+    CaptchaKey, Client, HOST_TOKEN, PATIENCE, Rig, TestResult, browser_or_skip, get, outcome, run,
 };
-use rmcp::service::{RoleClient, RunningService};
-use rmcp::transport::StreamableHttpClientTransport;
-use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+use browseros_trace::{Delivery, Effect, Outcome, RunId, RunStatus, TraceStore};
 use serde_json::{Value, json};
-use tempfile::TempDir;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpStream, UnixStream};
-use tokio::process::{Child, Command};
 use tokio::time;
 
-type TestResult = Result<(), Box<dyn Error>>;
-type Client = RunningService<RoleClient, ClientInfo>;
-
-const BIN: &str = env!("CARGO_BIN_EXE_browseros-claw-sdk");
-/// Names the BrowserOS binary; unset, the test does nothing.
-const BROWSER_ENV: &str = "CLAW_SDK_E2E_BROWSER";
-/// The `_meta` key a host's ids and the run's outcome ride under.
-const RUN_META: &str = "com.browseros.neo/run";
-/// A cold BrowserOS start plus the link's first connect, on a loaded machine.
-const PATIENCE: Duration = Duration::from_secs(60);
 /// The whole drive. A step that hangs fails the test here, so the guards still kill both
 /// processes: a killed test process runs no `Drop`.
 const TEST_BUDGET: Duration = Duration::from_secs(240);
@@ -65,196 +43,13 @@ const TITLE: &str = "Neo e2e";
 /// The page a host locks, then the owner closes.
 const LOCKED_PAGE: &str = "data:text/html,<title>Neo e2e lock</title><p>the owner's now</p>";
 const LOCKED_TITLE: &str = "Neo e2e lock";
-/// The bearer token the host presents on the host socket; browseros-service wants 32 bytes.
-const HOST_TOKEN: &str = "e2e-host-token-0123456789-abcdefghij";
-
-/// Whether Neo starts with a CAPTCHA provider key.
-#[derive(Clone, Copy)]
-enum CaptchaKey {
-    /// No key: `neo.solveCaptcha` is off.
-    Absent,
-    /// A placeholder key file and a provider URL nothing listens on.
-    Placeholder,
-}
-
-/// The two processes and their scratch directory. Fields drop in order: both children are
-/// killed (`kill_on_drop`) before the directory they write into is removed, on every path out
-/// of the test, a failed assertion included.
-struct Rig {
-    neo: Child,
-    _browser: Child,
-    server_port: u16,
-    cdp_port: u16,
-    dir: TempDir,
-}
-
-impl Rig {
-    /// BrowserOS on a fresh profile, then claw-sdk pointed at its CDP port.
-    fn start(browser: &Path, captcha: CaptchaKey) -> Result<Self, Box<dyn Error>> {
-        let dir = tempfile::tempdir()?;
-        let cdp_port = free_port()?;
-        let server_port = free_port()?;
-
-        // The flags hosted Neo's image uses minus the display: no bundled server, updater or
-        // extensions, which would race claw-sdk for the browser.
-        let browser = Command::new(browser)
-            .arg("--headless=new")
-            .arg(format!(
-                "--user-data-dir={}",
-                dir.path().join("profile").display()
-            ))
-            .arg(format!("--remote-debugging-port={cdp_port}"))
-            .args([
-                "--disable-browseros-server",
-                "--disable-browseros-server-updater",
-                "--disable-browseros-extensions",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "about:blank",
-            ])
-            .stdin(Stdio::null())
-            .stdout(log_sink(&dir.path().join("browser.log"))?)
-            .stderr(log_sink(&dir.path().join("browser.log"))?)
-            .kill_on_drop(true)
-            .spawn()?;
-
-        let launch = dir.path().join("server_config.json");
-        fs::write(
-            &launch,
-            format!(
-                r#"{{"ports":{{"server":{server_port},"cdp":{cdp_port}}},"directories":{{"resources":"r"}}}}"#
-            ),
-        )?;
-        let token_file = dir.path().join("host-token");
-        fs::write(&token_file, format!("{HOST_TOKEN}\n"))?;
-        let mut neo = Command::new(BIN);
-        neo.arg("--config")
-            .arg(&launch)
-            .env_clear()
-            .env("HOME", dir.path().join("home"))
-            .env("BROWSERCLAW_DIR", dir.path().join("state"))
-            .env("BROWSERCLAW_HOSTED_MODE", "1")
-            .env("CLAW_HOST_TOKEN_FILE", &token_file)
-            .env("CLAW_HOST_SOCKET", dir.path().join("host.sock"))
-            // The headless browser has no Xvnc, and 5900 may be a developer's Screen Sharing.
-            .env("CLAW_XVNC_ADDR", CLOSED_XVNC.addr.to_string());
-        if let CaptchaKey::Placeholder = captcha {
-            let key_file = dir.path().join("capsolver-key");
-            fs::write(&key_file, "placeholder")?;
-            neo.env("BROWSEROS_CAPSOLVER_API_KEY_FILE", &key_file)
-                .env("BROWSEROS_CAPSOLVER_API_URL", "http://127.0.0.1:9");
-        }
-        let neo = neo
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(log_sink(&dir.path().join("neo.log"))?)
-            .kill_on_drop(true)
-            .spawn()?;
-        Ok(Self {
-            neo,
-            _browser: browser,
-            server_port,
-            cdp_port,
-            dir,
-        })
-    }
-
-    /// One GET on the host socket, as zuzu sends it, with the bearer token when given.
-    async fn host_get(&self, path: &str, token: Option<&str>) -> Result<String, Box<dyn Error>> {
-        self.host_call("GET", path, token, None).await
-    }
-
-    /// One request on the host socket, as zuzu sends it, with the bearer token when given.
-    async fn host_call(
-        &self,
-        method: &str,
-        path: &str,
-        token: Option<&str>,
-        body: Option<&Value>,
-    ) -> Result<String, Box<dyn Error>> {
-        let mut stream = UnixStream::connect(self.dir.path().join("host.sock")).await?;
-        let auth = token.map_or_else(String::new, |token| {
-            format!("Authorization: Bearer {token}\r\n")
-        });
-        let body = body.map(Value::to_string).unwrap_or_default();
-        let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: neo\r\n{auth}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        stream.write_all(request.as_bytes()).await?;
-        let mut response = String::new();
-        time::timeout(PATIENCE, stream.read_to_string(&mut response)).await??;
-        Ok(response)
-    }
-
-    fn trace_path(&self) -> PathBuf {
-        self.dir
-            .path()
-            .join("state")
-            .join("claw-sdk")
-            .join("trace.db")
-    }
-
-    /// `/system/ready` answers 200 once the browser link is up.
-    async fn until_ready(&self) -> TestResult {
-        time::timeout(PATIENCE, async {
-            loop {
-                let ready = get(self.server_port, "/system/ready").await;
-                if ready.is_ok_and(|response| response.starts_with("HTTP/1.1 200")) {
-                    return;
-                }
-                time::sleep(Duration::from_millis(100)).await;
-            }
-        })
-        .await
-        .map_err(|_elapsed| format!("not ready within {PATIENCE:?}").into())
-    }
-
-    /// A client on the legacy protocol, as most hosts speak it today.
-    async fn client(&self) -> Result<Client, Box<dyn Error>> {
-        let mut info = ClientInfo::default();
-        info.protocol_version = ProtocolVersion::V_2025_11_25;
-        let url = format!("http://127.0.0.1:{}/mcp", self.server_port);
-        let transport = StreamableHttpClientTransport::from_config(
-            StreamableHttpClientTransportConfig::with_uri(url),
-        );
-        Ok(info.serve(transport).await?)
-    }
-
-    /// SIGTERM, as Chromium stops it, and the exit code; the trace writer commits on this path.
-    async fn stop_neo(&mut self) -> Result<Option<i32>, Box<dyn Error>> {
-        let pid = self.neo.id().ok_or("claw-sdk exited before SIGTERM")?;
-        let kill = Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status()
-            .await?;
-        if !kill.success() {
-            return Err(format!("kill -TERM {pid} failed").into());
-        }
-        Ok(time::timeout(PATIENCE, self.neo.wait()).await??.code())
-    }
-
-    /// Both processes' output, for a failure message.
-    fn logs(&self) -> String {
-        let read = |name: &str| {
-            fs::read_to_string(self.dir.path().join(name))
-                .unwrap_or_else(|error| format!("<{name}: {error}>"))
-        };
-        format!(
-            "--- claw-sdk ---\n{}\n--- BrowserOS ---\n{}",
-            read("neo.log"),
-            read("browser.log")
-        )
-    }
-}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn placeholder_built_ins_drive_a_real_browseros_page() -> TestResult {
-    let Some(browser) = env::var_os(BROWSER_ENV) else {
-        skipped();
+    let Some(browser) = browser_or_skip() else {
         return Ok(());
     };
-    let mut rig = Rig::start(Path::new(&browser), CaptchaKey::Absent)?;
+    let mut rig = Rig::start(&browser, CaptchaKey::Absent)?;
     let failure = match time::timeout(TEST_BUDGET, drive(&mut rig)).await {
         Ok(Ok(())) => return Ok(()),
         Ok(Err(error)) => error.to_string(),
@@ -290,7 +85,7 @@ async fn drive(rig: &mut Rig) -> TestResult {
         .ok_or("every result names its run")?
         .parse()?;
 
-    let targets = get(rig.cdp_port, "/json/list").await?;
+    let targets = get(rig.cdp_port(), "/json/list").await?;
     assert!(
         !targets.contains(TITLE),
         "page.close closed the tab in the browser: {targets}"
@@ -419,11 +214,10 @@ async fn solve_captcha_without_a_key(client: &Client) -> TestResult {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn solve_captcha_detects_a_clear_page_on_a_real_browseros() -> TestResult {
-    let Some(browser) = env::var_os(BROWSER_ENV) else {
-        skipped();
+    let Some(browser) = browser_or_skip() else {
         return Ok(());
     };
-    let rig = Rig::start(Path::new(&browser), CaptchaKey::Placeholder)?;
+    let rig = Rig::start(&browser, CaptchaKey::Placeholder)?;
     let failure = match time::timeout(TEST_BUDGET, solve_on_a_clear_page(&rig)).await {
         Ok(Ok(())) => return Ok(()),
         Ok(Err(error)) => error.to_string(),
@@ -515,7 +309,7 @@ async fn a_hosts_lock_ends_when_its_tab_closes(
         .and_then(Value::as_str)
         .ok_or("a lock has an id")?;
 
-    let listed = get(rig.cdp_port, "/json/list").await?;
+    let listed = get(rig.cdp_port(), "/json/list").await?;
     let (_, targets) = listed.split_once("\r\n\r\n").ok_or("an HTTP response")?;
     let targets: Value = serde_json::from_str(targets)?;
     let target = targets
@@ -528,7 +322,7 @@ async fn a_hosts_lock_ends_when_its_tab_closes(
         .and_then(|target| target.get("id"))
         .and_then(Value::as_str)
         .ok_or_else(|| format!("the locked page is a target: {listed}"))?;
-    let closed = get(rig.cdp_port, &format!("/json/close/{target}")).await?;
+    let closed = get(rig.cdp_port(), &format!("/json/close/{target}")).await?;
     assert!(
         closed.starts_with("HTTP/1.1 200"),
         "Chromium closes the tab: {closed}"
@@ -586,79 +380,4 @@ async fn read_back_over_the_host_socket(rig: &Rig, id: RunId) -> TestResult {
         ["context.newPage", "page.goto", "page.title", "page.close"]
     );
     Ok(())
-}
-
-/// `run` with `_meta["com.browseros.neo/run"] = meta`.
-async fn run(client: &Client, code: &str, meta: &Value) -> Result<CallToolResult, Box<dyn Error>> {
-    let Value::Object(arguments) = json!({ "code": code }) else {
-        return Err("arguments are an object".into());
-    };
-    let mut object = MetaObject::new();
-    object.insert(RUN_META.to_owned(), meta.clone());
-    let mut params = CallToolRequestParams::new("run").with_arguments(arguments);
-    params.meta = Some(RequestMetaObject(object));
-    Ok(time::timeout(PATIENCE, client.call_tool(params)).await??)
-}
-
-/// `_meta["com.browseros.neo/run"]` of a result.
-fn outcome(result: &CallToolResult) -> Result<&Value, Box<dyn Error>> {
-    result
-        .meta
-        .as_ref()
-        .and_then(|meta| meta.get(RUN_META))
-        .ok_or_else(|| "every result carries the run's _meta".into())
-}
-
-/// One plain HTTP/1.1 GET on 127.0.0.1: the head and a `Content-Length` body. Chromium's
-/// remote-debugging HTTP server ignores `Connection: close` and keeps the socket open, so
-/// reading to EOF would never end.
-async fn get(port: u16, path: &str) -> Result<String, Box<dyn Error>> {
-    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await?;
-    let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
-    stream.write_all(request.as_bytes()).await?;
-    let mut response = Vec::new();
-    let mut chunk = [0_u8; 8192];
-    loop {
-        let read = stream.read(&mut chunk).await?;
-        response.extend_from_slice(chunk.get(..read).unwrap_or_default());
-        if read == 0 || complete(&response) {
-            return Ok(String::from_utf8_lossy(&response).into_owned());
-        }
-    }
-}
-
-/// Whether `response` holds its whole head and as many body bytes as `Content-Length` says.
-fn complete(response: &[u8]) -> bool {
-    let text = String::from_utf8_lossy(response);
-    let Some((head, body)) = text.split_once("\r\n\r\n") else {
-        return false;
-    };
-    head.lines()
-        .filter_map(|line| line.split_once(':'))
-        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, length)| length.trim().parse::<usize>().ok())
-        .is_some_and(|length| body.len() >= length)
-}
-
-/// A port nothing listens on right now. Another process could take it before its user binds;
-/// that race is accepted for a test.
-fn free_port() -> Result<u16, Box<dyn Error>> {
-    Ok(TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?
-        .local_addr()?
-        .port())
-}
-
-/// A child's output, appended to `path`.
-fn log_sink(path: &Path) -> Result<Stdio, Box<dyn Error>> {
-    Ok(Stdio::from(
-        File::options().create(true).append(true).open(path)?,
-    ))
-}
-
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped e2e says so in the test output; nothing else reads it"
-)]
-fn skipped() {
-    eprintln!("skipped: set {BROWSER_ENV} to a BrowserOS binary to run this test");
 }
