@@ -28,7 +28,7 @@ class Switches:
     """Resolved run configuration; None fields mean 'preset default'."""
 
     preset: str = "release"
-    product: str = "browseros"
+    product: str = "browserclaw"
     architectures: Tuple[str, ...] = ()
     clean: Optional[bool] = None
     provision: Optional[str] = None
@@ -437,7 +437,7 @@ def load_profile(path: Path) -> Profile:
     return Profile(
         switches=Switches(
             preset=data.get("preset", "release"),
-            product=data.get("product", "browseros"),
+            product=data.get("product", "browserclaw"),
             architectures=_as_tuple(data.get("arch")),
             clean=data.get("clean"),
             provision=data.get("provision"),
@@ -482,7 +482,7 @@ def _load_modules_profile(path: Path, data: Dict[str, Any]) -> Profile:
 
     return Profile(
         switches=Switches(
-            product=data.get("product", "browseros"),
+            product=data.get("product", "browserclaw"),
             architectures=_as_tuple(data.get("arch")),
         ),
         modules=tuple(modules),

@@ -24,14 +24,14 @@ class ReleaseResourcesCliTest(unittest.TestCase):
         self, prepare, operations, read_version
     ) -> None:
         manifest = PreparedResourcesManifest(
-            product="browseros",
+            product="browserclaw",
             parent_sha=candidate_record().parent_sha,
             source_sha=candidate_record().candidate_sha,
             browser_version="0.31.0",
             component_versions={
-                "server": "0.0.128",
-                "agent": "0.0.101.0",
-                "app-onboard": "0.0.0",
+                "claw-server-rust": "0.0.128",
+                "browserclaw": "0.0.101.0",
+                "claw-onboard": "0.0.0",
             },
             files={},
         )
@@ -73,7 +73,6 @@ class ReleaseResourcesCliTest(unittest.TestCase):
 
     def test_explicit_prepare_fills_the_products_onboarding_version(self) -> None:
         cases = {
-            "browseros": "app-onboard",
             "browserclaw": "claw-onboard",
         }
         with tempfile.TemporaryDirectory() as temp_dir:

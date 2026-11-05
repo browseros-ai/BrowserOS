@@ -27,17 +27,17 @@ COMPONENTS = {
 }
 ARTIFACTS = {
     "macos": {
-        "arm64": "BrowserOS_v0.31.0_arm64.dmg",
-        "x64": "BrowserOS_v0.31.0_x64.dmg",
-        "universal": "BrowserOS_v0.31.0_universal.dmg",
+        "arm64": "BrowserOS_neo_v0.31.0_arm64.dmg",
+        "x64": "BrowserOS_neo_v0.31.0_x64.dmg",
+        "universal": "BrowserOS_neo_v0.31.0_universal.dmg",
     },
     "win": {
-        "x64_installer": "BrowserOS_v0.31.0_x64_installer.exe",
-        "x64_zip": "BrowserOS_v0.31.0_x64_installer.zip",
+        "x64_installer": "BrowserOS_neo_v0.31.0_x64_installer.exe",
+        "x64_zip": "BrowserOS_neo_v0.31.0_x64_installer.zip",
     },
     "linux": {
-        "x64_appimage": "BrowserOS_v0.31.0_x64.AppImage",
-        "x64_deb": "BrowserOS_v0.31.0_amd64.deb",
+        "x64_appimage": "BrowserOS_neo_v0.31.0_x64.AppImage",
+        "x64_deb": "BrowserOS_neo_v0.31.0_amd64.deb",
     },
 }
 
@@ -48,7 +48,7 @@ def _checksum(filename: str) -> str:
 
 def _candidate(state: str = "merged") -> CandidateRecord:
     return CandidateRecord(
-        product="browseros",
+        product="browserclaw",
         parent_sha=PARENT_SHA,
         candidate_sha=CANDIDATE_SHA,
         default_branch="main",
@@ -64,7 +64,7 @@ def _candidate(state: str = "merged") -> CandidateRecord:
 
 def _gate() -> LaneGate:
     return LaneGate(
-        product="browseros",
+        product="browserclaw",
         parent_sha=PARENT_SHA,
         candidate_sha=CANDIDATE_SHA,
         browser_version="0.31.0",
@@ -102,7 +102,7 @@ def _metadata() -> dict[str, dict]:
     result = {}
     for platform, artifacts in ARTIFACTS.items():
         result[platform] = {
-            "product": "browseros",
+            "product": "browserclaw",
             "platform": platform,
             "version": "0.31.0",
             "source_sha": CANDIDATE_SHA,
@@ -161,7 +161,7 @@ class BrowserFinalizationTest(unittest.TestCase):
 
         self.assertEqual(
             previews,
-            {"appcast.xml", "appcast-x86_64.xml", "appcast-win.xml"},
+            {"appcast-claw.xml", "appcast-claw-x86_64.xml", "appcast-claw-win.xml"},
         )
         self.assertEqual(record.draft.target_sha, CANDIDATE_SHA)
         self.assertEqual(record.merge_sha, MERGE_SHA)
@@ -320,7 +320,7 @@ class GitHubDraftBackendTest(unittest.TestCase):
     def test_download_failure_does_not_delete_existing_draft_assets(self) -> None:
         release = {
             "isDraft": True,
-            "assets": ["BrowserOS_v0.31.0_arm64.dmg"],
+            "assets": ["BrowserOS_neo_v0.31.0_arm64.dmg"],
             "targetCommitish": CANDIDATE_SHA,
         }
         with (

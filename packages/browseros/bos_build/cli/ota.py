@@ -189,7 +189,7 @@ def server_release(
         help="Platform(s) to process, comma-separated (darwin_arm64, darwin_x64, linux_arm64, linux_x64, windows_x64)"
     ),
     product: str = typer.Option(
-        "browseros", "--product", help="Product whose server bundle to release"
+        "browserclaw", "--product", help="Product whose server bundle to release"
     ),
     release_sha: str = typer.Option(
         "",
@@ -225,7 +225,7 @@ def server_assemble_appcast(
     version: str = typer.Option(..., "--version", "-v"),
     fragment: list[str] = typer.Option(..., "--fragment"),
     channel: str = typer.Option("alpha", "--channel", "-c"),
-    product: str = typer.Option("browseros", "--product"),
+    product: str = typer.Option("browserclaw", "--product"),
     output: Optional[Path] = typer.Option(None, "--output"),
 ):
     """Assemble a complete appcast from native platform fragments."""
@@ -255,7 +255,7 @@ def server_release_appcast(
         None, "--file", "-f", help="Custom appcast file to upload"
     ),
     product: str = typer.Option(
-        "browseros", "--product", help="Product whose server appcast to publish"
+        "browserclaw", "--product", help="Product whose server appcast to publish"
     ),
     publish: bool = typer.Option(
         False,
@@ -321,7 +321,7 @@ def server_release_appcast(
 @server_app.command("promote")
 def server_promote(
     product: str = typer.Option(
-        "browseros", "--product", help="Product whose server appcast to promote"
+        "browserclaw", "--product", help="Product whose server appcast to promote"
     ),
     publish: bool = typer.Option(
         False,

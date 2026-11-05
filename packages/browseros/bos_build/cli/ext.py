@@ -39,7 +39,7 @@ def _create_context(version: str) -> Context:
             chromium_src=root,
             architecture="",
             build_type="release",
-            product="browseros",
+            product="browserclaw",
         )
     except ValueError as e:
         log_error(str(e))

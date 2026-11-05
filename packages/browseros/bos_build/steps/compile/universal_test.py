@@ -206,10 +206,10 @@ class ServerBundleSkewTest(unittest.TestCase):
         )
 
     def test_matching_versions_pass(self):
-        self._write_bundle("browseros_server", "darwin-arm64", "0.0.10")
-        self._write_bundle("browseros_server", "darwin-x64", "0.0.10")
+        self._write_bundle("browseros_claw_server_rust", "darwin-arm64", "0.0.10")
+        self._write_bundle("browseros_claw_server_rust", "darwin-x64", "0.0.10")
 
-        universal._assert_server_bundles_aligned(self.root, "browseros")  # no raise
+        universal._assert_server_bundles_aligned(self.root, "browserclaw")  # no raise
 
     def test_mismatched_versions_raise_with_both_versions_and_timestamps(self):
         # Mirrors the BrowserClaw 0.47.11 skew: fresh arm64 vs stale x64.
@@ -248,35 +248,34 @@ class ServerBundleSkewTest(unittest.TestCase):
         universal._assert_server_bundles_aligned(self.root, "browserclaw")  # no raise
 
     def test_skew_in_another_products_family_is_ignored(self):
-        # Nightlies routinely leave the claw arm64 bundle at "local"; that
-        # must never block a browseros merge — only the product's own
-        # families ship in its app.
-        self._write_bundle("browseros_claw_server_rust", "darwin-arm64", "local")
-        self._write_bundle("browseros_claw_server_rust", "darwin-x64", "0.0.13")
-
-        universal._assert_server_bundles_aligned(self.root, "browseros")  # no raise
-
+        # A persistent runner may still hold the original BrowserOS server
+        # dirs; they must never block a neo merge, because only the
+        # product's own families ship in its app.
         self._write_bundle("browseros_server", "darwin-arm64", "0.0.10")
         self._write_bundle("browseros_server", "darwin-x64", "0.0.9")
 
-        with self.assertRaisesRegex(ValidationError, "browseros_server"):
-            universal._assert_server_bundles_aligned(self.root, "browseros")
+        universal._assert_server_bundles_aligned(self.root, "browserclaw")  # no raise
+
+        self._write_bundle("browseros_claw_server_rust", "darwin-arm64", "0.0.13")
+        self._write_bundle("browseros_claw_server_rust", "darwin-x64", "0.0.12")
+
+        with self.assertRaisesRegex(ValidationError, "browseros_claw_server_rust"):
+            universal._assert_server_bundles_aligned(self.root, "browserclaw")
 
     def test_absent_metadata_on_either_side_skips_family(self):
-        self._write_bundle("browseros_server", "darwin-arm64", "0.0.10")
+        self._write_bundle("browseros_claw_server_rust", "darwin-arm64", "0.0.10")
         # x64 dir exists but carries no metadata (partial/older layout).
         (
-            self.root / "resources" / "binaries" / "browseros_server" / "darwin-x64"
+            self.root
+            / "resources"
+            / "binaries"
+            / "browseros_claw_server_rust"
+            / "darwin-x64"
         ).mkdir(parents=True)
-
-        universal._assert_server_bundles_aligned(self.root, "browseros")  # no raise
-
-        self._write_bundle("browseros_claw_server_rust", "darwin-x64", "0.0.13")
 
         universal._assert_server_bundles_aligned(self.root, "browserclaw")  # no raise
 
     def test_missing_binaries_dir_is_noop(self):
-        universal._assert_server_bundles_aligned(self.root, "browseros")  # no raise
         universal._assert_server_bundles_aligned(self.root, "browserclaw")  # no raise
 
 

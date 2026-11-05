@@ -43,27 +43,15 @@ class _FakeR2Client:
         return {"Body": io.BytesIO(content), "Metadata": dict(metadata)}
 
 
-def _write_artifact(root: Path, *, product: str = "browseros") -> None:
+def _write_artifact(root: Path, *, product: str = "browserclaw") -> None:
     record = suite_record()
-    filename = (
-        f"BrowserOS_v{record.browser_version}_arm64.dmg"
-        if product == "browseros"
-        else f"BrowserOS_neo_v{record.browser_version}_arm64.dmg"
-    )
+    filename = f"BrowserOS_neo_v{record.browser_version}_arm64.dmg"
     content = f"signed-{product}".encode()
-    components = (
-        {
-            "server": record.component_versions["server"],
-            "agent": record.component_versions["agent"],
-            "app-onboard": record.component_versions["app-onboard"],
-        }
-        if product == "browseros"
-        else {
-            "claw-server-rust": record.component_versions["claw-server-rust"],
-            "browserclaw": record.component_versions["browserclaw"],
-            "claw-onboard": record.component_versions["claw-onboard"],
-        }
-    )
+    components = {
+        "claw-server-rust": record.component_versions["claw-server-rust"],
+        "browserclaw": record.component_versions["browserclaw"],
+        "claw-onboard": record.component_versions["claw-onboard"],
+    }
     (root / filename).write_bytes(content)
     (root / "release.json").write_text(
         json.dumps(
@@ -99,8 +87,8 @@ class SuiteArtifactPublicationTest(unittest.TestCase):
             backend = R2ImmutableObjectBackend(client, "bucket")
             record = replace(suite_record(state="merged"), draft=False)
 
-            first = publish_suite_browser_artifact(record, "browseros", root, backend)
-            second = publish_suite_browser_artifact(record, "browseros", root, backend)
+            first = publish_suite_browser_artifact(record, "browserclaw", root, backend)
+            second = publish_suite_browser_artifact(record, "browserclaw", root, backend)
 
         self.assertEqual(first, second)
         self.assertEqual(client.puts, [first.artifact_key, first.receipt_key])
@@ -113,7 +101,7 @@ class SuiteArtifactPublicationTest(unittest.TestCase):
             backend = R2ImmutableObjectBackend(client, "bucket")
             record = replace(suite_record(state="merged"), draft=False)
             publication = publish_suite_browser_artifact(
-                record, "browseros", root, backend
+                record, "browserclaw", root, backend
             )
             original = client.objects[publication.artifact_key]
             client.objects[publication.artifact_key] = (
@@ -122,7 +110,7 @@ class SuiteArtifactPublicationTest(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(RuntimeError, "conflicts"):
-                publish_suite_browser_artifact(record, "browseros", root, backend)
+                publish_suite_browser_artifact(record, "browserclaw", root, backend)
 
         self.assertEqual(
             client.puts, [publication.artifact_key, publication.receipt_key]
@@ -147,10 +135,8 @@ class SuiteArtifactPublicationTest(unittest.TestCase):
                 )
 
     def test_product_transaction_cannot_publish_sibling_artifact(self):
-        for product, sibling in (
-            ("browseros", "browserclaw"),
-            ("browserclaw", "browseros"),
-        ):
+        # The original BrowserOS product is no longer a suite product here.
+        for product, sibling in (("browserclaw", "browseros"),):
             with (
                 self.subTest(product=product),
                 tempfile.TemporaryDirectory() as temp_dir,

@@ -43,29 +43,6 @@ class ServerTargetTest(unittest.TestCase):
             ("darwin-arm64", "darwin-x64"),
         )
 
-    def test_browseros_delegates_each_target_to_bun_builder(self) -> None:
-        root = Path("/repo/packages/browseros-agent")
-        for target in (
-            "linux-x64",
-            "windows-x64",
-            "darwin-arm64",
-            "darwin-x64",
-        ):
-            with self.subTest(target=target):
-                command, artifact = server_build_command(
-                    "browseros", target, root, root / "target"
-                )
-                self.assertEqual(
-                    command,
-                    (
-                        "bun",
-                        "scripts/build/server.ts",
-                        f"--target={target}",
-                        "--no-upload",
-                    ),
-                )
-                self.assertEqual(artifact, root / "dist/prod/server" / target)
-
     def test_browserclaw_maps_targets_to_cargo_triples_and_runtime_names(self) -> None:
         root = Path("/repo/packages/browseros-agent")
         target_root = root / "target"
@@ -154,43 +131,6 @@ class ServerResourceBuilderTest(unittest.TestCase):
         if os.name != "nt":
             self.assertTrue(runtime.stat().st_mode & 0o100)
 
-    def test_bun_build_validates_builder_artifact_and_stages_current_target(self) -> None:
-        output = self.agent / "dist/prod/server/linux-x64"
-        files = {"resources/bin/browseros_server": b"bun-server"}
-
-        def run(command, cwd, env):
-            for relative, content in files.items():
-                path = output / relative
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(content)
-            (output / "artifact-metadata.json").write_text(
-                json.dumps(_metadata("0.0.128", "linux-x64", files))
-            )
-
-        builder = ServerResourceBuilder(
-            self.repo,
-            host_platform="linux",
-            run=run,
-            which=lambda name: f"/usr/bin/{name}",
-        )
-        result = builder.prepare(
-            product="browseros",
-            target="linux-x64",
-            version="0.0.128",
-            source_sha=SOURCE_SHA,
-        )
-
-        self.assertEqual(
-            (result.destination / "resources/bin/browseros_server").read_bytes(),
-            b"bun-server",
-        )
-        self.assertEqual(
-            json.loads((result.destination / "artifact-metadata.json").read_text())[
-                "sourceSha"
-            ],
-            SOURCE_SHA,
-        )
-
     def test_incompatible_host_and_missing_toolchain_fail_preflight(self) -> None:
         builder = ServerResourceBuilder(
             self.repo,
@@ -205,8 +145,8 @@ class ServerResourceBuilderTest(unittest.TestCase):
                 version="0.0.18",
                 source_sha=SOURCE_SHA,
             )
-        with self.assertRaisesRegex(RuntimeError, "install Bun"):
-            builder.preflight(product="browseros", target="linux-x64")
+        with self.assertRaisesRegex(RuntimeError, "install Rust and Cargo"):
+            builder.preflight(product="browserclaw", target="linux-x64")
 
     def test_source_manifest_must_match_requested_version(self) -> None:
         builder = ServerResourceBuilder(
@@ -240,20 +180,30 @@ class ServerResourceBuilderTest(unittest.TestCase):
             builder.preflight(product="browserclaw", target="linux-x64")
 
     def test_validation_rejects_version_source_and_checksum_drift(self) -> None:
-        destination = self.browseros / "resources/binaries/browseros_server/linux-x64"
-        binary = destination / "resources/bin/browseros_server"
+        destination = (
+            self.browseros / "resources/binaries/browseros_claw_server_rust/linux-x64"
+        )
+        binary = destination / "resources/bin/browseros-claw-server"
         binary.parent.mkdir(parents=True)
         binary.write_bytes(b"server")
         binary.chmod(0o755)
+        skill = destination / "resources/skills/browserclaw/SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_bytes(b"skill")
         document = _metadata(
-            "0.0.128", "linux-x64", {"resources/bin/browseros_server": b"server"}
+            "0.0.128",
+            "linux-x64",
+            {
+                "resources/bin/browseros-claw-server": b"server",
+                "resources/skills/browserclaw/SKILL.md": b"skill",
+            },
         )
         document["sourceSha"] = SOURCE_SHA
         (destination / "artifact-metadata.json").write_text(json.dumps(document))
 
         validate_server_resources(
             destination,
-            product="browseros",
+            product="browserclaw",
             target="linux-x64",
             version="0.0.128",
             source_sha=SOURCE_SHA,
@@ -262,7 +212,7 @@ class ServerResourceBuilderTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "checksum"):
             validate_server_resources(
                 destination,
-                product="browseros",
+                product="browserclaw",
                 target="linux-x64",
                 version="0.0.128",
                 source_sha=SOURCE_SHA,

@@ -69,13 +69,8 @@ def _release_provenance(ctx: Context) -> dict[str, object]:
     }
     if getattr(ctx, "resource_mode", "published") == "published":
         source = source_resources_for_product(ctx.product.id)
-        server_version = (
-            ctx.env.browseros_server_resource_version
-            if ctx.product.id == "browseros"
-            else ctx.env.browserclaw_server_resource_version
-        )
         component_versions = {
-            source.server_component: server_version,
+            source.server_component: ctx.env.browserclaw_server_resource_version,
             source.extension_component: ctx.env.bundled_product_extension_version,
             source.onboarding_component: ctx.env.onboarding_resource_version,
         }

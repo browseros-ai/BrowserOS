@@ -107,10 +107,8 @@ class ResourcePinsTest(unittest.TestCase):
         self.assertEqual(
             {name: pin.version for name, pin in pins.items()},
             {
-                "browseros_server": "0.0.1",
-                "browserclaw_server": "0.0.2",
-                "browserclaw_onboard": "0.0.3",
-                "browseros_onboard": "0.0.4",
+                "browserclaw_server": "0.0.1",
+                "browserclaw_onboard": "0.0.2",
             },
         )
         self.assertTrue(
@@ -168,10 +166,10 @@ class ResourcePinsTest(unittest.TestCase):
 
     def test_rejects_mixed_legacy_and_bound_aliases(self) -> None:
         self.add_all(metadata=False)
-        family = RESOURCE_FAMILIES[1]
+        family = RESOURCE_FAMILIES[0]
         target = family.targets[0]
         self.client.objects[family.latest_key(target)] = FakeR2Client._values(
-            family, target, "0.0.2", SOURCE_SHA, "0.0.2", True
+            family, target, "0.0.1", SOURCE_SHA, "0.0.1", True
         )
 
         with self.assertRaisesRegex(RuntimeError, "mixed bindings"):
@@ -179,22 +177,22 @@ class ResourcePinsTest(unittest.TestCase):
 
     def test_rejects_ambiguous_legacy_match(self) -> None:
         self.add_all(metadata=False)
-        family = RESOURCE_FAMILIES[2]
-        self.client.add_family(family, "0.0.9", metadata=False, marker="0.0.3")
+        family = RESOURCE_FAMILIES[1]
+        self.client.add_family(family, "0.0.9", metadata=False, marker="0.0.2")
 
         with self.assertRaisesRegex(RuntimeError, "match 2 versions"):
             self.resolve()
 
     def test_retries_when_alias_changes_during_snapshot(self) -> None:
         self.add_all(metadata=True)
-        family = RESOURCE_FAMILIES[2]
+        family = RESOURCE_FAMILIES[1]
         target = family.targets[0]
         replacement = FakeR2Client._values(
-            family, target, "0.0.3", SOURCE_SHA, "0.0.3", True
+            family, target, "0.0.2", SOURCE_SHA, "0.0.2", True
         )
         replacement["ETag"] = '"changed-once"'
         replacement["ContentLength"] = 99
-        self.client.objects[family.version_key("0.0.3", target)] = replacement
+        self.client.objects[family.version_key("0.0.2", target)] = replacement
         self.client.replace_after_head(family.latest_key(target), 2, replacement)
 
         pins = self.resolve(attempts=2)

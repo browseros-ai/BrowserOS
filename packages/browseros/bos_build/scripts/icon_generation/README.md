@@ -7,16 +7,13 @@ icons for Windows, macOS, Linux, and ChromeOS are generated from one source imag
 
 ```bash
 # 1. Place your 1024x1024 (or larger) source icon
-cp your_icon.png source/app_icon.png
+cp your_icon.png source/browserclaw/app_icon.png
 
-# 2. Place any static files (SVG, AI) in static/
-cp your_logo.svg static/product_logo.svg
+# 2. Place any static files (SVG, AI) in static/browserclaw/
+cp your_logo.svg static/browserclaw/product_logo.svg
 
-# 3. Run generation for BrowserOS
+# 3. Run generation for BrowserOS neo (the default and only product)
 python generate_icons.py
-
-# 4. Or run generation for BrowserClaw
-python generate_icons.py --product browserclaw
 ```
 
 ## Directory Structure
@@ -24,14 +21,10 @@ python generate_icons.py --product browserclaw
 ```
 icon_generation/
 ├── source/                    # Source images (high-res PNGs)
-│   ├── app_icon.png          # Main app icon (≥1024x1024, required)
 │   └── browserclaw/
-│       └── app_icon.png      # BrowserClaw app icon
+│       └── app_icon.png      # BrowserOS neo app icon (≥1024x1024, required)
 ├── static/                    # Static files (copied as-is)
-│   ├── product_logo.svg      # Vector logo
-│   ├── product_logo.ai       # Adobe Illustrator source
-│   ├── product_logo_animation.svg
-│   └── browserclaw/          # BrowserClaw static files
+│   └── browserclaw/          # BrowserOS neo vector, AI and animated logos
 ├── generate_icons.py         # Main generation script
 ├── generate_icons.txt        # Generation configuration
 └── README.md                 # This file
@@ -66,11 +59,10 @@ COPY   source dest          # Copy static file as-is
 
 | File | Type | Description |
 |------|------|-------------|
-| `source/app_icon.png` | PNG | Master source icon (≥1024x1024) |
-| `source/browserclaw/app_icon.png` | PNG | BrowserClaw source icon (≥1024x1024) |
-| `static/product_logo.svg` | SVG | Vector logo (manually maintained) |
-| `static/product_logo.ai` | AI | Adobe Illustrator source (manually maintained) |
-| `static/product_logo_animation.svg` | SVG | Animated logo (manually maintained) |
+| `source/browserclaw/app_icon.png` | PNG | BrowserOS neo source icon (≥1024x1024) |
+| `static/browserclaw/product_logo.svg` | SVG | Vector logo (manually maintained) |
+| `static/browserclaw/product_logo.ai` | AI | Adobe Illustrator source (manually maintained) |
+| `static/browserclaw/product_logo_animation.svg` | SVG | Animated logo (manually maintained) |
 
 ### Common Icons (Generated)
 
@@ -152,14 +144,14 @@ COPY   source dest          # Copy static file as-is
 
 ## Workflow
 
-1. **Update source icon**: Replace `source/app_icon.png` or `source/<product>/app_icon.png` with your new icon (≥1024x1024)
+1. **Update source icon**: Replace `source/<product>/app_icon.png` with your new icon (≥1024x1024)
 2. **Run generation**: `python generate_icons.py` or `python generate_icons.py --product browserclaw`
 3. **Build BrowserOS**: The `copy_resources.yaml` copies generated icons to chromium source tree
 
 ## Troubleshooting
 
 ### "Source image is too small"
-Your `source/app_icon.png` must be at least 1024x1024 pixels.
+Your `source/<product>/app_icon.png` must be at least 1024x1024 pixels.
 
 ### "ImageMagick not found"
 Install with: `brew install imagemagick`

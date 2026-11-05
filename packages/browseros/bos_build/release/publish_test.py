@@ -13,21 +13,21 @@ from .publish import PublishModule, _release_source_key
 
 class ReleaseSourceKeyTest(unittest.TestCase):
     def test_uses_metadata_url_when_it_points_at_cdn(self):
-        ctx = self._ctx("browseros")
+        ctx = self._ctx("browserclaw")
 
         key = _release_source_key(
             ctx,
             "win",
             "0.31.0",
             {
-                "filename": "BrowserOS_v0.31.0_x64_installer.exe",
-                "url": "https://cdn.browseros.com/releases/0.31.0/win/BrowserOS_v0.31.0_x64_installer.exe",
+                "filename": "BrowserOS_neo_v0.31.0_x64_installer.exe",
+                "url": "https://cdn.browseros.com/releases/browserclaw/0.31.0/win/BrowserOS_neo_v0.31.0_x64_installer.exe",
             },
         )
 
         self.assertEqual(
             key,
-            "releases/0.31.0/win/BrowserOS_v0.31.0_x64_installer.exe",
+            "releases/browserclaw/0.31.0/win/BrowserOS_neo_v0.31.0_x64_installer.exe",
         )
 
     def test_falls_back_to_product_prefixed_release_path(self):

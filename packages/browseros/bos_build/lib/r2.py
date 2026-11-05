@@ -187,7 +187,7 @@ def get_release_json(
     version: str,
     platform: str,
     env: Optional[EnvConfig] = None,
-    product_id: str = "browseros",
+    product_id: str = "browserclaw",
 ) -> Optional[Dict]:
     """Fetch one platform's release.json from R2."""
     if not BOTO3_AVAILABLE:
@@ -206,8 +206,6 @@ def get_release_json(
         return None
 
     keys = [f"releases/{product_id}/{version}/{platform}/release.json"]
-    if product_id == "browseros":
-        keys.append(f"releases/{version}/{platform}/release.json")
 
     for r2_key in keys:
         try:

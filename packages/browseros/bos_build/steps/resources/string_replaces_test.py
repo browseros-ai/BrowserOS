@@ -33,8 +33,8 @@ class ApplyStringReplacementsTest(unittest.TestCase):
         ).read_text()
         self.assertNotIn("Google Chrome", content)
         self.assertNotIn("Chromium", content)
-        self.assertIn("BrowserOS", content)
-        self.assertIn("The BrowserOS Authors. All rights reserved.", content)
+        self.assertIn("BrowserOS neo", content)
+        self.assertIn("The BrowserOS neo Authors. All rights reserved.", content)
 
     def test_google_play_is_preserved(self):
         self.chromium.with_branding_files()

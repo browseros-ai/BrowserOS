@@ -73,19 +73,23 @@ class FeedSpec:
         return f"{CDN_BASE_URL}/{self.key}"
 
 
-# Browser feed key infix per product ("" keeps today's browseros keys).
-_BROWSER_FEED_SLUGS = {"browseros": "", "browserclaw": "claw"}
+# Browser feed key infix per product. The slug-less keys (appcast.xml,
+# appcast-x86_64.xml, appcast-win.xml, appcast-win-arm64.xml) and
+# appcast-server(.alpha).xml belong to the original BrowserOS product, which
+# browseros-human now publishes to the same CDN keys for installed clients.
+# They are deliberately absent from FEEDS so every writer here fails closed on
+# them (feeds/spec_test.py pins this); never re-add them.
+_BROWSER_FEED_SLUGS = {"browserclaw": "claw"}
 _BROWSER_FEED_LEGACY_DISPLAY_NAMES = {"browserclaw": "BrowserClaw"}
 
 # Products whose shipping updater selects this feed by browseros::GetProduct()
 # (sparkle_glue.mm / winsparkle_glue.cc). A product listed in
 # _BROWSER_FEED_SLUGS but missing here would ship an updater still pointing at
 # the browseros feed, so its feeds stay unpublishable until that client lands.
-_BROWSER_FEED_CLIENTS = frozenset({"browseros", "browserclaw"})
+_BROWSER_FEED_CLIENTS = frozenset({"browserclaw"})
 
 # Server feed key slug per bundle (appcast-<slug>[.alpha].xml).
 _SERVER_FEED_SLUGS = {
-    "browseros-server": "server",
     "browserclaw-server": "claw-server",
 }
 
@@ -175,7 +179,7 @@ def _extension_feeds() -> Tuple[FeedSpec, ...]:
             FeedSpec(
                 key=f"extensions/update-manifest{suffix}.xml",
                 kind="extensions",
-                product="browseros",
+                product="browserclaw",
                 channel=channel,
             )
         )
@@ -183,7 +187,7 @@ def _extension_feeds() -> Tuple[FeedSpec, ...]:
             FeedSpec(
                 key=f"extensions/extensions{suffix}.json",
                 kind="extensions",
-                product="browseros",
+                product="browserclaw",
                 channel=channel,
             )
         )
@@ -192,7 +196,7 @@ def _extension_feeds() -> Tuple[FeedSpec, ...]:
         FeedSpec(
             key="extensions/bundled-manifest.xml",
             kind="extensions",
-            product="browseros",
+            product="browserclaw",
             channel="",
         )
     )
@@ -201,7 +205,6 @@ def _extension_feeds() -> Tuple[FeedSpec, ...]:
 
 def _build_feeds() -> Tuple[FeedSpec, ...]:
     feeds = (
-        *_browser_feeds("browseros"),
         *_browser_feeds("browserclaw"),
         *(feed for bundle in SERVER_BUNDLES for feed in _server_feeds(bundle)),
         *_extension_feeds(),

@@ -9,14 +9,13 @@ from ..core.step import Step, ValidationError
 from ..lib.env import EnvConfig
 from ..lib.utils import log_info
 from ..lib.r2 import BOTO3_AVAILABLE
-from ..products import DEFAULT_PRODUCT_ID, PRODUCTS
+from ..products import PRODUCTS
 from .common import (
     PLATFORMS,
     PLATFORM_DISPLAY_NAMES,
     fetch_all_release_metadata,
     format_size,
     list_all_versions,
-    list_legacy_versions,
     version_sort_key,
 )
 
@@ -42,15 +41,15 @@ def collect_product_rows(
 ) -> List[Tuple[str, bool]]:
     """Gather a product's version rows from R2.
 
-    Bare pre-product releases predate the registry, so they surface under
-    the default product only.
+    Bare pre-product releases/<version>/ entries belong to the original
+    BrowserOS product, now released from browseros-human, so no product
+    here claims them.
     """
     # Listing keys off release_prefix (R2 layout) while release.json fetches
     # key off product.id (get_release_json's contract); the two are equal
     # for every registered product today.
     productized = list_all_versions(product.release_prefix, env)
-    legacy = list_legacy_versions(env) if product.id == DEFAULT_PRODUCT_ID else []
-    return merge_product_versions(productized, legacy)
+    return merge_product_versions(productized, [])
 
 
 def apply_list_limit(

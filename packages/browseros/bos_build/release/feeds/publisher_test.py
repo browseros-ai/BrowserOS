@@ -75,7 +75,7 @@ class FakeR2Client:
 
 
 def _artifact(
-    url="https://cdn.browseros.com/releases/browseros/0.47.0.2/macos/BrowserOS_v0.47.0.2_arm64.dmg",
+    url="https://cdn.browseros.com/releases/browserclaw/0.47.0.2/macos/BrowserOS_neo_v0.47.0.2_arm64.dmg",
 ):
     return {
         "filename": url.rsplit("/", 1)[-1],
@@ -87,7 +87,7 @@ def _artifact(
 
 def _mac_appcast(sparkle_version="10000.0.47.0.2"):
     return render_browser_appcast(
-        feed_by_key("appcast.xml"),
+        feed_by_key("appcast-claw.xml"),
         _artifact(),
         "0.47.0.2",
         sparkle_version,
@@ -113,7 +113,7 @@ def _legacy_browserclaw_appcast(sparkle_version="10000.0.47.0.2"):
 
 
 def _empty_mac_appcast():
-    spec = feed_by_key("appcast.xml")
+    spec = feed_by_key("appcast-claw.xml")
     return f"""\
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
@@ -224,12 +224,12 @@ class PublisherTestCase(unittest.TestCase):
         publisher = self._publisher()
 
         self.assertEqual(
-            publisher.staging_path(feed_by_key("appcast.xml")),
-            self.staging_root / "browser" / "appcast.xml",
+            publisher.staging_path(feed_by_key("appcast-claw.xml")),
+            self.staging_root / "browser" / "appcast-claw.xml",
         )
         self.assertEqual(
-            publisher.staging_path(feed_by_key("appcast-server.xml")),
-            self.staging_root / "server" / "appcast-server.xml",
+            publisher.staging_path(feed_by_key("appcast-claw-server.xml")),
+            self.staging_root / "server" / "appcast-claw-server.xml",
         )
         self.assertEqual(
             publisher.staging_path(feed_by_key("extensions/bundled-manifest.xml")),
@@ -238,80 +238,80 @@ class PublisherTestCase(unittest.TestCase):
 
     def test_dry_run_stages_without_r2_writes(self):
         publisher = self._publisher(
-            {"appcast.xml": _mac_appcast("10000.0.46.0.0").encode()}
+            {"appcast-claw.xml": _mac_appcast("10000.0.46.0.0").encode()}
         )
 
-        ok = publisher.publish(feed_by_key("appcast.xml"), _mac_appcast())
+        ok = publisher.publish(feed_by_key("appcast-claw.xml"), _mac_appcast())
 
         self.assertTrue(ok)
         self.assertEqual(self.client.calls, [])
-        staged = self.staging_root / "browser" / "appcast.xml"
+        staged = self.staging_root / "browser" / "appcast-claw.xml"
         self.assertEqual(staged.read_text(), _mac_appcast())
 
     def test_dry_run_stage_false_does_not_write_staging_file(self):
         publisher = self._publisher(
-            {"appcast.xml": _mac_appcast("10000.0.46.0.0").encode()}
+            {"appcast-claw.xml": _mac_appcast("10000.0.46.0.0").encode()}
         )
 
-        ok = publisher.publish(feed_by_key("appcast.xml"), _mac_appcast(), stage=False)
+        ok = publisher.publish(feed_by_key("appcast-claw.xml"), _mac_appcast(), stage=False)
 
         self.assertTrue(ok)
         self.assertEqual(self.client.calls, [])
-        self.assertFalse((self.staging_root / "browser" / "appcast.xml").exists())
+        self.assertFalse((self.staging_root / "browser" / "appcast-claw.xml").exists())
 
     def test_publish_backs_up_live_before_put(self):
         live = _mac_appcast("10000.0.46.0.0").encode()
-        publisher = self._publisher({"appcast.xml": live})
+        publisher = self._publisher({"appcast-claw.xml": live})
 
-        ok = publisher.publish(feed_by_key("appcast.xml"), _mac_appcast(), publish=True)
+        ok = publisher.publish(feed_by_key("appcast-claw.xml"), _mac_appcast(), publish=True)
 
         self.assertTrue(ok)
         self.assertEqual(
             self.client.calls,
             [
-                ("copy", "appcast.xml", "feeds-history/appcast.xml.20260701T120000Z"),
-                ("put", "appcast.xml", "application/xml"),
+                ("copy", "appcast-claw.xml", "feeds-history/appcast-claw.xml.20260701T120000Z"),
+                ("put", "appcast-claw.xml", "application/xml"),
             ],
         )
-        staged = self.staging_root / "browser" / "appcast.xml"
+        staged = self.staging_root / "browser" / "appcast-claw.xml"
         self.assertEqual(staged.read_text(), _mac_appcast())
 
     def test_publish_identical_live_feed_is_idempotent(self):
         content = _mac_appcast()
-        publisher = self._publisher({"appcast.xml": content.encode()})
+        publisher = self._publisher({"appcast-claw.xml": content.encode()})
 
-        ok = publisher.publish(feed_by_key("appcast.xml"), content, publish=True)
+        ok = publisher.publish(feed_by_key("appcast-claw.xml"), content, publish=True)
 
         self.assertTrue(ok)
         self.assertEqual(self.client.calls, [])
-        staged = self.staging_root / "browser" / "appcast.xml"
+        staged = self.staging_root / "browser" / "appcast-claw.xml"
         self.assertEqual(staged.read_text(), content)
 
     def test_publish_without_live_object_skips_backup(self):
         publisher = self._publisher()
 
-        ok = publisher.publish(feed_by_key("appcast.xml"), _mac_appcast(), publish=True)
+        ok = publisher.publish(feed_by_key("appcast-claw.xml"), _mac_appcast(), publish=True)
 
         self.assertTrue(ok)
-        self.assertEqual(self.client.calls, [("put", "appcast.xml", "application/xml")])
+        self.assertEqual(self.client.calls, [("put", "appcast-claw.xml", "application/xml")])
 
     def test_empty_live_shell_is_valid_first_population(self):
-        publisher = self._publisher({"appcast.xml": _empty_mac_appcast().encode()})
+        publisher = self._publisher({"appcast-claw.xml": _empty_mac_appcast().encode()})
 
-        ok = publisher.publish(feed_by_key("appcast.xml"), _mac_appcast())
+        ok = publisher.publish(feed_by_key("appcast-claw.xml"), _mac_appcast())
 
         self.assertTrue(ok)
         self.assertEqual(self.client.calls, [])
         self.assertEqual(
-            (self.staging_root / "browser" / "appcast.xml").read_text(),
+            (self.staging_root / "browser" / "appcast-claw.xml").read_text(),
             _mac_appcast(),
         )
 
     def test_empty_live_item_is_backed_up_before_first_population(self):
-        publisher = self._publisher({"appcast.xml": _empty_item_mac_appcast().encode()})
+        publisher = self._publisher({"appcast-claw.xml": _empty_item_mac_appcast().encode()})
 
         ok = publisher.publish(
-            feed_by_key("appcast.xml"),
+            feed_by_key("appcast-claw.xml"),
             _mac_appcast(),
             publish=True,
         )
@@ -320,20 +320,20 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(
             self.client.calls,
             [
-                ("copy", "appcast.xml", "feeds-history/appcast.xml.20260701T120000Z"),
-                ("put", "appcast.xml", "application/xml"),
+                ("copy", "appcast-claw.xml", "feeds-history/appcast-claw.xml.20260701T120000Z"),
+                ("put", "appcast-claw.xml", "application/xml"),
             ],
         )
 
     def test_wrong_channel_empty_live_shell_fails_closed(self):
         live = _empty_item_mac_appcast().replace(
-            "https://cdn.browseros.com/appcast.xml",
             "https://cdn.browseros.com/appcast-claw.xml",
+            "https://cdn.browseros.com/appcast-claw-x86_64.xml",
         )
-        publisher = self._publisher({"appcast.xml": live.encode()})
+        publisher = self._publisher({"appcast-claw.xml": live.encode()})
 
         ok = publisher.publish(
-            feed_by_key("appcast.xml"),
+            feed_by_key("appcast-claw.xml"),
             _mac_appcast(),
             publish=True,
         )
@@ -346,10 +346,10 @@ class PublisherTestCase(unittest.TestCase):
             "<sparkle:version>10000.0.47.0.2</sparkle:version>",
             "",
         )
-        publisher = self._publisher({"appcast.xml": live.encode()})
+        publisher = self._publisher({"appcast-claw.xml": live.encode()})
 
         ok = publisher.publish(
-            feed_by_key("appcast.xml"),
+            feed_by_key("appcast-claw.xml"),
             _mac_appcast("10000.0.48.0.0"),
             publish=True,
         )
@@ -365,10 +365,10 @@ class PublisherTestCase(unittest.TestCase):
             "</rss>",
             f"  <channel>{populated_channel}</channel>\n</rss>",
         )
-        publisher = self._publisher({"appcast.xml": live.encode()})
+        publisher = self._publisher({"appcast-claw.xml": live.encode()})
 
         ok = publisher.publish(
-            feed_by_key("appcast.xml"),
+            feed_by_key("appcast-claw.xml"),
             _mac_appcast("10000.0.48.0.0"),
             publish=True,
         )
@@ -381,10 +381,10 @@ class PublisherTestCase(unittest.TestCase):
             "</rss>",
             "<item><title>meaningful old release</title></item>\n</rss>",
         )
-        publisher = self._publisher({"appcast.xml": live.encode()})
+        publisher = self._publisher({"appcast-claw.xml": live.encode()})
 
         ok = publisher.publish(
-            feed_by_key("appcast.xml"),
+            feed_by_key("appcast-claw.xml"),
             _mac_appcast("10000.0.48.0.0"),
             publish=True,
         )
@@ -399,10 +399,10 @@ class PublisherTestCase(unittest.TestCase):
                     "10000.0.47.0.2",
                     live_version,
                 )
-                publisher = self._publisher({"appcast.xml": live.encode()})
+                publisher = self._publisher({"appcast-claw.xml": live.encode()})
 
                 ok = publisher.publish(
-                    feed_by_key("appcast.xml"),
+                    feed_by_key("appcast-claw.xml"),
                     _mac_appcast("10000.0.48.0.0"),
                     publish=True,
                 )
@@ -424,10 +424,10 @@ class PublisherTestCase(unittest.TestCase):
                     "  </channel>",
                     f"    {bad_item}\n  </channel>",
                 )
-                publisher = self._publisher({"appcast.xml": live.encode()})
+                publisher = self._publisher({"appcast-claw.xml": live.encode()})
 
                 ok = publisher.publish(
-                    feed_by_key("appcast.xml"),
+                    feed_by_key("appcast-claw.xml"),
                     _mac_appcast("10000.0.48.0.0"),
                     publish=True,
                 )
@@ -443,7 +443,7 @@ class PublisherTestCase(unittest.TestCase):
         publisher = self._publisher()
 
         ok = publisher.publish(
-            feed_by_key("appcast.xml"),
+            feed_by_key("appcast-claw.xml"),
             content,
             publish=True,
             allow_downgrade=True,
@@ -453,14 +453,15 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_populated_wrong_channel_live_appcast_fails_closed(self):
+        # The original BrowserOS feed's title is foreign to every neo key.
         live = _mac_appcast("10000.0.46.0.0").replace(
+            "<title>BrowserOS neo</title>",
             "<title>BrowserOS</title>",
-            "<title>BrowserClaw</title>",
         )
-        publisher = self._publisher({"appcast.xml": live.encode()})
+        publisher = self._publisher({"appcast-claw.xml": live.encode()})
 
         ok = publisher.publish(
-            feed_by_key("appcast.xml"),
+            feed_by_key("appcast-claw.xml"),
             _mac_appcast(),
             publish=True,
         )
@@ -574,11 +575,11 @@ class PublisherTestCase(unittest.TestCase):
 
     def test_downgrade_refused_without_flag(self):
         publisher = self._publisher(
-            {"appcast.xml": _mac_appcast("10000.0.48.0.0").encode()}
+            {"appcast-claw.xml": _mac_appcast("10000.0.48.0.0").encode()}
         )
 
         ok = publisher.publish(
-            feed_by_key("appcast.xml"), _mac_appcast("10000.0.47.0.2"), publish=True
+            feed_by_key("appcast-claw.xml"), _mac_appcast("10000.0.47.0.2"), publish=True
         )
 
         self.assertFalse(ok)
@@ -587,11 +588,11 @@ class PublisherTestCase(unittest.TestCase):
 
     def test_downgrade_allowed_with_flag(self):
         publisher = self._publisher(
-            {"appcast.xml": _mac_appcast("10000.0.48.0.0").encode()}
+            {"appcast-claw.xml": _mac_appcast("10000.0.48.0.0").encode()}
         )
 
         ok = publisher.publish(
-            feed_by_key("appcast.xml"),
+            feed_by_key("appcast-claw.xml"),
             _mac_appcast("10000.0.47.0.2"),
             publish=True,
             allow_downgrade=True,
@@ -601,23 +602,23 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(len(self.client.calls), 2)
 
     def test_equal_version_passes(self):
-        publisher = self._publisher({"appcast.xml": _mac_appcast().encode()})
+        publisher = self._publisher({"appcast-claw.xml": _mac_appcast().encode()})
 
-        ok = publisher.publish(feed_by_key("appcast.xml"), _mac_appcast(), publish=True)
+        ok = publisher.publish(feed_by_key("appcast-claw.xml"), _mac_appcast(), publish=True)
 
         self.assertTrue(ok)
 
     def test_legacy_scheme_live_version_is_older(self):
         legacy = _mac_appcast().replace("10000.0.47.0.2", "7948.97")
-        publisher = self._publisher({"appcast.xml": legacy.encode()})
+        publisher = self._publisher({"appcast-claw.xml": legacy.encode()})
 
-        ok = publisher.publish(feed_by_key("appcast.xml"), _mac_appcast(), publish=True)
+        ok = publisher.publish(feed_by_key("appcast-claw.xml"), _mac_appcast(), publish=True)
 
         self.assertTrue(ok)
 
     def test_channel_metadata_mismatch_refused(self):
         alpha_content = render_server_appcast(
-            server_feed("browseros-server", "alpha"),
+            server_feed("browserclaw-server", "alpha"),
             "0.0.9",
             [],
             ExistingAppcast(
@@ -629,7 +630,7 @@ class PublisherTestCase(unittest.TestCase):
         publisher = self._publisher()
 
         ok = publisher.publish(
-            server_feed("browseros-server", "prod"), alpha_content, publish=True
+            server_feed("browserclaw-server", "prod"), alpha_content, publish=True
         )
 
         self.assertFalse(ok)
@@ -639,7 +640,7 @@ class PublisherTestCase(unittest.TestCase):
         url = _artifact()["url"]
         publisher = self._publisher(head_status={url: 404})
 
-        ok = publisher.publish(feed_by_key("appcast.xml"), _mac_appcast(), publish=True)
+        ok = publisher.publish(feed_by_key("appcast-claw.xml"), _mac_appcast(), publish=True)
 
         self.assertFalse(ok)
         self.assertEqual(self.client.calls, [])
@@ -647,7 +648,7 @@ class PublisherTestCase(unittest.TestCase):
 
     def test_failed_backup_blocks_the_put(self):
         publisher = self._publisher(
-            {"appcast.xml": _mac_appcast("10000.0.46.0.0").encode()}
+            {"appcast-claw.xml": _mac_appcast("10000.0.46.0.0").encode()}
         )
 
         def broken_copy(**kwargs):
@@ -655,7 +656,7 @@ class PublisherTestCase(unittest.TestCase):
 
         self.client.copy_object = broken_copy
 
-        ok = publisher.publish(feed_by_key("appcast.xml"), _mac_appcast(), publish=True)
+        ok = publisher.publish(feed_by_key("appcast-claw.xml"), _mac_appcast(), publish=True)
 
         self.assertFalse(ok)
         self.assertEqual(self.client.calls, [])
@@ -708,9 +709,9 @@ class PublisherTestCase(unittest.TestCase):
         }
         cases = (
             (
-                server_feed("browseros-server", "prod"),
-                _server_appcast("browseros-server", "prod", "0.0.127"),
-                _wrong_channel_server_appcast("browseros-server", "0.0.127"),
+                server_feed("browserclaw-server", "prod"),
+                _server_appcast("browserclaw-server", "prod", "0.0.127"),
+                _wrong_channel_server_appcast("browserclaw-server", "0.0.127"),
             ),
             (
                 server_feed("browserclaw-server", "prod"),
@@ -733,7 +734,7 @@ class PublisherTestCase(unittest.TestCase):
 
     def test_allow_downgrade_does_not_repair_wrong_channel_live(self):
         for bundle_id, version in (
-            ("browseros-server", "0.0.127"),
+            ("browserclaw-server", "0.0.127"),
             ("browserclaw-server", "0.0.15"),
         ):
             spec = server_feed(bundle_id, "prod")
@@ -753,7 +754,7 @@ class PublisherTestCase(unittest.TestCase):
 
     def test_repair_accepts_same_version_wrong_channel_appcasts(self):
         for bundle_id, version in (
-            ("browseros-server", "0.0.127"),
+            ("browserclaw-server", "0.0.127"),
             ("browserclaw-server", "0.0.15"),
         ):
             spec = server_feed(bundle_id, "prod")
@@ -800,11 +801,11 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_repair_refuses_recoverable_appcast_downgrade(self):
-        spec = server_feed("browseros-server", "prod")
+        spec = server_feed("browserclaw-server", "prod")
         publisher = self._publisher(
             {
                 spec.key: _wrong_channel_server_appcast(
-                    "browseros-server", "0.0.128"
+                    "browserclaw-server", "0.0.128"
                 ).encode()
             }
         )
@@ -812,7 +813,7 @@ class PublisherTestCase(unittest.TestCase):
         self.assertFalse(
             publisher.publish(
                 spec,
-                _server_appcast("browseros-server", "prod", "0.0.127"),
+                _server_appcast("browserclaw-server", "prod", "0.0.127"),
                 publish=True,
                 repair_invalid_live=True,
             )
@@ -820,8 +821,8 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_repair_wrong_channel_requires_recoverable_live_version(self):
-        spec = server_feed("browseros-server", "prod")
-        live = _wrong_channel_server_appcast("browseros-server", "0.0.127").replace(
+        spec = server_feed("browserclaw-server", "prod")
+        live = _wrong_channel_server_appcast("browserclaw-server", "0.0.127").replace(
             "<sparkle:version>0.0.127</sparkle:version>", ""
         )
         publisher = self._publisher({spec.key: live.encode()})
@@ -829,7 +830,7 @@ class PublisherTestCase(unittest.TestCase):
         self.assertFalse(
             publisher.publish(
                 spec,
-                _server_appcast("browseros-server", "prod", "0.0.127"),
+                _server_appcast("browserclaw-server", "prod", "0.0.127"),
                 publish=True,
                 repair_invalid_live=True,
             )
@@ -837,8 +838,8 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_repair_malformed_appcast_compares_recoverable_version(self):
-        spec = server_feed("browseros-server", "prod")
-        live = _server_appcast("browseros-server", "prod", "0.0.128").replace(
+        spec = server_feed("browserclaw-server", "prod")
+        live = _server_appcast("browserclaw-server", "prod", "0.0.128").replace(
             "</rss>", "</rss></rss>"
         )
         publisher = self._publisher({spec.key: live.encode()})
@@ -846,7 +847,7 @@ class PublisherTestCase(unittest.TestCase):
         self.assertFalse(
             publisher.publish(
                 spec,
-                _server_appcast("browseros-server", "prod", "0.0.127"),
+                _server_appcast("browserclaw-server", "prod", "0.0.127"),
                 publish=True,
                 repair_invalid_live=True,
             )
@@ -854,13 +855,13 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_repair_malformed_versionless_appcast_accepts_strict_replacement(self):
-        spec = server_feed("browseros-server", "prod")
+        spec = server_feed("browserclaw-server", "prod")
         publisher = self._publisher({spec.key: b"garbage <not xml"})
 
         self.assertTrue(
             publisher.publish(
                 spec,
-                _server_appcast("browseros-server", "prod", "0.0.127"),
+                _server_appcast("browserclaw-server", "prod", "0.0.127"),
                 repair_invalid_live=True,
             )
         )
@@ -882,11 +883,11 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_repair_refuses_invalid_new_content(self):
-        spec = server_feed("browseros-server", "prod")
-        invalid_live = _wrong_channel_server_appcast("browseros-server", "0.0.127")
+        spec = server_feed("browserclaw-server", "prod")
+        invalid_live = _wrong_channel_server_appcast("browserclaw-server", "0.0.127")
         cases = (
             "<rss><channel>",
-            _server_appcast("browseros-server", "alpha", "0.0.127"),
+            _server_appcast("browserclaw-server", "alpha", "0.0.127"),
             _empty_mac_appcast(),
         )
 
@@ -923,11 +924,11 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_repair_refuses_failed_download_url(self):
-        spec = server_feed("browseros-server", "prod")
+        spec = server_feed("browserclaw-server", "prod")
         publisher = self._publisher(
             {
                 spec.key: _wrong_channel_server_appcast(
-                    "browseros-server", "0.0.127"
+                    "browserclaw-server", "0.0.127"
                 ).encode()
             },
             head_status=404,
@@ -936,7 +937,7 @@ class PublisherTestCase(unittest.TestCase):
         self.assertFalse(
             publisher.publish(
                 spec,
-                _server_appcast("browseros-server", "prod", "0.0.127"),
+                _server_appcast("browserclaw-server", "prod", "0.0.127"),
                 publish=True,
                 repair_invalid_live=True,
             )
@@ -944,15 +945,15 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_repair_refuses_appcast_with_any_missing_download_url(self):
-        spec = server_feed("browseros-server", "prod")
+        spec = server_feed("browserclaw-server", "prod")
         publisher = self._publisher(
             {
                 spec.key: _wrong_channel_server_appcast(
-                    "browseros-server", "0.0.127"
+                    "browserclaw-server", "0.0.127"
                 ).encode()
             }
         )
-        content = _server_appcast("browseros-server", "prod", "0.0.127").replace(
+        content = _server_appcast("browserclaw-server", "prod", "0.0.127").replace(
             "</item>", '<enclosure length="1" />\n</item>'
         )
 
@@ -985,8 +986,8 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_repair_refuses_appcast_missing_download_url_with_valid_live(self):
-        spec = server_feed("browseros-server", "prod")
-        live = _server_appcast("browseros-server", "prod", "0.0.127")
+        spec = server_feed("browserclaw-server", "prod")
+        live = _server_appcast("browserclaw-server", "prod", "0.0.127")
         content = live.replace(' url="', ' data-url="')
         publisher = self._publisher({spec.key: live.encode()})
 
@@ -1017,7 +1018,7 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_repair_refuses_unpublishable_spec(self):
-        spec = replace(feed_by_key("appcast.xml"), publishable=False)
+        spec = replace(feed_by_key("appcast-claw.xml"), publishable=False)
         publisher = self._publisher({spec.key: b"garbage <not xml"})
 
         self.assertFalse(
@@ -1030,9 +1031,9 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_repair_logs_hashes_and_backs_up_before_put(self):
-        spec = server_feed("browseros-server", "prod")
-        corrected = _server_appcast("browseros-server", "prod", "0.0.127")
-        invalid_live = _wrong_channel_server_appcast("browseros-server", "0.0.127")
+        spec = server_feed("browserclaw-server", "prod")
+        corrected = _server_appcast("browserclaw-server", "prod", "0.0.127")
+        invalid_live = _wrong_channel_server_appcast("browserclaw-server", "0.0.127")
         publisher = self._publisher({spec.key: invalid_live.encode()})
 
         with mock.patch("bos_build.release.feeds.publisher.log_warning") as warning:
@@ -1053,11 +1054,11 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls[1][0], "put")
 
     def test_repair_backup_failure_blocks_put(self):
-        spec = server_feed("browseros-server", "prod")
+        spec = server_feed("browserclaw-server", "prod")
         publisher = self._publisher(
             {
                 spec.key: _wrong_channel_server_appcast(
-                    "browseros-server", "0.0.127"
+                    "browserclaw-server", "0.0.127"
                 ).encode()
             }
         )
@@ -1070,7 +1071,7 @@ class PublisherTestCase(unittest.TestCase):
         self.assertFalse(
             publisher.publish(
                 spec,
-                _server_appcast("browseros-server", "prod", "0.0.127"),
+                _server_appcast("browserclaw-server", "prod", "0.0.127"),
                 publish=True,
                 repair_invalid_live=True,
             )
@@ -1078,16 +1079,16 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_repair_batch_invalid_new_file_performs_zero_live_calls(self):
-        browseros_spec = server_feed("browseros-server", "prod")
-        browserclaw_spec = server_feed("browserclaw-server", "prod")
+        prod_spec = server_feed("browserclaw-server", "prod")
+        alpha_spec = server_feed("browserclaw-server", "alpha")
         extension_spec = update_manifest_feed("alpha")
         publisher = self._publisher(
             {
-                browseros_spec.key: _wrong_channel_server_appcast(
-                    "browseros-server", "0.0.127"
+                prod_spec.key: _wrong_channel_server_appcast(
+                    "browserclaw-server", "0.0.127"
                 ).encode(),
-                browserclaw_spec.key: _wrong_channel_server_appcast(
-                    "browserclaw-server", "0.0.15"
+                alpha_spec.key: _server_appcast(
+                    "browserclaw-server", "prod", "0.0.15"
                 ).encode(),
                 extension_spec.key: _malformed_manifest(
                     {"agent": "0.0.123.0"}
@@ -1096,19 +1097,19 @@ class PublisherTestCase(unittest.TestCase):
         )
         self._write_staged(
             publisher,
-            browseros_spec.key,
-            _server_appcast("browseros-server", "prod", "0.0.127"),
+            prod_spec.key,
+            _server_appcast("browserclaw-server", "prod", "0.0.127"),
         )
         self._write_staged(
             publisher,
-            browserclaw_spec.key,
-            _server_appcast("browserclaw-server", "prod", "0.0.15"),
+            alpha_spec.key,
+            _server_appcast("browserclaw-server", "alpha", "0.0.15"),
         )
         self._write_staged(publisher, extension_spec.key, "<gupdate>")
 
         self.assertFalse(
             publisher.publish_staged(
-                [browseros_spec.key, browserclaw_spec.key, extension_spec.key],
+                [prod_spec.key, alpha_spec.key, extension_spec.key],
                 publish=True,
                 repair_invalid_live=True,
             )
@@ -1116,21 +1117,22 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_mixed_repair_batch_is_retry_safe(self):
-        browseros_spec = server_feed("browseros-server", "prod")
-        browserclaw_spec = server_feed("browserclaw-server", "prod")
-        browseros = _server_appcast("browseros-server", "prod", "0.0.127")
-        browserclaw = _server_appcast("browserclaw-server", "prod", "0.0.15")
+        prod_spec = server_feed("browserclaw-server", "prod")
+        alpha_spec = server_feed("browserclaw-server", "alpha")
+        prod = _server_appcast("browserclaw-server", "prod", "0.0.127")
+        alpha = _server_appcast("browserclaw-server", "alpha", "0.0.15")
         publisher = self._publisher(
             {
-                browseros_spec.key: browseros.encode(),
-                browserclaw_spec.key: _wrong_channel_server_appcast(
-                    "browserclaw-server", "0.0.15"
+                prod_spec.key: prod.encode(),
+                # Prod-channel content under the alpha key is invalid live state.
+                alpha_spec.key: _server_appcast(
+                    "browserclaw-server", "prod", "0.0.15"
                 ).encode(),
             }
         )
-        self._write_staged(publisher, browseros_spec.key, browseros)
-        self._write_staged(publisher, browserclaw_spec.key, browserclaw)
-        keys = [browseros_spec.key, browserclaw_spec.key]
+        self._write_staged(publisher, prod_spec.key, prod)
+        self._write_staged(publisher, alpha_spec.key, alpha)
+        keys = [prod_spec.key, alpha_spec.key]
 
         self.assertTrue(
             publisher.publish_staged(
@@ -1157,7 +1159,7 @@ class PublisherTestCase(unittest.TestCase):
         # These files are release outputs, so pin stable schema and ownership
         # invariants instead of versions or whole-file hashes. Otherwise every
         # valid snapshot promotion makes the default branch's test suite stale.
-        for bundle_id in ("browseros-server", "browserclaw-server"):
+        for bundle_id in ("browserclaw-server",):
             spec = server_feed(bundle_id, "prod")
             with self.subTest(key=spec.key):
                 content = (updates / "server" / spec.key).read_text()
@@ -1398,15 +1400,15 @@ class PublisherTestCase(unittest.TestCase):
 
     def test_publish_staged_preflights_full_batch_before_live_writes(self):
         publisher = self._publisher()
-        self._write_staged(publisher, "appcast.xml", _mac_appcast())
+        self._write_staged(publisher, "appcast-claw.xml", _mac_appcast())
         self._write_staged(
             publisher,
-            "appcast-x86_64.xml",
+            "appcast-claw-x86_64.xml",
             "<rss><channel>",
         )
 
         ok = publisher.publish_staged(
-            ["appcast.xml", "appcast-x86_64.xml"], publish=True
+            ["appcast-claw.xml", "appcast-claw-x86_64.xml"], publish=True
         )
 
         self.assertFalse(ok)
@@ -1451,7 +1453,7 @@ class PublisherTestCase(unittest.TestCase):
         publisher = self._publisher()
 
         with mock.patch.object(publisher, "publish") as publish:
-            self.assertFalse(publisher.publish_staged(["appcast.xml"]))
+            self.assertFalse(publisher.publish_staged(["appcast-claw.xml"]))
 
         publish.assert_not_called()
 
@@ -1459,7 +1461,7 @@ class PublisherTestCase(unittest.TestCase):
         publisher = self._publisher()
 
         ok = publisher.publish(
-            feed_by_key("appcast.xml"), "<rss><channel>", publish=True
+            feed_by_key("appcast-claw.xml"), "<rss><channel>", publish=True
         )
 
         self.assertFalse(ok)
@@ -1470,12 +1472,12 @@ class PublisherTestCase(unittest.TestCase):
 
         with mock.patch("bos_build.release.feeds.publisher.log_error") as log_error:
             ok = publisher.publish(
-                feed_by_key("appcast.xml"), _empty_mac_appcast(), publish=True
+                feed_by_key("appcast-claw.xml"), _empty_mac_appcast(), publish=True
             )
 
         self.assertFalse(ok)
         self.assertEqual(self.client.calls, [])
-        log_error.assert_called_with("appcast.xml: new content has no <item> entries")
+        log_error.assert_called_with("appcast-claw.xml: new content has no <item> entries")
 
     def test_versionless_appcast_refused_with_version_error(self):
         content = _mac_appcast().replace(
@@ -1484,12 +1486,12 @@ class PublisherTestCase(unittest.TestCase):
         publisher = self._publisher()
 
         with mock.patch("bos_build.release.feeds.publisher.log_error") as log_error:
-            ok = publisher.publish(feed_by_key("appcast.xml"), content, publish=True)
+            ok = publisher.publish(feed_by_key("appcast-claw.xml"), content, publish=True)
 
         self.assertFalse(ok)
         self.assertEqual(self.client.calls, [])
         log_error.assert_called_with(
-            "appcast.xml: new content has <item> entries but no sparkle:version"
+            "appcast-claw.xml: new content has <item> entries but no sparkle:version"
         )
 
     def test_live_guard_distinguishes_empty_appcast(self):
@@ -1497,14 +1499,14 @@ class PublisherTestCase(unittest.TestCase):
 
         with mock.patch("bos_build.release.feeds.publisher.log_error") as log_error:
             ok = publisher._guard_appcast_version(
-                feed_by_key("appcast.xml"),
+                feed_by_key("appcast-claw.xml"),
                 _empty_mac_appcast(),
                 _mac_appcast(),
                 False,
             )
 
         self.assertFalse(ok)
-        log_error.assert_called_with("appcast.xml: new content has no <item> entries")
+        log_error.assert_called_with("appcast-claw.xml: new content has no <item> entries")
 
     def test_live_guard_distinguishes_versionless_items(self):
         content = _mac_appcast().replace(
@@ -1514,12 +1516,12 @@ class PublisherTestCase(unittest.TestCase):
 
         with mock.patch("bos_build.release.feeds.publisher.log_error") as log_error:
             ok = publisher._guard_appcast_version(
-                feed_by_key("appcast.xml"), content, _mac_appcast(), False
+                feed_by_key("appcast-claw.xml"), content, _mac_appcast(), False
             )
 
         self.assertFalse(ok)
         log_error.assert_called_with(
-            "appcast.xml: new content has <item> entries but no sparkle:version"
+            "appcast-claw.xml: new content has <item> entries but no sparkle:version"
         )
 
     def test_json_array_document_refused_cleanly(self):
@@ -1533,18 +1535,18 @@ class PublisherTestCase(unittest.TestCase):
         self.assertEqual(self.client.calls, [])
 
     def test_unparseable_live_fails_closed_without_flag(self):
-        publisher = self._publisher({"appcast.xml": b"garbage <not xml"})
+        publisher = self._publisher({"appcast-claw.xml": b"garbage <not xml"})
 
-        ok = publisher.publish(feed_by_key("appcast.xml"), _mac_appcast(), publish=True)
+        ok = publisher.publish(feed_by_key("appcast-claw.xml"), _mac_appcast(), publish=True)
 
         self.assertFalse(ok)
         self.assertEqual(self.client.calls, [])
 
     def test_unparseable_live_remains_blocked_with_override(self):
-        publisher = self._publisher({"appcast.xml": b"garbage <not xml"})
+        publisher = self._publisher({"appcast-claw.xml": b"garbage <not xml"})
 
         ok = publisher.publish(
-            feed_by_key("appcast.xml"),
+            feed_by_key("appcast-claw.xml"),
             _mac_appcast(),
             publish=True,
             allow_downgrade=True,
@@ -1567,11 +1569,11 @@ class PublisherTestCase(unittest.TestCase):
 
     def test_quiet_preflight_skips_output_but_keeps_rails(self):
         publisher = self._publisher(
-            {"appcast.xml": _mac_appcast("10000.0.48.0.0").encode()}
+            {"appcast-claw.xml": _mac_appcast("10000.0.48.0.0").encode()}
         )
 
         ok = publisher.publish(
-            feed_by_key("appcast.xml"), _mac_appcast(), verbose=False
+            feed_by_key("appcast-claw.xml"), _mac_appcast(), verbose=False
         )
 
         self.assertFalse(ok)
@@ -1579,9 +1581,9 @@ class PublisherTestCase(unittest.TestCase):
     def test_collect_status_covers_every_feed(self):
         publisher = self._publisher(
             {
-                "appcast.xml": _mac_appcast().encode(),
-                "feeds-history/appcast.xml.20260630T000000Z": b"old",
-                "feeds-history/appcast.xml.20260701T120000Z": b"older backup",
+                "appcast-claw.xml": _mac_appcast().encode(),
+                "feeds-history/appcast-claw.xml.20260630T000000Z": b"old",
+                "feeds-history/appcast-claw.xml.20260701T120000Z": b"older backup",
                 "extensions/update-manifest.alpha.xml": render_update_manifest(
                     {"agent": "0.0.118.0", "bugreporter": "54.0.0.0"}
                 ).encode(),
@@ -1595,7 +1597,7 @@ class PublisherTestCase(unittest.TestCase):
 
         self.assertEqual(set(statuses), {feed.key for feed in all_feeds()})
 
-        appcast = statuses["appcast.xml"]
+        appcast = statuses["appcast-claw.xml"]
         self.assertEqual(appcast.live_version, "10000.0.47.0.2")
         self.assertEqual(appcast.last_published, "20260701T120000Z")
 
@@ -1606,7 +1608,7 @@ class PublisherTestCase(unittest.TestCase):
 
         self.assertEqual(statuses["extensions/extensions.alpha.json"].live_version, "-")
 
-        absent = statuses["appcast-win-arm64.xml"]
+        absent = statuses["appcast-claw-win-arm64.xml"]
         self.assertIsNone(absent.live_version)
         self.assertIsNone(absent.last_published)
 

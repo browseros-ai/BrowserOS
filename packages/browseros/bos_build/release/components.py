@@ -31,7 +31,6 @@ class ComponentSpec:
     package_name: str
     tag_prefix: str
     workspace_path: str = ""
-    legacy_tag_prefixes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -54,28 +53,11 @@ class AllocationRecord:
     public: bool = False
 
 
+# The original BrowserOS components (server, agent, app-onboard) moved to
+# browseros-human with their product. Their historical tags and suite pins
+# stay in this repo's release history; allocators only read the components
+# listed here, so those records are ignored rather than rejected.
 COMPONENTS: Mapping[str, ComponentSpec] = {
-    "server": ComponentSpec(
-        id="server",
-        display_name="BrowserOS server",
-        version_scheme="semver",
-        manifest_path=Path("packages/browseros-agent/apps/server/package.json"),
-        lockfile_path=Path("packages/browseros-agent/bun.lock"),
-        package_name="@browseros/server",
-        workspace_path="apps/server",
-        tag_prefix="agent-server/v",
-        legacy_tag_prefixes=("browseros-server-v",),
-    ),
-    "agent": ComponentSpec(
-        id="agent",
-        display_name="BrowserOS agent extension",
-        version_scheme="chrome",
-        manifest_path=Path("packages/browseros-agent/apps/app/package.json"),
-        lockfile_path=Path("packages/browseros-agent/bun.lock"),
-        package_name="@browseros/app",
-        workspace_path="apps/app",
-        tag_prefix="ext-agent/v",
-    ),
     # Release records persist this ID; only the source package and path were renamed.
     "claw-server-rust": ComponentSpec(
         id="claw-server-rust",
@@ -106,20 +88,9 @@ COMPONENTS: Mapping[str, ComponentSpec] = {
         workspace_path="apps/claw-onboard",
         tag_prefix="claw-onboard/v",
     ),
-    "app-onboard": ComponentSpec(
-        id="app-onboard",
-        display_name="BrowserOS onboarding",
-        version_scheme="semver",
-        manifest_path=Path("packages/browseros-agent/apps/app-onboard/package.json"),
-        lockfile_path=Path("packages/browseros-agent/bun.lock"),
-        package_name="@browseros/app-onboard",
-        workspace_path="apps/app-onboard",
-        tag_prefix="app-onboard/v",
-    ),
 }
 
 _CANDIDATE_COMPONENTS = {
-    "browseros": ("server", "agent"),
     "browserclaw": ("claw-server-rust", "browserclaw"),
 }
 

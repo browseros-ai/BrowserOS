@@ -88,7 +88,7 @@ class ReleaseListInvocationTest(unittest.TestCase):
         self.assertIsNone(module.limit)
         self.assertEqual(
             [product.id for product in module.products],
-            ["browseros", "browserclaw"],
+            ["browserclaw"],
         )
 
     def test_limit_and_product_filter(self):
@@ -312,10 +312,10 @@ class CreateReleaseContextTest(unittest.TestCase):
         self.assertEqual(ctx.product.id, "browserclaw")
         self.assertEqual(ctx.release_version, "1.0.0")
 
-    def test_defaults_to_browseros(self):
+    def test_defaults_to_browserclaw(self):
         ctx = release_cli.create_release_context("1.0.0")
 
-        self.assertEqual(ctx.product.id, "browseros")
+        self.assertEqual(ctx.product.id, "browserclaw")
 
 
 def _configured_r2_env():

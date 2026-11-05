@@ -51,7 +51,7 @@ class ResumeCheckpointTest(unittest.TestCase):
         self.env = mock.patch.dict(
             os.environ,
             {
-                "BROWSEROS_SERVER_RESOURCE_VERSION": "0.0.138",
+                "BROWSERCLAW_SERVER_RESOURCE_VERSION": "0.0.138",
                 "BUNDLED_PRODUCT_EXTENSION_VERSION": "0.0.132.0",
                 "ONBOARDING_RESOURCE_VERSION": "0.0.36",
             },
@@ -124,9 +124,9 @@ class ResumeCheckpointTest(unittest.TestCase):
         self.assertEqual(
             ctx.resume_state.candidate["resources"]["component_versions"],
             {
-                "server": "0.0.138",
-                "agent": "0.0.132.0",
-                "app-onboard": "0.0.36",
+                "claw-server-rust": "0.0.138",
+                "browserclaw": "0.0.132.0",
+                "claw-onboard": "0.0.36",
             },
         )
 

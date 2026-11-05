@@ -3042,10 +3042,10 @@ esac
     def _workspace_parent(self):
         return self.base_root_resolved.parent / "browseros-ci-apfs-workspaces"
 
-    def _workspace_root(self, tag="123-4", product="browseros"):
+    def _workspace_root(self, tag="123-4", product="browserclaw"):
         return self._workspace_parent() / f"browseros-ci-chromium-{tag}-{product}"
 
-    def _state_path(self, tag="123-4", product="browseros"):
+    def _state_path(self, tag="123-4", product="browserclaw"):
         return self.runner_temp / f"browseros-ci-chromium-workspace-{tag}-{product}.env"
 
     def _write_workspace_marker(self, workspace_root, tag="old-1"):
@@ -3061,7 +3061,7 @@ esac
                     f"base_head={self.head}",
                     "chromium_version=1.2.3.4",
                     f"run_tag={tag}",
-                    "product=browseros",
+                    "product=browserclaw",
                 )
             )
             + "\n",
@@ -3088,8 +3088,8 @@ esac
 
         env_lines = self.github_env.read_text(encoding="utf-8").splitlines()
         self.assertIn(f"CHROMIUM_SRC={workspace_src}", env_lines)
-        self.assertEqual(outputs["browseros_state_path"], str(state_path))
-        self.assertEqual(outputs["browseros_chromium_src"], str(workspace_src))
+        self.assertEqual(outputs["browserclaw_state_path"], str(state_path))
+        self.assertEqual(outputs["browserclaw_chromium_src"], str(workspace_src))
         cp_lines = self.cp_log.read_text(encoding="utf-8").splitlines()
         self.assertTrue(any(line.startswith("-c ") for line in cp_lines))
         self.assertTrue(any(line.startswith("-cR ") for line in cp_lines))
@@ -3208,7 +3208,7 @@ esac
         result = self._run_helper("setup", self.base_src, "all", CP_FAIL_CLONE="1")
 
         self.assertNotEqual(result.returncode, 0)
-        for product in ("browseros", "browserclaw"):
+        for product in ("browserclaw",):
             root = self._workspace_root(product=product)
             self.assertEqual(
                 {path.name for path in root.iterdir()},
@@ -3270,16 +3270,20 @@ esac
         self.assertIn(str(nested_repo.resolve()), self.git_clean_log.read_text())
 
     def test_setup_removes_browseros_output_dirs_from_base(self):
-        out_dir = self.base_src / "out" / "Default_browseros_arm64"
+        out_dir = self.base_src / "out" / "Default_browserclaw_arm64"
         out_dir.mkdir(parents=True)
+        # The original BrowserOS outputs belong to browseros-human.
+        foreign = self.base_src / "out" / "Default_browseros_arm64"
+        foreign.mkdir(parents=True)
 
         result = self._run_helper("setup", self.base_src, "all")
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertFalse(out_dir.exists())
-        for product in ("browseros", "browserclaw"):
-            self.assertTrue(self._workspace_root(product=product).exists())
-            self.assertIn(f"{product}_chromium_src", self._outputs())
+        self.assertTrue(foreign.exists())
+        self.assertTrue(self._workspace_root(product="browserclaw").exists())
+        self.assertIn("browserclaw_chromium_src", self._outputs())
+        self.assertNotIn("browseros_chromium_src", self._outputs())
         self.assertEqual(len((self.root / "gclient.log").read_text().splitlines()), 1)
 
 

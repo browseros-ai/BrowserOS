@@ -235,10 +235,7 @@ class CopyResourcesTest(unittest.TestCase):
 
     def test_real_config_copies_icons_for_active_product(self):
         self.root.write_copy_config(self._real_copy_config())
-        for product_id, marker in (
-            ("browseros", "browseros"),
-            ("browserclaw", "claw"),
-        ):
+        for product_id, marker in (("browserclaw", "claw"),):
             icons = self.root.root / "resources" / product_id / "icons"
             (icons / "linux").mkdir(parents=True)
             (icons / "default_100_percent").mkdir(parents=True)
@@ -252,10 +249,7 @@ class CopyResourcesTest(unittest.TestCase):
             "bos_build.steps.resources.resources.get_platform",
             return_value="macos",
         ):
-            for product_id, marker in (
-                ("browseros", "browseros"),
-                ("browserclaw", "claw"),
-            ):
+            for product_id, marker in (("browserclaw", "claw"),):
                 with self.subTest(product=product_id):
                     self._seed_required_resources(product_id, "x64")
                     ctx = make_context(
@@ -349,11 +343,11 @@ class CopyResourcesTest(unittest.TestCase):
             version="0.0.12",
         )
         manifest = PreparedResourcesManifest(
-            product="browseros",
+            product="browserclaw",
             parent_sha="1" * 40,
             source_sha="2" * 40,
             browser_version="0.0.1",
-            component_versions={"app-onboard": "0.0.12"},
+            component_versions={"claw-onboard": "0.0.12"},
             files={"onboarding": prepared_file},
         )
         destination = self.root.root / "resources/binaries/browseros_onboarding"
@@ -372,40 +366,12 @@ class CopyResourcesTest(unittest.TestCase):
         self.assertEqual((staged / "resources/index.html").read_bytes(), content)
         self.assertFalse((staged / "stale").exists())
 
-    def test_real_config_copies_only_the_active_browseros_server(self):
-        self.root.write_copy_config(self._real_copy_config())
-        self._seed_required_resources("browseros", "arm64")
-        stale = (
-            self.chromium.src
-            / "chrome/browser/browseros/claw_server/resources/bin/stale"
-        )
-        stale.parent.mkdir(parents=True)
-        stale.write_text("stale")
-
-        with patch(
-            "bos_build.steps.resources.resources.get_platform",
-            return_value="macos",
-        ):
-            ctx = make_context(
-                self.chromium,
-                self.root,
-                architecture="arm64",
-                build_type="release",
-            )
-            self.assertTrue(copy_resources_impl(ctx))
-
-        binary = (
-            self.chromium.src
-            / "chrome/browser/browseros/server/resources/bin/browseros_server"
-        )
-        self.assertEqual(binary.read_text(), "browseros")
-        self.assertFalse(stale.exists())
-
     def test_real_config_copies_only_the_active_browserclaw_server(self):
         self.root.write_copy_config(self._real_copy_config())
         self._seed_required_resources("browserclaw", "arm64")
         stale = (
-            self.chromium.src / "chrome/browser/browseros/server/resources/bin/stale"
+            self.chromium.src
+            / "chrome/browser/browseros/claw_server/resources/bin/stale"
         )
         stale.parent.mkdir(parents=True)
         stale.write_text("stale")
@@ -450,15 +416,14 @@ class CopyResourcesTest(unittest.TestCase):
         server_ops = [
             op
             for op in config["copy_operations"]
-            if op["name"].startswith("BrowserOS Server Resources")
-            or op["name"].startswith("BrowserOS Claw Server Resources")
+            if op["name"].startswith("BrowserOS Claw Server Resources")
             or op["name"].startswith("BrowserOS Claw Rust Server Resources")
         ]
 
         self.assertTrue(server_ops)
         for op in server_ops:
             with self.subTest(name=op["name"]):
-                self.assertIn(op["product"], ("browseros", "browserclaw"))
+                self.assertEqual(op["product"], "browserclaw")
                 self.assertTrue(op["managed"])
                 self.assertTrue(op["required"])
 
@@ -480,7 +445,7 @@ class CopyResourcesTest(unittest.TestCase):
             / "resources"
         )
 
-        for product in ("browseros", "browserclaw"):
+        for product in ("browserclaw",):
             with self.subTest(product=product):
                 if onboard_source.exists():
                     shutil.rmtree(onboard_source)
@@ -537,7 +502,6 @@ class CopyResourcesTest(unittest.TestCase):
 
     def test_real_config_debug_needs_only_neutral_onboarding_directory(self):
         self.root.write_copy_config(self._real_copy_config())
-        self._seed_required_resources("browseros", "arm64")
         self._seed_required_resources("browserclaw", "arm64")
         source = (
             self.root.root
@@ -554,7 +518,7 @@ class CopyResourcesTest(unittest.TestCase):
                 self.root,
                 architecture="arm64",
                 build_type="debug",
-                product="browseros",
+                product="browserclaw",
             )
             self.assertTrue(copy_resources_impl(ctx))
 
@@ -572,11 +536,7 @@ class CopyResourcesTest(unittest.TestCase):
             return yaml.safe_load(f)
 
     def _seed_required_resources(self, product: str, architecture: str) -> None:
-        family, binary = (
-            ("browseros_server", "browseros_server")
-            if product == "browseros"
-            else ("browseros_claw_server_rust", "browseros-claw-server")
-        )
+        family, binary = ("browseros_claw_server_rust", "browseros-claw-server")
         server = (
             self.root.root
             / "resources"

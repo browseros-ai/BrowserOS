@@ -17,8 +17,8 @@ DEFAULT_CONFIG = SCRIPT_DIR / "generate_icons.txt"
 SOURCE_DIR = SCRIPT_DIR / "source"
 STATIC_DIR = SCRIPT_DIR / "static"
 RESOURCE_DIR = SCRIPT_DIR.parent.parent.parent / "resources"
-DEFAULT_PRODUCT = "browseros"
-PRODUCTS = (DEFAULT_PRODUCT, "browserclaw")
+DEFAULT_PRODUCT = "browserclaw"
+PRODUCTS = (DEFAULT_PRODUCT,)
 
 MIN_SOURCE_SIZE = 1024
 
@@ -32,8 +32,6 @@ def product_output_dir(product: str) -> Path:
 
 def product_roots(product: str) -> dict[str, Path]:
     """Return source roots for config paths like source/app_icon.png."""
-    if product == DEFAULT_PRODUCT:
-        return {"source": SOURCE_DIR, "static": STATIC_DIR}
     if product in PRODUCTS:
         return {"source": SOURCE_DIR / product, "static": STATIC_DIR / product}
     raise ValueError(f"Unknown product: {product}")

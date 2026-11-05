@@ -10,7 +10,6 @@ from unittest import mock
 from . import context as context_mod
 from .context import Context
 from .products import (
-    BROWSEROS_AGENT_EXTENSION_ID,
     BROWSEROS_BUG_REPORTER_EXTENSION_ID,
     BROWSERCLAW_EXTENSION_ID,
     ProductDescriptor,
@@ -88,7 +87,7 @@ class GetAppPathTest(unittest.TestCase):
         )
 
         expected = Path("/nonexistent-src") / ctx.out_dir / ctx.BROWSEROS_APP_NAME
-        self.assertTrue(str(ctx.out_dir).endswith("Default_browseros_universal"))
+        self.assertTrue(str(ctx.out_dir).endswith("Default_browserclaw_universal"))
         self.assertEqual(ctx.get_app_path(), expected)
 
     def test_browserclaw_context_derives_names_and_paths(self):
@@ -152,14 +151,14 @@ class GetAppPathTest(unittest.TestCase):
         self.assertEqual(
             ctx.get_product_gn_args(),
             [
-                'browseros_product = "browseros"',
+                'browseros_product = "browserclaw"',
                 "browseros_allow_runtime_product_override = true",
                 "browseros_package_all_server_resources = true",
             ],
         )
 
     def test_release_gn_args_select_product_for_baked_identity(self):
-        for product in ("browseros", "browserclaw"):
+        for product in ("browserclaw",):
             with self.subTest(product=product):
                 ctx = Context(
                     chromium_src=Path("/nonexistent-src"),
@@ -179,10 +178,6 @@ class GetAppPathTest(unittest.TestCase):
 
     def test_release_required_extensions_follow_active_product(self):
         expected = {
-            "browseros": (
-                (BROWSEROS_AGENT_EXTENSION_ID, "BrowserOS agent"),
-                (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
-            ),
             "browserclaw": (
                 (BROWSERCLAW_EXTENSION_ID, "BrowserOS neo app"),
                 (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
@@ -201,13 +196,14 @@ class GetAppPathTest(unittest.TestCase):
                 self.assertEqual(ctx.required_extension_ids, required)
 
     def test_debug_required_extensions_are_registered_product_union(self):
+        # Only registered products contribute; the original BrowserOS agent
+        # extension left with its product.
         expected = (
-            (BROWSEROS_AGENT_EXTENSION_ID, "BrowserOS agent"),
-            (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
             (BROWSERCLAW_EXTENSION_ID, "BrowserOS neo app"),
+            (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
         )
 
-        for product in ("browseros", "browserclaw"):
+        for product in ("browserclaw",):
             with self.subTest(product=product):
                 ctx = Context(
                     chromium_src=Path("/nonexistent-src"),

@@ -78,7 +78,7 @@ class ServerOTAModule(Step):
         version: str = "",
         channel: str = "alpha",
         platform_filter: Optional[str] = None,
-        product_id: str = "browseros",
+        product_id: str = "browserclaw",
         release_sha: str = "",
         allow_unbound: bool = False,
     ):

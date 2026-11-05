@@ -28,7 +28,7 @@ from .specs import (
 from .workspace import require_env
 
 _VERSION_RE = re.compile(r"^\d+(\.\d+){0,3}$")
-_AUTO_VERSION_EXTENSION_NAMES = frozenset({"agent", "browserclaw"})
+_AUTO_VERSION_EXTENSION_NAMES = frozenset({"browserclaw"})
 _SOURCE_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _CRX_BINDING_SCHEMA = "browseros-extension-crx-v1"
 
@@ -237,7 +237,7 @@ def resolve_extension_version(
     if len(names) != 1 or names[0] not in _AUTO_VERSION_EXTENSION_NAMES:
         raise ValueError(
             f"Extension '{extension}' requires an explicit version; automatic "
-            "allocation is limited to agent and browserclaw"
+            "allocation is limited to browserclaw"
         )
     if not release_sha:
         raise ValueError("Automatic extension version allocation requires a source SHA")

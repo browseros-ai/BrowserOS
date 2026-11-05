@@ -90,7 +90,7 @@ class ConfigureExecuteTest(unittest.TestCase):
         self.assertEqual(
             args_gn.read_text(),
             'is_official_build = true\n\ntarget_cpu = "arm64"\n'
-            'browseros_product = "browseros"\n'
+            'browseros_product = "browserclaw"\n'
             "browseros_allow_runtime_product_override = false\n"
             "browseros_package_all_server_resources = false\n",
         )
@@ -134,7 +134,7 @@ class ConfigureExecuteTest(unittest.TestCase):
         self.assertEqual(
             args_gn,
             'is_official_build = true\n\ntarget_cpu = "arm64"\n'
-            'browseros_product = "browseros"\n'
+            'browseros_product = "browserclaw"\n'
             "browseros_allow_runtime_product_override = false\n"
             "browseros_package_all_server_resources = false\n"
             "\n# --gn-arg overrides\n"

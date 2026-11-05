@@ -109,7 +109,7 @@ def ensure_cmd(
 @app.command("clean-outputs")
 def clean_outputs_cmd(
     root: Path = typer.Option(..., "--root", help="gclient root"),
-    product: str = typer.Option("browseros", "--product"),
+    product: str = typer.Option("browserclaw", "--product"),
     arch: str = typer.Option("arm64", "--arch"),
     all_products: bool = typer.Option(
         False, "--all-products", help="Remove known CI product outputs and checkpoints"
@@ -140,9 +140,11 @@ def clean_outputs_cmd(
 
 
 def _products(value: str) -> tuple[str, ...]:
+    from ..steps.source.workspace import PRODUCTS
+
     if value == "all":
-        return ("browseros", "browserclaw")
-    if value in ("browseros", "browserclaw"):
+        return PRODUCTS
+    if value in PRODUCTS:
         return (value,)
     raise ValueError(f"Unknown product set: {value}")
 
@@ -150,7 +152,7 @@ def _products(value: str) -> tuple[str, ...]:
 @app.command("workspace")
 def workspace_cmd(
     base_src: Path = typer.Option(..., "--base-src"),
-    products: str = typer.Option("browseros", "--products"),
+    products: str = typer.Option("browserclaw", "--products"),
     version_file: Optional[Path] = typer.Option(None, "--version-file"),
     runner_temp: Path = typer.Option(..., "--runner-temp"),
     run_tag: str = typer.Option(..., "--run-tag"),

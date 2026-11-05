@@ -257,7 +257,9 @@ class ManagedBinaryFamiliesTest(unittest.TestCase):
         )
         families = managed_binary_families(config_path)
 
-        self.assertIn("browseros_server", families)
+        # The original BrowserOS server moved to browseros-human; its leftover
+        # dir is pruned like any other retired family.
+        self.assertNotIn("browseros_server", families)
         self.assertIn("browseros_claw_server_rust", families)
         self.assertIn("browseros_onboarding", families)
         self.assertNotIn("browseros_app_onboard", families)
@@ -271,8 +273,8 @@ class ResourceVersionOverrideTest(unittest.TestCase):
         self._assert_execute_download_key(
             override="0.4.2",
             expected=(
-                "artifacts/server/0.4.2/"
-                "browseros-server-resources-linux-x64.zip"
+                "claw-server-rust/prod-resources/0.4.2/"
+                "browseros-claw-server-rust-resources-linux-x64.zip"
             ),
         )
 
@@ -280,18 +282,16 @@ class ResourceVersionOverrideTest(unittest.TestCase):
         self._assert_execute_download_key(
             override="",
             expected=(
-                "artifacts/server/latest/"
-                "browseros-server-resources-linux-x64.zip"
+                "claw-server-rust/prod-resources/latest/"
+                "browseros-claw-server-rust-resources-linux-x64.zip"
             ),
         )
 
     def test_empty_overrides_leave_keys_unchanged(self) -> None:
         context = self._context()
         keys = (
-            "artifacts/server/latest/browseros-server-resources-linux-x64.zip",
             "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-linux-x64.zip",
             "claw-onboard/prod-resources/latest/browseros-claw-onboard-resources.zip",
-            "app-onboard/prod-resources/latest/browseros-app-onboard-resources.zip",
         )
 
         self.assertEqual(
@@ -300,19 +300,8 @@ class ResourceVersionOverrideTest(unittest.TestCase):
         )
 
     def test_each_resource_family_uses_its_exact_version(self) -> None:
-        context = self._context(
-            browseros="0.4.2",
-            browserclaw="0.0.21",
-            onboard="0.0.13",
-        )
+        context = self._context(browserclaw="0.0.21", onboard="0.0.13")
 
-        self.assertEqual(
-            "artifacts/server/0.4.2/browseros-server-resources-linux-x64.zip",
-            resolve_resource_key(
-                "artifacts/server/latest/browseros-server-resources-linux-x64.zip",
-                context,
-            ),
-        )
         self.assertEqual(
             "claw-server-rust/prod-resources/0.0.21/browseros-claw-server-rust-resources-linux-x64.zip",
             resolve_resource_key(
@@ -327,22 +316,12 @@ class ResourceVersionOverrideTest(unittest.TestCase):
                 context,
             ),
         )
-        self.assertEqual(
-            "app-onboard/prod-resources/0.0.13/browseros-app-onboard-resources.zip",
-            resolve_resource_key(
-                "app-onboard/prod-resources/latest/browseros-app-onboard-resources.zip",
-                context,
-            ),
-        )
 
     def test_simultaneous_overrides_do_not_leak_across_families(self) -> None:
-        context = self._context(
-            browseros="1.2.3",
-            browserclaw="4.5.6",
-            onboard="7.8.9",
-        )
+        context = self._context(browserclaw="4.5.6", onboard="7.8.9")
         cases = {
-            "artifacts/server/latest/server.zip": "artifacts/server/1.2.3/server.zip",
+            # The original BrowserOS server is no longer a pinned family.
+            "artifacts/server/latest/server.zip": "artifacts/server/latest/server.zip",
             "claw-server-rust/prod-resources/latest/server.zip": (
                 "claw-server-rust/prod-resources/4.5.6/server.zip"
             ),
@@ -361,13 +340,15 @@ class ResourceVersionOverrideTest(unittest.TestCase):
         )
 
     def test_matching_family_with_malformed_key_fails_closed(self) -> None:
-        context = self._context(browseros="1.2.3")
+        context = self._context(browserclaw="1.2.3")
 
-        with self.assertRaisesRegex(ValueError, "artifacts/server/latest"):
-            resolve_resource_key("artifacts/server/latest", context)
+        with self.assertRaisesRegex(ValueError, "claw-server-rust/prod-resources/latest"):
+            resolve_resource_key("claw-server-rust/prod-resources/latest", context)
 
         with self.assertRaisesRegex(ValueError, "expected latest selector"):
-            resolve_resource_key("artifacts/server/current/server.zip", context)
+            resolve_resource_key(
+                "claw-server-rust/prod-resources/current/server.zip", context
+            )
 
     def test_version_override_must_be_one_safe_path_component(self) -> None:
         context = self._context(browserclaw="../0.0.21")
@@ -381,7 +362,6 @@ class ResourceVersionOverrideTest(unittest.TestCase):
     def _context(
         self,
         *,
-        browseros: str = "",
         browserclaw: str = "",
         onboard: str = "",
     ) -> Context:
@@ -389,7 +369,6 @@ class ResourceVersionOverrideTest(unittest.TestCase):
             Context,
             SimpleNamespace(
                 env=SimpleNamespace(
-                    browseros_server_resource_version=browseros,
                     browserclaw_server_resource_version=browserclaw,
                     onboarding_resource_version=onboard,
                 )
@@ -405,13 +384,13 @@ class ResourceVersionOverrideTest(unittest.TestCase):
                     {
                         "download_operations": [
                             {
-                                "name": "BrowserOS Server Resources - Linux x64",
+                                "name": "BrowserOS Claw Rust Server Resources - Linux x64",
                                 "r2_key": (
-                                    "artifacts/server/latest/"
-                                    "browseros-server-resources-linux-x64.zip"
+                                    "claw-server-rust/prod-resources/latest/"
+                                    "browseros-claw-server-rust-resources-linux-x64.zip"
                                 ),
                                 "destination": (
-                                    "resources/binaries/browseros_server/linux-x64"
+                                    "resources/binaries/browseros_claw_server_rust/linux-x64"
                                 ),
                                 "download_type": "artifact_zip",
                                 "os": ["linux"],
@@ -428,11 +407,10 @@ class ResourceVersionOverrideTest(unittest.TestCase):
                     architecture="x64",
                     plan_architectures=(),
                     build_type="release",
-                    product=get_product_descriptor("browseros"),
+                    product=get_product_descriptor("browserclaw"),
                     env=SimpleNamespace(
                         r2_bucket="browseros",
-                        browseros_server_resource_version=override,
-                        browserclaw_server_resource_version="",
+                        browserclaw_server_resource_version=override,
                         onboarding_resource_version="",
                     ),
                     get_download_resources_config=lambda: config_path,
@@ -475,11 +453,6 @@ class DownloadResourceConfigTest(unittest.TestCase):
                 "arm64",
                 [
                     (
-                        "BrowserOS Server Resources - macOS ARM64",
-                        "artifacts/server/latest/browseros-server-resources-darwin-arm64.zip",
-                        "resources/binaries/browseros_server/darwin-arm64",
-                    ),
-                    (
                         "BrowserOS Claw Rust Server Resources - macOS ARM64",
                         "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-darwin-arm64.zip",
                         "resources/binaries/browseros_claw_server_rust/darwin-arm64",
@@ -490,11 +463,6 @@ class DownloadResourceConfigTest(unittest.TestCase):
                 "macos",
                 "x64",
                 [
-                    (
-                        "BrowserOS Server Resources - macOS x64",
-                        "artifacts/server/latest/browseros-server-resources-darwin-x64.zip",
-                        "resources/binaries/browseros_server/darwin-x64",
-                    ),
                     (
                         "BrowserOS Claw Rust Server Resources - macOS x64",
                         "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-darwin-x64.zip",
@@ -507,11 +475,6 @@ class DownloadResourceConfigTest(unittest.TestCase):
                 "arm64",
                 [
                     (
-                        "BrowserOS Server Resources - Linux ARM64",
-                        "artifacts/server/latest/browseros-server-resources-linux-arm64.zip",
-                        "resources/binaries/browseros_server/linux-arm64",
-                    ),
-                    (
                         "BrowserOS Claw Rust Server Resources - Linux ARM64",
                         "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-linux-arm64.zip",
                         "resources/binaries/browseros_claw_server_rust/linux-arm64",
@@ -523,11 +486,6 @@ class DownloadResourceConfigTest(unittest.TestCase):
                 "x64",
                 [
                     (
-                        "BrowserOS Server Resources - Linux x64",
-                        "artifacts/server/latest/browseros-server-resources-linux-x64.zip",
-                        "resources/binaries/browseros_server/linux-x64",
-                    ),
-                    (
                         "BrowserOS Claw Rust Server Resources - Linux x64",
                         "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-linux-x64.zip",
                         "resources/binaries/browseros_claw_server_rust/linux-x64",
@@ -538,11 +496,6 @@ class DownloadResourceConfigTest(unittest.TestCase):
                 "windows",
                 "x64",
                 [
-                    (
-                        "BrowserOS Server Resources - Windows x64",
-                        "artifacts/server/latest/browseros-server-resources-windows-x64.zip",
-                        "resources/binaries/browseros_server/windows-x64",
-                    ),
                     (
                         "BrowserOS Claw Rust Server Resources - Windows x64",
                         "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-windows-x64.zip",
@@ -570,11 +523,9 @@ class DownloadResourceConfigTest(unittest.TestCase):
 
         self.assertEqual(
             [
-                "BrowserOS Server Resources - macOS ARM64",
-                "BrowserOS Server Resources - macOS x64",
                 "BrowserOS Claw Rust Server Resources - macOS ARM64",
                 "BrowserOS Claw Rust Server Resources - macOS x64",
-                "BrowserOS Onboarding Resources",
+                "BrowserOS Claw Onboarding Resources",
             ],
             [op["name"] for op in filtered],
         )
@@ -591,8 +542,6 @@ class DownloadResourceConfigTest(unittest.TestCase):
         )
         names = [op["name"] for op in filtered]
 
-        self.assertIn("BrowserOS Server Resources - macOS ARM64", names)
-        self.assertIn("BrowserOS Server Resources - macOS x64", names)
         self.assertIn("BrowserOS Claw Rust Server Resources - macOS ARM64", names)
         self.assertIn("BrowserOS Claw Rust Server Resources - macOS x64", names)
 
@@ -607,8 +556,7 @@ class DownloadResourceConfigTest(unittest.TestCase):
         )
         names = [op["name"] for op in filtered]
 
-        self.assertIn("BrowserOS Server Resources - macOS ARM64", names)
-        self.assertNotIn("BrowserOS Server Resources - macOS x64", names)
+        self.assertIn("BrowserOS Claw Rust Server Resources - macOS ARM64", names)
         self.assertNotIn("BrowserOS Claw Rust Server Resources - macOS x64", names)
 
     def test_real_config_includes_onboarding_resources_per_product(self) -> None:
@@ -616,11 +564,6 @@ class DownloadResourceConfigTest(unittest.TestCase):
         # so exactly one onboarding download applies on every platform.
         operations = self._real_download_operations()
         expected_by_product = {
-            "browseros": (
-                "BrowserOS Onboarding Resources",
-                "app-onboard/prod-resources/latest/browseros-app-onboard-resources.zip",
-                "resources/binaries/browseros_onboarding",
-            ),
             "browserclaw": (
                 "BrowserOS Claw Onboarding Resources",
                 "claw-onboard/prod-resources/latest/browseros-claw-onboard-resources.zip",
@@ -671,11 +614,6 @@ class DownloadResourceConfigTest(unittest.TestCase):
         self.assertEqual(
             [
                 (
-                    "BrowserOS Server Resources - macOS ARM64",
-                    "artifacts/server/latest/browseros-server-resources-darwin-arm64.zip",
-                    "resources/binaries/browseros_server/darwin-arm64",
-                ),
-                (
                     "BrowserOS Claw Rust Server Resources - macOS ARM64",
                     "claw-server-rust/prod-resources/latest/browseros-claw-server-rust-resources-darwin-arm64.zip",
                     "resources/binaries/browseros_claw_server_rust/darwin-arm64",
@@ -693,8 +631,7 @@ class DownloadResourceConfigTest(unittest.TestCase):
         server_ops = [
             op
             for op in operations
-            if op["name"].startswith("BrowserOS Server Resources")
-            or op["name"].startswith("BrowserOS Claw Server Resources")
+            if op["name"].startswith("BrowserOS Claw Server Resources")
             or op["name"].startswith("BrowserOS Claw Rust Server Resources")
         ]
 
@@ -736,7 +673,7 @@ class DownloadResourceConfigTest(unittest.TestCase):
         operations: list[dict],
         platform: str,
         architecture: str,
-        product: str = "browseros",
+        product: str = "browserclaw",
         plan_architectures: tuple = (),
     ) -> list[dict]:
         ctx = cast(

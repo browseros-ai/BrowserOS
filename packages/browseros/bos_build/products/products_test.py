@@ -13,57 +13,8 @@ from bos_build.core.products import (
 )
 from bos_build.products import DEFAULT_PRODUCT_ID, PRODUCTS
 
-BROWSEROS_AGENT_EXTENSION_ID = "bflpfmnmnokmjhmgnolecpppdbdophmk"
 BROWSEROS_BUG_REPORTER_EXTENSION_ID = "adlpneommgkgeanpaekgoaolcpncohkf"
 BROWSERCLAW_EXTENSION_ID = "pjimfkbpehlcllblajnpfamdfjhhlgkc"
-
-EXPECTED_BROWSEROS = ProductDescriptor(
-    id="browseros",
-    gn_product="browseros",
-    display_name="BrowserOS",
-    dev_display_name="BrowserOS Dev",
-    company_full_name="BrowserOS",
-    company_short_name="BrowserOS",
-    installer_full_name="BrowserOS Installer",
-    dev_installer_full_name="BrowserOS Dev Installer",
-    app_base_name="BrowserOS",
-    artifact_prefix="BrowserOS",
-    release_prefix="browseros",
-    homepage_url="https://www.browseros.com/",
-    support_url="https://docs.browseros.com/",
-    bugtracker_url="https://github.com/browseros-ai/BrowserOS/issues",
-    summary="The open source agentic browser",
-    description="BrowserOS is a privacy-focused web browser built on Chromium.",
-    string_replacements=_replacements("BrowserOS"),
-    required_extension_ids=(
-        (BROWSEROS_AGENT_EXTENSION_ID, "BrowserOS agent"),
-        (BROWSEROS_BUG_REPORTER_EXTENSION_ID, "BrowserOS bug reporter"),
-    ),
-    server_bundle_ids=("browseros-server",),
-    mac=MacProductIdentity(
-        bundle_id="com.browseros.BrowserOS",
-        dev_bundle_id="com.browseros.dev.BrowserOS",
-        signing_identifier="com.browseros.BrowserOS",
-        dev_signing_identifier="com.browseros.dev.BrowserOS",
-        framework_name="BrowserOS Framework.framework",
-        dev_framework_name="BrowserOS Dev Framework.framework",
-        dmg_volume_name="BrowserOS",
-    ),
-    linux=LinuxProductIdentity(
-        package_name="browseros",
-        launcher_name="browseros",
-        desktop_id="browseros.desktop",
-        icon_name="browseros",
-        lib_dir="/usr/lib/browseros",
-        appimage_dir="/opt/browseros",
-        apparmor_profile_name="browseros",
-        metainfo_id="browseros.desktop",
-    ),
-    windows=WindowsProductIdentity(
-        app_user_model_id="BrowserOS.BrowserOS",
-        installer_app_id="{5d8d08af-2df9-4da2-86c1-eac353a0ca32}",
-    ),
-)
 
 EXPECTED_BROWSERCLAW = ProductDescriptor(
     id="browserclaw",
@@ -115,9 +66,6 @@ EXPECTED_BROWSERCLAW = ProductDescriptor(
 
 
 class DefineGoldenTest(unittest.TestCase):
-    def test_browseros_matches_expected_descriptor(self):
-        self.assertEqual(get_product_descriptor("browseros"), EXPECTED_BROWSEROS)
-
     def test_browserclaw_matches_expected_descriptor(self):
         self.assertEqual(get_product_descriptor("browserclaw"), EXPECTED_BROWSERCLAW)
 
@@ -156,13 +104,19 @@ class DefineBehaviorTest(unittest.TestCase):
 
 
 class RegistryTest(unittest.TestCase):
-    def test_registry_has_both_products_and_default(self):
-        self.assertEqual(set(PRODUCTS), {"browseros", "browserclaw"})
-        self.assertEqual(DEFAULT_PRODUCT_ID, "browseros")
+    def test_registry_has_only_neo_as_default(self):
+        self.assertEqual(set(PRODUCTS), {"browserclaw"})
+        self.assertEqual(DEFAULT_PRODUCT_ID, "browserclaw")
+        self.assertEqual(get_product_descriptor(None), EXPECTED_BROWSERCLAW)
 
     def test_unknown_product_raises(self):
-        with self.assertRaisesRegex(ValueError, "Unknown build.product"):
-            get_product_descriptor("netscape")
+        # The original BrowserOS product moved to browseros-human.
+        for product_id in ("netscape", "browseros"):
+            with self.subTest(product_id=product_id):
+                with self.assertRaisesRegex(
+                    ValueError, f"Unknown build.product '{product_id}'"
+                ):
+                    get_product_descriptor(product_id)
 
 
 if __name__ == "__main__":

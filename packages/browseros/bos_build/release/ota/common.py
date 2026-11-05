@@ -38,7 +38,7 @@ def generate_server_appcast(
     artifacts: List[SignedArtifact],
     channel: str = "alpha",
     existing: Optional[ExistingAppcast] = None,
-    bundle_id: str = "browseros-server",
+    bundle_id: str = "browserclaw-server",
 ) -> str:
     """Render a server appcast for a bundle+channel via its FeedSpec."""
     spec = server_feed(bundle_id, channel)
@@ -91,6 +91,6 @@ def create_server_bundle_zip(resources_dir: Path, output_zip: Path) -> bool:
         return False
 
 
-def get_appcast_path(channel: str = "alpha", bundle_id: str = "browseros-server") -> Path:
+def get_appcast_path(channel: str = "alpha", bundle_id: str = "browserclaw-server") -> Path:
     """Return the tracked staging path for a server appcast."""
     return FeedPublisher().staging_path(server_feed(bundle_id, channel))
