@@ -18,6 +18,9 @@ pub struct FrameTarget {
     pub cursor_uses_session_default: bool,
 }
 
+/// Which CDP session reads each page and frame. None of its locks is held across a send on
+/// `cdp`, because a send refused as gone takes them to forget its session (see
+/// `BrowserSession::forget_session`).
 pub struct FrameRegistry {
     cdp: Arc<dyn CdpConnection>,
     connection_epoch: Mutex<u64>,
@@ -418,6 +421,18 @@ impl FrameRegistry {
         self.register_oopif_session_with_epoch(frame_id.clone(), session_id.clone(), false, guard)
             .await?;
         Ok(Some(session_id))
+    }
+
+    /// Forgets a session that died, whether a detach event or a refused command said so. It
+    /// does what [`Self::on_detached`] does and also releases the page attached under it, by
+    /// value, so a page already re-attached under a new session keeps that one. See
+    /// `BrowserSession::forget_session` for the lock rule.
+    pub(crate) async fn forget_session(&self, session_id: &SessionId) {
+        self.on_detached(session_id).await;
+        self.page_sessions
+            .lock()
+            .await
+            .retain(|_, existing| existing != session_id);
     }
 
     async fn on_detached(&self, session_id: &SessionId) {
