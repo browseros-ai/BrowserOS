@@ -45,6 +45,7 @@ mod privacy;
 mod read_model;
 mod redactor;
 mod run_record;
+mod salvage;
 mod screenshot_files;
 mod screenshot_queue;
 mod screenshot_rule;
@@ -69,6 +70,7 @@ pub use read_model::{
 };
 pub use redactor::{Bounded, RedactionLimits, Redactor, Truncation};
 pub use run_record::{RunEffects, RunEnded, RunStarted, RunStatus};
+pub use salvage::{Loss, Recovery, Salvage};
 pub use screenshot_queue::{Shot, ShotAnswer, ShotJob, ShotJobs, ShotQueue, screenshot_queue};
 pub use secret_set::{Registration, SecretSet, SecretSetConfig, SecretValue};
 pub use trace_error::TraceError;

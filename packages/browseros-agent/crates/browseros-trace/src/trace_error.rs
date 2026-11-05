@@ -21,4 +21,8 @@ pub enum TraceError {
     /// A stored row did not read back as a record (a newer schema, or a damaged file).
     #[error("corrupt trace row: {0}")]
     Corrupt(String),
+    /// The store's write-ahead log is damaged, so commits in it, private flags among them, may
+    /// be lost. The store is refused before any connection could read past the damage.
+    #[error("the trace store's write-ahead log is damaged")]
+    DamagedLog,
 }

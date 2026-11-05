@@ -72,6 +72,14 @@ impl RunEffects {
             Self::Unknown => "unknown",
         }
     }
+
+    /// Reads a stored or wire name.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        [Self::None, Self::Done, Self::Unknown]
+            .into_iter()
+            .find(|effects| effects.as_str() == name)
+    }
 }
 
 /// A run was admitted.

@@ -3,7 +3,9 @@
 //! Reads run on a small pool beside the writer, which WAL allows. Every write goes through the
 //! one writer task ([`spawn_writer`](crate::spawn_writer)), which calls the `pub(crate)`
 //! statements here inside its batch transactions. That keeps writes in order, and keeps
-//! privacy commits ordered with the records around them.
+//! privacy commits ordered with the records around them. The one exception is
+//! [`TraceStore::salvage`] (`salvage.rs`), which runs before the writer starts and copies a
+//! broken file's flags and request ids into a fresh store.
 //!
 //! `synchronous = NORMAL`: a committed batch survives a process crash, which is the failure
 //! that matters (a VM power loss loses the browser's state too). Opening the file recovers what
@@ -24,14 +26,12 @@ use crate::{
     Delivery, Effect, EpochMillis, ErrorRecord, IdError, OperationId, OperationKind, OperationRow,
     Outcome, Page, PageState, PrivacyRecord, PrivateReason, RequestId, RunDetail, RunEffects,
     RunId, RunQuery, RunStatus, RunSummary, Shot, ShotRead, ShotState, TailQuery, TaskId,
-    TraceError, TraceTail,
+    TraceError, TraceTail, salvage,
 };
 use browseros_core::TabId;
 use serde_json::Value;
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow, SqliteSynchronous,
-};
-use sqlx::{Row, Sqlite, SqlitePool, Transaction};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow, SqliteSynchronous};
+use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool, Transaction};
 use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
@@ -191,43 +191,79 @@ impl TraceStore {
     /// Opens (creating if needed) the trace file at `path`, migrates it, and recovers what a
     /// crash left open.
     ///
+    /// When it fails, every connection that read the file is closed before it returns, so the
+    /// caller may move the file and its write-ahead log aside and open a fresh one at `path`.
+    ///
+    /// A damaged write-ahead log is refused before any connection: SQLite would read past the
+    /// damage without an error, and the last connection's close would fold what it read into
+    /// the file and delete the log. The commits past the damage, private flags among them, would
+    /// then be lost with no trace, to this store and to [`TraceStore::salvage`] alike. A crash
+    /// that cut the log's last write short is refused too: a log cannot tell it from damage.
+    ///
     /// # Errors
-    /// When the file cannot be opened, or holds a newer schema than this build knows.
+    /// When the file cannot be opened, its log is damaged ([`TraceError::DamagedLog`]), or it
+    /// holds a newer schema than this build knows.
     pub async fn open(path: &Path) -> Result<Self, TraceError> {
+        use sqlx::Connection;
+
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(TraceError::Directory)?;
         }
+        if salvage::read_log(path).await == salvage::Log::Damaged {
+            return Err(TraceError::DamagedLog);
+        }
         let options = SqliteConnectOptions::new()
             .filename(path)
-            .create_if_missing(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal)
             .busy_timeout(Duration::from_secs(5));
+        // One connection reads and sets up the file, and is closed, and waited for, whether or
+        // not that works. sqlx drops a connection that fails while it connects instead of
+        // closing it, and its worker thread closes it after `open` has returned. The last
+        // connection to close checkpoints the log and deletes `<path>-wal` by name, which by
+        // then may be the log of the fresh store that replaced this one. So this connect runs no
+        // pragma that reads the file: sqlx's one default, `foreign_keys`, reads nothing, while
+        // `synchronous` reads the schema. Closing last, this connection also folds the log,
+        // and what `prepare` wrote, into the file.
+        let mut setup =
+            SqliteConnection::connect_with(&options.clone().create_if_missing(true)).await?;
+        let prepared = Self::prepare(&mut setup).await;
+        if let Err(error) = setup.close().await {
+            tracing::warn!(%error, path = %path.display(), "the trace file's setup connection did not close cleanly");
+        }
+        prepared?;
+        // Lazy: the pool connects, and sets `synchronous`, on first use. The setup connection
+        // has read the file whole, and nothing past this point can fail `open`.
         let pool = SqlitePoolOptions::new()
             .max_connections(4)
-            .connect_with(options)
-            .await?;
-        let store = Self {
+            .connect_lazy_with(options.synchronous(SqliteSynchronous::Normal));
+        Ok(Self {
             pool,
             files: ShotFiles::beside(path),
-        };
-        store.migrate().await?;
-        store.recover().await?;
-        Ok(store)
+        })
     }
 
-    async fn migrate(&self) -> Result<(), TraceError> {
+    async fn prepare(conn: &mut SqliteConnection) -> Result<(), TraceError> {
+        // WAL mode is a property of the file: set on this connection, it holds for the pool's.
+        sqlx::raw_sql("PRAGMA journal_mode = WAL")
+            .execute(&mut *conn)
+            .await?;
+        Self::migrate(conn).await?;
+        Self::recover(conn).await
+    }
+
+    async fn migrate(conn: &mut SqliteConnection) -> Result<(), TraceError> {
+        use sqlx::Connection;
+
         let version: i64 = sqlx::query_scalar("PRAGMA user_version")
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *conn)
             .await?;
         if version > SCHEMA_VERSION {
             return Err(TraceError::Corrupt(format!(
                 "trace schema {version} is newer than this build's {SCHEMA_VERSION}"
             )));
         }
-        let mut tx = self.pool.begin().await?;
+        let mut tx = conn.begin().await?;
         sqlx::raw_sql(SCHEMA).execute(&mut *tx).await?;
         sqlx::raw_sql(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
             .execute(&mut *tx)
@@ -236,8 +272,10 @@ impl TraceStore {
         Ok(())
     }
 
-    async fn recover(&self) -> Result<(), TraceError> {
-        let mut tx = self.pool.begin().await?;
+    async fn recover(conn: &mut SqliteConnection) -> Result<(), TraceError> {
+        use sqlx::Connection;
+
+        let mut tx = conn.begin().await?;
         sqlx::query(
             "UPDATE operations SET outcome = 'cancelled', \
              delivery = CASE WHEN effect = 'write' THEN 'unknown' ELSE 'not_sent' END \
@@ -1144,7 +1182,7 @@ fn run_summary(row: &SqliteRow) -> Result<RunSummary, TraceError> {
         status: RunStatus::parse(&status).ok_or_else(|| corrupt("status", &status))?,
         effects: effects
             .as_deref()
-            .map(|text| run_effects(text).ok_or_else(|| corrupt("effects", text)))
+            .map(|text| RunEffects::parse(text).ok_or_else(|| corrupt("effects", text)))
             .transpose()?,
         error: error_column(row, "error")?,
         request_id: host_id_column(row, "request_id", RequestId::parse)?,
@@ -1217,12 +1255,6 @@ fn operation_row(row: &SqliteRow) -> Result<OperationRow, TraceError> {
             .map(|text| ShotState::parse(text).ok_or_else(|| corrupt("screenshot", text)))
             .transpose()?,
     })
-}
-
-fn run_effects(text: &str) -> Option<RunEffects> {
-    [RunEffects::None, RunEffects::Done, RunEffects::Unknown]
-        .into_iter()
-        .find(|effects| effects.as_str() == text)
 }
 
 fn outcome_named(text: &str) -> Option<Outcome> {

@@ -929,7 +929,7 @@ components:
           description: Unix epoch ms; no pixel at or after this time is captured.
         reason:
           type: string
-          x-extensible-enum: [secret_input, takeover, display_input, host]
+          x-extensible-enum: [secret_input, takeover, display_input, host, flags_lost]
     MakePrivateRequest:
       type: object
       properties:

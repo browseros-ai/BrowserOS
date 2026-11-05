@@ -47,6 +47,10 @@ pub enum PrivateReason {
     DisplayInput,
     /// The host asked (`POST /v1/tabs/{tabId}/private`).
     Host,
+    /// Neo's trace file broke and its flags may not all have been carried over
+    /// ([`Salvage::flags`](crate::Salvage::flags)), so the app made every tab open at the
+    /// browser's next listing private: any of them may have been.
+    FlagsLost,
 }
 
 impl PrivateReason {
@@ -58,6 +62,7 @@ impl PrivateReason {
             Self::Takeover => "takeover",
             Self::DisplayInput => "display_input",
             Self::Host => "host",
+            Self::FlagsLost => "flags_lost",
         }
     }
 
@@ -69,6 +74,7 @@ impl PrivateReason {
             "takeover" => Some(Self::Takeover),
             "display_input" => Some(Self::DisplayInput),
             "host" => Some(Self::Host),
+            "flags_lost" => Some(Self::FlagsLost),
             _ => None,
         }
     }
