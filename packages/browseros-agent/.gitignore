@@ -180,9 +180,6 @@ packages/*/dist
 target/
 
 # Compiled binaries
-browseros-server
-browseros-server.exe
-browseros-server-*
 tools/dogfood/browseros-dogfood
 tools/dev/browseros-dev
 
