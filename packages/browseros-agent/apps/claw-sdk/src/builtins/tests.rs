@@ -1316,7 +1316,7 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
     let listed = builder.build().listed();
     let mut names: Vec<&str> = Op::all()
         .map(|op| op.spec().name)
-        .filter(|name| !HELD_OPS.contains(name))
+        .filter(|name| !HELD_OPS.contains(name) && *name != HELD_UPLOAD)
         .collect();
     names.sort_unstable();
     let registered: Vec<&str> = listed.iter().map(|spec| spec.name).collect();
@@ -1358,6 +1358,9 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
     );
     Ok(())
 }
+
+/// The file upload, held back because it hands the page files from Neo's own disk.
+const HELD_UPLOAD: &str = "locator.setInputFiles";
 
 /// The ops held back because they run the agent's script in the page's main world.
 const HELD_OPS: [&str; 5] = [
@@ -1535,6 +1538,53 @@ async fn the_ops_that_run_script_in_the_pages_main_world_are_held() -> Result<()
         sent,
         Vec::<String>::new(),
         "refused before the door resolves a page: nothing reached the browser"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_file_upload_is_held_since_its_paths_are_on_neos_own_disk() -> Result<(), Box<dyn Error>>
+{
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    let (run, _guard) = harness.run()?;
+    // A page's own script reads a file it is handed, and writes it where the agent reads.
+    let input = json!({
+        "call": { "api": "locator.setInputFiles", "timeoutMs": 30000 },
+        "target": locator(&handle(&owners)),
+        "strict": "strict",
+        "files": ["/home/neo/.config/browseros/captcha/capsolver-api-key"],
+    });
+    let (operation, reply) = harness.submit_op(&run, HELD_UPLOAD, input).await;
+    let refused = failure(reply)?;
+    assert_eq!(
+        (
+            refused.error.owner(),
+            refused.error.code(),
+            refused.delivery
+        ),
+        (
+            ErrorOwner::Script,
+            ErrorCode::METHOD_UNAVAILABLE,
+            Delivery::NotSent
+        ),
+        "{}",
+        refused.error
+    );
+    assert!(
+        refused.error.message().contains("Neo's own disk"),
+        "the message says why: {}",
+        refused.error
+    );
+    assert_eq!(
+        harness.row(operation).await?.error.map(|error| error.code),
+        Some("method_unavailable".to_owned()),
+        "the trace records the attempt"
+    );
+    assert_eq!(
+        harness.fake.count("DOM.setFileInputFiles"),
+        0,
+        "no file reached the page"
     );
     Ok(())
 }

@@ -62,13 +62,13 @@ const PLAYWRIGHT_LINE: &str = "Playwright's API (as of 1.56) on `page`, `context
     `toPass`; soft assertions, `toBeOK` and screenshot, snapshot and `toMatchAriaSnapshot` \
     comparisons are not available. Running script in the page (`page.evaluate`, \
     `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, `$eval`, `$$eval`, \
-    `elementHandle.evaluate`, `page.setContent`, and their `frame` forms) is not available for \
-    now and fails with `method_unavailable`, and `goto` and `reload` open only `http`, `https`, \
+    `elementHandle.evaluate`, `page.setContent`, and their `frame` forms) and `setInputFiles` \
+    are not available for now and fail with `method_unavailable`, and `goto` and `reload` open only `http`, `https`, \
     `data` and `about` URLs.";
 
 /// The ops claw-sdk holds back for now: every op that runs the agent's script in the page's main
 /// world, where the page's own state and its same-origin frames are in reach and no seal masks
-/// a field. A held op's name answers `script / method_unavailable` with the reason, and the
+/// a field, and the file upload. A held op's name answers `script / method_unavailable` with the reason, and the
 /// crate's op never runs.
 /// - `page.evaluate` and `page.waitForFunction` (decision 25a) run it between the evaluate
 ///   guard's sweeps (`page/evaluate_guard.rs`), which missed same-site frames on another CDP
@@ -78,6 +78,12 @@ const PLAYWRIGHT_LINE: &str = "Playwright's API (as of 1.56) on `page`, `context
 /// - `page.setContent` writes the agent's HTML from the sealed world, but the scripts in that
 ///   HTML run in the main world, with the page's origin and the state its own scripts keep, and
 ///   no sweep at all.
+/// - `locator.setInputFiles` is held for another reason: it hands the page any file Neo's
+///   process can read (core's `FileTransfers` checks only that each path is a readable file), and
+///   the page's own script can read that file and write it where the agent reads. Neo's disk
+///   holds the CAPTCHA key files and the host token, so it is the `file:` hole (decision 27)
+///   through an upload. Serving it needs a root uploads may come from, such as the downloads
+///   directory.
 ///
 /// `page.title` and `page.content` read in the sealed world and are served as usual. Serving an
 /// op again is a commit of its own, once a fix covers it.
@@ -92,34 +98,47 @@ const PLAYWRIGHT_LINE: &str = "Playwright's API (as of 1.56) on `page`, `context
 /// them itself. A served op that does harm only for some inputs is refused by input instead:
 /// `page.goto` to a URL outside [`NAVIGABLE_SCHEMES`] ([`OpInput::refused_navigation`]), and
 /// `page.reload` of a page on one ([`refused_reload`]).
-const HELD: [Held; 5] = [
+const HELD: [Held; 6] = [
     Held {
         name: "page.evaluate",
+        why: MAIN_WORLD,
         instead: "read the page through locators (`textContent`, `innerText`, \
                   `getAttribute`), `page.content()` or `page.title()`",
     },
     Held {
         name: "page.waitForFunction",
+        why: MAIN_WORLD,
         instead: "wait through a locator, which waits by itself, or through \
                   `page.waitForURL()` and `page.waitForLoadState()`",
     },
     Held {
         name: "locator.evaluate",
+        why: MAIN_WORLD,
         instead: "read the element with `textContent()`, `innerText()`, `getAttribute()` or \
                   `inputValue()`",
     },
     Held {
         name: "locator.evaluateAll",
+        why: MAIN_WORLD,
         instead: "read the matches with `allTextContents()`, `allInnerTexts()` or `count()`, \
                   or one at a time through `nth()`",
     },
     Held {
         name: "page.setContent",
+        why: MAIN_WORLD,
         instead: "open the HTML as a page of its own with \
                   `page.goto('data:text/html,' + encodeURIComponent(html))`, whose scripts run \
                   in an origin of their own",
     },
+    Held {
+        name: "locator.setInputFiles",
+        why: "it hands the page files from Neo's own disk, where Neo keeps its secrets",
+        instead: "no op gives a page a file; tell the user the upload needs them",
+    },
 ];
+
+/// Why most held ops are held.
+const MAIN_WORLD: &str = "it runs script in the page's main world";
 
 /// The schemes a navigation may load (decision 27): the web, and documents the script makes
 /// itself. Every other scheme shows the agent what it must not see, or runs script where no sweep
@@ -136,6 +155,8 @@ struct Held {
     /// The crate's op name, which the prelude sends for every alias of the API ([`HELD`] lists
     /// them).
     name: &'static str,
+    /// Why it is held, as the refusal says it.
+    why: &'static str,
     /// What the refusal suggests instead.
     instead: &'static str,
 }
@@ -191,12 +212,11 @@ impl Method for HeldOp {
         _op: &OpCtx<Self>,
         _input: Value,
     ) -> impl Future<Output = Result<Value, LeafError>> + Send {
-        let Held { name, instead } = self.held;
+        let Held { name, why, instead } = self.held;
         future::ready(Err(LeafError::definite(OperationError::script(
             ErrorCode::METHOD_UNAVAILABLE,
             format_args!(
-                "`{name}` is held while a privacy fix lands: it runs script in the page's main \
-                 world. Meanwhile, {instead}."
+                "`{name}` is held while a privacy fix lands: {why}. Meanwhile, {instead}."
             ),
         ))))
     }
