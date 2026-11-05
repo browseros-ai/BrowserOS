@@ -1,0 +1,25 @@
+<!doctype html>
+<!--
+  The one document every frame of every leak-test instance loads. fx.js reads the path
+  (/fx/<instance>/<location>), fetches that document's slice and renders it. Nothing secret
+  is in this file or in any URL: values arrive only in the no-store slice, or, after a
+  submit, in the server's echo of what was posted.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>leak fixture</title>
+<style>
+  body { font: 16px/1.4 monospace; margin: 8px }
+  label { display: block; margin: 2px 0 }
+  iframe { width: 100%; height: 360px; border: 1px solid #888 }
+  /* PIXELS layout: big enough to read off a frame, at the top of the viewport */
+  body.pixels { font-size: 40px }
+  body.pixels input { font: 40px monospace; width: 22ch }
+</style>
+</head>
+<body>
+<!--FX-SLICE-->
+<script src="/fx/fx.js"></script>
+</body>
+</html>
