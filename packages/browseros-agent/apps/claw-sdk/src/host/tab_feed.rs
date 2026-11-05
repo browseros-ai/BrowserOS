@@ -14,19 +14,16 @@ use crate::browser::{BrowserLink, TabEvent};
 /// no socket was watched, flags an earlier Neo left on disk, or every tab of a browser that
 /// restarted and numbers its tabs from 1 again. Returns the watch start its listing covers.
 ///
-/// `Service::retain_tabs` ends the state of every tab its listing lacks, so the listing is
-/// taken here and now, never one that waited in a queue: by then a host may have locked or
-/// made private a tab that opened after it. The listing is taken under `tab_watch`'s current
-/// start, so every tab that closes after it is reported as a [`TabEvent::Closed`].
+/// `Service::retain_tabs` ends the state of every tab its listing lacks, unless a host changed
+/// the tab after the fence. So the fence comes first and the listing here and now, never one
+/// that waited in a queue, which could lack a tab a host locked or made private before the
+/// fence. The listing is taken under `tab_watch`'s current start, so every tab that closes after
+/// it is reported as a [`TabEvent::Closed`].
 pub(crate) async fn reconcile(service: &Service, link: &BrowserLink) -> u64 {
+    let fence = service.tab_fence();
     let listing = link.watched_listing().await;
-    // The residual window, once the host API serves: a host that locks, or makes private, a tab
-    // that opened after this listing was taken and before `retain_tabs` runs (one
-    // `Browser.getTabs` round trip) loses that state as if the tab had closed. Neo cannot order
-    // the service's routes against its own listing; closing the window takes a fence inside
-    // browseros-service, such as `retain_tabs` keeping state created after the listing began
-    // (an sdk-traces follow-up).
-    service.retain_tabs(&listing.open).await;
+    // retain_tabs keeps a tab a host changed after the fence, though this listing may lack it.
+    service.retain_tabs(&listing.open, fence).await;
     listing.watched.generation
 }
 

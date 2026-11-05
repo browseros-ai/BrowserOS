@@ -23,6 +23,8 @@ pub(crate) async fn fit_tab(
 ) -> Result<Json<api::Fit>, ApiError> {
     let tab = query::tab_id(&tab)?;
     let viewer = wire::viewer_request(&body)?;
+    // Before the fit, so a reconcile whose listing missed the tab keeps it (`tab_stamps`).
+    service.stamps.stamp(tab).await;
     let fit = service.fits.fit(tab, viewer).await?;
     Ok(Json(wire::fit(&fit)))
 }

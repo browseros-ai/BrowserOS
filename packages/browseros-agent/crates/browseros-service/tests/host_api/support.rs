@@ -9,6 +9,7 @@ use axum::body::{Body, BodyDataStream, to_bytes};
 use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
 use axum::middleware::map_request;
+use axum::response::Response;
 use browseros_capture::CaptureTransport;
 use browseros_capture::testing::{ScriptedCdp, ScriptedTransport};
 use browseros_core::TabId;
@@ -221,6 +222,23 @@ pub(crate) struct Reply {
 }
 
 impl Reply {
+    /// `response` as a host reads it.
+    pub(crate) async fn read(response: Response) -> Result<Self, BoxError> {
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await?;
+        let body = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes)?
+        };
+        Ok(Self {
+            status,
+            headers,
+            body,
+        })
+    }
+
     pub(crate) fn request_id(&self) -> Option<&str> {
         self.headers
             .get("x-request-id")
@@ -273,20 +291,7 @@ impl Harness {
             .uri(uri)
             .header(header::CONTENT_TYPE, "application/json")
             .body(body)?;
-        let response = self.router.clone().oneshot(request).await?;
-        let status = response.status();
-        let headers = response.headers().clone();
-        let bytes = to_bytes(response.into_body(), usize::MAX).await?;
-        let body = if bytes.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_slice(&bytes)?
-        };
-        Ok(Reply {
-            status,
-            headers,
-            body,
-        })
+        Reply::read(self.router.clone().oneshot(request).await?).await
     }
 
     /// A response's status, headers and raw body, for a route that answers bytes.

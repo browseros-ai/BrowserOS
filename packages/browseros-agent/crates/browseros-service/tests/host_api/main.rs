@@ -9,6 +9,7 @@ mod fits;
 mod live;
 mod locks;
 mod privacy;
+mod reconcile;
 mod records;
 mod screenshots;
 mod socket;

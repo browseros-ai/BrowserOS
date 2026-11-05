@@ -255,7 +255,8 @@ async fn a_reconnected_browser_ends_the_locks_of_tabs_it_no_longer_has() -> Test
     h.browser.open_tab(5);
     let gone = take_lock(&h, json!({"tabId": 3, "ttlSeconds": 60})).await?;
     let kept = take_lock(&h, json!({"tabId": 5, "ttlSeconds": 60})).await?;
-    h.service.retain_tabs(&[TabId(5)]).await;
+    let fence = h.service.tab_fence();
+    h.service.retain_tabs(&[TabId(5)], fence).await;
     assert!(agent_may(&h, 3, Effect::Write));
     assert!(!agent_may(&h, 5, Effect::Write));
     assert!(h.get(&lock_uri(&gone)?).await?.body["releasedAt"].is_i64());

@@ -6,12 +6,14 @@
 //!  the link's first connect ─▶ HostApi::serve ─ Service::start(store, sink, privacy,
 //!        session, viewports, screenshot jobs, xvnc, cdp port)
 //!        ─▶ TakeoverLock armed with Service::locks
-//!        ─▶ Service::retain_tabs(a listing taken then) ─▶ tab_feed
+//!        ─▶ Service::retain_tabs(a listing taken then, Service::tab_fence from before it)
+//!        ─▶ tab_feed
 //!        ─▶ host_service(service.router(), auth) on the socket
 //!  door (every op, every recheck) ─▶ TakeoverLock::check ─▶ Locks::check
 //!  idle-tab janitor ─▶ TakeoverLock::is_locked
 //!  tab_watch's events, in order ─▶ tab_feed ─▶ Service::tab_closed | tab_opened, and on a
-//!        new watch start Service::retain_tabs(a listing taken then, never a queued one)
+//!        new watch start Service::retain_tabs(a listing taken then, never a queued one, and
+//!        the fence taken before it)
 //! ```
 //!
 //! The service owns the routes, the auth, the locks, tab privacy and the event log; Neo binds the

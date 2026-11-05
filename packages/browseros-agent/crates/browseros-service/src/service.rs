@@ -6,11 +6,14 @@
 //! [`Service::locks`], and the browser link's tab events go to [`Service::tab_opened`],
 //! [`Service::tab_closed`] and [`Service::retain_tabs`], which hand each event to every part
 //! that keeps state about tabs: the takeovers, `Privacy`, the fits, the locks, and the displays
-//! (a control display arms its journal on each tab that opens).
+//! (a control display arms its journal on each tab that opens). A reconcile takes a
+//! [`Service::tab_fence`] before its listing, so `retain_tabs` keeps what a host changed on a
+//! tab that opened after it (`tab_stamps`).
 
 use crate::event_log::{EventKind, EventLog, LogEvent};
 use crate::live_tabs::LiveTabs;
 use crate::screenshot_taker::Camera;
+use crate::tab_stamps::{TabFence, TabStamps};
 use crate::{router, wire};
 use axum::Router;
 use browseros_capture::{CaptureHub, CaptureTransport, CdpPortTransport};
@@ -69,6 +72,8 @@ pub(crate) struct ServiceState {
     pub(crate) takeovers: Arc<Takeovers>,
     /// The capture hub behind the live views (`live_tabs`).
     pub(crate) live: Arc<CaptureHub>,
+    /// The tabs each route changed, stamped before the change, against a reconcile's fence.
+    pub(crate) stamps: TabStamps,
     /// Cancels the hub's shutdown token when the service is dropped, which ends every live
     /// stream and capture.
     _live_shutdown: DropGuard,
@@ -165,6 +170,7 @@ impl Service {
                 displays,
                 takeovers,
                 live,
+                stamps: TabStamps::default(),
                 _live_shutdown: shutdown.drop_guard(),
             }),
         }
@@ -195,12 +201,14 @@ impl Service {
         private
     }
 
-    /// The browser link saw a tab close: its takeover is released first, while its lock still
-    /// holds, so the release lifts the lock itself and gives back what it took; then its fit is
-    /// restored (so the screen does not stay at the owner's size), its locks end, its private
-    /// flag is forgotten, and `tab.closed` is published, so a host that reads it finds the tab's
-    /// state already gone.
+    /// The browser link saw a tab close. Its stamp is forgotten first, so the close waits out a
+    /// reconcile's parts before it touches the tab's state, as a route does (`tab_stamps`). Then
+    /// its takeover is released, while its lock still holds, so the release lifts the lock itself
+    /// and gives back what it took; then its fit is restored (so the screen does not stay at the
+    /// owner's size), its locks end, its private flag is forgotten, and `tab.closed` is
+    /// published, so a host that reads it finds the tab's state already gone.
     pub async fn tab_closed(&self, tab: TabId) {
+        self.state.stamps.forget(tab).await;
         self.state.takeovers.tab_closed(tab).await;
         self.state.fits.tab_closed(tab).await;
         self.state.locks.tab_closed(tab);
@@ -213,13 +221,23 @@ impl Service {
         ));
     }
 
-    /// The browser link (re)connected with `open` tabs. Whatever the parts keep about any other
-    /// tab ends, as if it closed: it closed while Neo was not watching, or the browser restarted
-    /// and numbers its tabs from 1 again.
-    pub async fn retain_tabs(&self, open: &[TabId]) {
-        self.state.takeovers.retain_tabs(open).await;
-        self.state.fits.retain_tabs(open).await;
-        self.state.locks.retain_tabs(open);
-        self.state.privacy.retain_tabs(open).await;
+    /// Where a reconcile's listing begins among the host's changes to tabs. Take it before
+    /// listing the tabs, and hand it to [`Service::retain_tabs`] with that listing.
+    #[must_use]
+    pub fn tab_fence(&self) -> TabFence {
+        self.state.stamps.fence()
+    }
+
+    /// The browser link (re)connected with `open` tabs, listed after `fence` was taken. Whatever
+    /// the parts keep about any other tab ends, as if it closed: it closed while Neo was not
+    /// watching, or the browser restarted and numbers its tabs from 1 again. A tab a host changed
+    /// after `fence` is kept as if it were open, since it may have opened after the listing.
+    /// Host changes to tabs wait until every part is done (`tab_stamps`).
+    pub async fn retain_tabs(&self, open: &[TabId], fence: TabFence) {
+        let kept = self.state.stamps.kept(open, fence).await;
+        self.state.takeovers.retain_tabs(&kept.tabs).await;
+        self.state.fits.retain_tabs(&kept.tabs).await;
+        self.state.locks.retain_tabs(&kept.tabs);
+        self.state.privacy.retain_tabs(&kept.tabs).await;
     }
 }
