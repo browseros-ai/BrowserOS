@@ -2,7 +2,7 @@
 //! agent's. It attaches its own flat session per capture (CDP session ids belong to one socket)
 //! and routes screencast frames to their capture by that session id.
 
-use crate::error::{AppError, AppResult};
+use crate::{CaptureFailure, CaptureResult};
 use browseros_cdp::{CdpEvent, SessionId};
 use browseros_core::CdpConnection;
 use serde_json::{Value, json};
@@ -41,7 +41,7 @@ impl Link {
     pub(super) async fn open(
         transport: &dyn CaptureTransport,
         shutdown: CancellationToken,
-    ) -> AppResult<Arc<Self>> {
+    ) -> CaptureResult<Arc<Self>> {
         let cdp = transport.connect().await?;
         // Frames bypass the client's broadcast ring: at several per second and up to ~100 KB
         // each, that ring would copy them once per subscriber and hold hundreds of them.
@@ -60,7 +60,7 @@ impl Link {
         Ok(link)
     }
 
-    pub(super) async fn attach(&self, target_id: &str) -> AppResult<Attached> {
+    pub(super) async fn attach(&self, target_id: &str) -> CaptureResult<Attached> {
         let reply = self
             .call(
                 "Target.attachToTarget",
@@ -71,7 +71,7 @@ impl Link {
         let id = reply
             .get("sessionId")
             .and_then(Value::as_str)
-            .ok_or_else(|| AppError::Internal("attachToTarget returned no sessionId".into()))?;
+            .ok_or_else(|| CaptureFailure::new("attachToTarget returned no sessionId".into()))?;
         let detached = self.broken.child_token();
         lock(&self.detached).insert(id.to_string(), detached.clone());
         Ok(Attached {
@@ -92,7 +92,7 @@ impl Link {
         method: &str,
         params: Value,
         session: &Attached,
-    ) -> AppResult<Value> {
+    ) -> CaptureResult<Value> {
         self.call(method, params, Some(&session.id)).await
     }
 
@@ -114,11 +114,11 @@ impl Link {
         method: &str,
         params: Value,
         session: Option<&SessionId>,
-    ) -> AppResult<Value> {
+    ) -> CaptureResult<Value> {
         self.cdp
             .send(method, params, session)
             .await
-            .map_err(|error| AppError::Internal(format!("{method}: {error}")))
+            .map_err(|error| CaptureFailure::new(format!("{method}: {error}")))
     }
 }
 

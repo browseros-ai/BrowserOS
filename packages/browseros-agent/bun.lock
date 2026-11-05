@@ -291,6 +291,10 @@
         "puppeteer": "^25.12.0",
       },
     },
+    "crates/browseros-capture": {
+      "name": "@browseros/browseros-capture-rust",
+      "version": "0.0.0",
+    },
     "crates/browseros-cdp": {
       "name": "@browseros/browseros-cdp-rust",
       "version": "0.0.0",
@@ -303,6 +307,10 @@
       "name": "@browseros/browseros-mcp-rust",
       "version": "0.0.0",
     },
+    "crates/browseros-trace": {
+      "name": "@browseros/browseros-trace-rust",
+      "version": "0.0.0",
+    },
     "crates/claw-api": {
       "name": "@browseros/claw-api-rust",
       "version": "0.0.0",
@@ -313,6 +321,10 @@
     },
     "crates/hosted-api": {
       "name": "@browseros/hosted-api-rust",
+      "version": "0.0.0",
+    },
+    "crates/neo-service-api": {
+      "name": "@browseros/neo-service-api-rust",
       "version": "0.0.0",
     },
     "packages/acpx-ai-provider": {
@@ -636,11 +648,15 @@
 
     "@browseros/browser-mcp": ["@browseros/browser-mcp@workspace:packages/browser-mcp"],
 
+    "@browseros/browseros-capture-rust": ["@browseros/browseros-capture-rust@workspace:crates/browseros-capture"],
+
     "@browseros/browseros-cdp-rust": ["@browseros/browseros-cdp-rust@workspace:crates/browseros-cdp"],
 
     "@browseros/browseros-core-rust": ["@browseros/browseros-core-rust@workspace:crates/browseros-core"],
 
     "@browseros/browseros-mcp-rust": ["@browseros/browseros-mcp-rust@workspace:crates/browseros-mcp"],
+
+    "@browseros/browseros-trace-rust": ["@browseros/browseros-trace-rust@workspace:crates/browseros-trace"],
 
     "@browseros/build-server-tools": ["@browseros/build-server-tools@workspace:packages/build-server-tools"],
 
@@ -663,6 +679,8 @@
     "@browseros/harness-integrations-rust": ["@browseros/harness-integrations-rust@workspace:crates/harness-integrations"],
 
     "@browseros/hosted-api-rust": ["@browseros/hosted-api-rust@workspace:crates/hosted-api"],
+
+    "@browseros/neo-service-api-rust": ["@browseros/neo-service-api-rust@workspace:crates/neo-service-api"],
 
     "@browseros/onboarding-video": ["@browseros/onboarding-video@workspace:packages/onboarding-video"],
 

@@ -1,0 +1,9 @@
+{
+  "name": "@browseros/browseros-trace-rust",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint:rust": "cargo fmt --package browseros-trace -- --check && cargo clippy --package browseros-trace --all-targets --locked -- -D warnings",
+    "test:rust": "cargo test --package browseros-trace --locked"
+  }
+}

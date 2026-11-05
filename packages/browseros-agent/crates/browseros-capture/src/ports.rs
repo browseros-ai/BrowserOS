@@ -1,13 +1,9 @@
 //! The two things `CaptureHub` depends on, as ports so it can be exercised without a browser:
-//! which tabs a session may show, and a CDP connection reserved for captures. Production
-//! adapters live here; the test adapters are in `testing`.
+//! which tabs a session may show, and a CDP connection reserved for captures. The production
+//! transport lives here; each host implements `SessionTabs` over its own session state
+//! (claw-server's `LiveSessionTabs`). The test adapters are in `testing`.
 
-use crate::{
-    db::AuditLog,
-    error::{AppError, AppResult},
-    ids::SessionId,
-    services::{cockpit::SessionVisualService, sessions::Sessions},
-};
+use crate::{CaptureFailure, CaptureResult};
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use browseros_core::CdpConnection;
 use futures_util::future::BoxFuture;
@@ -32,65 +28,15 @@ pub struct CaptureTab {
 /// Resolves a session to the tabs a live view may show.
 pub trait SessionTabs: Send + Sync {
     /// `None` when no session has this id.
-    fn view<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, AppResult<Option<SessionView>>>;
+    fn view<'a>(&'a self, session_id: &'a str)
+    -> BoxFuture<'a, CaptureResult<Option<SessionView>>>;
 }
 
 /// Opens the CDP connection captures run on.
 pub trait CaptureTransport: Send + Sync {
     /// Opens a fresh connection; the hub calls it again only after the previous one broke, and
     /// the previous connection may be closed then.
-    fn connect(&self) -> BoxFuture<'_, AppResult<Arc<dyn CdpConnection>>>;
-}
-
-/// Production `SessionTabs`: liveness from the in-memory session map, existence from the audit,
-/// and tabs from the same ranking the cockpit preview uses, so both agree on a session's current
-/// tab. Only tabs the session has open claims on are offered, which are exactly the ones focus
-/// emulation keeps rendering in the background.
-pub struct LiveSessionTabs {
-    sessions: Arc<Sessions>,
-    audit_log: Arc<AuditLog>,
-    visuals: Arc<SessionVisualService>,
-}
-
-impl LiveSessionTabs {
-    #[must_use]
-    pub fn new(
-        sessions: Arc<Sessions>,
-        audit_log: Arc<AuditLog>,
-        visuals: Arc<SessionVisualService>,
-    ) -> Self {
-        Self {
-            sessions,
-            audit_log,
-            visuals,
-        }
-    }
-}
-
-impl SessionTabs for LiveSessionTabs {
-    fn view<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, AppResult<Option<SessionView>>> {
-        Box::pin(async move {
-            if !self.sessions.contains(&SessionId::new(session_id)).await {
-                let known = self.audit_log.get_task_summary(session_id).await?.is_some();
-                return Ok(known.then(|| SessionView {
-                    live: false,
-                    tabs: Vec::new(),
-                }));
-            }
-            let tabs = self
-                .visuals
-                .ranked_tabs(session_id)
-                .await?
-                .into_iter()
-                .map(|tab| CaptureTab {
-                    tab_id: tab.tab_id,
-                    target_id: tab.target_id,
-                    url: tab.url,
-                })
-                .collect();
-            Ok(Some(SessionView { live: true, tabs }))
-        })
-    }
+    fn connect(&self) -> BoxFuture<'_, CaptureResult<Arc<dyn CdpConnection>>>;
 }
 
 /// Production `CaptureTransport`: a second websocket to the browser's CDP port. Frames are large
@@ -112,7 +58,7 @@ impl CdpPortTransport {
 }
 
 impl CaptureTransport for CdpPortTransport {
-    fn connect(&self) -> BoxFuture<'_, AppResult<Arc<dyn CdpConnection>>> {
+    fn connect(&self) -> BoxFuture<'_, CaptureResult<Arc<dyn CdpConnection>>> {
         Box::pin(async move {
             let mut current = self.current.lock().await;
             // The client keeps reconnecting on its own, so the broken one must be told to stop.
@@ -130,7 +76,7 @@ impl CaptureTransport for CdpPortTransport {
                 ..ConnectOptions::new(self.port)
             })
             .await
-            .map_err(|error| AppError::Internal(format!("capture connection failed: {error}")))?;
+            .map_err(|error| CaptureFailure::new(format!("capture connection failed: {error}")))?;
             *current = Some(client.clone());
             Ok(Arc::new(client) as Arc<dyn CdpConnection>)
         })

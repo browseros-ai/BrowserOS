@@ -2,7 +2,7 @@
 //! and a session table set by the test. Used by the hub's own tests and the `/v1` route tests.
 
 use super::ports::{CaptureTransport, SessionTabs, SessionView};
-use crate::error::AppResult;
+use crate::CaptureResult;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use browseros_cdp::{CdpError, CdpEvent, SessionId};
 use browseros_core::CdpConnection;
@@ -220,7 +220,7 @@ impl CdpConnection for ScriptedCdp {
 pub struct ScriptedTransport(pub Arc<ScriptedCdp>);
 
 impl CaptureTransport for ScriptedTransport {
-    fn connect(&self) -> BoxFuture<'_, AppResult<Arc<dyn CdpConnection>>> {
+    fn connect(&self) -> BoxFuture<'_, CaptureResult<Arc<dyn CdpConnection>>> {
         Box::pin(async move { Ok(self.0.clone() as Arc<dyn CdpConnection>) })
     }
 }
@@ -238,7 +238,10 @@ impl StaticSessionTabs {
 }
 
 impl SessionTabs for StaticSessionTabs {
-    fn view<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, AppResult<Option<SessionView>>> {
+    fn view<'a>(
+        &'a self,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, CaptureResult<Option<SessionView>>> {
         Box::pin(async move { Ok(lock(&self.views).get(session_id).cloned()) })
     }
 }

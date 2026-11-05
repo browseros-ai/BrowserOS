@@ -1,0 +1,16 @@
+[package]
+name = "neo-service-api"
+version = "1.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Wire types of the Neo service API, generated from contracts/neo-service-api/openapi.yaml"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_with.workspace = true
+
+[lints]
+workspace = true

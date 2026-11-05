@@ -348,6 +348,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "browseros-capture"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "browseros-cdp",
+ "browseros-core",
+ "bytes",
+ "futures-util",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "browseros-cdp"
 version = "0.1.0"
 dependencies = [
@@ -420,6 +436,24 @@ dependencies = [
  "tower",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "browseros-trace"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "futures-util",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -549,6 +583,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "browseros-captcha",
+ "browseros-capture",
  "browseros-cdp",
  "browseros-core",
  "browseros-mcp",
@@ -1867,6 +1902,15 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "neo-service-api"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_with",
 ]
 
 [[package]]

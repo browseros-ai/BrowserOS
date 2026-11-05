@@ -1,6 +1,12 @@
-//! Live views of the tabs an agent session is working in, behind the hosted `/v1/sessions/{id}`
-//! `/screencast` (MJPEG) and `/video` (fragmented AV1 MP4) endpoints, and the cockpit's
-//! `/api/v1/screencasts` socket, which watches many sessions at once through a [`Watcher`].
+//! Live views of the tabs an agent session is working in, shared by claw-server and claw-sdk.
+//! In claw-server it backs the hosted `/v1/sessions/{id}` `/screencast` (MJPEG) and `/video`
+//! (fragmented AV1 MP4) endpoints, and the cockpit's `/api/v1/screencasts` socket, which
+//! watches many sessions at once through a [`Watcher`]. claw-sdk serves the same streams on
+//! its host listener.
+//!
+//! The crate knows nothing about either server. A host supplies its two ports:
+//! which tabs a session may show ([`SessionTabs`]), and the CDP connection captures
+//! run on ([`CaptureTransport`]; [`CdpPortTransport`] is the production one).
 //!
 //! ```text
 //!  viewer ─┐                      ┌─ Capture(tab A, screencast, high) ── Page.startScreencast ──────┐
@@ -15,6 +21,8 @@
 //! background (the agent turns on focus emulation for them), so they produce frames even when
 //! they are not the window's active tab.
 
+mod clock;
+mod failure;
 mod link;
 mod mp4;
 mod ports;
@@ -24,13 +32,11 @@ mod tab_capture;
 pub mod testing;
 mod watcher;
 
-pub use ports::{
-    CaptureTab, CaptureTransport, CdpPortTransport, LiveSessionTabs, SessionTabs, SessionView,
-};
+pub use failure::{CaptureFailure, CaptureResult};
+pub use ports::{CaptureTab, CaptureTransport, CdpPortTransport, SessionTabs, SessionView};
 pub use presets::Quality;
 pub use watcher::{Watch, Watcher};
 
-use crate::error::AppError;
 use bytes::Bytes;
 use futures_util::Stream;
 use link::Link;
@@ -66,7 +72,7 @@ pub enum CaptureError {
     #[error("tab is not open in this session")]
     TabNotFound,
     #[error(transparent)]
-    Browser(#[from] AppError),
+    Browser(#[from] CaptureFailure),
 }
 
 /// One screencast frame as a viewer receives it.
@@ -223,7 +229,7 @@ impl CaptureHub {
         lease
             .ready()
             .await
-            .map_err(|error| CaptureError::Browser(AppError::Internal(error)))?;
+            .map_err(|error| CaptureError::Browser(CaptureFailure::new(error)))?;
         Ok(lease)
     }
 

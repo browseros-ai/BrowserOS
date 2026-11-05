@@ -1,0 +1,28 @@
+[package]
+name = "browseros-trace"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Run and operation records, secret masking and pixel privacy for hosted BrowserOS Neo (claw-sdk)"
+
+[dependencies]
+aho-corasick.workspace = true
+futures-util.workspace = true
+percent-encoding.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v7"] }
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

@@ -10,7 +10,7 @@ use super::{
     mp4::{Mp4Part, Mp4Splitter},
     presets::{Preset, Quality},
 };
-use crate::{clock::now_epoch_ms, error::AppResult};
+use crate::{CaptureFailure, CaptureResult, clock::now_epoch_ms};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use bytes::Bytes;
 use serde_json::{Value, json};
@@ -286,7 +286,7 @@ async fn screencast(
     session: &Attached,
     capture: &Capture,
     preset: Preset,
-) -> AppResult<()> {
+) -> CaptureResult<()> {
     let mut frames = link.frames(session);
     link.send(
         "Page.startScreencast",
@@ -353,7 +353,7 @@ async fn video(
     session: &Attached,
     capture: &Capture,
     preset: Preset,
-) -> AppResult<()> {
+) -> CaptureResult<()> {
     let reply = link
         .send(
             "Page.startScreenRecording",
@@ -368,9 +368,7 @@ async fn video(
     let handle = reply
         .get("stream")
         .and_then(Value::as_str)
-        .ok_or_else(|| {
-            crate::error::AppError::Internal("startScreenRecording returned no stream".into())
-        })?
+        .ok_or_else(|| CaptureFailure::new("startScreenRecording returned no stream".into()))?
         .to_string();
     capture.ready.send_replace(Some(Ok(())));
     let result = drain_recording(link, session, capture, &handle).await;
@@ -388,7 +386,7 @@ async fn drain_recording(
     session: &Attached,
     capture: &Capture,
     handle: &str,
-) -> AppResult<()> {
+) -> CaptureResult<()> {
     let mut splitter = Mp4Splitter::default();
     let mut tick = tokio::time::interval(RECORDING_READ_INTERVAL);
     tick.reset();
@@ -421,9 +419,9 @@ async fn drain_recording(
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             let bytes = if chunk.get("base64Encoded").and_then(Value::as_bool) == Some(true) {
-                BASE64.decode(data).map_err(|error| {
-                    crate::error::AppError::Internal(format!("recording chunk: {error}"))
-                })?
+                BASE64
+                    .decode(data)
+                    .map_err(|error| CaptureFailure::new(format!("recording chunk: {error}")))?
             } else {
                 data.as_bytes().to_vec()
             };
@@ -433,7 +431,7 @@ async fn drain_recording(
             written = true;
             let parts = splitter
                 .push(&bytes)
-                .map_err(|error| crate::error::AppError::Internal(error.to_string()))?;
+                .map_err(|error| CaptureFailure::new(error.to_string()))?;
             for part in parts {
                 match part {
                     Mp4Part::Init(init) => {
