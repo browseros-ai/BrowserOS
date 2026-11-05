@@ -1,0 +1,108 @@
+# claw-sdk
+
+claw-sdk is hosted BrowserOS Neo's sidecar. Chromium launches it beside the browser, and agents talk to it instead of the desktop claw-server. It serves one stateless MCP tool, `run`, which executes an agent's JavaScript against the browser. Every SDK operation that script performs goes through one dispatcher, which owns the rules, delivery, and the trace.
+
+The binary is `browseros-claw-sdk`. Code style and review rules are in [STYLE.md](STYLE.md).
+
+## How it runs
+
+Chromium starts the binary with its launch JSON and reads the exit code.
+
+| Invocation or event | Result |
+|---|---|
+| `--version` | Prints the version alone on stdout and exits 0. Reads no config and opens no state. |
+| `--config <launch.json>` | Serves until SIGTERM or SIGINT, then exits 0. |
+| The agent port is taken | Exits 2, and Chromium relaunches Neo on the next port. Nothing else exits 2. |
+| Any other failure | Exits 1, bad arguments included. |
+
+From the launch JSON it reads `ports.server` (default 9200), `ports.cdp` (default 49337), `directories.resources`, and `instance.browseros_version`. It ignores every other key. claw-sdk has no config file of its own, so it logs and ignores `BROWSERCLAW_CONFIG_FILE`.
+
+`src/config/env_config.rs` reads the environment once, at start. A blank value counts as unset. A malformed address or screen size fails the start with exit 1.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `BROWSERCLAW_DIR` | `$HOME/.browserclaw` | The state directory. The start fails when both it and `HOME` are unset. |
+| `CLAW_LOG` | `info,rmcp=warn` | The `tracing` filter. A filter that does not parse falls back to the default with a warning. |
+| `BROWSERCLAW_HOSTED_MODE` | unset | Must be `1`. Any other value logs an error, because popups then open as windows Neo cannot drive. Neo still starts. |
+| `CLAW_NATIVE_BROWSEROS_VERSION` | the launch JSON's | Overrides the browser version that gates core's native features. |
+| `CLAW_HOST_SOCKET` | `$BROWSERCLAW_DIR/host.sock` | The host API's Unix socket. |
+| `CLAW_HOST_TOKEN_FILE` | unset | The host's bearer token. Without a usable token (32 or more bytes of visible ASCII) there is no host listener, and `run` still works. |
+| `CLAW_HOST_TCP` | unset | Also serves the host API on this TCP address. |
+| `CLAW_XVNC_ADDR` | `127.0.0.1:5900` | Xvnc, which a takeover fit resizes. |
+| `NEO_SCREEN` | `1600x1000` | Neo's screen size between fits. |
+| `BROWSEROS_CAPSOLVER_API_KEY_FILE`, `BROWSEROS_2CAPTCHA_API_KEY_FILE` | unset | CAPTCHA provider keys. Without a readable one, `neo.solveCaptcha` is unlisted and fails `host / captcha_unavailable`. browseros-captcha also reads `BROWSEROS_CAPSOLVER_API_URL`, `BROWSEROS_2CAPTCHA_API_URL`, and `BROWSEROS_CAPTCHA_PAID_TASK_LIMIT` (default 100). |
+
+Neo binds two listeners:
+
+- The agent listener is `127.0.0.1:<ports.server>`, with no auth. Chromium's proxy forwards to it. It serves `/mcp`, plus `GET /system/health` and `GET /system/ready` for Chromium's supervisor. `/mcp` refuses any request that carries `Origin` or `Sec-Fetch-Site`, so a web page in the driven browser cannot call `run`.
+- The host listener is a Unix socket with mode 0660, plus TCP when `CLAW_HOST_TCP` is set. It serves browseros-service's `/v1` routes (runs, operations, screenshots, events, locks, tab privacy, and fits) behind the service's bearer and peer-uid checks. The service starts when the browser link first connects.
+
+State lives under `$BROWSERCLAW_DIR`:
+
+- `claw-sdk/trace.db` is the SQLite trace store. If it does not open, Neo moves it aside to `trace.db.broken-<millis>` and starts a fresh one.
+- `logs/claw-sdk.log.<date>` is the daily log. The same lines go to stderr. `logs/claw-sdk-panics.log` gets each panic, written synchronously.
+- `host.sock` is the host socket, unless `CLAW_HOST_SOCKET` moves it.
+
+## The `run` contract
+
+The model sends `run { code, timeout? }`. `code` is the body of an async function whose parameters are the SDK: `page`, `context`, `neo`, `console`, the timers, and the error classes. `timeout` is in milliseconds, from 1 to 900000, and defaults to 300000. Unknown fields are refused. Each run gets a fresh QuickJS realm. `src/mcp/run_description.rs` builds the text the model reads about all of this.
+
+The host sends its ids in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData? }`. Neo refuses unknown keys as `host / invalid_meta`. `taskId` makes the task's last tab the run's `page`. Without it, `page` opens a background tab on the first call that needs one. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads.
+
+The result carries `_meta["com.browseros.neo/run"]` as `{ id, status, effects, error?, unknown }`. `id` is the run's id in the trace. `status` is `ok`, `error`, `cancelled`, or `timeout`, and `isError` is set unless it is `ok`. `effects` is `none`, `done`, or `unknown`. `unknown` lists the writes that were sent and never confirmed.
+
+A `requestId` never runs twice. A repeat while its run is going joins it and gets the same reply. A repeat within 10 minutes of the end gets the stored reply, from memory or from the trace store, so this holds across a restart. Later repeats are refused as `host / duplicate_request`, naming the first run. If the store cannot be read, Neo refuses the call as `neo / trace_unavailable` rather than risk a second run. Neo notices a gone client at the next SSE keep-alive, within 5 seconds. A run with a `requestId` then keeps going for 15 seconds, so a retry can join it. A run without one stops at once.
+
+## Module map
+
+| Module | Owns |
+|---|---|
+| `main.rs` | The process contract: flags and exit codes. |
+| `app` | Startup in dependency order, shutdown on SIGTERM, and housekeeping (idle tabs, secret expiry, trace retention). |
+| `config` | The launch JSON, the environment, and `Defaults`, which holds every fixed value. Nothing else reads an env var. |
+| `logging` | The daily log file, stderr, and the panic log. |
+| `http` | The two listeners, the request hygiene in front of `/mcp`, and `/system/*`. |
+| `mcp` | The `run` tool: parsing its arguments and `_meta`, its description, and rendering a reply. |
+| `run` | One `run` call from admission to reply: replay, joins, the orphan grace, and the deadline. |
+| `runtime` | The per-run QuickJS realm, the JS bootstrap and preludes in `runtime/js/`, and the strings-only bridge to the dispatcher. The only module that names rquickjs. |
+| `dispatch` | The door: `Dispatcher`, the `Method` trait, the `Registry`, the policy rules, and the error model. |
+| `builtins` | The methods Neo serves today (`context.newPage`, `page.goto`, `page.title`, `page.close`, `neo.solveCaptcha`) and the idle-tab janitor. |
+| `browser` | The CDP link to Chromium, its reconnects, and what Neo knows about each tab. |
+| `host` | The host API's lifecycle and the takeover lock the door checks. |
+| `test_rig` | The unit tests' rig: a fake browser, a real trace store, and test methods. |
+| `test_support` | `FakeCdp` and a test config, behind the `test-support` feature that only test builds turn on. |
+
+Every SDK operation goes through one door. A script's call reaches `Dispatcher::submit` through the bridge, and the idle-tab janitor submits its closes the same way. A method that needs another action calls `OpCtx::invoke`, which runs it through the same door as a child op. The door owns the op id, the trace records, the rules, delivery, and masking, so a method does its work and reports facts. `neo.solveCaptcha` is the one method that drives a page outside the door, and it holds a claim on the tab while it does.
+
+## Add a built-in method
+
+A built-in is a private type in `src/builtins/` that implements `dispatch::Method`. Copy `src/builtins/placeholder_page.rs`.
+
+1. Write an input type with `#[serde(deny_unknown_fields)]` and an output type that implements `Serialize`.
+2. Implement `Method`:
+   - `spec` returns a `MethodSpec` with the name scripts call, its `Effect` (`Read` or `Write`), and its `Listing` in the `run` description.
+   - `target` returns the input's `PageTarget`, or `None` for a method with no page. There is no default, so the takeover lock always sees the tab a method acts on.
+   - `call` does the work through its `OpCtx<Self>`. Await browser calls through `op.race`. A write calls `op.recheck()?` and then `op.mark_sent()` right before it sends, and the door derives delivery from that.
+3. Register it with `builder.define` from `builtin_set` in `src/builtins/builtin_set.rs`. A duplicate name fails the start.
+4. Expose it to scripts from a prelude in `src/runtime/js/` with `__neo.invoke('<name>', input)`. A new parameter of the agent's function goes through `__neo.provide`, and a test in `run_description.rs` fails until the description names it.
+
+## Test it
+
+`check.sh` is the gate, and the package's `lint:rust` script. It runs rustfmt with Google's options, the forbidden-dependency check, clippy with `-D warnings`, and `cargo test`, all on CI's pinned toolchain. Run it from `packages/browseros-agent`. In a Grove worktree, give it a private build directory, or it waits on the build lock that other worktrees hold:
+
+```sh
+CARGO_BUILD_BUILD_DIR="$(git rev-parse --show-toplevel)/packages/browseros-agent/target/build-private" \
+  apps/claw-sdk/check.sh
+```
+
+Unit and integration tests run against `FakeCdp`. Two integration tests drive a real headless BrowserOS instead. Stock Chrome does not work, because core uses BrowserOS-only CDP methods. The tests pass without doing anything unless `CLAW_SDK_E2E_BROWSER` names the browser binary:
+
+```sh
+CLAW_SDK_E2E_BROWSER=/Applications/BrowserOS.app/Contents/MacOS/BrowserOS \
+  cargo test -p claw-sdk --locked --test e2e_browseros --test acceptance_browseros
+```
+
+- `tests/e2e_browseros.rs` launches the built binary the way Chromium does, runs scripts over MCP, and reads them back over the host socket.
+- `tests/acceptance_browseros.rs` runs one task end to end. The agent drives a tab, and the host reads its trace, locks the tab, sees the agent's next write refused, releases the lock, and finds that write's screenshot.
+
+`packages/browseros/docker/neo/smoke_sdk.py` checks a running claw-sdk Neo container from the host. It checks health and readiness, that `/mcp` lists the one `run` tool without issuing a session id, and that one run loads a page and reads its title. Run it as `python3 smoke_sdk.py --mcp-port <port>`. The port defaults to 9010.

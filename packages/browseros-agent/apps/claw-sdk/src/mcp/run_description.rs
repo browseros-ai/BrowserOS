@@ -7,9 +7,10 @@ use crate::dispatch::{Listing, Registry};
 const USAGE: &str = "Runs JavaScript against the user's browser and returns what the script \
 returns. `code` is the body of an async function: `await` each SDK call and `return` a JSON \
 value. The function's parameters are the SDK: `page` (this task's tab; a background tab opens \
-on the first call that needs one), `context`, `console` (its lines come back with the result), \
-`setTimeout` and `NeoError`. Every run gets a fresh JavaScript realm; only the browser's tabs \
-carry over from one run to the next.";
+on the first call that needs one), `context`, `neo` (any `neo.*` method listed below), `console` \
+(its lines come back with the result), `setTimeout`, `clearTimeout`, `NeoError` and \
+`TimeoutError`. Every run gets a fresh JavaScript realm; only the browser's tabs carry over from \
+one run to the next. The realm is QuickJS, which has no `Intl`.";
 
 /// The error model, which the agent needs before it retries anything.
 const ERRORS: &str = "An SDK call that fails throws a `NeoError` with `code`, `owner` (who must \
@@ -59,6 +60,7 @@ pub(crate) fn run_description(registry: &Registry) -> String {
 #[cfg(test)]
 mod tests {
     use std::future::{self, Future};
+    use std::time::Duration;
 
     use browseros_trace::Effect;
     use serde_json::Value;
@@ -67,6 +69,8 @@ mod tests {
     use crate::dispatch::{
         LeafError, Listing, Method, MethodSpec, OpCtx, PageTarget, RegistryBuilder, RegistryError,
     };
+    use crate::runtime::{Script, ScriptOutcome, run_script};
+    use crate::test_rig::{TestError, TestRig, on_neo_runtime};
 
     /// A method that is only its spec.
     struct Named(MethodSpec);
@@ -133,5 +137,35 @@ mod tests {
         ))?;
         assert!(run_description(&builder.build()).contains("page.getByRef('e5')"));
         Ok(())
+    }
+
+    /// The prose is hand-written, so the realm checks it: a parameter a prelude adds, or an
+    /// `Intl` a QuickJS bump brings, fails here until the description says so.
+    #[test]
+    fn the_usage_names_every_parameter_and_the_missing_intl() -> Result<(), TestError> {
+        on_neo_runtime(async {
+            let rig = TestRig::new().await?;
+            let description = run_description(rig.dispatcher.registry());
+            let (run, _guard) = rig.run(Duration::from_mins(1), None)?;
+            let script = Script {
+                code: "return [__neo.parameters(), typeof Intl];".to_owned(),
+                page: None,
+            };
+            let ScriptOutcome::Returned(value) =
+                run_script(&run, &rig.dispatcher, script).await.outcome
+            else {
+                return Err("the probe script returns".into());
+            };
+            let (parameters, intl): (String, String) = serde_json::from_value(value)?;
+            for name in parameters.split(", ") {
+                assert!(
+                    description.contains(&format!("`{name}`")),
+                    "the description names the parameter `{name}`: {description}"
+                );
+            }
+            assert_eq!(intl, "undefined");
+            assert!(description.contains("no `Intl`"));
+            Ok(())
+        })
     }
 }
