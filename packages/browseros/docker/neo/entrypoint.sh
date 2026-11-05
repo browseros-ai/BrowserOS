@@ -6,8 +6,12 @@
 #     └── websockify :6080 (noVNC page + WebSocket) ◀── browser tab
 #   openbox keeps Neo maximized and follows viewer-driven screen resizes.
 #
+# Images built with claw-sdk instead of claw-server run no websockify and keep
+# the clipboard from VNC viewers; server_policy decides from the installed binary.
+#
 # Only Neo is restarted here, because users can close it. If Xvnc, openbox or
-# websockify exits, the container exits and Docker's restart policy takes over.
+# websockify (where it runs) exits, the container exits and Docker's restart
+# policy takes over.
 set -euo pipefail
 
 : "${NEO_DATA_DIR:=/data}"
@@ -23,6 +27,8 @@ readonly CLAW_DATA="$NEO_DATA_DIR/browserclaw"
 readonly NEO_HOME=/home/neo
 readonly XDG_DIR=/tmp/neo-xdg
 readonly CONFIGURED=/tmp/neo-configured
+# Exists once websockify serves noVNC; neo-healthcheck probes 6080 only then.
+readonly VIEWER_MARK=/tmp/neo-viewer
 readonly MCP_URL=http://127.0.0.1:9010
 # Neo otherwise picks CDP and claw-server ports at launch (default, or the next
 # free one) and can land elsewhere after a restart. Nothing else in the
@@ -146,11 +152,44 @@ forget_zoom_levels() {
     || log "Could not clear saved zoom levels in $prefs"
 }
 
+# What the display offers depends on which server this image runs. The answer
+# comes from the installed binary's version marker (neo-server-info), read at
+# every start and never from a variable, so no build path can pair a server with
+# the other one's display, and hosts that run this script under `env -i` (zuzu's
+# cell) get the same answer. A server that cannot be identified stops the
+# container instead of falling back to the open display. Everything else reads
+# these flags, never the kind:
+#   VIEWER                noVNC on 6080 (websockify, no authentication). claw-sdk
+#                         images must not serve it (sdk-traces R1).
+#   CLIPBOARD_TO_VIEWERS  Xvnc sends the X clipboard to every VNC client. claw-sdk
+#                         turns that off so a copied card number never reaches a
+#                         viewer (sdk-privacy D6.1).
+#   AGENT_SETTINGS        claw-server's human-help switch; claw-sdk has no such
+#                         route. claw-server's call stays strict, which also stops a
+#                         claw-sdk built without its marker. Read as claw-server, it
+#                         gets a 404 for the PUT and the container exits unhealthy.
+server_policy() {
+  local kind
+  kind=$(neo-server-info kind) || die "Could not identify the installed Neo server"
+  case "$kind" in
+    claw-server) VIEWER=1 CLIPBOARD_TO_VIEWERS=1 AGENT_SETTINGS=1 ;;
+    claw-sdk) VIEWER=0 CLIPBOARD_TO_VIEWERS=0 AGENT_SETTINGS=0 ;;
+    *) die "Unknown Neo server '$kind'" ;;
+  esac
+  readonly VIEWER CLIPBOARD_TO_VIEWERS AGENT_SETTINGS
+  log "Server: $kind"
+}
+
+# The arrays built here are never empty, because the host-side tests run this
+# function under bash 3.2, where expanding an empty array trips `set -u`.
 start_display() {
   # X servers expect a root-owned, sticky socket directory.
   mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
-  spawn_as_neo Xvnc :1 -geometry "$NEO_SCREEN" -depth 24 -SecurityTypes None \
-    -localhost -rfbport 5900 -AlwaysShared -nolisten tcp
+  local xvnc_argv=(Xvnc :1 -geometry "$NEO_SCREEN" -depth 24 -SecurityTypes None
+    -localhost -rfbport 5900 -AlwaysShared -nolisten tcp)
+  # Viewers can still paste into Neo; only copying out stops.
+  [ "$CLIPBOARD_TO_VIEWERS" = 1 ] || xvnc_argv+=(-SendCutText=0 -SendPrimary=0)
+  spawn_as_neo "${xvnc_argv[@]}"
   xvnc_pid=$!
   for _ in $(seq 1 100); do
     [ -S /tmp/.X11-unix/X1 ] && break
@@ -165,8 +204,15 @@ start_display() {
   vncconfig_pid=$!
   spawn_as_neo openbox --config-file /etc/neo/openbox-rc.xml
   openbox_pid=$!
-  spawn_as_neo websockify --web /usr/share/novnc 6080 localhost:5900 >/dev/null 2>&1
-  websockify_pid=$!
+  # The supervisor loop stops the container when one of these exits.
+  supervised=(xvnc openbox)
+  websockify_pid=""
+  if [ "$VIEWER" = 1 ]; then
+    spawn_as_neo websockify --web /usr/share/novnc 6080 localhost:5900 >/dev/null 2>&1
+    websockify_pid=$!
+    supervised+=(websockify)
+    touch "$VIEWER_MARK"
+  fi
 }
 
 # Chromium's sandbox needs user namespaces, which Docker's default seccomp
@@ -297,22 +343,27 @@ start_neo() {
   neo_signaled=0
 }
 
-# Applies container-level agent settings once claw-server answers, then marks
+# Applies container-level agent settings once the server answers, then marks
 # the container configured; the healthcheck waits for that marker so agents
 # never connect before the settings hold. Hosted mode already keeps human help
 # off, but a claw-server older than hosted-mode support ignores the flag and
 # defaults human help on, so it is switched off here too on every start.
+# claw-sdk has no settings to apply (server_policy).
 configure_neo() {
   for _ in $(seq 1 240); do
     curl -fsS "$MCP_URL/system/ready" >/dev/null 2>&1 && break
     sleep 0.5
   done
   curl -fsS "$MCP_URL/system/ready" >/dev/null 2>&1 || { log "Neo did not become ready"; return 1; }
-  curl -fsS -X PUT "$MCP_URL/api/v1/settings/agent" -H 'Content-Type: application/json' \
-    -d '{"humanHelpEnabled":false}' >/dev/null || { log "Could not apply agent settings"; return 1; }
+  if [ "$AGENT_SETTINGS" = 1 ]; then
+    curl -fsS -X PUT "$MCP_URL/api/v1/settings/agent" -H 'Content-Type: application/json' \
+      -d '{"humanHelpEnabled":false}' >/dev/null || { log "Could not apply agent settings"; return 1; }
+  fi
   touch "$CONFIGURED"
   log "Ready. These are the container's ports; use the host ports you mapped with -p."
-  log "  Viewer: http://localhost:6080"
+  if [ "$VIEWER" = 1 ]; then
+    log "  Viewer: http://localhost:6080"
+  fi
   log "  MCP:    http://localhost:9010/mcp"
   log "  Add to Claude Code: claude mcp add --transport http neo http://localhost:9010/mcp"
 }
@@ -347,14 +398,16 @@ shutdown() {
     kill -KILL "$neo_pid" 2>/dev/null || true
   fi
   [ -n "$configure_pid" ] && kill -TERM "$configure_pid" 2>/dev/null || true
-  kill -TERM "$websockify_pid" "$openbox_pid" "$vncconfig_pid" "$xvnc_pid" 2>/dev/null || true
+  kill -TERM ${websockify_pid:+"$websockify_pid"} "$openbox_pid" "$vncconfig_pid" "$xvnc_pid" 2>/dev/null || true
   wait 2>/dev/null || true
   exit "$code"
 }
 
 trap on_term TERM INT
 
-rm -f "$CONFIGURED"
+# Both markers describe this run only, and /tmp survives `docker restart`.
+rm -f "$CONFIGURED" "$VIEWER_MARK"
+server_policy
 apply_ids
 prepare_data
 apply_policies
@@ -375,7 +428,7 @@ while [ "$stopping" = 0 ]; do
       shutdown 1
     fi
   fi
-  for name in xvnc openbox websockify; do
+  for name in "${supervised[@]}"; do
     pid_var="${name}_pid"
     if ! kill -0 "${!pid_var}" 2>/dev/null; then
       log "$name exited; stopping the container"

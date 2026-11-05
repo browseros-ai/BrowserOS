@@ -85,7 +85,9 @@ browser_version() {
 # Same cross build as the release workflow's server job (glibc 2.17 floor via
 # zig), in its own target dir so the host build's cache isn't invalidated.
 # Without CLAW_POSTHOG_KEY the binary has no analytics key; the image turns
-# analytics off anyway. The Dockerfile reads the result from <dir>/<arch>/.
+# analytics off anyway. The Dockerfile installs <dir>/<arch>/neo-server over the
+# bundled server; the name is neutral because the binary's version marker says
+# which server it is.
 build_server() {
   local arch=$1 target
   case $arch in
@@ -96,7 +98,7 @@ build_server() {
   (cd "$AGENT_DIR" && CARGO_TARGET_DIR=target/neo-docker \
     cargo zigbuild --release --locked --target "$target.2.17" -p claw-server --bin browseros-claw-server-rs)
   install -d "$NEO_DEV_HOME/server/$arch"
-  install -m 0755 "$AGENT_DIR/target/neo-docker/$target/release/browseros-claw-server-rs" "$NEO_DEV_HOME/server/$arch/"
+  install -m 0755 "$AGENT_DIR/target/neo-docker/$target/release/browseros-claw-server-rs" "$NEO_DEV_HOME/server/$arch/neo-server"
 }
 
 up() {

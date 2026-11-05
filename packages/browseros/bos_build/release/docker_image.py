@@ -14,8 +14,16 @@ image natively, then pushes that same image by digest with no tags
 (push_by_digest); publish_index then tags one multi-architecture index over
 those digests without building anything.
 
+Servers: a release installs this commit's server over the one the browser
+package bundles. --server-dir holds it as `<arch>/neo-server`, a claw-server or
+a claw-sdk build, and only the binary's compiled version marker says which
+(ServerBuild), so the image's server label always names the binary inside.
+Only RELEASED_KINDS are pushed: claw-sdk images are built and smoke-tested
+beside claw-server's until claw-sdk becomes the default server, so they never
+take the release tags.
+
 Tag policy: a release installs the browser package for `<version>` plus the
-claw-server and packaging of one repository commit, so the browser version alone
+server and packaging of one repository commit, so the browser version alone
 does not name an image. `<version>-<commit>` names one build and is never reused
 for different source; `<version>` and `latest` are aliases that move to the newest
 build. Shipping a server or packaging change for an already released browser is
@@ -32,6 +40,7 @@ import urllib.error
 import urllib.request
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
+from enum import StrEnum
 from pathlib import Path
 from typing import ContextManager, Iterator, Optional, Protocol
 
@@ -57,15 +66,10 @@ _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REVISION = re.compile(r"^[0-9a-f]{40}$")
 # The commit tag uses GitHub's short form, so it matches the commit links people see.
 _SHORT_REVISION = 7
-# claw-server compiles this marker into its binary (VERSION_MARKER in
-# apps/claw-server/src/main.rs). Reading it avoids running a binary that may be
-# built for another architecture, and cannot disagree with the binary installed.
-_SERVER_VERSION_MARKER = re.compile(rb"browseros-claw-server-version=([0-9A-Za-z.+-]+);")
 # The Ubuntu base image sets the version label to its own release (24.04), so
 # every build overrides it.
 VERSION_LABEL = "org.opencontainers.image.version"
 REVISION_LABEL = "org.opencontainers.image.revision"
-SERVER_VERSION_LABEL = "com.browseros.claw-server.version"
 # Release package names carry the version and architecture, e.g.
 # BrowserOS_neo_v0.51.1.4_arm64.deb.
 _DEB_NAME = re.compile(r"^BrowserOS_neo_v(?P<version>\d+(?:\.\d+){1,3})_(?P<arch>amd64|arm64)\.deb$")
@@ -73,6 +77,55 @@ _DEB_NAME = re.compile(r"^BrowserOS_neo_v(?P<version>\d+(?:\.\d+){1,3})_(?P<arch
 
 class ImageError(ValueError):
     """A request that cannot produce a correct image."""
+
+
+# A --server-dir holds <arch>/neo-server. The name is neutral because the file
+# name never says which server it is; the version marker inside does. The
+# Dockerfile installs it under the bundled server's name, which the browser
+# launches.
+SERVER_FILE = "neo-server"
+
+
+class ServerKind(StrEnum):
+    """A Neo server an image can run. The value is the server's cargo package
+    name, which also names its compiled version marker and its image label."""
+
+    CLAW_SERVER = "claw-server"
+    CLAW_SDK = "claw-sdk"
+
+    @property
+    def label(self) -> str:
+        """The image label holding this server's version. publish_index reads it
+        to tell which server an image runs."""
+        return f"com.browseros.{self.value}.version"
+
+
+# Kinds whose images may be pushed and take release tags. claw-sdk is built and
+# smoke-tested beside claw-server until it becomes the default server; pushing
+# it would move `<version>` and `latest`, which deployments pin, onto a claw-sdk
+# image.
+RELEASED_KINDS = frozenset({ServerKind.CLAW_SERVER})
+
+# Every Neo server compiles in `browseros-<kind>-version=<version>;` (claw-server:
+# VERSION_MARKER in apps/claw-server/src/main.rs). The marker's own name is the
+# kind, so reading it identifies a binary without running one that may be built
+# for another architecture, and it cannot disagree with the binary installed.
+_SERVER_MARKER = re.compile(
+    rb"browseros-("
+    + b"|".join(re.escape(kind.value.encode()) for kind in ServerKind)
+    + rb")-version=([0-9A-Za-z.+-]+);"
+)
+
+
+@dataclass(frozen=True)
+class ServerBuild:
+    """The server build a --server-dir supplies, as its binaries declare it."""
+
+    kind: ServerKind
+    version: str
+
+    def __str__(self) -> str:
+        return f"{self.kind.value} {self.version}"
 
 
 @dataclass(frozen=True)
@@ -187,19 +240,45 @@ def _require_published(version: str, platforms: tuple[str, ...], ops: ImageOpera
         raise ImageError(f"Neo {version} has no {', '.join(missing)} on the CDN")
 
 
-def _server_version(server_dir: Path, platforms: tuple[str, ...]) -> str:
-    """The claw-server version every requested architecture's binary declares."""
-    versions = {}
+def _server_build(server_dir: Path, platforms: tuple[str, ...]) -> ServerBuild:
+    """The one server build that every requested architecture's binary declares.
+
+    One image label and one publish decision cover every architecture, so each
+    binary must declare exactly one build (a repeated marker is the same
+    declaration) and all of them must be the same kind at the same version.
+    """
+    builds = {}
     for platform in platforms:
         arch = platform.split("/")[1]
-        match = _SERVER_VERSION_MARKER.search((server_dir / arch / "browseros-claw-server-rs").read_bytes())
-        if not match:
-            raise ImageError(f"{arch}/browseros-claw-server-rs has no claw-server version marker")
-        versions[arch] = match[1].decode()
-    if len(set(versions.values())) != 1:
-        found = ", ".join(f"{arch} {version}" for arch, version in versions.items())
-        raise ImageError(f"Server binaries were built from different versions: {found}")
-    return next(iter(versions.values()))
+        binary = server_dir / arch / SERVER_FILE
+        if not binary.is_file():
+            # Server directories staged before the rename named the file after
+            # claw-server's binary.
+            if (server_dir / arch / "browseros-claw-server-rs").is_file():
+                raise ImageError(
+                    f"Server directory has {arch}/browseros-claw-server-rs but no {arch}/{SERVER_FILE}; "
+                    f"the server artifact was renamed to {SERVER_FILE}"
+                )
+            raise ImageError(f"Server directory has no {arch}/{SERVER_FILE}")
+        declared = list(dict.fromkeys(
+            ServerBuild(ServerKind(kind.decode()), version.decode())
+            for kind, version in _SERVER_MARKER.findall(binary.read_bytes())
+        ))
+        if not declared:
+            kinds = " or ".join(kind.value for kind in ServerKind)
+            raise ImageError(
+                f"{arch}/{SERVER_FILE} has no server version marker "
+                f"(browseros-<kind>-version=<version>; for {kinds})"
+            )
+        if len(declared) > 1:
+            raise ImageError(
+                f"{arch}/{SERVER_FILE} declares more than one server build: {', '.join(map(str, declared))}"
+            )
+        builds[arch] = declared[0]
+    if len(set(builds.values())) != 1:
+        found = ", ".join(f"{arch} {build}" for arch, build in builds.items())
+        raise ImageError(f"Server binaries are different builds: {found}")
+    return next(iter(builds.values()))
 
 
 def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> ImageResult:
@@ -207,9 +286,10 @@ def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> I
 
     Raises ImageError, before running buildx, for a request that would publish
     the wrong thing: a malformed version, an architecture the version never
-    shipped, :latest on an image that is not being pushed, or a commit tag or
-    push without that commit's servers and full revision. A local .deb replaces the CDN lookup
-    and is only ever loaded into local Docker.
+    shipped, :latest on an image that is not being pushed, a commit tag or
+    push without that commit's servers and full revision, server binaries that
+    are not one server build, or a push of a server outside RELEASED_KINDS. A
+    local .deb replaces the CDN lookup and is only ever loaded into local Docker.
     """
     if request.deb is not None:
         request = _resolve_deb(request, request.deb)
@@ -227,13 +307,16 @@ def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> I
             f"Invalid revision '{request.revision}'; pass the full 40-character commit sha with --revision"
         )
     platforms = _platforms(request, ops)
-    server_version = ""
+    server = None
     if request.server_dir is not None:
-        for platform in platforms:
-            arch = platform.split("/")[1]
-            if not (request.server_dir / arch / "browseros-claw-server-rs").is_file():
-                raise ImageError(f"Server directory has no {arch}/browseros-claw-server-rs")
-        server_version = _server_version(request.server_dir, platforms)
+        server = _server_build(request.server_dir, platforms)
+        # Every publish has a server directory (required above), so this check
+        # covers every image that could take a tag.
+        if publishing and server.kind not in RELEASED_KINDS:
+            raise ImageError(
+                f"{server.kind.value} is built and smoke-tested only until it becomes the "
+                "default server; build it without --push or --push-by-digest"
+            )
     keys = [
         (name, key_file)
         for name, key_file in (
@@ -260,8 +343,8 @@ def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> I
     argv += ["--label", f"{VERSION_LABEL}={image_version}"]
     if request.revision:
         argv += ["--label", f"{REVISION_LABEL}={request.revision}"]
-    if server_version:
-        argv += ["--label", f"{SERVER_VERSION_LABEL}={server_version}"]
+    if server is not None:
+        argv += ["--label", f"{server.kind.label}={server.version}"]
     if request.push_by_digest:
         argv += [
             "--output",
@@ -321,9 +404,10 @@ def publish_index(request: ImageRequest, digests: dict[str, str], ops: ImageOper
 
     `digests` maps every published platform to the image its verify job built,
     tested and pushed, so nothing is rebuilt here. Each source must be that
-    platform's image from this commit before any tag moves, so a stray digest
-    can never take the release tags. After tagging, the registry's view of the
-    index is checked the same way.
+    platform's image from this commit, running a server in RELEASED_KINDS,
+    before any tag moves, so a stray digest can never take the release tags.
+    After tagging, the registry's view of the index is checked to hold this
+    commit's image for every platform.
     """
     if request.push_by_digest:
         raise ImageError("--from-digests tags the images verify pushed; do not combine it with --push-by-digest")
@@ -345,6 +429,11 @@ def publish_index(request: ImageRequest, digests: dict[str, str], ops: ImageOper
         configs = ops.inspect_image(source).get("configs", {})
         if set(configs) != {platform} or not _built_from(configs[platform], request.revision):
             raise ImageError(f"{source} is not a {platform} image from {request.revision}")
+        if not _runs_released_server(configs[platform]):
+            released = ", ".join(sorted(kind.value for kind in RELEASED_KINDS))
+            raise ImageError(
+                f"{source} does not run a released server ({released}); no other image takes release tags"
+            )
     _, tags = _tags(request)
     argv = ["--annotation", f"index:org.opencontainers.image.source={IMAGE_SOURCE}"]
     for tag in tags:
@@ -360,10 +449,21 @@ def publish_index(request: ImageRequest, digests: dict[str, str], ops: ImageOper
     return ImageResult(tags, platforms, published.get("digest", ""))
 
 
+def _labels(config: Optional[dict]) -> dict:
+    """The labels in an image config as inspect_image reports it."""
+    return ((config or {}).get("config") or {}).get("Labels") or {}
+
+
 def _built_from(config: Optional[dict], revision: str) -> bool:
     """Whether an image config carries `revision` as its source commit."""
-    labels = ((config or {}).get("config") or {}).get("Labels") or {}
-    return labels.get(REVISION_LABEL) == revision
+    return _labels(config).get(REVISION_LABEL) == revision
+
+
+def _runs_released_server(config: dict) -> bool:
+    """Whether an image config's server labels name a released kind and no other."""
+    labels = _labels(config)
+    kinds = {kind for kind in ServerKind if kind.label in labels}
+    return bool(kinds) and kinds <= RELEASED_KINDS
 
 
 def image_context() -> Path:

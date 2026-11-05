@@ -14,8 +14,9 @@
 # is how CI artifacts and drafts that never reached the CDN get tested.
 FROM scratch AS neo-deb
 
-# An optional build context containing <arch>/browseros-claw-server-rs.
-# Releases supply this commit's server; standalone builds keep the .deb's server.
+# An optional build context containing <arch>/neo-server: a build of any Neo
+# server, claw-server or claw-sdk. Releases supply this commit's server;
+# standalone builds keep the .deb's server.
 FROM scratch AS neo-server
 
 FROM ubuntu:24.04 AS neo-runtime
@@ -67,14 +68,20 @@ RUN --mount=type=bind,from=neo-deb,target=/tmp/neo-local \
     apt-get install -y --no-install-recommends /tmp/neo.deb; \
     rm -rf /tmp/neo.deb /var/lib/apt/lists/*
 
-# The browser launches the bundled path, so replace that executable in place.
+# Locates and identifies the installed server for the step below, the entrypoint
+# and the release checks. Copied after the .deb install so that layer stays cached.
+COPY --chmod=0755 neo-server-info.sh /usr/local/bin/neo-server-info
+
+# The browser launches the bundled path, so replace that executable in place,
+# whichever server it is; its version marker tells the image which one.
 # A changed package layout must fail instead of silently shipping an old server.
 RUN --mount=type=bind,from=neo-server,target=/tmp/neo-server \
     set -eu; \
     if [ -n "$(ls -A /tmp/neo-server)" ]; then \
-      paths=$(find /usr/lib /opt -type f -name browseros-claw-server); \
-      test -n "$paths" && test "$(printf '%s\n' "$paths" | wc -l)" -eq 1; \
-      install -m 0755 "/tmp/neo-server/$TARGETARCH/browseros-claw-server-rs" "$paths"; \
+      server="/tmp/neo-server/$TARGETARCH/neo-server"; \
+      [ -f "$server" ] || { echo "The neo-server build context must hold $TARGETARCH/neo-server" >&2; exit 1; }; \
+      bundled=$(neo-server-info path); \
+      install -m 0755 "$server" "$bundled"; \
     fi
 
 # Ubuntu's image ships an `ubuntu` user at uid 1000; Neo's user takes that uid

@@ -1,15 +1,31 @@
 """Run entrypoint.sh functions under bash, with the container's commands stubbed."""
 
 import json
+import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-SCRIPT = (Path(__file__).parent / "entrypoint.sh").read_text()
+HERE = Path(__file__).parent
+SCRIPT = (HERE / "entrypoint.sh").read_text()
+HEALTHCHECK = (HERE / "healthcheck.sh").read_text()
+# The image's /bin/sh is dash.
+SH = shutil.which("dash") or "sh"
+
+# start_display's processes before claw-sdk images existed. claw-server images keep them.
+TODAY_XVNC = [
+    "Xvnc", ":1", "-geometry", "1600x1000", "-depth", "24", "-SecurityTypes", "None",
+    "-localhost", "-rfbport", "5900", "-AlwaysShared", "-nolisten", "tcp",
+]
+VNCCONFIG = ["vncconfig", "-nowin"]
+OPENBOX = ["openbox", "--config-file", "/etc/neo/openbox-rc.xml"]
+TODAY_WEBSOCKIFY = ["websockify", "--web", "/usr/share/novnc", "6080", "localhost:5900"]
+CLIPBOARD_OFF = ["-SendCutText=0", "-SendPrimary=0"]
 
 
 def shell_function(name: str) -> str:
@@ -19,11 +35,26 @@ def shell_function(name: str) -> str:
     return match.group(0)
 
 
-def run_bash(script: str) -> subprocess.CompletedProcess:
+def run_bash(script: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["bash", "-c", "set -euo pipefail\n" + script],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=check,
     )
+
+
+def identified_by(identify: str) -> str:
+    """Bash that runs server_policy with `identify` standing in for `neo-server-info kind`."""
+    return (
+        f'neo-server-info() {{ [ "$1" = kind ] && {identify}; }}\n'
+        "log() { printf '[neo] %s\\n' \"$*\"; }\n"
+        'die() { log "$*" >&2; exit 1; }\n'
+        + shell_function("server_policy")
+        + "server_policy\n"
+    )
+
+
+def server_is(kind: str) -> str:
+    return identified_by(f"echo {kind}")
 
 
 class StartNeoTest(unittest.TestCase):
@@ -205,6 +236,187 @@ class ForgetZoomLevelsTest(unittest.TestCase):
 
         self.assertEqual(prefs.read_text(), "{not json")
         self.assertIn("Could not clear saved zoom levels", result.stdout)
+
+
+class NeoServerInfoTest(unittest.TestCase):
+    def kind(self, binary: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [SH, str(HERE / "neo-server-info.sh"), "kind", str(binary)],
+            capture_output=True, text=True,
+        )
+
+    def test_the_version_marker_names_the_server(self):
+        binary = Path(self.enterContext(tempfile.TemporaryDirectory())) / "browseros-claw-server"
+        server = b"browseros-claw-server-version=0.0.90;"
+        sdk = b"browseros-claw-sdk-version=0.1.0;"
+        for contents, kind in [
+            (server, "claw-server"),
+            (sdk, "claw-sdk"),
+            # Servers bundled before markers existed are all claw-server.
+            (b"", "claw-server"),
+            # Release builds refuse a binary with both; a hand-built one gets the closed display.
+            (server + b"\0" + sdk, "claw-sdk"),
+        ]:
+            with self.subTest(contents=contents):
+                binary.write_bytes(b"\x7fELF\x02\x01\x01\0" + contents + b"\0\xff\xfe")
+                result = self.kind(binary)
+                self.assertEqual((result.returncode, result.stdout), (0, f"{kind}\n"))
+
+    def test_an_unreadable_binary_is_an_error_not_claw_server(self):
+        result = self.kind(Path(self.enterContext(tempfile.TemporaryDirectory())) / "missing")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+
+
+class ServerPolicyTest(unittest.TestCase):
+    def test_a_server_that_cannot_be_identified_stops_the_container(self):
+        for identify in ["return 1", "echo claw-next"]:
+            with self.subTest(identify=identify):
+                result = run_bash(identified_by(identify) + "echo started\n", check=False)
+
+                self.assertEqual(result.returncode, 1)
+                self.assertNotIn("started", result.stdout)
+
+
+class StartDisplayTest(unittest.TestCase):
+    def start(self, kind: str) -> tuple[list[list[str]], list[str], bool]:
+        """The processes start_display spawns, the ones the supervisor watches, and
+        whether it marked a viewer for the healthcheck."""
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        calls, supervised = directory / "calls", directory / "supervised"
+        mark, x11 = directory / "neo-viewer", directory / "x11"
+        x11.mkdir()
+        # The display socket Xvnc creates, which start_display waits for.
+        with socket.socket(socket.AF_UNIX) as display:
+            display.bind(str(x11 / "X1"))
+        run_bash(
+            server_is(kind)
+            + f"spawn_as_neo() {{ local IFS=$'\\t'; echo \"$*\" >> '{calls}'; : & }}\n"
+            + f"NEO_SCREEN=1600x1000 VIEWER_MARK='{mark}'\n"
+            + shell_function("start_display").replace("/tmp/.X11-unix", str(x11))
+            + f"start_display\nwait\nprintf '%s\\n' \"${{supervised[@]}}\" > '{supervised}'\n"
+        )
+        spawned = [line.split("\t") for line in calls.read_text().splitlines()]
+        return spawned, supervised.read_text().split(), mark.exists()
+
+    def test_claw_server_keeps_todays_display(self):
+        spawned, supervised, viewer = self.start("claw-server")
+
+        self.assertEqual(spawned, [TODAY_XVNC, VNCCONFIG, OPENBOX, TODAY_WEBSOCKIFY])
+        self.assertEqual(supervised, ["xvnc", "openbox", "websockify"])
+        self.assertTrue(viewer)
+
+    def test_claw_sdk_keeps_the_clipboard_from_viewers_and_serves_no_novnc(self):
+        spawned, supervised, viewer = self.start("claw-sdk")
+
+        self.assertEqual(spawned, [TODAY_XVNC + CLIPBOARD_OFF, VNCCONFIG, OPENBOX])
+        self.assertEqual(supervised, ["xvnc", "openbox"])
+        self.assertFalse(viewer)
+
+
+class ConfigureNeoTest(unittest.TestCase):
+    PUT_SETTINGS = [
+        "-fsS", "-X", "PUT", "http://127.0.0.1:9010/api/v1/settings/agent",
+        "-H", "Content-Type: application/json", "-d", '{"humanHelpEnabled":false}',
+    ]
+
+    def configure(self, kind: str, settings_status: int = 0) -> tuple[int, list[list[str]], bool, str]:
+        """configure_neo's exit status as the supervisor's wait sees it, its curl calls,
+        whether it marked the container configured, and its log."""
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        calls, configured = directory / "calls", directory / "neo-configured"
+        result = run_bash(
+            server_is(kind)
+            + f"curl() {{ local IFS=$'\\t'; echo \"$*\" >> '{calls}'; "
+            + f'case "$*" in *PUT*) return {settings_status} ;; esac; }}\n'
+            + f"MCP_URL=http://127.0.0.1:9010 CONFIGURED='{configured}'\n"
+            + shell_function("configure_neo")
+            # The supervisor starts it in the background and reads its status with wait.
+            + "configure_neo &\nif wait $!; then echo status=0; else echo status=$?; fi\n"
+        )
+        status = int(result.stdout.splitlines()[-1].removeprefix("status="))
+        curls = [line.split("\t") for line in calls.read_text().splitlines()]
+        return status, curls, configured.exists(), result.stdout
+
+    def test_claw_server_turns_human_help_off_before_it_reports_ready(self):
+        status, curls, configured, log = self.configure("claw-server")
+
+        self.assertEqual(status, 0)
+        self.assertIn(self.PUT_SETTINGS, curls)
+        self.assertTrue(configured)
+        self.assertIn("Viewer: http://localhost:6080", log)
+
+    def test_claw_server_still_stops_when_the_settings_call_fails(self):
+        status, _, configured, log = self.configure("claw-server", settings_status=22)
+
+        self.assertEqual(status, 1)
+        self.assertFalse(configured)
+        self.assertIn("Could not apply agent settings", log)
+
+    def test_claw_sdk_is_never_sent_the_settings_call_and_still_turns_ready(self):
+        status, curls, configured, log = self.configure("claw-sdk")
+
+        self.assertEqual(status, 0)
+        self.assertFalse(any("/api/v1/settings/agent" in arg for curl in curls for arg in curl))
+        self.assertTrue(configured)
+        self.assertNotIn("Viewer:", log)
+
+
+class ShutdownTest(unittest.TestCase):
+    def terminated(self, websockify_pid: str) -> list[str]:
+        """The arguments of shutdown's SIGTERM to the display, once Neo has stopped."""
+        result = run_bash(
+            "kill() { local IFS=$'\\t'; echo \"$*\"; }\n"
+            "wait() { :; }\n"
+            "neo_pid='' configure_pid=''\n"
+            f"websockify_pid='{websockify_pid}' openbox_pid=3 vncconfig_pid=2 xvnc_pid=1\n"
+            + shell_function("shutdown")
+            + "shutdown 0\n"
+        )
+        return result.stdout.rstrip("\n").split("\t")
+
+    def test_the_display_stops_in_todays_order(self):
+        self.assertEqual(self.terminated("4"), ["-TERM", "4", "3", "2", "1"])
+
+    def test_a_viewer_that_never_started_is_skipped(self):
+        self.assertEqual(self.terminated(""), ["-TERM", "3", "2", "1"])
+
+
+class HealthcheckTest(unittest.TestCase):
+    READY = "http://127.0.0.1:9010/system/ready"
+    NOVNC = "http://127.0.0.1:6080/"
+
+    def check(self, viewer: bool, down: str = "") -> tuple[int, list[str]]:
+        """The healthcheck's exit status and the URLs it probed, in a configured container."""
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        configured, mark, probes = (
+            directory / "neo-configured", directory / "neo-viewer", directory / "probes"
+        )
+        configured.touch()
+        if viewer:
+            mark.touch()
+        curl = directory / "curl"
+        curl.write_text(f"#!/bin/sh\necho \"$2\" >> '{probes}'\n[ \"$2\" != '{down}' ]\n")
+        curl.chmod(0o755)
+        script = HEALTHCHECK.replace("/tmp/neo-configured", str(configured)).replace(
+            "/tmp/neo-viewer", str(mark)
+        )
+        result = subprocess.run(
+            [SH, "-c", script],
+            env={**os.environ, "PATH": f"{directory}{os.pathsep}{os.environ['PATH']}"},
+            capture_output=True, text=True,
+        )
+        return result.returncode, probes.read_text().split() if probes.exists() else []
+
+    def test_probes_novnc_only_where_the_entrypoint_started_it(self):
+        self.assertEqual(self.check(viewer=True), (0, [self.READY, self.NOVNC]))
+        self.assertEqual(self.check(viewer=False), (0, [self.READY]))
+
+    def test_a_viewer_that_stops_answering_makes_the_container_unhealthy(self):
+        status, _ = self.check(viewer=True, down=self.NOVNC)
+
+        self.assertNotEqual(status, 0)
 
 
 if __name__ == "__main__":

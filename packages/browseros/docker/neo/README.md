@@ -459,6 +459,12 @@ To run this checkout's claw-server in the image while developing it, use
 [`dev.sh`](dev.sh): `./dev.sh up` builds and starts it with the viewer on 16080 and MCP on
 19010, and its header explains how to test it through Neo's MCP tools.
 
+An image can also run claw-sdk in place of claw-server. Those images are built and
+smoke-tested only for now, and none is published. A claw-sdk image serves no noVNC viewer on
+6080, never sends the clipboard to VNC viewers, and skips the human-help setting, which
+claw-sdk does not have. The image knows which server it runs from a version marker compiled
+into the server binary: `docker run --rm --entrypoint neo-server-info <image> kind`.
+
 Maintainers build and publish the image with `browseros release docker`; see
 [`bos_build/docs/docker-image.md`](../../bos_build/docs/docker-image.md).
 

@@ -53,11 +53,39 @@ A local `.deb` named like a release package (`BrowserOS_neo_v<version>_<arch>.de
 supplies the version and platform itself; otherwise pass `--version`.
 
 The CLI keeps the package's bundled server unless `--server-dir <dir>` supplies
-`<dir>/amd64/browseros-claw-server-rs` and/or `<dir>/arm64/browseros-claw-server-rs`.
+`<dir>/amd64/neo-server` and/or `<dir>/arm64/neo-server`, a claw-server or claw-sdk build.
 Every requested platform must have a binary. The workflow supplies both from this
 commit's Rust builds. Direct Docker builds use `--build-context neo-server=<dir>`.
 The server build keeps the normal release's required `CLAW_POSTHOG_KEY` and
 optional `CLAW_SENTRY_DSN` configuration.
+
+## claw-sdk images
+
+An image can run claw-sdk in place of claw-server. Nothing passes that choice down to
+the image. At every start it reads the installed binary's version marker,
+`browseros-claw-sdk-version=<version>;`, so no build path, derived image or
+`docker run -e` can pair one server with the other's display. A binary without that
+marker is claw-server. To see which server an image runs:
+
+```bash
+docker run --rm --entrypoint neo-server-info <image> kind   # claw-server or claw-sdk
+```
+
+A claw-sdk image differs from a claw-server one in three ways:
+
+- Xvnc never sends the X clipboard to VNC viewers (`-SendCutText=0 -SendPrimary=0`),
+  so a copied card number cannot reach one.
+- Nothing serves noVNC on 6080, which has no authentication. The healthcheck probes
+  6080 only when the entrypoint started websockify.
+- The entrypoint never sends `PUT /api/v1/settings/agent`, a route claw-sdk does not
+  have. claw-server's call stays strict, so a claw-sdk built without its marker stops
+  before it turns healthy.
+
+claw-sdk images are built and smoke-tested only for now. None is published:
+
+```bash
+gh workflow run release-docker.yml --ref main -f version=0.52.1.2 -f server=claw-sdk -f push=false
+```
 
 ## Provider keys
 
