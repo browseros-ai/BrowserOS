@@ -6,14 +6,13 @@
 //! `POST /host/v1/secrets`. Takeover and the control display feed it what the owner typed into
 //! private fields. Values live in memory only, never on disk. Each [`SecretValue`] is zeroed
 //! when dropped; the matcher keeps its own copies, which are freed but not zeroed. One set
-//! masks every session, because all sessions share one browser and can read each other's tabs.
-//! The scope tag only decides expiry.
+//! masks every run, because all runs share one browser and any run can read any tab. A value
+//! expires by its TTL, never with a tab or a task.
 //!
 //! Each value is matched in its plain, JSON-escaped and percent-encoded forms, with one
 //! Aho-Corasick automaton rebuilt on every change. Changes are rare (one per fill); masks run on
 //! every result.
 
-use crate::SessionId;
 use aho_corasick::{AhoCorasick, MatchKind};
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::Value;
@@ -67,21 +66,12 @@ impl fmt::Debug for SecretValue {
     }
 }
 
-/// Which session a value came from. It decides expiry only; every value masks every session.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SecretScope {
-    /// Registered for one session: a fill, a host registration, a takeover.
-    Session(SessionId),
-    /// Collected from the whole browser: the control display.
-    Browser,
-}
-
-/// `[secrets]` in `neo.toml`.
+/// The secret set's limits. [`Default`] is the fixed default claw-sdk runs with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SecretSetConfig {
     /// Shorter values are refused: they would mask ordinary text (zuzu's rule).
     pub min_length: usize,
-    /// How long a value is masked when its registration names no TTL.
+    /// How long a value is masked when its registration names no TTL: 24 h by default.
     pub retention: Duration,
     /// The most values kept; registering past it drops the one that expires first.
     pub max_entries: usize,
@@ -110,7 +100,6 @@ pub enum Registration {
 
 struct Entry {
     value: SecretValue,
-    scope: SecretScope,
     expires_at: Instant,
 }
 
@@ -136,13 +125,8 @@ impl SecretSet {
         }
     }
 
-    /// Masks `value` from now on, until `ttl` (or the configured retention) passes.
-    pub fn register(
-        &self,
-        value: SecretValue,
-        scope: SecretScope,
-        ttl: Option<Duration>,
-    ) -> Registration {
+    /// Masks `value` from now on, until `ttl` passes, or the configured retention when `None`.
+    pub fn register(&self, value: SecretValue, ttl: Option<Duration>) -> Registration {
         if value.as_str().chars().count() < self.config.min_length {
             return Registration::TooShort;
         }
@@ -167,11 +151,7 @@ impl SecretSet {
                 inner.entries.swap_remove(index);
             }
         }
-        inner.entries.push(Entry {
-            value,
-            scope,
-            expires_at,
-        });
+        inner.entries.push(Entry { value, expires_at });
         rebuild(&mut inner);
         Registration::Registered
     }
@@ -188,18 +168,14 @@ impl SecretSet {
         dropped
     }
 
-    /// How many values are masked, and how many of them came from `scope`.
+    /// How many values are masked.
     #[must_use]
-    pub fn count(&self, scope: Option<SecretScope>) -> usize {
-        let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
-        match scope {
-            None => inner.entries.len(),
-            Some(scope) => inner
-                .entries
-                .iter()
-                .filter(|entry| entry.scope == scope)
-                .count(),
-        }
+    pub fn count(&self) -> usize {
+        self.inner
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entries
+            .len()
     }
 
     /// Replaces every secret in `text` with `[private]`. Returns whether anything changed.
@@ -290,19 +266,14 @@ fn rebuild(inner: &mut Inner) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Registration, SecretScope, SecretSet, SecretSetConfig, SecretValue};
-    use crate::SessionId;
+    use super::{Registration, SecretSet, SecretSetConfig, SecretValue};
     use serde_json::json;
     use std::time::{Duration, Instant};
 
     fn set_with(values: &[&str]) -> SecretSet {
         let set = SecretSet::new(SecretSetConfig::default());
         for value in values {
-            set.register(
-                SecretValue::new((*value).to_string()),
-                SecretScope::Browser,
-                None,
-            );
+            set.register(SecretValue::new((*value).to_string()), None);
         }
         set
     }
@@ -349,21 +320,19 @@ mod tests {
     #[test]
     fn short_values_are_refused_and_repeats_refresh() {
         let set = SecretSet::new(SecretSetConfig::default());
-        let session = SecretScope::Session(SessionId::new());
         assert_eq!(
-            set.register(SecretValue::new("abc".into()), session, None),
+            set.register(SecretValue::new("abc".into()), None),
             Registration::TooShort
         );
         assert_eq!(
-            set.register(SecretValue::new("abcd".into()), session, None),
+            set.register(SecretValue::new("abcd".into()), None),
             Registration::Registered
         );
         assert_eq!(
-            set.register(SecretValue::new("abcd".into()), SecretScope::Browser, None),
+            set.register(SecretValue::new("abcd".into()), None),
             Registration::Refreshed
         );
-        assert_eq!(set.count(None), 1);
-        assert_eq!(set.count(Some(session)), 1);
+        assert_eq!(set.count(), 1);
     }
 
     #[test]
@@ -377,13 +346,22 @@ mod tests {
         let set = SecretSet::new(SecretSetConfig::default());
         set.register(
             SecretValue::new("one-time-123".into()),
-            SecretScope::Browser,
             Some(Duration::from_secs(60)),
         );
         assert_eq!(set.expire(Instant::now()), 0);
         assert_eq!(masked(&set, "code one-time-123"), "code [private]");
         assert_eq!(set.expire(Instant::now() + Duration::from_secs(61)), 1);
         assert_eq!(masked(&set, "code one-time-123"), "code one-time-123");
+    }
+
+    #[test]
+    fn a_value_without_a_ttl_is_masked_for_a_day() {
+        let set = set_with(&["owner-typed-1"]);
+        let hour = Duration::from_secs(60 * 60);
+        assert_eq!(set.expire(Instant::now() + 23 * hour), 0);
+        assert_eq!(masked(&set, "owner-typed-1"), "[private]");
+        assert_eq!(set.expire(Instant::now() + 25 * hour), 1);
+        assert_eq!(set.count(), 0);
     }
 
     #[test]
@@ -418,11 +396,10 @@ mod tests {
         ] {
             set.register(
                 SecretValue::new(value.into()),
-                SecretScope::Browser,
                 Some(Duration::from_secs(ttl)),
             );
         }
-        assert_eq!(set.count(None), 2);
+        assert_eq!(set.count(), 2);
         assert_eq!(masked(&set, "first-value"), "first-value");
         assert_eq!(masked(&set, "third-value"), "[private]");
     }

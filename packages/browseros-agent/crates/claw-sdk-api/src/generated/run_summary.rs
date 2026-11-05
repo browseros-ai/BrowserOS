@@ -1,7 +1,7 @@
 /*
  * BrowserOS claw-sdk API
  *
- * The host-facing API of hosted BrowserOS Neo (claw-sdk): run and operation records, screenshots, the live view, the VNC display and owner takeover. Takeover is offered as small stable parts (locks, fits, the typed-value sweep, plus `/private` and `/display`) and one thin flow over them (`/v1/takeovers`); a host may compose its own flow from the parts.  It is served on Neo's host listener, never on the agent's MCP port. That is a Unix socket by default (`[host_api] socket` in `neo.toml`), with a TCP bind only when `[host_api] tcp` is set. The same listener serves sdk-extensions' host API under `/host/v1`. Every request needs `Authorization: Bearer <token>` (`[host_api] token_file`); on the socket the peer's uid is checked too. Tokens are never accepted in query strings.  Ids: a run id is a UUIDv7 Neo creates for every run and returns in the result's `_meta[\"com.browseros.neo/run\"].id`; an operation id is `<runId>.<seq>`, where `seq` counts the run's operations in start order; a session id is the handle `run` returns in `_meta[\"com.browseros.neo/session\"]`. A host may also send its own optional `requestId` with a run (`_meta[\"com.browseros.neo/run\"] = {requestId?, hostData?}`): runs can then be looked up by it, and a repeat of it in the same session never runs again.  Delivery keeps three answers apart so a client never repeats a write blindly: `not_sent` (no side effect was attempted), `done` (Neo has a definite answer) and `unknown` (sent, never confirmed).  Compatibility: changes within `/v1` are additive. New response fields and new values of an extensible enum (`x-extensible-enum`) can appear at any time, so clients must ignore fields and values they do not know. Fields are never removed or renamed within `/v1`.
+ * The host-facing API of hosted BrowserOS Neo (claw-sdk): run and operation records, screenshots, the live view, the VNC display and owner takeover. Takeover is offered as small stable parts (locks, fits, the typed-value sweep, plus `/private` and `/display`) and one thin flow over them (`/v1/takeovers`); a host may compose its own flow from the parts.  It is served on Neo's host listener, never on the agent's MCP port. That is a Unix socket by default (`CLAW_HOST_SOCKET`, or `$BROWSERCLAW_DIR/host.sock` when unset), with a TCP bind only when `CLAW_HOST_TCP` is set. The same listener serves sdk-extensions' host API under `/host/v1`. Every request needs `Authorization: Bearer <token>`, with the token from the file `CLAW_HOST_TOKEN_FILE` names; on the socket the peer's uid is checked too. Tokens are never accepted in query strings.  Privacy and locks belong to a browser tab, and a host groups its runs with ids of its own. Ids: a run id is a UUIDv7 Neo creates for every run and returns in the result's `_meta[\"com.browseros.neo/run\"].id`; an operation id is `<runId>.<seq>`, where `seq` counts the run's operations in start order; a tab id is the browser's own (`PageRef.tabId`), stable while the tab is open and numbered from 1 again after the browser restarts. A host may send two optional ids of its own with a run (`_meta[\"com.browseros.neo/run\"] = {requestId?, taskId?, hostData?}`), each at most 128 bytes. `requestId` names one call. Runs can be looked up by it, and a repeat of it never runs again (within its task when the run has a `taskId`, else across Neo). `taskId` groups the calls of one task, so its runs, events and trace can be listed together.  Delivery keeps three answers apart so a client never repeats a write blindly: `not_sent` (no side effect was attempted), `done` (Neo has a definite answer) and `unknown` (sent, never confirmed).  Compatibility: changes within `/v1` are additive. New response fields and new values of an extensible enum (`x-extensible-enum`) can appear at any time, so clients must ignore fields and values they do not know. Fields are never removed or renamed within `/v1`.
  *
  * The version of the OpenAPI document: 1.0.0
  *
@@ -15,8 +15,12 @@ use serde::{Deserialize, Serialize};
 pub struct RunSummary {
     #[serde(rename = "id")]
     pub id: String,
-    #[serde(rename = "sessionId")]
-    pub session_id: String,
+    /// The host's task it sent with the run (`_meta[\"com.browseros.neo/run\"].taskId`), if any.
+    #[serde(rename = "taskId", skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    /// The tabs its operations targeted, ascending.
+    #[serde(rename = "tabs")]
+    pub tabs: Vec<i64>,
     /// `interrupted`: Neo stopped (crashed or restarted) before the run ended.
     #[serde(rename = "status")]
     pub status: String,
@@ -45,7 +49,7 @@ pub struct RunSummary {
 impl RunSummary {
     pub fn new(
         id: String,
-        session_id: String,
+        tabs: Vec<i64>,
         status: String,
         started_at: i64,
         operation_count: i64,
@@ -53,7 +57,8 @@ impl RunSummary {
     ) -> RunSummary {
         RunSummary {
             id,
-            session_id,
+            task_id: None,
+            tabs,
             status,
             effects: None,
             error: None,

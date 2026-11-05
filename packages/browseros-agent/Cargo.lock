@@ -447,6 +447,7 @@ name = "browseros-trace"
 version = "0.1.0"
 dependencies = [
  "aho-corasick",
+ "browseros-core",
  "futures-util",
  "percent-encoding",
  "serde",

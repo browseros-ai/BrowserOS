@@ -9,6 +9,7 @@ description = "Run and operation records, secret masking and pixel privacy for h
 
 [dependencies]
 aho-corasick.workspace = true
+browseros-core.workspace = true
 futures-util.workspace = true
 percent-encoding.workspace = true
 serde.workspace = true

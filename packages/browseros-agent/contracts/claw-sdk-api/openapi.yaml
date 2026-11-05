@@ -9,17 +9,22 @@ info:
     thin flow over them (`/v1/takeovers`); a host may compose its own flow from the parts.
 
     It is served on Neo's host listener, never on the agent's MCP port. That is a Unix socket by
-    default (`[host_api] socket` in `neo.toml`), with a TCP bind only when `[host_api] tcp` is
-    set. The same listener serves sdk-extensions' host API under `/host/v1`. Every request
-    needs `Authorization: Bearer <token>` (`[host_api] token_file`); on the socket the peer's
-    uid is checked too. Tokens are never accepted in query strings.
+    default (`CLAW_HOST_SOCKET`, or `$BROWSERCLAW_DIR/host.sock` when unset), with a TCP bind
+    only when `CLAW_HOST_TCP` is set. The same listener serves sdk-extensions' host API under
+    `/host/v1`. Every request needs `Authorization: Bearer <token>`, with the token from the file
+    `CLAW_HOST_TOKEN_FILE` names; on the socket the peer's uid is checked too. Tokens are never
+    accepted in query strings.
 
+    Privacy and locks belong to a browser tab, and a host groups its runs with ids of its own.
     Ids: a run id is a UUIDv7 Neo creates for every run and returns in the result's
-    `_meta["com.browseros.neo/run"].id`; an operation id is `<runId>.<seq>`, where `seq` counts the
-    run's operations in start order; a session id is the handle `run` returns in
-    `_meta["com.browseros.neo/session"]`. A host may also send its own optional `requestId` with a
-    run (`_meta["com.browseros.neo/run"] = {requestId?, hostData?}`): runs can then be looked up
-    by it, and a repeat of it in the same session never runs again.
+    `_meta["com.browseros.neo/run"].id`; an operation id is `<runId>.<seq>`, where `seq` counts
+    the run's operations in start order; a tab id is the browser's own (`PageRef.tabId`),
+    stable while the tab is open and numbered from 1 again after the browser restarts. A host
+    may send two optional ids of its own with a run
+    (`_meta["com.browseros.neo/run"] = {requestId?, taskId?, hostData?}`), each at most 128
+    bytes. `requestId` names one call. Runs can be looked up by it, and a repeat of it never
+    runs again (within its task when the run has a `taskId`, else across Neo). `taskId` groups
+    the calls of one task, so its runs, events and trace can be listed together.
 
     Delivery keeps three answers apart so a client never repeats a write blindly: `not_sent`
     (no side effect was attempted), `done` (Neo has a definite answer) and `unknown` (sent,
@@ -31,131 +36,30 @@ info:
 servers:
   - url: http://localhost
     description: >-
-      Over the Unix socket named by `[host_api] socket` (the Host header is ignored), or over
-      TCP at `[host_api] tcp` when that is set.
+      Over the Unix socket named by `CLAW_HOST_SOCKET` (the Host header is ignored), or over TCP
+      at `CLAW_HOST_TCP` when that is set.
 security:
   - bearer: []
 paths:
-  /v1/sessions:
-    get:
-      operationId: listSessions
-      summary: Sessions, most recently active first.
-      parameters:
-        - name: live
-          in: query
-          description: Only live (`true`) or only ended (`false`) sessions.
-          schema:
-            type: boolean
-        - $ref: '#/components/parameters/Since'
-        - $ref: '#/components/parameters/Until'
-        - $ref: '#/components/parameters/Cursor'
-        - $ref: '#/components/parameters/Limit'
-      responses:
-        '200':
-          description: One page of sessions.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SessionList'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-  /v1/sessions/{sessionId}:
-    get:
-      operationId: getSession
-      summary: One session with its runs (without operations), pages, privacy and takeover.
-      parameters:
-        - $ref: '#/components/parameters/SessionId'
-      responses:
-        '200':
-          description: The session.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Session'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-  /v1/sessions/{sessionId}/trace:
-    get:
-      operationId: getSessionTrace
-      summary: The session with its runs and every operation, redacted and with privacy applied.
-      description: |
-        `tail` keeps only the last N operations; runs whose operations were all cut are still
-        listed. `screenshots` inlines images: `none`, `all`, or `last:N` (N from 1 to 50).
-        Operations after the session's `privateSince` never carry a screenshot, and `visuals`
-        then says why.
-      parameters:
-        - $ref: '#/components/parameters/SessionId'
-        - name: tail
-          in: query
-          schema:
-            type: integer
-            format: int32
-            minimum: 1
-            maximum: 1000
-        - name: screenshots
-          in: query
-          schema:
-            type: string
-            default: none
-      responses:
-        '200':
-          description: The trace.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SessionTrace'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-  /v1/sessions/{sessionId}/private:
-    post:
-      operationId: makeSessionPrivate
-      summary: Make the session private now. Durable, and it cannot be undone.
-      description: |
-        Returns once the flag is committed: from then on no screenshot or frame of the session
-        is captured or served. Secrets to mask in text go to `POST /host/v1/secrets` instead.
-      parameters:
-        - $ref: '#/components/parameters/SessionId'
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/MakePrivateRequest'
-      responses:
-        '200':
-          description: The session's privacy.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Privacy'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '503':
-          $ref: '#/components/responses/Unavailable'
   /v1/runs:
     get:
       operationId: listRuns
       summary: Runs, newest first. `requestId` finds the run a host request produced.
+      description: The filters combine with AND.
       parameters:
-        - name: session
-          in: query
-          schema:
-            type: string
         - name: requestId
           in: query
           description: The host's own id it sent with the run, if it sent one.
           schema:
             type: string
-            maxLength: 200
+            maxLength: 128
+        - $ref: '#/components/parameters/TaskId'
+        - name: tab
+          in: query
+          description: Only runs with an operation that targeted this tab.
+          schema:
+            type: integer
+            format: int64
         - name: status
           in: query
           schema:
@@ -253,19 +157,68 @@ paths:
           $ref: '#/components/responses/NotFound'
         '410':
           $ref: '#/components/responses/Withheld'
+  /v1/trace:
+    get:
+      operationId: getTrace
+      summary: The latest operations of a task, a tab or all of Neo, with their runs, redacted and with privacy applied.
+      description: |
+        Keeps the last `tail` operations that match `taskId` and `tab`, oldest first, with the
+        summaries of their runs. Both filters are optional; given together, an operation must
+        match both. `truncated` says whether older matching operations were cut. `screenshots`
+        inlines images: `none`, `all`, or `last:N` (N from 1 to 50). An operation on a tab after
+        the tab went private never carries a screenshot, and `visuals` then says why.
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - name: tab
+          in: query
+          description: Only operations that targeted this tab.
+          schema:
+            type: integer
+            format: int64
+        - name: tail
+          in: query
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: screenshots
+          in: query
+          schema:
+            type: string
+            default: none
+      responses:
+        '200':
+          description: The trace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TraceTail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /v1/events:
     get:
       operationId: streamEvents
-      summary: Server-sent events, for one session or for all.
+      summary: Server-sent events, for one task, one tab, or all of Neo.
       description: |
         `text/event-stream`; each event's `data` is one `Event`. Event ids are `<boot>-<n>`:
         send the last one back as `Last-Event-ID` to resume within the same Neo process. After a
         restart, read the state endpoints again.
+
+        `taskId` keeps the run and operation events of that task's runs. `tab` keeps the events
+        about that tab: the operations that target it, and its `tab.private`, `tab.closed`,
+        `lock.state` and `takeover.state` events. Given together, an event must match both.
       parameters:
-        - name: session
+        - $ref: '#/components/parameters/TaskId'
+        - name: tab
           in: query
+          description: Only events about this tab.
           schema:
-            type: string
+            type: integer
+            format: int64
         - name: Last-Event-ID
           in: header
           schema:
@@ -279,21 +232,49 @@ paths:
                 $ref: '#/components/schemas/Event'
         '401':
           $ref: '#/components/responses/Unauthorized'
-  /v1/sessions/{sessionId}/screencast:
+  /v1/tabs/{tabId}/private:
+    post:
+      operationId: makeTabPrivate
+      summary: Make the tab private now. Durable until the tab closes, and it cannot be undone.
+      description: |
+        Returns once the flag is committed. From then on no screenshot, frame or live view of the
+        tab is captured or served, and the agent's screenshots and PDFs of it fail with `host /
+        page_private`. Screenshots taken before stay. The flag survives a Neo restart and ends
+        when the tab closes. Secrets to mask in text go to `POST /host/v1/secrets` instead; this
+        request carries none.
+      parameters:
+        - $ref: '#/components/parameters/TabId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MakePrivateRequest'
+      responses:
+        '200':
+          description: The tab's privacy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Privacy'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/tabs/{tabId}/screencast:
     get:
       operationId: getScreencast
-      summary: A live MJPEG view of the session's current tab, or of `tab`.
+      summary: A live MJPEG view of one tab.
       description: |
         `multipart/x-mixed-replace`; each part carries `Content-Type: image/jpeg`,
         `Content-Length`, `X-Tab-Id`, `X-Url` and `X-Frame-At` (Unix epoch ms, the browser's
-        capture time). Without `tab` the stream follows the tab the session's latest operation
-        targeted. It ends when the session ends, the pinned tab closes, or the session becomes
-        private. Capture runs only while someone watches; viewers of one tab and quality share
-        one capture.
+        capture time). The stream ends when the tab closes or becomes private, and `tab.closed`
+        or `tab.private` on `/v1/events` says which. Capture runs only while someone watches;
+        viewers of one tab and quality share one capture.
       parameters:
-        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/TabId'
         - $ref: '#/components/parameters/Quality'
-        - $ref: '#/components/parameters/Tab'
       responses:
         '200':
           description: The frame stream.
@@ -310,19 +291,17 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/NotLive'
-  /v1/sessions/{sessionId}/video:
+  /v1/tabs/{tabId}/video:
     get:
       operationId: getVideo
-      summary: A live AV1 video (fragmented MP4) of one tab of the session.
+      summary: A live AV1 video (fragmented MP4) of one tab.
       description: |
         The initialization segment first, then one keyframe-led fragment about every 2 seconds,
-        for Media Source Extensions or WebCodecs. It stays on `tab`, or on the session's current
-        tab when the request starts, and ends when that tab closes, the session ends, or the
-        session becomes private. A client that falls behind skips whole fragments.
+        for Media Source Extensions or WebCodecs. It ends when the tab closes or becomes
+        private. A client that falls behind skips whole fragments.
       parameters:
-        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/TabId'
         - $ref: '#/components/parameters/Quality'
-        - $ref: '#/components/parameters/Tab'
       responses:
         '200':
           description: The video stream.
@@ -345,12 +324,14 @@ paths:
       summary: Neo's whole screen as RFB over WebSocket (subprotocol `binary`, noVNC-compatible).
       description: |
         `view` drops every input message. `control` forwards input. Its first input event makes
-        every live session private before the event is forwarded, and every session that starts
-        while it is open is private from the start. Private-field values are collected for
-        masking while it is open and when it closes. View displays pause while a control
-        display has forwarded input. `follow` keeps that session's current page in front of the
-        screen while no owner has control. `release` ties a control display to a takeover:
-        releasing the takeover closes it.
+        every open tab private before the event is forwarded, and every tab that opens while it
+        is open is private from the start. Private-field values are collected for masking while
+        it is open and when it closes. View displays pause while a control display has forwarded
+        input. While no owner has control, `followTab` keeps that tab in front of the screen, and
+        `followTask` keeps the task's current page in front (the tab its latest operation
+        targeted). `followTab` and `followTask` are mutually exclusive, so sending both is
+        `400 invalid_request`. `release` ties a control display to a takeover: releasing the
+        takeover closes it.
       parameters:
         - name: mode
           in: query
@@ -358,10 +339,20 @@ paths:
           schema:
             type: string
             x-extensible-enum: [view, control]
-        - name: follow
+        - name: followTab
           in: query
+          description: A tab to keep in front. Not with `followTask`.
+          schema:
+            type: integer
+            format: int64
+        - name: followTask
+          in: query
+          description: >-
+            A host task (`_meta["com.browseros.neo/run"].taskId`) whose current page to keep in
+            front. Not with `followTab`.
           schema:
             type: string
+            maxLength: 128
         - name: release
           in: query
           description: A takeover id. Releasing that takeover closes this display.
@@ -381,15 +372,15 @@ paths:
   /v1/locks:
     post:
       operationId: createLock
-      summary: Lock the agent out of a session, a tab, or both. A takeover part.
+      summary: Lock the agent out of a tab. A takeover part.
       description: |
-        While the lock is held, the agent's operations in that session, and its operations on
-        that tab from any session, fail with `host / owner_has_control` and delivery `not_sent`.
-        Writes are always refused; with `reads: block` (the default, from
-        `[takeover] block_reads`), operations that target a page there are refused too.
-        Operations with no page and no write still run. Taking a lock waits up to 2 s for the
-        locked session's in-flight writes; `settled` says whether they finished. Every lock has a
-        TTL, so a host that dies cannot lock a session forever.
+        While the lock is held, the agent's operations on the tab fail with `host /
+        owner_has_control` and delivery `not_sent`. Writes are always refused; with
+        `reads: block` (the default), operations that read the tab are refused too. Operations
+        on other tabs, and operations with no tab, still run; a host that wants to pause a whole
+        task stops sending that task's runs. Taking a lock waits up to 2 s for the agent's
+        in-flight writes on the tab; `settled` says whether they finished. Every lock has a TTL,
+        so a host that dies cannot lock a tab forever.
       requestBody:
         required: true
         content:
@@ -543,16 +534,10 @@ paths:
       summary: Read the tab's sensitive fields into the known secrets list. A takeover part.
       description: |
         One pass over every frame of the tab: each value in a password, card or code field is
-        added to the known secrets list (masked everywhere from then on) with the session's
-        scope. The final catch for what the owner typed; values are never returned.
+        added to the known secrets list, masked everywhere for the next 24 hours. The final catch
+        for what the owner typed; values are never returned.
       parameters:
         - $ref: '#/components/parameters/TabId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SweepRequest'
       responses:
         '200':
           description: How many values were added.
@@ -571,9 +556,9 @@ paths:
       operationId: startTakeover
       summary: The v1 takeover flow, a thin composition of the parts. Start it when the owner opens the link.
       description: |
-        In order: make the session private, lock the session and the tab (with the TTL), fit the
-        tab to `viewer` when given. The answer names the parts it holds and the display path to
-        open. A host may compose its own flow from the parts instead.
+        In order: make the tab private, lock the tab (with `reads` and the TTL), fit the tab to
+        `viewer` when given. The answer names the parts it holds and the display path to open. A
+        host may compose its own flow from the parts instead.
       requestBody:
         required: true
         content:
@@ -657,12 +642,6 @@ components:
       type: http
       scheme: bearer
   parameters:
-    SessionId:
-      name: sessionId
-      in: path
-      required: true
-      schema:
-        type: string
     OperationId:
       name: operationId
       in: path
@@ -696,6 +675,14 @@ components:
       schema:
         type: integer
         format: int64
+    TaskId:
+      name: taskId
+      in: query
+      description: >-
+        A host task (`_meta["com.browseros.neo/run"].taskId`). Only what belongs to its runs.
+      schema:
+        type: string
+        maxLength: 128
     Since:
       name: since
       in: query
@@ -737,13 +724,6 @@ components:
         type: string
         x-extensible-enum: [low, high]
         default: high
-    Tab:
-      name: tab
-      in: query
-      description: A browser tab id the session has open. Without it, the current tab.
-      schema:
-        type: integer
-        format: int64
   responses:
     BadRequest:
       description: A parameter or body is invalid (`invalid_request`).
@@ -759,23 +739,20 @@ components:
             $ref: '#/components/schemas/Error'
     NotFound:
       description: >-
-        Nothing has this id (`not_found`): a session, run, operation, lock, fit, takeover or
-        tab. Or retention deleted it (`expired`), or `tab` is not a tab the session has open
-        (`tab_not_found`).
+        Nothing has this id (`not_found`): a run, operation, lock, fit or takeover. Or retention
+        deleted it (`expired`), or no open tab has the `tabId` (`tab_not_found`).
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
     Withheld:
-      description: The image is withheld because the session was private (`withheld`), or it expired (`expired`).
+      description: The image is withheld because its tab was private (`withheld`), or it expired (`expired`).
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
     NotLive:
-      description: >-
-        Nothing to watch: the session ended (`session_not_live`), has no open tab yet
-        (`no_open_tab`), or is private (`session_private`).
+      description: 'Nothing to watch: the tab is private (`page_private`).'
       content:
         application/json:
           schema:
@@ -807,11 +784,13 @@ components:
             Whose behavior must change to fix it: `neo` (browser, OS or Neo itself), `script`
             (the agent's own code: a syntax error, `invalid_input`, `strict_mode_violation`,
             `no_match`, `method_unavailable`), `website` (what the page did) or `host` (the
-            host's rules, services or owner, including `owner_has_control`).
+            host's rules, services or owner, including `owner_has_control` and `page_private`).
           x-extensible-enum: [neo, script, website, host]
         code:
           type: string
-          description: Stable snake_case, e.g. `owner_has_control`, `strict_mode_violation`, `target_closed`.
+          description: >-
+            Stable snake_case, e.g. `owner_has_control`, `page_private` (a screenshot or PDF of a
+            private tab), `strict_mode_violation`, `target_closed`.
         hostCode:
           type: string
           description: The host's own code when `code` is `host_error`, e.g. `needs_owner`.
@@ -829,6 +808,7 @@ components:
         pageId:
           type: integer
           format: int32
+          description: Neo's own page id, which a Neo restart resets. Name a tab by `tabId`.
         tabId:
           type: integer
           format: int64
@@ -856,103 +836,42 @@ components:
           type: string
           x-extensible-enum: [host]
           default: host
-    SessionSummary:
+    TraceTail:
       type: object
-      required: [id, status, startedAt, runCount, privacy]
+      required: [runs, operations, truncated, visuals]
       properties:
-        id:
-          type: string
-        client:
-          type: string
-          description: The MCP client's `clientInfo.name`.
-        status:
-          type: string
-          x-extensible-enum: [live, ended]
-        startedAt:
-          type: integer
-          format: int64
-        endedAt:
-          type: integer
-          format: int64
-        runCount:
-          type: integer
-          format: int64
-        privacy:
-          $ref: '#/components/schemas/Privacy'
-    Session:
-      type: object
-      required: [id, status, startedAt, runCount, privacy, pages, runs]
-      properties:
-        id:
-          type: string
-        client:
-          type: string
-        status:
-          type: string
-          x-extensible-enum: [live, ended]
-        startedAt:
-          type: integer
-          format: int64
-        endedAt:
-          type: integer
-          format: int64
-        runCount:
-          type: integer
-          format: int64
-        privacy:
-          $ref: '#/components/schemas/Privacy'
-        currentPage:
-          $ref: '#/components/schemas/PageRef'
-        pages:
-          type: array
-          description: The session's open pages, current first.
-          items:
-            $ref: '#/components/schemas/PageRef'
         runs:
           type: array
-          items:
-            $ref: '#/components/schemas/RunSummary'
-        takeover:
-          $ref: '#/components/schemas/Takeover'
-    SessionList:
-      type: object
-      required: [items]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/SessionSummary'
-        nextCursor:
-          type: string
-          description: Pass as `cursor` for the next page; absent on the last page.
-    SessionTrace:
-      type: object
-      required: [session, runs, operations, truncated, visuals]
-      properties:
-        session:
-          $ref: '#/components/schemas/SessionSummary'
-        runs:
-          type: array
+          description: The runs of `operations`, oldest first.
           items:
             $ref: '#/components/schemas/RunSummary'
         operations:
           type: array
+          description: The matching operations by start, oldest first.
           items:
             $ref: '#/components/schemas/Operation'
         truncated:
           type: boolean
-          description: True when `tail` cut older operations.
+          description: True when `tail` cut older matching operations.
         visuals:
           type: string
+          description: '`withheld_private_input`: some operations carry no screenshot because their tab was private.'
           x-extensible-enum: [available, withheld_private_input]
     RunSummary:
       type: object
-      required: [id, sessionId, status, startedAt, operationCount, complete]
+      required: [id, status, startedAt, operationCount, complete, tabs]
       properties:
         id:
           type: string
-        sessionId:
+        taskId:
           type: string
+          description: The host's task it sent with the run (`_meta["com.browseros.neo/run"].taskId`), if any.
+        tabs:
+          type: array
+          description: The tabs its operations targeted, ascending.
+          items:
+            type: integer
+            format: int64
         status:
           type: string
           description: '`interrupted`: Neo stopped (crashed or restarted) before the run ended.'
@@ -988,12 +907,19 @@ components:
           description: Operation events Neo dropped under disk pressure; zero or absent normally.
     Run:
       type: object
-      required: [id, sessionId, status, startedAt, operationCount, complete, operations]
+      required: [id, status, startedAt, operationCount, complete, tabs, operations]
       properties:
         id:
           type: string
-        sessionId:
+        taskId:
           type: string
+          description: The host's task it sent with the run (`_meta["com.browseros.neo/run"].taskId`), if any.
+        tabs:
+          type: array
+          description: The tabs its operations targeted, ascending.
+          items:
+            type: integer
+            format: int64
         status:
           type: string
           x-extensible-enum: [running, ok, error, cancelled, timeout, interrupted]
@@ -1090,6 +1016,12 @@ components:
         effect:
           type: string
           x-extensible-enum: [read, write]
+        tabId:
+          type: integer
+          format: int64
+          description: >-
+            The tab it targeted, when it had one. `page` is how the page looked after the
+            operation.
         page:
           $ref: '#/components/schemas/PageRef'
         args:
@@ -1143,31 +1075,29 @@ components:
           description: The image bytes, base64 with the standard alphabet and padding.
     LockRequest:
       type: object
-      required: [ttlSeconds]
-      description: At least one of `session` and `tabId`.
+      required: [tabId, ttlSeconds]
       properties:
-        session:
-          type: string
         tabId:
           type: integer
           format: int64
         reads:
           type: string
-          description: '`block` refuses the agent''s page reads too; `allow` refuses only writes. Defaults to `[takeover] block_reads`.'
+          description: '`block` refuses the agent''s reads of the tab too; `allow` refuses only writes.'
           x-extensible-enum: [block, allow]
+          default: block
         ttlSeconds:
           type: integer
           format: int32
           minimum: 1
-          maximum: 3600
-          description: The lock releases itself after this long; capped by `[takeover] max_minutes`.
+          maximum: 1200
+          description: >-
+            The lock releases itself after this long. At most 20 minutes, a fixed cap, so a
+            host that crashes cannot hold a tab for longer.
     Lock:
       type: object
-      required: [id, reads, settled, createdAt, expiresAt]
+      required: [id, tabId, reads, settled, createdAt, expiresAt]
       properties:
         id:
-          type: string
-        sessionId:
           type: string
         tabId:
           type: integer
@@ -1177,7 +1107,7 @@ components:
           x-extensible-enum: [block, allow]
         settled:
           type: boolean
-          description: Whether the session's in-flight writes finished within 2 s of locking.
+          description: Whether the agent's in-flight writes on the tab finished within 2 s of locking.
         createdAt:
           type: integer
           format: int64
@@ -1258,13 +1188,6 @@ components:
           type: boolean
         forward:
           type: boolean
-    SweepRequest:
-      type: object
-      required: [session]
-      properties:
-        session:
-          type: string
-          description: The session whose scope the values get in the known secrets list.
     SweepResult:
       type: object
       required: [registered]
@@ -1275,10 +1198,8 @@ components:
           description: Values added to the known secrets list; the values are never returned.
     TakeoverRequest:
       type: object
-      required: [session, tabId]
+      required: [tabId]
       properties:
-        session:
-          type: string
         tabId:
           type: integer
           format: int64
@@ -1286,20 +1207,21 @@ components:
           $ref: '#/components/schemas/ViewerSize'
         reads:
           type: string
+          description: The lock's `reads`, as on `LockRequest`.
           x-extensible-enum: [block, allow]
+          default: block
         ttlSeconds:
           type: integer
           format: int32
           minimum: 60
-          maximum: 3600
-          description: The lock's TTL; capped by `[takeover] max_minutes`.
+          maximum: 1200
+          default: 1200
+          description: The takeover lock's TTL. At most 20 minutes, the same fixed cap as a lock's.
     Takeover:
       type: object
-      required: [id, sessionId, tabId, state, lockId, display, createdAt, expiresAt]
+      required: [id, tabId, state, lockId, display, createdAt, expiresAt]
       properties:
         id:
-          type: string
-        sessionId:
           type: string
         tabId:
           type: integer
@@ -1383,23 +1305,29 @@ components:
               run.ended,
               operation.started,
               operation.ended,
-              session.page,
-              session.private,
-              session.ended,
+              tab.private,
+              tab.closed,
               lock.state,
               takeover.state,
             ]
         at:
           type: integer
           format: int64
-        sessionId:
+        taskId:
           type: string
+          description: The task of the run the event is about, when it has one.
+        tabId:
+          type: integer
+          format: int64
+          description: >-
+            The tab the event is about: an operation's target tab, or the tab of `tab.private`,
+            `tab.closed`, `lock.state` and `takeover.state`.
         run:
           $ref: '#/components/schemas/RunSummary'
         operation:
           $ref: '#/components/schemas/Operation'
-        page:
-          $ref: '#/components/schemas/PageRef'
+        privacy:
+          $ref: '#/components/schemas/Privacy'
         lock:
           $ref: '#/components/schemas/Lock'
         takeover:
@@ -1418,9 +1346,7 @@ components:
               expired,
               withheld,
               tab_not_found,
-              session_not_live,
-              no_open_tab,
-              session_private,
+              page_private,
               lock_released,
               fit_restored,
               takeover_released,

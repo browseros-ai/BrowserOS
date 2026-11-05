@@ -1,7 +1,7 @@
-//! What the trace hears about sessions and runs. Lifecycle events are never dropped, even when
-//! the writer falls behind: a run's end is what turns its open operations into a verdict.
+//! What the trace hears about runs. Lifecycle events are never dropped, even when the writer
+//! falls behind: a run's end is what turns its open operations into a verdict.
 
-use crate::{EpochMillis, ErrorRecord, RunId, SessionId};
+use crate::{EpochMillis, ErrorRecord, RequestId, RunId, TaskId};
 use serde_json::Value;
 
 /// How a run ended.
@@ -13,7 +13,7 @@ pub enum RunStatus {
     Ok,
     /// The script threw.
     Error,
-    /// The run was cancelled (MCP cancellation, the session stopped).
+    /// The run was cancelled (MCP cancellation).
     Cancelled,
     /// The run hit its wall-clock budget.
     Timeout,
@@ -59,39 +59,20 @@ impl RunEffects {
     }
 }
 
-/// A session started.
-#[derive(Clone, Debug)]
-pub struct SessionStarted {
-    /// Its id.
-    pub id: SessionId,
-    /// The MCP client's `clientInfo.name`.
-    pub client: Option<String>,
-    /// When it started.
-    pub at: EpochMillis,
-}
-
-/// A session ended.
-#[derive(Clone, Debug)]
-pub struct SessionEnded {
-    /// Its id.
-    pub id: SessionId,
-    /// When it ended.
-    pub at: EpochMillis,
-}
-
 /// A run was admitted.
 #[derive(Clone, Debug)]
 pub struct RunStarted {
     /// Its id.
     pub id: RunId,
-    /// Its session.
-    pub session: SessionId,
     /// The script, as given. The writer masks and bounds it.
     pub code: String,
     /// The host's own id for this request (`_meta["com.browseros.neo/run"].requestId`, zuzu's
-    /// tool-call id). Optional. It is the host's lookup key, and admission refuses to run a
-    /// repeat of it in the same session. Stored verbatim: masking a key would break the lookup.
-    pub request_id: Option<String>,
+    /// tool-call id). It is the host's lookup key, and admission never runs a repeat of it.
+    /// Stored verbatim: masking a key would break the lookup.
+    pub request_id: Option<RequestId>,
+    /// The host's task this run belongs to (`_meta["com.browseros.neo/run"].taskId`). Runs are
+    /// listed by it and it scopes `request_id` replay. Stored verbatim, like `request_id`.
+    pub task_id: Option<TaskId>,
     /// The host's own data for the run (`_meta["com.browseros.neo/run"].hostData`). Optional.
     pub host_data: Option<Value>,
     /// When it was admitted.

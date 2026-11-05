@@ -15,8 +15,11 @@
 //!                                    └── CaptureGuard ◀── every screenshot and frame
 //! ```
 //!
-//! The crate has no dispatcher, browser or HTTP types, so it builds and tests on its own. claw-sdk
-//! maps its dispatcher's types onto the record types here one-to-one.
+//! claw-sdk is stateless. Records and privacy hang off the browser's tab id
+//! (`browseros_core::TabId`) and the host's optional `requestId` and `taskId`. The crate takes
+//! only that id from `browseros-core` and has no dispatcher or HTTP types, so it builds and
+//! tests on its own. claw-sdk maps its dispatcher's types onto the record types here
+//! one-to-one.
 
 #![deny(missing_docs)]
 #![deny(
@@ -43,23 +46,19 @@ mod trace_writer;
 
 pub use epoch_millis::EpochMillis;
 pub use error_record::{ErrorOwner, ErrorRecord};
-pub use ids::{IdError, OperationId, RunId, SessionId};
+pub use ids::{IdError, OperationId, RequestId, RunId, TaskId};
 pub use json_pointer::{JsonPointer, PointerError};
 pub use operation_record::{
     Delivery, Effect, OperationEnded, OperationKind, OperationStarted, Outcome, PageState,
     RedactionPolicy, TargetSensitivity,
 };
 pub use privacy::{
-    CaptureGuard, ControlDisplay, DocumentKey, PageKey, Privacy, PrivacyError, PrivacyRecord,
-    PrivacyStore, PrivateReason,
+    CaptureGuard, ControlDisplay, Privacy, PrivacyError, PrivacyRecord, PrivacyStore, PrivateReason,
 };
-pub use read_model::{
-    OperationRow, Page, RunDetail, RunQuery, RunSummary, SessionDetail, SessionQuery, SessionState,
-    SessionSummary, SessionTrace,
-};
+pub use read_model::{OperationRow, Page, RunDetail, RunQuery, RunSummary, TailQuery, TraceTail};
 pub use redactor::{Bounded, RedactionLimits, Redactor, Truncation};
-pub use run_record::{RunEffects, RunEnded, RunStarted, RunStatus, SessionEnded, SessionStarted};
-pub use secret_set::{Registration, SecretScope, SecretSet, SecretSetConfig, SecretValue};
+pub use run_record::{RunEffects, RunEnded, RunStarted, RunStatus};
+pub use secret_set::{Registration, SecretSet, SecretSetConfig, SecretValue};
 pub use trace_error::TraceError;
 pub use trace_store::{RetentionPolicy, Swept, TraceStore};
 pub use trace_writer::{TraceRecordEvent, TraceSink, WriterConfig, spawn_writer};

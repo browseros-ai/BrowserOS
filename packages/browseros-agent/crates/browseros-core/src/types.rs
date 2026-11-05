@@ -35,6 +35,7 @@ macro_rules! id_newtype {
 
 id_newtype!(PageId, u32);
 id_newtype!(TabId, i64);
+impl Copy for TabId {}
 id_newtype!(TargetId, String);
 pub type SessionId = browseros_cdp::SessionId;
 id_newtype!(FrameId, String);

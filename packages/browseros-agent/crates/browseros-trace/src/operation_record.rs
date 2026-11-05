@@ -4,7 +4,8 @@
 //! The start event carries the raw input; it is redacted on the writer task, never on the
 //! dispatcher's path. Delivery arrives already derived by the dispatcher's `OperationGuard`.
 
-use crate::{EpochMillis, ErrorRecord, JsonPointer, OperationId, SessionId};
+use crate::{EpochMillis, ErrorRecord, JsonPointer, OperationId};
+use browseros_core::TabId;
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -138,10 +139,11 @@ pub struct RedactionPolicy {
 /// The tab an operation acted on, as it was after the operation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PageState {
-    /// The session's page id.
+    /// Core's page id, kept as information only: it is process-local and means nothing after a
+    /// Neo restart, so nothing is keyed by it.
     pub page_id: Option<u32>,
     /// The browser's tab id.
-    pub tab_id: Option<i64>,
+    pub tab_id: Option<TabId>,
     /// The page's URL; masked and clipped before storage.
     pub url: Option<String>,
     /// The page's title; masked and clipped before storage.
@@ -155,16 +157,15 @@ pub struct OperationStarted {
     pub id: OperationId,
     /// The operation it runs inside: a wrap's method, a defined method, a host call.
     pub parent: Option<OperationId>,
-    /// The session it belongs to.
-    pub session: SessionId,
     /// The method name, e.g. `locator.click` or `zuzu.auth.fill`.
     pub name: String,
     /// Its place in the tree.
     pub kind: OperationKind,
     /// Read or write.
     pub effect: Effect,
-    /// The page it targets, when it has one.
-    pub page: Option<u32>,
+    /// The tab it targets, when it has one. It lists the run under that tab, and after a
+    /// restart it is how a task finds its last tab again.
+    pub tab: Option<TabId>,
     /// The raw input. The writer redacts it; it is never stored as given.
     pub args: Value,
     /// Which input fields to redact.

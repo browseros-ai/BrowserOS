@@ -1,10 +1,14 @@
 //! What [`TraceStore`](crate::TraceStore) reads back: records as stored (masked and bounded),
 //! typed, ready for the service routes to map onto `claw-sdk-api` models.
+//!
+//! A host finds its records by its own ids (`requestId`, `taskId`), by browser tab, and by
+//! time.
 
 use crate::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationKind, Outcome, PageState,
-    PrivacyRecord, RunEffects, RunId, RunStatus, SessionId,
+    RequestId, RunEffects, RunId, RunStatus, TaskId,
 };
+use browseros_core::TabId;
 use serde_json::Value;
 
 /// One stored operation.
@@ -14,15 +18,15 @@ pub struct OperationRow {
     pub id: OperationId,
     /// The operation it ran inside.
     pub parent: Option<OperationId>,
-    /// Its session.
-    pub session: SessionId,
+    /// The tab it targeted, when it had one.
+    pub tab: Option<TabId>,
     /// The method name.
     pub name: String,
     /// Its place in the tree.
     pub kind: OperationKind,
     /// Read or write.
     pub effect: Effect,
-    /// The page it targeted and how that page looked after it.
+    /// How its tab looked after it.
     pub page: PageState,
     /// Safe input: redacted, masked, bounded.
     pub args: Option<Value>,
@@ -51,8 +55,10 @@ pub struct OperationRow {
 pub struct RunSummary {
     /// Its id.
     pub id: RunId,
-    /// Its session.
-    pub session: SessionId,
+    /// The host's task it belongs to.
+    pub task_id: Option<TaskId>,
+    /// The tabs its operations targeted, ascending.
+    pub tabs: Vec<TabId>,
     /// How it ended, or `Running`.
     pub status: RunStatus,
     /// What it changed; `None` while it runs.
@@ -60,7 +66,7 @@ pub struct RunSummary {
     /// Its uncaught error.
     pub error: Option<ErrorRecord>,
     /// The host's own id for the request that started it.
-    pub request_id: Option<String>,
+    pub request_id: Option<RequestId>,
     /// When it was admitted.
     pub started_at: EpochMillis,
     /// When it ended.
@@ -92,44 +98,14 @@ pub struct RunDetail {
     pub operations: Vec<OperationRow>,
 }
 
-/// A session without its runs.
+/// The latest operations that match a [`TailQuery`], with the runs they belong to.
 #[derive(Clone, Debug, PartialEq)]
-pub struct SessionSummary {
-    /// Its id.
-    pub id: SessionId,
-    /// The MCP client's name.
-    pub client: Option<String>,
-    /// When it started.
-    pub started_at: EpochMillis,
-    /// When it ended, if it did (or when a restart found it open).
-    pub ended_at: Option<EpochMillis>,
-    /// Its latest run start or end.
-    pub last_activity_at: EpochMillis,
-    /// How many runs it has.
-    pub run_count: u64,
-    /// Its privacy, when it is private.
-    pub privacy: Option<PrivacyRecord>,
-}
-
-/// A session with its runs, newest first.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SessionDetail {
-    /// The session.
-    pub summary: SessionSummary,
-    /// Its runs, newest first.
+pub struct TraceTail {
+    /// The runs of `operations`, oldest first.
     pub runs: Vec<RunSummary>,
-}
-
-/// A session with its runs and its latest operations, oldest first.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SessionTrace {
-    /// The session.
-    pub summary: SessionSummary,
-    /// Its runs, oldest first.
-    pub runs: Vec<RunSummary>,
-    /// Its operations by start, oldest first, cut to the tail asked for.
+    /// The matching operations by start, oldest first, cut to the tail asked for.
     pub operations: Vec<OperationRow>,
-    /// Whether the tail cut older operations.
+    /// Whether the tail cut older matching operations.
     pub truncated: bool,
 }
 
@@ -142,22 +118,16 @@ pub struct Page<T> {
     pub next_cursor: Option<String>,
 }
 
-/// Whether a session has ended, as the store records it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SessionState {
-    /// No end recorded.
-    Open,
-    /// Ended.
-    Ended,
-}
-
-/// Filters for listing runs. Every filter applies before paging.
+/// Filters for listing runs, newest first. The filters combine with AND, and every one
+/// applies before paging.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunQuery {
-    /// Only this session's runs.
-    pub session: Option<SessionId>,
     /// Only runs started with this request id.
-    pub request_id: Option<String>,
+    pub request_id: Option<RequestId>,
+    /// Only this task's runs.
+    pub task_id: Option<TaskId>,
+    /// Only runs with an operation that targeted this tab.
+    pub tab: Option<TabId>,
     /// Only runs with this status.
     pub status: Option<RunStatus>,
     /// Only runs started at or after this time.
@@ -170,17 +140,14 @@ pub struct RunQuery {
     pub limit: u32,
 }
 
-/// Filters for listing sessions, most recently active first.
+/// Which operations a [`TraceTail`] keeps. The filters combine with AND; with neither, the
+/// tail covers every run.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SessionQuery {
-    /// Only open or only ended sessions.
-    pub state: Option<SessionState>,
-    /// Only sessions started at or after this time.
-    pub since: Option<EpochMillis>,
-    /// Only sessions started at or before this time.
-    pub until: Option<EpochMillis>,
-    /// The previous page's `next_cursor`.
-    pub cursor: Option<String>,
-    /// Page size, 1 to 100 (25 when zero).
-    pub limit: u32,
+pub struct TailQuery {
+    /// Only operations of this task's runs.
+    pub task_id: Option<TaskId>,
+    /// Only operations that targeted this tab.
+    pub tab: Option<TabId>,
+    /// How many of the latest operations to keep, 1 to 1000 (100 when zero).
+    pub tail: u32,
 }

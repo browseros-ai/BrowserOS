@@ -294,7 +294,7 @@ impl PageManager {
             .await
             .pages
             .get(&page_id)
-            .map(|info| info.tab_id.clone())
+            .map(|info| info.tab_id)
     }
 
     pub async fn get_session(&self, page_id: PageId) -> Result<PageSession, CoreError> {
@@ -425,7 +425,7 @@ impl PageManager {
         let mut out = HashMap::new();
         for info in state.pages.values() {
             if tab_ids.contains(&info.tab_id) {
-                out.insert(info.tab_id.clone(), info.page_id.clone());
+                out.insert(info.tab_id, info.page_id.clone());
             }
         }
         Ok(out)

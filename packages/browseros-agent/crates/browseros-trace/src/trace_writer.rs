@@ -7,8 +7,13 @@
 //! subscribers (the service API's SSE).
 //!
 //! Backpressure: if the disk stalls and the backlog passes `max_backlog`, operation events are
-//! dropped and counted as the run's `trace_gaps` (which make its effects `unknown`). Session and
-//! run lifecycle events, privacy commits and flushes are never dropped.
+//! dropped and counted as the run's `trace_gaps` (which make its effects `unknown`). Run
+//! lifecycle events, privacy commits and flushes are never dropped.
+//!
+//! Run and operation events name the run's task, and operation events the target tab, so the
+//! SSE route filters by either without a store read. The writer learns a run's task at its start
+//! and keeps it with the open run until the run's end, which is never dropped, so the map
+//! cannot grow without bound in a live process.
 //!
 //! Redaction needs one fact that only the end of an operation knows: whether its target was
 //! sensitive. So the start row stores the input with both `secret` and `sensitive` paths
@@ -20,11 +25,11 @@ use crate::trace_store::{
     Swept,
 };
 use crate::{
-    Bounded, Delivery, EpochMillis, OperationEnded, OperationId, OperationStarted, Outcome,
-    PrivacyRecord, PrivacyStore, RedactionPolicy, Redactor, RunEffects, RunEnded, RunId,
-    RunStarted, RunStatus, SessionEnded, SessionId, SessionStarted, TargetSensitivity, TraceError,
-    TraceStore, Truncation,
+    Bounded, Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationStarted, Outcome,
+    PrivacyRecord, PrivacyStore, PrivateReason, RedactionPolicy, Redactor, RunEffects, RunEnded,
+    RunId, RunStarted, RunStatus, TargetSensitivity, TaskId, TraceError, TraceStore, Truncation,
 };
+use browseros_core::TabId;
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -33,7 +38,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
-/// Tuning for the writer. The defaults suit one browser's worth of agents.
+/// Tuning for the writer. [`Default`] is the fixed default claw-sdk runs with, sized for one
+/// browser's worth of agents.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WriterConfig {
     /// Most events in one transaction.
@@ -64,8 +70,8 @@ pub enum TraceRecordEvent {
     RunStarted {
         /// The run.
         run: RunId,
-        /// Its session.
-        session: SessionId,
+        /// Its task.
+        task: Option<TaskId>,
         /// When.
         at: EpochMillis,
     },
@@ -73,8 +79,8 @@ pub enum TraceRecordEvent {
     RunEnded {
         /// The run.
         run: RunId,
-        /// Its session.
-        session: SessionId,
+        /// Its task.
+        task: Option<TaskId>,
         /// How it ended.
         status: RunStatus,
         /// What it changed.
@@ -86,8 +92,12 @@ pub enum TraceRecordEvent {
     OperationStarted {
         /// The operation.
         id: OperationId,
-        /// Its session.
-        session: SessionId,
+        /// Its run's task.
+        task: Option<TaskId>,
+        /// The tab it targets.
+        tab: Option<TabId>,
+        /// Read or write, so a subscriber can follow a tab's in-flight writes.
+        effect: Effect,
         /// When.
         at: EpochMillis,
     },
@@ -95,8 +105,10 @@ pub enum TraceRecordEvent {
     OperationEnded {
         /// The operation.
         id: OperationId,
-        /// Its session.
-        session: SessionId,
+        /// Its run's task.
+        task: Option<TaskId>,
+        /// The tab it targeted.
+        tab: Option<TabId>,
         /// How it ended.
         outcome: Outcome,
         /// What happened to its side effect.
@@ -104,18 +116,18 @@ pub enum TraceRecordEvent {
         /// When.
         at: EpochMillis,
     },
-    /// A session became private.
-    SessionPrivate {
-        /// The session.
-        session: SessionId,
-        /// When and why.
-        record: PrivacyRecord,
+    /// A tab's private flag is on disk.
+    TabPrivate {
+        /// The tab.
+        tab: TabId,
+        /// Why it went private.
+        reason: PrivateReason,
+        /// When it went private: no pixel from then on is captured.
+        at: EpochMillis,
     },
 }
 
 enum Event {
-    SessionStarted(SessionStarted),
-    SessionEnded(SessionEnded),
     RunStarted(RunStarted),
     RunEnded(RunEnded),
     OperationStarted(OperationStarted),
@@ -125,8 +137,12 @@ enum Event {
 enum Command {
     Event(Box<Event>),
     PersistPrivate {
-        session: SessionId,
+        tab: TabId,
         record: PrivacyRecord,
+        reply: oneshot::Sender<Result<(), TraceError>>,
+    },
+    ForgetPrivate {
+        tab: TabId,
         reply: oneshot::Sender<Result<(), TraceError>>,
     },
     Sweep {
@@ -166,8 +182,11 @@ impl DroppedEvents {
 enum Work {
     Event(Box<Event>),
     Private {
-        session: SessionId,
+        tab: TabId,
         record: PrivacyRecord,
+    },
+    Forget {
+        tab: TabId,
     },
     Sweep {
         policy: RetentionPolicy,
@@ -191,16 +210,6 @@ pub struct TraceSink {
 }
 
 impl TraceSink {
-    /// A session started.
-    pub fn session_started(&self, event: SessionStarted) {
-        self.send(Event::SessionStarted(event));
-    }
-
-    /// A session ended.
-    pub fn session_ended(&self, event: SessionEnded) {
-        self.send(Event::SessionEnded(event));
-    }
-
     /// A run was admitted.
     pub fn run_started(&self, event: RunStarted) {
         self.send(Event::RunStarted(event));
@@ -284,16 +293,20 @@ impl TraceSink {
 impl PrivacyStore for TraceSink {
     fn persist_private(
         &self,
-        session: SessionId,
+        tab: TabId,
         record: PrivacyRecord,
     ) -> BoxFuture<'_, Result<(), TraceError>> {
         Box::pin(async move {
             let (reply, done) = oneshot::channel();
-            self.command(Command::PersistPrivate {
-                session,
-                record,
-                reply,
-            })?;
+            self.command(Command::PersistPrivate { tab, record, reply })?;
+            done.await.map_err(|_| TraceError::Closed)?
+        })
+    }
+
+    fn forget_private(&self, tab: TabId) -> BoxFuture<'_, Result<(), TraceError>> {
+        Box::pin(async move {
+            let (reply, done) = oneshot::channel();
+            self.command(Command::ForgetPrivate { tab, reply })?;
             done.await.map_err(|_| TraceError::Closed)?
         })
     }
@@ -329,7 +342,8 @@ pub fn spawn_writer(store: &TraceStore, redactor: Redactor, config: WriterConfig
 
 /// What the writer remembers about a run while it is open.
 struct OpenRun {
-    session: SessionId,
+    /// Named by every event the run publishes until its end.
+    task: Option<TaskId>,
     /// The masked, bounded code. It reaches disk only at the run's end, and only when no
     /// operation turned out sensitive, so a withheld literal is never written, not even to the
     /// WAL. `None` when the run's start was never seen.
@@ -340,7 +354,7 @@ struct OpenRun {
 }
 
 struct OpenOperation {
-    session: SessionId,
+    tab: Option<TabId>,
     args: Value,
     policy: Arc<RedactionPolicy>,
 }
@@ -386,12 +400,12 @@ impl Writer {
         for command in batch {
             match command {
                 Command::Event(event) => work.push(Work::Event(event)),
-                Command::PersistPrivate {
-                    session,
-                    record,
-                    reply,
-                } => {
-                    work.push(Work::Private { session, record });
+                Command::PersistPrivate { tab, record, reply } => {
+                    work.push(Work::Private { tab, record });
+                    privacy_replies.push(reply);
+                }
+                Command::ForgetPrivate { tab, reply } => {
+                    work.push(Work::Forget { tab });
                     privacy_replies.push(reply);
                 }
                 Command::Sweep { policy, now, reply } => {
@@ -412,9 +426,16 @@ impl Writer {
                             published.push(change);
                         }
                     }
-                    Work::Private { session, record } => {
-                        trace_store::persist_private(&mut tx, session, record).await?;
-                        published.push(TraceRecordEvent::SessionPrivate { session, record });
+                    Work::Private { tab, record } => {
+                        trace_store::persist_private(&mut tx, tab, record).await?;
+                        published.push(TraceRecordEvent::TabPrivate {
+                            tab,
+                            reason: record.reason,
+                            at: record.since,
+                        });
+                    }
+                    Work::Forget { tab } => {
+                        trace_store::forget_private(&mut tx, tab).await?;
                     }
                     Work::Sweep { policy, now } => {
                         swept.push(trace_store::sweep(&mut tx, policy, now).await?);
@@ -471,16 +492,7 @@ impl Writer {
         event: Event,
     ) -> Result<Option<TraceRecordEvent>, TraceError> {
         match event {
-            Event::SessionStarted(event) => {
-                trace_store::touch_session(tx, event.id, event.client.as_deref(), event.at).await?;
-                Ok(None)
-            }
-            Event::SessionEnded(event) => {
-                trace_store::end_session(tx, event.id, event.at).await?;
-                Ok(None)
-            }
             Event::RunStarted(event) => {
-                trace_store::touch_session(tx, event.session, None, event.at).await?;
                 let code = self.redactor.code(&event.code);
                 let host_data = event
                     .host_data
@@ -490,9 +502,9 @@ impl Writer {
                     tx,
                     RunStartRow {
                         id: event.id,
-                        session: event.session,
+                        task: event.task_id.as_ref(),
                         at: event.at,
-                        request_id: event.request_id.as_deref(),
+                        request_id: event.request_id.as_ref(),
                         host_data: host_data.as_ref(),
                     },
                 )
@@ -500,7 +512,7 @@ impl Writer {
                 self.runs.insert(
                     event.id,
                     OpenRun {
-                        session: event.session,
+                        task: event.task_id.clone(),
                         code: Some(code),
                         sensitive: false,
                         gaps: 0,
@@ -509,7 +521,7 @@ impl Writer {
                 );
                 Ok(Some(TraceRecordEvent::RunStarted {
                     run: event.id,
-                    session: event.session,
+                    task: event.task_id,
                     at: event.at,
                 }))
             }
@@ -530,7 +542,7 @@ impl Writer {
                 tx,
                 RunStartRow {
                     id: event.id.run,
-                    session: event.session,
+                    task: None,
                     at: event.at,
                     request_id: None,
                     host_data: None,
@@ -546,11 +558,10 @@ impl Writer {
             OperationStartRow {
                 id: event.id,
                 parent: event.parent,
-                session: event.session,
                 name: &event.name,
                 kind: event.kind,
                 effect: event.effect,
-                page: event.page,
+                tab: event.tab,
                 at: event.at,
                 args: &conservative.value,
                 args_truncated: conservative.truncation == Truncation::Cut,
@@ -558,7 +569,7 @@ impl Writer {
         )
         .await?;
         let run = self.runs.entry(event.id.run).or_insert_with(|| OpenRun {
-            session: event.session,
+            task: None,
             code: None,
             sensitive: false,
             gaps: 0,
@@ -567,14 +578,16 @@ impl Writer {
         run.operations.insert(
             event.id.seq,
             OpenOperation {
-                session: event.session,
+                tab: event.tab,
                 args: event.args,
                 policy: event.policy,
             },
         );
         Ok(Some(TraceRecordEvent::OperationStarted {
             id: event.id,
-            session: event.session,
+            task: run.task.clone(),
+            tab: event.tab,
+            effect: event.effect,
             at: event.at,
         }))
     }
@@ -631,12 +644,13 @@ impl Writer {
             }
             return Ok(None);
         }
-        let session = open
-            .map(|open| open.session)
-            .or_else(|| self.runs.get(&event.id.run).map(|run| run.session));
-        Ok(session.map(|session| TraceRecordEvent::OperationEnded {
+        Ok(Some(TraceRecordEvent::OperationEnded {
             id: event.id,
-            session,
+            task: self
+                .runs
+                .get(&event.id.run)
+                .and_then(|run| run.task.clone()),
+            tab: open.and_then(|open| open.tab),
             outcome: event.outcome,
             delivery: event.delivery,
             at: event.at,
@@ -691,20 +705,21 @@ impl Writer {
             },
         )
         .await?;
-        let session = match open {
-            Some(run) => Some(run.session),
-            None => sqlx::query_scalar::<_, String>("SELECT session_id FROM runs WHERE id = ?")
-                .bind(event.id.to_string())
-                .fetch_optional(&mut **tx)
-                .await?
-                .and_then(|text| text.parse().ok()),
+        // A run the writer never saw start still names its stored task; a run with no row at
+        // all publishes nothing.
+        let task = match open {
+            Some(run) => Some(run.task),
+            None => {
+                sqlx::query_scalar::<_, Option<String>>("SELECT task_id FROM runs WHERE id = ?")
+                    .bind(event.id.to_string())
+                    .fetch_optional(&mut **tx)
+                    .await?
+                    .map(|task| task.and_then(|text| TaskId::parse(&text).ok()))
+            }
         };
-        if let Some(session) = session {
-            trace_store::touch_session(tx, session, None, event.at).await?;
-        }
-        Ok(session.map(|session| TraceRecordEvent::RunEnded {
+        Ok(task.map(|task| TraceRecordEvent::RunEnded {
             run: event.id,
-            session,
+            task,
             status: event.status,
             effects,
             at: event.at,
@@ -714,15 +729,16 @@ impl Writer {
 
 #[cfg(test)]
 mod tests {
-    use super::{WriterConfig, spawn_writer};
+    use super::{TraceRecordEvent, TraceSink, WriterConfig, spawn_writer};
     use crate::{
-        EpochMillis, RedactionLimits, Redactor, RunId, RunStarted, SecretSet, SecretSetConfig,
-        SessionId, TraceError, TraceStore,
+        Effect, EpochMillis, OperationId, OperationKind, OperationStarted, PrivacyRecord,
+        PrivacyStore, PrivateReason, RedactionLimits, Redactor, RetentionPolicy, RunEnded, RunId,
+        RunStarted, RunStatus, SecretSet, SecretSetConfig, TraceError, TraceStore,
     };
+    use browseros_core::TabId;
     use std::sync::Arc;
 
-    #[tokio::test]
-    async fn flush_reports_a_batch_that_was_rolled_back() {
+    async fn writer() -> (tempfile::TempDir, TraceStore, TraceSink) {
         let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir: {error}"));
         let store = TraceStore::open(&dir.path().join("trace.db"))
             .await
@@ -735,14 +751,115 @@ mod tests {
             ),
             WriterConfig::default(),
         );
+        (dir, store, sink)
+    }
+
+    #[tokio::test]
+    async fn a_private_flag_is_announced_only_once_it_commits() {
+        let (_dir, store, sink) = writer().await;
+        let mut events = sink.subscribe();
+        let record = PrivacyRecord {
+            since: EpochMillis::from_millis(7),
+            reason: PrivateReason::Host,
+        };
+        assert!(sink.persist_private(TabId(3), record).await.is_ok());
+        assert_eq!(
+            events.recv().await.ok(),
+            Some(TraceRecordEvent::TabPrivate {
+                tab: TabId(3),
+                reason: PrivateReason::Host,
+                at: record.since,
+            })
+        );
+        // Break the next batch: the flag's insert fails and the transaction rolls back.
+        let dropped = sqlx::query("DROP TABLE private_tabs")
+            .execute(store.pool())
+            .await;
+        assert!(dropped.is_ok());
+        assert!(sink.persist_private(TabId(4), record).await.is_err());
+        let _ = sink.flush().await;
+        assert!(
+            events.try_recv().is_err(),
+            "a flag that never reached the disk was announced"
+        );
+    }
+
+    /// The invariant behind "swept with its runs": no tab link outlives its run, or `run_tabs`
+    /// would grow for as long as the cell runs.
+    #[tokio::test]
+    async fn a_sweep_leaves_no_tab_link_without_its_run() {
+        let (_dir, store, sink) = writer().await;
+        let day = 24 * 60 * 60 * 1000;
+        for (started, ended) in [(0, Some(10)), (8 * day, None)] {
+            let run = RunId::new();
+            sink.run_started(RunStarted {
+                id: run,
+                code: String::new(),
+                request_id: None,
+                task_id: None,
+                host_data: None,
+                at: EpochMillis::from_millis(started),
+            });
+            sink.op_started(OperationStarted {
+                id: OperationId::new(run, 1),
+                parent: None,
+                name: "page.title".into(),
+                kind: OperationKind::Builtin,
+                effect: Effect::Read,
+                tab: Some(TabId(3)),
+                args: serde_json::Value::Null,
+                policy: Arc::default(),
+                at: EpochMillis::from_millis(started),
+            });
+            if let Some(ended) = ended {
+                sink.run_ended(RunEnded {
+                    id: run,
+                    status: RunStatus::Ok,
+                    error: None,
+                    result: None,
+                    replay: None,
+                    at: EpochMillis::from_millis(ended),
+                });
+            }
+        }
+        let swept = sink
+            .sweep(
+                RetentionPolicy::default(),
+                EpochMillis::from_millis(8 * day + 1),
+            )
+            .await;
+        assert_eq!(swept.ok().map(|swept| swept.runs), Some(1));
+        let links = |sql: &'static str| {
+            let pool = store.pool().clone();
+            async move {
+                sqlx::query_scalar::<_, i64>(sql)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap_or(-1)
+            }
+        };
+        assert_eq!(
+            links("SELECT COUNT(*) FROM run_tabs WHERE run_id NOT IN (SELECT id FROM runs)").await,
+            0
+        );
+        assert_eq!(
+            links("SELECT COUNT(*) FROM run_tabs").await,
+            1,
+            "the running run keeps its link"
+        );
+    }
+
+    #[tokio::test]
+    async fn flush_reports_a_batch_that_was_rolled_back() {
+        let (_dir, store, sink) = writer().await;
         // Break the next batch: its run insert fails and the transaction rolls back.
         let dropped = sqlx::query("DROP TABLE runs").execute(store.pool()).await;
         assert!(dropped.is_ok());
         sink.run_started(RunStarted {
             id: RunId::new(),
-            session: SessionId::new(),
             code: String::new(),
             request_id: None,
+            task_id: None,
             host_data: None,
             at: EpochMillis::from_millis(1),
         });

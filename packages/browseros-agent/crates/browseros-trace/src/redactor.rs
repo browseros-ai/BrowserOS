@@ -250,19 +250,14 @@ fn clip(text: &str, limit: usize) -> (String, bool) {
 mod tests {
     use super::{RedactionLimits, Redactor, Truncation};
     use crate::{
-        JsonPointer, RedactionPolicy, SecretScope, SecretSet, SecretSetConfig, SecretValue,
-        TargetSensitivity,
+        JsonPointer, RedactionPolicy, SecretSet, SecretSetConfig, SecretValue, TargetSensitivity,
     };
     use serde_json::{Value, json};
     use std::sync::Arc;
 
     fn redactor(limits: RedactionLimits) -> Redactor {
         let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
-        secrets.register(
-            SecretValue::new("hunter22".into()),
-            SecretScope::Browser,
-            None,
-        );
+        secrets.register(SecretValue::new("hunter22".into()), None);
         Redactor::new(secrets, limits)
     }
 
