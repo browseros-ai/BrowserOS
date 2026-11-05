@@ -15,6 +15,7 @@ import dataclasses
 import html
 import json
 import re
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -137,7 +138,12 @@ class InstanceTests(unittest.TestCase):
             J.instance_to_json(a),
         )
 
-    def test_registrable_counts_typed_prefixes_and_skips_short_values(self) -> None:
+    def test_registrable_counts_a_typed_value_twice_and_skips_short_values(
+        self,
+    ) -> None:
+        """A typed value is registered whole once quiet, plus at most the prefix a read
+        swept between two keystrokes; a value under four characters or a split code adds
+        nothing."""
         instance = P.make_instance(P.Layout.OWNER, seed="r", index=1)
         cvc = instance.plant(P.Kind.CC_CSC, P.Location.MAIN, origin=P.Origin.OWNER)
         split = instance.plant(P.Kind.OTP_SPLIT, P.Location.MAIN, origin=P.Origin.OWNER)
@@ -149,7 +155,26 @@ class InstanceTests(unittest.TestCase):
         self.assertEqual(P.registrable(split, typed=True), 0)
         self.assertEqual(P.registrable(plain, typed=False), 0)
         self.assertEqual(P.registrable(pw, typed=False), 1)
-        self.assertEqual(P.registrable(pw, typed=True), 10)
+        self.assertEqual(P.registrable(pw, typed=True), 2)
+
+    def test_the_typed_layout_types_the_closed_root_first_and_echoes_each(self) -> None:
+        """The seal cannot hear input in the closed root, so its plants are typed first
+        and a journaled field's typing comes last; every value the agent types is empty
+        in the page until then and echoed in MAIN once typed."""
+        instance = P.make_instance(P.Layout.TYPED, seed="typed", index=1)
+        self.assertTrue(all(p.origin is P.Origin.AGENT for p in instance.plants))
+        locations = [p.location for p in instance.plants[1:]]
+        closed = locations.count(P.Location.SHADOW_CLOSED)
+        self.assertEqual(locations[:closed], [P.Location.SHADOW_CLOSED] * closed)
+        self.assertTrue(P.KINDS[instance.plants[-1].kind].sensitive)
+        self.assertNotEqual(instance.plants[-1].location, P.Location.SHADOW_CLOSED)
+        for plant in instance.plants:
+            (echo,) = [
+                r for r in instance.regions_of(plant) if r.exposure is P.Exposure.ECHO
+            ]
+            self.assertIs(echo.location, P.Location.MAIN)
+        main = instance.slice(P.Location.MAIN)["regions"]
+        self.assertFalse(any("value" in r for r in main))
 
     def test_every_region_is_in_exactly_one_document(self) -> None:
         for layout in P.Layout:
@@ -221,6 +246,30 @@ class SecretTests(unittest.TestCase):
                 f"{value} {other.secret.reveal()}", [instance], inject=special
             )
 
+    def test_an_agent_value_rides_only_its_typing_run(self) -> None:
+        """The agent's typing is a declared way in: its run's code carries its one value,
+        and nothing else carries it, nor any other value. A HOST value is declared for
+        POST /v1/secrets only, so it may not ride a run either."""
+        instance = P.make_instance(P.Layout.TYPED, seed="ways", index=1)
+        plant = instance.plant(P.Kind.PASSWORD, P.Location.MAIN)
+        (field,) = instance.field_regions(plant)
+        code = P.typing_code(instance, field)
+        run = P.DECLARED_WAYS_IN[P.Origin.AGENT]
+        P.assert_clean(code, [instance], inject=plant, way=run)
+        self.assertNotIn(field.anchor, code)
+        for kw in ({}, {"inject": plant, "way": P.DECLARED_WAYS_IN[P.Origin.HOST]}):
+            with self.subTest(kw=kw), self.assertRaises(P.Contamination):
+                P.assert_clean(code, [instance], **kw)
+        other = instance.plant(P.Kind.OTP, P.Location.SAME_SITE)
+        with self.assertRaises(P.Contamination):
+            P.assert_clean(
+                f"{code} {other.secret.reveal()}", [instance], inject=plant, way=run
+            )
+        host = P.make_instance(P.Layout.HOST, seed="ways", index=2)
+        secret = host.plant(origin=P.Origin.HOST)
+        with self.assertRaises(P.Contamination):
+            P.assert_clean(secret.secret.reveal(), [host], inject=secret, way=run)
+
     def test_no_run_template_ever_holds_a_value_or_an_anchor(self) -> None:
         for layout in P.Layout:
             instance = P.make_instance(layout, seed="tpl", index=5)
@@ -262,6 +311,18 @@ class PhaseGuardTests(unittest.TestCase):
         with self.assertRaises(P.PhaseError):
             self.guard.claim(self.inst, P.Phase.JOURNALED, 1)
 
+    def test_agent_typed_holds_from_the_typing_until_a_registration(self) -> None:
+        with self.assertRaises(P.PhaseError):
+            self.guard.claim(self.inst, P.Phase.AGENT_TYPED, 1)
+        self.guard.note_typed(self.inst)
+        self.guard.claim(self.inst, P.Phase.AGENT_TYPED, 2)
+        with self.assertRaises(P.PhaseError):
+            self.guard.claim(self.inst, P.Phase.COLD, 1)
+        self.guard.note_registered(self.inst)
+        with self.assertRaises(P.PhaseError):
+            self.guard.claim(self.inst, P.Phase.AGENT_TYPED, 1)
+        self.guard.claim(self.inst, P.Phase.WARM, 1)
+
     def test_control_phases_follow_the_open_control(self) -> None:
         with self.assertRaises(P.PhaseError):
             self.guard.claim(self.inst, P.Phase.DURING_CONTROL, 1)
@@ -285,6 +346,19 @@ class ChannelTableTests(unittest.TestCase):
         self.assertEqual(set(P.PIXEL_READS), {P.ChannelId.SCREENSHOT, P.ChannelId.PDF})
         self.assertTrue(all(P.SPECS[c].reads_fields for c in P.FIELD_READS))
         self.assertIn(P.ChannelId.SET_CONTENT, P.SCRIPT_READS)
+        self.assertNotIn(P.ChannelId.TO_HAVE_VALUE, P.FIELD_READS)
+        self.assertIn(P.ChannelId.TO_HAVE_TEXT, P.KEY_READS[P.Layout.ECHOES])
+        self.assertIn(P.ChannelId.FILL_CALL_LOG, P.KEY_READS[P.Layout.LOCKED])
+
+    def test_copy_probes_cut_last(self) -> None:
+        """A cut that goes through empties its field, so every copy chord runs before
+        any cut on the same field."""
+        cuts = [
+            n for n, c in enumerate(P.COPY_PROBES) if "Control+X" in c or "Delete" in c
+        ]
+        copies = [n for n, c in enumerate(P.COPY_PROBES) if n not in cuts]
+        self.assertTrue(cuts and copies)
+        self.assertLess(max(copies), min(cuts))
 
     def test_every_playwright_op_is_probed_driven_or_excused(self) -> None:
         names = set(re.findall(r"^  '([^']+)': \{", OPS.read_text(), re.MULTILINE))
@@ -408,6 +482,22 @@ class DetectorTests(unittest.TestCase):
         self.assertIs(J.classify("", field), J.SlotState.EMPTY)
         self.assertIs(J.classify("something else", field), J.SlotState.OTHER)
         self.assertIs(J.classify("•••• 0000", field), J.SlotState.OTHER)
+
+    def test_a_value_attribute_split_by_a_page_boundary_is_no_slot(self) -> None:
+        """A disk page can cut a string with page bytes. A value attribute with them
+        inside is no slot (as an echo or aria slot is not), so it neither proves nor
+        unproves; the whole copies in the same file still judge the field."""
+        (field,) = self.inst.field_regions(self.card)
+        tag = '<input id="{id}" value="{value}">'
+        page = tag.format(
+            id=field.id, value="•••• \x00\x00\x00L" + field.expected()[-4:]
+        )
+        page += " " + tag.format(id=field.id, value="•••• " + field.expected()[-4:])
+        views = J.views_of(page.encode(), structured=False)
+        self.assertEqual(
+            self.det.slots(views, field), [f"•••• {field.expected()[-4:]}"]
+        )
+        self.assertIs(self.det.slot_state(views, field), J.SlotState.MASKED)
 
     def test_a_truncated_slot_is_judged_by_what_survives(self) -> None:
         (field,) = self.inst.field_regions(self.cvc)
@@ -543,12 +633,14 @@ class VerdictTests(unittest.TestCase):
         self.assertIs(rule(J.Pixels(None, 5, 0)), J.Verdict.NOT_APPLICABLE)
 
 
-class EvidenceTests(unittest.TestCase):
-    """judge() over a synthetic evidence directory: presence around the probe, record
-    copies, a value only the disk holds."""
+class EvidenceBase(unittest.TestCase):
+    """A synthetic evidence directory for judge(): one instance (`self.inst`, swappable
+    per test before the first record), proofs, captures, streams and the manifest."""
+
+    layout = P.Layout.ECHOES
 
     def setUp(self) -> None:
-        self.inst = P.make_instance(P.Layout.ECHOES, seed="ev", index=1)
+        self.inst = P.make_instance(self.layout, seed="ev", index=1)
         self.others: list[P.Instance] = []  # more instances of the same run
         self.root = Path(tempfile.mkdtemp())
         (self.root / "blobs").mkdir()
@@ -562,9 +654,19 @@ class EvidenceTests(unittest.TestCase):
     def echo(self, loc: P.Location) -> P.Region:
         return echo_of(self.inst, self.inst.plant(P.Kind.PASSWORD, loc))
 
-    def proof(self, ident: str, regions: list[P.Region]) -> None:
+    def proof(
+        self,
+        ident: str,
+        regions: list[P.Region],
+        extra: dict | None = None,
+        focus: tuple[str, ...] = (),
+    ) -> None:
+        """The oracle showing `regions` holding their values, `extra` digests (region id
+        or fixed id -> the text it holds), and the focused elements' ids."""
         digests = {r.id: (J.fnv1a(r.expected()), len(r.expected())) for r in regions}
-        proof = J.Proof(ident, self.inst.name, 0, digests, ("main",))
+        for key, text in (extra or {}).items():
+            digests[key] = (J.fnv1a(text), len(text))
+        proof = J.Proof(ident, self.inst.name, 0, digests, ("main",), focus)
         self.records.append(J.encode(proof))
 
     def capture(self, ident: str, channel: P.ChannelId, body: bytes, **kw) -> None:
@@ -595,12 +697,16 @@ class EvidenceTests(unittest.TestCase):
             kw.pop("tab", None),
             J.Request("http", "GET", kw.pop("target", "/v1/events")),
             f"streams/{ident}.bin",
-            0,
-            ((0, 0),),
-            (1, "harness"),
+            kw.pop("opened_ms", 0),
+            kw.pop("chunks", ((0, 0),)),
+            kw.pop("closed", (1, "harness")),
             **kw,
         )
         self.records.append(J.encode(stream))
+
+    def step(self, at: int, action: str, **detail: object) -> None:
+        step = J.Step(at, "keys", self.inst.name, action, detail)
+        self.records.append(J.encode(step))
 
     def evidence(self) -> J.Evidence:
         manifest = {
@@ -614,6 +720,25 @@ class EvidenceTests(unittest.TestCase):
 
     def judged(self) -> list[J.Cell]:
         return list(J.judge(self.evidence()).cells)
+
+    def reply(self, value: object, run: str, error: dict | None = None) -> bytes:
+        """A run's raw MCP reply: its value, or the error it threw."""
+        meta: dict = {"id": run, "status": "ok", "effects": "none", "unknown": []}
+        result: dict = {
+            "content": [{"type": "text", "text": json.dumps(value)}],
+            "structuredContent": {"value": value},
+            "isError": False,
+        }
+        if error is not None:
+            meta.update(status="error", error=error)
+            result = {"structuredContent": {"error": error}, "isError": True}
+        result["_meta"] = {"com.browseros.neo/run": meta}
+        return json.dumps({"jsonrpc": "2.0", "id": 1, "result": result}).encode()
+
+
+class EvidenceTests(EvidenceBase):
+    """judge() over a synthetic evidence directory: presence around the probe, record
+    copies, a value only the disk holds."""
 
     def test_presence_before_and_after_coverage_and_record_copies(self) -> None:
         main, xo, ss, so = (
@@ -694,16 +819,6 @@ class EvidenceTests(unittest.TestCase):
             [(c.region.plant.id, c.verdict, c.residual) for c in new],
             [(orphan.id, J.Verdict.LEAKED, None)],
         )
-
-    def reply(self, value: object, run: str) -> bytes:
-        meta = {"id": run, "status": "ok", "effects": "none", "unknown": []}
-        result = {
-            "content": [{"type": "text", "text": json.dumps(value)}],
-            "structuredContent": {"value": value},
-            "isError": False,
-            "_meta": {"com.browseros.neo/run": meta},
-        }
-        return json.dumps({"jsonrpc": "2.0", "id": 1, "result": result}).encode()
 
     def test_a_run_reads_only_what_it_asked_for(self) -> None:
         (asked,) = self.inst.field_regions(self.inst.plant(P.Kind.OTP, P.Location.MAIN))
@@ -934,6 +1049,47 @@ class EvidenceTests(unittest.TestCase):
         logged = (self.root / "log.jsonl").read_text().splitlines()[int(line[1]) - 1]
         self.assertEqual(json.loads(json.loads(logged)["request"]["body"]), request)
 
+    def test_a_leak_only_a_record_holds_names_the_agent_run_it_records(self) -> None:
+        """The agent's answer was masked, yet the trace kept the raw value in that
+        run's record. The request that made it is the agent's run, not the host's GET
+        that fetched the record, so the block names that run's request and scenario."""
+        (echo,) = [
+            r
+            for r in self.inst.regions_of(
+                self.inst.plant(P.Kind.PASSWORD, P.Location.CROSS_SITE)
+            )
+            if r.exposure is P.Exposure.ECHO
+        ]
+        self.proof("p1", [echo])
+        request = json.dumps({"method": "tools/call", "code": "return 1;"})
+        masked = {echo.id: {"ok": f"ECHO {echo.anchor} {{{{[private]}}}}"}}
+        self.capture(
+            "c1",
+            P.ChannelId.TEXT_CONTENT,
+            self.reply(masked, "run1"),
+            run_id="run1",
+            proofs=("p1", "p1"),
+            regions=(echo.id,),
+            phase=P.Phase.WARM,
+            request=request,
+        )
+        raw = {"id": "run1", "result": f"ECHO {echo.anchor} {{{{{echo.expected()}}}}}"}
+        self.capture(
+            "h1",
+            P.ChannelId.RUN,
+            json.dumps(raw).encode(),
+            run_id="run1",
+            phase=P.Phase.ANY,
+        )
+        evidence = self.evidence()
+        report = J.render_markdown(J.judge(evidence), evidence)
+        block = report.split("## New leaks", 1)[1].split("## Known residuals")[0]
+        line = re.search(r"the agent run it records: .*`log\.jsonl` line (\d+)", block)
+        self.assertIsNotNone(line, block)
+        logged = (self.root / "log.jsonl").read_text().splitlines()[int(line[1]) - 1]
+        self.assertEqual(json.loads(logged)["id"], "c1")
+        self.assertIn("--scenario echoes", block)
+
     def test_a_channel_only_searched_reads_clean_when_nothing_is_found(self) -> None:
         """The logs are only searched: no proof or coverage stands behind a cell there,
         so a clean search makes no cell and the row would vanish from the table. Such a
@@ -1074,6 +1230,436 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(
             [(c.run_id, c.verdict) for c in cells], [("run2", J.Verdict.MASKED)]
         )
+
+
+def matcher_error(locator: str, received: str, polled: str | None = None) -> dict:
+    """An expect failure as a keyed error, its message as browseros-playwright prints it
+    (expect/matcher_message.rs): Received escapes `"` and `\\`, a poll line does not."""
+    quoted = received.replace("\\", "\\\\").replace('"', '\\"')
+    polled = received if polled is None else polled
+    message = (
+        "expect(locator).toHaveValue(expected) failed\n\n"
+        f'Locator:  {locator}\nExpected: "••••"\nReceived: "{quoted}"\n'
+        "Timeout:  800ms\n\nCall log:\n"
+        f'  - Expect "toHaveValue" {locator} with timeout 800ms\n'
+        f"  - waiting for {locator}\n"
+        f'    3 × locator resolved to <input type="text" id="x"/>\n'
+        f'       - unexpected value "{polled}"\n'
+    )
+    return {"err": message, "owner": "website", "code": "assertion_failed"}
+
+
+class KeysTests(EvidenceBase):
+    """The keys scenario's rows through judge(): expect messages, action errors, copy
+    probes, the agent's typing and its records, and the clipboard on a view display."""
+
+    layout = P.Layout.FIELDS
+
+    def field(self, kind: P.Kind, loc: P.Location = P.Location.MAIN) -> P.Region:
+        return self.inst.field_regions(self.inst.plant(kind, loc))[0]
+
+    def verdicts(self, channel: P.ChannelId) -> dict[str, J.Cell]:
+        return {c.region.id: c for c in self.judged() if c.channel is channel}
+
+    def test_an_expect_failure_is_judged_by_its_received_line(self) -> None:
+        """The Received line (and each poll's) is the region's slot in its own keyed
+        error, so a masked Received is masked, a raw one leaks (a 3-digit one included),
+        and an error with no Received line shows nothing of the field."""
+        masked, cvc, otp, plain = (
+            self.field(k)
+            for k in (P.Kind.PASSWORD, P.Kind.CC_CSC, P.Kind.OTP, P.Kind.PLAIN)
+        )
+        polled = self.field(P.Kind.OTP_SPLIT)  # one digit: short
+        bare = self.field(P.Kind.WORD_OTP)
+        regions = [masked, cvc, otp, plain, polled, bare]
+        value = {
+            r.id: matcher_error(f"locator('#{r.id}')", r.expected())
+            for r in (cvc, otp, plain)
+        }
+        value[masked.id] = matcher_error(f"locator('#{masked.id}')", "••••")
+        value[polled.id] = matcher_error(
+            f"locator('#{polled.id}')", "••••", polled.expected()
+        )
+        value[bare.id] = {
+            "err": "Timeout 800ms exceeded.",
+            "owner": "website",
+            "code": "assertion_failed",
+        }
+        self.proof("p1", regions)
+        self.capture(
+            "c1",
+            P.ChannelId.TO_HAVE_VALUE,
+            self.reply(value, "run1"),
+            run_id="run1",
+            proofs=("p1", "p1"),
+            regions=tuple(r.id for r in regions),
+            phase=P.Phase.ANY,
+        )
+        cells = self.verdicts(P.ChannelId.TO_HAVE_VALUE)
+        got = {r.id: (cells[r.id].verdict, cells[r.id].residual) for r in regions}
+        self.assertEqual(
+            got,
+            {
+                masked.id: (J.Verdict.MASKED, None),
+                cvc.id: (J.Verdict.LEAKED, None),
+                otp.id: (J.Verdict.LEAKED, None),
+                plain.id: (J.Verdict.LEAKED, "CONTROL"),
+                polled.id: (J.Verdict.LEAKED, None),
+                bare.id: (J.Verdict.INCONCLUSIVE, None),
+            },
+        )
+
+    def test_an_actions_strict_preview_is_judged_by_its_value_attributes(self) -> None:
+        """A strict-mode error previews value attributes. A preview with a masked value
+        covers its field even when its `aka` names no anchor; a field it does not list is
+        n/a; a raw one leaks, three digits included."""
+        self.inst = P.make_instance(P.Layout.LOCKED, seed="ev", index=1)
+        pw, cvc, otp, unlisted = (
+            self.field(k)
+            for k in (P.Kind.PASSWORD, P.Kind.CC_CSC, P.Kind.OTP, P.Kind.WORD_OTP)
+        )
+        lines = [
+            f'<input readonly id="{pw.id}" type="password" value="••••"/> '
+            f"aka getByLabel('Field {pw.anchor}')",
+            f'<input readonly id="{otp.id}" value="••••"/> aka locator(\'#{otp.id}\')',
+            f'<input readonly id="{cvc.id}" value="{cvc.expected()}"/> '
+            f"aka locator('#{cvc.id}')",
+        ]
+        message = "strict mode violation: locator('input') resolved to 36 elements:"
+        message += "".join(f"\n    {n}) {line}" for n, line in enumerate(lines, 1))
+        error = {"owner": "script", "code": "strict_mode_violation", "message": message}
+        regions = [pw, cvc, otp, unlisted]
+        self.proof("p1", regions)
+        self.capture(
+            "c1",
+            P.ChannelId.FILL_STRICT,
+            self.reply(None, "run1", error),
+            run_id="run1",
+            proofs=("p1", "p1"),
+            regions=tuple(r.id for r in regions),
+            phase=P.Phase.ANY,
+        )
+        cells = self.verdicts(P.ChannelId.FILL_STRICT)
+        self.assertEqual(
+            {r.id: cells[r.id].verdict for r in regions},
+            {
+                pw.id: J.Verdict.MASKED,
+                otp.id: J.Verdict.MASKED,
+                cvc.id: J.Verdict.LEAKED,
+                unlisted.id: J.Verdict.NOT_APPLICABLE,
+            },
+        )
+
+    def test_a_fill_call_log_reaches_no_field_unless_it_previews_one(self) -> None:
+        """fill's call log names its locator and the states it waited for. By contract
+        it previews no element, so a field is n/a there; a preview that does appear is
+        judged like any slot."""
+        self.inst = P.make_instance(P.Layout.LOCKED, seed="ev", index=1)
+        quiet, shown = self.field(P.Kind.PASSWORD), self.field(P.Kind.CC_CSC)
+        log = (
+            "Timeout 800ms exceeded.\nCall log:\n  - waiting for locator('#{id}')\n"
+            "  - attempting fill action\n"
+            "    - waiting for element to be visible, enabled and editable\n"
+            "    - element is not editable\n{extra}"
+        )
+        preview = f'  - locator resolved to <input readonly id="{shown.id}" '
+        preview += f'value="{shown.expected()}"/>\n'
+        value = {
+            r.id: {
+                "err": log.format(id=r.id, extra=extra),
+                "owner": "website",
+                "code": "not_actionable",
+            }
+            for r, extra in ((quiet, ""), (shown, preview))
+        }
+        self.proof("p1", [quiet, shown])
+        self.capture(
+            "c1",
+            P.ChannelId.FILL_CALL_LOG,
+            self.reply(value, "run1"),
+            run_id="run1",
+            proofs=("p1", "p1"),
+            regions=(quiet.id, shown.id),
+            phase=P.Phase.ANY,
+        )
+        cells = self.verdicts(P.ChannelId.FILL_CALL_LOG)
+        self.assertEqual(cells[quiet.id].verdict, J.Verdict.NOT_APPLICABLE)
+        self.assertEqual(cells[shown.id].verdict, J.Verdict.LEAKED)
+
+    def copy_probe(
+        self,
+        n: int,
+        field: P.Region,
+        *,
+        chord: dict,
+        pasted: str,
+        token: str,
+        channel: P.ChannelId = P.ChannelId.COPY_CONTROL_C,
+        control_error: dict | None = None,
+        present: bool = True,
+        focused: bool = True,
+    ) -> None:
+        """One probe as the Session records it: the baseline copy, a proof, the chord
+        and the paste in one run, a proof with the paste box's digest."""
+        self.capture(
+            f"a{n}",
+            P.ChannelId.HARNESS,
+            self.reply(1, f"base{n}", control_error),
+            run_id=f"base{n}",
+            phase=P.Phase.ANY,
+        )
+        focus = (field.id,) if focused else (P.COPY_BASE,)
+        self.proof(f"p{n}b", [field] if present else [], {P.COPY_BASE: token}, focus)
+        self.capture(
+            f"c{n}",
+            channel,
+            self.reply({"chord": chord, "paste": {"sent": True}}, f"run{n}"),
+            run_id=f"run{n}",
+            proofs=(f"p{n}b", f"p{n}a"),
+            regions=(field.id,),
+            control=f"a{n}",
+            phase=P.Phase.ANY,
+        )
+        self.proof(f"p{n}a", [field], {P.COPY_BASE: token, P.COPY_DROP: pasted})
+
+    def test_a_copy_probe_is_judged_by_what_the_paste_box_holds(self) -> None:
+        """The field's value pasted back is laundered, whatever the chord answered;
+        held and masked need a sent baseline copy whose fresh token came back."""
+        self.inst = P.make_instance(P.Layout.COPY, seed="ev", index=1)
+        refused = {
+            "err": "copying or cutting from a password, card or one-time-code field "
+            "is refused; read what the page shows instead",
+            "owner": "script",
+            "code": "sensitive_copy_refused",
+        }
+        sent = {"sent": True}
+        kinds = (
+            P.Kind.PASSWORD,
+            P.Kind.CC_NUMBER,
+            P.Kind.CC_CSC,
+            P.Kind.OTP,
+            P.Kind.WORD_CARD,
+            P.Kind.WORD_OTP,
+            P.Kind.NEW_PASSWORD,
+            P.Kind.CURRENT_PASSWORD,
+            P.Kind.PLAIN,
+        )
+        f = {kind: self.field(kind, P.Location.SAME_SITE) for kind in kinds}
+        lied = f[P.Kind.CC_NUMBER].expected()
+        self.copy_probe(1, f[P.Kind.PASSWORD], chord=refused, pasted="t1", token="t1")
+        self.copy_probe(2, f[P.Kind.CC_CSC], chord=sent, pasted="t2", token="t2")
+        self.copy_probe(3, f[P.Kind.CC_NUMBER], chord=refused, pasted=lied, token="t3")
+        self.copy_probe(4, f[P.Kind.OTP], chord=sent, pasted="", token="t4")
+        self.copy_probe(
+            5,
+            f[P.Kind.WORD_CARD],
+            chord=refused,
+            pasted="t5",
+            token="t5",
+            control_error=refused,
+        )
+        self.copy_probe(6, f[P.Kind.WORD_OTP], chord=refused, pasted="t5", token="t5")
+        self.copy_probe(
+            7,
+            f[P.Kind.NEW_PASSWORD],
+            chord=refused,
+            pasted="t7",
+            token="t7",
+            present=False,
+        )
+        plain = f[P.Kind.PLAIN]
+        self.copy_probe(8, plain, chord=sent, pasted=plain.expected(), token="t8")
+        # The page's focus missed: the chord copied the selected token again.
+        unfocused = f[P.Kind.CURRENT_PASSWORD]
+        self.copy_probe(
+            9, unfocused, chord=sent, pasted="t9", token="t9", focused=False
+        )
+        cells = self.verdicts(P.ChannelId.COPY_CONTROL_C)
+        got = {k: (cells[r.id].verdict, cells[r.id].residual) for k, r in f.items()}
+        self.assertEqual(
+            got,
+            {
+                P.Kind.PASSWORD: (J.Verdict.WITHHELD, None),
+                P.Kind.CC_CSC: (J.Verdict.MASKED, None),
+                P.Kind.CC_NUMBER: (J.Verdict.LEAKED, None),
+                P.Kind.OTP: (J.Verdict.INCONCLUSIVE, None),
+                P.Kind.WORD_CARD: (J.Verdict.INCONCLUSIVE, None),
+                P.Kind.WORD_OTP: (J.Verdict.INCONCLUSIVE, None),
+                P.Kind.NEW_PASSWORD: (J.Verdict.INCONCLUSIVE, None),
+                P.Kind.CURRENT_PASSWORD: (J.Verdict.INCONCLUSIVE, None),
+                P.Kind.PLAIN: (J.Verdict.LEAKED, "CONTROL"),
+            },
+        )
+        self.assertIn("laundered", cells[f[P.Kind.CC_NUMBER].id].why)
+        self.assertIn("focus", cells[unfocused.id].why)
+        self.assertIn("not new", cells[f[P.Kind.WORD_OTP].id].why)
+
+    def test_a_view_display_judges_each_copy_against_its_window(self) -> None:
+        """Any ServerCutText is a leak of the copy it follows, and of no other: one
+        arriving during the second probe marks that probe's field only. A short field
+        has no slot here, and needs none: no cut text at all proves its digits absent."""
+        self.inst = P.make_instance(P.Layout.COPY, seed="ev", index=1)
+        first, second = self.field(P.Kind.CC_NUMBER), self.field(P.Kind.OTP)
+        short = self.field(P.Kind.CC_CSC)
+        refused = {
+            "err": "refused",
+            "owner": "script",
+            "code": "sensitive_copy_refused",
+        }
+        probes = ((short, 60), (first, 100), (second, 200))
+        for n, (field, since) in enumerate(probes, 1):
+            self.copy_probe(n, field, chord=refused, pasted=f"t{n}", token=f"t{n}")
+            self.step(
+                since + 50,
+                "copy",
+                region=field.id,
+                capture=f"c{n}",
+                since_ms=since,
+                phase="any",
+            )
+        pixel_format = bytes([32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0])
+        cut = b"\x03\x00\x00\x00" + struct.pack(">i", 4) + b"zzzz"
+        self.stream(
+            "s1",
+            P.ChannelId.DISPLAY_VIEW,
+            cut,
+            instance=self.inst.name,
+            target="/v1/display?mode=view",
+            status=101,
+            role="view",
+            geometry=(4, 4, pixel_format.hex()),
+            opened_ms=50,
+            chunks=((0, 250),),
+            closed=(400, "harness"),
+        )
+        cells = self.verdicts(P.ChannelId.CLIPBOARD_VIEW)
+        self.assertEqual(
+            {r.id: cells[r.id].verdict for r in (short, first, second)},
+            {
+                short.id: J.Verdict.MASKED,
+                first.id: J.Verdict.MASKED,
+                second.id: J.Verdict.LEAKED,
+            },
+        )
+
+    def typed(self, n: int, region: P.Region, record: dict) -> None:
+        """One typing run as the Session records it, and its run record."""
+        reachable = P.PLACES[region.location].agent_reachable
+        value = {region.id: {"ok": "••••"}} if reachable else {}
+        self.proof(f"t{n}b", [])
+        self.proof(f"t{n}a", [region])
+        self.capture(
+            f"t{n}",
+            P.ChannelId.KEYBOARD_TYPE,
+            self.reply(value, f"run{n}"),
+            run_id=f"run{n}",
+            proofs=(f"t{n}b", f"t{n}a"),
+            regions=(region.id,),
+            phase=P.Phase.ANY,
+            request=P.typing_code(self.inst, region),
+        )
+        self.capture(
+            f"h{n}",
+            P.ChannelId.RUN,
+            json.dumps({"id": f"run{n}", **record}).encode(),
+            run_id=f"run{n}",
+            phase=P.Phase.ANY,
+        )
+
+    def test_a_typing_runs_records_are_judged_by_what_they_kept(self) -> None:
+        """A typing run's record keeps what it typed in two places: the op's typed
+        argument and the code's literal. Masked or withheld there is masked (the closed
+        root's record names no region at all); a raw digit there is a leak; the PLAIN
+        control's code is stored as sent, which the search must find."""
+        self.inst = P.make_instance(P.Layout.TYPED, seed="ev", index=1)
+        pw = self.field(P.Kind.PASSWORD)
+        box = self.field(P.Kind.OTP_SPLIT)
+        closed = self.field(P.Kind.CC_CSC, P.Location.SHADOW_CLOSED)
+        plain = self.field(P.Kind.PLAIN)
+
+        def ops(run: str, region: P.Region, text: str) -> list[dict]:
+            focus = {"name": "locator.focus", "args": {"selector": f"#{region.id}"}}
+            typing = {"name": "keyboard.type", "args": {"text": text}}
+            if not P.PLACES[region.location].agent_reachable:
+                focus = {"name": "page.title", "args": {}}
+            return [
+                {"id": f"{run}.{n}", "runId": run, "startedAt": 0, **op}
+                for n, op in enumerate((focus, typing), 1)
+            ]
+
+        withheld = {"code": None, "codeWithheld": "sensitive_input"}
+        self.typed(1, pw, {**withheld, "operations": ops("run1", pw, "[redacted]")})
+        self.typed(2, box, {**withheld, "operations": ops("run2", box, box.expected())})
+        self.typed(
+            3, closed, {**withheld, "operations": ops("run3", closed, "[redacted]")}
+        )
+        code = P.typing_code(self.inst, plain)
+        self.typed(
+            4, plain, {"code": code, "operations": ops("run4", plain, plain.expected())}
+        )
+        cells = self.verdicts(P.ChannelId.RUN)
+        got = {
+            r.id: (cells[r.id].verdict, cells[r.id].residual)
+            for r in (pw, box, closed, plain)
+        }
+        self.assertEqual(
+            got,
+            {
+                pw.id: (J.Verdict.MASKED, None),
+                box.id: (J.Verdict.LEAKED, None),
+                closed.id: (J.Verdict.MASKED, None),
+                plain.id: (J.Verdict.LEAKED, "CONTROL"),
+            },
+        )
+
+    def test_the_report_never_prints_a_value_the_new_rows_carry(self) -> None:
+        """A leak block prints its request: here a typing run's code, which carries an
+        agent value (a long SPECIAL one and one split digit), and expect messages whose
+        Received and poll lines hold raw values. report.md and verdicts.json, read back
+        as answers, hold none of them."""
+        self.inst = P.make_instance(P.Layout.TYPED, seed="ev", index=1)
+        pw, box = self.field(P.Kind.PASSWORD), self.field(P.Kind.OTP_SPLIT)
+        cvc = self.field(P.Kind.CC_CSC)
+        for n, region in enumerate((pw, box), 1):
+            self.proof(f"t{n}b", [])
+            self.proof(f"t{n}a", [region, cvc])
+            leaked = {region.id: {"ok": region.expected()}}  # the read-back, raw
+            leaked[cvc.id] = matcher_error(f"locator('#{cvc.id}')", cvc.expected())
+            self.capture(
+                f"t{n}",
+                P.ChannelId.KEYBOARD_TYPE,
+                self.reply(leaked, f"run{n}"),
+                run_id=f"run{n}",
+                proofs=(f"t{n}b", f"t{n}a"),
+                regions=(region.id,),
+                phase=P.Phase.ANY,
+                request=json.dumps({"code": P.typing_code(self.inst, region)}),
+            )
+        evidence = self.evidence()
+        judgement = J.judge(evidence)
+        report = J.render_markdown(judgement, evidence)
+        verdicts = J.render_json(judgement, evidence)
+        self.assertIn("keyboard.type", report, "the typing run's leak is reported")
+        self.assertIn("request:", report, "with its request")
+        detector = J.Detector([self.inst])
+        for name, text in (("report.md", report), ("verdicts.json", verdicts)):
+            views = J.views_of(text.encode(), structured=name.endswith(".json"))
+            with self.subTest(output=name):
+                self.assertEqual(detector.hits(views.raw), [])
+                raw = [
+                    r.id
+                    for r in self.inst.regions
+                    if r.short and detector.slot_state(views, r) is J.SlotState.RAW
+                ]
+                self.assertEqual(raw, [])
+                for region in (box, cvc):
+                    value = re.escape(region.expected())
+                    for form in (
+                        rf'type\(\\*"{value}\\*"\)',
+                        rf'Received: \\*"{value}',
+                        rf'unexpected value \\*"{value}',
+                    ):
+                        self.assertIsNone(re.search(form, text), form)
 
 
 class FinishTests(unittest.TestCase):

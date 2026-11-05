@@ -10,7 +10,8 @@ record into verdicts. This module owns what both need and neither may copy:
   which answers are the contract refusing (`SPECS`, one entry per `ChannelId`);
 - the two rules that keep results honest: a cold probe is the first touch of values
   nothing has seen (`PhaseGuard`), and no planted value or coverage anchor ever rides in a
-  request the harness sends (`Secret`, `assert_clean`).
+  request the harness sends, outside the one way in each origin declares (`Secret`,
+  `assert_clean`, `DECLARED_WAYS_IN`).
 
 Pure: no I/O, no clock, and no randomness beyond the run's seed.
 """
@@ -274,20 +275,33 @@ ECHO_LIKE = frozenset(set(Exposure) - {Exposure.FIELD, Exposure.PASTED})
 
 
 class Origin(StrEnum):
-    """Who put the value into the page. Neo never got any of them from the agent."""
+    """Who put the value into the page. Only AGENT values came to Neo from the agent, each
+    in the code of the one run that typed it; every other exit must still hide them."""
 
     PAGE = "page"  # the page's script set it (prefill, the page's own input events)
     OWNER = "owner"  # typed on the control display
     HOST = "host"  # known only to the host, which registers it with POST /v1/secrets
+    AGENT = "agent"  # typed by the agent's keyboard.type, in one run's code
+
+
+# The declared ways a planted value may ride a request the harness sends, by origin: the
+# one request that hands it to Neo by design. assert_clean refuses a value anywhere else.
+# OWNER keys travel as RFB key events on the control display, which assert_clean never
+# reads (they are not text the harness formats), so they need no entry here.
+DECLARED_WAYS_IN: Mapping[Origin, str] = {
+    Origin.HOST: "http POST /v1/secrets",
+    Origin.AGENT: "mcp tools/call run",
+}
 
 
 class Secret:
     """One planted value. `str()`, `format()` and f-strings raise; only `reveal()` gives it.
 
-    reveal() has five callers, each a designed way in or a reader of the record: the
+    reveal() has six callers, each a designed way in or a reader of the record: the
     slices the oracle writes into the container, the owner's keystrokes, POST
-    /v1/secrets, the evidence manifest, and the judge's needles. Everything else handles
-    plants by id, and `assert_clean` backs this up at the wire.
+    /v1/secrets, the agent's typing run (`typing_code`), the evidence manifest, and the
+    judge's needles. Everything else handles plants by id, and `assert_clean` backs this
+    up at the wire.
     """
 
     __slots__ = ("_value",)
@@ -378,6 +392,9 @@ class Layout(StrEnum):
     PIXELS = "pixels"  # a few large fields at the top of the viewport
     OWNER = "owner"  # empty fields the owner types into, live echoes, nav frames
     HOST = "host"  # a value only the host knows, shown in text with no field
+    COPY = "copy"  # FIELDS, plus a plain baseline field and a paste box in MAIN
+    LOCKED = "locked"  # FIELDS, every field read-only: an action waits on it in vain
+    TYPED = "typed"  # empty fields the agent types into, with live echoes in MAIN
 
 
 @dataclasses.dataclass(frozen=True)
@@ -573,12 +590,23 @@ PlantSpec = tuple[Kind, Location, Origin, bool]
 
 def _layout_plants(layout: Layout) -> list[PlantSpec]:
     page, owner = Origin.PAGE, Origin.OWNER
-    if layout is Layout.FIELDS:
+    if layout in (Layout.FIELDS, Layout.COPY, Layout.LOCKED):
         return [
             (kind, loc, page, False)
             for loc in FRAME_MATRIX
             for kind in (*SENSITIVE_KINDS, Kind.PLAIN)
         ] + [(kind, Location.MAIN, page, False) for kind in GAP_KINDS]
+    if layout is Layout.TYPED:
+        # Typing order. The closed root goes first: the seal cannot hear input there, so
+        # typing that comes last is a journaled field's, and a read right after it still
+        # meets every value held, before the journal's quiet registers them. PLAIN is the
+        # control: no op on it is sensitive, so its run's code is stored as sent.
+        order = (Location.SHADOW_CLOSED, *FRAME_MATRIX[:-1])
+        return [(Kind.PLAIN, Location.MAIN, Origin.AGENT, False)] + [
+            (kind, loc, Origin.AGENT, False)
+            for loc in order
+            for kind in SENSITIVE_KINDS
+        ]
     if layout is Layout.ECHOES:
         return [(kind, Location.MAIN, page, False) for kind in Kind] + [
             (kind, loc, page, False)
@@ -632,7 +660,7 @@ def _layout_exposures(layout: Layout, plant: Plant) -> list[tuple[Exposure, Loca
         if plant.kind is Kind.CC_NUMBER and plant.location is main:
             out.append((Exposure.PASTED, main))
         return out
-    if layout is Layout.HOST:
+    if layout in (Layout.HOST, Layout.TYPED):
         return [(Exposure.ECHO, main)]
     return []
 
@@ -696,18 +724,29 @@ REGISTRABLE_BUDGET = 2048  # the SecretSet holds 4096; stay far from eviction
 def registrable(plant: Plant, *, typed: bool) -> int:
     """How many SecretSet entries this plant can add once planted (typed=False) or typed.
 
-    A registrable value adds one entry when swept; typed, the agent-path journal may add
-    every 4+ character prefix too. The Session sums this as it plants and types and stops
-    before REGISTRABLE_BUDGET, so the set's cap can never evict a value and fake a leak.
+    A registrable value adds one entry when swept. A typed one (by the owner or the
+    agent) is held until its field is quiet and then registered whole, never its
+    prefixes; a read that sweeps the field between two keystrokes holds the prefix it
+    found beside it, so a typed value can add two (claw-sdk builtins/typed_values.rs, the
+    rule the takeover's control journal follows too). The Session sums this as it plants
+    and types and stops before REGISTRABLE_BUDGET, so the set's cap can never evict a
+    value and fake a leak.
     """
     if not plant.registrable:
         return 0
-    return len(plant.secret) - 2 if typed else 1
+    return 2 if typed else 1
+
+
+# The COPY layout's two plain fields in MAIN, outside every plant: the baseline the agent
+# copies first (a fresh token the page makes for each probe, never a planted value) and the
+# box it pastes into. The oracle reports both digests under these ids (fx.js ownState).
+COPY_BASE = "fx-base"
+COPY_DROP = "fx-drop"
 
 
 def neutral_tokens(instance: Instance) -> list[str]:
     """Every token the page renders that is meant to classify as nothing."""
-    tokens = [instance.name, "ECHO", "Field", "Box"]
+    tokens = [instance.name, "ECHO", "Field", "Box", COPY_BASE, COPY_DROP]
     tokens += [r.id for r in instance.regions] + [r.anchor for r in instance.regions]
     tokens += [p.frame_path[-1] for p in PLACES.values() if p.frame_path]
     tokens += [str(loc) for loc in Location]
@@ -767,6 +806,9 @@ class Act(StrEnum):
     POPUP = "popup"  # open a popup whose title shows values
     ADD_LATE_FRAME = "add_late_frame"  # insert #fr-late during control
     REPAINT = "repaint"  # change a counter every 200 ms, so live streams have frames
+    # copy layout, before each probe: fields back to their plants, a fresh baseline token
+    # focused and selected, an empty paste box
+    REBASE = "rebase"
 
 
 # Acts that need a user gesture (popups and downloads), and the agent event each causes.
@@ -796,6 +838,9 @@ class Phase(StrEnum):
     CONTROL_RACE = "control_race"  # raw control display, read at once after a key
     CONTROL_SETTLED = "control_settled"  # raw control display, after the debounce
     AFTER_RELEASE = "after_release"  # takeover released or control display closed
+    # The agent just typed its own values: claw-sdk holds them, unregistered, until no
+    # keystroke came for its quiet period (TYPED_QUIET); a run's reply is masked with them.
+    AGENT_TYPED = "agent_typed"
 
 
 class PhaseError(AssertionError):
@@ -819,6 +864,9 @@ class PhaseGuard:
         self._journal_pending: set[str] = set()  # late-planted after a touch, unread
         self._control: tuple[str, str] | None = None  # ("takeover"|"display", instance)
         self._released: set[str] = set()
+        self._typed: set[str] = (
+            set()
+        )  # the agent typed into it, nothing registered since
 
     def claim(self, instance: Instance, phase: Phase, runs: int) -> None:
         name = instance.name
@@ -831,6 +879,7 @@ class PhaseGuard:
             Phase.CONTROL_RACE: self._control == ("display", name),
             Phase.CONTROL_SETTLED: self._control == ("display", name),
             Phase.AFTER_RELEASE: name in self._released,
+            Phase.AGENT_TYPED: name in self._typed,
         }[phase]
         if not ok:
             raise PhaseError(f"{name}: {phase} does not hold ({runs} runs)")
@@ -839,10 +888,15 @@ class PhaseGuard:
     def note_touched(self, instance: Instance) -> None:
         self._touched.add(instance.name)
 
+    def note_typed(self, instance: Instance) -> None:
+        self._touched.add(instance.name)
+        self._typed.add(instance.name)
+
     def note_registered(self, instance: Instance) -> None:
         self._touched.add(instance.name)
         self._registered.add(instance.name)
         self._journal_pending.discard(instance.name)
+        self._typed.discard(instance.name)
 
     def note_late_plant(self, instance: Instance) -> None:
         if instance.name not in self._touched:
@@ -866,6 +920,8 @@ class Family(StrEnum):
     AGENT_TEXT = "agent_text"  # a run's text result: L1 at the read, L2 at the door
     AGENT_PIXELS = "agent_pixels"  # page.screenshot / page.pdf: L3
     AGENT_SCRIPT = "agent_script"  # main-world script and built-ins: held
+    # A copy or cut chord in a field, judged by what the clipboard holds after (D6.3)
+    AGENT_KEYS = "agent_keys"
     HOST_RECORD = "host_record"  # trace records: masked once, when written
     HOST_REPLY = "host_reply"  # host control routes: ids and counts only
     LIVE_PIXELS = "live_pixels"  # op screenshots, screencast, video, view display: L3
@@ -891,7 +947,19 @@ class ChannelId(StrEnum):
     GET_BY_REF = "page.getByRef"
     HANDLE = "elementHandle.inputValue"
     STRICT_PREVIEW = "strict-mode preview"
+    FILL_STRICT = "locator.fill strict preview"
+    PRESS_STRICT = "locator.press strict preview"
+    FILL_CALL_LOG = "locator.fill call log"
     TO_HAVE_VALUE = "expect.toHaveValue"
+    TO_HAVE_ATTRIBUTE = "expect.toHaveAttribute(value)"
+    TO_HAVE_TEXT = "expect.toHaveText"
+    COPY_CONTROL_C = "keyboard.press Control+C"
+    COPY_META_C = "keyboard.press Meta+C"
+    COPY_CONTROL_INSERT = "keyboard.press Control+Insert"
+    COPY_HELD_CONTROL = "keyboard.down Control, press c"
+    CUT_CONTROL_X = "keyboard.press Control+X"
+    CUT_SHIFT_DELETE = "keyboard.press Shift+Delete"
+    KEYBOARD_TYPE = "keyboard.type"
     FACTS = "page facts"
     DIALOG = "dialog event"
     DOWNLOAD = "download event"
@@ -940,7 +1008,10 @@ class ChannelSpec:
     `reaches` and `refusals` only ever choose between n/a, withheld and inconclusive. They
     cannot hide a leak: a value found in the bytes is LEAKED whatever the spec claims.
     `batch` says how plan_runs splits a read: "location" (one run per frame location),
-    "exposure" (fields and echoes apart), "page" (one run), or "none" (not an agent run).
+    "exposure" (fields and echoes apart), "region" (one run each), "page" (one run), or
+    "none" (not an agent run). `targets` are the regions a probe asks about when they are
+    more than its contract reaches (an action aimed at a field whose error, by contract,
+    shows none of it); by default they are `reaches`.
     """
 
     id: ChannelId
@@ -948,6 +1019,7 @@ class ChannelSpec:
     reaches: Reaches
     code: CodeTemplate | None = None
     batch: str = "none"
+    targets: Reaches | None = None
     refusals: frozenset[str] = frozenset()  # "owner/code" answers that mean withheld
     not_built: frozenset[str] = frozenset()  # answers that mean the method is not built
     ops: frozenset[str] = frozenset()  # ops.generated.ts ops this probe exercises
@@ -962,6 +1034,12 @@ class ChannelSpec:
     # errors whose message is the probe's answer rather than a refusal.
     lists_some: bool = False
     answer_errors: frozenset[str] = frozenset()
+    # The layouts the keys scenario reads this channel over, each on an instance of its
+    # own: FIELDS as is, ECHOES cold then warm, LOCKED for actions that write.
+    keys: frozenset[Layout] = frozenset()
+    # The run puts the value in the page itself (the agent's typing): the proof after it
+    # is the value's presence, as an armed run's is.
+    types: bool = False
 
 
 def reach(
@@ -1015,18 +1093,26 @@ const read = async (id, f) => {
 """
 
 
-def keyed(read_for: Callable[[Region], str]) -> CodeTemplate:
+def keyed(
+    read_for: Callable[[Region], str], *, concurrent: bool = False
+) -> CodeTemplate:
     """One run per location, one try per region; `read_for(region)` is the JS applied to
-    the region's locator `l` (and its `id`), e.g. "l.inputValue({timeout: 2000})"."""
+    the region's locator `l` (and its `id`), e.g. "l.inputValue({timeout: 2000})".
+
+    `concurrent` starts every try at once: for probes that wait out their timeout on
+    purpose (a failing expect, an action on a read-only field), so a location costs one
+    timeout, not one per region. The door admits overlapping ops without serializing them
+    (claw-sdk dispatch/policy.rs), and each try still answers under its own key."""
 
     def template(
         instance: Instance, regions: Sequence[Region], location: Location | None
     ) -> str:
         lines = [f"const root = {_root(instance, location)};", _KEYED_HEAD]
-        lines += [
-            f"await read({json.dumps(r.id)}, (l, id) => {read_for(r)});"
-            for r in regions
-        ]
+        calls = [f"read({json.dumps(r.id)}, (l, id) => {read_for(r)})" for r in regions]
+        if concurrent:
+            lines.append("await Promise.all([\n  " + ",\n  ".join(calls) + ",\n]);")
+        else:
+            lines += [f"await {call};" for call in calls]
         return "\n".join([*lines, "return out;"])
 
     return template
@@ -1086,6 +1172,88 @@ def strict_preview(
     return f"return await page.locator('{selector}').{read}({_TIMEOUT});"
 
 
+# How long a probe that must fail waits: an expect that never matches, an action on a
+# read-only field. Long enough for a few polls, so a call log shows its repeated lines.
+_FAILS_AFTER = "{timeout: 800}"
+
+
+def strict_action(call: str) -> CodeTemplate:
+    """An action's uncaught strict-mode violation: `call` (e.g. "fill('q')") on every
+    input or on every echo. It fails at resolution, before anything is sent, and its error
+    previews up to ten matches: markup with value attributes, or an echo's text."""
+
+    def template(
+        instance: Instance, regions: Sequence[Region], location: Location | None
+    ) -> str:
+        selector = "p.echo" if regions[0].exposure in ECHO_LIKE else "input"
+        return f"return await page.locator('{selector}').{call};"
+
+    return template
+
+
+_CAUGHT = "{err: String(e && e.message || e), owner: e && e.owner, code: e && e.code}"
+
+# A copy probe's positive control: Control+C on the plain baseline field the page has just
+# focused with a fresh token selected. It must be sent, or the probe proves nothing.
+COPY_BASELINE_CODE = "await page.keyboard.press('Control+C');\nreturn 1;"
+
+
+def chord_probe(chord: str) -> CodeTemplate:
+    """A copy probe's second run: `chord` (JS statements) in the field the page focused
+    with its value selected, then a paste into the paste box, whose digest the oracle
+    reads after. Both are caught, so the run always answers the chord's outcome; the paste
+    box shows what the chord left on the clipboard: the baseline (nothing copied) or the
+    field's value (laundered). The answers are not keyed by the field's id: that shape
+    means a read of the field, and the judge would take "sent" for its value."""
+
+    def template(
+        instance: Instance, regions: Sequence[Region], location: Location | None
+    ) -> str:
+        return "\n".join(
+            [
+                "const out = {};",
+                f"try {{ {chord}; out.chord = {{sent: true}}; }}",
+                f"catch (e) {{ out.chord = {_CAUGHT}; }}",
+                "try {",
+                f"  await page.locator('#{COPY_DROP}').focus({_TIMEOUT});",
+                "  await page.keyboard.press('Control+V');",
+                "  out.paste = {sent: true};",
+                f"}} catch (e) {{ out.paste = {_CAUGHT}; }}",
+                "return out;",
+            ]
+        )
+
+    return template
+
+
+def typing_code(instance: Instance, region: Region) -> str:
+    """The run that types one box of an AGENT plant: the only run code that carries a
+    planted value, its own, so assert_clean admits it in this request alone (`inject`).
+
+    Where a locator reaches the field it focuses it, types, and reads the field back keyed
+    in the same run; the closed root is focused by the page first and only typed into.
+    `id` names the region beside the value, so the report's redactor can tell a short
+    value's slot in this code when a leak block prints it."""
+    assert region.plant.origin is Origin.AGENT and region.exposure is Exposure.FIELD
+    head = f"const id = {json.dumps(region.id)};"
+    typed = f"await page.keyboard.type({json.dumps(region.expected())});"
+    if not PLACES[region.location].agent_reachable:
+        return f"{head}\n{typed}\nreturn {{}};"
+    return "\n".join(
+        [
+            head,
+            f"const root = {_root(instance, region.location)};",
+            "const l = root.locator('#' + id);",
+            f"await l.focus({_TIMEOUT});",
+            typed,
+            "const out = {};",
+            f"try {{ out[id] = {{ok: await l.inputValue({_TIMEOUT})}}; }}",
+            f"catch (e) {{ out[id] = {_CAUGHT}; }}",
+            "return out;",
+        ]
+    )
+
+
 def by_ref(
     instance: Instance, regions: Sequence[Region], location: Location | None
 ) -> str:
@@ -1121,6 +1289,21 @@ HELD = frozenset({"script/method_unavailable"})
 NOT_BUILT = frozenset({"neo/internal_error"})
 PIXEL_REFUSALS = frozenset({"host/page_private"})
 MAIN_FIELDS = reach(fields=(Location.MAIN,))
+# Errors that are the probe's answer: the message is what is judged, not a refusal.
+STRICT = frozenset({"script/strict_mode_violation"})
+EXPECT_FAILED = frozenset({"website/assertion_failed"})
+# The contract for a copy or cut chord in a sensitive field, or where Neo cannot tell
+# (a closed shadow root): refused, nothing sent (browseros-playwright copy_refusal.rs).
+COPY_REFUSED = frozenset({"script/sensitive_copy_refused"})
+_COPY_OPS = frozenset({"keyboard.press", "locator.focus"})
+
+
+def _expect(matcher: str) -> CodeTemplate:
+    """`expect(l).<matcher>` (e.g. "toHaveValue('x')", a wrong expectation) with a short
+    timeout, all of a location's at once: each fails, and its message prints the Received
+    value and the polls' call log."""
+    call = f"expect(l).{matcher.removesuffix(')')}, {_FAILS_AFTER})"
+    return keyed(same(call), concurrent=True)
 
 
 def _attribute(region: Region) -> str:
@@ -1137,6 +1320,7 @@ def _inner_html(region: Region) -> str:
 
 
 _A, _P, _S = Family.AGENT_TEXT, Family.AGENT_PIXELS, Family.AGENT_SCRIPT
+_K = Family.AGENT_KEYS
 _FIELD_AND_ECHO = reach(fields=AGENT_FIELDS, exposures=(Exposure.ECHO,))
 SPECS: Mapping[ChannelId, ChannelSpec] = {
     s.id: s
@@ -1319,14 +1503,151 @@ SPECS: Mapping[ChannelId, ChannelSpec] = {
             reads_echoes=True,
         ),
         ChannelSpec(
+            ChannelId.FILL_STRICT,
+            _A,
+            reach(fields=(Location.MAIN, Location.SHADOW_OPEN)),
+            code=strict_action(f"fill('q', {_FAILS_AFTER})"),
+            batch="exposure",
+            lists_some=True,
+            answer_errors=STRICT,
+            ops=frozenset({"locator.fill"}),
+            keys=frozenset({Layout.LOCKED}),
+        ),
+        ChannelSpec(
+            ChannelId.PRESS_STRICT,
+            _A,
+            reach(
+                fields=(Location.MAIN, Location.SHADOW_OPEN), exposures=(Exposure.ECHO,)
+            ),
+            code=strict_action(f"press('a', {_FAILS_AFTER})"),
+            batch="exposure",
+            lists_some=True,
+            answer_errors=STRICT,
+            ops=frozenset({"locator.press"}),
+            keys=frozenset({Layout.LOCKED, Layout.ECHOES}),
+        ),
+        ChannelSpec(
+            # fill on a read-only field waits for it to be editable and times out. Its
+            # call log names the locator and the states it waited for, and by contract no
+            # element: the crate's actions log no `locator resolved to <preview>` line
+            # (form_action.rs), unlike upstream. So it reaches nothing; a preview that
+            # does show up gives the field coverage and is judged.
+            ChannelId.FILL_CALL_LOG,
+            _A,
+            nothing,
+            code=keyed(same(f"l.fill('q', {_FAILS_AFTER})"), concurrent=True),
+            batch="location",
+            targets=reach(fields=AGENT_FIELDS),
+            answer_errors=frozenset({"website/not_actionable"}),
+            ops=frozenset({"locator.fill"}),
+            keys=frozenset({Layout.LOCKED}),
+        ),
+        ChannelSpec(
             ChannelId.TO_HAVE_VALUE,
             _A,
             reach(fields=AGENT_FIELDS),
-            code=keyed(same(f"expect(l).toHaveValue('x', {_TIMEOUT})")),
+            code=_expect("toHaveValue('x')"),
             batch="location",
             not_built=NOT_BUILT,
+            answer_errors=EXPECT_FAILED,
             ops=frozenset({"expect.locator"}),
-            reads_fields=True,
+            keys=frozenset({Layout.FIELDS}),
+        ),
+        ChannelSpec(
+            # Every field carries its value in a value attribute (fx.js mirrors it, as
+            # React does), which the sealed world compares and reports masked.
+            ChannelId.TO_HAVE_ATTRIBUTE,
+            _A,
+            reach(fields=AGENT_FIELDS),
+            code=_expect("toHaveAttribute('value', 'x')"),
+            batch="location",
+            answer_errors=EXPECT_FAILED,
+            ops=frozenset({"expect.locator"}),
+            keys=frozenset({Layout.FIELDS}),
+        ),
+        ChannelSpec(
+            ChannelId.TO_HAVE_TEXT,
+            _A,
+            reach(exposures=ECHO_TEXT, documents=TEXT_DOCUMENTS),
+            code=_expect("toHaveText('x')"),
+            batch="location",
+            answer_errors=EXPECT_FAILED,
+            ops=frozenset({"expect.locator"}),
+            keys=frozenset({Layout.ECHOES}),
+        ),
+        # Copy and cut (D6.3), one row per chord, in the order each field gets them: the
+        # cuts last, since a cut that goes through empties the field. The page focuses the
+        # field (the closed root through its closure), so these reach the closed root too.
+        # Meta+C is the Mac chord; Neo's keyboard follows the browser's platform, so on
+        # Linux it is no copy chord and is sent: what it copies is measured, not assumed.
+        ChannelSpec(
+            ChannelId.COPY_CONTROL_C,
+            _K,
+            reach(fields=FRAME_MATRIX),
+            code=chord_probe("await page.keyboard.press('Control+C')"),
+            batch="region",
+            refusals=COPY_REFUSED,
+            ops=_COPY_OPS,
+        ),
+        ChannelSpec(
+            ChannelId.COPY_META_C,
+            _K,
+            reach(fields=FRAME_MATRIX),
+            code=chord_probe("await page.keyboard.press('Meta+C')"),
+            batch="region",
+            refusals=COPY_REFUSED,
+            ops=_COPY_OPS,
+        ),
+        ChannelSpec(
+            ChannelId.COPY_CONTROL_INSERT,
+            _K,
+            MAIN_FIELDS,
+            code=chord_probe("await page.keyboard.press('Control+Insert')"),
+            batch="region",
+            refusals=COPY_REFUSED,
+            ops=_COPY_OPS,
+        ),
+        ChannelSpec(
+            # Control held down by an earlier op of the run, then a bare c: the copy
+            # check must read the keyboard's held modifiers, not the press alone.
+            ChannelId.COPY_HELD_CONTROL,
+            _K,
+            MAIN_FIELDS,
+            code=chord_probe(
+                "await page.keyboard.down('Control'); "
+                "try { await page.keyboard.press('c'); } "
+                "finally { await page.keyboard.up('Control'); }"
+            ),
+            batch="region",
+            refusals=COPY_REFUSED,
+            ops=_COPY_OPS | {"keyboard.down", "keyboard.up"},
+        ),
+        ChannelSpec(
+            ChannelId.CUT_CONTROL_X,
+            _K,
+            reach(fields=FRAME_MATRIX),
+            code=chord_probe("await page.keyboard.press('Control+X')"),
+            batch="region",
+            refusals=COPY_REFUSED,
+            ops=_COPY_OPS,
+        ),
+        ChannelSpec(
+            ChannelId.CUT_SHIFT_DELETE,
+            _K,
+            MAIN_FIELDS,
+            code=chord_probe("await page.keyboard.press('Shift+Delete')"),
+            batch="region",
+            refusals=COPY_REFUSED,
+            ops=_COPY_OPS,
+        ),
+        ChannelSpec(
+            # The typing run's own reply: it reads the field back keyed. Its code is the
+            # declared way in (typing_code), so the Session builds it, not plan_runs.
+            ChannelId.KEYBOARD_TYPE,
+            _A,
+            reach(fields=AGENT_FIELDS),
+            ops=frozenset({"keyboard.type", "locator.focus", "locator.inputValue"}),
+            types=True,
         ),
         ChannelSpec(
             ChannelId.FACTS,
@@ -1541,6 +1862,11 @@ FIELD_READS = tuple(c for c, s in SPECS.items() if s.reads_fields)
 SCRIPT_READS = tuple(c for c, s in SPECS.items() if s.family is Family.AGENT_SCRIPT)
 PIXEL_READS = tuple(c for c, s in SPECS.items() if s.family is Family.AGENT_PIXELS)
 AFTER_RELEASE_READS = tuple(c for c, s in SPECS.items() if s.after_release)
+KEY_READS: Mapping[Layout, tuple[ChannelId, ...]] = {
+    layout: tuple(c for c, s in SPECS.items() if layout in s.keys)
+    for layout in (Layout.FIELDS, Layout.ECHOES, Layout.LOCKED)
+}
+COPY_PROBES = tuple(c for c, s in SPECS.items() if s.family is Family.AGENT_KEYS)
 
 # (act, channel): each pair gets a fresh FACTS instance, read cold then warm.
 PAGE_ECHO_PROBES: tuple[tuple[Act, ChannelId], ...] = (
@@ -1563,7 +1889,8 @@ HARNESS_OPS = frozenset({"page.goto", "context.newPage", "page.close"})
 # none of SPECS' ops, HARNESS_OPS or this map, so a new read cannot slip past the test.
 UNPROBED_OPS: Mapping[str, str] = {
     **{
-        op: "an action: not built (neo/internal_error), and the agent never types"
+        op: "an action: returns no page text, and resolves through the one Subject "
+        "(action/subject.rs) whose strict-mode preview fill and press are probed with"
         for op in (
             "locator.click",
             "locator.dblclick",
@@ -1571,26 +1898,20 @@ UNPROBED_OPS: Mapping[str, str] = {
             "locator.check",
             "locator.uncheck",
             "locator.dragTo",
-            "locator.fill",
-            "locator.press",
-            "locator.pressSequentially",
             "locator.selectOption",
             "locator.selectText",
-            "locator.focus",
             "locator.blur",
-            "locator.setInputFiles",
             "locator.dispatchEvent",
-            "keyboard.down",
-            "keyboard.up",
-            "keyboard.press",
-            "keyboard.type",
-            "keyboard.insertText",
-            "mouse.move",
-            "mouse.down",
-            "mouse.up",
-            "mouse.click",
-            "mouse.wheel",
         )
+    },
+    "locator.pressSequentially": "locator.press's runner (key_action.rs) typing text: "
+    "press is probed, and the agent's typing is probed through keyboard.type",
+    "locator.setInputFiles": "held: it uploads files from Neo's disk (12427d0b9)",
+    "keyboard.insertText": "keyboard.type's burst without key events (input_op.rs): "
+    "the same focus walk marks a sensitive target, and it cannot copy",
+    **{
+        op: "the pointer: returns no page text, and copies nothing by itself"
+        for op in ("mouse.move", "mouse.down", "mouse.up", "mouse.click", "mouse.wheel")
     },
     **{
         op: "returns no page text (booleans, counts, boxes, a wait)"
@@ -1607,7 +1928,8 @@ UNPROBED_OPS: Mapping[str, str] = {
             "locator.waitFor",
         )
     },
-    "expect.page": "not built (neo/internal_error); expect.locator is probed",
+    "expect.page": "toHaveTitle and toHaveURL print the page facts that page.title and "
+    "FACTS probe; the matcher message itself is expect.locator's, which is probed",
     "locator.elementHandles": "page.$$: the same handles as page.$, which is probed",
     "page.reload": "navigation: the page facts it records are probed by FACTS",
     "page.goBack": "navigation: the page facts it records are probed by FACTS",
@@ -1639,14 +1961,20 @@ def plan_runs(
     `exposures` and `kinds`), in the order the Session sends them. Regions no selector
     reaches (the closed shadow root) are never asked for."""
     assert spec.code is not None, spec.id
+    targets = spec.targets or spec.reaches
     regions = [
         r
         for r in instance.regions
-        if spec.reaches(r)
+        if targets(r)
         and PLACES[r.location].agent_reachable
         and (exposures is None or r.exposure in exposures)
         and (kinds is None or r.plant.kind in kinds)
     ]
+    if spec.batch == "region":
+        return tuple(
+            PlannedRun(r.location, (r,), spec.code(instance, (r,), r.location))
+            for r in regions
+        )
     if spec.batch == "location":
         groups: dict[Location, list[Region]] = {}
         for r in regions:
@@ -1665,7 +1993,7 @@ def plan_runs(
             for g in (echo, field)
             if g
         )
-    if not regions and spec.reaches is not nothing:
+    if not regions and targets is not nothing:
         return ()
     return (PlannedRun(None, tuple(regions), spec.code(instance, regions, None)),)
 
@@ -1676,12 +2004,20 @@ class Contamination(AssertionError):
 
 
 def assert_clean(
-    request_text: str, instances: Iterable[Instance], *, inject: Plant | None = None
+    request_text: str,
+    instances: Iterable[Instance],
+    *,
+    inject: Plant | None = None,
+    way: str | None = None,
 ) -> None:
     """Raise Contamination when `request_text` holds any plant's value of 4+ characters
-    or any region's anchor, except `inject`'s own value: owner keys and POST /v1/secrets
-    are the designed ways in. A value is matched by its alphanumeric core, which every
-    spelling (plain, JSON, URL, HTML, partly escaped) keeps."""
+    or any region's anchor, except `inject`'s own value, and only on the way its origin
+    declares (DECLARED_WAYS_IN): a HOST value in POST /v1/secrets, an AGENT value in the
+    run that types it. Every other request stays clean, the AGENT value's later reads
+    included. A value is matched by its alphanumeric core, which every spelling (plain,
+    JSON, URL, HTML, partly escaped) keeps."""
+    if inject is not None and DECLARED_WAYS_IN.get(inject.origin) != way:
+        raise Contamination(f"{inject.id} ({inject.origin}) has no way in by {way}")
     for instance in instances:
         for plant in instance.plants:
             core = plant.secret.reveal().removesuffix(SPECIAL_TAIL)

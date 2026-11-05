@@ -32,6 +32,8 @@ from pathlib import Path
 
 from leak_plan import (
     ANCHOR_LENGTH,
+    COPY_BASE,
+    COPY_DROP,
     ECHO_LIKE,
     FRAGMENT,
     KINDS,
@@ -110,6 +112,7 @@ class Capture:
     replay_of: str | None = None  # the capture whose requestId this one repeated
     regions: tuple[str, ...] = ()  # what the run asked for; a region it did not ask
     # for is n/a unless the answer shows it anyway
+    control: str | None = None  # a copy probe's positive control: its baseline copy run
 
 
 @dataclasses.dataclass(frozen=True)
@@ -122,6 +125,9 @@ class Proof:
     at_ms: int
     regions: Mapping[str, tuple[str, int] | None]
     documents: tuple[str, ...]
+    # The ids of the focused elements, each from a document that has the focus (the
+    # iframe on the way down, then the field): where keyboard input lands now.
+    focus: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -210,6 +216,7 @@ def decode(line: str) -> Record:
             k: tuple(v) if v else None for k, v in data["regions"].items()
         }
         data["documents"] = tuple(data["documents"])
+        data["focus"] = tuple(data.get("focus", ()))
     return cls(**data)
 
 
@@ -406,7 +413,25 @@ _SLOT_VALUE = re.compile(
     r'|(?:\]|\\*"):[ ]([^"\\\n]{0,64})'
     r'|- text: ([^"\\\n]{0,64})'
     r'|\bvalue=\\*"([^"\\]{0,64})'
+    r'|Received(?: string)?: +\\*"([^"\\]{0,64})'
+    r'|unexpected value \\*"([^"\\\n]{0,64})'
+    r'|\.type\(\\*"([^"\\]{0,64})'
 )
+# An expect failure's Received line, and the `unexpected value` line each poll adds to
+# its call log (browseros-playwright expect/matcher_message.rs): Received escapes only
+# `"` and `\`, a poll line prints the value bare. In a keyed error they are the region's.
+_RECEIVED = re.compile(r'^Received(?: string)?: +"((?:[^"\\\n]|\\.)*)"$', re.M)
+_UNEXPECTED = re.compile(r'unexpected value "(.*)"$', re.M)
+# What a typing run carried, as its records keep it: the typed argument of a typing op
+# (the trace redacts it for a sensitive target) and the literal in the run's code (which
+# the trace withholds once an op was sensitive). leak_plan.typing_code writes the literal.
+_TYPING_ARGS = {
+    "keyboard.type": "text",
+    "keyboard.insertText": "text",
+    "locator.pressSequentially": "text",
+    "locator.fill": "value",
+}
+_TYPED_LITERAL = re.compile(r'keyboard\.type\(("(?:[^"\\]|\\.)*")\)')
 _SPECIAL_FORMS = {
     Form.JSON: json.dumps(SPECIAL_TAIL)[1:-1],
     Form.HTML: html.escape(SPECIAL_TAIL),
@@ -518,6 +543,37 @@ class Views:
     states: dict[str, SlotState | None] = dataclasses.field(
         default_factory=dict, compare=False, repr=False
     )
+
+
+def matcher_slots(message: str) -> list[str]:
+    """The values an expect failure's message shows: its Received value and each poll's."""
+    received = [re.sub(r"\\(.)", r"\1", m) for m in _RECEIVED.findall(message)]
+    return received + _UNEXPECTED.findall(message)
+
+
+def typed_slots(text: str) -> list[str]:
+    """Every place a record of a typing run holds what the run typed."""
+    out: list[str] = []
+    for tree in _json_trees(text):
+        for node in _leaves(tree):
+            if not isinstance(node, dict):
+                continue
+            name, args = node.get("name"), node.get("args")
+            arg = _TYPING_ARGS.get(name) if isinstance(name, str) else None
+            if arg and isinstance(args, dict) and isinstance(args.get(arg), str):
+                out.append(args[arg])
+            if isinstance(node.get("code"), str):
+                for m in _TYPED_LITERAL.finditer(node["code"]):
+                    with contextlib.suppress(ValueError):
+                        out.append(json.loads(m[1]))
+    return out
+
+
+def _worst(states: Iterable[SlotState | None]) -> SlotState | None:
+    """The slot state a region shows when it has several slots: a raw one wins."""
+    found = set(states)
+    ranked = (SlotState.RAW, SlotState.OTHER, SlotState.MASKED, SlotState.EMPTY)
+    return next((s for s in ranked if s in found), None)
 
 
 def _leaves(tree: object) -> Iterator[object]:
@@ -813,6 +869,8 @@ class Detector:
         for read in reads:
             if isinstance(read.get("ok"), str) and "<" not in read["ok"]:
                 out.append(read["ok"])  # markup (innerHTML) is read below, by attribute
+            if isinstance(read.get("err"), str):
+                out += matcher_slots(read["err"])  # an expect failure about this region
         for node in views.nodes:
             if region.anchor in node["name"]:
                 children = [
@@ -827,27 +885,29 @@ class Detector:
                 out += [inline or child for inline, child in aria.findall(s)]
             if region.id in s:
                 for m in tag.finditer(s):
-                    value = re.search(r'\bvalue="([^"]*)"', m.group())
+                    # Page bytes inside the attribute: a disk page cut it, no slot.
+                    value = re.search(r'\bvalue="([^"\x00-\x1f]*)"', m.group())
                     if value:
                         out.append(html.unescape(value[1]))
         return out
 
     def slot_state(self, views: Views, region: Region) -> SlotState | None:
         if region.id not in views.states:
-            states = {
-                state
-                for slot in self.slots(views, region)
-                if (state := classify_cut(slot, region)) is not None
-            }
-            ranked = (SlotState.RAW, SlotState.OTHER, SlotState.MASKED, SlotState.EMPTY)
-            views.states[region.id] = next((s for s in ranked if s in states), None)
+            views.states[region.id] = _worst(
+                classify_cut(slot, region) for slot in self.slots(views, region)
+            )
         return views.states[region.id]
 
     def covered(self, views: Views, region: Region) -> bool:
-        """The answer proves the channel read this region: its anchor is there, or a
-        successful keyed read of its id."""
+        """The answer proves the channel read this region: its anchor is there, a
+        successful keyed read of its id, or a slot of its own: its element's preview with
+        a value attribute, or the Received line of an expect failure keyed by its id."""
         reads = views.keyed.get(region.id, ())
-        return region.anchor in views.raw or any("ok" in read for read in reads)
+        return (
+            region.anchor in views.raw
+            or any("ok" in read for read in reads)
+            or self.slot_state(views, region) is not None
+        )
 
 
 # ------------------------------------------------------------------------------------------
@@ -880,6 +940,32 @@ class Pixels:
     unplaced: int = 0  # frames no record places before or after it
 
 
+class Pasted(StrEnum):
+    """What the paste box held after a copy probe's paste, by the oracle's digest."""
+
+    BASELINE = (
+        "baseline"  # the token the positive control copied: the chord copied nothing
+    )
+    VALUE = "value"  # the field's value: laundered through the clipboard
+    EMPTY = "empty"  # nothing pasted: the round trip failed
+    OTHER = "other"  # something else, such as an earlier probe's token
+    UNREAD = "unread"  # no proof showed the paste box
+
+
+@dataclasses.dataclass(frozen=True)
+class Clip:
+    """What a copy probe proved about the clipboard (decide_copy). The page put a fresh
+    token in a plain field; the agent copied it (the positive control), sent the chord in
+    the field, then pasted into an empty box, whose digest the oracle took after."""
+
+    baseline_sent: bool  # the positive control's Control+C went out, not refused
+    fresh: bool  # its token was new for this probe, so a paste of it is this probe's
+    pasted: Pasted
+    # The field had the keyboard focus just before the chord. Without it the chord could
+    # land in the baseline field and copy its token again: "nothing copied" by accident.
+    focused: bool = True
+
+
 @dataclasses.dataclass(frozen=True)
 class Observation:
     """One region as one channel answered it: the input to the verdict rule."""
@@ -895,6 +981,7 @@ class Observation:
     present: bool | None = True  # None: not shown in both proofs
     refusal: Refusal | None = None
     pixels: Pixels | None = None
+    clip: Clip | None = None  # a copy probe's: judged by decide_copy
     run_id: str | None = None
     derived_from: str | None = None  # a record copying this run's agent answer
 
@@ -973,11 +1060,66 @@ def decide_pixels(o: Observation) -> tuple[Verdict, str]:
     return Verdict.MASKED, "stopped at privacy"
 
 
+def decide_copy(o: Observation) -> tuple[Verdict, str]:
+    """A copy or cut chord in a field (D6.3), by what the clipboard held after it. The
+    field's value pasted back is a leak whatever the chord answered; anything short of a
+    fresh baseline coming back proves nothing about the clipboard:
+
+        a value in the run's answer                  -> LEAKED (as for every answer)
+        the paste box holds the field's value        -> LEAKED (laundered)
+        no presence proof before the chord           -> INCONCLUSIVE
+        the field did not have the focus             -> INCONCLUSIVE
+        the baseline copy refused, or not fresh      -> INCONCLUSIVE
+        the paste box holds anything but it          -> INCONCLUSIVE
+        the chord refused by contract                -> WITHHELD
+        any other refusal                            -> INCONCLUSIVE
+        the chord sent                               -> MASKED (sent, nothing copied)
+    """
+    clip = o.clip
+    assert clip is not None
+    if o.hit:
+        return Verdict.LEAKED, f"{o.hit.form} value in the answer"
+    if clip.pasted is Pasted.VALUE:
+        return Verdict.LEAKED, "laundered: the paste box holds the field's value"
+    if not o.present:
+        return Verdict.INCONCLUSIVE, "no presence proof before the chord"
+    if not clip.focused:
+        return Verdict.INCONCLUSIVE, "the field did not have the focus before the chord"
+    if not clip.baseline_sent:
+        return (
+            Verdict.INCONCLUSIVE,
+            "the baseline copy was not sent: clipboard unproven",
+        )
+    if not clip.fresh:
+        return (
+            Verdict.INCONCLUSIVE,
+            "the baseline token was not new: clipboard unproven",
+        )
+    if clip.pasted is not Pasted.BASELINE:
+        return (
+            Verdict.INCONCLUSIVE,
+            f"the paste box holds {clip.pasted}: clipboard unproven",
+        )
+    if o.refusal is not None:
+        if o.refusal.key in SPECS[o.channel].refusals:
+            return Verdict.WITHHELD, f"{o.refusal.key}; the clipboard kept the baseline"
+        return (
+            Verdict.INCONCLUSIVE,
+            f"refused: {o.refusal.key} {o.refusal.message[:80]}",
+        )
+    return Verdict.MASKED, "sent; the clipboard kept the baseline"
+
+
 # ------------------------------------------------------------------------------------------
 # Observation: every (answer x region) worth a verdict
 # ------------------------------------------------------------------------------------------
 
-AGENT_FAMILIES = (Family.AGENT_TEXT, Family.AGENT_SCRIPT, Family.AGENT_PIXELS)
+AGENT_FAMILIES = (
+    Family.AGENT_TEXT,
+    Family.AGENT_SCRIPT,
+    Family.AGENT_PIXELS,
+    Family.AGENT_KEYS,
+)
 DISK_CHANNELS: tuple[tuple[str, ChannelId], ...] = (
     ("claw-sdk/screenshots/", ChannelId.STORE_SCREENSHOTS),
     ("claw-sdk/trace.db", ChannelId.TRACE_STORE),
@@ -1011,6 +1153,16 @@ class _Observer:
         self.present_regions: set[str] = set()
         self.present_runs: dict[str, set[str]] = {}  # run id -> regions it proved
         self.phase_of_run: dict[str, Phase] = {}
+        self.captures = {c.id: c for c in evidence.captures}
+        # run id -> the field box it typed: that run's records hold its typed text in
+        # known places (typed_slots), which name no region, so the run attributes them.
+        self.typed_runs: dict[str, Region] = {
+            c.run_id: self.detector.regions[c.regions[0]]
+            for c in evidence.captures
+            if SPECS[c.channel].types and c.run_id and c.regions
+        }
+        self.bases: dict[str, object] = {}  # instance -> its last copy probe's baseline
+        self.clips: dict[str, Clip] = {}  # copy probe capture id -> what it proved
         # channel -> [answers, bytes] searched: a channel with no cell was still read
         self.searched: dict[ChannelId, list[int]] = {}
         self.op_start = self._op_starts()
@@ -1124,7 +1276,7 @@ class _Observer:
             live_before, live_after = live(before, region), live(after, region)
             if not (live_before or live_after or hit):
                 continue
-            present = (live_before or bool(c.trigger)) and live_after
+            present = (live_before or bool(c.trigger) or spec.types) and live_after
             if present:
                 self.present_regions.add(region.id)
                 if c.run_id:
@@ -1168,6 +1320,92 @@ class _Observer:
                 )
             )
 
+    def copy_probe(self, c: Capture) -> None:
+        """A copy or cut chord in one field, its run's answer searched like any other.
+        The chord's own answer is keyed by the field's id; the clipboard's is the paste
+        box's digest in the proof after the run, held against the baseline token in the
+        proof before it (the page made the token; it is no plant)."""
+        data = self.ev.blob(c.blob)
+        self.count(c.channel, data)
+        views = views_of(data)
+        hits = self.hits_by_region(views)
+        reply = parse_run_reply(data)
+        instance = self.ev.instances.get(c.instance or "")
+        before, after = (
+            (self.ev.proofs.get(c.proofs[0]), self.ev.proofs.get(c.proofs[1]))
+            if c.proofs
+            else (None, None)
+        )
+        answer = reply.value if isinstance(reply.value, dict) else {}
+        chord = answer.get("chord") if isinstance(answer.get("chord"), dict) else {}
+        refused = (
+            {
+                "owner": chord.get("owner"),
+                "code": chord.get("code"),
+                "message": chord["err"],
+            }
+            if "err" in chord
+            else None
+        )
+        for region in [instance.region(r) for r in c.regions] if instance else []:
+            clip = self._clip(c, region, before, after)
+            self.clips[c.id] = clip
+            if live(before, region):
+                self.present_regions.add(region.id)
+            self.emit(
+                Observation(
+                    c.channel,
+                    region,
+                    c.phase,
+                    c.id,
+                    hit=hits.pop(region.id, None),
+                    covered=True,
+                    reachable=True,
+                    present=live(before, region),
+                    refusal=self._refusal(reply.error) or self._refusal(refused),
+                    clip=clip,
+                    run_id=c.run_id,
+                )
+            )
+        for region_id, hit in hits.items():  # a value where nobody asked is a leak
+            self.emit(
+                Observation(
+                    c.channel,
+                    self.detector.regions[region_id],
+                    c.phase,
+                    c.id,
+                    hit=hit,
+                    present=None,
+                    run_id=c.run_id,
+                )
+            )
+
+    def _clip(
+        self, c: Capture, region: Region, before: Proof | None, after: Proof | None
+    ) -> Clip:
+        control = self.captures.get(c.control or "")
+        sent = (
+            control is not None
+            and parse_run_reply(self.ev.blob(control.blob)).error is None
+        )
+        base = before.regions.get(COPY_BASE) if before else None
+        drop = after.regions.get(COPY_DROP) if after else None
+        fresh = base is not None and base != self.bases.get(c.instance or "")
+        self.bases[c.instance or ""] = base
+        expected = region.expected()
+        if drop is None:
+            pasted = Pasted.UNREAD
+        elif drop == (fnv1a(expected), len(expected)):
+            pasted = Pasted.VALUE
+        elif drop == base:
+            pasted = Pasted.BASELINE
+        elif drop[1] == 0:
+            pasted = Pasted.EMPTY
+        else:
+            pasted = Pasted.OTHER
+        focused = before is not None and region.id in before.focus
+        return Clip(sent, fresh, pasted, focused)
+
     def record(
         self, channel: ChannelId, source: str, data: bytes, run_id: str | None
     ) -> None:
@@ -1191,17 +1429,29 @@ class _Observer:
                 else self.present_regions
             )
             phase = self.phase_of_run.get(part_run or "", Phase.ANY)
+            # A typing run's part: what it typed, where its records keep it (the op's
+            # typed argument, the code's literal), judged as that field's slots.
+            typed = self.typed_runs.get(part_run or "")
+            typed_states = (
+                [classify_cut(s, typed) for s in typed_slots(views.raw)]
+                if typed
+                else []
+            )
             for region_id in sorted(present | set(hits)):
                 region = self.detector.regions[region_id]
                 hit = hits.get(region_id)
+                mine = region is typed and any(typed_states)
                 if (
                     not hit
+                    and not mine
                     and region.anchor not in views.raw
                     and region_id not in views.raw
                 ):
                     continue  # the part never names this region
                 slot = self.detector.slot_state(views, region)
-                covered = self.detector.covered(views, region)
+                covered = self.detector.covered(views, region) or mine
+                if mine:
+                    slot = _worst([slot, *typed_states])
                 if part_run is None and slot is SlotState.EMPTY:
                     slot = None  # with no run to inherit from, an empty slot proves nothing
                 if disk:
@@ -1289,14 +1539,7 @@ class _Observer:
         states one), both on the host clock. Only the screencast states a capture time
         (X-Frame-At, on Neo's clock)."""
         data = self.ev.blob(s.blob)
-        offsets = [o for o, _ in s.chunks]
-        times = [t for _, t in s.chunks]
-
-        def arrival(offset: int) -> int:
-            return (
-                times[max(0, bisect.bisect_right(offsets, offset) - 1)] if times else 0
-            )
-
+        arrival = _arrival(s)
         if s.channel is ChannelId.SCREENCAST:
             return [
                 (
@@ -1312,14 +1555,20 @@ class _Observer:
         return [(arrival(m.offset), None) for m in _rfb(data, s) if m.type == 0]
 
     def clipboard(self, s: Stream) -> None:
-        """Any ServerCutText after the owner's copy is a leak: the image must never send
-        the clipboard to an RFB client (-SendCutText=0 -SendPrimary=0)."""
-        role = (
+        """Any ServerCutText is a leak: the image must never send the clipboard to an RFB
+        client (-SendCutText=0 -SendPrimary=0). Each copy made while the display was open
+        is judged against the cut texts that arrived in its window, from its start (a copy
+        probe's `since_ms`; the stream's start for the first copy) to the next copy's. A
+        cut text names the value it holds, or else the copied region. A copy whose value
+        was proven on the clipboard (the owner's paste, a copy probe's pasted token) is
+        the positive control that lets "no cut text" mean masked."""
+        channel = (
             ChannelId.CLIPBOARD_CONTROL
             if s.role == "control"
             else ChannelId.CLIPBOARD_VIEW
         )
-        self.count(role, self.ev.blob(s.blob))
+        data = self.ev.blob(s.blob)
+        self.count(channel, data)
         copies = [
             st
             for st in self.ev.steps
@@ -1333,38 +1582,49 @@ class _Observer:
         instance = self.ev.instances.get(s.instance or "")
         if not copies or instance is None or s.status != 101:
             return
-        copy = copies[0]
-        region = instance.region(str(copy.detail["region"]))
-        cuts = [m for m in _rfb(self.ev.blob(s.blob), s) if m.type == 3]
-        channel = (
-            ChannelId.CLIPBOARD_CONTROL
-            if s.role == "control"
-            else ChannelId.CLIPBOARD_VIEW
-        )
-        hit = None
-        for cut in cuts:
-            found = self.detector.hits((cut.text or b"").decode("latin-1"))
-            hit = (
-                found[0]
-                if found
-                else Hit(region.plant.id, region.id, Form.SLOT, cut.offset, "")
+        arrival = _arrival(s)
+        cuts = [(arrival(m.offset), m) for m in _rfb(data, s) if m.type == 3]
+        starts = [
+            float("-inf") if n == 0 else float(st.detail.get("since_ms", st.at_ms))
+            for n, st in enumerate(copies)
+        ]
+        ends = [*starts[1:], float("inf")]
+        for copy, start, end in zip(copies, starts, ends, strict=True):
+            region = instance.region(str(copy.detail["region"]))
+            mine = [cut for at, cut in cuts if start <= at < end]
+            found = [
+                h
+                for cut in mine
+                for h in self.detector.hits((cut.text or b"").decode("latin-1"))
+            ]
+            hit = found[0] if found else None
+            if mine and not hit:
+                context = f"ServerCutText of {len(mine[0].text or b'')} bytes"
+                hit = Hit(
+                    region.plant.id, region.id, Form.SLOT, mine[0].offset, context
+                )
+            at = float(copy.detail.get("since_ms", copy.at_ms))
+            open_at_copy = s.opened_ms <= at and (s.closed is None or s.closed[0] > at)
+            probe = self.clips.get(str(copy.detail.get("capture")))
+            if probe is not None:
+                proven = probe.pasted in (Pasted.BASELINE, Pasted.VALUE)
+            else:
+                proven = any(p.detail.get("proven") for p in pastes)
+            self.emit(
+                Observation(
+                    channel,
+                    region,
+                    Phase(copy.detail.get("phase", Phase.DURING_CONTROL)),
+                    s.id,
+                    hit=hit,
+                    # No cut text at all: the channel carried nothing, a short value
+                    # included, though nothing here is a slot to read it in.
+                    slot=None if mine else SlotState.EMPTY,
+                    covered=open_at_copy and proven,
+                    reachable=open_at_copy,
+                    present=proven,
+                )
             )
-        open_at_copy = s.opened_ms <= copy.at_ms and (
-            s.closed is None or s.closed[0] > copy.at_ms
-        )
-        proven = any(p.detail.get("proven") for p in pastes)
-        self.emit(
-            Observation(
-                channel,
-                region,
-                Phase.DURING_CONTROL,
-                s.id,
-                hit=hit,
-                covered=open_at_copy and proven,
-                reachable=open_at_copy,
-                present=proven,
-            )
-        )
 
     def op_screenshots(self, c: Capture) -> None:
         """GET /v1/operations/{op}/screenshot of an op on a tab that went private. The
@@ -1399,7 +1659,9 @@ class _Observer:
             c for c in self.ev.captures if SPECS[c.channel].family in AGENT_FAMILIES
         ]
         for c in agent:
-            if c.channel is not ChannelId.REPLAY:
+            if SPECS[c.channel].family is Family.AGENT_KEYS:
+                self.copy_probe(c)
+            elif c.channel is not ChannelId.REPLAY:
                 self.agent(c)
         for c in agent:
             if c.channel is ChannelId.REPLAY:
@@ -1540,6 +1802,17 @@ def _rfb(data: bytes, s: Stream) -> list:
     return _replay(RfbParser(width, height, bytes.fromhex(fmt)), data, s)
 
 
+def _arrival(s: Stream) -> Callable[[int], int]:
+    """When the byte at a stream offset arrived, on the host clock: its chunk's time."""
+    offsets = [o for o, _ in s.chunks]
+    times = [t for _, t in s.chunks]
+
+    def arrival(offset: int) -> int:
+        return times[max(0, bisect.bisect_right(offsets, offset) - 1)] if times else 0
+
+    return arrival
+
+
 def observe(evidence: Evidence) -> list[Observation]:
     return _Observer(evidence).run()
 
@@ -1662,10 +1935,15 @@ class Residual:
 # design itself accepts. A leak that matches nothing here is new and sets EXIT_NEW_LEAK.
 RESIDUALS: tuple[Residual, ...] = (
     Residual(
+        # Not on the clipboard channels: any ServerCutText there is the flag failing,
+        # whatever value it carries, so a control's value there is a finding too.
         "CONTROL",
         Status.CONTROL,
         "a field no rule classifies, read back raw: the positive control",
-        _kind_is(Kind.PLAIN),
+        lambda cell: (
+            _kind_is(Kind.PLAIN)(cell)
+            and SPECS[cell.channel].family is not Family.CLIPBOARD
+        ),
     ),
     Residual(
         "BD-R1",
@@ -1855,7 +2133,21 @@ def _headline(cells: Sequence[Cell]) -> dict[str, str]:
         return f"masked in all {len(found)} reads"
 
     held = [c for c in cells if c.residual == "EVAL-HELD"]
+    chords = [
+        c
+        for c in cells
+        if SPECS[c.channel].family is Family.AGENT_KEYS
+        and KINDS[c.region.plant.kind].sensitive
+    ]
+    tally = {verdict: sum(c.verdict is verdict for c in chords) for verdict in Verdict}
     return {
+        "copy and cut chords in sensitive fields (D6.3)": (
+            f"{tally[Verdict.WITHHELD]} refused, {tally[Verdict.MASKED]} sent with "
+            f"nothing copied, {tally[Verdict.LEAKED]} laundered or leaked, "
+            f"{tally[Verdict.INCONCLUSIVE]} unproven, of {len(chords)}"
+            if chords
+            else "not measured"
+        ),
         "FX-E same-document echo, cold (M, SH)": cold_echoes(
             (Location.MAIN, Location.SHADOW_OPEN)
         ),
@@ -1877,8 +2169,12 @@ def judge(evidence: Evidence) -> Judgement:
     observer = _Observer(evidence)
     cells = []
     for n, o in enumerate(observer.run()):
-        pixel = o.pixels is not None
-        verdict, why = decide_pixels(o) if pixel else decide(o)
+        if o.pixels is not None:
+            verdict, why = decide_pixels(o)
+        elif o.clip is not None:
+            verdict, why = decide_copy(o)
+        else:
+            verdict, why = decide(o)
         cells.append(
             Cell(
                 f"{o.source}:{o.region.id}:{n}",
@@ -2019,7 +2315,10 @@ def render_markdown(judgement: Judgement, evidence: Evidence) -> str:
         "legend: ok masked · held withheld by contract · LEAK new leak · ?? unproven · "
         "a residual id (fx-f, xsite, short, l2, r1, r3, eval-held) a known residual · "
         "raw the control's expected read · nb not built · clean searched, nothing found "
-        "(a channel the judge can only search) · · not applicable or not exercised",
+        "(a channel the judge can only search) · · not applicable or not exercised. "
+        "In the keyboard chord rows, held means Neo refused the chord and ok means Neo "
+        "sent it and the clipboard kept the baseline; LEAK there includes a value "
+        "laundered into the paste box.",
         "",
         "## New leaks",
         "",
@@ -2122,7 +2421,8 @@ def _leak_blocks(
 ) -> list[str]:
     """One block per leaking (channel, plant, phase) of an agent answer, with its exact
     request, a redacted context and a repro; record and disk copies of the same plant
-    are listed under it. A plant only records or disk hold gets a block of its own."""
+    are listed under it. A plant only records or disk hold gets a block of its own, and
+    when that record is a run's, the block also names the agent run that made it."""
     captures = {c.id: c for c in evidence.captures}
     streams = {s.id: s for s in evidence.streams}
     agent = [
@@ -2131,6 +2431,13 @@ def _leak_blocks(
         if SPECS[c.channel].family in AGENT_FAMILIES
         and c.channel is not ChannelId.REPLAY
     ]
+    runs = {
+        c.run_id: c
+        for c in evidence.captures
+        if c.run_id
+        and SPECS[c.channel].family in AGENT_FAMILIES
+        and c.channel is not ChannelId.REPLAY
+    }
     copies: dict[str, list[Cell]] = {}
     for cell in cells:
         if cell not in agent:
@@ -2151,29 +2458,12 @@ def _leak_blocks(
             f"{PLACES[cell.region.location].code} · {cell.phase} · {cell.why}"
         )
         if source is not None:
-            req = source.request
-            body = detector.redact(req.body or "")
-            whole = evidence.lines.get(source.id)
-            where = f"; whole in `log.jsonl` line {whole}" if whole else ""
-            cut = (
-                f", cut at {_EXCERPT} of {len(body)} characters"
-                if len(body) > _EXCERPT
-                else ""
-            )
-            out.append(
-                f"   - request: `{req.transport} {req.method} {req.target}`{cut}{where}"
-            )
-            if body:
-                out.append(
-                    "     ```\n" + _indent(body[:_EXCERPT], "     ") + "\n     ```"
-                )
-            out.append(
-                f"   - evidence: `{source.blob}`; repro: `python3 leak_sdk.py --image "
-                f"{evidence.image} --scenario {source.scenario} --keep` (this run: "
-                f"instance {source.instance}, seed {evidence.seed})"
-            )
+            out += _request_lines("request", source, evidence, detector)
         else:
             out.append(f"   - evidence: `{cell.source}`")
+        run = None if cell in agent else runs.get(cell.run_id or "")
+        if run is not None and run is not source:
+            out += _request_lines("the agent run it records", run, evidence, detector)
         if cell.hit:
             out.append(f"   - context: `{cell.hit.context}`")
         same = [c for c in copies.get(plant.id, []) if c is not cell]
@@ -2181,6 +2471,29 @@ def _leak_blocks(
             where = sorted({f"{c.channel} ({c.source})" for c in same})
             out.append(f"   - also in {len(where)} records: {'; '.join(where[:8])}")
     return out
+
+
+def _request_lines(
+    label: str, source: Capture | Stream, evidence: Evidence, detector: Detector
+) -> list[str]:
+    """A request as a leak block prints it: redacted, cut to _EXCERPT, with the line of
+    log.jsonl that holds it whole, its evidence and a repro."""
+    req = source.request
+    body = detector.redact(req.body or "")
+    whole = evidence.lines.get(source.id)
+    where = f"; whole in `log.jsonl` line {whole}" if whole else ""
+    cut = (
+        f", cut at {_EXCERPT} of {len(body)} characters" if len(body) > _EXCERPT else ""
+    )
+    lines = [f"   - {label}: `{req.transport} {req.method} {req.target}`{cut}{where}"]
+    if body:
+        lines.append("     ```\n" + _indent(body[:_EXCERPT], "     ") + "\n     ```")
+    lines.append(
+        f"   - evidence: `{source.blob}`; repro: `python3 leak_sdk.py --image "
+        f"{evidence.image} --scenario {source.scenario} --keep` (this run: "
+        f"instance {source.instance}, seed {evidence.seed})"
+    )
+    return lines
 
 
 def _indent(text: str, prefix: str) -> str:

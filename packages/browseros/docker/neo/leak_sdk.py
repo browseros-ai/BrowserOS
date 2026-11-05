@@ -59,9 +59,12 @@ from leak_plan import (
     ACT_EVENT,
     ACT_EXPOSURE,
     AFTER_RELEASE_READS,
+    COPY_BASELINE_CODE,
+    COPY_PROBES,
     ECHO_READS,
     FIELD_READS,
     GESTURE_ACTS,
+    KEY_READS,
     NAV_FRAMES,
     PAGE_ECHO_PROBES,
     PIXEL_READS,
@@ -87,6 +90,7 @@ from leak_plan import (
     make_instance,
     plan_runs,
     registrable,
+    typing_code,
 )
 from leak_wire import (
     Agent,
@@ -104,6 +108,11 @@ ECHO = frozenset({Exposure.ECHO, Exposure.SERVER_ECHO})
 RUN_TIMEOUT_MS = 60_000  # under smoke.McpClient's 120 s urllib timeout
 SCREEN = (1600, 1000)  # NEO_SCREEN: a takeover fit to it never resizes the display
 FX_F_SUBJECT = "every sealed-world read is masked with its frame's whole site"
+# claw-sdk holds a value typed into a sensitive field until no keystroke came for this long,
+# then registers it whole (config/defaults.rs TYPED_QUIET).
+TYPED_QUIET_S = 1.0
+# Values that reach the page as typing: held by claw-sdk until quiet, then registered.
+TYPED_ORIGINS = frozenset({Origin.OWNER, Origin.AGENT})
 
 # ------------------------------------------------------------------------------------------
 # The scenarios, in the order they run. Each opens its own page instances and closes them.
@@ -163,6 +172,53 @@ def page_echoes(s: Session) -> None:
             if phase is Phase.COLD:
                 s.sweep(page)
         s.close(page)
+
+
+def keys(s: Session) -> None:
+    """The agent's keyboard, and the text its failures print. expect's failure messages
+    over fields and over echoes (cold, then warm); an action's strict-mode previews and
+    call log over read-only fields; copy and cut in every field (D6.3), with the clipboard
+    read back through a paste; then the agent's own typing, a declared way in, judged at
+    every other exit. Each part has instances of its own, since copies and typing write."""
+    page = s.open(Layout.FIELDS)
+    for channel in KEY_READS[Layout.FIELDS]:
+        s.read(page, channel, exposures=FIELD)
+    s.act(page, Act.SHOW_PASSWORD)
+    for channel in KEY_READS[Layout.FIELDS]:
+        s.read(page, channel, exposures=FIELD, kinds={Kind.SHOW_PASSWORD})
+    s.close(page)
+    for channel in KEY_READS[Layout.ECHOES]:
+        page = s.open(Layout.ECHOES)
+        s.read(page, channel, Phase.COLD, exposures=ECHO)
+        s.sweep(page)
+        s.read(page, channel, Phase.WARM, exposures=ECHO)
+        s.close(page)
+    page = s.open(Layout.LOCKED)
+    for channel in KEY_READS[Layout.LOCKED]:
+        s.read(page, channel, exposures=FIELD)
+    s.close(page)
+    # Copy and cut. Neo's first touch seals every frame, so the show-password flip that
+    # follows happens under a seal that saw a password, as in `fields`.
+    page = s.open(Layout.COPY)
+    s.read(page, ChannelId.ARIA_AI)
+    s.act(page, Act.SHOW_PASSWORD)
+    with s.clipboard_view(page):
+        for plant in page.instance.plants:
+            field = page.instance.field_regions(plant)[0]
+            for channel in COPY_PROBES:
+                if SPECS[channel].reaches(field):
+                    s.copy_probe(page, field, channel)
+    s.close(page)
+    # The agent's own typing. The first read meets every value still held, inside the
+    # typing quiet; the rest read after it, with every value registered.
+    page = s.open(Layout.TYPED)
+    for plant in page.instance.plants:
+        s.type_into(page, plant)
+    s.read(page, ChannelId.TEXT_CONTENT, Phase.AGENT_TYPED, exposures=ECHO)
+    s.settle_typing(page)
+    for channel in (ChannelId.INPUT_VALUE, ChannelId.TEXT_CONTENT, ChannelId.ARIA_AI):
+        s.read(page, channel, Phase.WARM)
+    s.close(page)
 
 
 def pixels(s: Session) -> None:
@@ -257,6 +313,7 @@ SCENARIOS: tuple[tuple[str, Callable[[Session], None]], ...] = (
     ("echoes", echoes),
     ("fields", fields),
     ("page_echoes", page_echoes),
+    ("keys", keys),  # before any scenario makes a tab private: its tabs stay ordinary
     ("pixels", pixels),
     # control runs before takeover: after a takeover in which the owner typed, a raw control
     # display's keys never reach the page (measured on ec1ded9; a functional bug, reported).
@@ -576,7 +633,7 @@ class Session:
         index = len(self.instances) + 1
         instance = make_instance(layout, seed=self.seed, index=index, late=late)
         self.registrable += sum(
-            registrable(p, typed=p.origin is Origin.OWNER) for p in instance.plants
+            registrable(p, typed=p.origin in TYPED_ORIGINS) for p in instance.plants
         )
         if self.registrable > REGISTRABLE_BUDGET:
             raise HarnessError(
@@ -662,6 +719,7 @@ class Session:
             int(state["at"]),
             {k: tuple(v) if v else None for k, v in state["regions"].items()},
             tuple(state["documents"]),
+            tuple(state.get("focus", ())),
         )
         self.record(proof)
         return proof
@@ -716,6 +774,110 @@ class Session:
                 self.record(again)
         self.guard.note_touched(page.instance)
 
+    def focus(self, page: Page, region: Region, *, select: bool = False) -> None:
+        """The page focuses `region`, as the owner's click would: through the iframe
+        chain, the closed root through its closure, its text selected when asked."""
+        assert self.oracle is not None
+        reply = self.oracle.call(
+            "focus",
+            instance=page.instance.name,
+            region=region.id,
+            path=list(PLACES[region.location].frame_path),
+            tab="popup" if region.location is Location.POPUP else "main",
+            select=select,
+        )
+        if not reply.get("focused"):
+            raise HarnessError(f"focus missed {region.id}: {reply}")
+
+    def copy_probe(self, page: Page, region: Region, channel: ChannelId) -> None:
+        """One copy or cut chord in `region` (D6.3), with the clipboard proven around it.
+
+        page:  fields replanted; a fresh token in the baseline field, selected; paste box empty
+        agent: Control+C                      the positive control: must be sent
+        page:  focus the field, its value selected
+        proof  the field holds its value and has the focus
+        agent: the chord, then Control+V into the paste box
+        proof  the paste box: the token (nothing copied) or the field's value (laundered)
+        """
+        since = now()
+        self.act(page, Act.REBASE)
+        control = self._run(
+            page.instance, ChannelId.HARNESS, Phase.ANY, COPY_BASELINE_CODE
+        )
+        self.focus(page, region, select=True)
+        code = SPECS[channel].code(page.instance, (region,), region.location)
+        before = self.proof(page)
+        capture = self._run(page.instance, channel, Phase.ANY, code, page=page)
+        after = self.proof(page)
+        self.record(
+            dataclasses.replace(
+                capture,
+                proofs=(before.id, after.id),
+                regions=(region.id,),
+                control=control.id,
+            )
+        )
+        # What a view display open now must never be sent; the judge reads its window.
+        self.step(
+            "copy",
+            page,
+            region=region.id,
+            capture=capture.id,
+            since_ms=since,
+            phase=str(Phase.ANY),
+        )
+
+    def type_into(self, page: Page, plant: Plant) -> None:
+        """The agent types `plant`, an AGENT value, box by box: each run's code carries
+        that box's text, the one request assert_clean lets carry it. A locator focuses
+        the field inside the run; the page focuses the closed root first. The proof after
+        each run shows the text typed (the run's presence, ChannelSpec.types)."""
+        for region in page.instance.field_regions(plant):
+            if not PLACES[region.location].agent_reachable:
+                self.focus(page, region)
+            before = self.proof(page)
+            capture = self._run(
+                page.instance,
+                ChannelId.KEYBOARD_TYPE,
+                Phase.ANY,
+                typing_code(page.instance, region),
+                page=page,
+                inject=plant,
+            )
+            after = self.proof(page)
+            self.record(
+                dataclasses.replace(
+                    capture, proofs=(before.id, after.id), regions=(region.id,)
+                )
+            )
+        self.guard.note_typed(page.instance)
+        self.step("agent_typed", page, plant=plant.id)
+
+    def settle_typing(self, page: Page) -> None:
+        """Wait out claw-sdk's typing quiet: every value the agent typed is then in the
+        SecretSet, whole, which is a registration step for the phase guard."""
+        time.sleep(TYPED_QUIET_S + 0.5)
+        self.guard.note_registered(page.instance)
+        self.step("typing_settled", page)
+
+    @contextlib.contextmanager
+    def clipboard_view(self, page: Page) -> Iterator[None]:
+        """A view display following the tab while the agent copies: the image must send
+        it no ServerCutText, and the judge holds each cut text it gets against the copy
+        probe it arrived during. It asks for no frames: ServerCutText needs no request."""
+        path = f"/v1/display?mode=view&followTab={page.tab}"
+        blob = self.out / "streams" / f"{page.instance.name}-clipboard-view.bin"
+        display = Display(self.docker.port(9300), path, self.token, blob, watch=False)
+        try:
+            yield
+        finally:
+            display.stop()
+            self.record(
+                self._stream(
+                    display, ChannelId.DISPLAY_VIEW, page, page.tab, path, "view"
+                )
+            )
+
     def _raw_read(self, page: Page, channel: ChannelId) -> object:
         planned = plan_runs(SPECS[channel], page.instance, exposures=FIELD)[0]
         capture = self._run(page.instance, channel, Phase.ANY, planned.code)
@@ -736,9 +898,11 @@ class Session:
         task: bool = True,
         request_id: str | None = None,
         replay_of: str | None = None,
+        inject: Plant | None = None,
     ) -> Capture:
         """One MCP run, its every byte kept. Harness runs are recorded here; reads are
-        recorded by read() once their closing proof exists."""
+        recorded by read() once their closing proof exists. `inject` is the one AGENT plant
+        whose value this run's code may carry (the typing run), and the request names it."""
         ident = self._id("c")
         if instance.name in self.popped and channel is not ChannelId.HARNESS:
             main = json.dumps(f"/fx/{instance.name}/main")
@@ -749,7 +913,12 @@ class Session:
         meta = {"requestId": request_id or f"{instance.name}.{ident}"}
         if task:
             meta["taskId"] = instance.name
-        assert_clean(json.dumps({"code": code, "meta": meta}), self.instances.values())
+        assert_clean(
+            json.dumps({"code": code, "meta": meta}),
+            self.instances.values(),
+            inject=inject,
+            way="mcp tools/call run",
+        )
         started = now()
         if trigger is None:
             body, raw = self.agent.run(code, meta, RUN_TIMEOUT_MS)
@@ -762,7 +931,9 @@ class Session:
             instance.name,
             channel,
             phase,
-            Request("mcp", "tools/call run", "/mcp", body),
+            Request(
+                "mcp", "tools/call run", "/mcp", body, inject.id if inject else None
+            ),
             self.blob(raw, ident),
             started,
             now(),
@@ -830,7 +1001,12 @@ class Session:
         """One host request, recorded as a capture of `channel`. Its instance is the
         page's, the given task's, or the task the answer names."""
         text = json.dumps(body) if body is not None else None
-        assert_clean(f"{path} {text or ''}", self.instances.values(), inject=inject)
+        assert_clean(
+            f"{path} {text or ''}",
+            self.instances.values(),
+            inject=inject,
+            way=f"http {method} {path}",
+        )
         ident = self._id("h")
         started = now()
         answer = self.host.call(method, path, body)
@@ -1200,18 +1376,8 @@ class Owner:
         self.display.type_text(text)
 
     def _focus(self, region: Region) -> None:
-        assert self.s.oracle is not None
-        tab = "popup" if region.location is Location.POPUP else "main"
-        reply = self.s.oracle.call(
-            "focus",
-            instance=self.page.instance.name,
-            region=region.id,
-            path=list(PLACES[region.location].frame_path),
-            tab=tab,
-        )
-        if not reply.get("focused"):
-            raise HarnessError(f"focus missed {region.id}: {reply}")
-        time.sleep(0.1)
+        self.s.focus(self.page, region)
+        time.sleep(0.1)  # RFB keys arrive through Xvnc: let the focus land first
 
     def type(self, plant: Plant, *, then_enter: bool = False) -> None:
         """Each box of the plant: focus, the keys, a proof that the field holds them.

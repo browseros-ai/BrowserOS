@@ -29,9 +29,19 @@ const FX = {
   values: new Map(), // top only: field region id -> current value, across every frame
   fields: new Map(), // region id -> element in this document (closed-root fields too)
   closed: null, // the closed ShadowRoot, reachable only through this closure
+  closedHost: null, // its host, where document.activeElement stops
   facts: new Map(), // region id -> the dialog text or download name this page produced
   replies: new Map(), // top only: nonce -> callback for stateReply / focused
+  rebased: 0, // copy layout: how many baseline tokens this page has made
 };
+
+// The copy layout's two plain fields in MAIN (leak_plan.COPY_BASE, COPY_DROP): the baseline
+// token the agent copies first, and the box it pastes into. No plant's value is ever set in
+// either; a chord that launders one is what puts it in the paste box.
+const COPY_BOXES = [
+  ["fx-base", "base"],
+  ["fx-drop", "drop"],
+];
 
 function fnv1a(text) {
   let h = 0x811c9dc5;
@@ -104,6 +114,8 @@ function renderField(region, parent) {
   const input = el("input");
   for (const [k, v] of region.attrs) input.setAttribute(k, v);
   input.id = region.id;
+  // The locked layout: an action that waits for an editable field waits in vain.
+  if (FX.slice.layout === "locked") input.readOnly = true;
   const label = el("label", {}, `${region.words} ${region.anchor} `);
   label.append(input);
   FX.fields.set(region.id, input);
@@ -164,8 +176,15 @@ function render() {
     const host = el("div", { id: `host-${mode}` });
     document.body.append(host);
     const root = host.attachShadow({ mode });
-    if (mode === "closed") FX.closed = root;
+    if (mode === "closed") [FX.closed, FX.closedHost] = [root, host];
     renderFields(regions, root);
+  }
+  if (slice.layout === "copy" && slice.location === "main") {
+    for (const [id, word] of COPY_BOXES) {
+      const label = el("label", {}, `Field ${word} `);
+      label.append(el("input", { type: "text", id }));
+      document.body.prepend(label);
+    }
   }
   const echoes = el("div", { id: "echoes" });
   document.body.append(echoes);
@@ -229,7 +248,25 @@ function ownState() {
     }
     out[region.id] = text === null ? null : [fnv1a(text), text.length];
   }
+  for (const [id] of COPY_BOXES) {
+    const box = document.getElementById(id);
+    if (box) out[id] = [fnv1a(box.value), box.value.length];
+  }
   return out;
+}
+
+// The element keyboard input reaches in this document, by id, or null when the document
+// does not have the focus. It follows the focus into open shadow roots and into the closed
+// root this page made; an iframe's own document answers for what is inside it.
+function focusedId() {
+  if (!document.hasFocus()) return null;
+  let node = document.activeElement;
+  for (;;) {
+    const root = node && (node.shadowRoot || (node === FX.closedHost ? FX.closed : null));
+    if (!root || !root.activeElement) break;
+    node = root.activeElement;
+  }
+  return node && node.id ? node.id : null;
 }
 
 function descendants(win) {
@@ -265,11 +302,19 @@ async function state() {
   const replies = await ask({ fx: "state" }, frames, 2000);
   const regions = ownState();
   const documents = [FX.slice.location];
+  const focus = [focusedId()];
   for (const reply of replies) {
     Object.assign(regions, reply.regions);
     documents.push(reply.location);
+    focus.push(reply.focus);
   }
-  return { at: Date.now(), regions, documents, frames: frames.length };
+  return {
+    at: Date.now(),
+    regions,
+    documents,
+    frames: frames.length,
+    focus: focus.filter((id) => id),
+  };
 }
 
 async function act(name) {
@@ -278,9 +323,10 @@ async function act(name) {
   return true;
 }
 
-// The owner's click: focus each iframe on the path from the top, then the field itself.
-async function focus(id, path) {
-  const [reply] = await ask({ fx: "focus", id, path }, [window], 3000);
+// The owner's click: focus each iframe on the path from the top, then the field itself, with
+// its text selected when `select` is set (as a click and select-all would leave it).
+async function focus(id, path, select = false) {
+  const [reply] = await ask({ fx: "focus", id, path, select }, [window], 3000);
   return reply ?? { focused: false, why: "no answer" };
 }
 
@@ -294,6 +340,7 @@ function focusStep(data) {
   const input = FX.fields.get(data.id) ?? document.getElementById(data.id);
   if (!input) return;
   input.focus();
+  if (data.select && input.select) input.select();
   const focused = input.getRootNode().activeElement === input;
   window.top.postMessage(
     { fx: "reply", nonce: data.nonce, focused, hasFocus: document.hasFocus() },
@@ -301,8 +348,24 @@ function focusStep(data) {
   );
 }
 
-const BROADCAST = new Set(["show_password", "late_plant"]);
+const BROADCAST = new Set(["show_password", "late_plant", "rebase"]);
 const ACTS = {
+  rebase: () => {
+    // Before each copy probe. Every field gets its planted value back, as at load (no input
+    // events), so a cut that went through, or keys a chord typed, leave nothing for the next
+    // probe. In MAIN: a fresh baseline token, selected with the focus on it, and an empty
+    // paste box.
+    for (const r of regionsWhere((r) => r.value !== undefined && FX.fields.has(r.id))) {
+      plant(r);
+    }
+    const base = document.getElementById("fx-base");
+    if (!base) return;
+    FX.rebased += 1;
+    base.value = `${Math.random().toString(36).slice(2, 10)}q${FX.rebased}`;
+    document.getElementById("fx-drop").value = "";
+    base.focus();
+    base.select();
+  },
   show_password: () => {
     for (const r of regionsWhere((r) => r.kind === "show_password" && FX.fields.has(r.id))) {
       FX.fields.get(r.id).type = "text";
@@ -369,10 +432,14 @@ window.addEventListener("message", (event) => {
     FX.values.set(data.id, data.value);
     refreshEchoes();
   } else if (data.fx === "state") {
-    event.source.postMessage(
-      { fx: "reply", nonce: data.nonce, location: FX.slice.location, regions: ownState() },
-      "*",
-    );
+    const reply = {
+      fx: "reply",
+      nonce: data.nonce,
+      location: FX.slice.location,
+      regions: ownState(),
+      focus: focusedId(),
+    };
+    event.source.postMessage(reply, "*");
   } else if (data.fx === "act") {
     if (ACTS[data.name]) ACTS[data.name]();
     event.source.postMessage({ fx: "reply", nonce: data.nonce }, "*");

@@ -14,9 +14,11 @@ leak_sdk.py copies this file and leak_fixture/ to /tmp/leakfx and starts one pro
                                         value, so only the echo remains (the nav-away case)
   main: JSON lines on stdin/stdout, one request at a time, each answered by its id
     put      an instance's slices: the only way values travel, and never in a URL
-    state    each of the instance's tabs' __fx.state(): digests per region, never values
+    state    each of the instance's tabs' __fx.state(): digests per region, never values,
+             and the ids of the focused elements (where keyboard input lands)
     act      __fx.act(name), with a user gesture when asked
-    focus    __fx.focus(region): the owner's click, through the iframe chain
+    focus    __fx.focus(region): the owner's click, through the iframe chain, selecting
+             the field's text when asked
     targets  Target.getTargets: which documents really are out-of-process frames
     clock    the container's Unix ms, for the host-to-Neo clock offset
     grep     needles over a directory tree (the profile scan): indexes, never needles
@@ -344,6 +346,7 @@ class Oracle:
     def state(self, instance: str) -> dict:
         regions: dict = {}
         documents: list = []
+        focus: list = []
         tabs = self._tabs(instance)
         for tab in tabs:
             try:
@@ -355,10 +358,12 @@ class Oracle:
                 continue  # a tab that did not answer proves nothing about its regions
             regions.update(got["regions"])
             documents += got["documents"]
+            focus += got.get("focus", [])
         return {
             "at": int(time.time() * 1000),
             "regions": regions,
             "documents": documents,
+            "focus": focus,
             "tabs": len(tabs),
         }
 
@@ -367,14 +372,21 @@ class Oracle:
         expression = f"window.__fx.act({json.dumps(name)})"
         return {"done": self._evaluate(main["targetId"], expression, gesture)}
 
-    def focus(self, instance: str, region: str, path: list, tab: str = "main") -> dict:
+    def focus(
+        self,
+        instance: str,
+        region: str,
+        path: list,
+        tab: str = "main",
+        select: bool = False,
+    ) -> dict:
         tabs = self._tabs(instance)
         target = tabs[0] if tab == "main" else tabs[-1]
         # The owner's click also brings the tab to the front, where the keys go.
         self._evaluate(target["targetId"], "0")  # attaches a session when none is yet
         self.cdp.call("Page.bringToFront", session=self.sessions[target["targetId"]])
-        expression = f"window.__fx.focus({json.dumps(region)}, {json.dumps(path)})"
-        return self._evaluate(target["targetId"], expression)
+        args = ", ".join(json.dumps(a) for a in (region, path, select))
+        return self._evaluate(target["targetId"], f"window.__fx.focus({args})")
 
     def targets(self) -> dict:
         infos = self.cdp.call("Target.getTargets")["targetInfos"]
