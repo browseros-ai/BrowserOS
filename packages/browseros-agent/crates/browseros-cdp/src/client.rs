@@ -32,7 +32,7 @@ use tokio_tungstenite::{
     },
 };
 use tracing::{debug, info, warn};
-use url::Url;
+use url::{Host, Url};
 
 type WsStream = WebSocketStream<TcpStream>;
 type WsSink = SplitSink<WsStream, Message>;
@@ -458,6 +458,19 @@ fn open_socket(inner: Arc<Inner>) -> BoxFuture<'static, Result<(), CdpError>> {
     })
 }
 
+/// The host to open the WebSocket's TCP connection to. `Url::host_str` keeps an IPv6
+/// literal's brackets (`[::1]`), which address resolution refuses, so an IPv6 host is taken
+/// bare from the typed host. The URL itself keeps the brackets for the handshake.
+fn tcp_host(url: &Url) -> Result<String, CdpError> {
+    match url.host() {
+        Some(Host::Ipv6(ip)) => Ok(ip.to_string()),
+        Some(host) => Ok(host.to_string()),
+        None => Err(CdpError::Transport(
+            "websocket URL missing host".to_string(),
+        )),
+    }
+}
+
 async fn connect_websocket(url: &Url, connect_timeout: Duration) -> Result<WsStream, CdpError> {
     if url.scheme() != "ws" {
         return Err(CdpError::Transport(format!(
@@ -465,13 +478,11 @@ async fn connect_websocket(url: &Url, connect_timeout: Duration) -> Result<WsStr
             url.scheme()
         )));
     }
-    let host = url
-        .host_str()
-        .ok_or_else(|| CdpError::Transport("websocket URL missing host".to_string()))?;
+    let host = tcp_host(url)?;
     let port = url
         .port_or_known_default()
         .ok_or_else(|| CdpError::Transport("websocket URL missing port".to_string()))?;
-    let stream = timeout(connect_timeout, TcpStream::connect((host, port)))
+    let stream = timeout(connect_timeout, TcpStream::connect((host.as_str(), port)))
         .await
         .map_err(|_| CdpError::Transport(format!("timed out connecting websocket {url}")))?
         .map_err(|err| CdpError::Transport(err.to_string()))?;

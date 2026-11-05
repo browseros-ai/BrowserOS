@@ -506,3 +506,22 @@ async fn a_dropped_targeted_subscriber_is_forgotten_and_the_others_still_receive
     );
     client.disconnect().await;
 }
+
+/// Discovery points the URL at `[::1]` when the IPv6 loopback answered. The TCP connection
+/// must then resolve the bare address: `[::1]` with its brackets resolves to nothing.
+#[tokio::test]
+async fn a_websocket_url_on_every_loopback_spelling_resolves_to_a_socket_address()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (url, host) in [
+        ("ws://[::1]:9222/devtools/browser/abc", "::1"),
+        ("ws://127.0.0.1:9222/devtools/browser/abc", "127.0.0.1"),
+        ("ws://localhost:9222/devtools/browser/abc", "localhost"),
+    ] {
+        let url = Url::parse(url)?;
+        let tcp_host = tcp_host(&url)?;
+        assert_eq!(tcp_host, host);
+        let resolved = tokio::net::lookup_host((tcp_host.as_str(), 9222)).await?;
+        assert!(resolved.count() > 0, "{url} resolved to no address");
+    }
+    Ok(())
+}
