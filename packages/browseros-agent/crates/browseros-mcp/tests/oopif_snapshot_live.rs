@@ -287,6 +287,34 @@ async fn exercise(
         .await?,
     )?;
     ensure_replaced(session, page, &dropped).await?;
+
+    // Typing classifies the focused field first. That check must recover with the typing.
+    ok(
+        "focus the password field",
+        &call(
+            ctx,
+            "act",
+            json!({"page": page, "kind": "click", "ref": "e2"}),
+        )
+        .await?,
+    )?;
+    let dropped = drop_page_session_unannounced(session, client, hidden, page).await?;
+    let typed = call(
+        ctx,
+        "act",
+        json!({"page": page, "kind": "type", "text": "synthetic-typed"}),
+    )
+    .await?;
+    ok("typing after the page session died", &typed)?;
+    anyhow::ensure!(
+        typed
+            .audit_hints
+            .as_ref()
+            .is_some_and(|hints| hints.redact_all_values),
+        "typing into the password field was not marked for redaction: {:?}",
+        typed.audit_hints
+    );
+    ensure_replaced(session, page, &dropped).await?;
     Ok(())
 }
 
