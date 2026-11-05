@@ -153,7 +153,7 @@ impl SecretSet {
             }
         }
         inner.entries.push(Entry { value, expires_at });
-        rebuild(&mut inner);
+        rebuild(&mut inner, self.config.min_length);
         Registration::Registered
     }
 
@@ -164,7 +164,7 @@ impl SecretSet {
         inner.entries.retain(|entry| entry.expires_at > now);
         let dropped = before - inner.entries.len();
         if dropped > 0 {
-            rebuild(&mut inner);
+            rebuild(&mut inner, self.config.min_length);
         }
         dropped
     }
@@ -230,7 +230,7 @@ impl SecretSet {
 
 /// Rebuilds the automaton over every form of every value. Leftmost-longest, so a value that
 /// contains another is masked whole.
-fn rebuild(inner: &mut Inner) {
+fn rebuild(inner: &mut Inner, min_length: usize) {
     let mut patterns = Vec::with_capacity(inner.entries.len() * 3);
     for entry in &inner.entries {
         let plain = entry.value.as_str();
@@ -262,6 +262,13 @@ fn rebuild(inner: &mut Inner) {
                 patterns.push(escaped);
             }
         }
+        // A download's name (`suggestedFilename()`, the records and the trace) spells the value
+        // as Chromium sanitizes a file name, so a value in a name would match nothing above.
+        for spelled in file_name_spellings(plain, min_length) {
+            if !patterns.iter().any(|known| **known == *spelled) {
+                patterns.push(spelled);
+            }
+        }
     }
     inner.matcher = if patterns.is_empty() {
         None
@@ -272,6 +279,91 @@ fn rebuild(inner: &mut Inner) {
             .map_err(|error| tracing::error!(%error, "secret matcher could not be built"))
             .ok()
     };
+}
+
+/// `value` as Chromium writes it into a download's name, where that differs from `value`. On
+/// Linux, `net::GetSuggestedFilename` first trims every `.` from both ends of the name
+/// (`SanitizeGeneratedFileName`), then `base::i18n::ReplaceIllegalCharactersInPath` replaces each
+/// character illegal anywhere with `_`, and the name's first and last character too when white
+/// space or `~`. The value may start or end the name, or not, so each case is a spelling.
+///
+/// Each spelling needs the whole value, every other character as typed, so a page that shows one
+/// by chance is all but impossible; masking a long prefix of every value instead would catch
+/// unrelated text that shares a common head (`https://`, a key's `sk-` or a JWT's `eyJ`). A
+/// trimmed spelling shorter than `min_length` is left out, as a value that short is not kept.
+fn file_name_spellings(value: &str, min_length: usize) -> Vec<Zeroizing<String>> {
+    let mut spellings: Vec<Zeroizing<String>> = Vec::new();
+    for (starts_name, ends_name) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut kept = value;
+        if starts_name {
+            kept = kept.trim_start_matches('.');
+        }
+        if ends_name {
+            kept = kept.trim_end_matches('.');
+        }
+        if kept.chars().count() < min_length {
+            continue;
+        }
+        let mut spelled = Zeroizing::new(String::with_capacity(kept.len()));
+        for (at, character) in kept.char_indices() {
+            let at_end =
+                (starts_name && at == 0) || (ends_name && at + character.len_utf8() == kept.len());
+            let replaced =
+                illegal_in_file_name(character) || (at_end && illegal_at_file_name_ends(character));
+            spelled.push(if replaced { '_' } else { character });
+        }
+        if *spelled != value && !spellings.contains(&spelled) {
+            spellings.push(spelled);
+        }
+    }
+    spellings
+}
+
+/// Unicode's format characters (general category Cf, Unicode 15.1), which Chromium's ICU set
+/// for illegal file name characters includes. A format character added by a later Unicode
+/// version is kept as typed here, so a value holding one gets no file name spelling.
+const FORMAT_CHARACTERS: &[(u32, u32)] = &[
+    (0x00ad, 0x00ad),
+    (0x0600, 0x0605),
+    (0x061c, 0x061c),
+    (0x06dd, 0x06dd),
+    (0x070f, 0x070f),
+    (0x0890, 0x0891),
+    (0x08e2, 0x08e2),
+    (0x180e, 0x180e),
+    (0x200b, 0x200f),
+    (0x202a, 0x202e),
+    (0x2060, 0x2064),
+    (0x2066, 0x206f),
+    (0xfeff, 0xfeff),
+    (0xfff9, 0xfffb),
+    (0x110bd, 0x110bd),
+    (0x110cd, 0x110cd),
+    (0x13430, 0x1343f),
+    (0x1bca0, 0x1bca3),
+    (0x1d173, 0x1d17a),
+    (0xe0001, 0xe0001),
+    (0xe0020, 0xe007f),
+];
+
+/// Whether Chromium replaces `character` anywhere in a file name: `"*/:<>?\|`, controls (Cc),
+/// format characters (Cf) and the noncharacters.
+fn illegal_in_file_name(character: char) -> bool {
+    let code = u32::from(character);
+    matches!(
+        character,
+        '"' | '*' | '/' | ':' | '<' | '>' | '?' | '\\' | '|'
+    ) || character.is_control()
+        || FORMAT_CHARACTERS
+            .iter()
+            .any(|&(low, high)| (low..=high).contains(&code))
+        || (0xfdd0..=0xfdef).contains(&code)
+        || code & 0xfffe == 0xfffe
+}
+
+/// Whether Chromium replaces `character` as a file name's first or last: white space, `.`, `~`.
+fn illegal_at_file_name_ends(character: char) -> bool {
+    character.is_whitespace() || matches!(character, '.' | '~')
 }
 
 #[cfg(test)]
@@ -308,6 +400,51 @@ mod tests {
         assert_eq!(
             masked(&set, "<i data-v=\"p&amp;ss&lt;w&quot;rd&gt;&nbsp;x\"></i>"),
             "<i data-v=\"[private]\"></i>"
+        );
+        Ok(())
+    }
+
+    /// sdk-privacy leak test finding 3: a registered value in a download's name came back from
+    /// `suggestedFilename()` as Chromium sanitizes a file name (`&<\"` became `&__`), and the
+    /// part before the first replaced character leaked.
+    #[test]
+    fn a_value_is_masked_as_chromium_sanitizes_it_into_a_file_name()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let set = set_with(&["hunter2&<\"pw:*?|/\\x"]);
+        assert_eq!(
+            masked(&set, "report-hunter2&__pw______x.pdf"),
+            "report-[private].pdf"
+        );
+        let ends = set_with(&["~pass.word."]);
+        assert_eq!(
+            masked(&set_with(&["zw\u{200b}sp\u{feff}x"]), "a zw_sp_x b"),
+            "a [private] b",
+            "format characters are replaced too"
+        );
+        assert_eq!(
+            masked(&ends, "_pass.word"),
+            "[private]",
+            "a whole name: its trailing dot trimmed, and its leading tilde replaced"
+        );
+        assert_eq!(
+            masked(&ends, "_pass.word..pdf"),
+            "[private].pdf",
+            "a name it starts"
+        );
+        assert_eq!(
+            masked(&set_with(&[".hunter2"]), "hunter2.pdf"),
+            "[private].pdf",
+            "a leading dot trimmed from the name"
+        );
+        assert_eq!(
+            masked(&set_with(&[".abc"]), "abc.pdf"),
+            "abc.pdf",
+            "a trimmed spelling shorter than a kept value is not matched"
+        );
+        assert_eq!(
+            masked(&ends, "x ~pass.word. y"),
+            "x [private] y",
+            "the plain spelling still masks"
         );
         Ok(())
     }
