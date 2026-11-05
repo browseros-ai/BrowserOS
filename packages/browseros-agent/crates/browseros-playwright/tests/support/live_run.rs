@@ -282,6 +282,11 @@ impl LiveRun {
         })
     }
 
+    /// The browser session the crate runs over, for a test that reads core's registries.
+    pub(crate) fn browser(&self) -> &BrowserSession {
+        &self.browser
+    }
+
     /// The next command the crate sends with `method` gets `intercept`; later ones pass.
     pub(crate) fn intercept(&self, method: &'static str, intercept: Intercept) {
         *lock(&self.tap.watch) = Some((method, intercept));

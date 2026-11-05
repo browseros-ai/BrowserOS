@@ -376,6 +376,10 @@ pub(crate) struct FrameFields {
     pub(crate) url_fragment: Option<String>,
     #[serde(default)]
     pub(crate) unreachable_url: Option<String>,
+    /// The URL's registrable domain by Chromium's own public suffix list (`bbc.co.uk`); empty
+    /// for an IP address, `localhost`, a public suffix itself and a URL with no host.
+    #[serde(default)]
+    pub(crate) domain_and_registry: Option<String>,
 }
 
 /// `Page.getFrameTree`'s reply.

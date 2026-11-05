@@ -13,7 +13,8 @@
 //!  page.goto ─ navigation ─ DocumentWatch (commits, lifecycle per loader) ─ timing entry
 //!  page.frames ─ frame_tree ─ getFrameTree per session, OOPIFs via core's FrameRegistry
 //!  page.screenshot / page.pdf ─ PlaywrightHooks::capture_allowed ─ the capture
-//!  page.evaluate / waitForFunction ─ EvaluateGuard: sweep, main-world script, sweep, mask
+//!  page.evaluate / waitForFunction ─ EvaluateGuard: sweep, main-world script, sweep, mask;
+//!                                    each sweep covers the script's site (sweep_scope)
 //!  page.title / page.content ─ document_op: the sealed world's read, the frame's sweep
 //!  page.setContent ─ document_op: written in the sealed world, a new seq, the load state
 //!  page.waitForURL ─ wait_for_url: each navigation matched in the sealed world, the load state
@@ -34,6 +35,7 @@ mod page_registry;
 mod page_state;
 mod pdf;
 mod screenshot;
+mod sweep_scope;
 mod wait_for_url;
 mod world_call;
 

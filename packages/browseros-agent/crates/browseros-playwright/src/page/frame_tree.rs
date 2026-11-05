@@ -170,7 +170,8 @@ pub(crate) async fn read(
     Ok(tree)
 }
 
-async fn frame_tree(session: &ProtocolSession) -> Result<FrameTreeReply, CoreError> {
+/// `session`'s own frames: its root and the same-process frames under it.
+pub(crate) async fn frame_tree(session: &ProtocolSession) -> Result<FrameTreeReply, CoreError> {
     decode(session.send_value("Page.getFrameTree", json!({})).await?)
 }
 
