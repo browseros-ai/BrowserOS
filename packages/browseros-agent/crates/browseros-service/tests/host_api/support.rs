@@ -11,6 +11,8 @@ use axum::middleware::map_request;
 use browseros_core::TabId;
 use browseros_core::viewport::Viewports;
 use browseros_service::{HostAuth, HostToken, PeerInfo, Service, ServiceInputs, host_router};
+use browseros_takeover::ScreenSize;
+use browseros_takeover::testing::FakeXvnc;
 use browseros_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, Privacy, PrivacyStore, RedactionLimits, Redactor, RequestId, RunEnded, RunId,
@@ -58,12 +60,29 @@ pub(crate) struct Harness {
     pub(crate) sink: TraceSink,
     pub(crate) privacy: Arc<Privacy>,
     pub(crate) browser: Arc<ScriptedBrowser>,
+    /// Neo's screen, which the fits resize.
+    pub(crate) xvnc: FakeXvnc,
     /// The started service, for what the app calls directly: the locks and the tab events.
     pub(crate) service: Service,
     /// The routes behind the host auth, as a host reaches them.
     pub(crate) router: Router,
     /// `Service::router()` alone, for tests that serve it themselves.
     pub(crate) routes: Router,
+}
+
+/// The size Neo's screen rests at between fits in the harness (`NEO_SCREEN`).
+pub(crate) const HOME_SCREEN: ScreenSize = ScreenSize {
+    width: 1600,
+    height: 1000,
+};
+
+/// How the harness starts.
+struct Boot {
+    camera: bool,
+    /// The screen's size when the service starts.
+    screen: ScreenSize,
+    /// The window's state when the service starts.
+    window: &'static str,
 }
 
 /// A started service over a fresh store, with no camera: no screenshot is taken, and a run is
@@ -77,17 +96,46 @@ pub(crate) async fn harness() -> Result<Harness, BoxError> {
 pub(crate) async fn harness_with(
     privacy_store: impl FnOnce(&TraceSink) -> Arc<dyn PrivacyStore>,
 ) -> Result<Harness, BoxError> {
-    start(privacy_store, false).await
+    start(privacy_store, Boot::default()).await
 }
 
 /// A started service whose camera takes the writer's screenshots on the scripted browser.
 pub(crate) async fn harness_with_camera() -> Result<Harness, BoxError> {
-    start(|sink| Arc::new(sink.clone()), true).await
+    let boot = Boot {
+        camera: true,
+        ..Boot::default()
+    };
+    start(|sink| Arc::new(sink.clone()), boot).await
+}
+
+/// A service started over what a Neo restart in the middle of a fit leaves: the screen at the
+/// owner's phone size and the window fullscreen.
+pub(crate) async fn harness_after_a_crash_mid_fit(screen: ScreenSize) -> Result<Harness, BoxError> {
+    let boot = Boot {
+        screen,
+        window: "fullscreen",
+        ..Boot::default()
+    };
+    start(|sink| Arc::new(sink.clone()), boot).await
+}
+
+impl Default for Boot {
+    fn default() -> Self {
+        Self {
+            camera: false,
+            screen: HOME_SCREEN,
+            window: "maximized",
+        }
+    }
 }
 
 async fn start(
     privacy_store: impl FnOnce(&TraceSink) -> Arc<dyn PrivacyStore>,
-    camera: bool,
+    Boot {
+        camera,
+        screen,
+        window,
+    }: Boot,
 ) -> Result<Harness, BoxError> {
     let dir = tempfile::tempdir()?;
     let store = TraceStore::open(&dir.path().join("trace.db")).await?;
@@ -103,6 +151,8 @@ async fn start(
     );
     let privacy = Privacy::new(secrets, privacy_store(&sink), store.private_tabs().await?);
     let browser = ScriptedBrowser::new();
+    browser.set_window(window);
+    let xvnc = FakeXvnc::start(screen).await?;
     let service = Service::start(ServiceInputs {
         store: store.clone(),
         sink: sink.clone(),
@@ -110,13 +160,23 @@ async fn start(
         browser: browser.session(),
         viewports: Arc::new(Viewports::default()),
         screenshots: jobs,
+        xvnc: xvnc.xvnc(HOME_SCREEN),
     });
+    // The service puts the screen home in the background as it starts. Waiting for that keeps
+    // a test's own resizes, and its scripted refusals, the only ones after it.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while xvnc.resizes().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
     Ok(Harness {
         dir,
         store,
         sink,
         privacy,
         browser,
+        xvnc,
         router: authenticated(&service)?,
         routes: service.router(),
         service,

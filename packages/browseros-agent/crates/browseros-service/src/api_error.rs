@@ -24,6 +24,8 @@ pub(crate) enum ErrorCode {
     PrivacyUnavailable,
     BrowserUnavailable,
     InternalError,
+    FitRestored,
+    DisplayUnavailable,
 }
 
 impl ErrorCode {
@@ -40,6 +42,8 @@ impl ErrorCode {
             Self::PrivacyUnavailable => "privacy_unavailable",
             Self::BrowserUnavailable => "browser_unavailable",
             Self::InternalError => "internal_error",
+            Self::FitRestored => "fit_restored",
+            Self::DisplayUnavailable => "display_unavailable",
         }
     }
 }
@@ -161,6 +165,31 @@ impl From<PartError> for ApiError {
                     "Neo could not reach the browser",
                 )
             },
+            PartError::TimedOut(step) => Self {
+                cause: Some(format!("{step} timed out")),
+                ..Self::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    ErrorCode::BrowserUnavailable,
+                    "the browser did not answer in time",
+                )
+            },
+            // Xvnc is the display: the screen the owner's viewer shows.
+            PartError::Screen(cause) => Self {
+                cause: Some(cause.to_string()),
+                ..Self::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    ErrorCode::DisplayUnavailable,
+                    "Neo's screen could not be resized",
+                )
+            },
+            PartError::FitRestored => Self::new(
+                StatusCode::CONFLICT,
+                ErrorCode::FitRestored,
+                "the fit was restored",
+            ),
+            PartError::UnusableViewer(_) => {
+                Self::invalid("`width` and `height` must each be at least 100")
+            }
         }
     }
 }

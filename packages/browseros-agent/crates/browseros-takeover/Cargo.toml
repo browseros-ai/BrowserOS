@@ -8,17 +8,26 @@ repository.workspace = true
 description = "The owner's side of hosted BrowserOS Neo (claw-sdk): the takeover parts (the tab lock first) that keep the agent off a tab while its owner has it"
 
 [dependencies]
+browseros-cdp.workspace = true
 browseros-core.workspace = true
 browseros-trace.workspace = true
+percent-encoding.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
+url.workspace = true
 uuid = { workspace = true, features = ["v7"] }
+zeroize.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
+browseros-cdp.workspace = true
+futures-util.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

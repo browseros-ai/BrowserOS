@@ -355,6 +355,23 @@ mod tests {
     }
 
     #[test]
+    fn a_refresh_keeps_the_later_expiry() {
+        let set = SecretSet::new(SecretSetConfig::default());
+        let minute = Some(Duration::from_secs(60));
+        let hour = Duration::from_secs(60 * 60);
+        set.register(SecretValue::new("day-then-minute".into()), None);
+        set.register(SecretValue::new("day-then-minute".into()), minute);
+        set.register(SecretValue::new("minute-then-day".into()), minute);
+        set.register(SecretValue::new("minute-then-day".into()), None);
+        assert_eq!(
+            set.expire(Instant::now() + hour),
+            0,
+            "a shorter TTL did not cut the day short, and the day outlasted the minute"
+        );
+        assert_eq!(set.expire(Instant::now() + 25 * hour), 2);
+    }
+
+    #[test]
     fn a_value_without_a_ttl_is_masked_for_a_day() {
         let set = set_with(&["owner-typed-1"]);
         let hour = Duration::from_secs(60 * 60);

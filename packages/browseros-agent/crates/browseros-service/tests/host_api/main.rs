@@ -4,10 +4,12 @@
 mod browser;
 mod errors;
 mod events;
+mod fits;
 mod locks;
 mod privacy;
 mod records;
 mod screenshots;
 mod socket;
 mod support;
+mod sweep;
 mod waiting;

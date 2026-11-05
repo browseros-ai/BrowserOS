@@ -9,7 +9,9 @@
 use crate::api_error::ApiError;
 use crate::host_service::Authenticated;
 use crate::service::ServiceState;
-use crate::{events_route, part_routes, record_routes, response_id, secret_routes, tab_routes};
+use crate::{
+    events_route, fit_routes, part_routes, record_routes, response_id, secret_routes, tab_routes,
+};
 use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -32,11 +34,16 @@ pub(crate) fn router(state: Arc<ServiceState>) -> Router {
         .route("/v1/trace", get(record_routes::get_trace))
         .route("/v1/events", get(events_route::stream_events))
         .route("/v1/tabs/{tab_id}/private", post(tab_routes::make_private))
+        .route("/v1/tabs/{tab_id}/sweep", post(tab_routes::sweep_tab))
         .route("/v1/locks", post(part_routes::create_lock))
         .route(
             "/v1/locks/{lock_id}",
             get(part_routes::get_lock).delete(part_routes::release_lock),
         )
+        .route("/v1/tabs/{tab_id}/fit", post(fit_routes::fit_tab))
+        .route("/v1/fits/{fit_id}", get(fit_routes::get_fit))
+        .route("/v1/fits/{fit_id}/navigate", post(fit_routes::navigate_fit))
+        .route("/v1/fits/{fit_id}/restore", post(fit_routes::restore_fit))
         .route("/v1/secrets", post(secret_routes::register_secret))
         .fallback(not_found)
         .with_state(state)

@@ -1,6 +1,8 @@
 //! A scripted browser for the camera and the tab checks: the tabs a test opens, and how captures
 //! answer. It speaks the CDP the capture path sends (`Browser.getTabs`, `Browser.getTabInfo`,
-//! `Target.attachToTarget`, `Page.captureScreenshot`); every other command answers `{}`.
+//! `Target.attachToTarget`, `Page.captureScreenshot`), what a sweep of a one-frame tab sends
+//! (`Page.getFrameTree`, the sealed world, the seal's field values), and the fit's window calls,
+//! with one window whose state `setWindowBounds` changes; every other command answers `{}`.
 //!
 //! It is not core's scripted `TestConnection`: captures that a test holds and releases need a
 //! reply that waits, which a canned reply cannot do.
@@ -9,6 +11,7 @@ use crate::support::BoxError;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use browseros_cdp::{CdpError, CdpEvent, SessionId};
+use browseros_core::sensitive_fields::{SEALED_WORLD, seal_source};
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -38,22 +41,37 @@ enum Captures {
 
 pub(crate) struct ScriptedBrowser {
     tabs: Mutex<Vec<i64>>,
+    /// What every tab's password, card and code fields hold, as the seal reports it to a sweep.
+    fields: Mutex<Vec<String>>,
     /// `Browser.getTabs` fails, as when the browser is gone.
     unreachable: AtomicBool,
     captures: watch::Sender<Captures>,
     started: watch::Sender<usize>,
     events: broadcast::Sender<CdpEvent>,
+    /// The one window's state; openbox maximizes a normal window.
+    window: Mutex<&'static str>,
 }
 
 impl ScriptedBrowser {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             tabs: Mutex::default(),
+            fields: Mutex::default(),
             unreachable: AtomicBool::new(false),
             captures: watch::channel(Captures::Answer).0,
             started: watch::channel(0).0,
             events: broadcast::channel(16).0,
+            window: Mutex::new("maximized"),
         })
+    }
+
+    pub(crate) fn set_window(&self, state: &'static str) {
+        *self.window.lock().unwrap_or_else(PoisonError::into_inner) = state;
+    }
+
+    /// The window's state now.
+    pub(crate) fn window(&self) -> &'static str {
+        *self.window.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// A session over this browser, as the app's browser link would hand the service.
@@ -70,6 +88,12 @@ impl ScriptedBrowser {
 
     pub(crate) fn close_tab(&self, tab: i64) {
         self.lock_tabs().retain(|open| *open != tab);
+    }
+
+    /// The owner typed these into sensitive fields.
+    pub(crate) fn type_into_fields(&self, values: &[&str]) {
+        *self.fields.lock().unwrap_or_else(PoisonError::into_inner) =
+            values.iter().map(|value| (*value).to_owned()).collect();
     }
 
     /// The browser stops answering `Browser.getTabs` from now on.
@@ -167,6 +191,31 @@ impl ScriptedBrowser {
                 Ok(json!({ "sessionId": format!("scripted-session-{session}") }))
             }
             "Page.captureScreenshot" => self.capture().await,
+            "Page.getFrameTree" => Ok(json!({ "frameTree": { "frame": { "id": "main" } } })),
+            "Page.createIsolatedWorld" if params["worldName"] == SEALED_WORLD => {
+                Ok(json!({ "executionContextId": 1 }))
+            }
+            "Runtime.evaluate" if params["expression"] == seal_source() => {
+                Ok(json!({ "result": { "type": "number", "value": 1 } }))
+            }
+            "Runtime.evaluate" if params["expression"] == "__clawSeal.sensitiveValues()" => {
+                let fields = self.fields.lock().unwrap_or_else(PoisonError::into_inner);
+                Ok(json!({ "result": { "type": "object", "value": *fields } }))
+            }
+            "Browser.getWindowForTarget" => {
+                Ok(json!({ "windowId": 1, "bounds": { "windowState": self.window() } }))
+            }
+            "Browser.getWindowBounds" => Ok(json!({ "bounds": { "windowState": self.window() } })),
+            "Browser.getWindows" => Ok(json!({
+                "windows": [{ "windowId": 1, "bounds": { "windowState": self.window() } }],
+            })),
+            "Browser.setWindowBounds" => {
+                self.set_window(match params["bounds"]["windowState"].as_str() {
+                    Some("fullscreen") => "fullscreen",
+                    _ => "maximized",
+                });
+                Ok(json!({}))
+            }
             _ => Ok(json!({})),
         }
     }

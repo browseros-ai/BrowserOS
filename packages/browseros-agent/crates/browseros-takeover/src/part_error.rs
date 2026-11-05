@@ -1,6 +1,7 @@
 //! The crate's one error. Every part returns it, so the service turns the parts' failures into
 //! the contract's status codes in one place (`browseros-service`'s `api_error`).
 
+use crate::ScreenSize;
 use browseros_core::{CoreError, TabId};
 
 /// Why a part could not do what it was asked.
@@ -20,4 +21,17 @@ pub enum PartError {
     /// The browser refused or did not answer.
     #[error("the browser did not answer: {0}")]
     Browser(#[source] CoreError),
+    /// A browser step did not finish within its deadline.
+    #[error("{0} did not finish in time")]
+    TimedOut(&'static str),
+    /// Neo's screen (Xvnc) could not be reached, did not speak RFB 3.8, refused a size, or
+    /// gave no verdict on one.
+    #[error("Neo's screen did not take the change: {0}")]
+    Screen(#[source] std::io::Error),
+    /// The fit was already restored; its tab is no longer the owner's.
+    #[error("the fit was restored")]
+    FitRestored,
+    /// No page fits a screen this small: a side is under 100 px.
+    #[error("no page fits a {0} screen")]
+    UnusableViewer(ScreenSize),
 }

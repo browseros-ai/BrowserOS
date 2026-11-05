@@ -461,6 +461,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tower",
  "tracing",
  "tracing-subscriber",
@@ -472,14 +473,22 @@ dependencies = [
 name = "browseros-takeover"
 version = "0.1.0"
 dependencies = [
+ "browseros-cdp",
  "browseros-core",
  "browseros-trace",
+ "futures-util",
+ "percent-encoding",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
+ "tracing-subscriber",
+ "url",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

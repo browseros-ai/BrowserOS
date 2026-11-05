@@ -12,7 +12,7 @@ use crate::{router, wire};
 use axum::Router;
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, TabId};
-use browseros_takeover::{BrowserTabs, Locks};
+use browseros_takeover::{BrowserTabs, Fits, Journal, Locks, Xvnc};
 use browseros_trace::{EpochMillis, Privacy, PrivacyError, ShotJobs, TraceSink, TraceStore};
 use std::sync::Arc;
 
@@ -33,6 +33,9 @@ pub struct ServiceInputs {
     /// The camera's end of the writer's screenshot queue (`browseros_trace::screenshot_queue`;
     /// `spawn_writer` got the other end).
     pub screenshots: ShotJobs,
+    /// Neo's screen: Xvnc's address and the size it rests at (the image's `NEO_SCREEN`). The
+    /// fits resize it to the owner's viewer and put it back.
+    pub xvnc: Xvnc,
 }
 
 /// The host API, started. Cheap to clone.
@@ -49,12 +52,21 @@ pub(crate) struct ServiceState {
     pub(crate) events: Arc<EventLog>,
     pub(crate) browser: BrowserTabs,
     pub(crate) locks: Arc<Locks>,
+    /// The control journal, registering into the same secret set as `privacy`. The display and
+    /// the takeover flow arm it while the owner has control (decision 31).
+    #[expect(
+        dead_code,
+        reason = "the display (step 8) and the takeover flow (step 9b) arm it"
+    )]
+    pub(crate) journal: Journal,
+    pub(crate) fits: Arc<Fits>,
 }
 
 impl Service {
     /// Starts the workers: the event log's numbering tasks, which subscribe to the writer and
     /// to the locks before this returns, so every event from then on gets a number, and the
-    /// camera that answers the writer's screenshot jobs.
+    /// camera that answers the writer's screenshot jobs. It also puts Neo's screen and window
+    /// home, in the background (decision 30).
     ///
     /// # Panics
     /// Outside a Tokio runtime, as `tokio::spawn` does.
@@ -67,6 +79,7 @@ impl Service {
             browser,
             viewports,
             screenshots,
+            xvnc,
         } = inputs;
         let events = EventLog::start(store.clone(), sink.subscribe());
         let locks = Locks::new(store.clone(), sink.clone());
@@ -77,14 +90,27 @@ impl Service {
             privacy: Arc::clone(&privacy),
         }
         .spawn(screenshots);
+        let browser = BrowserTabs::new(browser, viewports);
+        let journal = Journal::new(browser.clone(), Arc::clone(privacy.secrets()));
+        let fits = Fits::new(browser.clone(), xvnc, Arc::clone(privacy.secrets()));
+        // A Neo restart in the middle of a fit drops the fit, but would leave Xvnc at the
+        // owner's size and the window fullscreen, and nothing else would ever put them back.
+        // Best-effort and logged. A fit that takes the surface first wins; its release puts
+        // the surface home instead.
+        tokio::spawn({
+            let fits = Arc::clone(&fits);
+            async move { fits.put_surface_home().await }
+        });
         Self {
             state: Arc::new(ServiceState {
                 store,
                 sink,
                 privacy,
                 events,
-                browser: BrowserTabs::new(browser, viewports),
+                browser,
                 locks,
+                journal,
+                fits,
             }),
         }
     }
@@ -111,9 +137,11 @@ impl Service {
         self.state.privacy.tab_opened(tab, at).await
     }
 
-    /// The browser link saw a tab close: its locks end, its private flag is forgotten, and then
-    /// `tab.closed` is published, so a host that reads it finds the tab's state already gone.
+    /// The browser link saw a tab close: its fit is restored (so the screen does not stay at
+    /// the owner's size), its locks end, its private flag is forgotten, and then `tab.closed`
+    /// is published, so a host that reads it finds the tab's state already gone.
     pub async fn tab_closed(&self, tab: TabId) {
+        self.state.fits.tab_closed(tab).await;
         self.state.locks.tab_closed(tab);
         self.state.privacy.tab_closed(tab).await;
         self.state.events.publish(LogEvent::new(
@@ -128,6 +156,7 @@ impl Service {
     /// tab ends, as if it closed: it closed while Neo was not watching, or the browser restarted
     /// and numbers its tabs from 1 again.
     pub async fn retain_tabs(&self, open: &[TabId]) {
+        self.state.fits.retain_tabs(open).await;
         self.state.locks.retain_tabs(open);
         self.state.privacy.retain_tabs(open).await;
     }

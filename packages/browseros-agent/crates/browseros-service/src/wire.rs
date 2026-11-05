@@ -4,11 +4,13 @@
 
 use crate::api_error::ApiError;
 use crate::event_log::EventKind;
-use crate::limits::SECRET_TTL_SECONDS;
+use crate::limits::{MAX_NAVIGATE_INPUT, SECRET_TTL_SECONDS, VIEWER_SIDE};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use browseros_core::TabId;
-use browseros_takeover::{Lock, LockTtl, Reads};
+use browseros_takeover::{
+    BarAction, BarOutcome, Fit, FitMode, FitState, Fitted, Lock, LockTtl, Reads, ScreenSize, Swept,
+};
 use browseros_trace::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationRow, Page, PageState,
     PrivacyRecord, RunDetail, RunSummary, SecretValue, ShotState, TaskId, TraceTail,
@@ -253,6 +255,11 @@ pub(crate) fn lock(lock: &Lock) -> api::Lock {
     }
 }
 
+/// What a sweep added to the known secrets list: a count, never the values.
+pub(crate) fn sweep_result(swept: Swept) -> api::SweepResult {
+    api::SweepResult::new(i32::try_from(swept.registered).unwrap_or(i32::MAX))
+}
+
 /// `lock.state`: the lock as it stands, at the moment it was taken or ended.
 pub(crate) fn lock_event(lock: &Lock) -> api::Event {
     let at = lock.ended.map_or(lock.created_at, |ended| ended.at);
@@ -326,6 +333,114 @@ pub(crate) fn secret_request(body: &[u8]) -> Result<(SecretValue, Option<Duratio
         })
         .transpose()?;
     Ok((value, ttl))
+}
+
+/// A fit as the contract has it. `fit` is `fitted` or `partial`, never `pending`: the fit
+/// route answers once the fit ran.
+pub(crate) fn fit(fit: &Fit) -> api::Fit {
+    api::Fit {
+        id: fit.id.to_string(),
+        tab_id: fit.tab.0,
+        screen: Box::new(api::ViewerSize::new(
+            fit.screen.width.into(),
+            fit.screen.height.into(),
+        )),
+        mode: Some(
+            match fit.mode {
+                FitMode::Mobile => "mobile",
+                FitMode::Desktop => "desktop",
+            }
+            .to_string(),
+        ),
+        fit: match fit.fitted {
+            Fitted::Full => "fitted",
+            Fitted::Partial => "partial",
+        }
+        .to_string(),
+        keyboard: fit.keyboard.as_ref().map(|keyboard| {
+            Box::new(api::FitKeyboard::new(
+                keyboard.screen.width.into(),
+                keyboard.screen.height.into(),
+                keyboard.at.millis(),
+                keyboard
+                    .boxes
+                    .iter()
+                    .map(|bounds| bounds.to_vec())
+                    .collect(),
+            ))
+        }),
+        browser: fit.bar.as_ref().map(|bar| {
+            Box::new(api::FitBrowserBar::new(
+                bar.url.clone(),
+                bar.back,
+                bar.forward,
+            ))
+        }),
+        popups: Some(fit.popups.iter().map(|target| target.0.clone()).collect()),
+        created_at: fit.created_at.millis(),
+        restored_at: match fit.state {
+            FitState::Active => None,
+            FitState::Restored(at) => Some(at.millis()),
+        },
+    }
+}
+
+/// `POST /v1/tabs/{tabId}/fit`: the viewer's `{width, height}`, each 100 to 4096 px.
+pub(crate) fn viewer_request(body: &[u8]) -> Result<ScreenSize, ApiError> {
+    let api::ViewerSize { width, height } = serde_json::from_slice(body)
+        .map_err(|_| not_the_body(r#"{"width": integer, "height": integer}"#))?;
+    let side = |side: i32| {
+        u16::try_from(side)
+            .ok()
+            .filter(|side| VIEWER_SIDE.contains(side))
+    };
+    match (side(width), side(height)) {
+        (Some(width), Some(height)) => Ok(ScreenSize { width, height }),
+        _ => Err(ApiError::invalid(format!(
+            "`width` and `height` must each be from {} to {}",
+            VIEWER_SIDE.start(),
+            VIEWER_SIDE.end()
+        ))),
+    }
+}
+
+/// `POST /v1/fits/{fitId}/navigate`: `back`, `forward`, `reload`, or `open` with what the owner
+/// typed, at most 2000 characters. The typed text is never quoted back in an error.
+pub(crate) fn navigate_request(body: &[u8]) -> Result<BarAction, ApiError> {
+    let api::NavigateRequest { action, input } = serde_json::from_slice(body).map_err(|_| {
+        not_the_body(r#"{"action": "back" | "forward" | "reload" | "open", "input"?: string}"#)
+    })?;
+    match (action.as_str(), input) {
+        ("back", _) => Ok(BarAction::Back),
+        ("forward", _) => Ok(BarAction::Forward),
+        ("reload", _) => Ok(BarAction::Reload),
+        ("open", Some(input)) if input.chars().count() <= MAX_NAVIGATE_INPUT => {
+            Ok(BarAction::Open(input))
+        }
+        ("open", Some(_)) => Err(ApiError::invalid(format!(
+            "`input` is at most {MAX_NAVIGATE_INPUT} characters"
+        ))),
+        ("open", None) => Err(ApiError::invalid(
+            "`open` needs `input`: what the owner typed",
+        )),
+        _ => Err(ApiError::invalid(
+            "`action` must be back, forward, reload or open",
+        )),
+    }
+}
+
+/// What the owner's browser bar did, with the sentence the owner page shows when it did not
+/// move.
+pub(crate) fn navigate_result(outcome: BarOutcome) -> api::NavigateResult {
+    api::NavigateResult {
+        status: match outcome {
+            BarOutcome::Completed => "completed",
+            BarOutcome::Refused => "refused",
+            BarOutcome::Failed => "failed",
+        }
+        .to_string(),
+        notice: outcome.notice().map(str::to_string),
+    }
 }
 
 /// A body that does not parse. serde's message is not passed on: it can quote the input.

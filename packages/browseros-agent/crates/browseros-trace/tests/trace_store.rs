@@ -1128,6 +1128,67 @@ async fn a_tasks_last_tab_is_its_latest_operation_with_a_target_and_survives_a_r
     assert_eq!(last_tab(reopened, "checkout").await, Some(TabId(6)));
 }
 
+/// A `newPage` has no target when it starts; its tab is known only from the page it ended on.
+/// A task whose latest step opened a tab resumes in that tab, and a target still beats the page
+/// an operation ended on.
+#[tokio::test]
+async fn a_tasks_last_tab_falls_back_to_the_tab_an_operation_ended_on() {
+    let h = harness(WriterConfig::default()).await;
+    let run = start_in(&h.sink, Some("checkout"), 0);
+    read_on(&h.sink, OperationId::new(run, 1), Some(TabId(5)), 10);
+    let opened = OperationId::new(run, 2);
+    op_started(
+        &h.sink,
+        Op {
+            tab: None,
+            at: at(20),
+            ..simple(opened, "context.newPage", Effect::Write)
+        },
+    );
+    h.sink.op_ended(OperationEnded {
+        id: opened,
+        outcome: Outcome::Ok,
+        delivery: Delivery::Done,
+        sent_at: Some(at(21)),
+        result: None,
+        error: None,
+        page_after: Some(PageState {
+            page_id: Some(4),
+            tab_id: Some(TabId(8)),
+            url: Some("about:blank".into()),
+            title: None,
+        }),
+        target: TargetSensitivity::Ordinary,
+        at: at(25),
+    });
+    read_on(&h.sink, OperationId::new(run, 3), None, 30);
+    flushed(&h).await;
+    let last_tab = || async {
+        h.store
+            .task_last_tab(&task("checkout"))
+            .await
+            .unwrap_or_else(|error| panic!("task_last_tab: {error}"))
+    };
+    assert_eq!(
+        last_tab().await,
+        Some(TabId(8)),
+        "the opened tab, and an operation with neither tab is skipped"
+    );
+
+    // An operation with a target counts with it, not with the page it ended on (tab 77).
+    let later = OperationId::new(run, 4);
+    op_started(&h.sink, simple(later, "page.click", Effect::Write));
+    op_ended(
+        &h.sink,
+        later,
+        Delivery::Done,
+        None,
+        TargetSensitivity::Ordinary,
+    );
+    flushed(&h).await;
+    assert_eq!(last_tab().await, Some(TabId(3)));
+}
+
 #[tokio::test]
 async fn events_name_the_task_and_the_target_tab() {
     let h = harness(WriterConfig::default()).await;

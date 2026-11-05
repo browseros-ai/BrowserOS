@@ -3,22 +3,25 @@
 //!
 //! zuzu (mirrord) is the only client. It reaches Neo over a Unix socket that the app binds;
 //! the app builds one [`Service`] from values it already holds (the trace store and sink,
-//! `Privacy`, the agent's browser session and viewports, and the writer's screenshot jobs) and
-//! serves [`Service::router`] on that socket through [`host_service`]:
+//! `Privacy`, the agent's browser session and viewports, the writer's screenshot jobs, and
+//! Xvnc's address and home size) and serves [`Service::router`] on that socket through
+//! [`host_service`]:
 //!
 //! ```text
 //!  HostListener (app) ─ bind ─▶ axum::serve(listener, host_service(routes, auth))
 //!                                  │ PeerInfo per connection; peer rule, then bearer token
 //!                                  ▼
 //!                                router ─ x-request-id ─▶ records, screenshots, tab privacy,
-//!                                  │                       secrets, locks
-//!                                  │                       └▶ TraceStore, Privacy, Locks
+//!                                  │                       sweep, secrets, locks, fits
+//!                                  │                       └▶ TraceStore, Privacy, Locks, Fits
 //!                                  └▶ GET /v1/events ◀── EventLog ◀── TraceSink's events,
 //!                                                                     lock changes, tab.closed
 //!
 //!  trace writer ─ ShotJobs ─▶ camera (screenshot_taker) ─ agent's BrowserSession ─▶ JPEG file
 //!       ▲                                  │
 //!       └──────── ShotAnswer ◀─────────────┘
+//!
+//!  Fits ─ RFB ─▶ Xvnc (the screen's size)    Fits ─ agent's BrowserSession ─▶ window, viewport
 //!
 //!  dispatcher lock policy (app) ─▶ Service::locks().check, synchronous
 //!  browser link tab events (app) ─▶ Service::tab_opened, tab_closed, retain_tabs
@@ -41,6 +44,7 @@ mod api_error;
 mod event_log;
 mod event_resume;
 mod events_route;
+mod fit_routes;
 mod host_auth;
 mod host_service;
 mod limits;

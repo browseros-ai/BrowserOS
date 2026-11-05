@@ -548,16 +548,19 @@ impl TraceStore {
         })
     }
 
-    /// The tab the task's most recent operation with a target tab acted on. claw-sdk's task page
-    /// default reads it after a restart, when its memory of the task is gone.
+    /// The tab the task's most recent operation acted on. claw-sdk's task page default reads it
+    /// after a restart, when its memory of the task is gone. An operation counts with its target
+    /// tab; one that had no target when it started counts with the tab of the page it ended on.
+    /// That is how a `newPage` counts: its tab exists only once it ends, and it is the page the
+    /// task works in next. An operation with neither is skipped.
     ///
     /// # Errors
     /// When the file cannot be read.
     pub async fn task_last_tab(&self, task: &TaskId) -> Result<Option<TabId>, TraceError> {
         let tab: Option<i64> = sqlx::query_scalar(
-            "SELECT target_tab_id FROM operations \
+            "SELECT COALESCE(target_tab_id, tab_id) FROM operations \
              WHERE run_id IN (SELECT id FROM runs WHERE task_id = ?) \
-               AND target_tab_id IS NOT NULL \
+               AND COALESCE(target_tab_id, tab_id) IS NOT NULL \
              ORDER BY started_at DESC, run_id DESC, seq DESC LIMIT 1",
         )
         .bind(task.as_str())

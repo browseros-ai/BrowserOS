@@ -22,6 +22,18 @@
 //! - `--lock-check`: prints what the app's lock policy (`Service::locks().check`) answers for a
 //!   write on that same tab, each time the answer changes: `allowed`, or `refused by <lock>`.
 //!   It stands in for the dispatcher, which would refuse the agent's next click there.
+//! - `--surface-calls`: also serves test-only calls under `/surface`, behind the same auth, for
+//!   what the display and the takeover flow will do with the control journal:
+//!   `POST /surface/journal {"tabs": [..]}` arms it (`{"millis"}`: how long arming took),
+//!   `DELETE /surface/journal` disarms it, `POST /surface/runs <json>` records a run with that
+//!   result (`{"runId"}`, committed when it answers) so a mask can be read back from
+//!   `/v1/runs/{id}`, and `GET /surface/secrets` counts the secret set (`{"count"}`).
+//! - `--xvnc <addr>`: Xvnc's RFB address for the fits (`127.0.0.1:5900`, the image's).
+//! - `--neo-screen <WxH>`: the size the screen rests at between fits (`NEO_SCREEN` from the
+//!   environment, else `1600x1000`). The service puts the screen there at start.
+//! - `--agent-viewport <mobile|desktop>`: before serving, sets the `--open` tab's viewport to
+//!   that mode the way the agent's own `setViewport` does, so a fit's restore can be seen to
+//!   put the agent's mode back.
 //!
 //! It logs to stderr (`RUST_LOG`, `info` by default), including the camera's line for each
 //! screenshot it drops, and serves until Ctrl-C.
@@ -31,26 +43,33 @@
     reason = "the paths and ids it prints are how a person or a script reaches the socket"
 )]
 
+use axum::body::Bytes;
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::routing::{get, post};
+use axum::{Json, Router};
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
-use browseros_core::viewport::Viewports;
-use browseros_core::{BrowserSession, BrowserSessionHooks, TabId};
+use browseros_core::viewport::{ViewportMode, ViewportRequest, Viewports};
+use browseros_core::{BrowserSession, BrowserSessionHooks, BrowserView, TabId};
 use browseros_service::{HostAuth, HostToken, PeerRule, Service, ServiceInputs, host_service};
-use browseros_takeover::{LockTarget, Locks};
+use browseros_takeover::{ArmedJournal, BrowserTabs, Journal, LockTarget, Locks, ScreenSize, Xvnc};
 use browseros_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, PageState, Privacy, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
     SecretSet, SecretSetConfig, TargetSensitivity, TaskId, TraceSink, TraceStore, WriterConfig,
     screenshot_queue, spawn_writer,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use std::error::Error;
 use std::fs::Permissions;
 use std::future::IntoFuture;
+use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UnixListener;
+use tokio_util::sync::CancellationToken;
 use ulid::Ulid;
 
 /// The command line.
@@ -61,6 +80,10 @@ struct Args {
     fake_writes: bool,
     fake_runs: bool,
     lock_check: bool,
+    surface_calls: bool,
+    xvnc: SocketAddr,
+    neo_screen: ScreenSize,
+    agent_viewport: Option<ViewportMode>,
 }
 
 impl Args {
@@ -73,6 +96,16 @@ impl Args {
             fake_writes: false,
             fake_runs: false,
             lock_check: false,
+            surface_calls: false,
+            xvnc: Xvnc::NEO_ADDR,
+            neo_screen: std::env::var("NEO_SCREEN")
+                .ok()
+                .and_then(|screen| screen.parse().ok())
+                .unwrap_or(ScreenSize {
+                    width: 1600,
+                    height: 1000,
+                }),
+            agent_viewport: None,
         };
         while let Some(arg) = args.next() {
             let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
@@ -87,6 +120,24 @@ impl Args {
                 "--fake-writes" => parsed.fake_writes = true,
                 "--fake-runs" => parsed.fake_runs = true,
                 "--lock-check" => parsed.lock_check = true,
+                "--surface-calls" => parsed.surface_calls = true,
+                "--xvnc" => {
+                    parsed.xvnc = value()?
+                        .parse()
+                        .map_err(|_| "--xvnc must be an address such as 127.0.0.1:5900")?;
+                }
+                "--neo-screen" => {
+                    parsed.neo_screen = value()?
+                        .parse()
+                        .map_err(|_| "--neo-screen must be a size such as 1600x1000")?;
+                }
+                "--agent-viewport" => {
+                    parsed.agent_viewport = Some(match value()?.as_str() {
+                        "mobile" => ViewportMode::Mobile,
+                        "desktop" => ViewportMode::Desktop,
+                        _ => return Err("--agent-viewport must be mobile or desktop".into()),
+                    });
+                }
                 other => return Err(format!("unknown argument {other}")),
             }
         }
@@ -139,13 +190,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Some(shots),
     );
     let privacy = Privacy::new(secrets, Arc::new(sink.clone()), store.private_tabs().await?);
+    let viewports = Arc::new(Viewports::default());
+    let surface = SurfaceCalls {
+        journal: Journal::new(
+            BrowserTabs::new(Arc::clone(&browser), Arc::clone(&viewports)),
+            Arc::clone(privacy.secrets()),
+        ),
+        armed: Arc::default(),
+        sink: sink.clone(),
+        secrets: Arc::clone(privacy.secrets()),
+    };
     let service = Service::start(ServiceInputs {
         store,
         sink: sink.clone(),
         privacy,
         browser: Arc::clone(&browser),
-        viewports: Arc::new(Viewports::default()),
+        viewports: Arc::clone(&viewports),
         screenshots: shot_jobs,
+        xvnc: Xvnc {
+            addr: args.xvnc,
+            home: args.neo_screen,
+        },
     });
 
     // What the app does at startup: read the token file, bind the socket owner-and-group only,
@@ -173,6 +238,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
     if let Some(tab) = opened {
         println!("tab: {}", tab.0);
+        if let Some(mode) = args.agent_viewport {
+            set_agent_viewport(&browser, &viewports, tab, mode).await?;
+        }
         println!("viewport: {}", viewport(&browser, tab).await?);
     }
     if args.fake_writes || args.lock_check {
@@ -190,11 +258,104 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if args.fake_runs {
         tokio::spawn(record_fake_runs(sink));
     }
+    let routes = if args.surface_calls {
+        service.router().merge(surface.routes())
+    } else {
+        service.router()
+    };
     tokio::select! {
-        served = axum::serve(listener, host_service(service.router(), auth)).into_future() => served?,
+        served = axum::serve(listener, host_service(routes, auth)).into_future() => served?,
         _ = tokio::signal::ctrl_c() => {}
     }
     Ok(())
+}
+
+/// The test-only calls `--surface-calls` serves: the control journal as the display and the
+/// takeover flow will arm it, a run whose result the writer masks, and the secret set's size.
+#[derive(Clone)]
+struct SurfaceCalls {
+    journal: Journal,
+    armed: Arc<tokio::sync::Mutex<Option<ArmedJournal>>>,
+    sink: TraceSink,
+    secrets: Arc<SecretSet>,
+}
+
+type SurfaceReply = Result<Json<Value>, (StatusCode, String)>;
+
+impl SurfaceCalls {
+    fn routes(self) -> Router {
+        Router::new()
+            .route("/surface/journal", post(Self::arm).delete(Self::disarm))
+            .route("/surface/runs", post(Self::fake_run))
+            .route("/surface/secrets", get(Self::count))
+            .with_state(self)
+    }
+
+    /// Arms the journal on the body's `tabs`, disarming one armed before.
+    async fn arm(State(calls): State<Self>, body: Bytes) -> SurfaceReply {
+        let request: Value = serde_json::from_slice(&body)
+            .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+        let tabs = request["tabs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_i64)
+            .map(TabId)
+            .collect::<Vec<_>>();
+        let mut armed = calls.armed.lock().await;
+        if let Some(previous) = armed.take() {
+            previous.disarm().await;
+        }
+        let started = std::time::Instant::now();
+        *armed = Some(calls.journal.arm(&tabs).await);
+        let millis = started.elapsed().as_secs_f64() * 1000.0;
+        println!("journal armed on {} tab(s) in {millis:.1} ms", tabs.len());
+        Ok(Json(json!({ "millis": millis })))
+    }
+
+    async fn disarm(State(calls): State<Self>) -> SurfaceReply {
+        let armed = calls.armed.lock().await.take();
+        let disarmed = armed.is_some();
+        if let Some(armed) = armed {
+            armed.disarm().await;
+        }
+        println!("journal disarmed: {disarmed}");
+        Ok(Json(json!({ "disarmed": disarmed })))
+    }
+
+    /// Records a run whose result is the body, as the agent's would be, and answers once the
+    /// writer committed it.
+    async fn fake_run(State(calls): State<Self>, body: Bytes) -> SurfaceReply {
+        let result: Value = serde_json::from_slice(&body)
+            .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+        let run = RunId::new();
+        calls.sink.run_started(RunStarted {
+            id: run,
+            code: "return await page.content()".into(),
+            request_id: None,
+            task_id: TaskId::parse("surface").ok(),
+            host_data: None,
+            at: EpochMillis::now(),
+        });
+        calls.sink.run_ended(RunEnded {
+            id: run,
+            status: RunStatus::Ok,
+            error: None,
+            result: Some(result),
+            replay: None,
+            at: EpochMillis::now(),
+        });
+        calls
+            .sink
+            .flush()
+            .await
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+        Ok(Json(json!({ "runId": run.to_string() })))
+    }
+
+    async fn count(State(calls): State<Self>) -> SurfaceReply {
+        Ok(Json(json!({ "count": calls.secrets.count() })))
+    }
 }
 
 /// Opens `url` in a new tab and returns its tab id, once `Browser.getTabs` lists it.
@@ -213,6 +374,28 @@ async fn open_tab(browser: &BrowserSession, url: &str) -> Result<TabId, Box<dyn 
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     Err(format!("the tab of target {target} never appeared").into())
+}
+
+/// Sets `tab`'s viewport to `mode` at the mode's own size, as the agent's `setViewport` does,
+/// through the same `Viewports` the service reads, and prints `agent viewport: <mode>`.
+async fn set_agent_viewport(
+    browser: &Arc<BrowserSession>,
+    viewports: &Arc<Viewports>,
+    tab: TabId,
+    mode: ViewportMode,
+) -> Result<(), Box<dyn Error>> {
+    let pages = browser.pages.resolve_tab_ids(&[tab]).await?;
+    let page = pages.get(&tab).cloned().ok_or("the opened tab closed")?;
+    BrowserView::unbound(Arc::clone(browser), None)
+        .with_viewports(Arc::clone(viewports))
+        .set_viewport(
+            page,
+            ViewportRequest::new(mode, None)?,
+            &CancellationToken::new(),
+        )
+        .await?;
+    println!("agent viewport: {mode:?}");
+    Ok(())
 }
 
 /// The first tab `Browser.getTabs` lists.
