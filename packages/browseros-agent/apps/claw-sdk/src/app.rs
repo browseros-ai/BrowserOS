@@ -23,7 +23,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::browser::{BrowserLink, TabRegistry};
-use crate::builtins::{self, BuiltinDeps, CaptchaClaims, TabJanitor};
+use crate::builtins::{
+    self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, PrivacyHooks, TabJanitor,
+};
 use crate::config::{AppConfig, Defaults, HostedMode};
 use crate::dispatch::{Dispatcher, Policy, RegistryBuilder};
 use crate::host::{HostApi, HostInputs, TakeoverLock};
@@ -39,8 +41,9 @@ use crate::test_support::FakeCdp;
 /// ```text
 ///  start ─ bind the agent port (taken: exit 2) ─ trace store + SecretSet + writer (with the
 ///          screenshot queue) + Privacy ─ host socket (with a usable token; bind failure: exit 1)
-///        ─ TabRegistry + BrowserLink (connects in the background) ─ CaptchaSolver (with a
-///          provider key) ─ Registry (built-ins)
+///        ─ TabRegistry + BrowserLink (connects in the background) ─ PlaywrightFacade (built on
+///          the link's first connect) ─ CaptchaSolver (with a provider key) ─ Registry
+///          (built-ins, browseros-playwright's ops)
 ///        ─ Dispatcher (rules: the takeover lock, the CAPTCHA claims) ─ RunService ─ McpServer
 ///        ─ host API task (starts browseros-service once the link connects, then serves the
 ///          socket) ─ housekeeping task ─ agent router
@@ -166,7 +169,7 @@ impl App {
             HostInputs {
                 store: store.clone(),
                 sink: trace.clone(),
-                privacy,
+                privacy: Arc::clone(&privacy),
                 screenshots,
                 xvnc: config.env.xvnc,
                 cdp_port: config.launch.cdp_port,
@@ -178,6 +181,9 @@ impl App {
         let tabs = Arc::new(TabRegistry::new());
         let native = NativeCapabilities::from_browseros_version(config.browseros_version());
         let browser = link(native, Arc::clone(&tabs));
+        // browseros-playwright's privacy callbacks feed the same secret set the door masks with.
+        let hooks = PrivacyHooks::new(privacy, Arc::clone(&tabs));
+        let playwright = PlaywrightFacade::start(Arc::clone(&browser), Arc::new(hooks));
 
         // One solver for the process: its paid-task budget and page reservations are its own.
         let solver = CaptchaSolver::new(config.captcha.clone()).map(Arc::new);
@@ -186,6 +192,7 @@ impl App {
         let deps = BuiltinDeps {
             solver,
             claims: Arc::clone(&claims),
+            playwright,
         };
         builtins::builtin_set(&mut methods, deps)
             .map_err(|error| StartError::Methods(error.to_string()))?;
@@ -289,9 +296,10 @@ impl fmt::Debug for App {
 }
 
 /// The dispatcher's rules, in their one fixed order (design D7 rule 4): the takeover lock, then
-/// the CAPTCHA busy rule. Tab privacy's screenshot refusal joins between them with the first
-/// method that captures a page. The door runs them in this order for every op, so an owner's
-/// lock outranks a solve's claim when both would refuse.
+/// the CAPTCHA busy rule. The door runs them in this order for every op, so an owner's lock
+/// outranks a solve's claim when both would refuse. Tab privacy is not one of them: a tab can
+/// turn private while a screenshot waits, so browseros-playwright asks at the moment of capture
+/// instead (`PrivacyHooks::capture_allowed`).
 fn rules(takeover: &Arc<TakeoverLock>, claims: &Arc<CaptchaClaims>) -> Vec<Arc<dyn Policy>> {
     vec![
         Arc::clone(takeover) as Arc<dyn Policy>,

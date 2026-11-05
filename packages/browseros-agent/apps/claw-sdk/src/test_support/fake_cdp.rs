@@ -177,6 +177,25 @@ impl FakeCdp {
         true
     }
 
+    /// An event the page in `tab` sends, such as `Runtime.consoleAPICalled` or
+    /// `Page.javascriptDialogOpening`, on the session `Target.attachToTarget` gives for the tab's
+    /// current target. It reaches a session's listeners only once something attached to the tab.
+    /// `false` when the fake has no such tab.
+    pub fn page_event(&self, tab: TabId, method: &str, params: Value) -> bool {
+        let state = self.lock();
+        let Some(entry) = state.tabs.iter().find(|entry| entry.tab == tab.0) else {
+            return false;
+        };
+        let session = SessionId::from(format!("session-{}", entry.target));
+        drop(state);
+        self.emit(vec![CdpEvent {
+            method: method.to_owned(),
+            params,
+            session_id: Some(session),
+        }]);
+        true
+    }
+
     /// Changes a tab's URL and title, as a navigation that already happened would. Core's
     /// cache keeps the old ones until something refreshes the page. `false` when the fake has
     /// no such tab.

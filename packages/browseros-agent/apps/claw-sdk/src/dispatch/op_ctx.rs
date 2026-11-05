@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use browseros_cdp::CdpError;
 use browseros_core::viewport::ViewportLease;
-use browseros_core::{CoreError, PageId, TargetError};
+use browseros_core::{CoreError, PageId, TabId, TargetError};
 use browseros_trace::{EpochMillis, OperationId};
 use serde_json::Value;
 use tokio::time::Instant;
@@ -153,6 +153,18 @@ impl<M> OpCtx<M> {
         }
     }
 
+    /// The door's rules for this op as if it acted on `tab`: for a result that carries another
+    /// tab's data, such as an event pull, which hands back what every page the run listens to
+    /// did. Unlike [`OpCtx::recheck`], a refusal here is not the op's standing error: the method
+    /// decides what becomes of that tab's data.
+    pub(crate) fn check_tab(&self, tab: TabId) -> Result<(), OperationError> {
+        let check = PolicyCheck {
+            tab: Some(tab),
+            ..self.core.policy_check()
+        };
+        self.core.dispatcher.check(&check)
+    }
+
     /// The side effect may happen from now on. Write-once, and it marks every ancestor too:
     /// a parent's effect happened through its child.
     pub(crate) fn mark_sent(&self) {
@@ -236,22 +248,7 @@ impl<M> OpCtx<M> {
         &self,
         work: impl Future<Output = Result<T, CoreError>>,
     ) -> Result<Result<T, CoreError>, LeafError> {
-        // Biased: when both are ready the stop wins, so an answer that arrives in the same
-        // instant as a cancel is never read as definite.
-        let result = tokio::select! {
-            biased;
-            () = self.core.cancel.cancelled() => return Err(self.stopped()),
-            result = work => result,
-        };
-        // An unbound view follows a reconnect silently, so a call that straddled one may have
-        // acted through another socket, even when it returned.
-        if self.core.dispatcher.browser().epoch() != Some(self.core.run.epoch()) {
-            return Err(LeafError::ambiguous(OperationError::neo(
-                ErrorCode::BROWSER_DISCONNECTED,
-                "the browser connection was replaced during this call",
-            )));
-        }
-        match result {
+        match self.race_classified(work).await? {
             Err(
                 error @ (CoreError::Cdp(
                     CdpError::ConnectionLost
@@ -268,6 +265,32 @@ impl<M> OpCtx<M> {
             )),
             answer => Ok(answer),
         }
+    }
+
+    /// Awaits work that classifies its own failures, such as a crate's whole operation
+    /// (sdk-playwright's `Playwright::invoke`): raced with the run's stop and refused when the
+    /// connection was replaced under it, as [`OpCtx::race`] is, and otherwise handed back as it
+    /// came, its own errors included.
+    pub(crate) async fn race_classified<T>(
+        &self,
+        work: impl Future<Output = T>,
+    ) -> Result<T, LeafError> {
+        // Biased: when both are ready the stop wins, so an answer that arrives in the same
+        // instant as a cancel is never read as definite.
+        let result = tokio::select! {
+            biased;
+            () = self.core.cancel.cancelled() => return Err(self.stopped()),
+            result = work => result,
+        };
+        // An unbound view follows a reconnect silently, so a call that straddled one may have
+        // acted through another socket, even when it returned.
+        if self.core.dispatcher.browser().epoch() != Some(self.core.run.epoch()) {
+            return Err(LeafError::ambiguous(OperationError::neo(
+                ErrorCode::BROWSER_DISCONNECTED,
+                "the browser connection was replaced during this call",
+            )));
+        }
+        Ok(result)
     }
 
     /// The page's viewport lease, for methods that observe, type or navigate. Inherited, not

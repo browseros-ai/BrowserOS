@@ -183,8 +183,8 @@ impl ErrorCode {
     }
 }
 
-/// An operation failed. The adapter reads it through the accessors and builds claw-sdk's
-/// `LeafError { OperationError { owner, code, message, host_code, timed_out }, answer }`.
+/// An operation failed. claw-sdk's adapter (`apps/claw-sdk/src/builtins/playwright_ops.rs`)
+/// reads it through the accessors and builds the dispatcher's `LeafError` from them.
 #[derive(Clone, Debug)]
 pub struct PlaywrightError {
     failure: Failure,

@@ -103,6 +103,7 @@ pub(crate) enum Listing {
 pub(crate) enum Lifetime {
     /// Listed in the run's "still running when the script returned" line.
     Operation,
-    /// A long poll (sdk-playwright's event pump) that the run's end cuts without a line.
+    /// A long poll (sdk-playwright's event pump) that the run's end cuts quietly: cancelled with
+    /// no error on its record, no line in the run's reply, and nothing in its effects.
     Background,
 }

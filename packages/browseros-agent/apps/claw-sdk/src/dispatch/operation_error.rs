@@ -168,6 +168,33 @@ impl ErrorCode {
     /// This Neo has no CAPTCHA provider key, so `neo.solveCaptcha` is off. The deployment adds
     /// one; the script cannot.
     pub(crate) const CAPTCHA_UNAVAILABLE: Self = Self("captcha_unavailable");
+    /// The tab is private, so Neo captures no more of its pixels (sdk-traces' privacy).
+    pub(crate) const PAGE_PRIVATE: Self = Self("page_private");
+
+    // browseros-playwright's codes. The crate's own error table picks each one's owner, whether
+    // it is a timeout and whether Neo can vouch for what happened; builtins/playwright_ops.rs
+    // carries them over unchanged.
+
+    /// A strict locator matched two or more elements.
+    pub(crate) const STRICT_MODE_VIOLATION: Self = Self("strict_mode_violation");
+    /// Nothing matched for the op's whole timeout; also `expect` with no element.
+    pub(crate) const NO_MATCH: Self = Self("no_match");
+    /// An element matched, but stayed hidden, disabled, unstable, not editable or covered.
+    pub(crate) const NOT_ACTIONABLE: Self = Self("not_actionable");
+    /// An `expect` matcher failed with its element present.
+    pub(crate) const ASSERTION_FAILED: Self = Self("assertion_failed");
+    /// A ref or element handle whose element or document is gone. Never waits.
+    pub(crate) const ELEMENT_DETACHED: Self = Self("element_detached");
+    /// A script the agent ran in the page threw (`evaluate`, `waitForFunction`).
+    pub(crate) const PAGE_ERROR: Self = Self("page_error");
+    /// The page never reached a state the op waited for: a load state, a URL, an event.
+    pub(crate) const WAIT_TIMEOUT: Self = Self("wait_timeout");
+    /// A Playwright feature Neo does not support here, such as a popup opened as a window.
+    pub(crate) const UNSUPPORTED: Self = Self("unsupported");
+    /// Copy or cut in a password, card or one-time-code field.
+    pub(crate) const SENSITIVE_COPY_REFUSED: Self = Self("sensitive_copy_refused");
+    /// The page or frame closed, or left the run's view, while a Playwright op worked on it.
+    pub(crate) const TARGET_CLOSED: Self = Self("target_closed");
 
     /// The stored and wire name.
     #[must_use]
@@ -212,6 +239,13 @@ impl LeafError {
             error,
             answer: Some(Answer::Ambiguous),
         }
+    }
+
+    /// The failure itself, for a crate that carries the door's refusal through its own error
+    /// type (sdk-playwright's `Refusal`).
+    #[must_use]
+    pub(crate) fn error(&self) -> &OperationError {
+        &self.error
     }
 }
 

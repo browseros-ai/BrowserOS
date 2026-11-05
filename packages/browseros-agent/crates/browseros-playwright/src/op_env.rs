@@ -1,7 +1,7 @@
 //! The host's side of one operation.
 //!
-//! claw-sdk implements [`OpEnv`] over its dispatcher's `OpCtx` (adapter/playwright.rs), and
-//! tests over a plain struct. The crate borrows it for one `Playwright::invoke` and never
+//! claw-sdk implements [`OpEnv`] over its dispatcher's `OpCtx`
+//! (`apps/claw-sdk/src/builtins/playwright_ops.rs`), and tests over a plain struct. The crate borrows it for one `Playwright::invoke` and never
 //! stores it.
 //!
 //! Deliberately absent: a cancel token and the run's deadline. The dispatcher races every

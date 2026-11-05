@@ -13,8 +13,8 @@ use tokio::sync::oneshot;
 
 use super::op_ctx::OpState;
 use super::{
-    Answer, CallSite, Caller, ErrorCode, LeafError, MethodSpec, OpFailure, OpLine, OpReply,
-    OperationError, PageFact, RunCtx, StopReason,
+    Answer, CallSite, Caller, ErrorCode, LeafError, Lifetime, MethodSpec, OpFailure, OpLine,
+    OpReply, OperationError, PageFact, RunCtx, StopReason,
 };
 use crate::browser::PageRef;
 
@@ -74,37 +74,57 @@ pub(super) enum Ending {
     Lost,
 }
 
-/// The decided end of an op: a pure function of whether it was sent, its effect and its ending.
-/// The trace, the reply and the run's effects all read this one value, so they cannot disagree
-/// (skeleton D7 rule 5). A plain data bag.
+/// The decided end of an op: a pure function of whether it was sent, its spec (effect and
+/// lifetime) and its ending. The trace, the reply and the run's effects all read this one value,
+/// so they cannot disagree (skeleton D7 rule 5). A plain data bag.
 #[derive(Debug, PartialEq)]
 pub(super) struct Settlement {
     pub(super) outcome: Outcome,
     pub(super) delivery: Delivery,
     pub(super) retryable: bool,
-    pub(super) result: Result<Value, OperationError>,
+    pub(super) result: Settled,
+}
+
+/// What an op ended with, as its trace record and its reply carry it.
+#[derive(Debug, PartialEq)]
+pub(super) enum Settled {
+    /// The method's value.
+    Value(Value),
+    /// The op failed: the error is on its record and in its reply.
+    Failed(OperationError),
+    /// A background pull (sdk-playwright's event pump) that the run's stop cut. A pull has no
+    /// end of its own, so this is how every pull ends, not a failure: its record carries no
+    /// error (skeleton D7 rule 15). A caller still waiting on it gets the stop's error, as any
+    /// cancelled call does; in practice the script is gone by then.
+    Retired(StopReason),
 }
 
 impl Settlement {
     /// The delivery table. Not sent is `not_sent`, whatever happened. Sent and answered is
     /// `done`; sent and unanswered is `unknown`. Stops, panics and drops are always unanswered,
     /// and so is a leaf error that did not say. Retrying is safe when nothing was sent or the
-    /// op only reads.
+    /// op only reads. A stop retires a background pull rather than failing it.
     #[must_use]
-    pub(super) fn decide(sent: bool, effect: Effect, ending: Ending) -> Self {
+    pub(super) fn decide(sent: bool, spec: &MethodSpec, ending: Ending) -> Self {
         let (outcome, answer, result) = match ending {
-            Ending::Returned(value) => (Outcome::Ok, Answer::Definite, Ok(value)),
+            Ending::Returned(value) => (Outcome::Ok, Answer::Definite, Settled::Value(value)),
             Ending::Failed(leaf) => (
                 Outcome::Error,
                 leaf.answer.unwrap_or(Answer::Ambiguous),
-                Err(leaf.error),
+                Settled::Failed(leaf.error),
             ),
-            Ending::Refused(error) => (Outcome::Error, Answer::Definite, Err(error)),
-            Ending::Stopped(reason) => (Outcome::Cancelled, Answer::Ambiguous, Err(reason.error())),
+            Ending::Refused(error) => (Outcome::Error, Answer::Definite, Settled::Failed(error)),
+            Ending::Stopped(reason) => {
+                let result = match spec.lifetime {
+                    Lifetime::Operation => Settled::Failed(reason.error()),
+                    Lifetime::Background => Settled::Retired(reason),
+                };
+                (Outcome::Cancelled, Answer::Ambiguous, result)
+            }
             Ending::Panicked => (
                 Outcome::Error,
                 Answer::Ambiguous,
-                Err(OperationError::neo(
+                Settled::Failed(OperationError::neo(
                     ErrorCode::INTERNAL_ERROR,
                     "the operation failed inside Neo",
                 )),
@@ -112,7 +132,7 @@ impl Settlement {
             Ending::Lost => (
                 Outcome::Cancelled,
                 Answer::Ambiguous,
-                Err(OperationError::neo(
+                Settled::Failed(OperationError::neo(
                     ErrorCode::INTERNAL_ERROR,
                     "the operation was dropped before it finished",
                 )),
@@ -123,7 +143,7 @@ impl Settlement {
             (true, Answer::Definite) => Delivery::Done,
             (true, Answer::Ambiguous) => Delivery::Unknown,
         };
-        let retryable = match (delivery, effect) {
+        let retryable = match (delivery, spec.effect) {
             (Delivery::NotSent, Effect::Read | Effect::Write)
             | (Delivery::Done | Delivery::Unknown, Effect::Read) => true,
             (Delivery::Done | Delivery::Unknown, Effect::Write) => false,
@@ -222,22 +242,23 @@ fn settle(open: Open, ending: Ending, pages: Vec<PageFact>, default_page: Option
     } = open;
     let id = state.id();
     let sent_at = state.sent_at();
-    let settlement = Settlement::decide(sent_at.is_some(), spec.effect, ending);
+    let settlement = Settlement::decide(sent_at.is_some(), &spec, ending);
     for mut note in state.take_notes() {
         secrets.mask_str(&mut note);
         tracing::debug!(operation = %id, method = spec.name, %note, "op note");
     }
+    let (result, error) = match &settlement.result {
+        Settled::Value(value) => (Some(value.clone()), None),
+        Settled::Failed(error) => (None, Some(error.record(settlement.retryable, Some(id)))),
+        Settled::Retired(_) => (None, None),
+    };
     trace.op_ended(OperationEnded {
         id,
         outcome: settlement.outcome,
         delivery: settlement.delivery,
         sent_at,
-        result: settlement.result.as_ref().ok().cloned(),
-        error: settlement
-            .result
-            .as_ref()
-            .err()
-            .map(|error| error.record(settlement.retryable, Some(id))),
+        result,
+        error,
         page_after: pages.first().map(PageFact::page_state),
         target: if state.is_sensitive() {
             TargetSensitivity::Sensitive
@@ -258,8 +279,13 @@ fn settle(open: Open, ending: Ending, pages: Vec<PageFact>, default_page: Option
         result,
         ..
     } = settlement;
+    let outcome = match result {
+        Settled::Value(value) => Ok(value),
+        Settled::Failed(error) => Err(error),
+        Settled::Retired(reason) => Err(reason.error()),
+    };
     let mut answer = OpReply {
-        outcome: result.map_err(|error| OpFailure {
+        outcome: outcome.map_err(|error| OpFailure {
             error,
             delivery,
             retryable,
@@ -282,8 +308,8 @@ mod tests {
     use browseros_trace::{Delivery, Effect, ErrorOwner, Outcome};
     use serde_json::json;
 
-    use super::{Ending, Settlement};
-    use crate::dispatch::{ErrorCode, LeafError, OperationError, StopReason};
+    use super::{Ending, Settled, Settlement};
+    use crate::dispatch::{ErrorCode, LeafError, Lifetime, MethodSpec, OperationError, StopReason};
 
     fn error() -> OperationError {
         OperationError::website(ErrorCode::CDP_ERROR, "the page said no")
@@ -366,7 +392,8 @@ mod tests {
         } in rows()
         {
             for effect in [Effect::Read, Effect::Write] {
-                let unsent = Settlement::decide(false, effect, ending());
+                let spec = MethodSpec::new("test.op", effect);
+                let unsent = Settlement::decide(false, &spec, ending());
                 assert_eq!(unsent.outcome, outcome, "{name}");
                 assert_eq!(
                     unsent.delivery,
@@ -378,7 +405,7 @@ mod tests {
                     "{name}: nothing sent is always safe to repeat"
                 );
 
-                let sent = Settlement::decide(true, effect, ending());
+                let sent = Settlement::decide(true, &spec, ending());
                 assert_eq!(sent.outcome, outcome, "{name}");
                 assert_eq!(sent.delivery, delivery_if_sent, "{name}, sent");
                 assert_eq!(
@@ -392,13 +419,48 @@ mod tests {
 
     #[test]
     fn a_stopped_op_carries_the_stops_owner() {
-        let settled =
-            Settlement::decide(true, Effect::Write, Ending::Stopped(StopReason::CallerLeft));
-        let error = settled.result.err();
+        let spec = MethodSpec::new("test.op", Effect::Write);
+        let settled = Settlement::decide(true, &spec, Ending::Stopped(StopReason::CallerLeft));
+        let Settled::Failed(error) = settled.result else {
+            panic!("a stopped operation fails: {:?}", settled.result);
+        };
         assert_eq!(
-            error.map(|error| (error.owner(), error.code())),
-            Some((ErrorOwner::Host, ErrorCode::CANCELLED)),
+            (error.owner(), error.code()),
+            (ErrorOwner::Host, ErrorCode::CANCELLED),
             "the caller left, so the host owns the cut"
         );
+    }
+
+    #[test]
+    fn a_stop_retires_a_background_pull_with_no_error() {
+        let pull = MethodSpec {
+            lifetime: Lifetime::Background,
+            ..MethodSpec::new("test.pull", Effect::Read)
+        };
+        for reason in [
+            StopReason::ScriptReturned,
+            StopReason::Deadline,
+            StopReason::CallerLeft,
+            StopReason::Shutdown,
+            StopReason::Crashed,
+        ] {
+            let settled = Settlement::decide(false, &pull, Ending::Stopped(reason));
+            assert_eq!(
+                (settled.outcome, settled.delivery, settled.result),
+                (
+                    Outcome::Cancelled,
+                    Delivery::NotSent,
+                    Settled::Retired(reason)
+                ),
+                "{reason:?}: the run's end is how a pull ends, so nothing failed"
+            );
+        }
+        for (name, ending) in [("panicked", Ending::Panicked), ("lost", Ending::Lost)] {
+            let settled = Settlement::decide(false, &pull, ending);
+            assert!(
+                matches!(settled.result, Settled::Failed(_)),
+                "{name}: Neo lost the pull, which is no normal end"
+            );
+        }
     }
 }

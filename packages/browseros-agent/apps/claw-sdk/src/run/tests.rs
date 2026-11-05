@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_trace::{
-    EpochMillis, ErrorOwner, RequestId, RunEnded, RunId, RunQuery, RunStarted, RunStatus,
-    RunSummary, SecretValue, TaskId, WriterConfig,
+    Delivery, EpochMillis, ErrorOwner, OperationId, Outcome, RequestId, RunEnded, RunId, RunQuery,
+    RunStarted, RunStatus, RunSummary, SecretValue, TaskId, WriterConfig,
 };
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -332,6 +332,40 @@ fn returning_cuts_pending_ops_and_the_reply_says_which() -> Result<(), TestError
 }
 
 #[test]
+fn a_pending_event_pull_ends_quietly_when_the_script_returns() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        // Started and never awaited, as the prelude's event pump is once a listener exists. The
+        // pause lets its task start before the script returns.
+        let code = "__neo.invoke('test.pull', {});\nawait new Promise((resolve) => setTimeout(resolve, 50));\nreturn 1;";
+        let reply = rig
+            .run_service(GRACE)
+            .run(request(code, meta(None, None)?)?)
+            .await;
+        assert_eq!((reply.status, &reply.value), (ReplyStatus::Ok, &json!(1)));
+        assert!(
+            reply.not_awaited.is_empty(),
+            "the run's end is how a pull ends, so the reply names no op the script left behind: {:?}",
+            reply.not_awaited
+        );
+        assert_eq!(reply.effects, ReplyEffects::None, "a pull changes nothing");
+        rig.sink.flush().await?;
+        let pull = rig
+            .store
+            .operation(OperationId::new(reply.id, 1))
+            .await?
+            .ok_or("the pull is the run's first op, on the record")?;
+        assert_eq!(pull.name, "test.pull");
+        assert_eq!(
+            (pull.outcome, pull.delivery, pull.error),
+            (Some(Outcome::Cancelled), Some(Delivery::NotSent), None),
+            "cancelled and never sent, with no error on the record: nothing failed"
+        );
+        Ok(())
+    })
+}
+
+#[test]
 fn a_caller_leaving_stops_a_run_without_a_request_id_at_once() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
@@ -620,6 +654,40 @@ fn a_new_task_gets_a_fresh_tab_and_a_known_task_keeps_its_tab_across_a_restart()
             other.value,
             Value::Null,
             "another new task starts with no tab yet"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn context_pages_lists_a_tab_opened_before_the_run_in_its_first_statement() -> Result<(), TestError>
+{
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let _registration = rig
+            .secrets
+            .register(SecretValue::new("hunter22".to_owned()), None);
+        let owner = rig
+            .owner_tab("https://owner.example/?code=hunter22")
+            .await?;
+        // Reversed, so the reply's own mask could not hide a secret the script was handed.
+        let code = "return context.pages().map((tab) => ({ brand: tab.toJSON(), url: [...tab.url()].reverse().join('') }));";
+        let reply = rig
+            .run_service(GRACE)
+            .run(request(code, meta(None, None)?)?)
+            .await;
+        assert_eq!(reply.status, ReplyStatus::Ok, "{reply:?}");
+        let masked: String = "https://owner.example/?code=[private]"
+            .chars()
+            .rev()
+            .collect();
+        assert_eq!(
+            reply.value,
+            json!([{
+                "brand": { "$neo": "page", "id": owner.id.0, "tab": owner.tab.0 },
+                "url": masked,
+            }]),
+            "every open tab before any op, its URL masked before the script sees it"
         );
         Ok(())
     })

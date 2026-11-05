@@ -79,8 +79,8 @@
     return bytes.subarray(0, length)
   }
 
-  // "$neo" brand -> reviver, for handles inside results. Preludes add theirs ("page" from the
-  // page prelude, "locator" from sdk-playwright's).
+  // "$neo" brand -> reviver, for handles inside results. Preludes add their own, such as the
+  // Playwright prelude's "page" and "element".
   const brands = new Map([['bytes', (json) => fromBase64(json.base64)]])
 
   // In place: every object here came from JSON.parse, so a "__proto__" key is an own data
@@ -275,8 +275,8 @@
     liveTimers.delete(id)
   }
 
-  // Parameter name -> (init) => value: the agent's API. Later preludes replace earlier names
-  // (sdk-playwright's `page` and `context` replace the page prelude's).
+  // Parameter name -> (init) => value: the agent's API, in the order the preludes provide it. A
+  // later prelude that provides a name again replaces it in place.
   const provided = new Map([
     ['console', () => console],
     ['setTimeout', () => setTimeout],

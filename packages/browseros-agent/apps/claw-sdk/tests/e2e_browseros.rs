@@ -45,7 +45,7 @@ const LOCKED_PAGE: &str = "data:text/html,<title>Neo e2e lock</title><p>the owne
 const LOCKED_TITLE: &str = "Neo e2e lock";
 
 #[tokio::test(flavor = "multi_thread")]
-async fn placeholder_built_ins_drive_a_real_browseros_page() -> TestResult {
+async fn the_playwright_api_drives_a_real_browseros_page() -> TestResult {
     let Some(browser) = browser_or_skip() else {
         return Ok(());
     };
@@ -138,6 +138,13 @@ async fn drive(rig: &mut Rig) -> TestResult {
                 Some(Outcome::Ok),
                 Some(Delivery::Done)
             ),
+            // Playwright's goto reads the frame tree it navigated, for `page.frames()`.
+            (
+                "page.frames",
+                Effect::Read,
+                Some(Outcome::Ok),
+                Some(Delivery::NotSent)
+            ),
             (
                 "page.title",
                 Effect::Read,
@@ -151,18 +158,14 @@ async fn drive(rig: &mut Rig) -> TestResult {
                 Some(Delivery::Done)
             ),
         ],
-        "four ops, once each (the replay ran nothing): writes done once sent, the read never sent"
+        "five ops, once each (the replay ran nothing): writes done once sent, reads never sent"
     );
-    new_pages_load_is_a_child_op_on_its_tab(&store, locked_run, locked_tab).await
+    the_load_is_an_op_on_the_new_tab(&store, locked_run, locked_tab).await
 }
 
-/// The trace of the run that opened the locked tab: `context.newPage({ url })` and, under it,
-/// the load as `page.goto` on the new tab, where the door's rules and the trace see the tab.
-async fn new_pages_load_is_a_child_op_on_its_tab(
-    store: &TraceStore,
-    run: RunId,
-    tab: i64,
-) -> TestResult {
+/// The trace of the run that opened the locked tab: `context.newPage()` on no tab, then the load
+/// as `page.goto` on the new tab, where the door's rules and the trace see the tab.
+async fn the_load_is_an_op_on_the_new_tab(store: &TraceStore, run: RunId, tab: i64) -> TestResult {
     let opened = store
         .run(run)
         .await?
@@ -182,9 +185,10 @@ async fn new_pages_load_is_a_child_op_on_its_tab(
         ops,
         [
             ("context.newPage", None, false),
-            ("page.goto", Some(tab), true)
+            ("page.goto", Some(tab), false),
+            ("page.frames", Some(tab), false),
         ],
-        "newPage loads its URL as a child op on the new tab, where the door's rules see it"
+        "the load is the script's own op on the new tab, where the door's rules see it"
     );
     Ok(())
 }
@@ -269,7 +273,7 @@ async fn solve_on_a_clear_page(rig: &Rig) -> TestResult {
     Ok(())
 }
 
-/// A host locks a tab the agent opened with `context.newPage({ url })`, the owner closes it from
+/// A host locks a tab the agent opened with `context.newPage()` and loaded, the owner closes it from
 /// outside Neo (Chromium's own `/json/close`), and the lock ends with the tab: the close reached
 /// browseros-service from BrowserOS's target events. Returns the run that opened the tab and
 /// the tab, for the trace check after the stop.
@@ -277,7 +281,12 @@ async fn a_hosts_lock_ends_when_its_tab_closes(
     rig: &Rig,
     client: &Client,
 ) -> Result<(RunId, i64), Box<dyn Error>> {
-    let code = format!("return await context.newPage({{ url: {LOCKED_PAGE:?} }});");
+    let code = format!(
+        r"
+        const p = await context.newPage();
+        await p.goto({LOCKED_PAGE:?});
+        return p;"
+    );
     let opened = run(client, &code, &json!({ "taskId": "e2e-lock" })).await?;
     let page = opened
         .structured_content
@@ -347,7 +356,7 @@ async fn a_hosts_lock_ends_when_its_tab_closes(
 }
 
 /// The run as zuzu reads it over the host socket: refused without the bearer token, and with it
-/// the run the trace recorded, with its four ops.
+/// the run the trace recorded, with its five ops.
 async fn read_back_over_the_host_socket(rig: &Rig, id: RunId) -> TestResult {
     let refused = rig.host_get(&format!("/v1/runs/{id}"), None).await?;
     assert!(
@@ -377,7 +386,13 @@ async fn read_back_over_the_host_socket(rig: &Rig, id: RunId) -> TestResult {
         .collect();
     assert_eq!(
         names,
-        ["context.newPage", "page.goto", "page.title", "page.close"]
+        [
+            "context.newPage",
+            "page.goto",
+            "page.frames",
+            "page.title",
+            "page.close"
+        ]
     );
     Ok(())
 }

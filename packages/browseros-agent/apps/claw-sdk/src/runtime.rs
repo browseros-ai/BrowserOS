@@ -2,9 +2,9 @@
 //! 0.15.1). The only subtree that names rquickjs (STYLE.md P1).
 //!
 //! ```text
-//!  run_script ─ AsyncRuntime + AsyncContext ─ js/bootstrap.js, js/page_prelude.js,
-//!      │        js/neo_prelude.js, then the agent's code compiled as
-//!      │        `async function (console, …, page, context, neo)`
+//!  run_script ─ AsyncRuntime + AsyncContext ─ js/bootstrap.js, browseros-playwright's
+//!      │        prelude, js/neo_prelude.js, then the agent's code compiled as
+//!      │        `async function (console, …, page, context, browser, expect, neo)`
 //!      │        natives: __neo_invoke(name, json, site) → Promise<string>, never rejects
 //!      │                 __neo_log(level, text)       __neo_sleep(ms) → Promise
 //!      ▼

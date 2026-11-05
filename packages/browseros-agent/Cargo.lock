@@ -658,6 +658,7 @@ dependencies = [
  "browseros-captcha",
  "browseros-cdp",
  "browseros-core",
+ "browseros-playwright",
  "browseros-service",
  "browseros-takeover",
  "browseros-trace",

@@ -22,8 +22,11 @@ use tokio::time;
 
 use super::{Bridge, RunLogs};
 use crate::browser::PageRef;
+use crate::builtins::PLAYWRIGHT_PRELUDE;
 use crate::config::Defaults;
-use crate::dispatch::{Dispatcher, ErrorCode, OpFailure, OperationError, RunCtx, StopReason};
+use crate::dispatch::{
+    Dispatcher, ErrorCode, OpFailure, OperationError, PageFact, RunCtx, StopReason,
+};
 
 /// The bootstrap: `NeoError`, the codec, envelopes, call sites, console, timers, `__neo.run`.
 const BOOTSTRAP: JsFile = JsFile {
@@ -31,12 +34,12 @@ const BOOTSTRAP: JsFile = JsFile {
     source: include_str!("js/bootstrap.js"),
 };
 /// Evaluated after the bootstrap, in order. Each adds parameters of the agent's function through
-/// `__neo.provide`; sdk-playwright's prelude replaces the page prelude's `page` and `context`,
-/// and the neo prelude's `neo` stays.
+/// `__neo.provide`: browseros-playwright's prelude `page`, `context`, `browser` and `expect`,
+/// and the neo prelude `neo`.
 const PRELUDES: &[JsFile] = &[
     JsFile {
-        name: "page_prelude.js",
-        source: include_str!("js/page_prelude.js"),
+        name: "playwright_prelude.js",
+        source: PLAYWRIGHT_PRELUDE,
     },
     JsFile {
         name: "neo_prelude.js",
@@ -61,6 +64,10 @@ pub(crate) struct Script {
     /// The `page` parameter's tab: the task's tab when the run service knows one, else `None`,
     /// and the run opens a tab on the first call that needs it.
     pub(crate) page: Option<PageRef>,
+    /// Every tab open when the run started, as reply facts describe them and masked the same
+    /// way, so `context.pages()`, which is synchronous in Playwright, lists each one before the
+    /// script's first op. Empty when the run service could not list them.
+    pub(crate) pages: Vec<PageFact>,
 }
 
 /// How a script ended, and what it logged. A plain data bag with nothing JS-typed in it: the
@@ -195,7 +202,9 @@ async fn evaluate(
         Ok(context) => context,
         Err(error) => return Evaluated::Engine(error.to_string()),
     };
-    let init = json!({ "page": script.page }).to_string();
+    // The prelude's `RunInit`: `page` is the run's own tab, `pages` every tab, whose order is
+    // `context.pages()`'s (sdk-playwright's bridge.ts).
+    let init = json!({ "page": script.page, "pages": script.pages }).to_string();
     let code = script.code;
     let natives = Arc::clone(bridge);
     let evaluation = SliceTimed::new(

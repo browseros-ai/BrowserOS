@@ -6,11 +6,11 @@ use crate::dispatch::{Listing, Registry};
 /// How a script is written and what it gets, true of every build.
 const USAGE: &str = "Runs JavaScript against the user's browser and returns what the script \
 returns. `code` is the body of an async function: `await` each SDK call and `return` a JSON \
-value. The function's parameters are the SDK: `page` (this task's tab; a background tab opens \
-on the first call that needs one), `context`, `neo` (any `neo.*` method listed below), `console` \
-(its lines come back with the result), `setTimeout`, `clearTimeout`, `NeoError` and \
-`TimeoutError`. Every run gets a fresh JavaScript realm; only the browser's tabs carry over from \
-one run to the next. The realm is QuickJS, which has no `Intl`.";
+value. The function's parameters are the SDK: Playwright's `page` (this task's tab; a background \
+tab opens on the first call that needs one), `context`, `browser` and `expect`, then `neo` (any \
+`neo.*` method listed below), `console` (its lines come back with the result), `setTimeout`, \
+`clearTimeout`, `NeoError` and `TimeoutError`. Every run gets a fresh JavaScript realm; only the \
+browser's tabs carry over from one run to the next. The realm is QuickJS, which has no `Intl`.";
 
 /// The error model, which the agent needs before it retries anything.
 const ERRORS: &str = "An SDK call that fails throws a `NeoError` with `code`, `owner` (who must \
@@ -150,6 +150,7 @@ mod tests {
             let script = Script {
                 code: "return [__neo.parameters(), typeof Intl];".to_owned(),
                 page: None,
+                pages: Vec::new(),
             };
             let ScriptOutcome::Returned(value) =
                 run_script(&run, &rig.dispatcher, script).await.outcome

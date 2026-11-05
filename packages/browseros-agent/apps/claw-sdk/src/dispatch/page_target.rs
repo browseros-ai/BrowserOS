@@ -28,6 +28,16 @@ pub(super) enum TargetHandle {
     RunDefault,
 }
 
+impl PageTarget {
+    /// Whether this names the run's own page before it has a tab (`id: null`), which the door
+    /// opens on first use. The prelude sends that brand wherever the page is named, so one input
+    /// can carry it more than once.
+    #[must_use]
+    pub(crate) fn is_run_default(&self) -> bool {
+        matches!(self.0, TargetHandle::RunDefault)
+    }
+}
+
 /// The brand's wire form. Every field the prelude sends is named, so a typo is refused.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -20,20 +20,24 @@ The engine stays swappable and could move out of process. Everything else sees J
 
 ```rust
 // Bad, in dispatch/: rquickjs::Value<'_> as a parameter
-// Good: the bridge decodes to serde_json::Value before the dispatcher sees it
-pub async fn invoke(&self, call: Invocation<'_>) -> Result<Value, OpFailure>
+// Good: the bridge decodes to serde_json::Value (`Call::input`) before the dispatcher sees it
+pub(crate) fn submit(self: &Arc<Self>, run: &Arc<RunCtx>, call: Call) -> PendingReply
 ```
 
 ### P2. One front door
 
-Every SDK action is a `Handler` registered in the `Registry`, reached only through
-`Dispatcher::invoke`. A handler that needs another action calls `op.invoke`, which records it as a
-child op; it never calls another handler or drives the browser outside its own op. `mcp/`,
-`http/` and `runtime/` never name a browser crate.
+Every SDK action is a `Method` registered in the `Registry`, and only the dispatcher runs it. A
+script's call enters through `Dispatcher::submit` from the bridge, as do the idle-tab janitor's
+closes. A method that needs another action calls `OpCtx::invoke`, which runs it through the same
+door as a child op, with its own record, rules and delivery. A method never
+calls another method's `call`, and the types enforce it, because only the door mints the
+`OpCtx<M>` that `call` takes. Nor does it drive the browser outside its own op. `mcp/`, `http/`
+and `runtime/` never name a browser crate.
 
 ```rust
-// Bad: a second path around policy, delivery and the trace
-let title = TitleLeaf.call(op, json!({ "page": page })).await?;
+// Bad: a second path around policy, delivery and the trace (and a type error: `Title::call`
+// takes an `&OpCtx<Title>`, which only the door can mint)
+let title = Title.call(op, TitleInput { page }).await?;
 // Good
 let title = op.invoke("page.title", json!({ "page": page })).await?;
 ```
@@ -213,8 +217,8 @@ the names; review checks that the item really is the file's main subject.
 
 ### G8. Traits only when they are needed
 
-For generics, `dyn` seams (`Handler`, `Policy`, `Masker`) or an extension trait named `…Ext`.
-Not to group methods.
+For generics (`Method`), `dyn` seams (`Policy`, the registry's erased methods) or an extension
+trait named `…Ext`. Not to group methods.
 
 ```rust
 trait RunHelpers { fn signal(&self, line: String); }   // Bad: impl RunCtx { fn signal(..) }
@@ -288,9 +292,9 @@ gets a short block comment or ASCII diagram there.
 ```rust
 //! The operation dispatcher: the one path every SDK call takes.
 //!
-//! agent JS ─▶ bridge ─▶ Dispatcher::invoke ─▶ policy ─▶ Handler ─▶ mask ─▶ JSON envelope
+//! agent JS ─▶ bridge ─▶ Dispatcher::submit ─▶ rules ─▶ Method::call ─▶ mask ─▶ JSON envelope
 //!
-//! It owns delivery (from `OperationGuard`) and the trace record; handlers report facts.
+//! It owns delivery (from `OperationGuard`) and the trace record; methods report facts.
 ```
 
 ### D3. Comment the seams

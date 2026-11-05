@@ -583,7 +583,7 @@ fn tests_that_only_the_probe_names_engine_internals() -> TestResult {
             }
         }
     }
-    for dir in ["src", "adapter", "tests"] {
+    for dir in ["src", "tests"] {
         for path in files_below(&crate_root().join(dir))? {
             let rust = path.extension().is_some_and(|extension| extension == "rs");
             if rust && !path.ends_with("tests/engine_sources.rs") {

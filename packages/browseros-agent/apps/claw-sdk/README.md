@@ -45,7 +45,7 @@ State lives under `$BROWSERCLAW_DIR`:
 
 ## The `run` contract
 
-The model sends `run { code, timeout? }`. `code` is the body of an async function whose parameters are the SDK: `page`, `context`, `neo`, `console`, the timers, and the error classes. `timeout` is in milliseconds, from 1 to 900000, and defaults to 300000. Unknown fields are refused. Each run gets a fresh QuickJS realm. `src/mcp/run_description.rs` builds the text the model reads about all of this.
+The model sends `run { code, timeout? }`. `code` is the body of an async function whose parameters are the SDK: Playwright's `page`, `context`, `browser` and `expect` (browseros-playwright's prelude), `neo`, `console`, the timers, and the error classes. `timeout` is in milliseconds, from 1 to 900000, and defaults to 300000. Unknown fields are refused. Each run gets a fresh QuickJS realm. `src/mcp/run_description.rs` builds the text the model reads about all of this.
 
 The host sends its ids in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData? }`. Neo refuses unknown keys as `host / invalid_meta`. `taskId` makes the task's last tab the run's `page`. Without it, `page` opens a background tab on the first call that needs one. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads.
 
@@ -64,9 +64,9 @@ A `requestId` never runs twice. A repeat while its run is going joins it and get
 | `http` | The two listeners, the request hygiene in front of `/mcp`, and `/system/*`. |
 | `mcp` | The `run` tool: parsing its arguments and `_meta`, its description, and rendering a reply. |
 | `run` | One `run` call from admission to reply: replay, joins, the orphan grace, and the deadline. |
-| `runtime` | The per-run QuickJS realm, the JS bootstrap and preludes in `runtime/js/`, and the strings-only bridge to the dispatcher. The only module that names rquickjs. |
+| `runtime` | The per-run QuickJS realm, the JS bootstrap and the `neo` prelude in `runtime/js/` plus browseros-playwright's prelude, and the strings-only bridge to the dispatcher. The only module that names rquickjs. |
 | `dispatch` | The door: `Dispatcher`, the `Method` trait, the `Registry`, the policy rules, and the error model. |
-| `builtins` | The methods Neo serves today (`context.newPage`, `page.goto`, `page.title`, `page.close`, `neo.solveCaptcha`) and the idle-tab janitor. |
+| `builtins` | The methods Neo serves: every browseros-playwright op but the two held for a privacy fix (`page.evaluate`, `page.waitForFunction`), on the process's one `Playwright` (`playwright_ops.rs`, with the privacy hooks it reports to, and `event_release.rs`, which puts every event an event pull returns through the rules on its own tab) and `neo.solveCaptcha`; and the idle-tab janitor. |
 | `browser` | The CDP link to Chromium, its reconnects, and what Neo knows about each tab. |
 | `host` | The host API's lifecycle and the takeover lock the door checks. |
 | `test_rig` | The unit tests' rig: a fake browser, a real trace store, and test methods. |
@@ -76,7 +76,7 @@ Every SDK operation goes through one door. A script's call reaches `Dispatcher::
 
 ## Add a built-in method
 
-A built-in is a private type in `src/builtins/` that implements `dispatch::Method`. Copy `src/builtins/placeholder_page.rs`.
+A built-in is a private type in `src/builtins/` that implements `dispatch::Method`. Copy `src/builtins/solve_captcha.rs`. The Playwright API is not written this way: browseros-playwright owns its ops, and `src/builtins/playwright_ops.rs` registers each one from the crate's table.
 
 1. Write an input type with `#[serde(deny_unknown_fields)]` and an output type that implements `Serialize`.
 2. Implement `Method`:
@@ -95,14 +95,16 @@ CARGO_BUILD_BUILD_DIR="$(git rev-parse --show-toplevel)/packages/browseros-agent
   apps/claw-sdk/check.sh
 ```
 
-Unit and integration tests run against `FakeCdp`. Two integration tests drive a real headless BrowserOS instead. Stock Chrome does not work, because core uses BrowserOS-only CDP methods. The tests pass without doing anything unless `CLAW_SDK_E2E_BROWSER` names the browser binary:
+Unit and integration tests run against `FakeCdp`. Three integration tests drive a real headless BrowserOS instead. Stock Chrome does not work, because core uses BrowserOS-only CDP methods. The tests pass without doing anything unless `CLAW_SDK_E2E_BROWSER` names the browser binary:
 
 ```sh
 CLAW_SDK_E2E_BROWSER=/Applications/BrowserOS.app/Contents/MacOS/BrowserOS \
-  cargo test -p claw-sdk --locked --test e2e_browseros --test acceptance_browseros
+  cargo test -p claw-sdk --locked --test e2e_browseros --test acceptance_browseros \
+    --test playwright_browseros
 ```
 
 - `tests/e2e_browseros.rs` launches the built binary the way Chromium does, runs scripts over MCP, and reads them back over the host socket.
-- `tests/acceptance_browseros.rs` runs one task end to end. The agent drives a tab, and the host reads its trace, locks the tab, sees the agent's next write refused, releases the lock, and finds that write's screenshot.
+- `tests/playwright_browseros.rs` runs one Playwright script over MCP, the way a model trained on Playwright writes it. The script loads a page with a same-origin iframe into the run's own `page`, reads its `ariaSnapshot({ mode: 'ai' })`, reads elements by a printed ref through `getByRef` and `aria-ref=`, and reads through locators and inside the frame.
+- `tests/acceptance_browseros.rs` runs one task end to end. The agent drives a tab, and the host reads its trace, locks the tab, sees the agent's next write refused, releases the lock, and finds the tab's picture after that write.
 
 `packages/browseros/docker/neo/smoke_sdk.py` checks a running claw-sdk Neo container from the host. It checks health and readiness, that `/mcp` lists the one `run` tool without issuing a session id, and that one run loads a page and reads its title. Run it as `python3 smoke_sdk.py --mcp-port <port>`. The port defaults to 9010.

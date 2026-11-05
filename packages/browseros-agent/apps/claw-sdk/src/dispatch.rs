@@ -18,7 +18,8 @@
 //!
 //! [`RunCtx`] lives here because every op belongs to one, and [`RunCtx::start`] records the
 //! run, so an op can never run outside a recorded run. A stopped run's write-once
-//! [`StopReason`] names the owner of every op it cut short.
+//! [`StopReason`] names the owner of every op it cut short, but for a background pull: the
+//! run's end is how a pull ends, so a stop retires it with no error.
 
 mod dispatcher;
 mod method;

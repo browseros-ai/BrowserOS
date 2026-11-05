@@ -6,7 +6,7 @@ use std::sync::Arc;
 use browseros_core::pages::PageInfo;
 use browseros_core::{PageId, TabId};
 use browseros_trace::{Delivery, Effect, OperationId, PageState, SecretSet, TraceSink};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
@@ -21,7 +21,8 @@ use super::{
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 
 /// The method the door calls, as Neo, to open a run's lazy default page: with `{}`, returning
-/// the new page (a `PageRef`) after reporting it `PageChange::Opened`.
+/// Playwright's page entry `{ page, url }` (`OpenedPage`) after reporting the page
+/// `PageChange::Opened`.
 const DEFAULT_PAGE_OPENER: &str = "context.newPage";
 /// How much of a method name the trace and the error keep: a script can send any string.
 const NAME_CHARS: usize = 128;
@@ -129,6 +130,13 @@ struct Admitted {
     spec: MethodSpec,
     caller: Caller,
     target: Option<PageTarget>,
+}
+
+/// What [`DEFAULT_PAGE_OPENER`] returns, as far as the door reads it: the brand of the tab it
+/// opened. Its `url` is the prelude's, so unknown fields pass.
+#[derive(Deserialize)]
+struct OpenedPage {
+    page: PageTarget,
 }
 
 /// An op's target after the door checked it.
@@ -257,9 +265,13 @@ impl Dispatcher {
             .invoke_child(run, None, DEFAULT_PAGE_OPENER, json!({}))
             .await
             .map_err(|failure| failure.error)?;
-        match serde_json::from_value::<PageTarget>(opened) {
-            Ok(PageTarget(TargetHandle::Page { id, tab })) => Ok(PageRef { id, tab }),
-            Ok(PageTarget(TargetHandle::RunDefault)) => Err(OperationError::neo(
+        match serde_json::from_value::<OpenedPage>(opened) {
+            Ok(OpenedPage {
+                page: PageTarget(TargetHandle::Page { id, tab }),
+            }) => Ok(PageRef { id, tab }),
+            Ok(OpenedPage {
+                page: PageTarget(TargetHandle::RunDefault),
+            }) => Err(OperationError::neo(
                 ErrorCode::INTERNAL_ERROR,
                 format_args!("{DEFAULT_PAGE_OPENER} returned no page"),
             )),
@@ -501,7 +513,7 @@ impl Dispatcher {
     }
 
     /// Runs every rule in order; the first refusal wins.
-    fn check(&self, check: &PolicyCheck<'_>) -> Result<(), OperationError> {
+    pub(super) fn check(&self, check: &PolicyCheck<'_>) -> Result<(), OperationError> {
         for policy in &self.policies {
             policy.check(check)?;
         }
@@ -572,6 +584,13 @@ impl PageFact {
         }
     }
 
+    /// Replaces every known secret in what a script would see of the page: its URL and title.
+    pub(crate) fn mask(&mut self, secrets: &SecretSet) {
+        for text in [&mut self.url, &mut self.title].into_iter().flatten() {
+            secrets.mask_str(text);
+        }
+    }
+
     /// The fact as the trace's `page_after`. The writer masks and clips it.
     pub(super) fn page_state(&self) -> PageState {
         PageState {
@@ -580,6 +599,13 @@ impl PageFact {
             url: self.url.clone(),
             title: self.title.clone(),
         }
+    }
+}
+
+/// An open tab, as core's cache describes it.
+impl From<PageInfo> for PageFact {
+    fn from(info: PageInfo) -> Self {
+        Self::new(PageRef::from(&info), Some(info))
     }
 }
 
@@ -594,9 +620,7 @@ impl OpReply {
             Err(failure) => failure.error.mask(secrets),
         }
         for page in &mut self.pages {
-            for text in [&mut page.url, &mut page.title].into_iter().flatten() {
-                secrets.mask_str(text);
-            }
+            page.mask(secrets);
         }
     }
 }

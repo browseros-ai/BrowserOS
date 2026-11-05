@@ -1,5 +1,5 @@
-// Neo's own methods: the agent's `neo` parameter. Kept apart from the page prelude because
-// sdk-playwright's prelude replaces that file, and these stay.
+// Neo's own methods: the agent's `neo` parameter. Kept apart from browseros-playwright's
+// prelude, which is Playwright's API and nothing else.
 //
 //   neo.solveCaptcha(page) -> { verdict, type, reason, message, durationMs, paidTasks }
 //

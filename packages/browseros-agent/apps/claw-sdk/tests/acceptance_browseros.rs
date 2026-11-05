@@ -11,7 +11,7 @@
 //!
 //! In order: the agent opens a tab and reads its title; the host reads that run's trace; the
 //! host locks the tab and the agent's next write is refused `not_sent`; the host releases it and
-//! the same write lands; that write's screenshot appears; SIGTERM stops Neo with 0.
+//! the same write lands; the tab's picture after that write appears; SIGTERM stops Neo with 0.
 //!
 //! Like `e2e_browseros.rs`, it runs only when `CLAW_SDK_E2E_BROWSER` names a BrowserOS binary.
 
@@ -22,8 +22,7 @@ use std::error::Error;
 use std::time::Duration;
 
 use browseros_rig::{
-    CaptchaKey, Client, HOST_TOKEN, HostResponse, PATIENCE, Rig, TestResult, browser_or_skip, get,
-    outcome, run,
+    CaptchaKey, Client, HOST_TOKEN, Rig, TestResult, browser_or_skip, get, outcome, run,
 };
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
@@ -65,7 +64,7 @@ async fn drive(rig: &mut Rig) -> TestResult {
     the_host_reads_the_run(rig, &opened, tab).await?;
     a_lock_refuses_the_agent(rig, &client, tab).await?;
     let landed = the_write_lands_once_released(rig, &client).await?;
-    the_write_has_a_screenshot(rig, &landed, tab).await?;
+    the_tab_has_its_picture_after_the_write(rig, &landed, tab).await?;
 
     client.cancel().await?;
     assert_eq!(rig.stop_neo().await?, Some(0), "SIGTERM is a normal stop");
@@ -108,8 +107,8 @@ async fn the_agent_opens_a_tab(client: &Client) -> Result<(String, i64), Box<dyn
     Ok((id, tab))
 }
 
-/// The host reads run 1 back: its ids, its tab, and three operations whose deliveries match what
-/// the agent did (two writes answered, one read never sent).
+/// The host reads run 1 back: its ids, its tab, and four operations whose deliveries match what
+/// the agent did (two writes answered, two reads never sent).
 async fn the_host_reads_the_run(rig: &Rig, id: &str, tab: i64) -> TestResult {
     let host_run = read_run(rig, id).await?;
     let field = |name: &str| host_run.get(name).cloned().unwrap_or(Value::Null);
@@ -144,6 +143,8 @@ async fn the_host_reads_the_run(rig: &Rig, id: &str, tab: i64) -> TestResult {
         [
             op_of("context.newPage", "write", "ok", "done", None),
             op_of("page.goto", "write", "ok", "done", Some(tab)),
+            // Playwright's goto reads the frame tree it navigated, for `page.frames()`.
+            op_of("page.frames", "read", "ok", "not_sent", Some(tab)),
             op_of("page.title", "read", "ok", "not_sent", Some(tab)),
         ],
         "every op once, in start order: {host_run}"
@@ -281,42 +282,38 @@ async fn the_write_lands_once_released(
     Ok(id)
 }
 
-/// Run 3's write, as the host finds it: its screenshot polled from the moment the run returned
-/// until the camera stored it, a whole JPEG, then the run's record. The write is its run's only
-/// operation on the tab, so its own job is the only one for the tab and nothing coalesces it
-/// away.
-async fn the_write_has_a_screenshot(rig: &Rig, run: &str, tab: i64) -> TestResult {
-    let op = format!("{run}.1");
-    let path = format!("/v1/operations/{op}/screenshot");
-    let polled = time::timeout(PATIENCE, async {
-        loop {
-            let read = rig.host("GET", &path, Some(HOST_TOKEN), None).await?;
-            // 404 until the camera's answer reaches the writer's next batch.
-            if read.status != 404 {
-                return Ok::<HostResponse, Box<dyn Error>>(read);
-            }
-            time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await;
-    let Ok(shot) = polled else {
-        // The camera answers `Dropped` for a capture past its timeout (browseros-service's
-        // CAPTURE_TIMEOUT) and never retries; neo.log, appended below, names the cause.
-        let record = rig
-            .host(
-                "GET",
-                &format!("/v1/operations/{op}"),
-                Some(HOST_TOKEN),
-                None,
-            )
-            .await?;
-        return Err(format!(
-            "no screenshot for {op} within {PATIENCE:?}; the operation reads {}",
-            record.text()
+/// Run 3's picture of its tab, as the host finds it. Each write keeps its own screenshot (the
+/// trace writer no longer folds a write's picture into a later read's on the same tab), so the
+/// `page.goto` holds it, not the frame-tree read Playwright makes right after. The run's record
+/// names that op, and its JPEG is whole.
+async fn the_tab_has_its_picture_after_the_write(rig: &Rig, run: &str, tab: i64) -> TestResult {
+    // Held until the run is complete: ended, and every screenshot job answered.
+    let host_run = read_run(rig, run).await?;
+    assert_eq!(
+        operations(&host_run)?,
+        [
+            op_of("page.goto", "write", "ok", "done", Some(tab)),
+            op_of("page.frames", "read", "ok", "not_sent", Some(tab)),
+        ],
+        "{host_run}"
+    );
+    let write = format!("{run}.1");
+    assert_eq!(
+        (
+            host_run.pointer("/operations/0/id"),
+            host_run.pointer("/operations/0/hasScreenshot"),
+        ),
+        (Some(&json!(write)), Some(&json!(true))),
+        "the write holds its own picture of the tab: {host_run}"
+    );
+    let shot = rig
+        .host(
+            "GET",
+            &format!("/v1/operations/{write}/screenshot"),
+            Some(HOST_TOKEN),
+            None,
         )
-        .into());
-    };
-    let shot = shot?;
+        .await?;
     assert_eq!(
         (shot.status, shot.header("content-type")),
         (200, Some("image/jpeg")),
@@ -327,21 +324,6 @@ async fn the_write_has_a_screenshot(rig: &Rig, run: &str, tab: i64) -> TestResul
         shot.body.starts_with(JPEG_START) && shot.body.ends_with(JPEG_END),
         "a whole JPEG, {} bytes",
         shot.body.len()
-    );
-
-    let host_run = read_run(rig, run).await?;
-    assert_eq!(
-        operations(&host_run)?,
-        [op_of("page.goto", "write", "ok", "done", Some(tab))],
-        "{host_run}"
-    );
-    assert_eq!(
-        (
-            host_run.pointer("/operations/0/id"),
-            host_run.pointer("/operations/0/hasScreenshot"),
-        ),
-        (Some(&json!(op)), Some(&json!(true))),
-        "the run's record says the write has its screenshot: {host_run}"
     );
     Ok(())
 }

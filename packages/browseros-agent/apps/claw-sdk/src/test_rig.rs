@@ -26,8 +26,8 @@ use tokio_util::sync::CancellationToken;
 use crate::app::App;
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 use crate::dispatch::{
-    Dispatcher, ErrorCode, LeafError, Method, MethodSpec, OpCtx, OperationError, PageChange,
-    PageTarget, RegistryBuilder, RegistryError, RunCtx, RunGuard, RunStart,
+    Dispatcher, ErrorCode, LeafError, Lifetime, Method, MethodSpec, OpCtx, OperationError,
+    PageChange, PageTarget, RegistryBuilder, RegistryError, RunCtx, RunGuard, RunStart,
 };
 use crate::run::{RunService, RunServiceParts};
 use crate::test_support::FakeCdp;
@@ -224,6 +224,7 @@ fn test_methods(registry: &mut RegistryBuilder) -> Result<(), RegistryError> {
     registry.define(Fail)?;
     registry.define(SlowAnswer)?;
     registry.define(Hang)?;
+    registry.define(Pull)?;
     registry.define(Touch)?;
     registry.define(NewPage)
 }
@@ -338,6 +339,30 @@ impl Method for Hang {
     }
 }
 
+/// `test.pull`: a background pull, as browseros-playwright's event pump is. It answers only when
+/// something happens, and here nothing does, so the run's end is what ends it.
+struct Pull;
+
+impl Method for Pull {
+    type Input = Nothing;
+    type Output = Value;
+
+    fn spec(&self) -> MethodSpec {
+        MethodSpec {
+            lifetime: Lifetime::Background,
+            ..MethodSpec::new("test.pull", Effect::Read)
+        }
+    }
+
+    fn target(_input: &Nothing) -> Option<&PageTarget> {
+        None
+    }
+
+    async fn call(&self, _op: &OpCtx<Self>, _input: Nothing) -> Result<Value, LeafError> {
+        future::pending().await
+    }
+}
+
 /// `test.touch`: reads its page's tab id, so the run's task remembers that tab.
 struct Touch;
 
@@ -362,23 +387,32 @@ impl Method for Touch {
     }
 }
 
-/// `context.newPage`, as the placeholder built-in opens one: a background tab, reported opened.
-/// The door also calls it to open a run's lazy default page.
+/// `context.newPage`, as browseros-playwright's op opens one: a background tab, reported
+/// opened, returned as Playwright's page entry `{ page, url }`. The prelude sends its call
+/// header; the door calls it with `{}` to open a run's lazy default page.
 struct NewPage;
 
+/// `context.newPage`'s input: the prelude's call header, which this double does not read.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewPageInput {
+    #[serde(default, rename = "call")]
+    _call: Option<Value>,
+}
+
 impl Method for NewPage {
-    type Input = Nothing;
-    type Output = PageRef;
+    type Input = NewPageInput;
+    type Output = Value;
 
     fn spec(&self) -> MethodSpec {
         MethodSpec::new("context.newPage", Effect::Write)
     }
 
-    fn target(_input: &Nothing) -> Option<&PageTarget> {
+    fn target(_input: &NewPageInput) -> Option<&PageTarget> {
         None
     }
 
-    async fn call(&self, op: &OpCtx<Self>, _input: Nothing) -> Result<PageRef, LeafError> {
+    async fn call(&self, op: &OpCtx<Self>, _input: NewPageInput) -> Result<Value, LeafError> {
         op.recheck()?;
         op.mark_sent();
         let options = NewPageOptions {
@@ -391,6 +425,6 @@ impl Method for NewPage {
             .await?;
         let page = PageRef::from(&info);
         op.report_page(&page, PageChange::Opened);
-        Ok(page)
+        Ok(json!({ "page": page, "url": info.url }))
     }
 }

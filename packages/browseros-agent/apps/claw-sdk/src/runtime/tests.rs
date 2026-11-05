@@ -23,6 +23,7 @@ async fn run_code(rig: &TestRig, run: &Arc<RunCtx>, code: &str) -> ScriptEnd {
     let script = Script {
         code: code.to_owned(),
         page: None,
+        pages: Vec::new(),
     };
     run_script(run, &rig.dispatcher, script).await
 }

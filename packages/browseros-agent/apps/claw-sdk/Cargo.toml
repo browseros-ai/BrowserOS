@@ -90,6 +90,8 @@ axum.workspace = true
 browseros-captcha.workspace = true
 browseros-cdp.workspace = true
 browseros-core.workspace = true
+# The Playwright API agent scripts call: its op table and the facade that runs each op.
+browseros-playwright.workspace = true
 # The host API: its routes, auth and event log, and the takeover locks the door asks.
 browseros-service.workspace = true
 browseros-takeover.workspace = true

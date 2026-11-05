@@ -6,7 +6,9 @@ use browseros_trace::OperationId;
 use super::{Caller, MethodSpec, OperationError};
 
 /// One rule the door applies to every op: at admission, again when a leaf is about to send
-/// (`OpCtx::recheck`), and to a read once more before its result is released.
+/// (`OpCtx::recheck`), and to a read once more before its result is released. A result that
+/// carries other tabs' data, such as an event pull's, also goes past the rules once per tab it
+/// names (`OpCtx::check_tab`).
 ///
 /// Rules read in-memory state only and never await. That is what lets overlapping calls
 /// (`Promise.all`) pass through the door without waiting on each other (skeleton D7 rule 8).

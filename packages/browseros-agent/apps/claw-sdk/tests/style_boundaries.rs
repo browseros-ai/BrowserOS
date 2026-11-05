@@ -32,7 +32,7 @@ const CRATE_HOMES: &[CrateHome] = &[CrateHome {
     why: "only runtime/ imports the JS engine (STYLE.md P1)",
 }];
 
-/// STYLE.md P2: the entry points reach the browser only through `Dispatcher::invoke`, so they
+/// STYLE.md P2: the entry points reach the browser only through `Dispatcher::submit`, so they
 /// never name a crate that drives it.
 const ENTRY_POINTS: &[&str] = &["mcp", "http", "runtime"];
 const BROWSER_CRATES: &[&str] = &[
@@ -201,7 +201,7 @@ fn check_entry_points(shown: &str, module: &ModuleFile, names: &NamedPaths, out:
     for krate in BROWSER_CRATES {
         for path in names.with_root(krate) {
             out.push(format!(
-                "{shown}: names `{path}`; {}/ reaches the browser only through Dispatcher::invoke (STYLE.md P2)",
+                "{shown}: names `{path}`; {}/ reaches the browser only through Dispatcher::submit (STYLE.md P2)",
                 module.subtree
             ));
         }

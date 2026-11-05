@@ -18,7 +18,9 @@ use super::request_ledger::{Admission, LedgerLimits, RunTicket};
 use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
 use crate::browser::{BrowserLink, PageRef, RunView, TabRegistry};
 use crate::config::Defaults;
-use crate::dispatch::{Dispatcher, ErrorCode, OperationError, RunCtx, RunStart, StopReason};
+use crate::dispatch::{
+    Dispatcher, ErrorCode, OperationError, PageFact, RunCtx, RunStart, StopReason,
+};
 use crate::runtime::{Script, run_script};
 
 /// Runs `run` calls. One per process, shared by every request. There is no concurrency limit
@@ -207,13 +209,18 @@ impl RunService {
         );
         #[cfg(test)]
         self.crash_if_asked();
+        let script = async {
+            let pages = self.open_pages(&run).await;
+            run_script(&run, &self.dispatcher, Script { code, page, pages }).await
+        };
         let end = tokio::select! {
-            end = run_script(&run, &self.dispatcher, Script { code, page }) => end,
+            end = script => end,
             never = self.stop_when_due(&run, &handle) => match never {},
         };
         // Ops still running end through the door as the script's (`script / not_awaited`),
-        // with their page facts; stragglers past the grace are aborted and settle in their
-        // guards. Their records precede the run's end.
+        // with their page facts, and a background pull (the event pump) ends quietly; stragglers
+        // past the grace are aborted and settle in their guards. Their records precede the
+        // run's end.
         run.stop(StopReason::ScriptReturned);
         let mut ops = run.close_ops();
         if time::timeout(Defaults::TEARDOWN_GRACE, drain(&mut ops))
@@ -225,6 +232,34 @@ impl RunService {
         let reply = Arc::new(RunReply::build(&run, end, &self.secrets));
         guard.finish(reply.trace_end(request_id.as_ref()));
         ticket.finish(reply);
+    }
+
+    /// Every tab open as the run starts, for its init (decision 25, PB input 4): Playwright's
+    /// `context.pages()` is synchronous, so the prelude can list a tab only once something named
+    /// it, and this names them all before the script's first op. The facts are a reply's, masked
+    /// the same way. A listing that fails leaves the list empty, and replies then name the tabs
+    /// the script touches. Raced with the run's stop, inside the race with its deadline.
+    async fn open_pages(&self, run: &RunCtx) -> Vec<PageFact> {
+        let listing = tokio::select! {
+            biased;
+            () = run.cancel_token().cancelled() => return Vec::new(),
+            listing = run.view().list_pages() => listing,
+        };
+        match listing {
+            Ok(listing) => listing
+                .pages
+                .into_iter()
+                .map(|info| {
+                    let mut fact = PageFact::from(info);
+                    fact.mask(&self.secrets);
+                    fact
+                })
+                .collect(),
+            Err(error) => {
+                tracing::debug!(%error, "could not list the tabs for the run's init; context.pages() starts empty");
+                Vec::new()
+            }
+        }
     }
 
     /// Stops the run on the first of its deadline, shutdown and its callers leaving, then

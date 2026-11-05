@@ -5,6 +5,7 @@ mod harness;
 mod test_methods;
 
 use std::error::Error;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -730,6 +731,51 @@ async fn a_method_sees_its_runs_budget() -> Result<(), Box<dyn Error>> {
         budget.get("cancelled"),
         Some(&json!(false)),
         "a running op's token is live"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_runs_slot_is_shared_by_its_ops_and_goes_when_its_record_ends()
+-> Result<(), Box<dyn Error>> {
+    #[derive(Default)]
+    struct Feature;
+
+    let harness = Harness::new().await?;
+    let (run, guard) = harness.run()?;
+    let first = run.slot::<Feature>();
+    assert!(
+        Arc::ptr_eq(&first, &run.slot::<Feature>()),
+        "one value per run and type"
+    );
+    let (other, other_guard) = harness.run()?;
+    assert!(
+        !Arc::ptr_eq(&first, &other.slot::<Feature>()),
+        "every run has its own"
+    );
+    let kept = Arc::downgrade(&first);
+    drop(first);
+    guard.finish(RunEnd {
+        status: RunStatus::Ok,
+        error: None,
+        result: None,
+        replay: None,
+    });
+    assert!(
+        kept.upgrade().is_none(),
+        "the record's end drops it, while the run itself is still held"
+    );
+    let late = Arc::downgrade(&run.slot::<Feature>());
+    assert!(
+        late.upgrade().is_none(),
+        "after the end, nothing keeps a new one"
+    );
+
+    let crashed = Arc::downgrade(&other.slot::<Feature>());
+    drop(other_guard);
+    assert!(
+        crashed.upgrade().is_none(),
+        "a run that ended without finishing drops it too"
     );
     Ok(())
 }

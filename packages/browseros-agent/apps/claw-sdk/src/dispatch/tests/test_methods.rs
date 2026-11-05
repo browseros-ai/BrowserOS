@@ -485,13 +485,13 @@ impl Method for LeaseChild {
     }
 }
 
-/// The run's page opener, as the real `context.newPage` will be: a background tab, reported
-/// opened.
+/// The run's page opener, as browseros-playwright's `context.newPage` is: a background tab,
+/// reported opened, returned as Playwright's page entry `{ page, url }`.
 struct NewPage;
 
 impl Method for NewPage {
     type Input = Nothing;
-    type Output = PageRef;
+    type Output = Value;
 
     fn spec(&self) -> MethodSpec {
         MethodSpec::new("context.newPage", Effect::Write)
@@ -501,7 +501,7 @@ impl Method for NewPage {
         None
     }
 
-    async fn call(&self, op: &OpCtx<Self>, _input: Nothing) -> Result<PageRef, LeafError> {
+    async fn call(&self, op: &OpCtx<Self>, _input: Nothing) -> Result<Value, LeafError> {
         send(op)?;
         let options = NewPageOptions {
             background: Some(true),
@@ -513,7 +513,7 @@ impl Method for NewPage {
             .await?;
         let page = PageRef::from(&info);
         op.report_page(&page, PageChange::Opened);
-        Ok(page)
+        Ok(json!({ "page": page, "url": info.url }))
     }
 }
 

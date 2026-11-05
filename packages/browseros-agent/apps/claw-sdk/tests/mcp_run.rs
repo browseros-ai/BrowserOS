@@ -289,10 +289,9 @@ fn meta_goes_into_the_trace_and_a_repeat_replays_the_first_id() -> TestResult {
 }
 
 #[test]
-fn a_script_drives_a_page_through_the_built_ins() -> TestResult {
+fn a_script_drives_a_page_through_the_playwright_api() -> TestResult {
     on_neo_runtime(async {
         let neo = Neo::start().await?;
-        neo.fake.serve("https://example.com/", "Example Domain");
         let client = neo.modern_client().await?;
         let tools = client.list_tools(None).await?.tools;
         let description = tools
@@ -300,16 +299,16 @@ fn a_script_drives_a_page_through_the_built_ins() -> TestResult {
             .and_then(|tool| tool.description.as_deref())
             .ok_or("run has a description")?;
         assert!(
-            description.contains("context.newPage") && description.contains("page.goto"),
-            "the description lists the registered built-ins: {description}"
+            description.contains("`getByRole`") && description.contains("page.getByRef('e5')"),
+            "the description lists the Playwright API and its ref hint: {description}"
         );
 
-        let code = r#"
+        // The fake browser has no sealed world for browseros-playwright's reads, so this drive
+        // opens and closes a tab; tests/e2e_browseros.rs reads pages on a real BrowserOS.
+        let code = r"
             const p = await context.newPage();
-            await p.goto("https://example.com/");
-            const t = await p.title();
             await p.close();
-            return t;"#;
+            return p.isClosed();";
         let result = run(
             &client,
             json!({ "code": code }),
@@ -318,8 +317,8 @@ fn a_script_drives_a_page_through_the_built_ins() -> TestResult {
         .await?;
         assert_eq!(
             result.structured_content,
-            Some(json!({ "value": "Example Domain" })),
-            "the title of the document the tab loaded"
+            Some(json!({ "value": true })),
+            "the page knows it closed from the reply's page facts"
         );
         assert_eq!(outcome(&result)?.get("status"), Some(&json!("ok")));
         assert!(
@@ -351,25 +350,13 @@ fn a_script_drives_a_page_through_the_built_ins() -> TestResult {
                     Some(Delivery::Done)
                 ),
                 (
-                    "page.goto",
-                    Effect::Write,
-                    Some(Outcome::Ok),
-                    Some(Delivery::Done)
-                ),
-                (
-                    "page.title",
-                    Effect::Read,
-                    Some(Outcome::Ok),
-                    Some(Delivery::NotSent)
-                ),
-                (
                     "page.close",
                     Effect::Write,
                     Some(Outcome::Ok),
                     Some(Delivery::Done)
                 ),
             ],
-            "writes are done once sent; a read sends nothing"
+            "writes are done once sent"
         );
         client.cancel().await?;
         Ok(())

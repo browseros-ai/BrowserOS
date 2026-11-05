@@ -1,32 +1,37 @@
 //! The built-ins through the real door, on the fake browser, with a real trace store read back
 //! from a temp dir.
 
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use browseros_captcha::CaptchaSolver;
 use browseros_captcha::config::{CAPSOLVER_KEY_FILE_ENV, CAPSOLVER_URL_ENV, CaptchaConfig};
 use browseros_core::{NativeCapabilities, PageId, TabId};
+use browseros_playwright::{ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, RunState};
 use browseros_takeover::{Lock, LockBinding, LockTtl, Locks, Reads};
 use browseros_trace::{
-    Delivery, Effect, ErrorOwner, OperationId, OperationRow, Outcome, RedactionLimits, Redactor,
-    RunId, RunStatus, SecretSet, SecretSetConfig, TraceSink, TraceStore, WriterConfig,
+    Delivery, Effect, ErrorOwner, OperationId, OperationRow, Outcome, Privacy, RedactionLimits,
+    Redactor, RunId, RunStatus, SecretSet, SecretSetConfig, TraceSink, TraceStore, WriterConfig,
     spawn_writer,
 };
 use futures_util::future::{self, Either};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::time::{self, Instant};
 
-use super::{BuiltinDeps, CaptchaClaims, TabJanitor};
+use super::playwright_ops::{self, OpCtxEnv, leaf_error};
+use super::{BuiltinDeps, CaptchaClaims, PlaywrightFacade, PrivacyHooks, TabJanitor};
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 use crate::config::Defaults;
 use crate::dispatch::{
-    Call, Dispatcher, ErrorCode, OpFailure, OpReply, PendingReply, Policy, RegistryBuilder, RunCtx,
-    RunGuard, RunStart, StopReason,
+    Call, Dispatcher, ErrorCode, LeafError, Lifetime, Listing, Method, MethodSpec, OpCtx,
+    OpFailure, OpReply, OperationError, PageTarget, PendingReply, Policy, PolicyCheck,
+    RegistryBuilder, RegistryError, RunCtx, RunGuard, RunStart, StopReason, Visibility,
 };
 use crate::host::TakeoverLock;
 use crate::test_support::FakeCdp;
@@ -44,6 +49,8 @@ struct Harness {
     /// `takeover`.
     locks: Arc<Locks>,
     takeover: Arc<TakeoverLock>,
+    /// The facade every Playwright op of `dispatcher` runs on, as app.rs builds it.
+    playwright: Arc<PlaywrightFacade>,
     dispatcher: Arc<Dispatcher>,
     /// Keeps the store's directory for the test's life.
     _dir: TempDir,
@@ -71,6 +78,9 @@ impl Harness {
             }
         })
         .await?;
+        // `page.opener` is the page read these tests use: browseros-playwright's other reads run
+        // in a sealed world the fake browser does not have, and this one is a single CDP call.
+        fake.answer("Target.getTargetInfo", json!({ "targetInfo": {} }));
         let dir = tempfile::tempdir()?;
         let store = TraceStore::open(&dir.path().join("trace.db")).await?;
         let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
@@ -81,10 +91,14 @@ impl Harness {
         let takeover = Arc::new(TakeoverLock::default());
         takeover.arm(Arc::clone(&locks));
         let claims = Arc::new(CaptchaClaims::default());
+        let privacy = Privacy::new(Arc::clone(&secrets), Arc::new(sink.clone()), HashMap::new());
+        let hooks = PrivacyHooks::new(privacy, Arc::clone(&tabs));
+        let playwright = PlaywrightFacade::start(Arc::clone(&link), Arc::new(hooks));
         let mut registry = RegistryBuilder::default();
         let deps = BuiltinDeps {
             solver,
             claims: Arc::clone(&claims),
+            playwright: Arc::clone(&playwright),
         };
         super::builtin_set(&mut registry, deps)?;
         let dispatcher = Arc::new(Dispatcher::new(
@@ -106,6 +120,7 @@ impl Harness {
             sink,
             locks,
             takeover,
+            playwright,
             dispatcher,
             _dir: dir,
         })
@@ -189,6 +204,25 @@ impl Harness {
         row.ok_or_else(|| format!("{operation} is recorded").into())
     }
 
+    /// A door over this harness's browser and trace with only `rules` and the methods
+    /// `methods` registers.
+    fn dispatcher_with(
+        &self,
+        rules: Vec<Arc<dyn Policy>>,
+        methods: impl FnOnce(&mut RegistryBuilder) -> Result<(), RegistryError>,
+    ) -> Result<Arc<Dispatcher>, Box<dyn Error>> {
+        let mut registry = RegistryBuilder::default();
+        methods(&mut registry)?;
+        Ok(Arc::new(Dispatcher::new(
+            registry.build(),
+            rules,
+            Arc::new(SecretSet::new(SecretSetConfig::default())),
+            self.sink.clone(),
+            Arc::clone(&self.link),
+            Arc::clone(&self.tabs),
+        )))
+    }
+
     fn janitor(&self) -> TabJanitor {
         TabJanitor::new(
             Arc::clone(&self.dispatcher),
@@ -245,9 +279,14 @@ fn failure(reply: OpReply) -> Result<OpFailure, Box<dyn Error>> {
     }
 }
 
-fn page_of(value: &Value) -> Result<PageRef, Box<dyn Error>> {
-    let id = value["id"].as_u64().ok_or("a page brand has an id")?;
-    let tab = value["tab"].as_i64().ok_or("a page brand has a tab")?;
+/// The page a `context.newPage` entry `{ page, url }` names.
+fn page_of(entry: &Value) -> Result<PageRef, Box<dyn Error>> {
+    let id = entry["page"]["id"]
+        .as_u64()
+        .ok_or("a page brand has an id")?;
+    let tab = entry["page"]["tab"]
+        .as_i64()
+        .ok_or("a page brand has a tab")?;
     Ok(PageRef {
         id: PageId(u32::try_from(id)?),
         tab: TabId(tab),
@@ -263,14 +302,19 @@ async fn within<T>(work: impl Future<Output = T>) -> Result<T, Box<dyn Error>> {
 }
 
 #[tokio::test]
-async fn a_script_opens_navigates_reads_and_closes_a_page() -> Result<(), Box<dyn Error>> {
+async fn a_script_opens_and_closes_a_page_with_the_doors_bookkeeping() -> Result<(), Box<dyn Error>>
+{
     let harness = Harness::new().await?;
     let (run, _guard) = harness.run()?;
 
     let (opened_op, reply) = harness.submit_op(&run, "context.newPage", json!({})).await;
-    let opened = value(reply)?;
-    assert_eq!(opened["$neo"], "page", "a brand the bootstrap revives");
-    let page = page_of(&opened)?;
+    let entry = value(reply)?;
+    let page = page_of(&entry)?;
+    assert_eq!(
+        entry,
+        json!({ "page": handle(&page), "url": "about:blank" }),
+        "Playwright's page entry, with the brand the bootstrap revives"
+    );
     assert_eq!(
         harness.first_params("Browser.createTab")?["background"],
         json!(true),
@@ -284,30 +328,14 @@ async fn a_script_opens_navigates_reads_and_closes_a_page() -> Result<(), Box<dy
         "agent-opened, so the janitor may close it once idle"
     );
 
-    // The fake's `Page.navigate` changes nothing, so the test plays the browser's load.
-    let url = "https://example.com/";
-    harness.fake.navigate_tab(page.tab, url, "Example Domain");
-    let input = json!({ "page": handle(&page), "url": url });
-    let (goto_op, reply) = harness.submit_op(&run, "page.goto", input).await;
-    let fact = reply
-        .pages
-        .first()
-        .cloned()
-        .ok_or("goto reports its page")?;
-    assert_eq!(
-        fact.url.as_deref(),
-        Some(url),
-        "the door refreshed the navigated page before reading its facts"
-    );
-    assert_eq!(value(reply)?, json!({ "status": null, "download": false }));
-    assert_eq!(harness.first_params("Page.navigate")?["url"], url);
-
     let on_page = json!({ "page": handle(&page) });
-    let (title_op, reply) = harness.submit_op(&run, "page.title", on_page.clone()).await;
+    let (read_op, reply) = harness
+        .submit_op(&run, "page.opener", on_page.clone())
+        .await;
     assert_eq!(
         value(reply)?,
-        json!("Example Domain"),
-        "the tab-strip title"
+        json!({ "opener": null }),
+        "Neo opened it, no page did"
     );
 
     let (close_op, reply) = harness.submit_op(&run, "page.close", on_page).await;
@@ -317,7 +345,7 @@ async fn a_script_opens_navigates_reads_and_closes_a_page() -> Result<(), Box<dy
         .cloned()
         .ok_or("close reports its page")?;
     assert!(fact.closed, "the reply says the page is gone");
-    assert_eq!(value(reply)?, Value::Null);
+    assert_eq!(value(reply)?, json!({}));
     assert!(
         !harness.is_open(page.tab).await?,
         "the browser closed the tab"
@@ -325,8 +353,7 @@ async fn a_script_opens_navigates_reads_and_closes_a_page() -> Result<(), Box<dy
 
     for (operation, effect, delivery) in [
         (opened_op, Effect::Write, Delivery::Done),
-        (goto_op, Effect::Write, Delivery::Done),
-        (title_op, Effect::Read, Delivery::NotSent),
+        (read_op, Effect::Read, Delivery::NotSent),
         (close_op, Effect::Write, Delivery::Done),
     ] {
         let row = harness.row(operation).await?;
@@ -337,6 +364,49 @@ async fn a_script_opens_navigates_reads_and_closes_a_page() -> Result<(), Box<dy
             row.name
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_close_that_beforeunload_can_veto_leaves_the_page_open_until_the_browser_says()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let page = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    let close = json!({ "page": handle(&page), "runBeforeUnload": true });
+    let (close_op, reply) = harness.submit_op(&run, "page.close", close).await;
+    let fact = reply
+        .pages
+        .first()
+        .cloned()
+        .ok_or("close reports its page")?;
+    assert_eq!(value(reply)?, json!({}));
+    assert_eq!(
+        harness.fake.count("Page.close"),
+        1,
+        "the close went to the page, to run its beforeunload handlers"
+    );
+    // The fake answers `Page.close` and keeps the tab, as a page whose handler kept it does.
+    assert!(harness.is_open(page.tab).await?, "the tab is still open");
+    assert!(
+        !fact.closed,
+        "the close was only asked for, so the reply does not say the page is gone: {fact:?}"
+    );
+    assert_eq!(
+        harness.row(close_op).await?.page.url.as_deref(),
+        Some("about:blank"),
+        "and neither does the trace"
+    );
+    let reply = harness
+        .submit(&run, "page.opener", json!({ "page": handle(&page) }))
+        .await;
+    assert_eq!(
+        value(reply)?,
+        json!({ "opener": null }),
+        "the page is still the script's to use"
+    );
     Ok(())
 }
 
@@ -352,8 +422,12 @@ async fn a_load_the_browser_could_not_make_is_the_websites_failure() -> Result<(
         json!({ "frameId": "frame", "errorText": "net::ERR_NAME_NOT_RESOLVED" }),
     );
 
-    let input = json!({ "page": handle(&page), "url": "https://nowhere.invalid/" });
-    let failure = failure(harness.submit(&run, "page.goto", input).await)?;
+    let input = json!({
+        "page": handle(&page),
+        "url": "https://nowhere.invalid/",
+        "waitUntil": "load",
+    });
+    let failure = failure(within(harness.submit(&run, "page.goto", input)).await?)?;
     assert_eq!(
         (failure.error.owner(), failure.error.code()),
         (ErrorOwner::Website, ErrorCode::NAVIGATION_FAILED),
@@ -373,131 +447,6 @@ async fn a_load_the_browser_could_not_make_is_the_websites_failure() -> Result<(
     assert_eq!(
         row.error.map(|error| (error.owner, error.code)),
         Some((ErrorOwner::Website, "navigation_failed".to_owned()))
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn new_page_with_a_url_reports_its_tab_when_the_load_fails() -> Result<(), Box<dyn Error>> {
-    let harness = Harness::new().await?;
-    let (run, _guard) = harness.run()?;
-    harness.fake.answer(
-        "Page.navigate",
-        json!({ "frameId": "frame", "errorText": "net::ERR_CONNECTION_REFUSED" }),
-    );
-
-    let reply = harness
-        .submit(
-            &run,
-            "context.newPage",
-            json!({ "url": "http://localhost:1/" }),
-        )
-        .await;
-    let fact = reply
-        .pages
-        .first()
-        .cloned()
-        .ok_or("the new tab is in the reply")?;
-    let failure = failure(reply)?;
-    assert_eq!(
-        (failure.error.owner(), failure.error.code()),
-        (ErrorOwner::Website, ErrorCode::NAVIGATION_FAILED)
-    );
-    let page = PageRef {
-        id: fact.id,
-        tab: fact.tab,
-    };
-    assert!(
-        harness
-            .tabs
-            .idle_agent_tabs(Duration::ZERO, Instant::now())
-            .contains(&page),
-        "the tab stayed open, so it is the janitor's to close"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_lock_on_a_new_tab_refuses_the_load_new_page_was_asked_for() -> Result<(), Box<dyn Error>>
-{
-    let harness = Harness::new().await?;
-    let (run, _guard) = harness.run()?;
-    // The tab exists as soon as the browser made it, and `Browser.createTab`'s reply comes
-    // late, so the owner takes the tab between its opening and the load newPage asked for.
-    harness.fake.hold_next("Browser.createTab");
-    let call = Call::script(
-        "context.newPage".to_owned(),
-        json!({ "url": "https://example.com/" }),
-        None,
-    );
-    let pending = harness.dispatcher.submit(&run, call);
-    let opener = pending.operation();
-    within(async {
-        while harness.fake.count("Browser.createTab") == 0 {
-            time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await?;
-    let tab = *harness
-        .fake
-        .tabs()
-        .last()
-        .ok_or("the browser made the tab")?;
-    let lock = harness.lock(tab, Reads::Allow).await?;
-    harness.fake.release_held();
-
-    let reply = within(pending.wait()).await?;
-    let fact = reply
-        .pages
-        .first()
-        .cloned()
-        .ok_or("the new tab is in the reply")?;
-    assert_eq!(fact.tab, tab, "the script can still find the tab it opened");
-    let refused = failure(reply)?;
-    assert_eq!(
-        (refused.error.owner(), refused.error.code()),
-        (ErrorOwner::Host, ErrorCode::OWNER_HAS_CONTROL),
-        "the owner holds the new tab: {}",
-        refused.error
-    );
-    assert!(
-        refused.error.message().contains(&lock.id.to_string()),
-        "the refusal names the lock: {}",
-        refused.error
-    );
-    assert_eq!(
-        refused.delivery,
-        Delivery::Done,
-        "the tab opened, so newPage was sent; only its load was refused"
-    );
-    assert_eq!(
-        harness.fake.count("Page.navigate"),
-        0,
-        "the browser never loaded the page under the owner's lock"
-    );
-
-    harness.sink.flush().await?;
-    let detail = harness
-        .store
-        .run(run.id())
-        .await?
-        .ok_or("the run is recorded")?;
-    let load = detail
-        .operations
-        .iter()
-        .find(|row| row.name == "page.goto")
-        .ok_or("the load is an op of its own")?;
-    assert_eq!(
-        (load.parent, load.tab, load.delivery),
-        (Some(opener), Some(tab), Some(Delivery::NotSent)),
-        "newPage's load is its child, on the new tab, and refused before anything was sent"
-    );
-    assert_eq!(
-        load.error
-            .as_ref()
-            .map(|error| (error.owner, error.code.as_str())),
-        Some((ErrorOwner::Host, "owner_has_control")),
-        "the trace says the lock refused the load"
     );
     Ok(())
 }
@@ -554,8 +503,8 @@ async fn concurrent_calls_on_the_lazy_page_open_one_tab() -> Result<(), Box<dyn 
     let pending: Vec<PendingReply> = (0..5)
         .map(|_| {
             let call = Call::script(
-                "page.title".to_owned(),
-                json!({ "page": { "$neo": "page" } }),
+                "page.opener".to_owned(),
+                json!({ "page": { "$neo": "page", "id": null } }),
                 None,
             );
             harness.dispatcher.submit(&run, call)
@@ -578,8 +527,8 @@ async fn concurrent_calls_on_the_lazy_page_open_one_tab() -> Result<(), Box<dyn 
         assert_eq!(reply.default_page.as_ref(), Some(&opened));
         assert_eq!(
             value(reply)?,
-            json!("about:blank"),
-            "a new tab starts blank"
+            json!({ "opener": null }),
+            "each read ran on the tab the door opened"
         );
     }
     assert!(
@@ -603,7 +552,11 @@ async fn the_owners_lock_keeps_the_agent_off_their_tab() -> Result<(), Box<dyn E
     let lock = harness.lock(owners.tab, Reads::Allow).await?;
     assert!(lock.settled, "nothing was in flight on the tab");
 
-    let goto = json!({ "page": handle(&owners), "url": "https://example.com/pay" });
+    let goto = json!({
+        "page": handle(&owners),
+        "url": "https://example.com/pay",
+        "waitUntil": "load",
+    });
     let (refused_op, reply) = harness.submit_op(&run, "page.goto", goto).await;
     let refused = failure(reply)?;
     assert_eq!(
@@ -646,7 +599,7 @@ async fn the_owners_lock_keeps_the_agent_off_their_tab() -> Result<(), Box<dyn E
 
     value(
         harness
-            .submit(&run, "page.title", json!({ "page": handle(&owners) }))
+            .submit(&run, "page.opener", json!({ "page": handle(&owners) }))
             .await,
     )
     .map_err(|error| format!("reads: allow lets a read through: {error}"))?;
@@ -661,13 +614,170 @@ async fn the_owners_lock_keeps_the_agent_off_their_tab() -> Result<(), Box<dyn E
     harness.lock(owners.tab, Reads::Block).await?;
     let read = failure(
         harness
-            .submit(&run, "page.title", json!({ "page": handle(&owners) }))
+            .submit(&run, "page.opener", json!({ "page": handle(&owners) }))
             .await,
     )?;
     assert_eq!(
         (read.error.code(), read.delivery),
         (ErrorCode::OWNER_HAS_CONTROL, Delivery::NotSent),
         "reads: block refuses reads too: the owner may be typing a password"
+    );
+    Ok(())
+}
+
+/// What a run's event pulls brought back. A plain data bag.
+#[derive(Debug, Default)]
+struct Pulled {
+    /// The events released, oldest first.
+    events: Vec<Value>,
+    /// How many events the door withheld.
+    withheld: u64,
+}
+
+impl Pulled {
+    /// Each released event as `kind: text`, with a console message's text or a dialog's message.
+    fn said(&self) -> Vec<String> {
+        self.events
+            .iter()
+            .map(|event| {
+                let text = event["message"]["text"]
+                    .as_str()
+                    .or_else(|| event["dialog"]["message"].as_str())
+                    .unwrap_or_default();
+                format!("{}: {text}", event["event"].as_str().unwrap_or_default())
+            })
+            .collect()
+    }
+}
+
+/// Pulls as the prelude's event pump does, until `count` events were released or withheld.
+async fn pull(harness: &Harness, run: &Arc<RunCtx>, count: u64) -> Result<Pulled, Box<dyn Error>> {
+    let mut pulled = Pulled::default();
+    while u64::try_from(pulled.events.len())? + pulled.withheld < count {
+        let next = json!({ "call": { "api": "events.next", "timeoutMs": 0 } });
+        let batch = value(within(harness.submit(run, "events.next", next)).await?)?;
+        let events = batch["events"]
+            .as_array()
+            .ok_or("a pull returns its events")?;
+        pulled.events.extend(events.iter().cloned());
+        pulled.withheld += batch["withheld"].as_u64().unwrap_or_default();
+    }
+    Ok(pulled)
+}
+
+/// `Runtime.consoleAPICalled` for `console.log(text)`.
+fn console_log(text: &str) -> Value {
+    json!({
+        "type": "log",
+        "args": [{ "type": "string", "value": text }],
+        "executionContextId": 1,
+        "timestamp": 1.0,
+    })
+}
+
+#[tokio::test]
+async fn a_listener_gets_no_events_from_a_tab_whose_lock_blocks_reads() -> Result<(), Box<dyn Error>>
+{
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://example.com/").await?;
+    let (run, _guard) = harness.run()?;
+    for event in ["console", "dialog"] {
+        let listen = json!({
+            "call": { "api": "page.on", "timeoutMs": 0 },
+            "page": handle(&owners),
+            "event": event,
+            "on": true,
+            "since": 0,
+        });
+        value(harness.submit(&run, "events.listen", listen).await)?;
+    }
+    harness.fake.page_event(
+        owners.tab,
+        "Runtime.consoleAPICalled",
+        console_log("before"),
+    );
+    assert_eq!(pull(&harness, &run, 1).await?.said(), ["console: before"]);
+
+    let lock = harness.lock(owners.tab, Reads::Block).await?;
+    harness.fake.page_event(
+        owners.tab,
+        "Runtime.consoleAPICalled",
+        console_log("the owner typed hunter2"),
+    );
+    harness.fake.page_event(
+        owners.tab,
+        "Page.javascriptDialogOpening",
+        json!({ "type": "confirm", "message": "Send hunter2 to the bank?" }),
+    );
+    let during = pull(&harness, &run, 2).await?;
+    assert_eq!(
+        during.said(),
+        Vec::<String>::new(),
+        "nothing from the tab reaches the script while the owner blocks reads, and the pump \
+         still answers"
+    );
+    assert_eq!(during.withheld, 2, "the pull says what it withheld");
+
+    harness.locks.unlock_host(lock.id)?;
+    harness
+        .fake
+        .page_event(owners.tab, "Runtime.consoleAPICalled", console_log("after"));
+    assert_eq!(
+        pull(&harness, &run, 1).await?.said(),
+        ["console: after"],
+        "the listener hears the tab again once the owner lets go"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_wait_whose_event_names_a_tab_the_owner_holds_is_refused() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    // `context.waitForEvent('page')`: it names no page, so nothing but its event says which tab
+    // it reads.
+    let wait = json!({
+        "call": { "api": "browserContext.waitForEvent", "timeoutMs": 5000 },
+        "page": null,
+        "event": "page",
+        "since": 0,
+    });
+    let (operation, pending) = {
+        let pending = harness
+            .dispatcher
+            .submit(&run, Call::script("events.wait".to_owned(), wait, None));
+        (pending.operation(), pending)
+    };
+    // browseros-playwright's target watcher subscribes to the browser's events before its first
+    // `Target.getTargets`, so from then on it sees the tab open.
+    within(async {
+        while harness.fake.count("Target.getTargets") == 0 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    // The tab announces no URL, so its open is recorded about a second later: after the lock.
+    let tab = harness.fake.open_tab("https://bank.example/", "Bank");
+    harness.lock(tab, Reads::Block).await?;
+    let refused = failure(within(pending.wait()).await?)?;
+    assert_eq!(
+        (
+            refused.error.owner(),
+            refused.error.code(),
+            refused.delivery
+        ),
+        (
+            ErrorOwner::Host,
+            ErrorCode::OWNER_HAS_CONTROL,
+            Delivery::NotSent
+        ),
+        "the new tab is the owner's, reads blocked: {}",
+        refused.error
+    );
+    assert_eq!(
+        harness.row(operation).await?.result,
+        None,
+        "the event is not on the record either"
     );
     Ok(())
 }
@@ -686,7 +796,7 @@ async fn the_janitor_closes_idle_agent_tabs_through_the_door() -> Result<(), Box
     // A script op touched the owner's tab too, so it is known to the registry, and still Found.
     value(
         harness
-            .submit(&run, "page.title", json!({ "page": handle(&owners) }))
+            .submit(&run, "page.opener", json!({ "page": handle(&owners) }))
             .await,
     )?;
     let lock = harness.lock(held.tab, Reads::Block).await?;
@@ -909,6 +1019,557 @@ async fn a_solve_the_run_stops_after_it_was_sent_is_unknown() -> Result<(), Box<
     assert_eq!(
         harness.row(operation).await?.delivery,
         Some(Delivery::Unknown)
+    );
+    Ok(())
+}
+
+/// A locator brand on `page`, as the prelude builds `getByRole('button')`.
+fn locator(page: &Value) -> Value {
+    json!({
+        "$neo": "locator",
+        "page": page,
+        "frame": null,
+        "chunks": [{ "parts": [{ "name": "internal:role", "body": "button", "source": "button" }] }],
+        "display": "getByRole('button')",
+    })
+}
+
+/// Passes each op at admission and refuses its recheck, as an owner who took the tab while the
+/// op waited for its element does.
+#[derive(Default)]
+struct TakenWhileWaiting {
+    admitted: Mutex<HashSet<OperationId>>,
+}
+
+impl Policy for TakenWhileWaiting {
+    fn check(&self, check: &PolicyCheck<'_>) -> Result<(), OperationError> {
+        let admission = self
+            .admitted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(check.operation);
+        if admission {
+            Ok(())
+        } else {
+            Err(OperationError::host(
+                ErrorCode::OWNER_HAS_CONTROL,
+                "the owner took the tab while the op waited",
+            ))
+        }
+    }
+}
+
+/// `test.env`: what the adapter's `OpEnv` gives browseros-playwright, over this op's own context.
+/// A refused recheck is reported as the crate sees it, or, with `handBack`, returned the way the
+/// crate returns it once its `send_effect` is refused.
+struct EnvProbe;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct EnvProbeInput {
+    hand_back: bool,
+}
+
+impl Method for EnvProbe {
+    type Input = EnvProbeInput;
+    type Output = Value;
+
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new("test.env", Effect::Write)
+    }
+
+    fn target(_input: &EnvProbeInput) -> Option<&PageTarget> {
+        None
+    }
+
+    fn call(
+        &self,
+        op: &OpCtx<Self>,
+        input: EnvProbeInput,
+    ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        let env = OpCtxEnv::new(op);
+        let shares_the_runs_state = Arc::ptr_eq(env.run_state(), &op.run().slot::<RunState>());
+        future::ready(match env.recheck() {
+            Ok(()) => {
+                env.mark_sent();
+                Ok(json!({ "sharesTheRunsState": shares_the_runs_state }))
+            }
+            Err(refused) if input.hand_back => Err(leaf_error(&PlaywrightError::from(refused))),
+            Err(refused) => Ok(json!({ "refused": {
+                "owner": refused.owner,
+                "code": refused.code,
+                "message": refused.message,
+            } })),
+        })
+    }
+}
+
+/// `test.crateFailure`: fails through the adapter's mapping with one of browseros-playwright's
+/// codes, after marking itself sent when asked, as a crate op that failed after or before its
+/// effect.
+struct CrateFailure;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CrateFailureInput {
+    code: String,
+    sent: bool,
+}
+
+impl Method for CrateFailure {
+    type Input = CrateFailureInput;
+    type Output = Value;
+
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new("test.crateFailure", Effect::Write)
+    }
+
+    fn target(_input: &CrateFailureInput) -> Option<&PageTarget> {
+        None
+    }
+
+    fn call(
+        &self,
+        op: &OpCtx<Self>,
+        input: CrateFailureInput,
+    ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        let failed = || {
+            let code = PlaywrightCode::ALL
+                .iter()
+                .copied()
+                .find(|code| code.as_str() == input.code)
+                .ok_or_else(|| {
+                    LeafError::definite(OperationError::script(
+                        ErrorCode::INVALID_INPUT,
+                        "not one of the crate's codes",
+                    ))
+                })?;
+            if input.sent {
+                op.recheck()?;
+                op.mark_sent();
+            }
+            let message = format!("locator.click: {}", code.as_str());
+            Err(leaf_error(&PlaywrightError::new(code, message)))
+        };
+        future::ready(failed())
+    }
+}
+
+#[tokio::test]
+async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let mut builder = RegistryBuilder::default();
+    playwright_ops::playwright_ops(&mut builder, &harness.playwright)?;
+    let listed = builder.build().listed();
+    let mut names: Vec<&str> = Op::all()
+        .map(|op| op.spec().name)
+        .filter(|name| !HELD_OPS.contains(name))
+        .collect();
+    names.sort_unstable();
+    let registered: Vec<&str> = listed.iter().map(|spec| spec.name).collect();
+    assert_eq!(
+        registered, names,
+        "one listed method per op, and no other; the held ops are not offered"
+    );
+    let mut lines = HashSet::new();
+    for spec in &listed {
+        let op = Op::from_name(spec.name).ok_or(spec.name)?.spec();
+        assert_eq!(spec.effect, op.effect, "{}", spec.name);
+        assert_eq!(spec.sensitive_args, op.sensitive_args, "{}", spec.name);
+        assert!(
+            spec.secret_args.is_empty(),
+            "{}: no Playwright argument is always secret",
+            spec.name
+        );
+        assert_eq!(spec.visibility, Visibility::Script, "{}", spec.name);
+        assert_eq!(
+            spec.lifetime == Lifetime::Background,
+            spec.name == "events.next",
+            "{}: only the event pump is cut quietly when the run ends",
+            spec.name
+        );
+        let Listing::Grouped(line) = spec.listing else {
+            return Err(format!("{} is listed with the Playwright API", spec.name).into());
+        };
+        lines.insert(line);
+    }
+    assert_eq!(lines.len(), 1, "the description lists the API once");
+    let fill = listed
+        .iter()
+        .find(|spec| spec.name == "locator.fill")
+        .ok_or("locator.fill")?;
+    assert_eq!(
+        fill.sensitive_args,
+        ["/value"],
+        "a fill into a password field never stores the typed value"
+    );
+    Ok(())
+}
+
+/// The ops held back while sdk-playwright fixes the main world's leak (decision 25a).
+const HELD_OPS: [&str; 2] = ["page.evaluate", "page.waitForFunction"];
+
+#[tokio::test]
+async fn the_ops_that_run_script_in_the_pages_main_world_are_held() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let lazy = json!({ "$neo": "page", "id": null });
+    let calls = [
+        json!({
+            "call": { "api": "page.evaluate", "timeoutMs": 0 },
+            "page": lazy,
+            "expression": "() => document.querySelector('input[type=password]').value",
+            "isFunction": true,
+        }),
+        json!({
+            "call": { "api": "page.waitForFunction", "timeoutMs": 1000 },
+            "page": lazy,
+            "expression": "() => document.readyState === 'complete'",
+            "isFunction": true,
+            "polling": "raf",
+        }),
+    ];
+    for (name, input) in HELD_OPS.into_iter().zip(calls) {
+        let (operation, reply) = harness.submit_op(&run, name, input).await;
+        let refused = failure(reply)?;
+        assert_eq!(
+            (
+                refused.error.owner(),
+                refused.error.code(),
+                refused.delivery
+            ),
+            (
+                ErrorOwner::Script,
+                ErrorCode::METHOD_UNAVAILABLE,
+                Delivery::NotSent
+            ),
+            "{name}: {}",
+            refused.error
+        );
+        assert!(
+            refused
+                .error
+                .message()
+                .contains("held while a privacy fix lands"),
+            "{name}: the message says why, so the agent reads the page another way: {}",
+            refused.error
+        );
+        assert_eq!(
+            harness.row(operation).await?.error.map(|error| error.code),
+            Some("method_unavailable".to_owned()),
+            "{name}: the trace records the attempt"
+        );
+    }
+    assert_eq!(
+        harness.fake.count("Browser.createTab"),
+        0,
+        "refused before the door opens the run's page: nothing reached the browser"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn registering_the_playwright_ops_twice_fails_the_start() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let mut builder = RegistryBuilder::default();
+    playwright_ops::playwright_ops(&mut builder, &harness.playwright)?;
+    let again = playwright_ops::playwright_ops(&mut builder, &harness.playwright);
+    assert!(
+        matches!(again, Err(RegistryError::Duplicate(_))),
+        "the registry reports a duplicate instead of keeping two methods"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_env_hands_the_crate_the_doors_refusal_and_reports_its_marks()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let open = harness.dispatcher_with(Vec::new(), |registry| registry.define(EnvProbe))?;
+    let (run, _guard) = harness.run()?;
+    let pending = open.submit(
+        &run,
+        Call::script("test.env".to_owned(), json!({ "handBack": false }), None),
+    );
+    let operation = pending.operation();
+    assert_eq!(
+        value(pending.wait().await)?,
+        json!({ "sharesTheRunsState": true }),
+        "every op of a run works on the run's one RunState"
+    );
+    assert_eq!(
+        harness.row(operation).await?.delivery,
+        Some(Delivery::Done),
+        "the crate's mark_sent is the door's"
+    );
+
+    let taken = harness.dispatcher_with(
+        vec![Arc::new(TakenWhileWaiting::default()) as Arc<dyn Policy>],
+        |registry| registry.define(EnvProbe),
+    )?;
+    let seen = taken
+        .submit(
+            &run,
+            Call::script("test.env".to_owned(), json!({ "handBack": false }), None),
+        )
+        .wait()
+        .await;
+    assert_eq!(
+        value(seen)?,
+        json!({ "refused": {
+            "owner": "host",
+            "code": "owner_has_control",
+            "message": "the owner took the tab while the op waited",
+        } }),
+        "the rule's refusal reaches the crate unchanged"
+    );
+    let handed_back = taken
+        .submit(
+            &run,
+            Call::script("test.env".to_owned(), json!({ "handBack": true }), None),
+        )
+        .wait()
+        .await;
+    let failure = failure(handed_back)?;
+    assert_eq!(
+        (
+            failure.error.owner(),
+            failure.error.code(),
+            failure.delivery
+        ),
+        (
+            ErrorOwner::Host,
+            ErrorCode::OWNER_HAS_CONTROL,
+            Delivery::NotSent
+        ),
+        "the script sees the rule's own error, whatever the crate made of it"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_crate_failure_keeps_its_owner_and_timeout_and_its_answer_decides_delivery()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let door = harness.dispatcher_with(Vec::new(), |registry| registry.define(CrateFailure))?;
+    let (run, _guard) = harness.run()?;
+    let cases = [
+        // Timeouts are ambiguous: an input sent before the deadline may have landed.
+        (
+            "not_actionable",
+            true,
+            ErrorOwner::Website,
+            ErrorCode::NOT_ACTIONABLE,
+            true,
+            Delivery::Unknown,
+        ),
+        (
+            "wait_timeout",
+            true,
+            ErrorOwner::Website,
+            ErrorCode::WAIT_TIMEOUT,
+            true,
+            Delivery::Unknown,
+        ),
+        (
+            "no_match",
+            false,
+            ErrorOwner::Script,
+            ErrorCode::NO_MATCH,
+            true,
+            Delivery::NotSent,
+        ),
+        // Neo saw these end, so a sent op is done.
+        (
+            "strict_mode_violation",
+            true,
+            ErrorOwner::Script,
+            ErrorCode::STRICT_MODE_VIOLATION,
+            false,
+            Delivery::Done,
+        ),
+        (
+            "internal",
+            false,
+            ErrorOwner::Neo,
+            ErrorCode::INTERNAL_ERROR,
+            false,
+            Delivery::NotSent,
+        ),
+    ];
+    for (code, sent, owner, expected, timeout, delivery) in cases {
+        let reply = door
+            .submit(
+                &run,
+                Call::script(
+                    "test.crateFailure".to_owned(),
+                    json!({ "code": code, "sent": sent }),
+                    None,
+                ),
+            )
+            .wait()
+            .await;
+        let failure = failure(reply)?;
+        assert_eq!(
+            (
+                failure.error.owner(),
+                failure.error.code(),
+                failure.delivery
+            ),
+            (owner, expected, delivery),
+            "{code}"
+        );
+        assert_eq!(
+            failure.error.is_timeout(),
+            timeout,
+            "{code}: a Playwright timeout throws TimeoutError"
+        );
+        assert_eq!(failure.error.message(), format!("locator.click: {code}"));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_op_the_crate_has_not_built_answers_so_on_the_tab_its_locator_names()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let page = harness.owner_tab("https://example.com/").await?;
+    let (run, _guard) = harness.run()?;
+    let input = json!({
+        "call": { "api": "page.click", "timeoutMs": 5000 },
+        "target": locator(&handle(&page)),
+        "strict": "strict",
+    });
+    let (operation, reply) = harness.submit_op(&run, "locator.click", input).await;
+    let failure = failure(reply)?;
+    assert_eq!(
+        (
+            failure.error.owner(),
+            failure.error.code(),
+            failure.delivery
+        ),
+        (
+            ErrorOwner::Neo,
+            ErrorCode::INTERNAL_ERROR,
+            Delivery::NotSent
+        ),
+        "{}",
+        failure.error
+    );
+    assert!(
+        failure
+            .error
+            .message()
+            .starts_with("page.click: not built yet"),
+        "the crate's message, named after the API the script called: {}",
+        failure.error
+    );
+    assert_eq!(
+        harness.row(operation).await?.tab,
+        Some(page.tab),
+        "the rules and the trace see the tab the locator names"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_crate_gets_the_page_the_door_resolved_never_the_lazy_one() -> Result<(), Box<dyn Error>>
+{
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let listen = json!({
+        "call": { "api": "page.on", "timeoutMs": 0 },
+        "page": { "$neo": "page", "id": null },
+        "event": "dialog",
+        "on": true,
+        "since": 0,
+    });
+    let (operation, reply) = harness.submit_op(&run, "events.listen", listen).await;
+    let opened = reply
+        .default_page
+        .clone()
+        .ok_or("the door opened the run's page for the listener")?;
+    assert_eq!(
+        value(reply)?,
+        json!({}),
+        "the crate admitted a real page: it refuses the lazy page's `id: null`"
+    );
+    assert_eq!(
+        harness.row(operation).await?.page.tab_id,
+        Some(opened.tab),
+        "the op's page facts name the tab the door opened, which the crate acted on"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_locator_whose_page_is_a_bare_id_is_the_scripts_invalid_input()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let page = harness.owner_tab("https://example.com/").await?;
+    let (run, _guard) = harness.run()?;
+    let input = json!({ "target": locator(&json!(page.id.0)), "strict": "strict" });
+    let failure = failure(harness.submit(&run, "locator.click", input).await)?;
+    assert_eq!(
+        (
+            failure.error.owner(),
+            failure.error.code(),
+            failure.delivery
+        ),
+        (
+            ErrorOwner::Script,
+            ErrorCode::INVALID_INPUT,
+            Delivery::NotSent
+        )
+    );
+    assert!(
+        failure.error.message().contains("`target.page`"),
+        "the message names where the page brand belongs: {}",
+        failure.error
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_rule_that_refuses_the_crates_own_recheck_is_what_the_script_sees()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let page = harness.owner_tab("https://example.com/").await?;
+    let door = harness.dispatcher_with(
+        vec![Arc::new(TakenWhileWaiting::default()) as Arc<dyn Policy>],
+        |registry| playwright_ops::playwright_ops(registry, &harness.playwright),
+    )?;
+    let (run, _guard) = harness.run()?;
+    let reload = json!({
+        "call": { "api": "page.reload", "timeoutMs": 5000 },
+        "page": handle(&page),
+        "waitUntil": "load",
+    });
+    let reply = within(
+        door.submit(&run, Call::script("page.reload".to_owned(), reload, None))
+            .wait(),
+    )
+    .await?;
+    let failure = failure(reply)?;
+    assert_eq!(
+        (
+            failure.error.owner(),
+            failure.error.code(),
+            failure.delivery
+        ),
+        (
+            ErrorOwner::Host,
+            ErrorCode::OWNER_HAS_CONTROL,
+            Delivery::NotSent
+        ),
+        "browseros-playwright rechecks right before it reloads, and nothing was sent: {}",
+        failure.error
+    );
+    assert_eq!(
+        harness.fake.count("Page.reload"),
+        0,
+        "the reload never reached the browser"
     );
     Ok(())
 }

@@ -1,6 +1,7 @@
 //! One run as the door sees it, and the exactly-once end of its record.
 
-use std::collections::HashSet;
+use std::any::{Any, TypeId};
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::mem;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -22,7 +23,7 @@ use super::{CallSite, Dispatcher, ErrorCode, Lifetime, MethodSpec, OperationErro
 use crate::browser::{PageRef, RunView};
 
 /// One `run` call as the door sees it: its identity, the browser view it captured, its budget,
-/// why it stopped, the ops it started and what they changed.
+/// why it stopped, the ops it started, what they changed, and the state features keep per run.
 ///
 /// Created only by [`RunCtx::start`], which records `run_started`, so no op runs outside a
 /// recorded run. It lives in `dispatch/` so the dependency points one way (`run/` uses it).
@@ -43,6 +44,7 @@ pub(crate) struct RunCtx {
     next_seq: AtomicU32,
     ledger: Mutex<RunLedger>,
     ops: Mutex<OpTasks>,
+    slots: Mutex<RunSlots>,
 }
 
 /// Why a run stopped. Each reason decides who owns the ops it cut short.
@@ -149,6 +151,20 @@ struct OpTasks {
     closed: bool,
 }
 
+/// Per-run feature state, one value per type ([`RunCtx::slot`]).
+///
+/// The guard empties it when the run's record ends, on the normal path and on a crash alike,
+/// rather than leaving it to the `RunCtx`'s own drop: a run's state must not live on in
+/// whatever still holds the `RunCtx`. sdk-playwright's `RunState` is why: the event hub holds
+/// runs weakly, so dropping it is what ends the run's listeners and releases the dialogs it
+/// held. A side table keyed by run id would leak on every abnormal end instead.
+#[derive(Default)]
+struct RunSlots {
+    values: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+    /// Set once the run ended. A later `slot` gets a value that nothing keeps.
+    ended: bool,
+}
+
 impl RunCtx {
     /// Opens the run: records `run_started` (a channel send, never a wait on disk) and returns
     /// the guard that records its end.
@@ -184,6 +200,7 @@ impl RunCtx {
             next_seq: AtomicU32::new(1),
             ledger: Mutex::default(),
             ops: Mutex::default(),
+            slots: Mutex::default(),
         });
         let guard = RunGuard {
             run: Some(Arc::clone(&run)),
@@ -266,6 +283,36 @@ impl RunCtx {
         let mut ops = self.lock_ops();
         ops.closed = true;
         mem::take(&mut ops.set)
+    }
+
+    /// The run's one `T`, created on first use and shared by every op of the run (sdk-playwright
+    /// keeps its `RunState` here). It goes when the run's record ends, however the run ends; an
+    /// op still holding it keeps its own reference only until that op settles. Called after the
+    /// end, it returns a fresh `T` that nothing keeps.
+    pub(crate) fn slot<T: Default + Send + Sync + 'static>(&self) -> Arc<T> {
+        let mut slots = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
+        if slots.ended {
+            return Arc::new(T::default());
+        }
+        let slot = slots
+            .values
+            .entry(TypeId::of::<T>())
+            .or_insert_with(|| Arc::new(T::default()));
+        // Keyed by `TypeId::of::<T>()`, so the downcast cannot miss.
+        Arc::clone(slot)
+            .downcast::<T>()
+            .unwrap_or_else(|_other| Arc::new(T::default()))
+    }
+
+    /// The run's record ended: its feature state goes now. Dropped after the lock is released,
+    /// because a value's `Drop` may do anything, such as release the dialogs a run held.
+    fn end_slots(&self) {
+        let values = {
+            let mut slots = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
+            slots.ended = true;
+            mem::take(&mut slots.values)
+        };
+        drop(values);
     }
 
     /// The next op id, in call order.
@@ -394,6 +441,7 @@ impl RunGuard {
     /// records precede it; the trace turns any op still open at a run's end into `unknown`.
     pub(crate) fn finish(mut self, end: RunEnd) {
         if let Some(run) = self.run.take() {
+            run.end_slots();
             self.trace.run_ended(RunEnded {
                 id: run.id,
                 status: end.status,
@@ -413,6 +461,7 @@ impl Drop for RunGuard {
         };
         run.stop(StopReason::Crashed);
         drop(run.close_ops());
+        run.end_slots();
         // Ops still in flight may have sent something, so the run is not called retryable.
         let error = StopReason::Crashed.error().record(false, None);
         self.trace.run_ended(RunEnded {
