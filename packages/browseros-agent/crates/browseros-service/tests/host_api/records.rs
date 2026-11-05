@@ -2,11 +2,18 @@
 //! one operation, and the trace tail.
 
 use crate::support::{
-    Op, Start, TestResult, at, end_run, harness, op_ended, op_started, start_run,
+    EventStream, Op, Start, TestResult, at, end_run, harness, op_ended, op_started, start_run,
 };
 use axum::http::StatusCode;
-use browseros_trace::{Delivery, Effect, OperationId};
+use browseros_core::TabId;
+use browseros_trace::{
+    Delivery, Effect, OperationEnded, OperationId, OperationKind, OperationStarted, Outcome,
+    PageState, RunEnded, RunId, RunStarted, RunStatus, SecretSet, SecretSetConfig, SecretValue,
+    TargetSensitivity, TaskId,
+};
 use serde_json::json;
+use std::sync::Arc;
+use std::{fs, io};
 
 #[tokio::test]
 async fn runs_filter_by_request_task_tab_status_and_time() -> TestResult {
@@ -325,5 +332,124 @@ async fn an_operations_notes_read_back_masked_on_the_operation_and_its_run() -> 
     let quiet = h.get(&format!("/v1/operations/{title}")).await?;
     assert_eq!(quiet.status, StatusCode::OK);
     assert!(quiet.body.get("notes").is_none(), "{}", quiet.body);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_value_only_a_records_also_mask_knows_reads_masked_in_every_channel() -> TestResult {
+    let h = harness().await?;
+    let mut live = EventStream::open(&h, "/v1/events", None).await?;
+    // What claw-sdk still holds unregistered (sdk-traces decision 32): the record's own set.
+    let held_value = "held-7Qx-swordfish";
+    let held = SecretSet::new(SecretSetConfig::default());
+    let _registration = held.register(SecretValue::new(held_value.to_string()), None);
+    let held = Some(Arc::new(held));
+    let run = RunId::new();
+    h.sink.run_started(RunStarted {
+        id: run,
+        code: format!("return '{held_value}'"),
+        request_id: None,
+        task_id: Some(TaskId::parse("checkout")?),
+        host_data: Some(json!({"for": held_value})),
+        also_mask: held.clone(),
+        at: at(0),
+    });
+    let read = OperationId::new(run, 1);
+    h.sink.op_started(OperationStarted {
+        id: read,
+        parent: None,
+        name: "page.title".to_string(),
+        kind: OperationKind::Builtin,
+        effect: Effect::Read,
+        tab: Some(TabId(3)),
+        args: json!({"expected": held_value}),
+        policy: Arc::default(),
+        also_mask: held.clone(),
+        at: at(1),
+    });
+    h.sink.op_notes(read, vec![format!("read {held_value}")]);
+    h.sink.op_ended(OperationEnded {
+        id: read,
+        outcome: Outcome::Ok,
+        delivery: Delivery::Done,
+        sent_at: None,
+        result: Some(json!({"title": format!("Welcome {held_value}")})),
+        error: None,
+        page_after: Some(PageState {
+            page_id: Some(3),
+            tab_id: Some(TabId(3)),
+            url: Some(format!("https://b.test/?name={held_value}")),
+            title: Some(format!("Welcome {held_value}")),
+        }),
+        target: TargetSensitivity::Ordinary,
+        also_mask: held.clone(),
+        at: at(2),
+    });
+    h.sink.run_ended(RunEnded {
+        id: run,
+        status: RunStatus::Ok,
+        error: None,
+        result: Some(json!({"echo": held_value})),
+        replay: None,
+        also_mask: held,
+        at: at(3),
+    });
+    h.flushed().await?;
+
+    let mut channels = Vec::new();
+    for uri in [
+        format!("/v1/runs/{run}"),
+        "/v1/runs?taskId=checkout".to_string(),
+        format!("/v1/operations/{read}"),
+        "/v1/trace?taskId=checkout".to_string(),
+    ] {
+        let reply = h.get(&uri).await?;
+        assert_eq!(reply.status, StatusCode::OK, "{uri}: {}", reply.body);
+        channels.push((uri, reply.body));
+    }
+    let events = live.take(4).await?;
+    // The event log replays what it published from memory, after the client's last event.
+    let mut resumed = EventStream::open(&h, "/v1/events", Some(&events[0].id)).await?;
+    let replayed = resumed.take(3).await?;
+    for (label, list) in [("live", &events), ("replayed", &replayed)] {
+        for event in list {
+            channels.push((format!("{label} {}", event.kind), event.data.clone()));
+        }
+    }
+    for (channel, body) in &channels {
+        let text = body.to_string();
+        assert!(
+            !text.contains(held_value),
+            "{channel} keeps the held value: {text}"
+        );
+    }
+    let masked = |channel: &str| {
+        channels
+            .iter()
+            .any(|(name, body)| name == channel && body.to_string().contains("[private]"))
+    };
+    for channel in [
+        format!("/v1/runs/{run}"),
+        format!("/v1/operations/{read}"),
+        "/v1/trace?taskId=checkout".to_string(),
+        "live operation.ended".to_string(),
+        "replayed operation.ended".to_string(),
+    ] {
+        assert!(masked(&channel), "{channel} does not show the mask");
+    }
+
+    let wal = match fs::read(h.dir.path().join("trace.db-wal")) {
+        Ok(wal) => wal,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error.into()),
+    };
+    for file in [fs::read(h.dir.path().join("trace.db"))?, wal] {
+        assert!(
+            !file
+                .windows(held_value.len())
+                .any(|window| window == held_value.as_bytes()),
+            "trace.db keeps the held value"
+        );
+    }
     Ok(())
 }

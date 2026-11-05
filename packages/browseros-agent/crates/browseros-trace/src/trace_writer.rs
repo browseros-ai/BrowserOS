@@ -23,6 +23,15 @@
 //! bounded: whoever reads the end (its `operation.ended` event included) reads every note, and
 //! none arrive after it.
 //!
+//! Masking: each record is masked with the process `SecretSet` and with the sets the record
+//! itself carries (`also_mask`: what claw-sdk still holds unregistered as it sends the record,
+//! the same values it masks the agent's reply with), all at once, and only then cut to size.
+//! Every text a host reads (`/v1/runs`, `/v1/operations`, `/v1/trace`, and `/v1/events`, which
+//! reads the store as each batch commits) comes from these rows, so masking them as they are
+//! written covers all of them. An operation's end is masked with its own set and its start's,
+//! and a run's code with the start's and the end's: a value held at either moment may be in
+//! the text, grown or shrunk at the other.
+//!
 //! Screenshots: the writer decides and accounts, and the camera only takes pictures. This task
 //! is the one that sees each operation's start (effect, tab) and end (outcome, error owner) in
 //! order, so it applies the rule (`screenshot_rule`), makes a `ShotJob` per screenshot, and
@@ -45,16 +54,17 @@ use crate::trace_store::{
     Swept,
 };
 use crate::{
-    Bounded, Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationStarted, Outcome,
+    Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationStarted, Outcome,
     PrivacyRecord, PrivacyStore, PrivateReason, RedactionPolicy, Redactor, RunEffects, RunEnded,
-    RunId, RunStarted, RunStatus, Shot, ShotAnswer, ShotJob, ShotQueue, TargetSensitivity, TaskId,
-    TraceError, TraceStore, Truncation,
+    RunId, RunStarted, RunStatus, SecretSet, Shot, ShotAnswer, ShotJob, ShotQueue,
+    TargetSensitivity, TaskId, TraceError, TraceStore, Truncation,
 };
 use browseros_core::TabId;
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::mem;
+use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -443,10 +453,13 @@ pub fn spawn_writer(
 struct OpenRun {
     /// Named by every event the run publishes until its end.
     task: Option<TaskId>,
-    /// The masked, bounded code. It reaches disk only at the run's end, and only when no
-    /// operation turned out sensitive, so a withheld literal is never written, not even to the
-    /// WAL. `None` when the run's start was never seen.
-    code: Option<Bounded<String>>,
+    /// The code as given, held in memory only. It reaches disk only at the run's end, and only
+    /// when no operation turned out sensitive, so a withheld literal is never written, not even
+    /// to the WAL. `None` when the run's start was never seen.
+    code: Option<String>,
+    /// Where the code holds a value the process set or the start's own set knew as the run
+    /// began. The end masks these together with its own matches, then cuts.
+    code_spans: Vec<Range<usize>>,
     sensitive: bool,
     gaps: u64,
     operations: HashMap<u32, OpenOperation>,
@@ -457,10 +470,11 @@ struct OpenRun {
 }
 
 impl OpenRun {
-    fn new(task: Option<TaskId>, code: Option<Bounded<String>>) -> Self {
+    fn new(task: Option<TaskId>, code: Option<String>, code_spans: Vec<Range<usize>>) -> Self {
         Self {
             task,
             code,
+            code_spans,
             sensitive: false,
             gaps: 0,
             operations: HashMap::new(),
@@ -475,6 +489,8 @@ struct OpenOperation {
     effect: Effect,
     args: Value,
     policy: Arc<RedactionPolicy>,
+    /// The start's own set, which the end masks with too.
+    also_mask: Option<Arc<SecretSet>>,
     /// Raw, like `args`: masked and bounded only when the end stores them.
     notes: Vec<String>,
 }
@@ -664,11 +680,13 @@ impl Writer {
     ) -> Result<(), TraceError> {
         let change = match event {
             Event::RunStarted(event) => {
-                let code = self.redactor.code(&event.code);
+                let redactor = self.redactor.also_masking(&event.also_mask);
+                let mut code_spans = Vec::new();
+                redactor.spans(&event.code, &mut code_spans);
                 let host_data = event
                     .host_data
                     .as_ref()
-                    .map(|data| self.redactor.host_data(data).value);
+                    .map(|data| redactor.host_data(data).value);
                 trace_store::insert_run(
                     tx,
                     RunStartRow {
@@ -680,8 +698,10 @@ impl Writer {
                     },
                 )
                 .await?;
-                self.runs
-                    .insert(event.id, OpenRun::new(event.task_id.clone(), Some(code)));
+                self.runs.insert(
+                    event.id,
+                    OpenRun::new(event.task_id.clone(), Some(event.code), code_spans),
+                );
                 Some(TraceRecordEvent::RunStarted {
                     run: event.id,
                     task: event.task_id,
@@ -725,9 +745,11 @@ impl Writer {
             )
             .await?;
         }
-        let conservative =
-            self.redactor
-                .args(&event.args, &event.policy, TargetSensitivity::Sensitive);
+        let conservative = self.redactor.also_masking(&event.also_mask).args(
+            &event.args,
+            &event.policy,
+            TargetSensitivity::Sensitive,
+        );
         trace_store::insert_operation(
             tx,
             OperationStartRow {
@@ -746,7 +768,7 @@ impl Writer {
         let run = self
             .runs
             .entry(event.id.run)
-            .or_insert_with(|| OpenRun::new(None, None));
+            .or_insert_with(|| OpenRun::new(None, None, Vec::new()));
         if let Some(tab) = event.tab {
             run.tabs.admitted(tab, event.id.seq);
         }
@@ -757,6 +779,7 @@ impl Writer {
                 effect: event.effect,
                 args: event.args,
                 policy: event.policy,
+                also_mask: event.also_mask,
                 notes: Vec::new(),
             },
         );
@@ -780,24 +803,27 @@ impl Writer {
             }
             run.operations.remove(&event.id.seq)
         });
+        let redactor = self.redactor.also_masking(
+            event
+                .also_mask
+                .iter()
+                .chain(open.as_ref().and_then(|open| open.also_mask.as_ref())),
+        );
         let precise = open
             .as_ref()
-            .map(|open| self.redactor.args(&open.args, &open.policy, event.target));
+            .map(|open| redactor.args(&open.args, &open.policy, event.target));
         let notes = open
             .as_mut()
-            .map(|open| self.redactor.notes(mem::take(&mut open.notes)))
+            .map(|open| redactor.notes(mem::take(&mut open.notes)))
             .unwrap_or_default();
-        let result = event
-            .result
-            .as_ref()
-            .map(|result| self.redactor.result(result));
+        let result = event.result.as_ref().map(|result| redactor.result(result));
         let error = event.error.map(|mut error| {
-            error.message = self.redactor.text(&error.message);
+            error.message = redactor.text(&error.message);
             error
         });
         let page = event.page_after.map(|mut page| {
-            page.url = page.url.map(|url| self.redactor.text(&url));
-            page.title = page.title.map(|title| self.redactor.text(&title));
+            page.url = page.url.map(|url| redactor.text(&url));
+            page.title = page.title.map(|title| redactor.text(&title));
             page
         });
         let matched = trace_store::end_operation(
@@ -875,19 +901,24 @@ impl Writer {
         // Answers earlier in this batch count toward the end, though they come off the run's
         // count only when the batch commits.
         let complete = pending <= self.answering.get(&event.id).copied().unwrap_or(0);
-        let result = event
-            .result
-            .as_ref()
-            .map(|result| self.redactor.result(result));
+        let redactor = self.redactor.also_masking(&event.also_mask);
+        let result = event.result.as_ref().map(|result| redactor.result(result));
         let error = event.error.map(|mut error| {
-            error.message = self.redactor.text(&error.message);
+            error.message = redactor.text(&error.message);
             error
         });
-        let code = match open.as_ref() {
-            Some(run) if run.sensitive => RunCode::Withheld("sensitive_input"),
-            Some(OpenRun {
-                code: Some(code), ..
-            }) => RunCode::Stored {
+        // The start's matches with the end's, so a value the process set has learned since, or
+        // one held then that grew or shrank, is masked whole.
+        let bounded = match open.as_ref() {
+            Some(run) if !run.sensitive => run
+                .code
+                .as_deref()
+                .map(|code| redactor.code_with(code, run.code_spans.clone())),
+            _ => None,
+        };
+        let code = match (open.as_ref(), bounded.as_ref()) {
+            (Some(run), _) if run.sensitive => RunCode::Withheld("sensitive_input"),
+            (_, Some(code)) => RunCode::Stored {
                 text: &code.value,
                 truncated: code.truncation == Truncation::Cut,
             },
@@ -1065,6 +1096,7 @@ mod tests {
                 request_id: None,
                 task_id: None,
                 host_data: None,
+                also_mask: None,
                 at: EpochMillis::from_millis(started),
             });
             sink.op_started(OperationStarted {
@@ -1076,6 +1108,7 @@ mod tests {
                 tab: Some(TabId(3)),
                 args: serde_json::Value::Null,
                 policy: Arc::default(),
+                also_mask: None,
                 at: EpochMillis::from_millis(started),
             });
             if let Some(ended) = ended {
@@ -1085,6 +1118,7 @@ mod tests {
                     error: None,
                     result: None,
                     replay: None,
+                    also_mask: None,
                     at: EpochMillis::from_millis(ended),
                 });
             }
@@ -1142,6 +1176,7 @@ mod tests {
             request_id: None,
             task_id: None,
             host_data: None,
+            also_mask: None,
             at: EpochMillis::from_millis(1),
         });
         assert!(sink.flush().await.is_ok());
@@ -1160,6 +1195,7 @@ mod tests {
             tab: Some(TabId(3)),
             args: serde_json::Value::Null,
             policy: Arc::default(),
+            also_mask: None,
             at: EpochMillis::from_millis(2),
         });
         sink.op_ended(OperationEnded {
@@ -1171,6 +1207,7 @@ mod tests {
             error: None,
             page_after: None,
             target: TargetSensitivity::Ordinary,
+            also_mask: None,
             at: EpochMillis::from_millis(3),
         });
         let lost = sink.flush().await;
@@ -1185,6 +1222,7 @@ mod tests {
             error: None,
             result: None,
             replay: None,
+            also_mask: None,
             at: EpochMillis::from_millis(4),
         });
         let complete = tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -1227,6 +1265,7 @@ mod tests {
             request_id: None,
             task_id: None,
             host_data: None,
+            also_mask: None,
             at: EpochMillis::from_millis(1),
         });
         let (first, second) = (OperationId::new(run, 1), OperationId::new(run, 2));
@@ -1240,6 +1279,7 @@ mod tests {
                 tab: Some(TabId(3)),
                 args: serde_json::Value::Null,
                 policy: Arc::default(),
+                also_mask: None,
                 at: EpochMillis::from_millis(2),
             });
             sink.op_ended(OperationEnded {
@@ -1251,6 +1291,7 @@ mod tests {
                 error: None,
                 page_after: None,
                 target: TargetSensitivity::Ordinary,
+                also_mask: None,
                 at: EpochMillis::from_millis(3),
             });
         }
@@ -1260,6 +1301,7 @@ mod tests {
             error: None,
             result: None,
             replay: None,
+            also_mask: None,
             at: EpochMillis::from_millis(4),
         });
         assert!(sink.flush().await.is_ok());
@@ -1330,6 +1372,7 @@ mod tests {
             request_id: None,
             task_id: None,
             host_data: None,
+            also_mask: None,
             at: EpochMillis::from_millis(1),
         });
         let first = sink.flush().await;

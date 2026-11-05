@@ -58,6 +58,7 @@ fn start_run(sink: &TraceSink, millis: i64) -> RunId {
         request_id: None,
         task_id: None,
         host_data: None,
+        also_mask: None,
         at: at(millis),
     });
     run
@@ -70,6 +71,7 @@ fn end_run(sink: &TraceSink, run: RunId, millis: i64) {
         error: None,
         result: None,
         replay: None,
+        also_mask: None,
         at: at(millis),
     });
 }
@@ -91,6 +93,7 @@ fn operation(
         tab: tab.map(TabId),
         args: serde_json::Value::Null,
         policy: Arc::default(),
+        also_mask: None,
         at: at(i64::from(id.seq)),
     });
     sink.op_ended(OperationEnded {
@@ -113,6 +116,7 @@ fn operation(
         }),
         page_after: None,
         target: TargetSensitivity::Ordinary,
+        also_mask: None,
         at: at(i64::from(id.seq) + 1),
     });
 }

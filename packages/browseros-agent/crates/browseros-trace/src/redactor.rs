@@ -1,12 +1,16 @@
 //! Turns what the dispatcher saw into what a record may keep. In order: redact the declared
-//! input fields, mask every registered secret, then cut to size.
+//! input fields, mask every registered secret and every value of the record's own sets
+//! ([`Redactor::also_masking`]), then cut to size. Every mask comes before the cut: a cut that
+//! falls inside a value it has not masked yet keeps the value's head.
 //!
 //! Cuts are structural, so a stored value always parses: long strings end in `…[+N bytes]`, and
 //! arrays and objects that run over budget end in a `{"$more": n}` marker (`"$more": n` for an
 //! object). claw-server's audit cut stored JSON mid-text instead.
 
+use crate::secret_set::{mask_json_with, mask_spans};
 use crate::{RedactionPolicy, SecretSet, TargetSensitivity};
 use serde_json::{Map, Value, json};
+use std::ops::Range;
 use std::sync::Arc;
 
 /// What a redacted field becomes.
@@ -72,6 +76,11 @@ pub struct Bounded<T> {
 #[derive(Clone)]
 pub struct Redactor {
     secrets: Arc<SecretSet>,
+    /// A record's own sets, masked with together with `secrets`: what claw-sdk still holds
+    /// unregistered when it sends the record (sdk-traces decision 32). Nothing in them is ever
+    /// registered in `secrets`, so they mask only the records that carry them. Empty for the
+    /// writer's own redactor.
+    also: Vec<Arc<SecretSet>>,
     limits: RedactionLimits,
 }
 
@@ -79,7 +88,30 @@ impl Redactor {
     /// A redactor over the process-wide secret set.
     #[must_use]
     pub fn new(secrets: Arc<SecretSet>, limits: RedactionLimits) -> Self {
-        Self { secrets, limits }
+        Self {
+            secrets,
+            also: Vec::new(),
+            limits,
+        }
+    }
+
+    /// This redactor for one record, which also masks every value of `sets`. Each set counts
+    /// once, however often it is passed.
+    pub(crate) fn also_masking<'a>(
+        &self,
+        sets: impl IntoIterator<Item = &'a Arc<SecretSet>>,
+    ) -> Self {
+        let mut also: Vec<Arc<SecretSet>> = Vec::new();
+        for set in sets {
+            if !also.iter().any(|kept| Arc::ptr_eq(kept, set)) {
+                also.push(Arc::clone(set));
+            }
+        }
+        Self {
+            secrets: Arc::clone(&self.secrets),
+            also,
+            limits: self.limits,
+        }
     }
 
     /// An operation's input: `secret` fields always redacted, `sensitive` ones when the target
@@ -101,7 +133,7 @@ impl Redactor {
                 pointer.replace_in(&mut value, &redacted);
             }
         }
-        self.secrets.mask_json(&mut value);
+        self.mask_json(&mut value);
         self.bound(value, self.limits.args, self.limits.string)
     }
 
@@ -109,7 +141,7 @@ impl Redactor {
     #[must_use]
     pub fn result(&self, result: &Value) -> Bounded<Value> {
         let mut value = result.clone();
-        self.secrets.mask_json(&mut value);
+        self.mask_json(&mut value);
         self.bound(value, self.limits.result, self.limits.string)
     }
 
@@ -118,7 +150,7 @@ impl Redactor {
     #[must_use]
     pub fn host_data(&self, host: &Value) -> Bounded<Value> {
         let mut value = host.clone();
-        self.secrets.mask_json(&mut value);
+        self.mask_json(&mut value);
         self.bound(value, self.limits.host_data, self.limits.host_data)
     }
 
@@ -126,7 +158,7 @@ impl Redactor {
     #[must_use]
     pub fn text(&self, text: &str) -> String {
         let mut text = text.to_string();
-        self.secrets.mask_str(&mut text);
+        self.mask_str(&mut text);
         clip(&text, self.limits.text).0
     }
 
@@ -141,7 +173,7 @@ impl Redactor {
             .into_iter()
             .take(self.limits.note_lines)
             .map(|mut line| {
-                self.secrets.mask_str(&mut line);
+                self.mask_str(&mut line);
                 clip(&line, self.limits.note).0
             })
             .collect();
@@ -154,9 +186,18 @@ impl Redactor {
     /// A run's code: masked and clipped.
     #[must_use]
     pub fn code(&self, code: &str) -> Bounded<String> {
-        let mut code = code.to_string();
-        self.secrets.mask_str(&mut code);
-        let (value, cut) = clip(&code, self.limits.code);
+        self.code_with(code, Vec::new())
+    }
+
+    /// A run's code, masked over `spans` found earlier ([`Redactor::spans`]) and over what this
+    /// redactor finds now, then clipped. The writer finds the start's spans as a run begins and
+    /// adds the end's here, so a value held at either moment is masked whole whether it grew or
+    /// shrank in between, and before the cut.
+    #[must_use]
+    pub(crate) fn code_with(&self, code: &str, mut spans: Vec<Range<usize>>) -> Bounded<String> {
+        self.spans(code, &mut spans);
+        let masked = mask_spans(code, spans);
+        let (value, cut) = clip(masked.as_deref().unwrap_or(code), self.limits.code);
         Bounded {
             value,
             truncation: if cut {
@@ -165,6 +206,37 @@ impl Redactor {
                 Truncation::Whole
             },
         }
+    }
+
+    /// Adds where `text` holds a value of the process set or of the record's own sets.
+    pub(crate) fn spans(&self, text: &str, spans: &mut Vec<Range<usize>>) {
+        self.secrets.spans(text, spans);
+        for set in &self.also {
+            set.spans(text, spans);
+        }
+    }
+
+    /// Masks the union of every set's matches on the text as given. One set after another would
+    /// not do: a held value that grew or shrank since another set learned it, or one whose
+    /// prefix the process set has registered, would lose its head to the first set and keep its
+    /// tail from the second.
+    fn mask_str(&self, text: &mut String) -> bool {
+        if self.also.is_empty() {
+            return self.secrets.mask_str(text);
+        }
+        let mut spans = Vec::new();
+        self.spans(text, &mut spans);
+        match mask_spans(text, spans) {
+            Some(masked) => {
+                *text = masked;
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn mask_json(&self, value: &mut Value) {
+        mask_json_with(value, &mut |text| self.mask_str(text));
     }
 
     /// Cuts `value` to `budget` bytes of JSON, and any one string in it to `max_string`.

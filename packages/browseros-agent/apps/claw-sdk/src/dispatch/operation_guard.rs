@@ -202,6 +202,7 @@ impl OperationGuard {
             tab: None,
             args,
             policy: redaction,
+            also_mask: None,
             at: EpochMillis::now(),
         };
         let unsent = match tab {
@@ -305,6 +306,7 @@ fn settle(open: Open, ending: Ending, pages: Vec<PageFact>, default_page: Option
         } else {
             TargetSensitivity::Ordinary
         },
+        also_mask: None,
         at: EpochMillis::now(),
     });
     let line = OpLine {

@@ -18,6 +18,7 @@ use browseros_core::sensitive_fields;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::Value;
 use std::fmt;
+use std::ops::Range;
 use std::sync::{PoisonError, RwLock};
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
@@ -116,6 +117,17 @@ pub struct SecretSet {
     inner: RwLock<Inner>,
 }
 
+/// How many values it holds, never the values: a trace event that carries a set derives
+/// `Debug`, and a log of one must not print a secret.
+impl fmt::Debug for SecretSet {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SecretSet")
+            .field("values", &self.count())
+            .finish_non_exhaustive()
+    }
+}
+
 impl SecretSet {
     /// An empty set.
     #[must_use]
@@ -199,32 +211,85 @@ impl SecretSet {
 
     /// Masks every string in `value`, keys included. Returns whether anything changed.
     pub fn mask_json(&self, value: &mut Value) -> bool {
-        match value {
-            Value::String(text) => self.mask_str(text),
-            // Every item is masked: stopping at the first change would leak the rest.
-            Value::Array(items) => {
-                let mut changed = false;
-                for item in items.iter_mut() {
-                    changed |= self.mask_json(item);
-                }
-                changed
-            }
-            Value::Object(map) => {
-                let mut changed = false;
-                let keys = map.keys().cloned().collect::<Vec<_>>();
-                for key in keys {
-                    let mut masked_key = key.clone();
-                    let key_changed = self.mask_str(&mut masked_key);
-                    if let Some(mut child) = map.remove(&key) {
-                        changed |= self.mask_json(&mut child);
-                        map.insert(masked_key, child);
-                    }
-                    changed |= key_changed;
-                }
-                changed
-            }
-            Value::Null | Value::Bool(_) | Value::Number(_) => false,
+        mask_json_with(value, &mut |text| self.mask_str(text))
+    }
+
+    /// Adds to `spans` where `text` holds a value of this set: the byte ranges
+    /// [`SecretSet::mask_str`] would replace. Masking with several sets one after another
+    /// destroys what a later set must match: a value one set masks leaves only the tail of a
+    /// longer value another set holds. So a record masked with several sets takes every set's
+    /// spans on the same text and masks their union ([`mask_spans`]).
+    pub(crate) fn spans(&self, text: &str, spans: &mut Vec<Range<usize>>) {
+        let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
+        if let Some(matcher) = inner.matcher.as_ref() {
+            spans.extend(matcher.find_iter(text).map(|found| found.range()));
         }
+    }
+}
+
+/// `text` with each run of overlapping `spans` replaced by one [`MASK`], or `None` when there
+/// are none. Spans may come from several sets, in any order. Spans that only touch stay
+/// separate, as one set's adjacent matches do.
+pub(crate) fn mask_spans(text: &str, mut spans: Vec<Range<usize>>) -> Option<String> {
+    if spans.is_empty() {
+        return None;
+    }
+    spans.sort_unstable_by_key(|span| span.start);
+    let mut masked = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut current: Option<Range<usize>> = None;
+    for span in spans {
+        match &mut current {
+            Some(open) if span.start < open.end => open.end = open.end.max(span.end),
+            _ => {
+                if let Some(done) = current.replace(span) {
+                    masked.push_str(&text[copied..done.start]);
+                    masked.push_str(MASK);
+                    copied = done.end;
+                }
+            }
+        }
+    }
+    if let Some(done) = current {
+        masked.push_str(&text[copied..done.start]);
+        masked.push_str(MASK);
+        copied = done.end;
+    }
+    masked.push_str(&text[copied..]);
+    Some(masked)
+}
+
+/// Masks every string in `value`, keys included, with `mask`, which returns whether it changed
+/// its text. Returns whether anything changed.
+pub(crate) fn mask_json_with(
+    value: &mut Value,
+    mask: &mut impl FnMut(&mut String) -> bool,
+) -> bool {
+    match value {
+        Value::String(text) => mask(text),
+        // Every item is masked: stopping at the first change would leak the rest.
+        Value::Array(items) => {
+            let mut changed = false;
+            for item in items.iter_mut() {
+                changed |= mask_json_with(item, mask);
+            }
+            changed
+        }
+        Value::Object(map) => {
+            let mut changed = false;
+            let keys = map.keys().cloned().collect::<Vec<_>>();
+            for key in keys {
+                let mut masked_key = key.clone();
+                let key_changed = mask(&mut masked_key);
+                if let Some(mut child) = map.remove(&key) {
+                    changed |= mask_json_with(&mut child, mask);
+                    map.insert(masked_key, child);
+                }
+                changed |= key_changed;
+            }
+            changed
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
     }
 }
 
@@ -368,7 +433,7 @@ fn illegal_at_file_name_ends(character: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Registration, SecretSet, SecretSetConfig, SecretValue};
+    use super::{Registration, SecretSet, SecretSetConfig, SecretValue, mask_spans};
     use serde_json::json;
     use std::time::{Duration, Instant};
 
@@ -584,5 +649,38 @@ mod tests {
         assert_eq!(set.count(), 2);
         assert_eq!(masked(&set, "first-value"), "first-value");
         assert_eq!(masked(&set, "third-value"), "[private]");
+    }
+
+    /// Each set's spans on one text, masked together.
+    fn masked_by(sets: &[&SecretSet], text: &str) -> String {
+        let mut spans = Vec::new();
+        for set in sets {
+            set.spans(text, &mut spans);
+        }
+        mask_spans(text, spans).unwrap_or_else(|| text.to_string())
+    }
+
+    #[test]
+    fn spans_of_several_sets_are_masked_as_one_run_whatever_their_order() {
+        let short = set_with(&["held-7Qx"]);
+        let long = set_with(&["held-7Qx-swordfish"]);
+        let tail = set_with(&["swordfish-tail"]);
+        let text = "pw held-7Qx-swordfish-tail ok";
+        for sets in [[&short, &long, &tail], [&tail, &long, &short]] {
+            assert_eq!(masked_by(&sets, text), "pw [private] ok");
+        }
+        assert_eq!(
+            masked_by(&[&short], "held-7Qxheld-7Qx"),
+            "[private][private]",
+            "spans that only touch stay two, as one set's matches do"
+        );
+        assert_eq!(
+            masked_by(
+                &[&set_with(&["pässwörd"]), &set_with(&["wörd-zwei"])],
+                "é pässwörd-zwei é"
+            ),
+            "é [private] é"
+        );
+        assert_eq!(mask_spans("nothing held", Vec::new()), None);
     }
 }

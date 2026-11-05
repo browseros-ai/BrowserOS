@@ -88,6 +88,7 @@ fn start(
         request_id: request_id.map(request).transpose()?,
         task_id: task_id.map(task).transpose()?,
         host_data: None,
+        also_mask: None,
         at: at(millis),
     });
     Ok(run)
@@ -115,6 +116,7 @@ async fn old_trace(dir: &Path) -> TestResult<Old> {
         error: None,
         result: Some(json!({"title": "Done"})),
         replay: Some(reply()),
+        also_mask: None,
         at: at(1_000),
     });
     let running = start(&sink, Some("call-2"), None, 2_000)?;
@@ -129,6 +131,7 @@ async fn old_trace(dir: &Path) -> TestResult<Old> {
             tab: Some(TabId(4)),
             args: json!({"note": "x".repeat(300)}),
             policy: Arc::new(RedactionPolicy::default()),
+            also_mask: None,
             at: at(3_000 + i64::from(seq)),
         });
     }

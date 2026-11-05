@@ -351,6 +351,7 @@ impl SurfaceCalls {
             request_id: None,
             task_id: TaskId::parse("surface").ok(),
             host_data: None,
+            also_mask: None,
             at: EpochMillis::now(),
         });
         calls.sink.run_ended(RunEnded {
@@ -359,6 +360,7 @@ impl SurfaceCalls {
             error: None,
             result: Some(result),
             replay: None,
+            also_mask: None,
             at: EpochMillis::now(),
         });
         calls
@@ -412,6 +414,7 @@ impl SurfaceCalls {
             request_id: None,
             task_id: TaskId::parse("surface").ok(),
             host_data: None,
+            also_mask: None,
             at: EpochMillis::now(),
         });
         let last = colors.len();
@@ -447,6 +450,7 @@ impl SurfaceCalls {
             error: None,
             result: None,
             replay: None,
+            also_mask: None,
             at: EpochMillis::now(),
         });
         calls
@@ -488,6 +492,7 @@ impl SurfaceCalls {
             tab: Some(tab),
             args: Value::Null,
             policy: Arc::default(),
+            also_mask: None,
             at: EpochMillis::now(),
         });
     }
@@ -502,6 +507,7 @@ impl SurfaceCalls {
             error: None,
             page_after: None,
             target: TargetSensitivity::Ordinary,
+            also_mask: None,
             at: EpochMillis::now(),
         });
     }
@@ -610,6 +616,7 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
             request_id: None,
             task_id: TaskId::parse("surface").ok(),
             host_data: None,
+            also_mask: None,
             at: EpochMillis::now(),
         });
         sink.op_started(OperationStarted {
@@ -621,6 +628,7 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
             tab: Some(tab),
             args: json!({"selector": "h1"}),
             policy: Arc::default(),
+            also_mask: None,
             at: EpochMillis::now(),
         });
         sink.op_ended(OperationEnded {
@@ -637,6 +645,7 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
                 title: None,
             }),
             target: TargetSensitivity::Ordinary,
+            also_mask: None,
             at: EpochMillis::now(),
         });
         sink.run_ended(RunEnded {
@@ -645,6 +654,7 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
             error: None,
             result: None,
             replay: None,
+            also_mask: None,
             at: EpochMillis::now(),
         });
         println!("fake write: run {run} op {op} tab {}", tab.0);
@@ -681,6 +691,7 @@ async fn record_fake_runs(sink: TraceSink) {
             request_id: None,
             task_id: TaskId::parse("demo").ok(),
             host_data: None,
+            also_mask: None,
             at: EpochMillis::now(),
         });
         for (seq, name, effect) in [
@@ -697,6 +708,7 @@ async fn record_fake_runs(sink: TraceSink) {
                 tab: Some(TabId(1)),
                 args: json!({"page": {"$neo": "page", "id": 1}}),
                 policy: Arc::default(),
+                also_mask: None,
                 at: EpochMillis::now(),
             });
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -714,6 +726,7 @@ async fn record_fake_runs(sink: TraceSink) {
                     title: Some("Example Domain".into()),
                 }),
                 target: TargetSensitivity::Ordinary,
+                also_mask: None,
                 at: EpochMillis::now(),
             });
         }
@@ -723,6 +736,7 @@ async fn record_fake_runs(sink: TraceSink) {
             error: None,
             result: Some(json!("Example Domain")),
             replay: None,
+            also_mask: None,
             at: EpochMillis::now(),
         });
     }

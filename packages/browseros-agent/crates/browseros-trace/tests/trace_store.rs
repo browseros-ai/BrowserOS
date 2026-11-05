@@ -102,6 +102,7 @@ fn start_run(sink: &TraceSink, start: Start<'_>) -> RunId {
         request_id: start.request.map(request),
         task_id: start.task.map(task),
         host_data: Some(json!({"ownerRun": "r1"})),
+        also_mask: None,
         at: at(start.at),
     });
     run
@@ -132,17 +133,7 @@ struct Op<'a> {
 }
 
 fn op_started(sink: &TraceSink, op: Op<'_>) {
-    sink.op_started(OperationStarted {
-        id: op.id,
-        parent: op.parent,
-        name: op.name.to_string(),
-        kind: op.kind,
-        effect: op.effect,
-        tab: op.tab,
-        args: op.args,
-        policy: Arc::new(op.policy),
-        at: op.at,
-    });
+    sink.op_started(started(op));
 }
 
 fn op_ended(
@@ -166,6 +157,7 @@ fn op_ended(
             title: Some("Done".into()),
         }),
         target,
+        also_mask: None,
         at: at(i64::from(id.seq) * 10 + 5),
     });
 }
@@ -177,6 +169,7 @@ fn end_run(sink: &TraceSink, run: RunId, status: RunStatus, error: Option<ErrorR
         error,
         result: Some(json!({"title": "Done"})),
         replay: Some(json!({"content": [{"type": "text", "text": "Done"}]})),
+        also_mask: None,
         at: at(1_000),
     });
 }
@@ -215,6 +208,7 @@ fn read_on(sink: &TraceSink, id: OperationId, tab: Option<TabId>, millis: i64) {
         error: None,
         page_after: None,
         target: TargetSensitivity::Ordinary,
+        also_mask: None,
         at: at(millis + 5),
     });
 }
@@ -764,6 +758,7 @@ async fn host_data_of_4_kib_is_stored_whole_and_a_larger_one_is_cut()
             request_id: None,
             task_id: None,
             host_data: Some(host_data_of(bytes)),
+            also_mask: None,
             at: at(0),
         });
         run
@@ -951,6 +946,7 @@ async fn retention_deletes_old_runs_and_keeps_private_tabs() {
         error: None,
         result: None,
         replay: None,
+        also_mask: None,
         at: at(20),
     });
     assert!(
@@ -1541,6 +1537,7 @@ async fn a_tasks_last_tab_falls_back_to_the_tab_an_operation_ended_on() {
             title: None,
         }),
         target: TargetSensitivity::Ordinary,
+        also_mask: None,
         at: at(25),
     });
     read_on(&h.sink, OperationId::new(run, 3), None, 30);
@@ -1852,4 +1849,395 @@ async fn recording_an_operation_never_waits_on_the_writer() {
         .flatten()
         .map(|run| run.summary.operation_count);
     assert_eq!(count, Some(u64::from(samples)));
+}
+
+/// A value claw-sdk still holds unregistered (decision 32), which no process set knows.
+const HELD: &str = "held-7Qx-swordfish";
+
+/// A set of its own, as claw-sdk passes its held values: the writer masks a record with it and
+/// the process set never learns them.
+fn also_mask(values: &[&str]) -> Arc<SecretSet> {
+    let set = SecretSet::new(SecretSetConfig::default());
+    for value in values {
+        let _registration = set.register(SecretValue::new((*value).to_string()), None);
+    }
+    Arc::new(set)
+}
+
+/// The store file and its WAL, each read whole. Only the WAL may be absent (after a
+/// checkpoint): a read that fails must fail the test, or a scan would pass without looking.
+fn store_files(h: &Harness) -> Result<[Vec<u8>; 2], Box<dyn std::error::Error + Send + Sync>> {
+    let bytes = fs::read(h.dir.path().join("claw-sdk/trace.db"))?;
+    let wal = match fs::read(h.dir.path().join("claw-sdk/trace.db-wal")) {
+        Ok(wal) => wal,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error.into()),
+    };
+    Ok([bytes, wal])
+}
+
+fn holds(file: &[u8], needle: &str) -> bool {
+    file.windows(needle.len())
+        .any(|window| window == needle.as_bytes())
+}
+
+fn failure(message: String) -> ErrorRecord {
+    ErrorRecord {
+        owner: ErrorOwner::Website,
+        code: "assertion_failed".into(),
+        message,
+        host_code: None,
+        retryable: false,
+        operation_id: None,
+    }
+}
+
+#[tokio::test]
+async fn a_records_also_mask_masks_every_text_it_stores_and_registers_nothing()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let h = harness(WriterConfig::default()).await;
+    let held = also_mask(&[HELD]);
+    let run = RunId::new();
+    h.sink.run_started(RunStarted {
+        id: run,
+        code: format!("return '{HELD}'"),
+        request_id: None,
+        task_id: None,
+        host_data: Some(json!({"note": format!("for {HELD}")})),
+        also_mask: Some(Arc::clone(&held)),
+        at: at(0),
+    });
+    let read = OperationId::new(run, 1);
+    h.sink.op_started(OperationStarted {
+        args: json!({"expected": format!("Welcome {HELD}")}),
+        also_mask: Some(Arc::clone(&held)),
+        ..started(simple(read, "page.title", Effect::Read))
+    });
+    flushed(&h).await;
+    let admitted = h
+        .store
+        .operation(read)
+        .await?
+        .ok_or("operation not found")?;
+    assert_eq!(
+        admitted.args,
+        Some(json!({"expected": "Welcome [private]"})),
+        "the start row, before the end rewrites it"
+    );
+
+    h.sink
+        .op_notes(read, vec![format!("read {HELD} from the title")]);
+    h.sink.op_ended(OperationEnded {
+        result: Some(json!({"title": format!("Welcome {HELD}")})),
+        page_after: Some(PageState {
+            page_id: Some(3),
+            tab_id: Some(TabId(3)),
+            url: Some(format!("https://b.test/welcome?name={HELD}")),
+            title: Some(format!("Welcome {HELD}")),
+        }),
+        also_mask: Some(Arc::clone(&held)),
+        ..ended(read)
+    });
+    // An end with no set of its own still masks with what its start was given: a value held as
+    // the operation began may be in what it returned.
+    let check = OperationId::new(run, 2);
+    h.sink.op_started(OperationStarted {
+        also_mask: Some(Arc::clone(&held)),
+        ..started(simple(check, "expect.toHaveTitle", Effect::Read))
+    });
+    h.sink.op_ended(OperationEnded {
+        outcome: Outcome::Error,
+        error: Some(failure(format!("expected title {HELD}"))),
+        ..ended(check)
+    });
+    h.sink.run_ended(RunEnded {
+        id: run,
+        status: RunStatus::Error,
+        error: Some(failure(format!("Error: expected title {HELD}"))),
+        result: Some(json!({"echo": HELD})),
+        replay: None,
+        also_mask: Some(Arc::clone(&held)),
+        at: at(1_000),
+    });
+    flushed(&h).await;
+
+    let done = h.store.run(run).await?.ok_or("run not found")?;
+    assert_eq!(done.code.as_deref(), Some("return '[private]'"));
+    assert_eq!(done.host_data, Some(json!({"note": "for [private]"})));
+    assert_eq!(done.result, Some(json!({"echo": "[private]"})));
+    assert_eq!(
+        done.summary.error.map(|error| error.message).as_deref(),
+        Some("Error: expected title [private]")
+    );
+    let [title, expect] = &done.operations[..] else {
+        panic!("two operations: {:?}", done.operations);
+    };
+    assert_eq!(title.args, Some(json!({"expected": "Welcome [private]"})));
+    assert_eq!(title.notes, ["read [private] from the title"]);
+    assert_eq!(title.result, Some(json!({"title": "Welcome [private]"})));
+    assert_eq!(
+        title.page.url.as_deref(),
+        Some("https://b.test/welcome?name=[private]")
+    );
+    assert_eq!(title.page.title.as_deref(), Some("Welcome [private]"));
+    assert_eq!(
+        expect.error.as_ref().map(|error| error.message.as_str()),
+        Some("expected title [private]")
+    );
+    for file in store_files(&h)? {
+        assert!(!holds(&file, HELD), "the file keeps the held value");
+    }
+
+    assert_eq!(h.secrets.count(), 0, "a record's set registers nothing");
+    let later = start_run(
+        &h.sink,
+        Start {
+            code: HELD,
+            ..Start::default()
+        },
+    );
+    end_run(&h.sink, later, RunStatus::Ok, None);
+    flushed(&h).await;
+    let later = h.store.run(later).await?.ok_or("run not found")?;
+    assert_eq!(
+        later.code.as_deref(),
+        Some(HELD),
+        "a record without the set keeps what the process set does not know"
+    );
+    Ok(())
+}
+
+/// The prefix of [`HELD`] the owner had typed, or left after a backspace, at one end of a record.
+const PREFIX: &str = "held-7Qx";
+
+#[tokio::test]
+async fn a_held_value_that_grew_or_shrank_between_an_ops_start_and_end_is_masked_whole()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let h = harness(WriterConfig::default()).await;
+    let run = start_in(&h.sink, None, 0);
+    // Typed on as the op ran, then backspaced as the next one ran: the start's set and the
+    // end's each hold the value or its prefix, so whichever set masks first must not leave the
+    // other's tail behind.
+    let grew = OperationId::new(run, 1);
+    let shrank = OperationId::new(run, 2);
+    for (op, at_start, at_end) in [(grew, PREFIX, HELD), (shrank, HELD, PREFIX)] {
+        h.sink.op_started(OperationStarted {
+            args: json!({"expected": HELD}),
+            also_mask: Some(also_mask(&[at_start])),
+            ..started(simple(op, "locator.textContent", Effect::Read))
+        });
+        h.sink.op_ended(OperationEnded {
+            result: Some(json!({"text": HELD})),
+            also_mask: Some(also_mask(&[at_end])),
+            ..ended(op)
+        });
+    }
+    flushed(&h).await;
+    for op in [grew, shrank] {
+        let row = h.store.operation(op).await?.ok_or("operation not found")?;
+        assert_eq!(row.args, Some(json!({"expected": "[private]"})), "{op}");
+        assert_eq!(row.result, Some(json!({"text": "[private]"})), "{op}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_held_value_that_grew_or_shrank_during_a_run_is_masked_whole_in_its_code()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let h = harness(WriterConfig::default()).await;
+    let mut runs = Vec::new();
+    for (at_start, at_end) in [(PREFIX, HELD), (HELD, PREFIX)] {
+        let run = RunId::new();
+        h.sink.run_started(RunStarted {
+            id: run,
+            code: format!("return '{HELD}'"),
+            request_id: None,
+            task_id: None,
+            host_data: None,
+            also_mask: Some(also_mask(&[at_start])),
+            at: at(0),
+        });
+        h.sink.run_ended(RunEnded {
+            id: run,
+            status: RunStatus::Ok,
+            error: None,
+            result: None,
+            replay: None,
+            also_mask: Some(also_mask(&[at_end])),
+            at: at(1_000),
+        });
+        runs.push(run);
+    }
+    flushed(&h).await;
+    for run in runs {
+        let done = h.store.run(run).await?.ok_or("run not found")?;
+        assert_eq!(done.code.as_deref(), Some("return '[private]'"), "{run}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_held_value_whose_prefix_the_process_set_knows_is_masked_whole()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let h = harness(WriterConfig::default()).await;
+    // The owner paused long enough for the prefix to be registered, then typed on. The record's
+    // set holds the value only as typed, not as the process set's mask leaves it.
+    let _registration = h
+        .secrets
+        .register(SecretValue::new(PREFIX.to_string()), None);
+    let run = start_in(&h.sink, None, 0);
+    let read = OperationId::new(run, 1);
+    op_started(&h.sink, simple(read, "locator.textContent", Effect::Read));
+    h.sink.op_ended(OperationEnded {
+        result: Some(json!({"text": HELD})),
+        also_mask: Some(also_mask(&[HELD])),
+        ..ended(read)
+    });
+    flushed(&h).await;
+    let row = h
+        .store
+        .operation(read)
+        .await?
+        .ok_or("operation not found")?;
+    assert_eq!(row.result, Some(json!({"text": "[private]"})));
+    Ok(())
+}
+
+/// A held value long enough that a cut placed near it falls inside it.
+const LONG_HELD: &str = "held-7Qx-swordfish-and-a-long-passphrase-tail";
+
+/// Where a clip of a text with `limit` bytes cuts: it keeps room for its `…[+N bytes]` marker.
+const MARKER_ROOM: usize = 24;
+
+#[tokio::test]
+async fn a_held_value_the_size_cut_falls_on_is_masked_before_the_cut()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let h = harness(WriterConfig::default()).await;
+    let limits = RedactionLimits::default();
+    let held = also_mask(&[LONG_HELD]);
+    let head = &LONG_HELD[..8];
+    // The held value starts 16 bytes before where `cut` says the clip falls, and text follows
+    // it. A cut made before the mask keeps the value's head; one made after keeps `[private`.
+    let across = |cut: usize, fill: char| {
+        format!(
+            "{}{LONG_HELD}{}",
+            fill.to_string().repeat(cut - 16),
+            "z".repeat(100)
+        )
+    };
+    // A JSON string's room is the string limit; host data's is its whole budget, less the
+    // object around its one string.
+    let json_cut = limits.string - MARKER_ROOM;
+    let host_cut = limits.host_data - json!({"blob": ""}).to_string().len() - MARKER_ROOM;
+    let run = RunId::new();
+    h.sink.run_started(RunStarted {
+        id: run,
+        code: across(limits.code - MARKER_ROOM, 'c'),
+        request_id: None,
+        task_id: None,
+        host_data: Some(json!({"blob": across(host_cut, 'h')})),
+        also_mask: Some(Arc::clone(&held)),
+        at: at(0),
+    });
+    let read = OperationId::new(run, 1);
+    h.sink.op_started(OperationStarted {
+        also_mask: Some(Arc::clone(&held)),
+        ..started(simple(read, "page.title", Effect::Read))
+    });
+    h.sink
+        .op_notes(read, vec![across(limits.note - MARKER_ROOM, 'n')]);
+    h.sink.op_ended(OperationEnded {
+        result: Some(json!({"text": across(json_cut, 'r')})),
+        page_after: Some(PageState {
+            page_id: Some(3),
+            tab_id: Some(TabId(3)),
+            url: None,
+            title: Some(across(limits.text - MARKER_ROOM, 't')),
+        }),
+        also_mask: Some(Arc::clone(&held)),
+        ..ended(read)
+    });
+    h.sink.run_ended(RunEnded {
+        id: run,
+        status: RunStatus::Ok,
+        error: None,
+        result: Some(json!({"text": across(json_cut, 'e')})),
+        replay: None,
+        also_mask: Some(Arc::clone(&held)),
+        at: at(1_000),
+    });
+    flushed(&h).await;
+
+    let done = h.store.run(run).await?.ok_or("run not found")?;
+    let title = &done.operations[0];
+    assert!(
+        done.code_truncated && done.result_truncated && title.result_truncated,
+        "every text was cut"
+    );
+    let stored = [
+        done.code.clone().unwrap_or_default(),
+        done.host_data
+            .map(|data| data.to_string())
+            .unwrap_or_default(),
+        done.result
+            .map(|result| result.to_string())
+            .unwrap_or_default(),
+        title.notes.join("\n"),
+        title
+            .result
+            .as_ref()
+            .map(Value::to_string)
+            .unwrap_or_default(),
+        title.page.title.clone().unwrap_or_default(),
+    ];
+    for text in &stored {
+        assert!(text.contains("…[+"), "not cut: …{}", tail_of(text));
+        assert!(
+            !text.contains(head),
+            "the cut kept the held value's head: …{}",
+            tail_of(text)
+        );
+    }
+    for file in store_files(&h)? {
+        assert!(!holds(&file, head), "the file keeps the held value's head");
+    }
+    Ok(())
+}
+
+/// The last 40 characters, enough to show what a cut kept.
+fn tail_of(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    chars[chars.len().saturating_sub(40)..].iter().collect()
+}
+
+/// `op`'s start, as [`op_started`] sends it, with no set of its own.
+fn started(op: Op<'_>) -> OperationStarted {
+    OperationStarted {
+        id: op.id,
+        parent: op.parent,
+        name: op.name.to_string(),
+        kind: op.kind,
+        effect: op.effect,
+        tab: op.tab,
+        args: op.args,
+        policy: Arc::new(op.policy),
+        also_mask: None,
+        at: op.at,
+    }
+}
+
+/// An end that returned nothing, with no set of its own.
+fn ended(id: OperationId) -> OperationEnded {
+    OperationEnded {
+        id,
+        outcome: Outcome::Ok,
+        delivery: Delivery::Done,
+        sent_at: None,
+        result: None,
+        error: None,
+        page_after: None,
+        target: TargetSensitivity::Ordinary,
+        also_mask: None,
+        at: at(i64::from(id.seq) * 10 + 5),
+    }
 }

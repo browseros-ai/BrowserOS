@@ -185,6 +185,7 @@ impl RunCtx {
             request_id,
             task_id: task_id.clone(),
             host_data,
+            also_mask: None,
             at: EpochMillis::now(),
         });
         let run = Arc::new(Self {
@@ -448,6 +449,7 @@ impl RunGuard {
                 error: end.error,
                 result: end.result,
                 replay: end.replay,
+                also_mask: None,
                 at: EpochMillis::now(),
             });
         }
@@ -470,6 +472,7 @@ impl Drop for RunGuard {
             error: Some(error),
             result: None,
             replay: None,
+            also_mask: None,
             at: EpochMillis::now(),
         });
     }

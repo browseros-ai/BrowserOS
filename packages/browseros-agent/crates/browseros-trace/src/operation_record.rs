@@ -4,7 +4,7 @@
 //! The start event carries the raw input; it is redacted on the writer task, never on the
 //! dispatcher's path. Delivery arrives already derived by the dispatcher's `OperationGuard`.
 
-use crate::{EpochMillis, ErrorRecord, JsonPointer, OperationId};
+use crate::{EpochMillis, ErrorRecord, JsonPointer, OperationId, SecretSet};
 use browseros_core::TabId;
 use serde_json::Value;
 use std::sync::Arc;
@@ -170,6 +170,11 @@ pub struct OperationStarted {
     pub args: Value,
     /// Which input fields to redact.
     pub policy: Arc<RedactionPolicy>,
+    /// Values the process set does not mask yet that this record must not keep: what claw-sdk
+    /// still holds unregistered (sdk-traces decision 32). The writer masks the stored input with
+    /// it after the process set, and the operation's end record with it too. It registers
+    /// nothing from it. `None` masks with the process set alone.
+    pub also_mask: Option<Arc<SecretSet>>,
     /// When it was admitted.
     pub at: EpochMillis,
 }
@@ -193,6 +198,9 @@ pub struct OperationEnded {
     pub page_after: Option<PageState>,
     /// Whether the field it typed into was sensitive.
     pub target: TargetSensitivity,
+    /// Values this record must not keep beyond the process set's, as on [`OperationStarted`].
+    /// The writer masks the input, notes, result, error message and page with it.
+    pub also_mask: Option<Arc<SecretSet>>,
     /// When it ended.
     pub at: EpochMillis,
 }

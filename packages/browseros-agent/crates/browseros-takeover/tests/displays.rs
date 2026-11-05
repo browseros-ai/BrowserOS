@@ -493,6 +493,7 @@ impl Harness {
             request_id: None,
             task_id: Some(task.clone()),
             host_data: None,
+            also_mask: None,
             at: EpochMillis::now(),
         });
         self.sink.op_started(OperationStarted {
@@ -504,6 +505,7 @@ impl Harness {
             tab: Some(TabId(tab)),
             args: json!({ "selector": "#next" }),
             policy: Arc::default(),
+            also_mask: None,
             at: EpochMillis::now(),
         });
     }

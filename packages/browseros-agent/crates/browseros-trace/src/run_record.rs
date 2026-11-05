@@ -1,8 +1,9 @@
 //! What the trace hears about runs. Lifecycle events are never dropped, even when the writer
 //! falls behind: a run's end is what turns its open operations into a verdict.
 
-use crate::{EpochMillis, ErrorRecord, RequestId, RunId, TaskId};
+use crate::{EpochMillis, ErrorRecord, RequestId, RunId, SecretSet, TaskId};
 use serde_json::Value;
+use std::sync::Arc;
 
 /// How a run ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,6 +99,11 @@ pub struct RunStarted {
     pub task_id: Option<TaskId>,
     /// The host's own data for the run (`_meta["com.browseros.neo/run"].hostData`). Optional.
     pub host_data: Option<Value>,
+    /// Values the process set does not mask yet that this record must not keep: what claw-sdk
+    /// still holds unregistered (sdk-traces decision 32). The writer masks the code and host data
+    /// with it after the process set, and registers nothing from it. `None` masks with the
+    /// process set alone.
+    pub also_mask: Option<Arc<SecretSet>>,
     /// When it was admitted.
     pub at: EpochMillis,
 }
@@ -116,6 +122,9 @@ pub struct RunEnded {
     /// The exact MCP result handed to the client, already masked, kept to answer a repeated
     /// `request_id` without running again.
     pub replay: Option<Value>,
+    /// Values this record must not keep beyond the process set's, as on [`RunStarted`]. The
+    /// writer masks the result, the error's message and the stored code with it.
+    pub also_mask: Option<Arc<SecretSet>>,
     /// When it ended.
     pub at: EpochMillis,
 }

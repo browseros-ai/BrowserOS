@@ -64,6 +64,7 @@ fn write_in_flight(sink: &TraceSink, tab: i64) -> OperationId {
         request_id: None,
         task_id: None,
         host_data: None,
+        also_mask: None,
         at: EpochMillis::now(),
     });
     let op = OperationId::new(run, 1);
@@ -76,6 +77,7 @@ fn write_in_flight(sink: &TraceSink, tab: i64) -> OperationId {
         tab: Some(TabId(tab)),
         args: serde_json::json!({ "selector": "#pay" }),
         policy: Arc::default(),
+        also_mask: None,
         at: EpochMillis::now(),
     });
     op
@@ -91,6 +93,7 @@ fn write_done(sink: &TraceSink, op: OperationId) {
         error: None,
         page_after: None,
         target: TargetSensitivity::Ordinary,
+        also_mask: None,
         at: EpochMillis::now(),
     });
 }

@@ -162,6 +162,7 @@ impl RunService {
             request_id: None,
             task_id: meta.task_id,
             host_data: meta.host_data.map(HostData::into_value),
+            also_mask: None,
             at: EpochMillis::now(),
         });
         let end = reply.trace_end(None);
@@ -171,6 +172,7 @@ impl RunService {
             error: end.error,
             result: end.result,
             replay: end.replay,
+            also_mask: None,
             at: EpochMillis::now(),
         });
         Arc::new(reply)

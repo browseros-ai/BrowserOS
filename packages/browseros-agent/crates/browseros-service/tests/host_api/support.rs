@@ -342,6 +342,7 @@ pub(crate) fn start_known_run(sink: &TraceSink, run: RunId, start: Start<'_>) {
         request_id: start.request.and_then(|id| RequestId::parse(id).ok()),
         task_id: start.task.and_then(|id| TaskId::parse(id).ok()),
         host_data: None,
+        also_mask: None,
         at: at(start.at),
     });
 }
@@ -377,6 +378,7 @@ pub(crate) fn op_started(sink: &TraceSink, id: OperationId, op: Op<'_>) {
         tab: op.tab.map(TabId),
         args: serde_json::json!({"page": op.tab}),
         policy: Arc::default(),
+        also_mask: None,
         at: at(op.at),
     });
 }
@@ -396,6 +398,7 @@ pub(crate) fn op_ended(
         error: None,
         page_after: None,
         target: TargetSensitivity::Ordinary,
+        also_mask: None,
         at: at(10_000),
     });
 }
@@ -407,6 +410,7 @@ pub(crate) fn end_run(sink: &TraceSink, run: RunId, result: Option<Value>) {
         error: None,
         result,
         replay: None,
+        also_mask: None,
         at: at(20_000),
     });
 }
