@@ -9,11 +9,17 @@
 //! ```text
 //!  dispatcher ─ op_started/op_ended ─▶ TraceSink ─(queue)─▶ writer task ──▶ trace.db (WAL)
 //!      │                                                    │  Redactor      ▲
-//!      │                                                    └─▶ broadcast    │ TraceStore reads
+//!      │                                                    ├─▶ broadcast    │ TraceStore reads
+//!      │                                                    └─ ShotJob ─▶ camera (service)
+//!      │                                     ShotAnswer ◀── writes screenshots/<run>/<seq>.jpg
 //!      ├─ Masker ──────────────▶ SecretSet ◀── protected fill, /host/v1/secrets, takeover
 //!      └─ SecretInput, takeover ▶ Privacy ── make_private ─▶ writer (durable) ─┘
 //!                                    └── CaptureGuard ◀── every screenshot and frame
 //! ```
+//!
+//! The writer decides which operations get a screenshot and when a run is `complete`; the
+//! camera that takes the pictures lives in `browseros-service`, so this crate makes no browser
+//! calls.
 //!
 //! claw-sdk is stateless. Records and privacy hang off the browser's tab id
 //! (`browseros_core::TabId`) and the host's optional `requestId` and `taskId`. The crate takes
@@ -39,6 +45,9 @@ mod privacy;
 mod read_model;
 mod redactor;
 mod run_record;
+mod screenshot_files;
+mod screenshot_queue;
+mod screenshot_rule;
 mod secret_set;
 mod trace_error;
 mod trace_store;
@@ -55,9 +64,12 @@ pub use operation_record::{
 pub use privacy::{
     CaptureGuard, ControlDisplay, Privacy, PrivacyError, PrivacyRecord, PrivacyStore, PrivateReason,
 };
-pub use read_model::{OperationRow, Page, RunDetail, RunQuery, RunSummary, TailQuery, TraceTail};
+pub use read_model::{
+    OperationRow, Page, RunDetail, RunQuery, RunSummary, ShotRead, ShotState, TailQuery, TraceTail,
+};
 pub use redactor::{Bounded, RedactionLimits, Redactor, Truncation};
 pub use run_record::{RunEffects, RunEnded, RunStarted, RunStatus};
+pub use screenshot_queue::{Shot, ShotAnswer, ShotJob, ShotJobs, ShotQueue, screenshot_queue};
 pub use secret_set::{Registration, SecretSet, SecretSetConfig, SecretValue};
 pub use trace_error::TraceError;
 pub use trace_store::{RetentionPolicy, Swept, TraceStore};

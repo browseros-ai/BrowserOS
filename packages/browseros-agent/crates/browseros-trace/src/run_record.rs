@@ -34,6 +34,21 @@ impl RunStatus {
             Self::Interrupted => "interrupted",
         }
     }
+
+    /// Reads a stored or wire name.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        [
+            Self::Running,
+            Self::Ok,
+            Self::Error,
+            Self::Cancelled,
+            Self::Timeout,
+            Self::Interrupted,
+        ]
+        .into_iter()
+        .find(|status| status.as_str() == name)
+    }
 }
 
 /// Whether a run changed anything, rolled up from its write operations.

@@ -1,0 +1,35 @@
+[package]
+name = "browseros-service"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The host API of hosted BrowserOS Neo (claw-sdk): the /v1 router, the host auth and the event stream"
+
+[dependencies]
+axum.workspace = true
+base64.workspace = true
+browseros-core.workspace = true
+browseros-trace.workspace = true
+claw-sdk-api.workspace = true
+futures-util.workspace = true
+percent-encoding.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+ulid.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+browseros-cdp.workspace = true
+sqlx.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tower.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

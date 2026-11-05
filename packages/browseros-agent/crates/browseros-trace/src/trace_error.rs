@@ -15,6 +15,9 @@ pub enum TraceError {
     /// A batch failed and was rolled back, so some records in it, or sent before it, are lost.
     #[error("a trace batch was rolled back: {0}")]
     BatchLost(String),
+    /// A stored screenshot's file could not be read.
+    #[error("screenshot file: {0}")]
+    Screenshot(#[source] std::io::Error),
     /// A stored row did not read back as a record (a newer schema, or a damaged file).
     #[error("corrupt trace row: {0}")]
     Corrupt(String),

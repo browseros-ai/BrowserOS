@@ -443,6 +443,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "browseros-service"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "browseros-cdp",
+ "browseros-core",
+ "browseros-trace",
+ "claw-sdk-api",
+ "futures-util",
+ "percent-encoding",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+ "url",
+]
+
+[[package]]
 name = "browseros-trace"
 version = "0.1.0"
 dependencies = [

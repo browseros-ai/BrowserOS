@@ -204,13 +204,17 @@ paths:
       operationId: streamEvents
       summary: Server-sent events, for one task, one tab, or all of Neo.
       description: |
-        `text/event-stream`; each event's `data` is one `Event`. Event ids are `<boot>-<n>`:
-        send the last one back as `Last-Event-ID` to resume within the same Neo process. After a
-        restart, read the state endpoints again.
+        `text/event-stream`; each event's `data` is one `Event`, and its `event` field is that
+        Event's `type`. Event ids are `<boot>-<n>`: send the last one back as `Last-Event-ID` to
+        resume within the same Neo process, while Neo still holds it (the last 1024 events).
+        An id from another Neo process (after a restart), an older one, or one Neo never sent
+        starts the stream with `stream.reset`, then live events; read the state endpoints
+        again. A client that falls more than 1024 events behind gets `stream.reset` too.
 
         `taskId` keeps the run and operation events of that task's runs. `tab` keeps the events
         about that tab: the operations that target it, and its `tab.private`, `tab.closed`,
         `lock.state` and `takeover.state` events. Given together, an event must match both.
+        `stream.reset` passes every filter.
       parameters:
         - $ref: '#/components/parameters/TaskId'
         - name: tab
@@ -240,7 +244,7 @@ paths:
         Returns once the flag is committed. From then on no screenshot, frame or live view of the
         tab is captured or served, and the agent's screenshots and PDFs of it fail with `host /
         page_private`. Screenshots taken before stay. The flag survives a Neo restart and ends
-        when the tab closes. Secrets to mask in text go to `POST /host/v1/secrets` instead; this
+        when the tab closes. Secrets to mask in text go to `POST /v1/secrets` instead; this
         request carries none.
       parameters:
         - $ref: '#/components/parameters/TabId'
@@ -262,6 +266,31 @@ paths:
           $ref: '#/components/responses/NotFound'
         '503':
           $ref: '#/components/responses/Unavailable'
+  /v1/secrets:
+    post:
+      operationId: registerSecret
+      summary: Mask a value in everything Neo records or hands back, until its TTL.
+      description: |
+        Adds the value to Neo's known secrets list, the one mask over run and operation records,
+        the operation results the agent's script reads and the run result its model sees. From
+        now on the value reads as `[private]` there, in its plain, JSON-escaped and URL-encoded
+        forms, for `ttlSeconds` (24 hours when absent). Registering a value again keeps the
+        later of the two expiries. The value stays in memory only and is never logged, stored or
+        returned. A value shorter than 4 characters is refused (`invalid_request`), because
+        masking it would hide ordinary text.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SecretRequest'
+      responses:
+        '204':
+          description: The value is masked.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /v1/tabs/{tabId}/screencast:
     get:
       operationId: getScreencast
@@ -367,6 +396,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '503':
           $ref: '#/components/responses/Unavailable'
   /v1/locks:
@@ -419,7 +450,7 @@ paths:
           $ref: '#/components/responses/NotFound'
     delete:
       operationId: releaseLock
-      summary: Release a lock. Idempotent.
+      summary: Release a lock. Idempotent. A takeover's lock is released with the takeover.
       parameters:
         - $ref: '#/components/parameters/LockId'
       responses:
@@ -433,6 +464,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
   /v1/tabs/{tabId}/fit:
     post:
       operationId: fitTab
@@ -464,6 +497,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /v1/fits/{fitId}:
     get:
       operationId: getFit
@@ -508,6 +543,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /v1/fits/{fitId}/restore:
     post:
       operationId: restoreFit
@@ -528,6 +565,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /v1/tabs/{tabId}/sweep:
     post:
       operationId: sweepTab
@@ -551,6 +590,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /v1/takeovers:
     post:
       operationId: startTakeover
@@ -760,15 +801,18 @@ components:
     Conflict:
       description: >-
         A part was already given back: the fit was restored (`fit_restored`), the lock released
-        (`lock_released`), or the takeover released (`takeover_released`).
+        (`lock_released`), or the takeover released (`takeover_released`). Or a takeover is in
+        the way: the lock belongs to one, so release the takeover instead (`takeover_lock`), or
+        view displays are paused while the owner has control (`display_paused`).
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
     Unavailable:
       description: >-
-        Neo could not commit a privacy change (`privacy_unavailable`), so nothing was done, or
-        the display is not running (`display_unavailable`).
+        Neo could not commit a privacy change (`privacy_unavailable`), so nothing was done, the
+        display is not running (`display_unavailable`), or Neo could not reach the browser
+        (`browser_unavailable`).
       content:
         application/json:
           schema:
@@ -836,6 +880,23 @@ components:
           type: string
           x-extensible-enum: [host]
           default: host
+    SecretRequest:
+      type: object
+      required: [value]
+      properties:
+        value:
+          type: string
+          minLength: 4
+          description: >-
+            The text to mask. Never logged, stored or returned. At least 4 characters, the
+            known-secrets list's minimum: shorter values would mask too much ordinary text.
+        ttlSeconds:
+          type: integer
+          format: int32
+          minimum: 60
+          maximum: 86400
+          default: 86400
+          description: How long the value is masked.
     TraceTail:
       type: object
       required: [runs, operations, truncated, visuals]
@@ -1299,6 +1360,9 @@ components:
       properties:
         type:
           type: string
+          description: >-
+            What happened. `stream.reset` carries nothing else: events were missed, so re-read
+            the state endpoints.
           x-extensible-enum:
             [
               run.started,
@@ -1309,6 +1373,7 @@ components:
               tab.closed,
               lock.state,
               takeover.state,
+              stream.reset,
             ]
         at:
           type: integer
@@ -1350,8 +1415,11 @@ components:
               lock_released,
               fit_restored,
               takeover_released,
+              takeover_lock,
+              display_paused,
               privacy_unavailable,
               display_unavailable,
+              browser_unavailable,
               internal_error,
             ]
         message:

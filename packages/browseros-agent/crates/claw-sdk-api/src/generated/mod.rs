@@ -36,6 +36,8 @@ pub mod run_summary;
 pub use self::run_summary::RunSummary;
 pub mod screenshot;
 pub use self::screenshot::Screenshot;
+pub mod secret_request;
+pub use self::secret_request::SecretRequest;
 pub mod sweep_result;
 pub use self::sweep_result::SweepResult;
 pub mod takeover;

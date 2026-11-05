@@ -48,6 +48,53 @@ pub struct OperationRow {
     pub sent_at: Option<EpochMillis>,
     /// When it ended.
     pub ended_at: Option<EpochMillis>,
+    /// What became of the screenshot taken after it; `None` when it has none.
+    pub screenshot: Option<ShotState>,
+}
+
+/// What became of an operation's screenshot, as its row records it. An operation with none (no
+/// job, or the job was dropped) has no state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShotState {
+    /// A JPEG is on disk.
+    Stored,
+    /// Its tab was private, so no pixels were kept.
+    Withheld,
+    /// The disk cap deleted it.
+    Expired,
+}
+
+impl ShotState {
+    /// The stored name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stored => "stored",
+            Self::Withheld => "withheld",
+            Self::Expired => "expired",
+        }
+    }
+
+    /// Reads a stored name.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        [Self::Stored, Self::Withheld, Self::Expired]
+            .into_iter()
+            .find(|state| state.as_str() == name)
+    }
+}
+
+/// One operation's screenshot, read back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ShotRead {
+    /// The JPEG.
+    Jpeg(Vec<u8>),
+    /// Withheld because its tab was private.
+    Withheld,
+    /// Deleted by the disk cap, or missing from the disk.
+    Expired,
+    /// No screenshot: none was taken, it was dropped, or no operation has this id.
+    None,
 }
 
 /// A run without its operations.
@@ -75,6 +122,8 @@ pub struct RunSummary {
     pub operation_count: u64,
     /// Operation events Neo dropped under disk pressure. Non-zero makes `effects` `Unknown`.
     pub trace_gaps: u64,
+    /// Ended, and every screenshot job it made was answered: a re-read returns the same data.
+    pub complete: bool,
 }
 
 /// A run with its operations in admission order.

@@ -9,12 +9,22 @@
 //! that matters (a VM power loss loses the browser's state too). Opening the file recovers what
 //! a crash left open. A run with no end becomes `interrupted` with `effects: unknown`. An open
 //! write operation becomes `unknown`, and an open read becomes `not_sent`, because events
-//! queued but not yet written may be gone.
+//! queued but not yet written may be gone. Every run becomes `complete`: the screenshot jobs it
+//! was waiting for died with the process.
+//!
+//! Screenshots are files beside the database (`screenshot_files`); an operation's `screenshot`
+//! state says whether its file is there. The camera writes a file before its answer reaches the
+//! writer. The retention sweep deletes a run's files before its rows, inside its transaction,
+//! and keeps the rows of a run whose files it could not delete. So a row may name a file that
+//! is gone (it reads as expired, and the next sweep converges), but a file never outlives its
+//! run's rows.
 
+use crate::screenshot_files::ShotFiles;
 use crate::{
     Delivery, Effect, EpochMillis, ErrorRecord, IdError, OperationId, OperationKind, OperationRow,
     Outcome, Page, PageState, PrivacyRecord, PrivateReason, RequestId, RunDetail, RunEffects,
-    RunId, RunQuery, RunStatus, RunSummary, TailQuery, TaskId, TraceError, TraceTail,
+    RunId, RunQuery, RunStatus, RunSummary, Shot, ShotRead, ShotState, TailQuery, TaskId,
+    TraceError, TraceTail,
 };
 use browseros_core::TabId;
 use serde_json::Value;
@@ -49,7 +59,10 @@ CREATE TABLE IF NOT EXISTS runs (
   replay TEXT,
   replay_until INTEGER,
   operation_count INTEGER NOT NULL DEFAULT 0,
-  trace_gaps INTEGER NOT NULL DEFAULT 0
+  trace_gaps INTEGER NOT NULL DEFAULT 0,
+  -- Ended, and every screenshot job it made answered. Only the writer sets it, in the batch
+  -- that stores the last answer (or the end, when nothing is pending).
+  complete INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS runs_by_start ON runs(started_at, id);
 -- Not unique on purpose: admission keeps a request id from running twice (per task when the run
@@ -84,11 +97,23 @@ CREATE TABLE IF NOT EXISTS operations (
   result TEXT,
   result_truncated INTEGER NOT NULL DEFAULT 0,
   error TEXT,
+  -- The screenshot after it: NULL (none, or its job was dropped), 'stored' (a JPEG on disk,
+  -- screenshot_bytes long), 'withheld' (its tab was private) or 'expired' (the disk cap
+  -- deleted it).
+  screenshot TEXT,
+  screenshot_bytes INTEGER,
   PRIMARY KEY (run_id, seq)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS operations_by_start ON operations(started_at, run_id, seq);
 CREATE INDEX IF NOT EXISTS operations_by_tab ON operations(target_tab_id, started_at, run_id, seq)
   WHERE target_tab_id IS NOT NULL;
+-- The operations still open on a tab, which a lock's settle polls (`open_writes`). Partial, so it
+-- holds only open operations and stays small however long the tab's history grows.
+CREATE INDEX IF NOT EXISTS operations_open_by_tab ON operations(target_tab_id)
+  WHERE outcome IS NULL AND target_tab_id IS NOT NULL;
+-- The screenshots on disk, by run. The disk cap sums their sizes from this index alone.
+CREATE INDEX IF NOT EXISTS operations_stored_shots ON operations(run_id, screenshot_bytes)
+  WHERE screenshot = 'stored';
 -- Which runs acted on which tab: a row per run and target tab, written with the operation. The
 -- primary key answers runs on this tab; the second index reads a run's tabs and sweeps them.
 CREATE TABLE IF NOT EXISTS run_tabs (
@@ -109,25 +134,32 @@ CREATE TABLE IF NOT EXISTS private_tabs (
 /// A run summary's columns. Every query that selects them reads `FROM runs` without an alias,
 /// because the `tabs` subquery names the table.
 const RUN_SUMMARY_COLUMNS: &str = "id, task_id, status, effects, error, request_id, \
-    started_at, ended_at, operation_count, trace_gaps, \
+    started_at, ended_at, operation_count, trace_gaps, complete, \
     (SELECT group_concat(tab_id) FROM run_tabs WHERE run_tabs.run_id = runs.id) AS tabs";
 
 const OPERATION_COLUMNS: &str = "run_id, seq, parent_id, name, kind, attempt, effect, \
     target_tab_id, page_id, tab_id, url, title, started_at, sent_at, ended_at, outcome, \
-    delivery, args, args_truncated, result, result_truncated, error";
+    delivery, args, args_truncated, result, result_truncated, error, screenshot";
+
+/// The most screenshot bytes kept on disk (D5): about 7,000 JPEGs of 150 KB.
+const SCREENSHOT_CAP_BYTES: u64 = 1 << 30;
 
 /// How long records are kept. [`Default`] is the fixed default claw-sdk runs with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RetentionPolicy {
-    /// Finished runs older than this are deleted with their operations and their tab links:
-    /// 7 days by default. Private tab flags are never swept.
+    /// Finished runs older than this are deleted with their operations, their tab links and
+    /// their screenshots: 7 days by default. Private tab flags are never swept.
     pub max_age: Duration,
+    /// The most screenshot bytes kept. Past it, the oldest runs' screenshots are deleted first
+    /// and read as expired: 1 GiB by default.
+    pub screenshot_cap: u64,
 }
 
 impl Default for RetentionPolicy {
     fn default() -> Self {
         Self {
             max_age: Duration::from_secs(7 * 24 * 60 * 60),
+            screenshot_cap: SCREENSHOT_CAP_BYTES,
         }
     }
 }
@@ -141,12 +173,15 @@ pub struct Swept {
     pub operations: u64,
     /// Stored results for repeated request ids, dropped because their window passed.
     pub replays: u64,
+    /// Screenshots deleted, with their runs or by the disk cap.
+    pub screenshots: u64,
 }
 
-/// Reads the trace file. Cheap to clone.
+/// Reads the trace file and the screenshots beside it. Cheap to clone.
 #[derive(Clone)]
 pub struct TraceStore {
     pool: SqlitePool,
+    files: ShotFiles,
 }
 
 impl TraceStore {
@@ -171,7 +206,10 @@ impl TraceStore {
             .max_connections(4)
             .connect_with(options)
             .await?;
-        let store = Self { pool };
+        let store = Self {
+            pool,
+            files: ShotFiles::beside(path),
+        };
         store.migrate().await?;
         store.recover().await?;
         Ok(store)
@@ -211,12 +249,19 @@ impl TraceStore {
         )
         .execute(&mut *tx)
         .await?;
+        sqlx::query("UPDATE runs SET complete = 1 WHERE complete = 0")
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         Ok(())
     }
 
     pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub(crate) fn files(&self) -> &ShotFiles {
+        &self.files
     }
 
     /// Every private tab, for [`Privacy::new`](crate::Privacy::new) at startup.
@@ -293,6 +338,73 @@ impl TraceStore {
         .as_ref()
         .map(operation_row)
         .transpose()
+    }
+
+    /// The screenshot taken after `op`. A stored file that is gone reads as expired: the
+    /// retention sweep deletes files before its rows commit, and a crash between the two leaves
+    /// rows the next sweep finishes.
+    ///
+    /// # Errors
+    /// When the file cannot be read for another reason, or the row is corrupt.
+    pub async fn screenshot(&self, op: OperationId) -> Result<ShotRead, TraceError> {
+        let state: Option<Option<String>> =
+            sqlx::query_scalar("SELECT screenshot FROM operations WHERE run_id = ? AND seq = ?")
+                .bind(op.run.to_string())
+                .bind(i64::from(op.seq))
+                .fetch_optional(&self.pool)
+                .await?;
+        let Some(state) = state.flatten() else {
+            return Ok(ShotRead::None);
+        };
+        match ShotState::parse(&state).ok_or_else(|| corrupt("screenshot", &state))? {
+            ShotState::Withheld => Ok(ShotRead::Withheld),
+            ShotState::Expired => Ok(ShotRead::Expired),
+            ShotState::Stored => match tokio::fs::read(self.files.path(op)).await {
+                Ok(jpeg) => Ok(ShotRead::Jpeg(jpeg)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ShotRead::Expired),
+                Err(error) => Err(TraceError::Screenshot(error)),
+            },
+        }
+    }
+
+    /// One run's summary: its row and its tabs, without its operations. The service's event
+    /// log reads one per run event, so it stays a single-row lookup.
+    ///
+    /// # Errors
+    /// When the file cannot be read or the row is corrupt.
+    pub async fn run_summary(&self, id: RunId) -> Result<Option<RunSummary>, TraceError> {
+        sqlx::query(&format!(
+            "SELECT {RUN_SUMMARY_COLUMNS} FROM runs WHERE id = ?"
+        ))
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?
+        .as_ref()
+        .map(run_summary)
+        .transpose()
+    }
+
+    /// The writes in flight on `tab`: operations that target it, are writes, have not ended,
+    /// and belong to a running run. Taking a lock polls it until it reaches zero, so it reads
+    /// only the tab's open operations (`operations_open_by_tab`) and their runs by key, never
+    /// the tab's history or the run list.
+    ///
+    /// A run's end closes its open operations, and opening the file closes a crashed run's.
+    /// The run's status still matters: an operation can start after its run ended, and nothing
+    /// will ever close it.
+    ///
+    /// # Errors
+    /// When the file cannot be read.
+    pub async fn open_writes(&self, tab: TabId) -> Result<u64, TraceError> {
+        let open: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM operations JOIN runs ON runs.id = operations.run_id \
+             WHERE operations.target_tab_id = ? AND operations.outcome IS NULL \
+               AND operations.effect = 'write' AND runs.status = 'running'",
+        )
+        .bind(tab.0)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(u64::try_from(open).unwrap_or(0))
     }
 
     /// Runs, newest first.
@@ -552,6 +664,8 @@ pub(crate) struct RunEndRow<'a> {
     pub(crate) replay: Option<&'a Value>,
     pub(crate) replay_until: Option<EpochMillis>,
     pub(crate) gaps: u64,
+    /// No screenshot job of the run is unanswered, so the end completes it.
+    pub(crate) complete: bool,
 }
 
 /// Closes a run: open operations get their verdict, then the run its effects.
@@ -606,7 +720,7 @@ pub(crate) async fn end_run(
     sqlx::query(
         "UPDATE runs SET ended_at = ?, status = ?, effects = ?, error = ?, result = ?, \
          result_truncated = ?, trace_gaps = ?, replay = ?, replay_until = ?, \
-         code = ?, code_truncated = ?, code_withheld = ? \
+         code = ?, code_truncated = ?, code_withheld = ?, complete = ? \
          WHERE id = ?",
     )
     .bind(run.at.millis())
@@ -621,10 +735,52 @@ pub(crate) async fn end_run(
     .bind(code)
     .bind(i64::from(code_truncated))
     .bind(code_withheld)
+    .bind(i64::from(run.complete))
     .bind(&id)
     .execute(&mut **tx)
     .await?;
     Ok(effects)
+}
+
+/// Stores a screenshot answer as its operation's state. `Dropped` leaves no state.
+pub(crate) async fn store_screenshot(
+    tx: &mut Transaction<'_, Sqlite>,
+    op: OperationId,
+    shot: Shot,
+) -> Result<(), TraceError> {
+    let (state, bytes) = match shot {
+        Shot::Taken { bytes_len } => (
+            ShotState::Stored,
+            Some(i64::try_from(bytes_len).unwrap_or(i64::MAX)),
+        ),
+        Shot::Withheld => (ShotState::Withheld, None),
+        Shot::Dropped => return Ok(()),
+    };
+    sqlx::query(
+        "UPDATE operations SET screenshot = ?, screenshot_bytes = ? WHERE run_id = ? AND seq = ?",
+    )
+    .bind(state.as_str())
+    .bind(bytes)
+    .bind(op.run.to_string())
+    .bind(i64::from(op.seq))
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Marks an ended run complete. False when there is no such ended run, such as one whose end
+/// was in a batch that rolled back: a run the file still shows running never reads complete.
+pub(crate) async fn complete_run(
+    tx: &mut Transaction<'_, Sqlite>,
+    run: RunId,
+) -> Result<bool, TraceError> {
+    let updated = sqlx::query(
+        "UPDATE runs SET complete = 1 WHERE id = ? AND complete = 0 AND status != 'running'",
+    )
+    .bind(run.to_string())
+    .execute(&mut **tx)
+    .await?;
+    Ok(updated.rows_affected() > 0)
 }
 
 /// An operation's start row, as the writer stores it (args already conservatively redacted).
@@ -730,35 +886,64 @@ pub(crate) async fn end_operation(
     Ok(updated.rows_affected() > 0)
 }
 
+/// Deletes runs past `policy`'s age with their screenshots, then the oldest runs' screenshots
+/// until the rest fit under the cap.
+///
+/// A run's files go first, and only a run whose files are gone loses its rows or has its
+/// screenshots marked expired. A run whose files stay keeps its rows, and keeps counting toward
+/// the cap, so the next sweep finds it again: without its rows, nothing would ever name those
+/// files again, and the cap's byte total would leave them out. The files also go before the
+/// transaction commits, so a rollback or a crash leaves rows naming missing files (read as
+/// expired), which the next sweep finishes.
 pub(crate) async fn sweep(
     tx: &mut Transaction<'_, Sqlite>,
+    files: &ShotFiles,
     policy: RetentionPolicy,
     now: EpochMillis,
 ) -> Result<Swept, TraceError> {
     let max_age = i64::try_from(policy.max_age.as_millis()).unwrap_or(i64::MAX);
-    let cutoff = now.plus_millis(-max_age).millis();
-    sqlx::query(
-        "DELETE FROM run_tabs WHERE run_id IN \
-         (SELECT id FROM runs WHERE started_at < ? AND status != 'running')",
+    // Interrupted runs have no end time but are finished: only a running run is kept, and an
+    // ended run still waiting for screenshot answers, so the camera never writes into a
+    // directory this deletes.
+    let aged = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM runs WHERE started_at < ? AND status != 'running' AND complete = 1",
     )
-    .bind(cutoff)
-    .execute(&mut **tx)
+    .bind(now.plus_millis(-max_age).millis())
+    .fetch_all(&mut **tx)
     .await?;
-    let operations = sqlx::query(
-        "DELETE FROM operations WHERE run_id IN \
-         (SELECT id FROM runs WHERE started_at < ? AND status != 'running')",
-    )
-    .bind(cutoff)
-    .execute(&mut **tx)
-    .await?
-    .rows_affected();
-    // Interrupted runs have no end time but are finished: only a running run is kept.
-    let runs = sqlx::query("DELETE FROM runs WHERE started_at < ? AND status != 'running'")
-        .bind(cutoff)
-        .execute(&mut **tx)
-        .await?
-        .rows_affected();
-    let replays = sqlx::query(
+    let mut swept = Swept::default();
+    for id in aged {
+        // An id that does not parse names no directory: every screenshot path comes from a
+        // typed id.
+        if let Ok(run) = id.parse::<RunId>()
+            && !remove_run_files(files, run).await
+        {
+            continue;
+        }
+        let screenshots: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM operations WHERE run_id = ? AND screenshot = 'stored'",
+        )
+        .bind(&id)
+        .fetch_one(&mut **tx)
+        .await?;
+        swept.screenshots += u64::try_from(screenshots).unwrap_or(0);
+        sqlx::query("DELETE FROM run_tabs WHERE run_id = ?")
+            .bind(&id)
+            .execute(&mut **tx)
+            .await?;
+        swept.operations += sqlx::query("DELETE FROM operations WHERE run_id = ?")
+            .bind(&id)
+            .execute(&mut **tx)
+            .await?
+            .rows_affected();
+        swept.runs += sqlx::query("DELETE FROM runs WHERE id = ?")
+            .bind(&id)
+            .execute(&mut **tx)
+            .await?
+            .rows_affected();
+    }
+    swept.screenshots += cap_screenshots(tx, files, policy.screenshot_cap).await?;
+    swept.replays = sqlx::query(
         "UPDATE runs SET replay = NULL, replay_until = NULL \
          WHERE replay_until IS NOT NULL AND replay_until <= ?",
     )
@@ -766,11 +951,68 @@ pub(crate) async fn sweep(
     .execute(&mut **tx)
     .await?
     .rows_affected();
-    Ok(Swept {
-        runs,
-        operations,
-        replays,
-    })
+    Ok(swept)
+}
+
+/// Deletes `run`'s screenshot directory. True when none of its files is left, which includes a
+/// run that never had any; false, with a warning, when its files stay on disk.
+async fn remove_run_files(files: &ShotFiles, run: RunId) -> bool {
+    match tokio::fs::remove_dir_all(files.run_dir(run)).await {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(error) => {
+            tracing::warn!(%error, %run, "a run's screenshots stay on disk until the next sweep");
+            false
+        }
+    }
+}
+
+/// Expires the oldest complete runs' stored screenshots until the rest fit under `cap`, and
+/// returns how many expired. A run is the unit: its files share a directory, and a host reads a
+/// run's pictures together. A run whose files could not be deleted keeps them stored, and
+/// counted, so the next oldest run's go instead.
+async fn cap_screenshots(
+    tx: &mut Transaction<'_, Sqlite>,
+    files: &ShotFiles,
+    cap: u64,
+) -> Result<u64, TraceError> {
+    let stored: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(screenshot_bytes), 0) FROM operations WHERE screenshot = 'stored'",
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    let mut over = stored.saturating_sub(i64::try_from(cap).unwrap_or(i64::MAX));
+    if over <= 0 {
+        return Ok(0);
+    }
+    let oldest_first = sqlx::query(
+        "SELECT operations.run_id AS run_id, SUM(operations.screenshot_bytes) AS bytes \
+         FROM operations JOIN runs ON runs.id = operations.run_id \
+         WHERE operations.screenshot = 'stored' AND runs.complete = 1 \
+         GROUP BY operations.run_id ORDER BY runs.started_at, operations.run_id",
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    let mut expired = 0;
+    for row in oldest_first {
+        if over <= 0 {
+            break;
+        }
+        let run: RunId = parse_id(&row.try_get::<String, _>("run_id")?)?;
+        if !remove_run_files(files, run).await {
+            continue;
+        }
+        over = over.saturating_sub(row.try_get::<i64, _>("bytes")?);
+        expired += sqlx::query(
+            "UPDATE operations SET screenshot = 'expired' \
+             WHERE run_id = ? AND screenshot = 'stored'",
+        )
+        .bind(run.to_string())
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+    }
+    Ok(expired)
 }
 
 // ---- Row mapping. ----
@@ -887,7 +1129,7 @@ fn run_summary(row: &SqliteRow) -> Result<RunSummary, TraceError> {
         id: parse_id(&row.try_get::<String, _>("id")?)?,
         task_id: host_id_column(row, "task_id", TaskId::parse)?,
         tabs: tabs_column(row)?,
-        status: run_status(&status).ok_or_else(|| corrupt("status", &status))?,
+        status: RunStatus::parse(&status).ok_or_else(|| corrupt("status", &status))?,
         effects: effects
             .as_deref()
             .map(|text| run_effects(text).ok_or_else(|| corrupt("effects", text)))
@@ -898,6 +1140,7 @@ fn run_summary(row: &SqliteRow) -> Result<RunSummary, TraceError> {
         ended_at: time_column(row, "ended_at")?,
         operation_count: count_column(row, "operation_count")?,
         trace_gaps: count_column(row, "trace_gaps")?,
+        complete: row.try_get::<i64, _>("complete")? != 0,
     })
 }
 
@@ -912,6 +1155,7 @@ fn operation_row(row: &SqliteRow) -> Result<OperationRow, TraceError> {
     let effect: String = row.try_get("effect")?;
     let outcome: Option<String> = row.try_get("outcome")?;
     let delivery: Option<String> = row.try_get("delivery")?;
+    let screenshot: Option<String> = row.try_get("screenshot")?;
     Ok(OperationRow {
         id: OperationId::new(run, seq),
         parent: row
@@ -951,20 +1195,11 @@ fn operation_row(row: &SqliteRow) -> Result<OperationRow, TraceError> {
         started_at: EpochMillis::from_millis(row.try_get("started_at")?),
         sent_at: time_column(row, "sent_at")?,
         ended_at: time_column(row, "ended_at")?,
+        screenshot: screenshot
+            .as_deref()
+            .map(|text| ShotState::parse(text).ok_or_else(|| corrupt("screenshot", text)))
+            .transpose()?,
     })
-}
-
-fn run_status(text: &str) -> Option<RunStatus> {
-    [
-        RunStatus::Running,
-        RunStatus::Ok,
-        RunStatus::Error,
-        RunStatus::Cancelled,
-        RunStatus::Timeout,
-        RunStatus::Interrupted,
-    ]
-    .into_iter()
-    .find(|status| status.as_str() == text)
 }
 
 fn run_effects(text: &str) -> Option<RunEffects> {

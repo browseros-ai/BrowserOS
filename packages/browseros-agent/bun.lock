@@ -307,6 +307,10 @@
       "name": "@browseros/browseros-mcp-rust",
       "version": "0.0.0",
     },
+    "crates/browseros-service": {
+      "name": "@browseros/browseros-service-rust",
+      "version": "0.0.0",
+    },
     "crates/browseros-trace": {
       "name": "@browseros/browseros-trace-rust",
       "version": "0.0.0",
@@ -655,6 +659,8 @@
     "@browseros/browseros-core-rust": ["@browseros/browseros-core-rust@workspace:crates/browseros-core"],
 
     "@browseros/browseros-mcp-rust": ["@browseros/browseros-mcp-rust@workspace:crates/browseros-mcp"],
+
+    "@browseros/browseros-service-rust": ["@browseros/browseros-service-rust@workspace:crates/browseros-service"],
 
     "@browseros/browseros-trace-rust": ["@browseros/browseros-trace-rust@workspace:crates/browseros-trace"],
 

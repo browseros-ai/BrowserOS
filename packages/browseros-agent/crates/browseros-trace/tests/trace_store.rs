@@ -31,6 +31,7 @@ async fn harness(config: WriterConfig) -> Harness {
         &store,
         Redactor::new(secrets.clone(), RedactionLimits::default()),
         config,
+        None,
     );
     Harness {
         dir,
@@ -54,6 +55,7 @@ fn writer(store: &TraceStore) -> TraceSink {
             RedactionLimits::default(),
         ),
         WriterConfig::default(),
+        None,
     )
 }
 
@@ -1171,6 +1173,7 @@ async fn events_name_the_task_and_the_target_tab() {
                 effects: RunEffects::Done,
                 at: at(1_000),
             },
+            TraceRecordEvent::RunComplete { run: tasked },
             TraceRecordEvent::RunStarted {
                 run: untasked,
                 task: None,
@@ -1184,6 +1187,168 @@ async fn events_name_the_task_and_the_target_tab() {
                 at: at(10),
             },
         ]
+    );
+}
+
+#[tokio::test]
+async fn a_run_summary_is_the_run_without_its_operations() {
+    let h = harness(WriterConfig::default()).await;
+    let run = start_run(
+        &h.sink,
+        Start {
+            request: Some("call-9"),
+            task: Some("task-9"),
+            ..Start::default()
+        },
+    );
+    let goto = OperationId::new(run, 1);
+    op_started(
+        &h.sink,
+        Op {
+            tab: Some(TabId(4)),
+            ..simple(goto, "page.goto", Effect::Write)
+        },
+    );
+    op_started(
+        &h.sink,
+        simple(OperationId::new(run, 2), "page.title", Effect::Read),
+    );
+    flushed(&h).await;
+
+    let running = h.store.run_summary(run).await.ok().flatten();
+    let Some(running) = running else {
+        panic!("run not found");
+    };
+    assert_eq!(running.status, RunStatus::Running);
+    assert_eq!(running.effects, None);
+    assert_eq!(running.tabs, vec![TabId(3), TabId(4)]);
+    assert_eq!(running.operation_count, 2);
+    assert_eq!(running.task_id, Some(task("task-9")));
+    assert_eq!(running.request_id, Some(request("call-9")));
+
+    op_ended(
+        &h.sink,
+        goto,
+        Delivery::Unknown,
+        None,
+        TargetSensitivity::Ordinary,
+    );
+    end_run(&h.sink, run, RunStatus::Ok, None);
+    flushed(&h).await;
+    let ended = h.store.run_summary(run).await.ok().flatten();
+    assert_eq!(
+        ended.as_ref().map(|run| (run.status, run.effects)),
+        Some((RunStatus::Ok, Some(RunEffects::Unknown)))
+    );
+    let detail = h.store.run(run).await.ok().flatten();
+    assert_eq!(
+        ended,
+        detail.map(|detail| detail.summary),
+        "the same summary as the full read"
+    );
+    assert!(
+        h.store
+            .run_summary(RunId::new())
+            .await
+            .is_ok_and(|summary| summary.is_none())
+    );
+}
+
+#[tokio::test]
+async fn open_writes_count_a_tabs_unfinished_writes_in_running_runs() {
+    let h = harness(WriterConfig::default()).await;
+    let open_writes = |tab: i64| {
+        let store = h.store.clone();
+        async move {
+            store
+                .open_writes(TabId(tab))
+                .await
+                .unwrap_or_else(|error| panic!("open_writes: {error}"))
+        }
+    };
+    let run = start_in(&h.sink, None, 0);
+    let click = OperationId::new(run, 1);
+    let fill = OperationId::new(run, 2);
+    let goto = OperationId::new(run, 4);
+    op_started(&h.sink, simple(click, "locator.click", Effect::Write));
+    op_started(&h.sink, simple(fill, "locator.fill", Effect::Write));
+    op_ended(
+        &h.sink,
+        fill,
+        Delivery::Done,
+        None,
+        TargetSensitivity::Ordinary,
+    );
+    op_started(
+        &h.sink,
+        simple(OperationId::new(run, 3), "page.title", Effect::Read),
+    );
+    op_started(
+        &h.sink,
+        Op {
+            tab: Some(TabId(4)),
+            ..simple(goto, "page.goto", Effect::Write)
+        },
+    );
+    flushed(&h).await;
+    assert_eq!(
+        open_writes(3).await,
+        1,
+        "the click; not the ended fill or the read"
+    );
+    assert_eq!(open_writes(4).await, 1);
+    assert_eq!(open_writes(5).await, 0);
+
+    op_ended(
+        &h.sink,
+        click,
+        Delivery::Done,
+        None,
+        TargetSensitivity::Ordinary,
+    );
+    flushed(&h).await;
+    assert_eq!(open_writes(3).await, 0);
+
+    end_run(&h.sink, run, RunStatus::Ok, None);
+    flushed(&h).await;
+    assert_eq!(open_writes(4).await, 0, "the run's end closed the goto");
+
+    op_started(
+        &h.sink,
+        simple(OperationId::new(run, 5), "locator.click", Effect::Write),
+    );
+    flushed(&h).await;
+    assert_eq!(
+        open_writes(3).await,
+        0,
+        "a write that started after its run ended is not in flight"
+    );
+}
+
+#[tokio::test]
+async fn a_restart_leaves_no_write_in_flight() {
+    let h = harness(WriterConfig::default()).await;
+    let run = start_in(&h.sink, None, 0);
+    op_started(
+        &h.sink,
+        simple(OperationId::new(run, 1), "locator.click", Effect::Write),
+    );
+    flushed(&h).await;
+    assert!(
+        h.store
+            .open_writes(TabId(3))
+            .await
+            .is_ok_and(|open| open == 1)
+    );
+    let Harness { dir, sink, .. } = h;
+    drop(sink);
+
+    let reopened = open(&dir).await;
+    assert!(
+        reopened
+            .open_writes(TabId(3))
+            .await
+            .is_ok_and(|open| open == 0)
     );
 }
 

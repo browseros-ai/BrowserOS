@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Event {
+    /// What happened. `stream.reset` carries nothing else: events were missed, so re-read the state endpoints.
     #[serde(rename = "type")]
     pub r#type: String,
     #[serde(rename = "at")]
