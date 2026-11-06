@@ -606,13 +606,6 @@ pub(crate) enum WaitAfter {
     /// Await both the hit-target verdict and navigation barrier.
     Enabled,
     /// Await the verdict only, as check/uncheck require.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the checkbox implementation lands after this skeleton"
-        )
-    )]
     Disabled,
     /// Stop the interceptor in the background; await neither.
     NoWait,

@@ -856,23 +856,21 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tests_that_remaining_forms_stubs_reply_with_served_error_envelopes() {
+    async fn tests_that_press_stub_replies_with_a_served_error_envelope() {
         let tab = FakeTab::ready();
-        for method in ["press", "check", "uncheck"] {
-            let progress = Progress::for_test(1000.0);
-            let route = route_frame(method, forms_params(method, "input"))
-                .route
-                .expect("routed");
-            let result = serve_route(&tab, route, &progress).await;
-            let expected = PlaywrightError::error(format!("Neo does not serve Frame.{method} yet"));
-            assert_eq!(result, Err(expected.clone().into()));
-            assert_eq!(
-                progress.delivery().expect("test cell").delivery(),
-                Delivery::NotSent
-            );
-            assert_eq!(encode_reply(&json!(7), Err(&expected), Some(&progress.folded_log())),
-                json!({ "id": 7, "error": { "error": { "name": "Error", "message": expected.message } }, "log": [] }).to_string());
-        }
+        let progress = Progress::for_test(1000.0);
+        let route = route_frame("press", forms_params("press", "input"))
+            .route
+            .expect("routed");
+        let result = serve_route(&tab, route, &progress).await;
+        let expected = PlaywrightError::error("Neo does not serve Frame.press yet");
+        assert_eq!(result, Err(expected.clone().into()));
+        assert_eq!(
+            progress.delivery().expect("test cell").delivery(),
+            Delivery::NotSent
+        );
+        assert_eq!(encode_reply(&json!(7), Err(&expected), Some(&progress.folded_log())),
+            json!({ "id": 7, "error": { "error": { "name": "Error", "message": expected.message } }, "log": [] }).to_string());
         assert!(tab.calls().is_empty(), "stub handlers perform no page work");
     }
 
