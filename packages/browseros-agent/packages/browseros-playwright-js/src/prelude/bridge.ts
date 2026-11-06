@@ -12,7 +12,11 @@
  *   `defaultPage` names the tab the door opened for the run's lazy page.
  * - `__neo.provide(name, build)`: one parameter of the agent's function. `build(init)` runs
  *   once, when the run starts; `init.page` is the run's page brand when it already has a tab,
- *   and `init.pages`, when the run service sends it, lists every tab as reply facts do.
+ *   and `init.pages`, when the run service sends it, lists every tab as reply facts do. A
+ *   bootstrap with `refuse` (sdk-skeleton's S3) awaits a build that returns a promise, before
+ *   the agent's first statement (FR/RC C5).
+ * - `__neo.refuse(api, code, reason)`: a refusal the door records, which errors.ts raises
+ *   through host.ts, where the bootstrap's type lives.
  * - `__neo_sleep(ms)`: the clock native the bootstrap's own `setTimeout` rides on, capped by
  *   the run's deadline and cut short by its stop. The bootstrap hands `setTimeout` to the
  *   agent's function only, so `waitForTimeout`, polling waits and the deadline a
@@ -23,6 +27,7 @@
  * claw-sdk's runtime/tests.rs pins that a run's realm gains only `__neo` and its natives.
  */
 import { shapeBridgeError, unsupportedError } from './errors'
+import { host, refuser } from './host'
 import type { OpName } from './ops.generated'
 import type {
   CallHeader,
@@ -31,15 +36,6 @@ import type {
   PageBrand,
   PageFact,
 } from './wire'
-
-type Bootstrap = {
-  invoke(name: string, input?: unknown): Promise<unknown>
-  brands: {
-    register(brand: string, fromJson: (json: object) => unknown): void
-  }
-  onReply(listener: (envelope: unknown) => void): void
-  provide(name: string, build: (init: unknown) => unknown): void
-}
 
 /** What a run starts with (claw-sdk's run_script.rs `init`). */
 export type RunInit = {
@@ -58,15 +54,6 @@ export type Reply = {
   pages: PageFact[]
   /** The tab of the run's own page, on the reply of an op the door opened it for. */
   defaultPage: { id: number; tab: number } | null
-}
-
-function host(): Bootstrap {
-  const neo: unknown = Reflect.get(globalThis, '__neo')
-  if (typeof neo !== 'object' || neo === null)
-    throw new Error(
-      "The Playwright prelude needs claw-sdk's bootstrap (globalThis.__neo), which was not installed",
-    )
-  return neo as Bootstrap
 }
 
 /**
@@ -106,7 +93,11 @@ export function onReply(listener: (reply: Reply) => void): void {
   )
 }
 
-/** Gives the agent's function its `name` parameter, built once from the run's init. */
+/**
+ * Gives the agent's function its `name` parameter, built once from the run's init. A build may
+ * return a promise only for a bootstrap that awaits it (`awaitsProviders`): an older one would
+ * hand the script the promise itself.
+ */
 export function provide(name: string, build: (init: RunInit) => unknown): void {
   host().provide(name, (init) => {
     const page = readTab(field(init, 'page'))
@@ -115,6 +106,14 @@ export function provide(name: string, build: (init: RunInit) => unknown): void {
       pages: readPageFacts(field(init, 'pages')),
     })
   })
+}
+
+/**
+ * Whether the bootstrap awaits a parameter's build before the agent's first statement (FR/RC
+ * C5). It landed with `refuse` (C1), in sdk-skeleton's S3, so the one tells of the other.
+ */
+export function awaitsProviders(): boolean {
+  return refuser() !== null
 }
 
 function field(value: unknown, name: string): unknown {

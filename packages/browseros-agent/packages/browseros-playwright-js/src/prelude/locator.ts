@@ -9,7 +9,7 @@
 
 import type { Rect } from '../probe/protocol'
 import type { ElementHandle } from './element-handle'
-import { clientError } from './errors'
+import { internalError, plainError } from './errors'
 import { type EvaluateOptions, pageCall, refuseSignal } from './evaluation'
 import type {
   ClickOptions,
@@ -48,9 +48,13 @@ export class Locator {
   readonly _frame: Frame
   readonly _selector: string
 
-  constructor(frame: Frame, selector: string, options?: LocatorOptions) {
+  /**
+   * `selector` is the whole selector: a method that takes the script's options composes them
+   * first (`withLocatorOptions`), so its refusal names that method.
+   */
+  constructor(frame: Frame, selector: string) {
     this._frame = frame
-    this._selector = withLocatorOptions(frame, selector, options)
+    this._selector = selector
     markHandle(this)
   }
 
@@ -72,18 +76,27 @@ export class Locator {
     selectorOrLocator: string | Locator,
     options?: Omit<LocatorOptions, 'visible'>,
   ): Locator {
+    const api = 'locator.locator'
     if (typeof selectorOrLocator === 'string')
       return new Locator(
         this._frame,
-        `${this._selector} >> ${selectorOrLocator}`,
-        options,
+        withLocatorOptions(
+          api,
+          this._frame,
+          `${this._selector} >> ${selectorOrLocator}`,
+          options,
+        ),
       )
     if (selectorOrLocator._frame !== this._frame)
-      throw new Error('Locators must belong to the same frame.')
+      throw plainError(api, 'Locators must belong to the same frame.')
     return new Locator(
       this._frame,
-      `${this._selector} >> internal:chain=${JSON.stringify(selectorOrLocator._selector)}`,
-      options,
+      withLocatorOptions(
+        api,
+        this._frame,
+        `${this._selector} >> internal:chain=${JSON.stringify(selectorOrLocator._selector)}`,
+        options,
+      ),
     )
   }
 
@@ -128,11 +141,24 @@ export class Locator {
   }
 
   filter(options?: LocatorOptions): Locator {
-    return new Locator(this._frame, this._selector, options)
+    return new Locator(
+      this._frame,
+      withLocatorOptions(
+        'locator.filter',
+        this._frame,
+        this._selector,
+        options,
+      ),
+    )
   }
 
   visible(): Locator {
-    return new Locator(this._frame, this._selector, { visible: true })
+    return new Locator(
+      this._frame,
+      withLocatorOptions('locator.visible', this._frame, this._selector, {
+        visible: true,
+      }),
+    )
   }
 
   describe(description: string): Locator {
@@ -156,7 +182,7 @@ export class Locator {
 
   and(locator: Locator): Locator {
     if (locator._frame !== this._frame)
-      throw new Error('Locators must belong to the same frame.')
+      throw plainError('locator.and', 'Locators must belong to the same frame.')
     return new Locator(
       this._frame,
       `${this._selector} >> internal:and=${JSON.stringify(locator._selector)}`,
@@ -165,7 +191,7 @@ export class Locator {
 
   or(locator: Locator): Locator {
     if (locator._frame !== this._frame)
-      throw new Error('Locators must belong to the same frame.')
+      throw plainError('locator.or', 'Locators must belong to the same frame.')
     return new Locator(
       this._frame,
       `${this._selector} >> internal:or=${JSON.stringify(locator._selector)}`,
@@ -551,7 +577,7 @@ export class Locator {
       options,
     )
     if (!handle)
-      throw clientError(
+      throw internalError(
         'locator.elementHandle',
         `Could not resolve ${this} to DOM Element`,
       )
@@ -640,18 +666,27 @@ export class FrameLocator {
     selectorOrLocator: string | Locator,
     options?: LocatorOptions,
   ): Locator {
+    const api = 'frameLocator.locator'
     if (typeof selectorOrLocator === 'string')
       return new Locator(
         this._frame,
-        this.#childSelector(selectorOrLocator),
-        options,
+        withLocatorOptions(
+          api,
+          this._frame,
+          this.#childSelector(selectorOrLocator),
+          options,
+        ),
       )
     if (selectorOrLocator._frame !== this._frame)
-      throw new Error('Locators must belong to the same frame.')
+      throw plainError(api, 'Locators must belong to the same frame.')
     return new Locator(
       this._frame,
-      this.#childSelector(selectorOrLocator._selector),
-      options,
+      withLocatorOptions(
+        api,
+        this._frame,
+        this.#childSelector(selectorOrLocator._selector),
+        options,
+      ),
     )
   }
 
@@ -691,23 +726,33 @@ export class FrameLocator {
     return new FrameLocator(this._frame, this.#childSelector(selector))
   }
 
-  #nthSelector(nth: string): string {
+  #nthSelector(api: string, nth: string): string {
     if (this._frameSelector === kAnyFrameSelector)
-      throw new Error(
+      throw plainError(
+        api,
         'Selecting the nth frame is not allowed on frameLocator().',
       )
     return `${this._frameSelector} >> nth=${nth}`
   }
 
   first(): FrameLocator {
-    return new FrameLocator(this._frame, this.#nthSelector('0'))
+    return new FrameLocator(
+      this._frame,
+      this.#nthSelector('frameLocator.first', '0'),
+    )
   }
 
   last(): FrameLocator {
-    return new FrameLocator(this._frame, this.#nthSelector('-1'))
+    return new FrameLocator(
+      this._frame,
+      this.#nthSelector('frameLocator.last', '-1'),
+    )
   }
 
   nth(index: number): FrameLocator {
-    return new FrameLocator(this._frame, this.#nthSelector(String(index)))
+    return new FrameLocator(
+      this._frame,
+      this.#nthSelector('frameLocator.nth', String(index)),
+    )
   }
 }

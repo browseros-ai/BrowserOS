@@ -13,7 +13,7 @@
  * bundle names any global outside ECMAScript's own.
  */
 
-import { onReply, provide, registerBrand } from './bridge'
+import { awaitsProviders, onReply, provide, registerBrand } from './bridge'
 import { Browser } from './browser'
 import { Buffer } from './buffer'
 import { BrowserContext } from './context'
@@ -62,7 +62,19 @@ onReply((reply) => context._applyReply(reply))
 
 // The agent function's parameters, after the bootstrap's own. claw-sdk's placeholder page
 // prelude provides `page` and `context` too; these replace them when both are loaded.
-provide('page', (init) => context._runPage(init))
+// With a bootstrap that awaits its providers (FR/RC C5), the run's page reads its frame tree
+// before the agent's first statement, so `page.frames()` lists the tab's iframes from the start,
+// as upstream's does (FR-1). An older bootstrap would hand the script the promise instead.
+provide(
+  'page',
+  awaitsProviders()
+    ? async (init) => {
+        const page = context._runPage(init)
+        await page._readInitialFrames()
+        return page
+      }
+    : (init) => context._runPage(init),
+)
 provide('context', () => context)
 provide('browser', () => browser)
 provide('expect', () => expect)

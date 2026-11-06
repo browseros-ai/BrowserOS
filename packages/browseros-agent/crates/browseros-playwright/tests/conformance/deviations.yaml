@@ -188,6 +188,48 @@
     Object.prototype.toString does not."
   p: "[object URL]"
   n: "[object Object]"
+- case: refusals
+  path: /returned/route
+  kind: decided
+  reason: "held design (deviations table) and FR/RC (held/design/fr-rc/design.md, sdk-skeleton's S3,
+    C1-C4): Neo serves no network interception, so page.route is refused before any op, with
+    Playwright's message for the method and the hint. The refusal is a door call
+    (__neo.refuse): the door records it as a row of the run's trace and answers script /
+    method_unavailable, which reaches the error the script caught once it yields to Rust, with
+    the row's op id. Upstream adds the route."
+  p: null
+  n:
+    code: method_unavailable
+    message: "page.route: network interception is not available in Neo"
+    name: Error
+    recorded: true
+- case: refusals
+  path: /returned/request
+  kind: decided
+  reason: "held design (deviations table) and FR/RC, as /returned/route: the getter
+    context.request throws the same door refusal, script / method_unavailable with its row's op
+    id. Upstream returns its APIRequestContext."
+  p: null
+  n:
+    code: method_unavailable
+    message: "browserContext.request: API requests are not available in Neo; fetch from the page with page.evaluate()"
+    name: Error
+    recorded: true
+- case: refusals
+  path: /returned/state/code
+  kind: decided
+  reason: "FR/RC (sdk-skeleton's S3, C4): the client's load-state check throws upstream's
+    message, unprefixed, in both; in Neo it is a door call too, so the error carries the door's
+    script / invalid_input. Upstream's client error has no code."
+  p: null
+  n: invalid_input
+- case: refusals
+  path: /returned/state/recorded
+  kind: decided
+  reason: "FR/RC, as /returned/state/code: Neo's refusal is a row of the run's trace, whose op id
+    the caught error carries once the script yields to Rust; upstream's client error is no call."
+  p: false
+  n: true
 - case: wait-for-function
   path: /returned/rafPolling/returned/withinFiveFrames
   kind: decided

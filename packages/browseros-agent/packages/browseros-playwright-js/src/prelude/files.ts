@@ -44,17 +44,22 @@ export function inputFiles(api: string, files: unknown): FilesInput {
       (item): item is string => typeof item === 'string',
     )
     if (paths.length !== items.length)
-      throw unprefixedClientError('File paths cannot be mixed with buffers')
+      throw unprefixedClientError(
+        api,
+        'File paths cannot be mixed with buffers',
+      )
     return { paths }
   }
-  const total = payloadBytes(items)
+  const total = payloadBytes(api, items)
   if (total >= UPLOAD_LIMIT)
     throw unprefixedClientError(
+      api,
       'Cannot set buffer larger than 50Mb, please write it to a file and pass its path instead.',
     )
   const checked = items.map((item, index) => checkedPayload(api, item, index))
   if (total >= NEO_UPLOAD_LIMIT)
     throw unprefixedClientError(
+      api,
       'Cannot set buffer larger than 10Mb in Neo, please write it to a file and pass its path instead.',
     )
   return {
@@ -73,11 +78,12 @@ export function inputFiles(api: string, files: unknown): FilesInput {
  * with JavaScript's own arithmetic on whatever a buffer's `byteLength` is. Reading `buffer` off
  * a missing payload throws V8's TypeError, before any channel call, as upstream's does.
  */
-function payloadBytes(items: unknown[]): number {
+function payloadBytes(api: string, items: unknown[]): number {
   let total = 0
   for (const item of items) {
     if (item === null || item === undefined)
       throw unprefixedClientError(
+        api,
         `Cannot read properties of ${item} (reading 'buffer')`,
         'TypeError',
       )

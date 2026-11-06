@@ -12,6 +12,21 @@
  * Do not edit. Notices: crates/browseros-playwright/THIRD_PARTY_NOTICES.md.
  */
 (() => {
+  // packages/browseros-playwright-js/src/prelude/host.ts
+  function host() {
+    const neo = Reflect.get(globalThis, "__neo");
+    if (typeof neo !== "object" || neo === null)
+      throw new Error("The Playwright prelude needs claw-sdk's bootstrap (globalThis.__neo), which was not installed");
+    return neo;
+  }
+  function refuser() {
+    const neo = Reflect.get(globalThis, "__neo");
+    if (typeof neo !== "object" || neo === null)
+      return null;
+    const refuse = Reflect.get(neo, "refuse");
+    return typeof refuse === "function" ? (api, code, reason) => Reflect.apply(refuse, neo, [api, code, reason]) : null;
+  }
+
   // packages/browseros-playwright-js/src/prelude/errors.ts
   var FIELDS = [
     "code",
@@ -77,20 +92,32 @@
     retryable: false,
     timeout: false
   };
+  var UNSUPPORTED = {
+    code: "unsupported",
+    owner: "neo",
+    delivery: "not_sent",
+    retryable: false,
+    timeout: false
+  };
+  function refusal(api, code, message, fallback, name = "Error") {
+    const refuse = refuser();
+    if (refuse === null)
+      return withFields(name === "TypeError" ? new TypeError(message) : new PlaywrightError(message), fallback);
+    const error = refuse(api, code, message);
+    error.name = name;
+    return withFields(error, { timeout: false });
+  }
   function clientError(api, message) {
-    return withFields(new PlaywrightError(`${api}: ${message}`), REFUSED_ARGUMENTS);
+    return refusal(api, "invalid_input", `${api}: ${message}`, REFUSED_ARGUMENTS);
   }
-  function unprefixedClientError(message, kind = "Error") {
-    return withFields(kind === "TypeError" ? new TypeError(message) : new PlaywrightError(message), REFUSED_ARGUMENTS);
+  function unprefixedClientError(api, message, kind = "Error") {
+    return refusal(api, "invalid_input", message, REFUSED_ARGUMENTS, kind);
   }
-  function plainError(message) {
-    return withFields(new PlaywrightError(message), {
-      code: "invalid_input",
-      owner: "script",
-      delivery: "not_sent",
-      retryable: false,
-      timeout: false
-    });
+  function plainError(api, message) {
+    return refusal(api, "invalid_input", message, REFUSED_ARGUMENTS);
+  }
+  function internalError(api, message) {
+    return new PlaywrightError(`${api}: ${message}`);
   }
   function waitTimeoutError(api, message) {
     return withFields(new TimeoutError(`${api}: ${message}`), {
@@ -102,13 +129,7 @@
     });
   }
   function unsupportedError(api, hint) {
-    return withFields(new PlaywrightError(`${api}: ${hint}`), {
-      code: "unsupported",
-      owner: "neo",
-      delivery: "not_sent",
-      retryable: false,
-      timeout: false
-    });
+    return refusal(api, "method_unavailable", `${api}: ${hint}`, UNSUPPORTED);
   }
   function assertionError(message) {
     return new PlaywrightError(message);
@@ -124,12 +145,6 @@
   }
 
   // packages/browseros-playwright-js/src/prelude/bridge.ts
-  function host() {
-    const neo = Reflect.get(globalThis, "__neo");
-    if (typeof neo !== "object" || neo === null)
-      throw new Error("The Playwright prelude needs claw-sdk's bootstrap (globalThis.__neo), which was not installed");
-    return neo;
-  }
   async function invoke(op, call, args) {
     try {
       return await host().invoke(op, { call, ...args });
@@ -154,6 +169,9 @@
         pages: readPageFacts(field(init, "pages"))
       });
     });
+  }
+  function awaitsProviders() {
+    return refuser() !== null;
   }
   function field(value, name) {
     return typeof value === "object" && value !== null ? Reflect.get(value, name) : undefined;
@@ -1189,8 +1207,9 @@
     }
     async dismiss() {
       const api = "dialog.dismiss";
+      const page = await this.#pageValue._brand(api);
       try {
-        await invoke("dialog.dismiss", { api, timeoutMs: 0 }, { page: await this.#pageValue._brand(api), dialog: this.#info.id });
+        await invoke("dialog.dismiss", { api, timeoutMs: 0 }, { page, dialog: this.#info.id });
       } catch (error) {
         if (Reflect.get(Object(error), "code") === "target_closed")
           return;
@@ -1338,8 +1357,8 @@
     serviceworker: "Neo does not report service workers",
     backgroundpage: "Neo does not report extension background pages",
     filechooser: "Neo does not report file choosers; call locator.setInputFiles() on the input",
-    frameattached: "Neo does not report frame events; read page.frames() after a navigation",
-    framedetached: "Neo does not report frame events; read page.frames() after a navigation",
+    frameattached: "Neo does not report frame events; read page.frames(), which Neo refreshes after navigations and waits",
+    framedetached: "Neo does not report frame events; read page.frames(), which Neo refreshes after navigations and waits",
     framenavigated: "Neo does not report frame events; use page.waitForURL()",
     load: "Neo does not report load events; use page.waitForLoadState()",
     domcontentloaded: 'Neo does not report load events; use page.waitForLoadState("domcontentloaded")',
@@ -5834,15 +5853,15 @@ ${value.stack}`;
     if (items.some((item) => typeof item === "string")) {
       const paths = items.filter((item) => typeof item === "string");
       if (paths.length !== items.length)
-        throw unprefixedClientError("File paths cannot be mixed with buffers");
+        throw unprefixedClientError(api, "File paths cannot be mixed with buffers");
       return { paths };
     }
-    const total = payloadBytes(items);
+    const total = payloadBytes(api, items);
     if (total >= UPLOAD_LIMIT)
-      throw unprefixedClientError("Cannot set buffer larger than 50Mb, please write it to a file and pass its path instead.");
+      throw unprefixedClientError(api, "Cannot set buffer larger than 50Mb, please write it to a file and pass its path instead.");
     const checked = items.map((item, index) => checkedPayload(api, item, index));
     if (total >= NEO_UPLOAD_LIMIT)
-      throw unprefixedClientError("Cannot set buffer larger than 10Mb in Neo, please write it to a file and pass its path instead.");
+      throw unprefixedClientError(api, "Cannot set buffer larger than 10Mb in Neo, please write it to a file and pass its path instead.");
     return {
       payloads: checked.map(({ name, mimeType, buffer }) => ({
         name,
@@ -5851,11 +5870,11 @@ ${value.stack}`;
       }))
     };
   }
-  function payloadBytes(items) {
+  function payloadBytes(api, items) {
     let total = 0;
     for (const item of items) {
       if (item === null || item === undefined)
-        throw unprefixedClientError(`Cannot read properties of ${item} (reading 'buffer')`, "TypeError");
+        throw unprefixedClientError(api, `Cannot read properties of ${item} (reading 'buffer')`, "TypeError");
       const buffer = Reflect.get(Object(item), "buffer");
       if (!buffer)
         continue;
@@ -5908,7 +5927,7 @@ ${value.stack}`;
   }
 
   // packages/browseros-playwright-js/src/prelude/selectors.ts
-  function withLocatorOptions(frame, selector, options) {
+  function withLocatorOptions(api, frame, selector, options) {
     let result = selector;
     if (options?.hasText)
       result += ` >> internal:has-text=${escapeForTextSelector(options.hasText, false)}`;
@@ -5916,12 +5935,12 @@ ${value.stack}`;
       result += ` >> internal:has-not-text=${escapeForTextSelector(options.hasNotText, false)}`;
     if (options?.has) {
       if (options.has._frame !== frame)
-        throw new Error('Inner "has" locator must belong to the same frame.');
+        throw plainError(api, 'Inner "has" locator must belong to the same frame.');
       result += ` >> internal:has=${JSON.stringify(options.has._selector)}`;
     }
     if (options?.hasNot) {
       if (options.hasNot._frame !== frame)
-        throw new Error('Inner "hasNot" locator must belong to the same frame.');
+        throw plainError(api, 'Inner "hasNot" locator must belong to the same frame.');
       result += ` >> internal:has-not=${JSON.stringify(options.hasNot._selector)}`;
     }
     if (options?.visible !== undefined)
@@ -5954,9 +5973,9 @@ ${value.stack}`;
   class Locator {
     _frame;
     _selector;
-    constructor(frame, selector, options) {
+    constructor(frame, selector) {
       this._frame = frame;
-      this._selector = withLocatorOptions(frame, selector, options);
+      this._selector = selector;
       markHandle(this);
     }
     page() {
@@ -5969,11 +5988,12 @@ ${value.stack}`;
       return locatorCustomDescription(this._selector) ?? null;
     }
     locator(selectorOrLocator, options) {
+      const api = "locator.locator";
       if (typeof selectorOrLocator === "string")
-        return new Locator(this._frame, `${this._selector} >> ${selectorOrLocator}`, options);
+        return new Locator(this._frame, withLocatorOptions(api, this._frame, `${this._selector} >> ${selectorOrLocator}`, options));
       if (selectorOrLocator._frame !== this._frame)
-        throw new Error("Locators must belong to the same frame.");
-      return new Locator(this._frame, `${this._selector} >> internal:chain=${JSON.stringify(selectorOrLocator._selector)}`, options);
+        throw plainError(api, "Locators must belong to the same frame.");
+      return new Locator(this._frame, withLocatorOptions(api, this._frame, `${this._selector} >> internal:chain=${JSON.stringify(selectorOrLocator._selector)}`, options));
     }
     within(locator) {
       return locator.locator(this);
@@ -6006,10 +6026,12 @@ ${value.stack}`;
       return new FrameLocator(this._frame, this._selector);
     }
     filter(options) {
-      return new Locator(this._frame, this._selector, options);
+      return new Locator(this._frame, withLocatorOptions("locator.filter", this._frame, this._selector, options));
     }
     visible() {
-      return new Locator(this._frame, this._selector, { visible: true });
+      return new Locator(this._frame, withLocatorOptions("locator.visible", this._frame, this._selector, {
+        visible: true
+      }));
     }
     describe(description) {
       return new Locator(this._frame, `${this._selector} >> internal:describe=${JSON.stringify(description)}`);
@@ -6025,12 +6047,12 @@ ${value.stack}`;
     }
     and(locator) {
       if (locator._frame !== this._frame)
-        throw new Error("Locators must belong to the same frame.");
+        throw plainError("locator.and", "Locators must belong to the same frame.");
       return new Locator(this._frame, `${this._selector} >> internal:and=${JSON.stringify(locator._selector)}`);
     }
     or(locator) {
       if (locator._frame !== this._frame)
-        throw new Error("Locators must belong to the same frame.");
+        throw plainError("locator.or", "Locators must belong to the same frame.");
       return new Locator(this._frame, `${this._selector} >> internal:or=${JSON.stringify(locator._selector)}`);
     }
     click(options = {}) {
@@ -6233,7 +6255,7 @@ ${value.stack}`;
     async elementHandle(options = {}) {
       const handle = await this._frame._elementHandle("locator.elementHandle", this._selector, true, false, options);
       if (!handle)
-        throw clientError("locator.elementHandle", `Could not resolve ${this} to DOM Element`);
+        throw internalError("locator.elementHandle", `Could not resolve ${this} to DOM Element`);
       return handle;
     }
     elementHandles() {
@@ -6274,11 +6296,12 @@ ${value.stack}`;
       return `${this._frameSelector} >> internal:control=enter-frame >> ${selector}`;
     }
     locator(selectorOrLocator, options) {
+      const api = "frameLocator.locator";
       if (typeof selectorOrLocator === "string")
-        return new Locator(this._frame, this.#childSelector(selectorOrLocator), options);
+        return new Locator(this._frame, withLocatorOptions(api, this._frame, this.#childSelector(selectorOrLocator), options));
       if (selectorOrLocator._frame !== this._frame)
-        throw new Error("Locators must belong to the same frame.");
-      return new Locator(this._frame, this.#childSelector(selectorOrLocator._selector), options);
+        throw plainError(api, "Locators must belong to the same frame.");
+      return new Locator(this._frame, withLocatorOptions(api, this._frame, this.#childSelector(selectorOrLocator._selector), options));
     }
     getByTestId(testId) {
       return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
@@ -6307,19 +6330,19 @@ ${value.stack}`;
     frameLocator(selector) {
       return new FrameLocator(this._frame, this.#childSelector(selector));
     }
-    #nthSelector(nth) {
+    #nthSelector(api, nth) {
       if (this._frameSelector === kAnyFrameSelector)
-        throw new Error("Selecting the nth frame is not allowed on frameLocator().");
+        throw plainError(api, "Selecting the nth frame is not allowed on frameLocator().");
       return `${this._frameSelector} >> nth=${nth}`;
     }
     first() {
-      return new FrameLocator(this._frame, this.#nthSelector("0"));
+      return new FrameLocator(this._frame, this.#nthSelector("frameLocator.first", "0"));
     }
     last() {
-      return new FrameLocator(this._frame, this.#nthSelector("-1"));
+      return new FrameLocator(this._frame, this.#nthSelector("frameLocator.last", "-1"));
     }
     nth(index) {
-      return new FrameLocator(this._frame, this.#nthSelector(String(index)));
+      return new FrameLocator(this._frame, this.#nthSelector("frameLocator.nth", String(index)));
     }
   }
 
@@ -6360,12 +6383,21 @@ ${value.stack}`;
   }
 
   // packages/browseros-playwright-js/src/prelude/frame.ts
-  function loadState(name, state) {
+  function knownLoadState(state) {
     if (state === "networkidle0")
       return "networkidle";
     if (state === "load" || state === "domcontentloaded" || state === "networkidle" || state === "commit")
       return state;
-    throw plainError(`${name}: expected one of (load|domcontentloaded|networkidle|commit)`);
+    return null;
+  }
+  function loadStateError(name) {
+    return `${name}: expected one of (load|domcontentloaded|networkidle|commit)`;
+  }
+  function loadState(api, name, state) {
+    const known = knownLoadState(state);
+    if (known === null)
+      throw plainError(api, loadStateError(name));
+    return known;
   }
 
   class Frame extends EventEmitter {
@@ -6404,7 +6436,10 @@ ${value.stack}`;
       return { name: this.name(), url: this.url() };
     }
     locator(selector, options) {
-      return new Locator(this, selector, options);
+      return this._locator("frame.locator", selector, options);
+    }
+    _locator(api, selector, options) {
+      return new Locator(this, withLocatorOptions(api, this, selector, options));
     }
     getByTestId(testId) {
       return this.locator(getByTestIdSelector(testIdAttributeName(), testId));
@@ -6512,12 +6547,12 @@ ${value.stack}`;
       return this._elementHandles("frame.$$", selector);
     }
     async $eval(selector, pageFunction, arg) {
-      assertMaxArguments(arguments.length, 3);
+      assertMaxArguments("frame.$eval", arguments.length, 3);
       const api = "frame.$eval";
       return await this._evaluateOn(api, selector, false, pageCall(api, "query", pageFunction, arg), true);
     }
     async $$eval(selector, pageFunction, arg) {
-      assertMaxArguments(arguments.length, 3);
+      assertMaxArguments("frame.$$eval", arguments.length, 3);
       const api = "frame.$$eval";
       return await this._evaluateAll(api, selector, pageCall(api, "query", pageFunction, arg));
     }
@@ -6544,14 +6579,15 @@ ${value.stack}`;
       return this._setContent("frame.setContent", html, options);
     }
     async evaluate(pageFunction, arg, options) {
-      assertMaxArguments(arguments.length, 3);
+      assertMaxArguments("frame.evaluate", arguments.length, 3);
       return await this._evaluate("frame.evaluate", pageFunction, arg, options);
     }
     waitForFunction(pageFunction, arg, options) {
       return this._waitForFunction("frame.waitForFunction", pageFunction, arg, options);
     }
-    waitForTimeout(timeout) {
-      return sleep("frame.waitForTimeout", timeout);
+    async waitForTimeout(timeout) {
+      await sleep("frame.waitForTimeout", timeout);
+      await this._page._context._refreshWorkingFrames("frame.waitForTimeout");
     }
     _call(api, timeout) {
       return { api, timeoutMs: timeoutMs(api, timeout) };
@@ -6745,7 +6781,7 @@ ${value.stack}`;
     async _goto(api, url, options = {}) {
       if (typeof url !== "string")
         throw clientError(api, `url: expected string, got ${typeof url}`);
-      const waitUntil = loadState("waitUntil", options.waitUntil ?? "load");
+      const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const args = await this._frameArgs(api);
       const result = await invoke("page.goto", this._call(api, this._navigationTimeout(options)), {
         ...args,
@@ -6756,7 +6792,7 @@ ${value.stack}`;
       return await this._page._navigated(api, this, result);
     }
     async _waitForLoadState(api, state, options = {}) {
-      const verified = loadState("state", state ?? "load");
+      const verified = loadState(api, "state", state ?? "load");
       const result = await invoke("page.waitForLoadState", this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), state: verified });
       await this._page._navigated(api, this, result);
     }
@@ -6764,7 +6800,7 @@ ${value.stack}`;
       return await invoke("page.content", this._call(api, 0), await this._frameArgs(api));
     }
     async _setContent(api, html, options = {}) {
-      const waitUntil = loadState("waitUntil", options.waitUntil ?? "load");
+      const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const result = await invoke("page.setContent", this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), html, waitUntil });
       await this._page._navigated(api, this, result);
     }
@@ -6778,7 +6814,7 @@ ${value.stack}`;
     }
     async _waitForFunction(api, pageFunction, arg, options = {}) {
       if (typeof options.polling === "string" && options.polling !== "raf")
-        throw plainError(`Unknown polling option: ${options.polling}`);
+        throw plainError(api, `Unknown polling option: ${options.polling}`);
       const script = pageCall(api, "frame", pageFunction, arg);
       const { value, preview } = await invoke("page.waitForFunction", this._call(api, this._timeout(options)), {
         ...await this._frameArgs(api),
@@ -6859,13 +6895,26 @@ ${value.stack}`;
 
   // packages/browseros-playwright-js/src/prelude/evaluation.ts
   var TOO_MANY_ARGUMENTS = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
-  function assertMaxArguments(count, max) {
+  var REFUSALS = {
+    unsupported: unsupportedError,
+    client: clientError,
+    plain: plainError
+  };
+
+  class FailedCheck extends Error {
+    kind;
+    constructor(kind, message) {
+      super(message);
+      this.kind = kind;
+    }
+  }
+  function assertMaxArguments(api, count, max) {
     if (count > max)
-      throw plainError(TOO_MANY_ARGUMENTS);
+      throw plainError(api, TOO_MANY_ARGUMENTS);
   }
   function assertEvaluateOptions(options) {
     if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
-      throw plainError(TOO_MANY_ARGUMENTS);
+      throw new FailedCheck("plain", TOO_MANY_ARGUMENTS);
   }
   function refuseExposedFunctions(api, options) {
     if (typeof options === "object" && options !== null && Reflect.get(options, "exposeFunctions"))
@@ -6886,20 +6935,20 @@ ${value.stack}`;
     const { options: checksOptions, afterWait } = FORMS[form];
     if (checksOptions)
       refuseExposedFunctions(api, options);
-    const build = () => {
+    try {
       if (checksOptions)
         assertEvaluateOptions(options);
       return script(api, pageFunction, arg);
-    };
-    if (!afterWait)
-      return build();
-    try {
-      return build();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        refused: message.startsWith(`${api}: `) ? message.slice(api.length + 2) : message
-      };
+      if (afterWait) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          refused: message.startsWith(`${api}: `) ? message.slice(api.length + 2) : message
+        };
+      }
+      if (error instanceof FailedCheck)
+        throw REFUSALS[error.kind](api, error.message);
+      throw error;
     }
   }
   function script(api, pageFunction, arg) {
@@ -6929,7 +6978,6 @@ ${value.stack}`;
     };
   }
   function serializeArgument(api, arg) {
-    let refused;
     let serialized;
     const clientHandles = [];
     const copies = new Map;
@@ -6946,25 +6994,24 @@ ${value.stack}`;
         }
         if (!isHandle(value))
           return fallThrough(value);
-        refused = unsupportedError(api, "Neo passes element handles as evaluate arguments, not pages, frames, locators or JSHandles; pass the value itself, or an element handle");
-        throw refused;
+        throw new FailedCheck("unsupported", "Neo passes element handles as evaluate arguments, not pages, frames, locators or JSHandles; pass the value itself, or an element handle");
       });
     } catch (error) {
-      if (error === refused)
+      if (error instanceof FailedCheck)
         throw error;
-      throw plainError(error instanceof Error ? error.message : String(error));
+      throw new FailedCheck("plain", error instanceof Error ? error.message : String(error));
     }
-    validateValue(api, serialized, "arg.value");
+    validateValue(serialized, "arg.value");
     clientHandles.forEach((handle, index) => {
       if (handle._disposed)
-        throw clientError(api, `arg.handles[${index}]: no object with guid ${handle._guid}`);
+        throw new FailedCheck("client", `arg.handles[${index}]: no object with guid ${handle._guid}`);
     });
     return { serialized, clientHandles };
   }
-  function validateValue(api, value, path) {
+  function validateValue(value, path) {
     const expectString = (field, at) => {
       if (typeof field !== "string" && !(field instanceof String))
-        throw clientError(api, `${at}: expected string, got ${typeof field}`);
+        throw new FailedCheck("client", `${at}: expected string, got ${typeof field}`);
     };
     if (value.d !== undefined)
       expectString(value.d, `${path}.d`);
@@ -6972,10 +7019,10 @@ ${value.stack}`;
       for (const key of ["m", "n", "s"])
         expectString(value.e[key], `${path}.e.${key}`);
     value.a?.forEach((item, index) => {
-      validateValue(api, item, `${path}.a[${index}]`);
+      validateValue(item, `${path}.a[${index}]`);
     });
     value.o?.forEach((entry, index) => {
-      validateValue(api, entry.v, `${path}.o[${index}].v`);
+      validateValue(entry.v, `${path}.o[${index}].v`);
     });
   }
   function fromPageValue(api, value) {
@@ -7414,6 +7461,7 @@ ${value.stack}`;
     _url;
     _title = "";
     _closed = false;
+    _working = false;
     #childFrames = new Map;
     constructor(context, id, url = "about:blank") {
       super();
@@ -7439,7 +7487,7 @@ ${value.stack}`;
       const name = typeof selector === "string" ? selector : selector.name;
       const url = typeof selector === "string" ? undefined : selector.url;
       if (!name && url === undefined)
-        throw new Error("Either name or url matcher should be specified");
+        throw plainError("page.frame", "Either name or url matcher should be specified");
       return this.frames().find((frame) => frameMatches(frame, selector)) ?? null;
     }
     url() {
@@ -7467,7 +7515,7 @@ ${value.stack}`;
       return this._id === null ? { $neo: "page", id: null } : { $neo: "page", id: this._id, tab: this._tab };
     }
     locator(selector, options) {
-      return this._mainFrame.locator(selector, options);
+      return this._mainFrame._locator("page.locator", selector, options);
     }
     getByRef(ref) {
       return this.locator(`aria-ref=${ref}`);
@@ -7578,12 +7626,12 @@ ${value.stack}`;
       return this._mainFrame._elementHandles("page.$$", selector);
     }
     async $eval(selector, pageFunction, arg) {
-      assertMaxArguments(arguments.length, 3);
+      assertMaxArguments("page.$eval", arguments.length, 3);
       const api = "page.$eval";
       return await this._mainFrame._evaluateOn(api, selector, false, pageCall(api, "query", pageFunction, arg), true);
     }
     async $$eval(selector, pageFunction, arg) {
-      assertMaxArguments(arguments.length, 3);
+      assertMaxArguments("page.$$eval", arguments.length, 3);
       const api = "page.$$eval";
       return await this._mainFrame._evaluateAll(api, selector, pageCall(api, "query", pageFunction, arg));
     }
@@ -7621,14 +7669,15 @@ ${value.stack}`;
       return this._mainFrame._setContent("page.setContent", html, options);
     }
     async evaluate(pageFunction, arg, options) {
-      assertMaxArguments(arguments.length, 3);
+      assertMaxArguments("page.evaluate", arguments.length, 3);
       return await this._mainFrame._evaluate("page.evaluate", pageFunction, arg, options);
     }
     waitForFunction(pageFunction, arg, options) {
       return this._mainFrame._waitForFunction("page.waitForFunction", pageFunction, arg, options);
     }
-    waitForTimeout(timeout) {
-      return sleep("page.waitForTimeout", timeout);
+    async waitForTimeout(timeout) {
+      await sleep("page.waitForTimeout", timeout);
+      await this._context._refreshWorkingFrames("page.waitForTimeout");
     }
     ariaSnapshot(options) {
       return this._mainFrame._ariaSnapshot("page.ariaSnapshot", null, options);
@@ -7668,9 +7717,10 @@ ${value.stack}`;
         this._didClose();
         return;
       }
+      const page = await this._brand(api);
       try {
         await invoke("page.close", { api, timeoutMs: 0 }, {
-          page: await this._brand(api),
+          page,
           ...options.runBeforeUnload ? { runBeforeUnload: true } : {}
         });
       } catch (error) {
@@ -7699,6 +7749,7 @@ ${value.stack}`;
       }
       if (this._tab === null)
         throw clientError(api, "Neo has no tab id for this page; get the page again from context.pages()");
+      this._working = true;
       return { $neo: "page", id: this._id, tab: this._tab };
     }
     async _openedBrand(api) {
@@ -7727,6 +7778,13 @@ ${value.stack}`;
       else
         await this._refreshFrames(api);
       return typeof result?.response?.status === "number" ? new Response(frame, result.response) : null;
+    }
+    async _readInitialFrames() {
+      if (this._id === null || this._tab === null)
+        return;
+      await this._refreshFrames("page.frames").catch(() => {
+        return;
+      });
     }
     async _refreshFrames(api) {
       const tree = await invoke("page.frames", { api, timeoutMs: 0 }, { page: await this._brand(api) });
@@ -7778,12 +7836,9 @@ ${value.stack}`;
       this.emit("close", this);
     }
     async _waitForURL(api, frame, url, options = {}) {
-      let waitUntil;
-      try {
-        waitUntil = loadState("waitUntil", options.waitUntil ?? "load");
-      } catch (error) {
-        throw prefixed(api, error);
-      }
+      const waitUntil = knownLoadState(options.waitUntil ?? "load");
+      if (waitUntil === null)
+        throw clientError(api, loadStateError("waitUntil"));
       const timeout = frame._navigationTimeout(options);
       const args = await frame._frameArgs(api);
       if (typeof url !== "function") {
@@ -7825,7 +7880,7 @@ ${value.stack}`;
       }
     }
     async#history(api, options = {}) {
-      const waitUntil = loadState("waitUntil", options.waitUntil ?? "load");
+      const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const result = await invoke(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil });
       return await this._navigated(api, this._mainFrame, result);
     }
@@ -7850,6 +7905,7 @@ ${value.stack}`;
     _browser = null;
     #byId = new Map;
     #unopened = null;
+    #started = false;
     constructor() {
       super();
       this._events = new EventHub(this);
@@ -7897,6 +7953,7 @@ ${value.stack}`;
       let page = this.#byId.get(fact.id);
       if (!page) {
         page = new Page(this, fact.id, fact.url);
+        page._working = this.#started;
         this.#byId.set(fact.id, page);
       }
       page._applyFact(fact);
@@ -7911,10 +7968,18 @@ ${value.stack}`;
     _runPage(init) {
       for (const fact of init.pages)
         this._pageFor(fact);
-      if (init.page)
-        return this._pageFor(init.page);
-      this.#unopened = new Page(this, null);
-      return this.#unopened;
+      const page = init.page ? this._pageFor(init.page) : new Page(this, null);
+      if (!init.page)
+        this.#unopened = page;
+      page._working = true;
+      this.#started = true;
+      return page;
+    }
+    async _refreshWorkingFrames(api) {
+      const working = this.pages().filter((page) => page._working && page._tab !== null);
+      await Promise.all(working.map((page) => page._refreshFrames(api).catch(() => {
+        return;
+      })));
     }
     _applyReply({ pages, defaultPage }) {
       const page = this.#unopened;
@@ -7931,7 +7996,7 @@ ${value.stack}`;
       const opened = await invoke("context.newPage", { api, timeoutMs: 0 }, {});
       const page = this._pageFromResult(opened.page, opened.url);
       if (!page)
-        throw clientError(api, "context.newPage returned no page");
+        throw internalError(api, "context.newPage returned no page");
       return page;
     }
   }
@@ -7998,7 +8063,7 @@ ${value.stack}`;
       super(false);
       this.expected = expected;
       if (expected === undefined)
-        throw new TypeError("any() expects to be passed a constructor function. Please pass one or use anything() to match any object.");
+        throw unprefixedClientError("expect.any", "any() expects to be passed a constructor function. Please pass one or use anything() to match any object.", "TypeError");
     }
     asymmetricMatch(other) {
       if (this.expected === String)
@@ -8391,9 +8456,12 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
       options
     };
   }
-  function text(receiver, expression, expected, values, options, extra = {}) {
+  function argumentError(matcher, message) {
+    return plainError(`expect.${matcher}`, message);
+  }
+  function text(matcher, receiver, expression, expected, values, options, extra = {}) {
     if (typeof expected !== "string" && !(expected instanceof RegExp))
-      throw new Error("expected value must be a string or regular expression");
+      throw argumentError(matcher, "expected value must be a string or regular expression");
     const substring = values[0]?.matchSubstring === true;
     const suffix = typeof expected === "string" ? substring ? " substring" : "" : " pattern";
     const params = {
@@ -8461,20 +8529,20 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
         normalizeWhiteSpace: true,
         ignoreCase: options?.ignoreCase
       })
-    }) : text("Locator", "to.have.text", expected, textValues([expected], {
+    }) : text("toContainText", "Locator", "to.have.text", expected, textValues([expected], {
       matchSubstring: true,
       normalizeWhiteSpace: true,
       ignoreCase: options?.ignoreCase
     }), options),
-    toHaveAccessibleDescription: (expected, options) => text("Locator", "to.have.accessible.description", expected, textValues([expected], {
+    toHaveAccessibleDescription: (expected, options) => text("toHaveAccessibleDescription", "Locator", "to.have.accessible.description", expected, textValues([expected], {
       ignoreCase: options?.ignoreCase,
       normalizeWhiteSpace: true
     }), options),
-    toHaveAccessibleName: (expected, options) => text("Locator", "to.have.accessible.name", expected, textValues([expected], {
+    toHaveAccessibleName: (expected, options) => text("toHaveAccessibleName", "Locator", "to.have.accessible.name", expected, textValues([expected], {
       ignoreCase: options?.ignoreCase,
       normalizeWhiteSpace: true
     }), options),
-    toHaveAccessibleErrorMessage: (expected, options) => text("Locator", "to.have.accessible.error.message", expected, textValues([expected], {
+    toHaveAccessibleErrorMessage: (expected, options) => text("toHaveAccessibleErrorMessage", "Locator", "to.have.accessible.error.message", expected, textValues([expected], {
       ignoreCase: options?.ignoreCase,
       normalizeWhiteSpace: true
     }), options),
@@ -8488,55 +8556,55 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
           expressionArg: name
         });
       const value = expected;
-      return text("Locator", "to.have.attribute.value", value, textValues([value], { ignoreCase: options?.ignoreCase }), options, { expressionArg: name });
+      return text("toHaveAttribute", "Locator", "to.have.attribute.value", value, textValues([value], { ignoreCase: options?.ignoreCase }), options, { expressionArg: name });
     },
     toHaveClass: (expected, options) => Array.isArray(expected) ? equal("to.have.class.array", expected, options, {
       expectedText: textValues(expected)
-    }) : text("Locator", "to.have.class", expected, textValues([expected]), options),
+    }) : text("toHaveClass", "Locator", "to.have.class", expected, textValues([expected]), options),
     toContainClass: (expected, options) => {
       if (Array.isArray(expected)) {
         if (expected.some((item) => item instanceof RegExp))
-          throw new Error('"expected" argument in toContainClass cannot contain RegExp values');
+          throw argumentError("toContainClass", '"expected" argument in toContainClass cannot contain RegExp values');
         return equal("to.contain.class.array", expected, options, {
           expectedText: textValues(expected)
         });
       }
       if (expected instanceof RegExp)
-        throw new Error('"expected" argument in toContainClass cannot be a RegExp value');
-      return text("Locator", "to.contain.class", expected, textValues([expected]), options);
+        throw argumentError("toContainClass", '"expected" argument in toContainClass cannot be a RegExp value');
+      return text("toContainClass", "Locator", "to.contain.class", expected, textValues([expected]), options);
     },
     toHaveCount: (expected, options) => equal("to.have.count", expected, options, { expectedNumber: expected }),
-    toHaveCSS: (name, expected, options) => text("Locator", "to.have.css", expected, textValues([expected]), options, {
+    toHaveCSS: (name, expected, options) => text("toHaveCSS", "Locator", "to.have.css", expected, textValues([expected]), options, {
       expressionArg: name,
       ...options?.pseudo ? { pseudo: options.pseudo } : {}
     }),
-    toHaveId: (expected, options) => text("Locator", "to.have.id", expected, textValues([expected]), options),
+    toHaveId: (expected, options) => text("toHaveId", "Locator", "to.have.id", expected, textValues([expected]), options),
     toHaveJSProperty: (name, expected, options) => equal("to.have.property", expected, options, {
       expressionArg: name,
       expectedValue: expected
     }),
     toHaveRole: (expected, options) => {
       if (typeof expected !== "string")
-        throw new Error('"role" argument in toHaveRole must be a string');
-      return text("Locator", "to.have.role", expected, textValues([expected]), options);
+        throw argumentError("toHaveRole", '"role" argument in toHaveRole must be a string');
+      return text("toHaveRole", "Locator", "to.have.role", expected, textValues([expected]), options);
     },
     toHaveText: (expected, options) => Array.isArray(expected) ? equal("to.have.text.array", expected, options, {
       expectedText: textValues(expected, {
         normalizeWhiteSpace: true,
         ignoreCase: options?.ignoreCase
       })
-    }) : text("Locator", "to.have.text", expected, textValues([expected], {
+    }) : text("toHaveText", "Locator", "to.have.text", expected, textValues([expected], {
       normalizeWhiteSpace: true,
       ignoreCase: options?.ignoreCase
     }), options),
-    toHaveValue: (expected, options) => text("Locator", "to.have.value", expected, textValues([expected]), options),
+    toHaveValue: (expected, options) => text("toHaveValue", "Locator", "to.have.value", expected, textValues([expected]), options),
     toHaveValues: (expected, options) => equal("to.have.values", expected, options, {
       expectedText: textValues(expected)
     }),
-    toHaveTitle: (expected, options) => text("Page", "to.have.title", expected, textValues([expected], { normalizeWhiteSpace: true }), options),
+    toHaveTitle: (expected, options) => text("toHaveTitle", "Page", "to.have.title", expected, textValues([expected], { normalizeWhiteSpace: true }), options),
     toHaveURL: (expected, options) => {
       const value = typeof expected === "string" ? normalizeUrl(expected) : expected;
-      return text("Page", "to.have.url", value, textValues([value], { ignoreCase: options?.ignoreCase }), options);
+      return text("toHaveURL", "Page", "to.have.url", value, textValues([value], { ignoreCase: options?.ignoreCase }), options);
     }
   };
   async function retry(name, actual, state, matcher) {
@@ -8544,7 +8612,7 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
     const isPage = actual instanceof Page;
     const isLocator = actual instanceof Locator;
     if (matcher.receiver === "Page" ? !isPage : !isLocator)
-      throw new Error(`${name} can be only used with ${matcher.receiver} object, was called with ${receiverText(actual)}`);
+      throw argumentError(name, `${name} can be only used with ${matcher.receiver} object, was called with ${receiverText(actual)}`);
     const call = {
       api,
       timeoutMs: timeoutMs(api, matcher.options?.timeout ?? state.config.timeout)
@@ -8614,7 +8682,7 @@ Timeout: ${timeout}ms`);
   var OWNED = "Neo owns the browser and its profile; close a tab with page.close()";
   var TRACE = "Neo records its own trace of every run";
   var ROOTED = "element handles cannot root a selector in Neo; use locator.locator(selector) instead";
-  var UNSUPPORTED = {
+  var UNSUPPORTED2 = {
     Browser: {
       bind: "Neo does not share its browser",
       browserType: {
@@ -8822,7 +8890,7 @@ Timeout: ${timeout}ms`);
     });
   }
   function installUnsupported(classes) {
-    for (const [className, members] of Object.entries(UNSUPPORTED)) {
+    for (const [className, members] of Object.entries(UNSUPPORTED2)) {
       if (className === "expect")
         continue;
       const prototype = classes[className].prototype;
@@ -8831,7 +8899,7 @@ Timeout: ${timeout}ms`);
     }
   }
   function installUnsupportedExpect(target, part) {
-    for (const [member, entry] of Object.entries(UNSUPPORTED.expect))
+    for (const [member, entry] of Object.entries(UNSUPPORTED2.expect))
       if (member.startsWith("to") === (part === "matchers"))
         define(target, "expect", member, entry);
   }
@@ -8840,7 +8908,7 @@ Timeout: ${timeout}ms`);
   function retrying(name, actual, state, args) {
     if (name === "toHaveURL" && typeof args[0] === "function") {
       if (!(actual instanceof Page))
-        throw new Error(`toHaveURL can be only used with Page object, was called with ${receiverText(actual)}`);
+        throw plainError("expect.toHaveURL", `toHaveURL can be only used with Page object, was called with ${receiverText(actual)}`);
       return urlPredicate(actual, args[0], state, args[1]);
     }
     const build = RETRYING[name];
@@ -8897,7 +8965,7 @@ Resolved to value: ${stringify(value)}`);
   var INTERVALS = [100, 250, 500, 1000];
   async function toPass(callback, state, options = {}) {
     if (typeof callback !== "function")
-      throw new Error("toPass: expected a function");
+      throw plainError("expect.toPass", "toPass: expected a function");
     const timeout = options.timeout ?? 0;
     const intervals = options.intervals ?? INTERVALS;
     const deadline = timeout ? Date.now() + timeout : Number.POSITIVE_INFINITY;
@@ -8924,7 +8992,7 @@ Resolved to value: ${stringify(value)}`);
   }
   function poll(generator, state, options = {}) {
     if (typeof generator !== "function")
-      throw new Error("expect.poll: expected a function");
+      throw plainError("expect.poll", "expect.poll: expected a function");
     const timeout = options.timeout ?? state.config.timeout;
     const intervals = options.intervals ?? INTERVALS;
     const polled = (isNot) => {
@@ -9012,7 +9080,11 @@ Call Log:
   });
   registerBrand("bytes", (json) => Buffer.from(String(Reflect.get(json, "base64") ?? ""), "base64"));
   onReply((reply) => context._applyReply(reply));
-  provide("page", (init) => context._runPage(init));
+  provide("page", awaitsProviders() ? async (init) => {
+    const page = context._runPage(init);
+    await page._readInitialFrames();
+    return page;
+  } : (init) => context._runPage(init));
   provide("context", () => context);
   provide("browser", () => browser);
   provide("expect", () => expect);

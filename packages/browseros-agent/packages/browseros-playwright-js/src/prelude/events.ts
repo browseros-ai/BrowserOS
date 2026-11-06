@@ -57,9 +57,9 @@ const UNREPORTED: Readonly<Record<string, string>> = {
   filechooser:
     'Neo does not report file choosers; call locator.setInputFiles() on the input',
   frameattached:
-    'Neo does not report frame events; read page.frames() after a navigation',
+    'Neo does not report frame events; read page.frames(), which Neo refreshes after navigations and waits',
   framedetached:
-    'Neo does not report frame events; read page.frames() after a navigation',
+    'Neo does not report frame events; read page.frames(), which Neo refreshes after navigations and waits',
   framenavigated: 'Neo does not report frame events; use page.waitForURL()',
   load: 'Neo does not report load events; use page.waitForLoadState()',
   domcontentloaded:

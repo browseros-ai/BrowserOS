@@ -11,7 +11,13 @@ import {
   parseSerializedValue,
   serializeValue,
 } from '../../../crates/browseros-playwright/third_party/playwright/packages/protocol/src/serializers'
-import { json, loadPrelude, SEED } from './support/prelude-runtime'
+import {
+  isRefusal,
+  json,
+  loadPrelude,
+  refusalCall,
+  SEED,
+} from './support/prelude-runtime'
 
 type Case = {
   name: string
@@ -76,7 +82,9 @@ it('tests that every argument reaches the wire as upstream sends it, or fails as
     const thrown = await runtime.run(
       `try { await page.evaluate((x) => x, ${value.source}); return null } catch (e) { return e.message }`,
     )
-    const sent = runtime.sent('page.evaluate')
+    const sent = runtime
+      .sent('page.evaluate')
+      .filter((call) => !isRefusal(call))
     if (value.arg !== undefined) {
       expect([value.name, thrown]).toEqual([value.name, null])
       expect([value.name, json(sent[0]?.input.script)]).toEqual([
@@ -86,6 +94,10 @@ it('tests that every argument reaches the wire as upstream sends it, or fails as
     } else {
       expect([value.name, thrown]).toEqual([value.name, value.argError])
       expect([value.name, sent]).toEqual([value.name, []])
+      expect([value.name, runtime.calls]).toEqual([
+        value.name,
+        [refusalCall('page.evaluate', 'invalid_input', String(thrown))],
+      ])
     }
   }
 })
@@ -139,13 +151,18 @@ it('tests that upstream client checks throw unprefixed and the server one is rai
     [tooMany, 'invalid_input'],
     [
       'page.evaluate: pages cannot call back into the script in Neo; return what the page computed instead',
-      'unsupported',
+      'method_unavailable',
     ],
     ['Unknown polling option: often', 'invalid_input'],
     'returned',
   ])
   expect(
-    json(runtime.sent('page.evaluate').map((call) => call.input.script)),
+    json(
+      runtime
+        .sent('page.evaluate')
+        .filter((call) => !isRefusal(call))
+        .map((call) => call.input.script),
+    ),
   ).toEqual([{ refused: 'Passed function is not well-serializable!' }])
 })
 
@@ -229,11 +246,17 @@ it('tests that locator.evaluate refuses a signal before anything is sent, and pa
   expect(outcomes).toEqual([
     [
       'locator.evaluate: an op cannot be aborted from the script in Neo; pass timeout instead',
-      'unsupported',
+      'method_unavailable',
     ],
     'returned',
   ])
-  expect(runtime.sent('locator.evaluate')).toEqual([])
+  expect(runtime.sent('locator.evaluate')).toEqual([
+    refusalCall(
+      'locator.evaluate',
+      'method_unavailable',
+      'locator.evaluate: an op cannot be aborted from the script in Neo; pass timeout instead',
+    ),
+  ])
   expect(runtime.sent('page.evaluate')).toHaveLength(1)
 })
 
@@ -269,4 +292,63 @@ it('tests that an answer the prelude cannot read fails as the op that answered i
     'locator.evaluate',
     'page.evaluate',
   ])
+})
+
+it('tests that a locator.evaluate check upstream runs after the wait fails as that op alone, with no refusal of its own', async () => {
+  // Rust raises a script's `refused` after the wait as `<api>: <message>`, as upstream's
+  // `_withElement` fails the handle's checks inside the same call.
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) => {
+      const script = call.input.script as { refused?: string } | undefined
+      return call.name === 'locator.evaluate' && script?.refused !== undefined
+        ? {
+            err: {
+              code: 'invalid_input',
+              owner: 'script',
+              delivery: 'not_sent',
+              retryable: true,
+              operationId: 'run.1',
+              timeout: false,
+              message: `locator.evaluate: ${script.refused}`,
+            },
+          }
+        : null
+    },
+  })
+  const deferred: [script: string, refused: string][] = [
+    [
+      "page.locator('#missing').evaluate((el) => el, { fn() {} })",
+      'Attempting to serialize unexpected value at position "fn": fn() {}',
+    ],
+    [
+      "page.locator('#missing').evaluate((el) => el, new Date(Number.NaN))",
+      'arg.value.d: expected string, got object',
+    ],
+    [
+      "page.locator('#missing').evaluate((el) => el, undefined, 5)",
+      'Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.',
+    ],
+  ]
+  const seen: unknown[] = []
+  for (const [script] of deferred) {
+    const before = runtime.calls.length
+    const thrown = json(
+      await runtime.run(`
+        try { await ${script} } catch (error) { return [error.name, error.message, error.code] }
+        return 'returned'
+      `),
+    )
+    const sent = runtime.calls
+      .slice(before)
+      .map((call) => [call.name, call.input.script])
+    seen.push([script, thrown, json(sent)])
+  }
+  expect(seen).toEqual(
+    deferred.map(([script, refused]) => [
+      script,
+      ['Error', `locator.evaluate: ${refused}`, 'invalid_input'],
+      [['locator.evaluate', { refused }]],
+    ]),
+  )
 })

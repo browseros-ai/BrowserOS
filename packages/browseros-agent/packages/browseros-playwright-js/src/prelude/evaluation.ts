@@ -46,18 +46,50 @@ export type EvaluateOptions = { exposeFunctions?: boolean }
 const TOO_MANY_ARGUMENTS =
   'Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.'
 
-/** upstream's `assertMaxArguments` (PW:59239); callers pass `arguments.length`, as upstream. */
-export function assertMaxArguments(count: number, max: number): void {
-  if (count > max) throw plainError(TOO_MANY_ARGUMENTS)
+/** How upstream words a failed check: which refusal helper says it as upstream's client does. */
+type CheckKind = 'unsupported' | 'client' | 'plain'
+
+const REFUSALS: Record<CheckKind, (api: string, message: string) => Error> = {
+  unsupported: unsupportedError,
+  client: clientError,
+  plain: plainError,
+}
+
+/**
+ * A check of the script's call that failed, before anything reports it: `pageCall` does, once.
+ * The frame, handle and query forms throw the door's refusal of it at once. locator.evaluate's
+ * checks run after its wait upstream, so its op carries the message to Rust as `{ refused }`,
+ * which fails that op: the op is the failure's one record, and no refusal is built for it,
+ * since the door records every refusal it is asked for, thrown or not (FR/RC note 1).
+ */
+class FailedCheck extends Error {
+  constructor(
+    readonly kind: CheckKind,
+    message: string,
+  ) {
+    super(message)
+  }
+}
+
+/**
+ * upstream's `assertMaxArguments` (PW:59239); callers pass `arguments.length`, as upstream, and
+ * `api`, the method the refusal is recorded under.
+ */
+export function assertMaxArguments(
+  api: string,
+  count: number,
+  max: number,
+): void {
+  if (count > max) throw plainError(api, TOO_MANY_ARGUMENTS)
 }
 
 /** upstream's `assertEvaluateOptions` (PW:59243): an options argument must be an object. */
-export function assertEvaluateOptions(options: unknown): void {
+function assertEvaluateOptions(options: unknown): void {
   if (
     options !== undefined &&
     (typeof options !== 'object' || options === null || Array.isArray(options))
   )
-    throw plainError(TOO_MANY_ARGUMENTS)
+    throw new FailedCheck('plain', TOO_MANY_ARGUMENTS)
 }
 
 /** `exposeFunctions` would let the page call back into the agent's runtime, which Neo forbids. */
@@ -134,20 +166,21 @@ export function pageCall(
 ): PageScript {
   const { options: checksOptions, afterWait } = FORMS[form]
   if (checksOptions) refuseExposedFunctions(api, options)
-  const build = () => {
+  try {
     if (checksOptions) assertEvaluateOptions(options)
     return script(api, pageFunction, arg)
-  }
-  if (!afterWait) return build()
-  try {
-    return build()
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    return {
-      refused: message.startsWith(`${api}: `)
-        ? message.slice(api.length + 2)
-        : message,
+    if (afterWait) {
+      const message = error instanceof Error ? error.message : String(error)
+      return {
+        refused: message.startsWith(`${api}: `)
+          ? message.slice(api.length + 2)
+          : message,
+      }
     }
+    if (error instanceof FailedCheck)
+      throw REFUSALS[error.kind](api, error.message)
+    throw error
   }
 }
 
@@ -190,7 +223,6 @@ function script(api: string, pageFunction: unknown, arg: unknown): PageScript {
  * so the page receives one object for it, as upstream's page receives its one remote object.
  */
 function serializeArgument(api: string, arg: unknown) {
-  let refused: Error | undefined
   let serialized: ReturnType<typeof serializeValue>
   const clientHandles: ElementHandle[] = []
   const copies = new Map<WaitHandle, unknown>()
@@ -205,21 +237,23 @@ function serializeArgument(api: string, arg: unknown) {
         return fallThrough(copies.get(value))
       }
       if (!isHandle(value)) return fallThrough(value)
-      refused = unsupportedError(
-        api,
+      throw new FailedCheck(
+        'unsupported',
         'Neo passes element handles as evaluate arguments, not pages, frames, locators or JSHandles; pass the value itself, or an element handle',
       )
-      throw refused
     })
   } catch (error) {
-    if (error === refused) throw error
-    throw plainError(error instanceof Error ? error.message : String(error))
+    if (error instanceof FailedCheck) throw error
+    throw new FailedCheck(
+      'plain',
+      error instanceof Error ? error.message : String(error),
+    )
   }
-  validateValue(api, serialized, 'arg.value')
+  validateValue(serialized, 'arg.value')
   clientHandles.forEach((handle, index) => {
     if (handle._disposed)
-      throw clientError(
-        api,
+      throw new FailedCheck(
+        'client',
         `arg.handles[${index}]: no object with guid ${handle._guid}`,
       )
   })
@@ -234,23 +268,25 @@ function serializeArgument(api: string, arg: unknown) {
  * `o` depth first) and fails inside the channel call, so its message carries the prefix.
  */
 function validateValue(
-  api: string,
   value: ReturnType<typeof serializeValue>,
   path: string,
 ): void {
   const expectString = (field: unknown, at: string) => {
     if (typeof field !== 'string' && !(field instanceof String))
-      throw clientError(api, `${at}: expected string, got ${typeof field}`)
+      throw new FailedCheck(
+        'client',
+        `${at}: expected string, got ${typeof field}`,
+      )
   }
   if (value.d !== undefined) expectString(value.d, `${path}.d`)
   if (value.e !== undefined)
     for (const key of ['m', 'n', 's'] as const)
       expectString(value.e[key], `${path}.e.${key}`)
   value.a?.forEach((item, index) => {
-    validateValue(api, item, `${path}.a[${index}]`)
+    validateValue(item, `${path}.a[${index}]`)
   })
   value.o?.forEach((entry, index) => {
-    validateValue(api, entry.v, `${path}.o[${index}].v`)
+    validateValue(entry.v, `${path}.o[${index}].v`)
   })
 }
 

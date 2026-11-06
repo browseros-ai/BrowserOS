@@ -12,7 +12,7 @@ import { invoke, sleep } from './bridge'
 import type { BrowserContext } from './context'
 import { ElementHandle, elementBrand } from './element-handle'
 import { EventEmitter } from './emitter'
-import { clientError, prefixed, unsupportedError } from './errors'
+import { clientError, plainError, prefixed, unsupportedError } from './errors'
 import {
   assertMaxArguments,
   type EvaluateOptions,
@@ -24,7 +24,9 @@ import {
   type ExactOption,
   Frame,
   frameMatches,
+  knownLoadState,
   loadState,
+  loadStateError,
   type NavigateOptions,
   type ScreenshotOptionsInput,
   type SnapshotOptions,
@@ -91,6 +93,12 @@ export class Page extends EventEmitter {
   _url: string
   _title = ''
   _closed = false
+  /**
+   * Whether `waitForTimeout` reads this page's frame tree again (FR-1): the run's page, a page
+   * the run opened or learned of after it started, and a tab the run's init listed once the
+   * script ran an op on it. A listed tab the script never touched keeps the tree it had.
+   */
+  _working = false
   readonly #childFrames = new Map<string, Frame>()
 
   constructor(context: BrowserContext, id: number | null, url = 'about:blank') {
@@ -123,7 +131,10 @@ export class Page extends EventEmitter {
     const name = typeof selector === 'string' ? selector : selector.name
     const url = typeof selector === 'string' ? undefined : selector.url
     if (!name && url === undefined)
-      throw new Error('Either name or url matcher should be specified')
+      throw plainError(
+        'page.frame',
+        'Either name or url matcher should be specified',
+      )
     return this.frames().find((frame) => frameMatches(frame, selector)) ?? null
   }
 
@@ -171,7 +182,7 @@ export class Page extends EventEmitter {
   // ---- builders ---------------------------------------------------------------------------
 
   locator(selector: string, options?: LocatorOptions): Locator {
-    return this._mainFrame.locator(selector, options)
+    return this._mainFrame._locator('page.locator', selector, options)
   }
 
   /** Playwright's own definition (client/page.ts 1.64): a locator over Neo's ref engine. */
@@ -472,7 +483,7 @@ export class Page extends EventEmitter {
     arg?: unknown,
   ): Promise<unknown> {
     // biome-ignore lint/complexity/noArguments: upstream counts the arguments passed, not the parameters.
-    assertMaxArguments(arguments.length, 3)
+    assertMaxArguments('page.$eval', arguments.length, 3)
     const api = 'page.$eval'
     return await this._mainFrame._evaluateOn(
       api,
@@ -489,7 +500,7 @@ export class Page extends EventEmitter {
     arg?: unknown,
   ): Promise<unknown> {
     // biome-ignore lint/complexity/noArguments: upstream counts the arguments passed, not the parameters.
-    assertMaxArguments(arguments.length, 3)
+    assertMaxArguments('page.$$eval', arguments.length, 3)
     const api = 'page.$$eval'
     return await this._mainFrame._evaluateAll(
       api,
@@ -568,7 +579,7 @@ export class Page extends EventEmitter {
     options?: EvaluateOptions,
   ): Promise<unknown> {
     // biome-ignore lint/complexity/noArguments: upstream counts the arguments passed, not the parameters.
-    assertMaxArguments(arguments.length, 3)
+    assertMaxArguments('page.evaluate', arguments.length, 3)
     return await this._mainFrame._evaluate(
       'page.evaluate',
       pageFunction,
@@ -590,8 +601,13 @@ export class Page extends EventEmitter {
     )
   }
 
-  waitForTimeout(timeout: number): Promise<void> {
-    return sleep('page.waitForTimeout', timeout)
+  /**
+   * upstream's wait is a server round trip, after which its frame tree is current; Neo's sleeps
+   * in the realm, then reads the trees of the run's working pages (FR-1).
+   */
+  async waitForTimeout(timeout: number): Promise<void> {
+    await sleep('page.waitForTimeout', timeout)
+    await this._context._refreshWorkingFrames('page.waitForTimeout')
   }
 
   ariaSnapshot(options?: SnapshotOptions): Promise<string> {
@@ -653,12 +669,15 @@ export class Page extends EventEmitter {
       this._didClose()
       return
     }
+    // Outside the try: the catch reads the code the door gave the op, and a refused brand's
+    // error has the door's fields only after the script next yields to Rust.
+    const page = await this._brand(api)
     try {
       await invoke(
         'page.close',
         { api, timeoutMs: 0 },
         {
-          page: await this._brand(api),
+          page,
           ...(options.runBeforeUnload
             ? { runBeforeUnload: true as const }
             : {}),
@@ -726,6 +745,7 @@ export class Page extends EventEmitter {
         api,
         'Neo has no tab id for this page; get the page again from context.pages()',
       )
+    this._working = true
     return { $neo: 'page', id: this._id, tab: this._tab }
   }
 
@@ -764,6 +784,18 @@ export class Page extends EventEmitter {
     return typeof result?.response?.status === 'number'
       ? new Response(frame, result.response)
       : null
+  }
+
+  /**
+   * The run's page tree, read once before the agent's first statement (FR-1), so a script that
+   * starts on a tab with iframes finds them in `frames()`, as upstream's does. A page with no
+   * tab yet reads nothing, so a run that never touches `page` opens no tab. A refused or failed
+   * read, as under the owner's takeover, keeps the main frame alone and the run starts: the
+   * script's own first op meets the same refusal (sdk-skeleton's A4).
+   */
+  async _readInitialFrames(): Promise<void> {
+    if (this._id === null || this._tab === null) return
+    await this._refreshFrames('page.frames').catch(() => undefined)
   }
 
   async _refreshFrames(api: string): Promise<void> {
@@ -839,12 +871,8 @@ export class Page extends EventEmitter {
   ): Promise<void> {
     // Neo's waitForURL keeps the prefix it always gave; upstream's depends on whether the URL
     // already matched (waitForLoadState's check, or waitForNavigation's wrapped one).
-    let waitUntil: LoadState
-    try {
-      waitUntil = loadState('waitUntil', options.waitUntil ?? 'load')
-    } catch (error) {
-      throw prefixed(api, error)
-    }
+    const waitUntil = knownLoadState(options.waitUntil ?? 'load')
+    if (waitUntil === null) throw clientError(api, loadStateError('waitUntil'))
     const timeout = frame._navigationTimeout(options)
     const args = await frame._frameArgs(api)
     if (typeof url !== 'function') {
@@ -903,7 +931,7 @@ export class Page extends EventEmitter {
     api: 'page.reload' | 'page.goBack' | 'page.goForward',
     options: NavigateOptions = {},
   ): Promise<Response | null> {
-    const waitUntil = loadState('waitUntil', options.waitUntil ?? 'load')
+    const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const result = await invoke(
       api,
       this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)),

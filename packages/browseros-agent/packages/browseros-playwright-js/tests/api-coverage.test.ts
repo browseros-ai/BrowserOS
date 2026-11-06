@@ -127,7 +127,7 @@ describe('unsupported members', () => {
     })),
   )
 
-  it('tests that each fails neo / unsupported with its hint, sending nothing', async () => {
+  it('tests that each fails script / method_unavailable with its hint, one refusal the door records', async () => {
     const runtime = loadPrelude({
       seed: SEED,
       answer: (call) =>
@@ -214,16 +214,21 @@ describe('unsupported members', () => {
     const expected = cases.map(({ className, member, hint, kind }) => ({
       className,
       member,
-      code: 'unsupported',
+      code: 'method_unavailable',
       message: `${api(className, member)}: ${hint}`,
       async: kind === 'async',
     }))
     expect(outcomes).toEqual(expected)
     const setup = ['locator.elementHandle', 'events.wait', 'page.goto']
-    expect(
-      runtime.calls
-        .map((call) => call.name)
-        .filter((name) => !setup.includes(name)),
-    ).toEqual([])
+    expect(runtime.calls.filter((call) => !setup.includes(call.name))).toEqual(
+      cases.map(({ className, member, hint }) => ({
+        name: api(className, member),
+        input: {
+          $neo: 'refused',
+          code: 'method_unavailable',
+          reason: `${api(className, member)}: ${hint}`,
+        },
+      })),
+    )
   })
 })

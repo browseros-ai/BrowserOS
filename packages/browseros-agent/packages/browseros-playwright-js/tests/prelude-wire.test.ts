@@ -5,7 +5,14 @@
 import { describe, expect, it } from 'bun:test'
 import { recordEveryOp } from '../scripts/wire-examples'
 import { OPS } from '../src/prelude/ops.generated'
-import { type Call, json, loadPrelude, SEED } from './support/prelude-runtime'
+import {
+  type Call,
+  isRefusal,
+  json,
+  loadPrelude,
+  refusalCall,
+  SEED,
+} from './support/prelude-runtime'
 
 type Part = { name: string; source: string; body: unknown }
 type Chunk = { parts: Part[]; capture?: number }
@@ -384,7 +391,13 @@ describe('timeouts', () => {
       code: 'invalid_input',
       delivery: 'not_sent',
     })
-    expect(runtime.calls).toEqual([])
+    expect(runtime.calls).toEqual([
+      refusalCall(
+        'page.click',
+        'invalid_input',
+        'page.click: timeout: expected a non-negative number, got -1',
+      ),
+    ])
   })
 })
 
@@ -493,6 +506,30 @@ describe('errors', () => {
     })
   })
 
+  it('tests that closing a page that is already gone is not an error, as upstream', async () => {
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: (call) =>
+        call.name === 'page.close'
+          ? {
+              err: {
+                code: 'target_closed',
+                owner: 'neo',
+                delivery: 'unknown',
+                retryable: false,
+                operationId: 'run.1',
+                timeout: false,
+                message: 'Target page, context or browser has been closed',
+              },
+            }
+          : null,
+    })
+    expect(
+      json(await runtime.run('await page.close(); return page.isClosed()')),
+    ).toBe(true)
+    expect(runtime.sent('page.close')).toHaveLength(1)
+  })
+
   it('tests that a selector the vendored parser rejects fails as invalid input without an op', async () => {
     const runtime = loadPrelude({ seed: SEED })
     const error = json(
@@ -508,7 +545,9 @@ describe('errors', () => {
     expect(error.message).toStartWith(
       'locator.click: Selector cannot end with entering frame',
     )
-    expect(runtime.calls).toEqual([])
+    expect(runtime.calls).toEqual([
+      refusalCall('locator.click', 'invalid_input', error.message),
+    ])
   })
 
   it('tests that an any-frame locator is unsupported, with the selector form to use', async () => {
@@ -518,7 +557,7 @@ describe('errors', () => {
         "try { await page.frameLocator().getByText('Pay').click() } catch (e) { return { message: e.message, code: e.code, owner: e.owner } }",
       ),
     ) as { message: string }
-    expect(error).toMatchObject({ code: 'unsupported', owner: 'neo' })
+    expect(error).toMatchObject({ code: 'method_unavailable', owner: 'script' })
     expect(error.message).toStartWith(
       'locator.click: frameLocator() needs a selector in Neo',
     )
@@ -531,11 +570,13 @@ describe('errors', () => {
         "try { await page.evaluate((el) => el.id, page.locator('#a')) } catch (e) { return { message: e.message, code: e.code } }",
       ),
     ) as { message: string; code: string }
-    expect(error.code).toBe('unsupported')
+    expect(error.code).toBe('method_unavailable')
     expect(error.message).toStartWith(
       'page.evaluate: Neo passes element handles as evaluate arguments, not pages',
     )
-    expect(runtime.calls).toEqual([])
+    expect(runtime.calls).toEqual([
+      refusalCall('page.evaluate', 'method_unavailable', error.message),
+    ])
   })
 
   it('tests that an element handle passes as upstream passes one, and a disposed one fails its guid', async () => {
@@ -584,7 +625,9 @@ describe('errors', () => {
       'elementHandle.evaluate: Target page, context or browser has been closed',
     )
     expect(
-      runtime.calls.filter((call) => call.name === 'page.evaluate'),
+      runtime.calls.filter(
+        (call) => call.name === 'page.evaluate' && !isRefusal(call),
+      ),
     ).toHaveLength(1)
   })
 
@@ -600,8 +643,15 @@ describe('errors', () => {
         return refused
       `),
     )
-    expect(refused).toEqual(Array(5).fill('unsupported'))
-    expect(runtime.calls.map((call) => call.input)).toEqual([
+    expect(refused).toEqual(Array(5).fill('method_unavailable'))
+    expect(runtime.calls.filter(isRefusal).map((call) => call.name)).toEqual(
+      Array(5).fill('page.screenshot'),
+    )
+    expect(
+      runtime.calls
+        .filter((call) => !isRefusal(call))
+        .map((call) => call.input),
+    ).toEqual([
       {
         call: { api: 'locator.screenshot', timeoutMs: 5000 },
         page: { $neo: 'page', id: 7, tab: 1007 },
@@ -618,13 +668,28 @@ describe('synchronous state', () => {
   it("tests that the run's init names the agent's page, and reply facts list the other tabs", async () => {
     const runtime = loadPrelude({
       seed: SEED,
-      answer: () => ({
-        ok: 'Cart',
-        pages: [
-          { id: 7, tab: 1007, url: 'https://shop.example/cart', title: 'Cart' },
-          { id: 9, tab: 1009, url: 'https://mail.example/', title: 'Mail' },
-        ],
-      }),
+      // The run's frames read at its start (FR-1) answers with no facts, so `before` is what
+      // the run's init alone gives.
+      answer: (call) =>
+        call.name === 'page.frames'
+          ? null
+          : {
+              ok: 'Cart',
+              pages: [
+                {
+                  id: 7,
+                  tab: 1007,
+                  url: 'https://shop.example/cart',
+                  title: 'Cart',
+                },
+                {
+                  id: 9,
+                  tab: 1009,
+                  url: 'https://mail.example/',
+                  title: 'Mail',
+                },
+              ],
+            },
     })
     expect(
       json(
@@ -693,17 +758,22 @@ describe('synchronous state', () => {
   it("tests that every envelope's page facts refresh url() and isClosed()", async () => {
     const runtime = loadPrelude({
       seed: SEED,
-      answer: () => ({
-        ok: null,
-        pages: [
-          {
-            id: 7,
-            url: 'https://shop.example/pay',
-            title: 'Pay',
-            closed: true,
-          },
-        ],
-      }),
+      // The click's reply closes the page, after the script listens; the run's frames read at
+      // its start (FR-1) answers with no facts.
+      answer: (call) =>
+        call.name === 'page.frames'
+          ? null
+          : {
+              ok: null,
+              pages: [
+                {
+                  id: 7,
+                  url: 'https://shop.example/pay',
+                  title: 'Pay',
+                  closed: true,
+                },
+              ],
+            },
     })
     expect(
       json(
@@ -884,7 +954,10 @@ describe('synchronous state', () => {
       message:
         'page.reload: Neo has no tab id for this page; get the page again from context.pages()',
     })
-    expect(runtime.calls.map((call) => call.name)).toEqual(['page.opener'])
+    expect(runtime.calls.map((call) => call.name)).toEqual([
+      'page.opener',
+      'page.reload',
+    ])
     await runtime.run(
       'const tab = await context.newPage(); await page.title(); await tab.title()',
     )

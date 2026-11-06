@@ -51,8 +51,13 @@ const bootstrap = (): string =>
 const strict = (source: string): string => `'use strict';${source}`
 
 export type Runtime = {
-  /** Every op the prelude sent, decoded from the JSON the bridge carried. */
+  /**
+   * Every op the prelude sent once the run started, decoded from the JSON the bridge carried:
+   * the script's own, and the refusals the door recorded for it.
+   */
   calls: Call[]
+  /** What a run sent before the agent's first statement: the run page's frame read (FR-1). */
+  startCalls: Call[]
   /** Runs a script body (`return await page.title()`) as claw-sdk runs `run(code)`. */
   run(code: string): Promise<unknown>
   /**
@@ -86,9 +91,16 @@ export function loadPrelude(
     prelude?: string
     /** A fixed `Date.now()` for the realm, so recorded `since` stamps are reproducible. */
     now?: number
+    /**
+     * The bootstrap as it was before sdk-skeleton's FR/RC: its `__neo` without `refuse`, which
+     * the prelude takes for an older bootstrap.
+     */
+    withoutRefuse?: boolean
   } = {},
 ): Runtime {
   const calls: Call[] = []
+  const startCalls: Call[] = []
+  let refusals = 0
   // Each failed op's error, by op id, as bridge.rs remembers the failures it answered.
   const failures = new Map<unknown, Record<string, unknown>>()
   const answer = options.answer ?? (() => null)
@@ -96,6 +108,15 @@ export function loadPrelude(
     __neo_invoke: async (name: string, inputJson: string): Promise<string> => {
       const call: Call = { name, input: JSON.parse(inputJson) }
       calls.push(call)
+      const refused = refusalReply(
+        name,
+        call.input,
+        () => `refused.${++refusals}`,
+      )
+      if (refused) {
+        failures.set(refused.err.operationId, refused.err)
+        return JSON.stringify(refused)
+      }
       let reply: unknown
       try {
         reply = await answer(call)
@@ -118,6 +139,11 @@ export function loadPrelude(
   if (options.now !== undefined)
     runInContext(`Date.now = () => ${options.now}`, realm)
   runInContext(strict(bootstrap()), realm, { filename: 'bootstrap.js' })
+  if (options.withoutRefuse)
+    runInContext(
+      'globalThis.__neo = Object.freeze({ ...globalThis.__neo, refuse: undefined })',
+      realm,
+    )
   runInContext(strict(options.prelude ?? committedPrelude()), realm, {
     filename: 'prelude.js',
   })
@@ -133,6 +159,7 @@ export function loadPrelude(
     started = resolve
   })
   void start(async (...args) => {
+    startCalls.push(...calls.splice(0))
     started(args)
   }, init)
   let evaluator: ((code: string) => unknown) | null = null
@@ -152,10 +179,19 @@ export function loadPrelude(
     ) as (...provided: unknown[]) => Promise<unknown>
   return {
     calls,
+    startCalls,
     ready,
     run: async (code) => compile(code)(...(await provided)),
     settle: async (code) => {
-      const { ok, thrown } = JSON.parse(await start(compile(code), init)) as {
+      // A second run in the realm builds its parameters again: what it sends before the body
+      // starts is that run's start.
+      const before = calls.length
+      const main = compile(code)
+      const settled = await start(async (...args) => {
+        startCalls.push(...calls.splice(before))
+        return main(...args)
+      }, init)
+      const { ok, thrown } = JSON.parse(settled) as {
         ok?: unknown
         thrown?: {
           kind: string
@@ -178,6 +214,55 @@ export function loadPrelude(
     },
     sent: (name) => calls.filter((call) => call.name === name),
   }
+}
+
+/**
+ * The door's answer to a refusal brand (`__neo.refuse`, claw-sdk's dispatch/refusal_brand.rs):
+ * refused under `name` before anything is sent, script-owned, its code one of the two a script
+ * may claim and any other `invalid_input`. Null for any other call. `operationId` names the
+ * refusal and is drawn only for one, so the run's frames read at its start (FR-1) or the
+ * script's other ops do not shift the ids a test expects.
+ */
+function refusalReply(
+  name: string,
+  input: unknown,
+  operationId: () => string,
+): { err: Record<string, unknown>; pages: [] } | null {
+  if (typeof input !== 'object' || input === null) return null
+  if (Reflect.get(input, '$neo') !== 'refused') return null
+  const code: unknown = Reflect.get(input, 'code')
+  const reason: unknown = Reflect.get(input, 'reason')
+  const claimed =
+    (code === 'method_unavailable' || code === 'invalid_input') &&
+    typeof reason === 'string'
+  return {
+    err: {
+      code: claimed ? code : 'invalid_input',
+      owner: 'script',
+      delivery: 'not_sent',
+      retryable: true,
+      operationId: operationId(),
+      timeout: false,
+      message: claimed
+        ? reason
+        : `\`${name}\`: a refusal may name only method_unavailable or invalid_input`,
+    },
+    pages: [],
+  }
+}
+
+/** Whether `call` is a refusal the prelude raised through `__neo.refuse`, not an op. */
+export function isRefusal(call: Call): boolean {
+  return call.input.$neo === 'refused'
+}
+
+/** A refusal as the door receives it: under `name`, with its code and the whole message. */
+export function refusalCall(
+  name: string,
+  code: 'method_unavailable' | 'invalid_input',
+  reason: string,
+): Call {
+  return { name, input: { $neo: 'refused', code, reason } }
 }
 
 /** A run that starts on page 7, tab 1007, as for a task whose tab the run service knows. */

@@ -1,11 +1,13 @@
 /**
  * The one list of Playwright members Neo does not support, each with what to use instead.
  *
- * `installUnsupported` turns every entry into a member that fails `neo / unsupported` with its
- * hint, so a model calling a Playwright method Neo lacks learns what to do instead of meeting
- * "undefined is not a function". tests/api-coverage.test.ts compares every class's members with
- * the methods real playwright-core 1.64.1 defines (tests/data/api-methods.json): each must be
- * implemented or listed here, so an upgrade that adds a method fails until it is classified.
+ * `installUnsupported` turns every entry into a member that fails `script / method_unavailable`
+ * with its hint, a refusal the door records (errors.ts `unsupportedError`), so a model calling a
+ * Playwright method Neo lacks learns what to do instead of meeting "undefined is not a function",
+ * and every try is a row of the run's trace. tests/api-coverage.test.ts compares every class's
+ * members with the methods real playwright-core 1.64.1 defines (tests/data/api-methods.json):
+ * each must be implemented or listed here, so an upgrade that adds a method fails until it is
+ * classified.
  *
  * An entry is async by default (a rejected promise, as the upstream method is async), `sync`
  * when upstream returns a value directly, and `property` for an object-valued property such as

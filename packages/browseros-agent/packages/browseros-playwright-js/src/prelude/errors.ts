@@ -9,15 +9,22 @@
  *   uncaught failure as the op's own, with the owner and delivery the door decided, where a
  *   copy would settle as the script's `script_error`. It fixes the name and the first line and
  *   adds `timeout`, which the bootstrap says only by its class.
- * - the prelude refused a call before any op: `clientError`, `plainError` and
- *   `unsupportedError`, with the fields the dispatcher would have set for the same refusal
- *   (`not_sent`, never retryable).
- *   `waitTimeoutError` is the same idea for a wait deadline the prelude keeps across ops.
+ * - the prelude refused a call before any op: `unsupportedError` for a method, option or event
+ *   Neo does not serve (`script / method_unavailable`), and `clientError`, `plainError` and
+ *   `unprefixedClientError` for its arguments (`script / invalid_input`). Each is a door call
+ *   (FR/RC, the bootstrap's `__neo.refuse`): the door records the try as a row of the run's
+ *   trace and decides the error's code, owner, delivery and op id, as for any op it refuses,
+ *   and the error is the bootstrap's own NeoError, so an uncaught one settles the run with that
+ *   code. The door's fields reach the error only after the script next yields to Rust. A
+ *   bootstrap without `refuse` gets the error each was before FR/RC.
+ *   `waitTimeoutError` is the same idea for a wait deadline the prelude keeps across ops, and
+ *   is not a refusal: Rust's own wait would have timed out.
  *
  * The first line names the method the script called (`page.click: ...`), as playwright-core's
  * client prefixes every API error. expect's errors are the exception: Playwright prints those
  * as `expect(locator).toHaveText(expected) failed`, named `Error`, never `TimeoutError`.
  */
+import { type RefusalCode, refuser } from './host'
 import type { OpName } from './ops.generated'
 
 /** What claw-sdk's error envelope says (runtime/bridge.rs `ErrBody`), on every error. */
@@ -112,6 +119,7 @@ export function shapeBridgeError(
   )
 }
 
+/** An argument refusal's fields from a bootstrap without `refuse`, as before FR/RC. */
 const REFUSED_ARGUMENTS: ErrorFields = {
   code: 'invalid_input',
   owner: 'script',
@@ -120,44 +128,78 @@ const REFUSED_ARGUMENTS: ErrorFields = {
   timeout: false,
 }
 
+/** An unserved method's fields from a bootstrap without `refuse`, as before FR/RC. */
+const UNSUPPORTED: ErrorFields = {
+  code: 'unsupported',
+  owner: 'neo',
+  delivery: 'not_sent',
+  retryable: false,
+  timeout: false,
+}
+
+/**
+ * A call the prelude refuses before any op, recorded by the door under `api`, the method the
+ * script called. `message` is the whole text the script reads, the same with either bootstrap.
+ * The error is the one `__neo.refuse` returns, renamed in place to Playwright's `name`: a
+ * wrapped or copied error would settle as the script's own and lose the refusal's code.
+ * Without `refuse` (an older bootstrap) it is the error the prelude threw before, with
+ * `fallback`'s fields.
+ */
+function refusal(
+  api: string,
+  code: RefusalCode,
+  message: string,
+  fallback: ErrorFields,
+  name: 'Error' | 'TypeError' = 'Error',
+): Error {
+  const refuse = refuser()
+  if (refuse === null)
+    return withFields(
+      name === 'TypeError'
+        ? new TypeError(message)
+        : new PlaywrightError(message),
+      fallback,
+    )
+  const error = refuse(api, code, message)
+  error.name = name
+  return withFields(error, { timeout: false })
+}
+
 /** A call the prelude refuses for its arguments: `script / invalid_input`, nothing sent. */
 export function clientError(api: string, message: string): Error {
-  return withFields(
-    new PlaywrightError(`${api}: ${message}`),
-    REFUSED_ARGUMENTS,
-  )
+  return refusal(api, 'invalid_input', `${api}: ${message}`, REFUSED_ARGUMENTS)
 }
 
 /**
  * The same refusal where upstream's client throws before any channel call, which gives its
  * error no method prefix (`File paths cannot be mixed with buffers`). `TypeError` is for what
- * V8 throws there on a missing argument (`Cannot read properties of undefined (reading …)`).
+ * V8 throws there on a missing argument (`Cannot read properties of undefined (reading …)`):
+ * the refusal carries its name, though it is not an instance of `TypeError`.
  */
 export function unprefixedClientError(
+  api: string,
   message: string,
   kind: 'Error' | 'TypeError' = 'Error',
 ): Error {
-  return withFields(
-    kind === 'TypeError'
-      ? new TypeError(message)
-      : new PlaywrightError(message),
-    REFUSED_ARGUMENTS,
-  )
+  return refusal(api, 'invalid_input', message, REFUSED_ARGUMENTS, kind)
 }
 
 /**
  * What upstream's client throws before it calls the server, with no `<api>:` prefix because the
  * throw happens outside the channel call that adds one: "Too many arguments...", "Attempting to
- * serialize unexpected value...", "Unknown polling option...". Fields as `clientError`'s.
+ * serialize unexpected value...", "Unknown polling option...". Recorded under `api` as
+ * `clientError`'s refusals are.
  */
-export function plainError(message: string): Error {
-  return withFields(new PlaywrightError(message), {
-    code: 'invalid_input',
-    owner: 'script',
-    delivery: 'not_sent',
-    retryable: false,
-    timeout: false,
-  })
+export function plainError(api: string, message: string): Error {
+  return refusal(api, 'invalid_input', message, REFUSED_ARGUMENTS)
+}
+
+/**
+ * A Neo-side inconsistency the prelude noticed (`newPage` answered with no page): a plain error,
+ * not a refusal, since only Rust can vouch for a failure Neo owns.
+ */
+export function internalError(api: string, message: string): Error {
+  return new PlaywrightError(`${api}: ${message}`)
 }
 
 /**
@@ -174,15 +216,12 @@ export function waitTimeoutError(api: string, message: string): Error {
   })
 }
 
-/** A Playwright method or option Neo lacks: `neo / unsupported`, with what to use instead. */
+/**
+ * A Playwright method, option or event Neo lacks, with what to use instead:
+ * `script / method_unavailable`, the door's code for a method it does not serve.
+ */
 export function unsupportedError(api: string, hint: string): Error {
-  return withFields(new PlaywrightError(`${api}: ${hint}`), {
-    code: 'unsupported',
-    owner: 'neo',
-    delivery: 'not_sent',
-    retryable: false,
-    timeout: false,
-  })
+  return refusal(api, 'method_unavailable', `${api}: ${hint}`, UNSUPPORTED)
 }
 
 /**

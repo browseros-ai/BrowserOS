@@ -11,22 +11,33 @@
 
 #[path = "support/fixture_server.rs"]
 mod fixture_server;
+#[path = "support/js_runner.rs"]
+mod js_runner;
 #[path = "support/live_browser.rs"]
 #[expect(
     dead_code,
     reason = "shared with snapshot_live.rs, which reads the swept values"
 )]
 mod live_browser;
+#[path = "support/live_run.rs"]
+#[expect(
+    dead_code,
+    reason = "these scripts reach pages through the runner, not live_run's direct helpers"
+)]
+mod live_run;
 #[path = "support/locator.rs"]
 mod locator;
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use browseros_core::sensitive_fields::SensitiveKind;
 use browseros_core::{PageId, TabId};
 use browseros_playwright::{ErrorCode, TypedBy};
 use fixture_server::{FixtureServer, Page, nest_pages};
+use js_runner::OpHost;
 use live_browser::{Journaled, LiveBrowser, TestPage, TestResult};
+use live_run::LiveRun;
 use locator::{aria_ref, attr, css, enter_frame, locator, role, text};
 use serde_json::{Value, json};
 use tokio::time;
@@ -510,4 +521,89 @@ async fn tests_that_the_journal_reports_typing_in_an_oopif_password_field() -> T
         )
         .await;
     live.close(&page).await
+}
+
+/// FR-1: a run that starts on a tab with frames lists every one of them in its first
+/// statement, as upstream's `page.frames()` does on a page it connected to. The prelude reads
+/// the tab's tree before the script runs, through the `page` provider S3's bootstrap awaits.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_run_on_a_tab_with_frames_lists_them_in_its_first_statement() -> TestResult {
+    let server = FixtureServer::start(nest_pages()).await?;
+    let host: Arc<dyn OpHost> = Arc::new(LiveRun::connect().await?);
+    // A first run opens the tab and waits for the deepest frame of each branch, as a task's
+    // earlier run would have left it.
+    let opened = js_runner::run_script(
+        &host,
+        &json!({ "page": null }),
+        &format!(
+            "await page.goto({top})\n\
+             const button = (titles) => titles\n\
+               .reduce((at, title) => at.frameLocator(`[title=\"${{title}}\"]`), page)\n\
+               .getByRole('button')\n\
+             await button(['a1', 'b2', 'b3']).textContent()\n\
+             await button(['b1', 'c2', 'a3', 'c4']).textContent()\n\
+             return page.toJSON()",
+            top = json!(server.url("127.0.0.1", "/nest/top.html")),
+        ),
+    )
+    .await?;
+    let listed = js_runner::run_script(
+        &host,
+        &json!({ "page": opened }),
+        "try {\n\
+           return page.frames().map((frame) => frame.url().split('/').pop()).sort()\n\
+         } finally {\n\
+           await page.close()\n\
+         }",
+    )
+    .await?;
+    assert_eq!(
+        listed,
+        json!([
+            "a1.html", "a3.html", "b1.html", "b2.html", "b3.html", "c2.html", "c4.html", "top.html"
+        ]),
+        "all 8 frames, before any op of the script's own"
+    );
+    Ok(())
+}
+
+/// FR-1: a frame the page attaches after load is listed once `waitForTimeout` ends, as
+/// upstream's is after its wait's round trip: the wait reads the run's working pages' trees.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_frames_attached_after_load_are_listed_after_wait_for_timeout() -> TestResult {
+    let server = FixtureServer::start(nest_pages()).await?;
+    let host: Arc<dyn OpHost> = Arc::new(LiveRun::connect().await?);
+    let script = format!(
+        "try {{\n\
+           await page.goto({top})\n\
+           const evaluate = async (expression) =>\n\
+             JSON.parse(await __neo_test_eval(page._id, page._tab, expression)).ok\n\
+           await evaluate(`(() => {{\n\
+             const frame = document.createElement('iframe')\n\
+             frame.name = 'late'\n\
+             frame.onload = () => {{ window.__late = true }}\n\
+             frame.src = '/nest/b3.html'\n\
+             document.body.append(frame)\n\
+             return true\n\
+           }})()`)\n\
+           for (let tries = 0; !(await evaluate('window.__late === true')); tries++) {{\n\
+             if (tries === 100) throw new Error('the late frame never loaded')\n\
+             await new Promise((resolve) => setTimeout(resolve, 50))\n\
+           }}\n\
+           const before = page.frame('late')\n\
+           await page.waitForTimeout(300)\n\
+           return {{ before, late: page.frame('late')?.url() ?? null }}\n\
+         }} finally {{\n\
+           await page.close()\n\
+         }}",
+        top = json!(server.url("127.0.0.1", "/nest/top.html")),
+    );
+    assert_eq!(
+        js_runner::run_script(&host, &json!({ "page": null }), &script).await?,
+        json!({ "before": null, "late": server.url("127.0.0.1", "/nest/b3.html") }),
+        "listed after the wait, and not before it"
+    );
+    Ok(())
 }

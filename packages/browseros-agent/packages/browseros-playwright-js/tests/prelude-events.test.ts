@@ -259,19 +259,23 @@ describe('waitForEvent', () => {
     )
     expect(result).toEqual([
       [
-        'unsupported',
+        'method_unavailable',
         "page.waitForEvent('request'): Neo does not report network events; wait for what the page shows instead",
       ],
       [
-        'unsupported',
+        'method_unavailable',
         "page.on('framenavigated'): Neo does not report frame events; use page.waitForURL()",
       ],
       [
-        'unsupported',
+        'method_unavailable',
         'browserContext.on(\'dialog\'): Neo reports "dialog" on pages: page.on("dialog")',
       ],
     ])
-    expect(runtime.calls).toEqual([])
+    expect(runtime.calls.map((call) => [call.name, call.input.$neo])).toEqual([
+      ["page.waitForEvent('request')", 'refused'],
+      ["page.on('framenavigated')", 'refused'],
+      ["browserContext.on('dialog')", 'refused'],
+    ])
   })
 })
 

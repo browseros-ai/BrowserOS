@@ -55,11 +55,13 @@ export class Dialog {
   /** As upstream, a dialog whose page already closed counts as dismissed. */
   async dismiss(): Promise<void> {
     const api = 'dialog.dismiss'
+    // Outside the try, as page.close's: the catch reads the op's code from the door.
+    const page = await this.#pageValue._brand(api)
     try {
       await invoke(
         'dialog.dismiss',
         { api, timeoutMs: 0 },
-        { page: await this.#pageValue._brand(api), dialog: this.#info.id },
+        { page, dialog: this.#info.id },
       )
     } catch (error) {
       if (Reflect.get(Object(error), 'code') === 'target_closed') return

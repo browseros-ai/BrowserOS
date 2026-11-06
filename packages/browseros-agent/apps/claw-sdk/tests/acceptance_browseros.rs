@@ -179,7 +179,9 @@ async fn the_host_reads_the_run(rig: &Rig, id: &str, tab: i64) -> TestResult {
 }
 
 /// The host locks the tab; run 2 of the task writes on it and is refused before anything is
-/// sent, the page stays where it was, and the trace records the refusal.
+/// sent, the page stays where it was, and the trace records the refusal. The run's page reads its
+/// frames before the script's first statement, and the lock, which blocks reads, refuses that
+/// too; the run starts on the main frame alone.
 async fn a_lock_refuses_the_agent(rig: &Rig, client: &Client, tab: i64) -> TestResult {
     let take = json!({ "tabId": tab, "ttlSeconds": 600 });
     let taken = rig
@@ -228,10 +230,16 @@ async fn a_lock_refuses_the_agent(rig: &Rig, client: &Client, tab: i64) -> TestR
     let host_run = read_run(rig, &refused_id).await?;
     assert_eq!(
         operations(&host_run)?,
-        [op_of("page.goto", "write", "error", "not_sent", Some(tab))],
-        "the trace records the refused write on the locked tab: {host_run}"
+        [
+            op_of("page.frames", "read", "error", "not_sent", Some(tab)),
+            op_of("page.goto", "write", "error", "not_sent", Some(tab)),
+        ],
+        "the trace records the refused read of the frames and the refused write on the locked \
+         tab: {host_run}"
     );
-    let goto = host_run.pointer("/operations/0").ok_or("one operation")?;
+    let goto = host_run
+        .pointer("/operations/1")
+        .ok_or("the write is the second operation")?;
     assert_eq!(
         (goto.pointer("/error/owner"), goto.pointer("/error/code")),
         (Some(&json!("host")), Some(&json!("owner_has_control"))),
@@ -284,24 +292,26 @@ async fn the_write_lands_once_released(
 
 /// Run 3's picture of its tab, as the host finds it. Each write keeps its own screenshot (the
 /// trace writer no longer folds a write's picture into a later read's on the same tab), so the
-/// `page.goto` holds it, not the frame-tree read Playwright makes right after. The run's record
-/// names that op, and its JPEG is whole.
+/// `page.goto` holds it, not the frame-tree reads around it: the run's page reads its frames
+/// before the script's first statement, and Playwright's goto again after it navigated. The
+/// run's record names that op, and its JPEG is whole.
 async fn the_tab_has_its_picture_after_the_write(rig: &Rig, run: &str, tab: i64) -> TestResult {
     // Held until the run is complete: ended, and every screenshot job answered.
     let host_run = read_run(rig, run).await?;
     assert_eq!(
         operations(&host_run)?,
         [
+            op_of("page.frames", "read", "ok", "not_sent", Some(tab)),
             op_of("page.goto", "write", "ok", "done", Some(tab)),
             op_of("page.frames", "read", "ok", "not_sent", Some(tab)),
         ],
         "{host_run}"
     );
-    let write = format!("{run}.1");
+    let write = format!("{run}.2");
     assert_eq!(
         (
-            host_run.pointer("/operations/0/id"),
-            host_run.pointer("/operations/0/hasScreenshot"),
+            host_run.pointer("/operations/1/id"),
+            host_run.pointer("/operations/1/hasScreenshot"),
         ),
         (Some(&json!(write)), Some(&json!(true))),
         "the write holds its own picture of the tab: {host_run}"

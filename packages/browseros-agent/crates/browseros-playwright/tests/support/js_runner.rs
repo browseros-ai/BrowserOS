@@ -277,6 +277,13 @@ impl RunDoor {
             self.operations.fetch_add(1, Ordering::Relaxed) + 1
         );
         let mut input: Value = serde_json::from_str(input).unwrap_or(Value::Null);
+        // A prelude's refusal (`__neo.refuse`) is refused under the name it gives, as claw-sdk's
+        // door refuses it at admission: never run, never resolving a page, so it opens no tab,
+        // and remembered as any failed op is.
+        if let Some(refused) = Refused::of(name, &input) {
+            lock(&self.failures).insert(operation.clone(), refused.said());
+            return refused.envelope(&operation);
+        }
         let (outcome, default_page) = match self.default_page(name, &mut input).await {
             Ok(default_page) => (self.host.invoke(name, input).await, default_page),
             Err(error) => (Err(error), None),
@@ -340,6 +347,61 @@ impl RunDoor {
             Some(failure) => format!("the script threw the error of an op: {failure}"),
             None => format!("the script threw {thrown}"),
         }
+    }
+}
+
+/// The refusal brand a prelude's `__neo.refuse` sends, `{"$neo":"refused","code","reason"}`, as
+/// claw-sdk's door reads it (`dispatch/refusal_brand.rs`): a script-owned failure, its code one
+/// of the two a script may claim, any other code or a missing reason `invalid_input`.
+struct Refused {
+    code: &'static str,
+    message: String,
+}
+
+impl Refused {
+    fn of(name: &str, input: &Value) -> Option<Self> {
+        if input.get("$neo").and_then(Value::as_str) != Some("refused") {
+            return None;
+        }
+        let reason = input.get("reason").and_then(Value::as_str);
+        Some(match (input.get("code").and_then(Value::as_str), reason) {
+            (Some(code @ ("method_unavailable" | "invalid_input")), Some(reason)) => Self {
+                code: if code == "method_unavailable" {
+                    "method_unavailable"
+                } else {
+                    "invalid_input"
+                },
+                message: reason.to_owned(),
+            },
+            _ => Self {
+                code: "invalid_input",
+                message: format!(
+                    "`{name}`: a refusal may name only method_unavailable or invalid_input"
+                ),
+            },
+        })
+    }
+
+    /// The failure as `RunDoor::thrown` reports it.
+    fn said(&self) -> String {
+        format!("{}: {}", self.code, self.message)
+    }
+
+    /// The door's answer: refused with nothing sent, retryable as a run that changed nothing.
+    fn envelope(&self, operation: &str) -> String {
+        json!({
+            "err": {
+                "code": self.code,
+                "owner": "script",
+                "delivery": "not_sent",
+                "retryable": true,
+                "operationId": operation,
+                "timeout": false,
+                "message": self.message,
+            },
+            "pages": [],
+        })
+        .to_string()
     }
 }
 

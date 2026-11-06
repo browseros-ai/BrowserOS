@@ -5,7 +5,7 @@
  */
 import type { ExpectParams } from '../probe/protocol'
 import { invoke } from './bridge'
-import { prefixed } from './errors'
+import { plainError, prefixed } from './errors'
 import { receiverText, stringify } from './expect-equality'
 import { fail, header, type State } from './expect-values'
 import { Locator } from './locator'
@@ -66,8 +66,17 @@ function truthy(
   }
 }
 
+/**
+ * A check of a retrying matcher's own arguments or its receiver, before its op: a refusal under
+ * the matcher, `expect.<matcher>`, the name its op runs as.
+ */
+function argumentError(matcher: string, message: string): Error {
+  return plainError(`expect.${matcher}`, message)
+}
+
 /** toHaveText and the other string-or-pattern matchers (upstream's toMatchText). */
 function text(
+  matcher: string,
   receiver: 'Locator' | 'Page',
   expression: string,
   expected: string | RegExp,
@@ -76,7 +85,10 @@ function text(
   extra: Partial<ExpectParams> = {},
 ): Retrying {
   if (typeof expected !== 'string' && !(expected instanceof RegExp))
-    throw new Error('expected value must be a string or regular expression')
+    throw argumentError(
+      matcher,
+      'expected value must be a string or regular expression',
+    )
   const substring = values[0]?.matchSubstring === true
   const suffix =
     typeof expected === 'string' ? (substring ? ' substring' : '') : ' pattern'
@@ -208,6 +220,7 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
           }),
         })
       : text(
+          'toContainText',
           'Locator',
           'to.have.text',
           expected,
@@ -223,6 +236,7 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
     options?: TextOptions,
   ) =>
     text(
+      'toHaveAccessibleDescription',
       'Locator',
       'to.have.accessible.description',
       expected,
@@ -234,6 +248,7 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
     ),
   toHaveAccessibleName: (expected: string | RegExp, options?: TextOptions) =>
     text(
+      'toHaveAccessibleName',
       'Locator',
       'to.have.accessible.name',
       expected,
@@ -248,6 +263,7 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
     options?: TextOptions,
   ) =>
     text(
+      'toHaveAccessibleErrorMessage',
       'Locator',
       'to.have.accessible.error.message',
       expected,
@@ -277,6 +293,7 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
       })
     const value = expected as string | RegExp
     return text(
+      'toHaveAttribute',
       'Locator',
       'to.have.attribute.value',
       value,
@@ -294,6 +311,7 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
           expectedText: textValues(expected),
         })
       : text(
+          'toHaveClass',
           'Locator',
           'to.have.class',
           expected,
@@ -303,7 +321,8 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
   toContainClass: (expected: string | string[], options?: TimeoutOption) => {
     if (Array.isArray(expected)) {
       if (expected.some((item: unknown) => item instanceof RegExp))
-        throw new Error(
+        throw argumentError(
+          'toContainClass',
           '"expected" argument in toContainClass cannot contain RegExp values',
         )
       return equal('to.contain.class.array', expected, options, {
@@ -311,10 +330,12 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
       })
     }
     if ((expected as unknown) instanceof RegExp)
-      throw new Error(
+      throw argumentError(
+        'toContainClass',
         '"expected" argument in toContainClass cannot be a RegExp value',
       )
     return text(
+      'toContainClass',
       'Locator',
       'to.contain.class',
       expected,
@@ -329,12 +350,27 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
     expected: string | RegExp,
     options?: TimeoutOption & { pseudo?: 'before' | 'after' },
   ) =>
-    text('Locator', 'to.have.css', expected, textValues([expected]), options, {
-      expressionArg: name,
-      ...(options?.pseudo ? { pseudo: options.pseudo } : {}),
-    }),
+    text(
+      'toHaveCSS',
+      'Locator',
+      'to.have.css',
+      expected,
+      textValues([expected]),
+      options,
+      {
+        expressionArg: name,
+        ...(options?.pseudo ? { pseudo: options.pseudo } : {}),
+      },
+    ),
   toHaveId: (expected: string | RegExp, options?: TimeoutOption) =>
-    text('Locator', 'to.have.id', expected, textValues([expected]), options),
+    text(
+      'toHaveId',
+      'Locator',
+      'to.have.id',
+      expected,
+      textValues([expected]),
+      options,
+    ),
   toHaveJSProperty: (
     name: string,
     expected: unknown,
@@ -346,8 +382,12 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
     }),
   toHaveRole: (expected: string, options?: TimeoutOption) => {
     if (typeof expected !== 'string')
-      throw new Error('"role" argument in toHaveRole must be a string')
+      throw argumentError(
+        'toHaveRole',
+        '"role" argument in toHaveRole must be a string',
+      )
     return text(
+      'toHaveRole',
       'Locator',
       'to.have.role',
       expected,
@@ -367,6 +407,7 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
           }),
         })
       : text(
+          'toHaveText',
           'Locator',
           'to.have.text',
           expected,
@@ -377,13 +418,21 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
           options,
         ),
   toHaveValue: (expected: string | RegExp, options?: TimeoutOption) =>
-    text('Locator', 'to.have.value', expected, textValues([expected]), options),
+    text(
+      'toHaveValue',
+      'Locator',
+      'to.have.value',
+      expected,
+      textValues([expected]),
+      options,
+    ),
   toHaveValues: (expected: (string | RegExp)[], options?: TimeoutOption) =>
     equal('to.have.values', expected, options, {
       expectedText: textValues(expected),
     }),
   toHaveTitle: (expected: string | RegExp, options?: TimeoutOption) =>
     text(
+      'toHaveTitle',
       'Page',
       'to.have.title',
       expected,
@@ -397,6 +446,7 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
     const value =
       typeof expected === 'string' ? normalizeUrl(expected) : expected
     return text(
+      'toHaveURL',
       'Page',
       'to.have.url',
       value,
@@ -416,7 +466,8 @@ export async function retry(
   const isPage = actual instanceof Page
   const isLocator = actual instanceof Locator
   if (matcher.receiver === 'Page' ? !isPage : !isLocator)
-    throw new Error(
+    throw argumentError(
+      name,
       `${name} can be only used with ${matcher.receiver} object, was called with ${receiverText(actual)}`,
     )
   const call = {

@@ -274,8 +274,10 @@ async fn wait_for_function(rig: &Rig) -> TestResult {
             "argument": "enough",
             "snapshot": [
                 { "a": 1 },
+                // A method Neo lacks, refused through the door, which lets a prelude claim only
+                // the script's two codes.
                 threw(
-                    "Error", "neo", "unsupported", "not_sent",
+                    "Error", "script", "method_unavailable", "not_sent",
                     "jsHandle.evaluate: Neo's waitForFunction handle holds the value, not the page's object; read it with jsonValue()",
                 ),
             ],

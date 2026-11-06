@@ -2,7 +2,7 @@
 // printed expectation for Rust to poll and report; value matchers run in the prelude with
 // Jest's semantics.
 import { describe, expect, it } from 'bun:test'
-import { json, loadPrelude, SEED } from './support/prelude-runtime'
+import { json, loadPrelude, refusalCall, SEED } from './support/prelude-runtime'
 
 async function expectOps(code: string): Promise<Record<string, unknown>[]> {
   const runtime = loadPrelude({ seed: SEED })
@@ -247,16 +247,18 @@ describe('retrying matchers', () => {
     }
   })
 
-  it("tests that a locator matcher on something else fails as Playwright's does, before any op", async () => {
+  it("tests that a locator matcher on something else fails as Playwright's does, refused before any op", async () => {
     const runtime = loadPrelude({ seed: SEED })
+    const message =
+      'toBeVisible can be only used with Locator object, was called with 42'
     expect(
       await runtime.run(
         'try { await expect(42).toBeVisible() } catch (e) { return e.message }',
       ),
-    ).toBe(
-      'toBeVisible can be only used with Locator object, was called with 42',
-    )
-    expect(runtime.calls).toEqual([])
+    ).toBe(message)
+    expect(runtime.calls).toEqual([
+      refusalCall('expect.toBeVisible', 'invalid_input', message),
+    ])
   })
 })
 

@@ -6,7 +6,7 @@
  * The string becomes wire data only when an op runs, as in Playwright, where a bad selector
  * fails the action that uses it rather than the line that built it.
  */
-import { clientError, unsupportedError } from './errors'
+import { clientError, plainError, unsupportedError } from './errors'
 import {
   asLocator,
   escapeForTextSelector,
@@ -26,8 +26,13 @@ export type LocatorOptions = {
   visible?: boolean
 }
 
-/** Upstream's Locator constructor: each option appends one selector part, in this order. */
+/**
+ * Upstream's Locator constructor: each option appends one selector part, in this order. Its one
+ * check, an inner locator in another frame, is a refusal under `api`, the method the script
+ * called with the options.
+ */
 export function withLocatorOptions(
+  api: string,
   frame: FrameLike,
   selector: string,
   options: LocatorOptions | undefined,
@@ -39,12 +44,18 @@ export function withLocatorOptions(
     result += ` >> internal:has-not-text=${escapeForTextSelector(options.hasNotText, false)}`
   if (options?.has) {
     if (options.has._frame !== frame)
-      throw new Error('Inner "has" locator must belong to the same frame.')
+      throw plainError(
+        api,
+        'Inner "has" locator must belong to the same frame.',
+      )
     result += ` >> internal:has=${JSON.stringify(options.has._selector)}`
   }
   if (options?.hasNot) {
     if (options.hasNot._frame !== frame)
-      throw new Error('Inner "hasNot" locator must belong to the same frame.')
+      throw plainError(
+        api,
+        'Inner "hasNot" locator must belong to the same frame.',
+      )
     result += ` >> internal:has-not=${JSON.stringify(options.hasNot._selector)}`
   }
   if (options?.visible !== undefined)

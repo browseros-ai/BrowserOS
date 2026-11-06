@@ -11,7 +11,7 @@
  * Jest's semantics (expect-values.ts). `expect.poll` and `toPass` retry here.
  */
 import { sleep } from './bridge'
-import { assertionError, unsupportedError } from './errors'
+import { assertionError, plainError, unsupportedError } from './errors'
 import {
   Any,
   Anything,
@@ -49,7 +49,8 @@ function retrying(
 ): Promise<void> {
   if (name === 'toHaveURL' && typeof args[0] === 'function') {
     if (!(actual instanceof Page))
-      throw new Error(
+      throw plainError(
+        'expect.toHaveURL',
         `toHaveURL can be only used with Page object, was called with ${receiverText(actual)}`,
       )
     return urlPredicate(
@@ -146,7 +147,7 @@ async function toPass(
   options: { timeout?: number; intervals?: number[] } = {},
 ): Promise<void> {
   if (typeof callback !== 'function')
-    throw new Error('toPass: expected a function')
+    throw plainError('expect.toPass', 'toPass: expected a function')
   const timeout = options.timeout ?? 0
   const intervals = options.intervals ?? INTERVALS
   const deadline = timeout ? Date.now() + timeout : Number.POSITIVE_INFINITY
@@ -178,7 +179,7 @@ function poll(
   options: { timeout?: number; intervals?: number[] } = {},
 ): Matchers {
   if (typeof generator !== 'function')
-    throw new Error('expect.poll: expected a function')
+    throw plainError('expect.poll', 'expect.poll: expected a function')
   const timeout = options.timeout ?? state.config.timeout
   const intervals = options.intervals ?? INTERVALS
   const polled = (isNot: boolean): Matchers => {

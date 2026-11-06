@@ -3,6 +3,7 @@
  * output, the asymmetric matchers (`expect.any`, `expect.objectContaining`, ...) and `equals`,
  * with toEqual's rule that undefined properties do not count and toStrictEqual's that they do.
  */
+import { unprefixedClientError } from './errors'
 import { Locator } from './locator'
 
 export function stringify(value: unknown, seen = new Set<unknown>()): string {
@@ -58,8 +59,10 @@ export class Any extends AsymmetricMatcher {
   constructor(private readonly expected: unknown) {
     super(false)
     if (expected === undefined)
-      throw new TypeError(
+      throw unprefixedClientError(
+        'expect.any',
         'any() expects to be passed a constructor function. Please pass one or use anything() to match any object.',
+        'TypeError',
       )
   }
   asymmetricMatch(other: unknown): boolean {

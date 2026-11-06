@@ -36,7 +36,11 @@ import {
 } from './options'
 import type { Page } from './page'
 import type { Response } from './response'
-import { type LocatorOptions, locatorBrand } from './selectors'
+import {
+  type LocatorOptions,
+  locatorBrand,
+  withLocatorOptions,
+} from './selectors'
 import { renderSnapshot } from './snapshot'
 import { type TimeoutOption, timeoutMs } from './timeouts'
 import { globMatches } from './url'
@@ -99,12 +103,8 @@ export type SelectorOp = {
     : never
 }[OpName]
 
-/**
- * upstream's verifyLoadState. Its client calls it before the API wrapper that prefixes a
- * failure with the method's name (PW:61763), so the message has no prefix: measured for
- * `setContent` and `waitForLoadState` with Playwright 1.64.1.
- */
-export function loadState(name: string, state: unknown): LoadState {
+/** A load state upstream's verifyLoadState takes, `networkidle0` as `networkidle`, or null. */
+export function knownLoadState(state: unknown): LoadState | null {
   if (state === 'networkidle0') return 'networkidle'
   if (
     state === 'load' ||
@@ -113,9 +113,28 @@ export function loadState(name: string, state: unknown): LoadState {
     state === 'commit'
   )
     return state
-  throw plainError(
-    `${name}: expected one of (load|domcontentloaded|networkidle|commit)`,
-  )
+  return null
+}
+
+/** upstream's verifyLoadState's message for the option `name`. */
+export function loadStateError(name: string): string {
+  return `${name}: expected one of (load|domcontentloaded|networkidle|commit)`
+}
+
+/**
+ * upstream's verifyLoadState. Its client calls it before the API wrapper that prefixes a
+ * failure with the method's name (PW:61763), so the message has no prefix: measured for
+ * `setContent` and `waitForLoadState` with Playwright 1.64.1. The refusal is recorded under
+ * `api`.
+ */
+export function loadState(
+  api: string,
+  name: string,
+  state: unknown,
+): LoadState {
+  const known = knownLoadState(state)
+  if (known === null) throw plainError(api, loadStateError(name))
+  return known
 }
 
 export class Frame extends EventEmitter {
@@ -166,7 +185,16 @@ export class Frame extends EventEmitter {
   // ---- builders: pure values ------------------------------------------------------------
 
   locator(selector: string, options?: LocatorOptions): Locator {
-    return new Locator(this, selector, options)
+    return this._locator('frame.locator', selector, options)
+  }
+
+  /** `locator` for `api`, the method the script called: `page.locator` is its main frame's. */
+  _locator(
+    api: string,
+    selector: string,
+    options: LocatorOptions | undefined,
+  ): Locator {
+    return new Locator(this, withLocatorOptions(api, this, selector, options))
   }
 
   getByTestId(testId: TextMatch): Locator {
@@ -425,7 +453,7 @@ export class Frame extends EventEmitter {
     arg?: unknown,
   ): Promise<unknown> {
     // biome-ignore lint/complexity/noArguments: upstream counts the arguments passed, not the parameters.
-    assertMaxArguments(arguments.length, 3)
+    assertMaxArguments('frame.$eval', arguments.length, 3)
     const api = 'frame.$eval'
     return await this._evaluateOn(
       api,
@@ -442,7 +470,7 @@ export class Frame extends EventEmitter {
     arg?: unknown,
   ): Promise<unknown> {
     // biome-ignore lint/complexity/noArguments: upstream counts the arguments passed, not the parameters.
-    assertMaxArguments(arguments.length, 3)
+    assertMaxArguments('frame.$$eval', arguments.length, 3)
     const api = 'frame.$$eval'
     return await this._evaluateAll(
       api,
@@ -503,7 +531,7 @@ export class Frame extends EventEmitter {
     options?: EvaluateOptions,
   ): Promise<unknown> {
     // biome-ignore lint/complexity/noArguments: upstream counts the arguments passed, not the parameters.
-    assertMaxArguments(arguments.length, 3)
+    assertMaxArguments('frame.evaluate', arguments.length, 3)
     return await this._evaluate('frame.evaluate', pageFunction, arg, options)
   }
 
@@ -520,8 +548,10 @@ export class Frame extends EventEmitter {
     )
   }
 
-  waitForTimeout(timeout: number): Promise<void> {
-    return sleep('frame.waitForTimeout', timeout)
+  /** The same as `page.waitForTimeout`: a sleep, then the working pages' trees (FR-1). */
+  async waitForTimeout(timeout: number): Promise<void> {
+    await sleep('frame.waitForTimeout', timeout)
+    await this._page._context._refreshWorkingFrames('frame.waitForTimeout')
   }
 
   // ---- internals shared with Page and Locator -----------------------------------------
@@ -1091,7 +1121,7 @@ export class Frame extends EventEmitter {
   ): Promise<Response | null> {
     if (typeof url !== 'string')
       throw clientError(api, `url: expected string, got ${typeof url}`)
-    const waitUntil = loadState('waitUntil', options.waitUntil ?? 'load')
+    const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const args = await this._frameArgs(api)
     const result = await invoke(
       'page.goto',
@@ -1111,7 +1141,7 @@ export class Frame extends EventEmitter {
     state: LoadState | undefined,
     options: TimeoutOption = {},
   ): Promise<void> {
-    const verified = loadState('state', state ?? 'load')
+    const verified = loadState(api, 'state', state ?? 'load')
     const result = await invoke(
       'page.waitForLoadState',
       this._call(api, this._navigationTimeout(options)),
@@ -1133,7 +1163,7 @@ export class Frame extends EventEmitter {
     html: string,
     options: NavigateOptions = {},
   ): Promise<void> {
-    const waitUntil = loadState('waitUntil', options.waitUntil ?? 'load')
+    const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const result = await invoke(
       'page.setContent',
       this._call(api, this._navigationTimeout(options)),
@@ -1165,7 +1195,7 @@ export class Frame extends EventEmitter {
     options: WaitForFunctionOptions = {},
   ): Promise<WaitHandle> {
     if (typeof options.polling === 'string' && options.polling !== 'raf')
-      throw plainError(`Unknown polling option: ${options.polling}`)
+      throw plainError(api, `Unknown polling option: ${options.polling}`)
     const script = pageCall(api, 'frame', pageFunction, arg)
     const { value, preview } = await invoke(
       'page.waitForFunction',

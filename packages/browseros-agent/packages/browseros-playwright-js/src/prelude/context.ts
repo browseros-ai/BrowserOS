@@ -11,7 +11,7 @@
 import { invoke, type Reply, type RunInit } from './bridge'
 import type { Browser } from './browser'
 import { EventEmitter } from './emitter'
-import { clientError } from './errors'
+import { internalError } from './errors'
 import { checkReported, EventHub, isReported } from './events'
 import { markHandle } from './options'
 import { Page } from './page'
@@ -40,6 +40,8 @@ export class BrowserContext extends EventEmitter {
   readonly #byId = new Map<number, Page>()
   /** The run's `page` while it has no tab; the reply that names its tab clears it. */
   #unopened: Page | null = null
+  /** Set once the run's page exists: a page first seen after it is working (`Page._working`). */
+  #started = false
 
   constructor() {
     super()
@@ -116,6 +118,7 @@ export class BrowserContext extends EventEmitter {
     let page = this.#byId.get(fact.id)
     if (!page) {
       page = new Page(this, fact.id, fact.url)
+      page._working = this.#started
       this.#byId.set(fact.id, page)
     }
     page._applyFact(fact)
@@ -137,9 +140,25 @@ export class BrowserContext extends EventEmitter {
    */
   _runPage(init: RunInit): Page {
     for (const fact of init.pages) this._pageFor(fact)
-    if (init.page) return this._pageFor(init.page)
-    this.#unopened = new Page(this, null)
-    return this.#unopened
+    const page = init.page ? this._pageFor(init.page) : new Page(this, null)
+    if (!init.page) this.#unopened = page
+    page._working = true
+    this.#started = true
+    return page
+  }
+
+  /**
+   * One `page.frames` read per open working page that has a tab, in parallel, each failure
+   * swallowed, as `waitForTimeout` ends (FR-1). A page with no tab yet is skipped, so a wait
+   * never opens the run's lazy tab, and a refused read leaves that page's tree as it was.
+   */
+  async _refreshWorkingFrames(api: string): Promise<void> {
+    const working = this.pages().filter(
+      (page) => page._working && page._tab !== null,
+    )
+    await Promise.all(
+      working.map((page) => page._refreshFrames(api).catch(() => undefined)),
+    )
   }
 
   /**
@@ -161,7 +180,7 @@ export class BrowserContext extends EventEmitter {
   async #openPage(api: string): Promise<Page> {
     const opened = await invoke('context.newPage', { api, timeoutMs: 0 }, {})
     const page = this._pageFromResult(opened.page, opened.url)
-    if (!page) throw clientError(api, 'context.newPage returned no page')
+    if (!page) throw internalError(api, 'context.newPage returned no page')
     return page
   }
 }

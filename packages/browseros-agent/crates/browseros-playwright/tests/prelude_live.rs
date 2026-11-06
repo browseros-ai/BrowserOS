@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use browseros_playwright::{ErrorCode, PlaywrightError};
 use fixture_server::{FixtureServer, Page};
 use futures_util::future::BoxFuture;
-use js_runner::{OpHost, run_script};
+use js_runner::OpHost;
 use live_run::{LiveRun, TestPage, TestResult};
 use serde_json::{Value, json};
 
@@ -84,7 +84,7 @@ async fn tests_that_the_prelude_builds_playwrights_locators_in_quickjs() -> Test
          return {{ built, go: {{ selector: go._selector, toString: go.toString() }} }}",
         codes = serde_json::to_string(&codes)?,
     );
-    let result = run_script(&host, &init, &script).await?;
+    let result = js_runner::run_script(&host, &init, &script).await?;
     let expected: Vec<Value> = cases
         .iter()
         .map(|case| {
@@ -110,7 +110,7 @@ async fn tests_that_an_uncaught_expect_failure_settles_as_its_ops_failure() -> T
     let host: Arc<dyn OpHost> = Arc::new(NoOps);
     let init = json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 } });
     let script = "await expect(page.locator('#total')).toHaveText('nope', { timeout: 50 })";
-    let settled = run_script(&host, &init, script).await;
+    let settled = js_runner::run_script(&host, &init, script).await;
     assert_eq!(
         settled,
         Err(
@@ -120,6 +120,161 @@ async fn tests_that_an_uncaught_expect_failure_settles_as_its_ops_failure() -> T
         ),
         "the bootstrap knows the op's own error, so the run reports the failure the door recorded"
     );
+    Ok(())
+}
+
+/// The run page a seeded run starts on.
+fn seeded() -> Value {
+    json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 } })
+}
+
+/// FR/RC: a refusal the script leaves uncaught settles the run as the refusal's op, whose
+/// failure the door recorded with its code, for an async member and a sync one alike.
+#[tokio::test]
+async fn tests_that_an_uncaught_refusal_settles_as_its_refusal_op() -> TestResult {
+    let host: Arc<dyn OpHost> = Arc::new(NoOps);
+    for (script, refused) in [
+        (
+            "await page.route('**', () => {})",
+            "page.route: network interception is not available in Neo",
+        ),
+        (
+            "browser.browserType()",
+            "browser.browserType: Neo drives its own BrowserOS; there is no browser type to launch",
+        ),
+    ] {
+        assert_eq!(
+            js_runner::run_script(&host, &seeded(), script).await,
+            Err(format!(
+                "the script threw the error of an op: method_unavailable: {refused}"
+            )),
+            "{script}"
+        );
+    }
+    Ok(())
+}
+
+/// A host that records every op it is sent and answers only `page.frames` (with `frames`, or
+/// refused as an owner's takeover refuses it) and `page.title`.
+struct Recording {
+    frames: Option<Value>,
+    sent: Mutex<Vec<String>>,
+}
+
+impl Recording {
+    fn answering_frames(frames: Option<Value>) -> Arc<Self> {
+        Arc::new(Self {
+            frames,
+            sent: Mutex::default(),
+        })
+    }
+
+    fn sent(&self) -> Vec<String> {
+        self.sent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl OpHost for Recording {
+    fn invoke<'a>(
+        &'a self,
+        name: &'a str,
+        _input: Value,
+    ) -> BoxFuture<'a, Result<Value, PlaywrightError>> {
+        Box::pin(async move {
+            self.sent
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(name.to_owned());
+            match (name, &self.frames) {
+                ("page.frames", Some(frames)) => Ok(frames.clone()),
+                ("page.title", _) => Ok(json!("Title")),
+                _ => Err(PlaywrightError::new(
+                    ErrorCode::Unsupported,
+                    format!("{name}: the owner has control of this tab"),
+                )),
+            }
+        })
+    }
+
+    fn gesture(
+        &self,
+        _page: TestPage,
+        _expression: String,
+    ) -> BoxFuture<'_, Result<Value, String>> {
+        Box::pin(async { Err("this script was to touch no page".to_owned()) })
+    }
+}
+
+/// FR-1: a run on a known tab reads the tab's frames once, before the script's first statement,
+/// so `page.frames()` lists its iframes with no op of the script's own.
+#[tokio::test]
+async fn tests_that_a_run_on_a_known_tab_reads_its_frames_before_its_first_statement() -> TestResult
+{
+    let recording = Recording::answering_frames(Some(json!({ "frames": [
+        { "id": "main", "parentId": null, "name": "", "url": "https://a.example/" },
+        { "id": "same", "parentId": "main", "name": "same", "url": "https://a.example/child" },
+    ] })));
+    let host: Arc<dyn OpHost> = Arc::clone(&recording) as Arc<dyn OpHost>;
+    let names = js_runner::run_script(
+        &host,
+        &seeded(),
+        "return page.frames().map((frame) => frame.name())",
+    )
+    .await?;
+    assert_eq!(names, json!(["", "same"]));
+    assert_eq!(recording.sent(), ["page.frames"], "one read, at the start");
+    Ok(())
+}
+
+/// A4: a run whose page has no tab yet reads no frames, so a run that never touches `page`
+/// opens no tab, and a refusal it meets first is refused by the door alone. The refusal's code
+/// is read from the run's settled error, the door's record of it: the error object has the
+/// door's fields only after the script next yields to Rust.
+#[tokio::test]
+async fn tests_that_an_unopened_run_page_opens_no_tab() -> TestResult {
+    let recording = Recording::answering_frames(None);
+    let host: Arc<dyn OpHost> = Arc::clone(&recording) as Arc<dyn OpHost>;
+    let settled = js_runner::run_script(
+        &host,
+        &json!({ "page": null }),
+        "if (page.frames().length !== 1) throw new Error('the unopened page lists one frame')\n\
+         await page.route('**', () => {})",
+    )
+    .await;
+    assert_eq!(
+        settled,
+        Err(
+            "the script threw the error of an op: method_unavailable: page.route: network \
+             interception is not available in Neo"
+                .to_owned()
+        ),
+        "the door recorded the refusal with its code"
+    );
+    assert_eq!(
+        recording.sent(),
+        Vec::<String>::new(),
+        "no op reached the host"
+    );
+    Ok(())
+}
+
+/// A4: a frames read the door refuses, as under the owner's takeover, keeps the main frame alone,
+/// and the run still starts; its own first op meets the refusal itself.
+#[tokio::test]
+async fn tests_that_a_refused_frames_read_still_starts_the_run() -> TestResult {
+    let recording = Recording::answering_frames(None);
+    let host: Arc<dyn OpHost> = Arc::clone(&recording) as Arc<dyn OpHost>;
+    let outcome = js_runner::run_script(
+        &host,
+        &seeded(),
+        "return { frames: page.frames().length, title: await page.title() }",
+    )
+    .await?;
+    assert_eq!(outcome, json!({ "frames": 1, "title": "Title" }));
+    assert_eq!(recording.sent(), ["page.frames", "page.title"]);
     Ok(())
 }
 
@@ -135,7 +290,7 @@ async fn tests_that_context_pages_lists_the_tabs_the_run_init_names() -> TestRes
     });
     let script =
         "return context.pages().map((p) => ({ url: p.url(), brand: p.toJSON(), run: p === page }))";
-    let listed = run_script(&host, &init, script).await?;
+    let listed = js_runner::run_script(&host, &init, script).await?;
     assert_eq!(
         listed,
         json!([
@@ -160,7 +315,7 @@ async fn tests_that_buffer_text_of_megabytes_fits_in_claw_sdks_heap() -> TestRes
                   }";
     let host: Arc<dyn OpHost> = Arc::new(NoOps);
     let init = json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 } });
-    let lengths = run_script(&host, &init, script).await?;
+    let lengths = js_runner::run_script(&host, &init, script).await?;
     assert_eq!(
         lengths,
         json!({ "base64": 4_194_304, "hex": 6_291_456, "utf8": 3_145_728, "fromUtf8": 3_670_016 }),
@@ -211,7 +366,7 @@ async fn tests_that_a_payload_under_neos_limit_reaches_the_op_whole_in_claw_sdks
     let uploads = Arc::new(Uploads::default());
     let host: Arc<dyn OpHost> = Arc::<Uploads>::clone(&uploads);
     let init = json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 } });
-    let refused = run_script(&host, &init, script).await?;
+    let refused = js_runner::run_script(&host, &init, script).await?;
     assert_eq!(
         refused,
         json!([
@@ -299,7 +454,7 @@ async fn tests_that_a_playwright_script_runs_through_the_prelude_on_a_live_brows
         page = json!(url("page")),
         side = json!(url("side")),
     );
-    let result = run_script(&host, &init, &script).await?;
+    let result = js_runner::run_script(&host, &init, &script).await?;
     assert_eq!(
         result,
         json!({
