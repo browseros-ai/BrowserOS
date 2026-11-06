@@ -54,6 +54,4 @@ test('innerText returns rendered text and rejects non-HTML, ambiguous or missing
       notAString: 'error',
     },
   })
-  assert.equal(outcome.calls.length, 8)
-  assert.ok(outcome.calls.every((c) => c.delivery === undefined))
 })

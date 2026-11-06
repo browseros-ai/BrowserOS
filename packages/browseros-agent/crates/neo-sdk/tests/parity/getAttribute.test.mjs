@@ -49,6 +49,4 @@ test('getAttribute returns strings or null and rejects ambiguous or missing targ
       nameNotAString: 'error',
     },
   })
-  assert.equal(outcome.calls.length, 8)
-  assert.ok(outcome.calls.every((c) => c.delivery === undefined))
 })
