@@ -12,10 +12,11 @@ use super::{ConfigError, Defaults};
 /// field, and nothing else in the crate reads an env var.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct EnvConfig {
-    /// `BROWSERCLAW_DIR` (trimmed, non-empty), else `$HOME/.browserclaw`. Logs, the trace store
-    /// and the default host socket live under it.
+    /// `BROWSERCLAW_DIR` (trimmed, non-empty), else `.browserclaw` under `home`. Logs, the trace
+    /// store and the default host socket live under it.
     pub(crate) state_dir: PathBuf,
-    /// `HOME` (trimmed, non-empty). The Neo image keeps its CAPTCHA keys under it
+    /// The user's home: `HOME` (trimmed, non-empty), else the passwd entry's, for a launch
+    /// through `env -i`, which sets no `HOME`. The Neo image keeps its CAPTCHA keys under it
     /// (`Defaults::CAPTCHA_KEY_DIR`), and the state dir falls back to it.
     pub(crate) home: Option<PathBuf>,
     /// browseros-captcha's key-file variables (`BROWSEROS_CAPSOLVER_API_KEY_FILE`, then
@@ -71,20 +72,27 @@ pub(crate) struct HostApiConfig {
 }
 
 impl EnvConfig {
-    /// Reads the variables through `lookup`, so tests pass a map instead of the real
-    /// environment. Blank values count as unset.
+    /// Reads the variables through `lookup`, and the user's home through `users_home` only when
+    /// `HOME` is unset or blank, so tests pass values instead of the real environment and passwd
+    /// database. Blank values count as unset. Production passes `std::env::home_dir`, which
+    /// returns a set `HOME` as is, so a blank one names no home and only an unset one reaches
+    /// the passwd entry.
     pub(crate) fn from_lookup(
         lookup: &dyn Fn(&str) -> Option<String>,
+        users_home: &dyn Fn() -> Option<PathBuf>,
     ) -> Result<Self, ConfigError> {
         let read = |name: &str| non_blank(lookup(name));
-        let home = read("HOME").map(PathBuf::from);
+        let home = read("HOME").map(PathBuf::from).or_else(|| {
+            users_home().filter(|home| !home.as_os_str().to_string_lossy().trim().is_empty())
+        });
         let state_dir = match (read("BROWSERCLAW_DIR"), &home) {
             (Some(dir), _) => PathBuf::from(dir),
             (None, Some(home)) => home.join(".browserclaw"),
             (None, None) => {
                 return Err(ConfigError::Env {
                     name: "HOME",
-                    why: "unset, and BROWSERCLAW_DIR is unset too, so there is no state directory"
+                    why: "unset, the passwd entry names no home, and BROWSERCLAW_DIR is unset \
+                          too, so there is no state directory"
                         .to_owned(),
                 });
             }
@@ -178,7 +186,7 @@ mod tests {
             .iter()
             .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
             .collect();
-        EnvConfig::from_lookup(&|name| vars.get(name).cloned())
+        EnvConfig::from_lookup(&|name| vars.get(name).cloned(), &|| None)
     }
 
     #[test]
@@ -276,7 +284,7 @@ mod tests {
             "browseros-captcha trims each value and reads the key at that path"
         );
         assert_eq!(
-            EnvConfig::from_lookup(&lookup)?.captcha_key_files,
+            EnvConfig::from_lookup(&lookup, &|| None)?.captcha_key_files,
             [capsolver, twocaptcha],
             "Neo names the same two files, trimmed the same way"
         );
@@ -294,11 +302,31 @@ mod tests {
         Ok(())
     }
 
+    /// `HOME` wins, as every Unix program reads it; an `env -i` launch, which has none, still
+    /// gets the user's home from the passwd entry.
+    #[test]
+    fn home_is_home_else_the_passwd_entrys() -> Result<(), Box<dyn Error>> {
+        let passwd = || Some(PathBuf::from("/home/neo"));
+        let set = EnvConfig::from_lookup(
+            &|name| (name == "HOME").then(|| "/tmp/rig/home".to_owned()),
+            &passwd,
+        )?;
+        assert_eq!(set.home.as_deref(), Some(Path::new("/tmp/rig/home")));
+        let unset = EnvConfig::from_lookup(&|_| None, &passwd)?;
+        assert_eq!(unset.home.as_deref(), Some(Path::new("/home/neo")));
+        assert_eq!(
+            unset.state_dir,
+            Path::new("/home/neo/.browserclaw"),
+            "the state dir falls back to that home too"
+        );
+        Ok(())
+    }
+
     #[test]
     fn no_home_and_no_state_dir_fails() {
         assert!(
             matches!(env(&[]), Err(ConfigError::Env { name: "HOME", .. })),
-            "without either there is nowhere to put logs or the trace"
+            "without either, or a passwd home, there is nowhere to put logs or the trace"
         );
     }
 

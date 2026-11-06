@@ -57,7 +57,7 @@ impl AppConfig {
         let lookup = |name: &str| env::var(name).ok();
         let cwd = env::current_dir();
         let launch = LaunchConfig::read(path)?;
-        let env = EnvConfig::from_lookup(&lookup)?;
+        let env = EnvConfig::from_lookup(&lookup, &env::home_dir)?;
         Ok(Self {
             secret_files: SecretFiles::locate(&env, &launch, &cwd),
             launch,

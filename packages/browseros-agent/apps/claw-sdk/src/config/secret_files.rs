@@ -11,6 +11,7 @@
 //!  HostToken       CLAW_HOST_TOKEN_FILE             file  /run/mirror-neo/token, <rig>/host-token
 //!  CaptchaKey      BROWSEROS_*_API_KEY_FILE         file  <keys>/capsolver-api-key, <rig>/…-key
 //!  CaptchaKeyDir   $HOME/.config/browseros/captcha  dir   <keys>, the image's 0700 keys-only dir
+//!                  (HOME unset, as in an `env -i` launch: the passwd entry's home)
 //!  TraceStore      $BROWSERCLAW_DIR/claw-sdk        dir   trace.db, -wal, -shm, flags-lost,
 //!                                                         broken stores, screenshots
 //!  BrowserProfile  parent(directories.execution)    dir   /data/profile, <rig>/profile
@@ -59,8 +60,9 @@ pub(crate) enum SecretKind {
     /// directory, which can be shared too (the BrowserOS rig's root holds the profile and the
     /// token); the crate's `(dev, inode)` match still catches a link to it.
     CaptchaKey,
-    /// The image's CAPTCHA key directory under `$HOME`, which covers a key baked into the image
-    /// that no variable names.
+    /// The image's CAPTCHA key directory under the user's home (`EnvConfig::home`), which covers
+    /// a key baked into the image that no variable names. Skipped only when neither `HOME` nor
+    /// the passwd entry names a home.
     CaptchaKeyDir,
     /// The trace store's directory: `trace.db` and its `-wal` and `-shm`, which come and go, the
     /// flags-lost marker, broken stores moved aside, and the trace screenshots.
@@ -164,12 +166,22 @@ mod tests {
     use super::{SecretFile, SecretFiles, SecretKind};
     use crate::config::{Defaults, EnvConfig, LaunchConfig};
 
-    /// The environment `vars` would give Neo.
+    /// The environment `vars` would give Neo, for a user with no home in the passwd database.
     fn env(vars: &[(&str, &str)]) -> Result<EnvConfig, Box<dyn Error>> {
+        env_for_user(vars, None)
+    }
+
+    /// The environment `vars` would give Neo, for a user whose passwd entry's home is
+    /// `passwd_home`.
+    fn env_for_user(
+        vars: &[(&str, &str)],
+        passwd_home: Option<&str>,
+    ) -> Result<EnvConfig, Box<dyn Error>> {
         let vars: HashMap<&str, &str> = vars.iter().copied().collect();
-        Ok(EnvConfig::from_lookup(&|name| {
-            vars.get(name).map(|value| (*value).to_owned())
-        })?)
+        Ok(EnvConfig::from_lookup(
+            &|name| vars.get(name).map(|value| (*value).to_owned()),
+            &|| passwd_home.map(PathBuf::from),
+        )?)
     }
 
     /// The launch facts Chromium writes, with `directories.execution` as given.
@@ -337,6 +349,38 @@ mod tests {
                 SecretFiles::Named(_)
             ),
             "absolute entries need no working directory"
+        );
+        Ok(())
+    }
+
+    /// A launch through `env -i` has no `HOME`, yet the image's keys still sit under its user's
+    /// home, where a key no variable names would otherwise upload.
+    #[test]
+    fn an_unset_home_falls_back_to_the_users_passwd_home() -> Result<(), Box<dyn Error>> {
+        let bare = [
+            ("BROWSERCLAW_DIR", "/data/browserclaw"),
+            ("BROWSEROS_CAPSOLVER_API_KEY_FILE", "/run/keys/capsolver"),
+        ];
+        let profile = launch(Some("/data/profile/.browseros"));
+        let root = Ok(PathBuf::from("/"));
+        assert_eq!(
+            SecretFiles::locate(&env_for_user(&bare, Some("/home/neo"))?, &profile, &root),
+            named(&[
+                (CaptchaKey, "/run/keys/capsolver"),
+                (CaptchaKeyDir, "/home/neo/.config/browseros/captcha"),
+                (TraceStore, "/data/browserclaw/claw-sdk"),
+                (BrowserProfile, "/data/profile"),
+            ]),
+            "the key dir under the passwd entry's home"
+        );
+        assert_eq!(
+            SecretFiles::locate(&env_for_user(&bare, None)?, &profile, &root),
+            named(&[
+                (CaptchaKey, "/run/keys/capsolver"),
+                (TraceStore, "/data/browserclaw/claw-sdk"),
+                (BrowserProfile, "/data/profile"),
+            ]),
+            "with no home anywhere there is no key dir to name, and the named key is still denied"
         );
         Ok(())
     }
