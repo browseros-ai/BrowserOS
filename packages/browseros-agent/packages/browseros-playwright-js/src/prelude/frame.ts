@@ -99,12 +99,12 @@ export type SelectorOp = {
     : never
 }[OpName]
 
-/** upstream's verifyLoadState. */
-export function loadState(
-  api: string,
-  name: string,
-  state: unknown,
-): LoadState {
+/**
+ * upstream's verifyLoadState. Its client calls it before the API wrapper that prefixes a
+ * failure with the method's name (PW:61763), so the message has no prefix: measured for
+ * `setContent` and `waitForLoadState` with Playwright 1.64.1.
+ */
+export function loadState(name: string, state: unknown): LoadState {
   if (state === 'networkidle0') return 'networkidle'
   if (
     state === 'load' ||
@@ -113,8 +113,7 @@ export function loadState(
     state === 'commit'
   )
     return state
-  throw clientError(
-    api,
+  throw plainError(
     `${name}: expected one of (load|domcontentloaded|networkidle|commit)`,
   )
 }
@@ -989,7 +988,7 @@ export class Frame extends EventEmitter {
       noWait ? 0 : this._timeout(options),
       noWait ? { script, noWait: true, selector } : { script },
     )
-    return fromPageValue(value)
+    return fromPageValue(api, value)
   }
 
   /** `fn(elements, arg)` on every match of `selector` now. */
@@ -1003,7 +1002,7 @@ export class Frame extends EventEmitter {
       target,
       script,
     })
-    return fromPageValue(value)
+    return fromPageValue(api, value)
   }
 
   /** A snapshot rooted at `selector`, or at the page when `selector` is null. */
@@ -1092,7 +1091,7 @@ export class Frame extends EventEmitter {
   ): Promise<Response | null> {
     if (typeof url !== 'string')
       throw clientError(api, `url: expected string, got ${typeof url}`)
-    const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
+    const waitUntil = loadState('waitUntil', options.waitUntil ?? 'load')
     const args = await this._frameArgs(api)
     const result = await invoke(
       'page.goto',
@@ -1112,7 +1111,7 @@ export class Frame extends EventEmitter {
     state: LoadState | undefined,
     options: TimeoutOption = {},
   ): Promise<void> {
-    const verified = loadState(api, 'state', state ?? 'load')
+    const verified = loadState('state', state ?? 'load')
     const result = await invoke(
       'page.waitForLoadState',
       this._call(api, this._navigationTimeout(options)),
@@ -1134,7 +1133,7 @@ export class Frame extends EventEmitter {
     html: string,
     options: NavigateOptions = {},
   ): Promise<void> {
-    const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
+    const waitUntil = loadState('waitUntil', options.waitUntil ?? 'load')
     const result = await invoke(
       'page.setContent',
       this._call(api, this._navigationTimeout(options)),
@@ -1155,7 +1154,7 @@ export class Frame extends EventEmitter {
       ...(await this._frameArgs(api)),
       script,
     })
-    return fromPageValue(value)
+    return fromPageValue(api, value)
   }
 
   /** upstream's `Frame.waitForFunction`: its polling check, unprefixed, comes first. */
@@ -1261,12 +1260,12 @@ export class WaitHandle {
   }
 
   async jsonValue(): Promise<unknown> {
-    return fromPageValue(this.#value)
+    return fromPageValue('jsHandle.jsonValue', this.#value)
   }
 
-  /** The value, for a script that passes this handle as its argument. */
-  _value(): unknown {
-    return fromPageValue(this.#value)
+  /** The value, for a script that passes this handle as its argument to `api`. */
+  _value(api: string): unknown {
+    return fromPageValue(api, this.#value)
   }
 
   asElement(): null {

@@ -1,26 +1,66 @@
-//! How the page ops call into a frame's sealed world: one retry when the frame's document was
-//! replaced under the world. A failure left after it is the op's through `resolve::failed`.
+//! How the page ops call into a frame's sealed world: the frame a `frame.*` form names, found
+//! the way `frame.locator` finds it, and one retry when the frame's document was replaced under
+//! the world. A failure left after it is the op's through `resolve::failed`.
 
 use std::future::Future;
 
 use browseros_core::FrameId;
 
-use crate::PlaywrightError;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{ProbeFailure, ProbeReply};
+use crate::resolve::{self, FrameStart, Started};
 use crate::world::{Endpoint, Place, SealedWorld};
+use crate::{ErrorCode, PlaywrightError};
 
-/// The frame a page op's input names: absent is the main frame, the only one these ops serve
-/// yet. `frame.evaluate`, `frame.title` and the other frame forms answer `not built yet`.
-pub(crate) fn main_frame_only(
+/// The world of the frame a page op's input names: absent, or the main frame's own id, is the
+/// main frame; a child frame's id (from `page.frames`) is entered level by level from the main
+/// frame through `FrameStart`, the route a locator built from that frame takes. A world gone on
+/// the way is dropped and the walk runs once more. A frame the page's tree no longer lists, or
+/// that is not where the tree says, fails `<api>: Frame was detached`, as upstream's
+/// `frame.evaluate`, `waitForFunction`, `setContent` and `content` do on a detached frame
+/// (measured with Playwright 1.64.1 on stock Chromium and on BrowserOS).
+pub(crate) async fn frame_world(
+    page: &OpPage<'_>,
     scope: &OpScope<'_>,
     frame: Option<&FrameId>,
-) -> Result<(), PlaywrightError> {
-    match frame {
-        None => Ok(()),
-        Some(_) => Err(scope.not_built()),
+) -> Result<SealedWorld, PlaywrightError> {
+    listed_frame_world(page, scope, frame)
+        .await?
+        .ok_or_else(|| scope.fail(ErrorCode::TargetClosed, "Frame was detached"))
+}
+
+/// [`frame_world`], with `None` for a frame the page's tree no longer lists, for an op whose
+/// own failure says what a detached frame means to it (`waitForURL`'s).
+pub(crate) async fn listed_frame_world(
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    frame: Option<&FrameId>,
+) -> Result<Option<SealedWorld>, PlaywrightError> {
+    let main = page.main_endpoint();
+    let child = frame.filter(|frame| **frame != main.frame);
+    for _attempt in 0..2 {
+        let main_world = page
+            .world(&main, Place::Main)
+            .await
+            .map_err(|failure| resolve::failed(scope, failure))?;
+        let Some(child) = child else {
+            return Ok(Some(main_world));
+        };
+        match FrameStart::new(child.clone())
+            .enter(page, scope, main_world)
+            .await?
+        {
+            Started::Ready { world, .. } => return Ok(Some(*world)),
+            Started::Missing | Started::Detached => break,
+            Started::Gone(world) => {
+                if let Some(world) = world {
+                    page.frames().invalidate(&world);
+                }
+            }
+        }
     }
+    Ok(None)
 }
 
 /// Runs `call` in the world of `endpoint`'s frame, installing it on first use. A world whose
@@ -65,3 +105,6 @@ pub(crate) fn unexpected(request: &str, reply: ProbeReply) -> ProbeFailure {
         )),
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,8 +1,9 @@
 //! The main-world sweep's scope on a real browser, through `Playwright::invoke` (decisions.md,
-//! "Main-world sweep scope"): before and after `page.evaluate` and `page.waitForFunction`, every
-//! frame of the page in the main frame's site is swept, across every CDP session the page has.
-//! A frame of that site that cannot be swept within its budget refuses the script with nothing
-//! sent; a frame of another site is never asked, so a hung one costs nothing.
+//! "Main-world sweep scope"): before and after `page.evaluate`, `page.waitForFunction` and
+//! `page.setContent`, every frame of the page in the main frame's site is swept, across every
+//! CDP session the page has. A frame of that site that cannot be swept within its budget refuses
+//! the script with nothing sent; a frame of another site is never asked, so a hung one costs
+//! nothing.
 //!
 //! The nested fixture holds the leak R10c measured: a3 has the top page's site but sits under two
 //! cross-site OOPIFs on a session of its own, so a script on top reads it through `frames[…]`.
@@ -68,6 +69,11 @@ const UNTIMED_RETRY: Duration = Duration::from_secs(5);
 /// The short Playwright timeout the hung-frame test gives an op that has one.
 const SHORT_TIMEOUT: Duration = Duration::from_millis(1_500);
 
+/// setContent's timeout, in milliseconds, when the frame its HTML opens hangs after the load:
+/// room for the write and its load state, then for the sweep after them to try the hung frame a
+/// few times.
+const HUNG_AFTER_TIMEOUT_MS: u64 = 5_000;
+
 /// The nested fixture with the unresponsive cross-site frame D (`top.html?hang` adds it).
 fn nest_and_hang() -> HashMap<String, Page> {
     let mut pages = nest_pages();
@@ -114,6 +120,20 @@ async fn page_evaluate(
     run.invoke(
         "page.evaluate",
         json!({ "page": brand(page), "script": script(function) }),
+    )
+    .await
+}
+
+/// `page.setContent(html)` as the prelude sends it, with Playwright's timeout of `timeout_ms`.
+async fn set_content_within(
+    run: &LiveRun,
+    page: &TestPage,
+    html: &str,
+    timeout_ms: u64,
+) -> Result<Value, PlaywrightError> {
+    run.invoke(
+        "page.setContent",
+        json!({ "call": { "timeoutMs": timeout_ms }, "page": brand(page), "html": html }),
     )
     .await
 }
@@ -712,7 +732,7 @@ async fn tests_that_an_oopif_script_reads_its_same_origin_sibling_masked() -> Te
 /// origin-keyed agent cluster, so Chromium gives it a process of its own (measured), which
 /// then spins. The page's own frame still answers. Each op tries the frame again on fresh
 /// budgets until its own bound and then refuses: `page.evaluate`, which has no timeout, for
-/// the untimed window; the other two inside their 1.5 s.
+/// the untimed window; the other three inside their 1.5 s.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_hung_same_site_frame_refuses_the_script_with_nothing_sent() -> TestResult {
@@ -742,13 +762,23 @@ async fn tests_that_a_hung_same_site_frame_refuses_the_script_with_nothing_sent(
             );
             let script = "() => { window.ran = true; return document.getElementById('p').value; }";
             let field = locator(&page, &[css("#p")], "locator('#p')");
-            for api in ["page.evaluate", "page.waitForFunction", "locator.evaluate"] {
+            let html = "<!doctype html><title>Written</title><script>window.ran = true</script>";
+            for api in [
+                "page.evaluate",
+                "page.waitForFunction",
+                "page.setContent",
+                "locator.evaluate",
+            ] {
                 run.clear_calls();
                 let started = Instant::now();
                 let (refused, bound) = match api {
                     "page.evaluate" => (page_evaluate(&run, &page, script).await, UNTIMED_RETRY),
                     "page.waitForFunction" => (
                         wait_for_function_within(&run, &page, script, 1_500).await,
+                        SHORT_TIMEOUT,
+                    ),
+                    "page.setContent" => (
+                        set_content_within(&run, &page, html, 1_500).await,
                         SHORT_TIMEOUT,
                     ),
                     _ => (
@@ -785,9 +815,10 @@ async fn tests_that_a_hung_same_site_frame_refuses_the_script_with_nothing_sent(
                 not_sent(&run, api);
             }
             assert_eq!(
-                run.eval(&page, "window.ran === true").await?,
-                json!(false),
-                "no script ran"
+                run.eval(&page, "[window.ran === true, document.title]")
+                    .await?,
+                json!([false, "Parent"]),
+                "no script ran, and the document was not replaced"
             );
             Ok(())
         }
@@ -795,6 +826,80 @@ async fn tests_that_a_hung_same_site_frame_refuses_the_script_with_nothing_sent(
         (run, result)
     })
     .await
+}
+
+/// The frame setContent's HTML opens is of the page's site and hangs once it loaded, so the
+/// sweep after the load state cannot reach it: the op fails closed once its timeout leaves no
+/// room for another try of that frame, though its content was set, which only an op that wrote
+/// it and reached its load state can report.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_same_site_frame_hung_after_set_content_fails_it_closed() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let hang = Page::html(
+        "<!doctype html><title>Hang</title><label>Password <input type=\"password\"></label>\
+         <script>addEventListener('load', () => setTimeout(() => { for (;;) {} }, 0));</script>",
+    )
+    .with_header("origin-agent-cluster", "?1")
+    .with_header("cache-control", "no-store");
+    let hanging = FixtureServer::start(HashMap::from([("/hang.html".to_owned(), hang)])).await?;
+    let server = FixtureServer::start(HashMap::from([(
+        "/plain.html".to_owned(),
+        Page::html("<!doctype html><title>Plain</title><p>plain</p>"),
+    )]))
+    .await?;
+    let url = server.url("127.0.0.1", "/plain.html");
+    let run = LiveRun::connect().await?;
+    let page = run.new_page().await?;
+    let result = async {
+        run.invoke(
+            "page.goto",
+            json!({ "call": { "timeoutMs": 30_000 }, "page": brand(&page), "url": url }),
+        )
+        .await?;
+        let html = format!(
+            "<!doctype html><title>Written</title><iframe title=\"hang\" src=\"{}\"></iframe>",
+            hanging.url("127.0.0.1", "/hang.html")
+        );
+        run.clear_calls();
+        let started = Instant::now();
+        let error = set_content_within(&run, &page, &html, HUNG_AFTER_TIMEOUT_MS)
+            .await
+            .err()
+            .ok_or("a same-site frame the sweep after cannot reach fails setContent")?;
+        let took = started.elapsed();
+        report(&format!("page.setContent failed after {took:?}: {error}"));
+        assert_eq!(
+            (error.error_code(), error.owner()),
+            (Some(ErrorCode::Unsupported), ErrorOwner::Neo),
+            "{error}"
+        );
+        assert!(
+            error.message().contains("though the content was set"),
+            "the message says the content is in the page: {error}"
+        );
+        assert!(
+            run.calls().contains(&EnvCall::MarkSent),
+            "the content was sent: {:?}",
+            run.calls()
+        );
+        // The write and its load state run under the op's timeout, and the sweep after them
+        // tries the hung frame again on fresh budgets while that timeout has room for a try as
+        // long as the last, so the op fails closed after one late try and by its timeout.
+        assert!(
+            took >= Duration::from_secs(1)
+                && took < Duration::from_millis(HUNG_AFTER_TIMEOUT_MS) + Duration::from_secs(1),
+            "failed closed after a late try and within the op's timeout, took {took:?}"
+        );
+        TestResult::Ok(())
+    }
+    .await;
+    // Closed by its tab id, browser-side, and nothing else is asked of the page: any op on an
+    // agent's tab whose frame hung at its load first admits the page through core, whose file
+    // chooser interception then waits on that frame's session for CDP's 60 s timeout per call,
+    // one to three of them (measured, the crate's page.close took 60 s and 179 s).
+    let _ = run.browser().pages.close(page.id.clone()).await;
+    result
 }
 
 #[tokio::test]

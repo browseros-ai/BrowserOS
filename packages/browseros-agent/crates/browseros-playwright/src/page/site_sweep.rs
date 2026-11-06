@@ -113,6 +113,8 @@ impl SiteSweep {
                  again for its privacy sweep, so page text that may hold its values is withheld; \
                  try again",
             )),
+            // Only a guard's sweep is cut at the op's deadline on its first try.
+            Some(Unswept::Expired) => Err(scope.timed_out(ErrorCode::WaitTimeout)),
             Some(Unswept::Failed(failure)) => Err(resolve::failed(scope, failure)),
         }
     }

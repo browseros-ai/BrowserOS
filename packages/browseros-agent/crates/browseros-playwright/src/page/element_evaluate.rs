@@ -21,15 +21,16 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::op_scope::OpScope;
-use crate::page::OpPage;
 use crate::page::evaluate::ScriptInput;
 use crate::page::evaluate_guard::{
-    self, BoundNode, DOCUMENT_REPLACED, EvaluateGuard, MainWorldCall, Outcome, Subject, TreeFrame,
+    self, BoundNode, DOCUMENT_REPLACED, EvaluateGuard, MainWorldCall, NAVIGATED, Outcome, Subject,
+    TreeFrame,
 };
+use crate::page::{OpPage, world_call};
 use crate::read::{self, Returning, SelectorState};
-use crate::resolve::{self, FrameStart, HandleSite, Started};
+use crate::resolve::{self, HandleSite};
 use crate::target::{ElementTarget, LocatorTarget, PageRef, RootHandle, Strictness, Target};
-use crate::world::{FrameSeq, Place, SeqLookup};
+use crate::world::{FrameSeq, SeqLookup};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// `locator.evaluate(fn, arg)`, `elementHandle.evaluate`, and `$eval` with `noWait`.
@@ -147,6 +148,7 @@ async fn run_once(
         Outcome::NotRun | Outcome::Destroyed => {
             Err(scope.fail(ErrorCode::PageError, DOCUMENT_REPLACED))
         }
+        Outcome::Navigated => Err(scope.fail(ErrorCode::PageError, NAVIGATED)),
         Outcome::Falsy => Err(scope.fail(ErrorCode::Internal, "a script run once answered a poll")),
     }
 }
@@ -226,40 +228,9 @@ async fn starting_frame(
             world.seq(),
         ));
     }
-    let main = page.main_endpoint();
-    let built_from = locator.frame.as_ref().filter(|frame| **frame != main.frame);
-    for _attempt in 0..2 {
-        let main_world = page
-            .world(&main, Place::Main)
-            .await
-            .map_err(|failure| resolve::failed(scope, failure))?;
-        let Some(frame) = built_from else {
-            let seq = main_world.seq();
-            return Ok((
-                TreeFrame {
-                    endpoint: main,
-                    place: Place::Main,
-                },
-                seq,
-            ));
-        };
-        match FrameStart::new(frame.clone())
-            .enter(page, scope, main_world)
-            .await?
-        {
-            Started::Ready { world, .. } => {
-                return Ok((
-                    evaluate_guard::frame_endpoint(page, world.session(), world.frame().clone()),
-                    world.seq(),
-                ));
-            }
-            Started::Missing => break,
-            Started::Gone(world) => {
-                if let Some(world) = world {
-                    page.frames().invalidate(&world);
-                }
-            }
-        }
-    }
-    Err(scope.fail(ErrorCode::TargetClosed, "Frame was detached"))
+    let world = world_call::frame_world(page, scope, locator.frame.as_ref()).await?;
+    Ok((
+        evaluate_guard::frame_endpoint(page, world.session(), world.frame().clone()),
+        world.seq(),
+    ))
 }

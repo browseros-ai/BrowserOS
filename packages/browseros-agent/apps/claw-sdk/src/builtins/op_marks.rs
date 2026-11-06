@@ -25,7 +25,7 @@ pub(super) struct OpMarks {
 /// sees the call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Hold {
-    /// What the op does that keeps it held, read after "it" or "each": "runs script in ...".
+    /// What the op does that keeps it held, read after "it" or "each": "changes which tab ...".
     why: &'static str,
     /// What a script does instead, meanwhile.
     meanwhile: &'static str,
@@ -76,25 +76,11 @@ const fn policing(capability: Capability) -> Policing {
 
 /// The hold of an op whose every capability the door polices, but which the crate does not guard
 /// at its gateways yet ([`OpSpec::gated`] is false). A door rule cannot stand in for a guard the
-/// crate lacks. What a script does meanwhile depends on what the op reaches, so `reach` is the
-/// first capability it declares.
-const fn ungated(reach: Option<Capability>) -> Hold {
-    match reach {
-        // `page.setContent`: the crate writes its HTML from the sealed world, outside the evaluate
-        // guard, and that HTML's scripts run in the main world.
-        Some(Capability::MainWorld) => Hold {
-            why: "runs script in the page's main world, where Neo's Playwright does not guard it \
-                  yet",
-            meanwhile: "open the HTML as a page of its own with \
-                        `page.goto('data:text/html,' + encodeURIComponent(html))`, whose scripts \
-                        run in an origin of their own",
-        },
-        Some(Capability::Capture | Capability::HostFiles | Capability::Screen) | None => Hold {
-            why: "reaches beyond the page's sealed world before Neo's Playwright guards that reach",
-            meanwhile: "reach the page through the rest of the Playwright API",
-        },
-    }
-}
+/// crate lacks.
+const UNGATED: Hold = Hold {
+    why: "reaches beyond the page's sealed world before Neo's Playwright guards that reach",
+    meanwhile: "reach the page through the rest of the Playwright API",
+};
 
 /// Which other Playwright APIs send the ops of a receiver: the prelude's aliases, by the receiver
 /// of the op they send. The held clause names those of a receiver only while one of its ops is
@@ -242,7 +228,7 @@ impl Hold {
         match unpoliced {
             Some(hold) => Some(hold),
             None if spec.gated() => None,
-            None => Some(ungated(spec.capabilities.first().copied())),
+            None => Some(UNGATED),
         }
     }
 
@@ -329,13 +315,12 @@ mod tests {
                 policed: vec![HostFiles],
                 placement: Served,
             },
-            // Its HTML's scripts run outside the crate's evaluate guard until its milestone 2.
             Row {
                 op: "page.setContent",
                 declared: vec![MainWorld],
-                gated: false,
+                gated: true,
                 policed: vec![MainWorld],
-                placement: Held,
+                placement: Served,
             },
             Row {
                 op: "page.evaluate",
@@ -490,7 +475,8 @@ mod tests {
         };
         let page_only = super::held_clause([page_op]).ok_or("an ungated op is held")?;
         assert!(
-            page_only.contains("the `frame` forms send the `page` ops")
+            page_only.starts_with("`page.newOp` is held")
+                && page_only.contains("the `frame` forms send the `page` ops")
                 && !page_only.contains("$eval"),
             "{page_only}"
         );
@@ -624,8 +610,8 @@ mod tests {
         BrowserosCase {
             op: "page.setContent",
             file: "main_world_browseros.rs",
-            test: "set_content_stays_held_on_browseros",
-            proves: Proves::Held,
+            test: "set_content_behaves_as_playwright_on_browseros",
+            proves: Proves::Served,
         },
         BrowserosCase {
             op: "locator.setInputFiles",

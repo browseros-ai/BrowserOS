@@ -188,17 +188,11 @@ const UNSUPPORTED_PROPERTIES = new Set([
   'touchscreen',
   'tracing',
 ])
-/** Page ops Neo serves only in the main frame so far (page/world_call.rs main_frame_only). */
-const MAIN_FRAME_ONLY = new Set(['content', 'title', 'waitForFunction'])
 
 /** What a member call means to Neo: null when it is built, or why the case cannot run yet. */
 function memberStatus(name, kind) {
   if (UNSUPPORTED.has(name) || UNSUPPORTED_ON[kind]?.has(name))
     return { unsupported: `${kind === 'unknown' ? '' : `${kind}.`}${name}` }
-  if (name === 'evaluate' && kind === 'frame')
-    return { needs: 'unowned', what: 'evaluate in a child frame' }
-  if (kind === 'frame' && MAIN_FRAME_ONLY.has(name))
-    return { needs: 'unowned', what: `${name} in a child frame` }
   if (name === 'screenshot' && (kind === 'locator' || kind === 'handle'))
     return { needs: 'unowned', what: 'element screenshots' }
   return null

@@ -1,74 +1,70 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::error::Error;
+use std::sync::Arc;
 
-use serde_json::{Value, json};
+use browseros_trace::ErrorOwner;
+use serde_json::json;
 
-use super::replace_document;
+use super::{SetContentInput, set_content};
 use crate::op_scope::OpScope;
-use crate::page::OpPage;
-use crate::page::evaluate_guard::DOCUMENT_REPLACED;
 use crate::target::CallHeader;
-use crate::test_support::{ProbeAnswer, ScriptedRun, ScriptedTab, TabScript, TestResult};
-use crate::{ErrorCode, Op};
+use crate::test_env::{self, EnvCall, TestEnv};
+use crate::test_support::RecordingHooks;
+use crate::{ErrorCode, Op, Playwright};
 
-/// A tab whose first write fails with `first`, Chromium's answer to the call, and whose later
-/// writes replace the document.
-struct FirstWriteFails {
-    first: &'static str,
-    writes: AtomicUsize,
+type TestResult = Result<(), Box<dyn Error>>;
+
+fn input(frame: Option<&str>) -> Result<SetContentInput, serde_json::Error> {
+    serde_json::from_value(json!({ "page": { "$neo": "page", "id": 1, "tab": 7 },
+                                   "frame": frame, "html": "<script>window.ran = 1</script>" }))
 }
 
-impl TabScript for FirstWriteFails {
-    fn probe(&self, _frame: &str, request: &Value) -> ProbeAnswer {
-        if request["op"] != "setContent" {
-            return ProbeAnswer::empty_sweep();
-        }
-        if self.writes.fetch_add(1, Ordering::SeqCst) == 0 {
-            ProbeAnswer::error(self.first)
-        } else {
-            ProbeAnswer::reply(json!({ "kind": "replaced" }))
-        }
-    }
-}
-
-/// A write that found its world gone never ran, so it goes once more in the new document's
-/// world. One that a navigation cut off while it was pending may have run, the HTML's inline
-/// scripts and all, so it is not written again: setContent fails as upstream's does when that
-/// navigation destroys its evaluation's context.
+/// A host serves an op unheld unless its spec declares `MainWorld`, and setContent's HTML runs
+/// its scripts in the main world, so the document write's gateway refuses any other op, here
+/// one that declares only `Capture`, before it looks up the page or the frame: `neo / internal`
+/// with the declaration named, although the browser is gone. `page.setContent` itself goes on
+/// to admit its page, which fails here for want of a browser.
+/// Paused: core waits out its own attach timeout before it gives up on the page.
 #[tokio::test(start_paused = true)]
-async fn tests_that_a_write_cut_off_by_a_navigation_is_not_written_again() -> TestResult {
-    for (first, writes, written_again) in [
-        ("Cannot find context with specified id", 2, true),
-        ("Inspected target navigated or closed", 1, false),
-        ("Execution context was destroyed.", 1, false),
-    ] {
-        let tab = ScriptedTab::new(FirstWriteFails {
-            first,
-            writes: AtomicUsize::new(0),
-        });
-        let run = ScriptedRun::over(&tab).await?;
-        let op = Op::from_name("page.setContent").ok_or("page.setContent is an op")?;
-        let scope = OpScope::new(&run.env, op, CallHeader::default());
-        let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
-        let replaced = replace_document(&scope, &page, &page.main_endpoint(), "<p>hi</p>").await;
+async fn tests_that_only_an_op_declaring_main_world_writes_a_document() -> TestResult {
+    let playwright = Playwright::new(
+        test_env::offline_session(),
+        Arc::new(RecordingHooks::default()),
+    );
+    let env = TestEnv::new();
+    let screenshot = Op::from_name("page.screenshot").ok_or("page.screenshot is an op")?;
+    let set_content_op = Op::from_name("page.setContent").ok_or("page.setContent is an op")?;
+    for frame in [None, Some("child-frame")] {
+        let undeclared = OpScope::new(&env, screenshot, CallHeader::default());
+        let refused = set_content(&playwright, &undeclared, input(frame)?)
+            .await
+            .err()
+            .ok_or("an op that does not declare MainWorld writes no document")?;
         assert_eq!(
-            tab.script().writes.load(Ordering::SeqCst),
-            writes,
-            "writes sent after the first failed with {first:?}"
+            (refused.owner(), refused.error_code()),
+            (ErrorOwner::Neo, Some(ErrorCode::Internal)),
+            "{frame:?}: {refused}"
         );
-        match replaced {
-            Ok(_) => assert!(written_again, "after {first:?}, the write went once more"),
-            Err(error) => {
-                assert!(!written_again, "after {first:?}: {error}");
-                assert_eq!(
-                    (error.error_code(), error.message()),
-                    (
-                        Some(ErrorCode::PageError),
-                        format!("page.setContent: {DOCUMENT_REPLACED}").as_str()
-                    ),
-                    "after {first:?}"
-                );
-            }
-        }
+        assert!(
+            refused.message().contains("Capability::MainWorld"),
+            "{frame:?}: refused at the gateway, not further on: {refused}"
+        );
+        let declared = OpScope::new(&env, set_content_op, CallHeader::default());
+        let admitting = set_content(&playwright, &declared, input(frame)?)
+            .await
+            .err()
+            .ok_or("no browser, no write")?;
+        assert_eq!(
+            admitting.error_code(),
+            Some(ErrorCode::BrowserDisconnected),
+            "{frame:?}: the declared op goes on to admit its page: {admitting}"
+        );
     }
+    let calls = env.calls();
+    assert!(
+        !calls
+            .iter()
+            .any(|call| matches!(call, EnvCall::Recheck | EnvCall::MarkSent)),
+        "no op rechecked or marked anything sent: {calls:?}"
+    );
     Ok(())
 }

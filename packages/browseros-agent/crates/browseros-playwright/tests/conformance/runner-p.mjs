@@ -3,9 +3,14 @@
  * version), connected over CDP to the same throwaway BrowserOS Runner N drives. It is what
  * "what Playwright would give" means for each case.
  *
- * Each case gets a fresh tab from `context.newPage()` and opens its page with `goto`, never
- * `setContent`: playwright-core 1.64.1's `setContent` never sees `load` on a fresh BrowserOS
- * tab (decisions.md). Every tab the case opened, popups included, is closed after it.
+ * Each case gets a fresh tab from `context.newPage()` and opens its page with `goto`. Every tab
+ * the case opened, popups included, is closed after it.
+ *
+ * A case with a `// @runner-p: stock-chromium` line runs on Playwright's own Chromium
+ * (`chromium.launch()`, headless) instead. playwright-core 1.64.1's `setContent` waits for a
+ * console message after `document.open()`, which a hosted BrowserOS never sends, so it never
+ * sees `load` there; on stock Chromium and on a non-hosted BrowserOS it does (measured, spike
+ * S-runner-p). Runner N ignores the line: Neo's setContent needs no console message.
  *
  * It connects as a client co-located with the browser (`isLocal: true`), as Neo is, so
  * `setInputFiles` with paths takes upstream's native path (`DOM.setFileInputFiles`, trusted
@@ -137,14 +142,28 @@ const names = readdirSync(casesDir)
 const outPath = resolve(outDir)
 mkdirSync(outPath, { recursive: true })
 process.chdir(here)
+/** Whether a case asks to run on Playwright's own Chromium (see the header). */
+function onStockChromium(source) {
+  return /^\/\/ @runner-p: stock-chromium$/m.test(source)
+}
+
 const browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`, {
   isLocal: true,
 })
+/** Launched on the first case that asks for it, closed with the run. */
+let stock = null
 try {
   const [context] = browser.contexts()
   for (const name of names) {
     const source = readFileSync(resolve(casesDir, `${name}.js`), 'utf8')
-    let outcome = await runCase(context, source)
+    if (onStockChromium(source) && stock === null) {
+      const launched = await chromium.launch()
+      stock = { browser: launched, context: await launched.newContext() }
+    }
+    let outcome = await runCase(
+      onStockChromium(source) ? stock.context : context,
+      source,
+    )
     let text
     try {
       text = JSON.stringify(outcome, null, 2)
@@ -156,5 +175,6 @@ try {
     console.log(`runner-p: ${name}: ${Object.keys(outcome)[0]}`)
   }
 } finally {
+  await stock?.browser.close()
   await browser.close()
 }

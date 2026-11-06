@@ -24,7 +24,9 @@
  *                                          so one case can record several outcomes
  *
  * and returns JSON. A line `// @needs <unit>: <why>` makes both runners skip the case with
- * that reason, for a case written before its op is built; deleting the line enables it.
+ * that reason, for a case written before its op is built; deleting the line enables it. A line
+ * `// @runner-p: stock-chromium` runs the case under Runner P on Playwright's own Chromium
+ * (runner-p.mjs says why); Runner N ignores it.
  *
  * The runner records one outcome per case: { returned }, { threw }, { skipped }, or
  * { broke } when the runner itself failed. diff.mjs compares the two runners' outcomes.

@@ -94,34 +94,51 @@ pub(crate) enum Ran {
 }
 
 /// How Chromium answers a call its document's navigation cut off while it was pending. The
-/// first answers a call to a frame that changed process (measured: a `waitForSelector` poll
-/// during a cross-site `goto`), the second one whose context was destroyed while it awaited.
-/// Upstream turns both into "Execution context was destroyed, most likely because of a
-/// navigation" (`crExecutionContext.rewriteError`). Core's `is_stale_context` also takes the
-/// second for a stale context, so these are read first.
-const CUT_OFF: [&str; 2] = [
-    "Inspected target navigated or closed",
-    "Execution context was destroyed",
-];
+/// first answers a call into a document that left for another (measured: a `waitForSelector`
+/// poll during a cross-site `goto`, and main-world calls under a same-site or a cross-site
+/// `location.href`), the second one whose context was destroyed while it awaited. Upstream
+/// turns both into "Execution context was destroyed, most likely because of a navigation"
+/// (`crExecutionContext.rewriteError`, which ends it with a period, or the frame's own word
+/// for a context it saw go, which does not). Core's `is_stale_context` also takes the second
+/// for a stale context, so these are read first.
+const CUT_OFF: [&str; 2] = [NAVIGATED_OR_CLOSED, "Execution context was destroyed"];
 
-impl ProbeFailure {
-    /// Core's failure as a probe failure. A stale context, a lost session and a frame that is
-    /// no longer in the page mean the world was gone before the call ran; a call cut off by
-    /// its document's navigation means it went while the call was pending.
-    pub(crate) fn from_core(error: CoreError) -> Self {
-        let message = match &error {
+/// How Chromium fails a call into a document that left for another while the call was pending,
+/// same-site or cross-site (measured on BrowserOS 155, spike S-cut-off), before it sends any
+/// event of the context going.
+pub(crate) const NAVIGATED_OR_CLOSED: &str = "Inspected target navigated or closed";
+
+impl Ran {
+    /// Whether `error` says a call's world went away, and if so whether the call may have run
+    /// there. A stale context, a lost session and a frame that is no longer in the page mean
+    /// the world was gone before the call ran; a call cut off by its document's navigation
+    /// ([`CUT_OFF`]) went while it was pending. `None` for any other error. Probe calls and the
+    /// evaluate guard's main-world calls read their errors with it alike.
+    pub(crate) fn when_gone(error: &CoreError) -> Option<Self> {
+        let message = match error {
             CoreError::Cdp(CdpError::Protocol { message, .. }) => message.as_str(),
             _ => "",
         };
         if CUT_OFF.iter().any(|cut| message.contains(cut)) {
-            Self::Gone(Ran::Maybe)
+            Some(Self::Maybe)
         } else if message.contains("No frame for given id found")
-            || is_stale_context(&error)
+            || is_stale_context(error)
             || matches!(error, CoreError::Cdp(CdpError::SessionGone))
         {
-            Self::Gone(Ran::No)
+            Some(Self::No)
         } else {
-            Self::Cdp(error)
+            None
+        }
+    }
+}
+
+impl ProbeFailure {
+    /// Core's failure as a probe failure: `Gone` when the world went away
+    /// ([`Ran::when_gone`]), else the CDP failure itself.
+    pub(crate) fn from_core(error: CoreError) -> Self {
+        match Ran::when_gone(&error) {
+            Some(ran) => Self::Gone(ran),
+            None => Self::Cdp(error),
         }
     }
 }
@@ -205,7 +222,17 @@ pub(crate) async fn call(
     world: &SealedWorld,
     request: &ProbeRequest,
 ) -> Result<ProbeReply, ProbeFailure> {
-    send(world, request, None, None).await
+    send(world, request, None, None, Gesture::None).await
+}
+
+/// [`call`] with a user gesture, as upstream sends its own utility-world calls
+/// (`evaluateWithArguments`, `userGesture: true`): `setContent`'s write, whose HTML's scripts
+/// run inside the call and so with the frame's transient activation, as they do upstream.
+pub(crate) async fn call_with_gesture(
+    world: &SealedWorld,
+    request: &ProbeRequest,
+) -> Result<ProbeReply, ProbeFailure> {
+    send(world, request, None, None, Gesture::User).await
 }
 
 /// One request about an element handle's node (`root`, a remote object in this world), which
@@ -222,7 +249,7 @@ pub(crate) async fn call_on(
     request: &ProbeRequest,
     root: &str,
 ) -> Result<ProbeReply, ProbeFailure> {
-    send(world, request, Some(root), None).await
+    send(world, request, Some(root), None, Gesture::None).await
 }
 
 /// [`call`], or [`call_on`] with `root`, carrying `mask`: what a request whose reply previews
@@ -233,7 +260,15 @@ pub(crate) async fn call_masked(
     root: Option<&str>,
     mask: ProbeMask<'_>,
 ) -> Result<ProbeReply, ProbeFailure> {
-    send(world, request, root, Some(mask)).await
+    send(world, request, root, Some(mask), Gesture::None).await
+}
+
+/// Whether a probe call carries a user gesture.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Gesture {
+    None,
+    /// `userGesture: true`: the call activates the frame, as a click would.
+    User,
 }
 
 /// One `Runtime.callFunctionOn` of [`CALL_FUNCTION`] on the world's global.
@@ -242,14 +277,20 @@ async fn send(
     request: &ProbeRequest,
     root: Option<&str>,
     mask: Option<ProbeMask<'_>>,
+    gesture: Gesture,
 ) -> Result<ProbeReply, ProbeFailure> {
-    let params = json!({
+    let mut params = json!({
         "objectId": world.global(),
         "functionDeclaration": CALL_FUNCTION,
         "arguments": call_arguments(request, root, mask)?,
         "returnByValue": true,
         "awaitPromise": true,
     });
+    if gesture == Gesture::User
+        && let Some(params) = params.as_object_mut()
+    {
+        params.insert("userGesture".to_owned(), Value::Bool(true));
+    }
     let called = world
         .session()
         .send::<_, Value>("Runtime.callFunctionOn", params)

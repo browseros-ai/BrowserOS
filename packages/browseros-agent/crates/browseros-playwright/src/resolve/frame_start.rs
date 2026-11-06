@@ -50,6 +50,8 @@ pub(crate) enum Started {
     Missing,
     /// A world on the way went away; the resolver invalidates it and runs the pass again.
     Gone(Option<SealedWorld>),
+    /// The page's frame tree no longer lists the frame: it was detached.
+    Detached,
 }
 
 /// `DOM.getFrameOwner`'s answer.
@@ -80,15 +82,17 @@ impl FrameStart {
     }
 
     /// Walks from `main`, the main frame's world, down to the start frame. A frame no longer
-    /// in the page's tree fails `target_closed` ("Frame was detached"), as upstream's ops on a
-    /// detached frame do.
+    /// in the page's tree is [`Started::Detached`], which each caller fails as upstream's op on a
+    /// detached frame does.
     pub(crate) async fn enter(
         &self,
         page: &OpPage<'_>,
         scope: &OpScope<'_>,
         main: SealedWorld,
     ) -> Result<Started, PlaywrightError> {
-        let chain = self.chain(page, scope).await?;
+        let Some(chain) = self.chain(page, scope).await? else {
+            return Ok(Started::Detached);
+        };
         let mut world = main;
         let mut path = FramePath::default();
         let mut visible = true;
@@ -118,24 +122,25 @@ impl FrameStart {
         })
     }
 
-    /// The frames down to the start frame, from the cache or the page's frame tree.
+    /// The frames down to the start frame, from the cache or the page's frame tree; `None`
+    /// when the tree no longer lists it.
     async fn chain(
         &self,
         page: &OpPage<'_>,
         scope: &OpScope<'_>,
-    ) -> Result<Vec<FrameId>, PlaywrightError> {
+    ) -> Result<Option<Vec<FrameId>>, PlaywrightError> {
         if let Some(chain) = self.lock().as_ref() {
-            return Ok(chain.clone());
+            return Ok(Some(chain.clone()));
         }
         let main = page.main_endpoint();
         let tree = frame_tree::read(page.browser(), page.id(), &main.session)
             .await
             .map_err(|error| scope.core_error(&error))?;
-        let chain = tree
-            .path_to(&self.frame)
-            .ok_or_else(|| scope.fail(ErrorCode::TargetClosed, "Frame was detached"))?;
+        let Some(chain) = tree.path_to(&self.frame) else {
+            return Ok(None);
+        };
         *self.lock() = Some(chain.clone());
-        Ok(chain)
+        Ok(Some(chain))
     }
 
     fn lock(&self) -> MutexGuard<'_, Option<Vec<FrameId>>> {

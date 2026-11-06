@@ -1,5 +1,6 @@
-//! `page.evaluate` and `page.waitForFunction`: the agent's scripts in the page's main world,
-//! through the evaluate guard, which sweeps before and after every send. Both answer in
+//! `page.evaluate` and `page.waitForFunction`, with their `frame.*` forms: the agent's scripts in
+//! the main world of the page's main frame or of the child frame a `Frame` names, through the
+//! evaluate guard, which sweeps the script frame's site before and after every send. Both answer in
 //! Playwright's serialized format, masked, which the prelude's `wire.ts` reads back with the
 //! vendored `parseEvaluationResultValue`.
 
@@ -11,9 +12,8 @@ use serde_json::{Value, json};
 
 use crate::op_scope::OpScope;
 use crate::page::evaluate_guard::{
-    ArgText, DOCUMENT_REPLACED, EvaluateGuard, MainWorldCall, Outcome, Script, Subject,
+    ArgText, DOCUMENT_REPLACED, EvaluateGuard, MainWorldCall, NAVIGATED, Outcome, Script, Subject,
 };
-use crate::page::world_call::main_frame_only;
 use crate::target::{ElementTarget, PageRef};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
@@ -107,8 +107,7 @@ pub(crate) async fn evaluate(
     scope: &OpScope<'_>,
     input: EvaluateInput,
 ) -> Result<Value, PlaywrightError> {
-    main_frame_only(scope, input.frame.as_ref())?;
-    let call = MainWorldCall::once(input.script.into(), Subject::Page);
+    let call = MainWorldCall::once(input.script.into(), Subject::Frame(input.frame));
     let mut guard = EvaluateGuard::open(pw, scope, &input.page, call).await?;
     // A document that was gone before the script started ran nothing, so the script is tried
     // once more in the new one, as upstream waits for the new main context.
@@ -119,6 +118,7 @@ pub(crate) async fn evaluate(
             Outcome::Answered(answer) => return Ok(guard.finish(scope, answer)?.value),
             Outcome::NotRun => {}
             Outcome::Destroyed => break,
+            Outcome::Navigated => return Err(scope.fail(ErrorCode::PageError, NAVIGATED)),
             Outcome::Falsy => {
                 return Err(scope.fail(ErrorCode::Internal, "a script run once answered a poll"));
             }
@@ -137,25 +137,25 @@ pub(crate) async fn wait_for_function(
     scope: &OpScope<'_>,
     input: WaitForFunctionInput,
 ) -> Result<Value, PlaywrightError> {
-    main_frame_only(scope, input.frame.as_ref())?;
     let interval = poll_interval(scope, input.polling)?;
-    let call = MainWorldCall::poll(input.script.into());
+    let call = MainWorldCall::poll(input.script.into(), input.frame);
+    // Upstream's timeout covers the whole call. The guard finds the frame and installs its
+    // world within it, and each poll's send runs within it here; every sweep runs outside it,
+    // to the deadline at the latest, so a timeout never drops one with the values it found.
     let mut guard = EvaluateGuard::open(pw, scope, &input.page, call).await?;
-    let polls = async {
-        loop {
-            let (swept, outcome) = guard.run(scope).await?.sweep(scope).await?;
-            guard = swept;
-            if let Outcome::Answered(answer) = outcome {
-                return Ok((guard, answer));
-            }
-            if scope.sleep(interval).await.is_err() {
-                return Err(scope.timed_out(ErrorCode::WaitTimeout));
-            }
+    let (guard, answer) = loop {
+        let pending = match scope.within(guard.run(scope)).await {
+            Ok(pending) => pending?,
+            Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
+        };
+        let (swept, outcome) = pending.sweep(scope).await?;
+        guard = swept;
+        if let Outcome::Answered(answer) = outcome {
+            break (guard, answer);
         }
-    };
-    let (guard, answer) = match scope.within(polls).await {
-        Ok(polled) => polled?,
-        Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
+        if scope.sleep(interval).await.is_err() {
+            return Err(scope.timed_out(ErrorCode::WaitTimeout));
+        }
     };
     let finished = guard.finish(scope, answer)?;
     Ok(json!({ "value": finished.value, "preview": finished.preview }))

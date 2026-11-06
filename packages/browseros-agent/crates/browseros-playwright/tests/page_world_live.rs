@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::time::{Duration, Instant};
 
+use browseros_core::sensitive_fields::FieldValues;
 use browseros_playwright::{Answer, ErrorCode, PlaywrightError, Refusal, TimedOut};
 use browseros_trace::ErrorOwner;
 use fixture_server::{FixtureServer, Page};
@@ -63,8 +64,40 @@ const DONE: &str = "<!doctype html><title>Done</title><p>done</p>";
 const XHTML: &str = r#"<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html><head><title>Strict</title></head><body><p>strict</p></body></html>"#;
 
+/// A page that keeps the window of its same-origin frame, as an app keeps one it talks to. The
+/// frame's password field is the one a user types into.
+const KEPT: &str = r#"<!doctype html><html><head><title>Kept</title></head><body><h1>Account</h1>
+<iframe id="field" src="/field.html"></iframe>
+<script>
+document.getElementById('field').addEventListener('load', (event) => {
+  window.kept = event.target.contentWindow;
+});
+</script></body></html>"#;
+
+const FIELD: &str =
+    r#"<!doctype html><title>Field</title><label>Password <input type="password"></label>"#;
+
+/// A settings page whose server put a secret in its password field, as an API key page does.
+const FILLED: &str = r#"<!doctype html><title>Filled</title>
+<label>API key <input type="password" value="filled-secret-93"></label>"#;
+
+/// Where a framed test's child frame navigates to: a field of its own, filled by its server.
+const MOVED: &str = r#"<!doctype html><title>Moved</title>
+<label>Token <input type="password" value="moved-secret-57"></label>"#;
+
+/// A page on 127.0.0.1 holding one frame of its own site and one of another (`localhost`), an
+/// out-of-process frame. `{other}` is the fixture server's `localhost` origin.
+const FRAMED: &str = r#"<!doctype html><html><head><title>Framed</title></head><body>
+<label>Password <input id="pw" type="password"></label>
+<iframe name="same" src="/field.html"></iframe>
+<iframe name="cross" src="{other}/filled.html"></iframe>
+</body></html>"#;
+
 async fn fixtures() -> TestResult<FixtureServer> {
     let pages = HashMap::from([
+        ("/kept.html".to_owned(), Page::html(KEPT)),
+        ("/field.html".to_owned(), Page::html(FIELD)),
+        ("/filled.html".to_owned(), Page::html(FILLED)),
         ("/login.html".to_owned(), Page::html(LOGIN)),
         ("/other.html".to_owned(), Page::html(OTHER)),
         ("/reflect.html".to_owned(), Page::html(REFLECT)),
@@ -488,6 +521,87 @@ async fn tests_that_evaluate_runs_in_the_document_the_tab_shows_after_navigation
     .await
 }
 
+/// A main-world call still pending when its page navigates to another site is cut off, as the
+/// page's document leaves for one in another renderer. `waitForFunction`'s predicate is meant
+/// to be free of side effects, so the wait goes on in the new document, every poll rechecked
+/// and marked, and settles there, as upstream's does; a script `page.evaluate` sent may have
+/// run, so it goes out once and fails with upstream's message.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_cross_site_navigation_cuts_off_main_world_calls_as_upstreams() -> TestResult {
+    on_page("/login.html", |run, server, page| async move {
+        let result = async {
+            let other = server.url("localhost", "/other.html");
+            run.eval(
+                &page,
+                &format!("setTimeout(() => {{ location.href = {other:?}; }}, 400), true"),
+            )
+            .await?;
+            run.clear_calls();
+            let started = Instant::now();
+            let waited = wait_for_function(
+                &run,
+                &page,
+                10_000,
+                "() => location.hostname === 'localhost' ? document.title : new Promise(() => {})",
+                json!({}),
+            )
+            .await?;
+            assert_eq!(
+                waited.get("value"),
+                Some(&json!("Other")),
+                "settled in the new document: {waited}"
+            );
+            assert!(
+                started.elapsed() >= Duration::from_millis(300),
+                "it waited for the navigation, {:?}",
+                started.elapsed()
+            );
+            let effects: Vec<EnvCall> = run
+                .calls()
+                .into_iter()
+                .filter(|call| !matches!(call, EnvCall::Note(_)))
+                .collect();
+            assert!(
+                effects.len() >= 4
+                    && effects
+                        .chunks(2)
+                        .all(|pair| pair == [EnvCall::Recheck, EnvCall::MarkSent]),
+                "the cut-off poll and one in the new document, each rechecked, then marked: \
+                 {effects:?}"
+            );
+            goto(&run, &page, &server.url("127.0.0.1", "/login.html")).await?;
+            run.clear_calls();
+            let script = format!(
+                "() => {{ setTimeout(() => {{ location.href = {other:?}; }}, 300); \
+                 return new Promise(() => {{}}); }}"
+            );
+            let error = evaluate(&run, &page, &script)
+                .await
+                .err()
+                .ok_or("a script a navigation cut off does not answer")?;
+            assert_eq!(
+                (error.error_code(), error.message()),
+                (
+                    Some(ErrorCode::PageError),
+                    "page.evaluate: Execution context was destroyed, most likely because of a \
+                     navigation."
+                ),
+            );
+            let sent = run
+                .calls()
+                .iter()
+                .filter(|call| **call == EnvCall::MarkSent)
+                .count();
+            assert_eq!(sent, 1, "the script went out once");
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
 /// `page.title()` or `page.content()`'s text.
 async fn document_text(run: &LiveRun, page: &TestPage, op: &str) -> TestResult<String> {
     let read = run.invoke(op, json!({ "page": brand(page) })).await?;
@@ -681,6 +795,31 @@ async fn tests_that_set_content_writes_the_document_and_waits_for_its_load_state
                 assert_eq!(text, json!("written"), "the new document is the page's");
             }
 
+            // The image holds `load` past the timeout: the content is set, so the timeout
+            // leaves only after the sweep that follows the write, as upstream's message.
+            run.clear_calls();
+            let timed_out = run
+                .invoke(
+                    "page.setContent",
+                    json!({ "call": { "timeoutMs": 300 }, "page": brand(&page), "html": html }),
+                )
+                .await
+                .err()
+                .ok_or("a load past the timeout times out")?;
+            assert_eq!(
+                (timed_out.error_code(), first_line(&timed_out)),
+                (
+                    Some(ErrorCode::WaitTimeout),
+                    "page.setContent: Timeout 300ms exceeded."
+                ),
+                "{timed_out}"
+            );
+            assert!(
+                run.calls().contains(&EnvCall::MarkSent),
+                "the content was sent: {:?}",
+                run.calls()
+            );
+
             run.clear_calls();
             let error = set_content("networkidle")
                 .await
@@ -698,6 +837,672 @@ async fn tests_that_set_content_writes_the_document_and_waits_for_its_load_state
         (run, result)
     })
     .await
+}
+
+/// Polls `expression` in the page's own world until it is true.
+async fn until_true(run: &LiveRun, page: &TestPage, expression: &str) -> TestResult {
+    let started = Instant::now();
+    while run.eval(page, expression).await? != json!(true) {
+        if started.elapsed() > Duration::from_secs(10) {
+            return Err(format!("never true: {expression}").into());
+        }
+        time::sleep(Duration::from_millis(50)).await;
+    }
+    Ok(())
+}
+
+/// `output` as the host hands it to the agent: claw-sdk's door masks every exit with the
+/// values the crate reported through `values_swept`, which the live hooks keep.
+fn as_the_host_returns(run: &LiveRun, mut output: Value) -> Value {
+    FieldValues::from_sweep(&json!(run.swept())).mask_json(&mut output);
+    output
+}
+
+/// Runs `page.setContent(html)`, polls `settled` in the page until the script copied `secret`
+/// and the frame that held it is gone, then runs every read of the new document (`title`,
+/// `content` and `#who`'s `textContent`). The host must be told `secret` by the time setContent
+/// returns, and every read, as the host returns it, must mask it: no read's own sweep can find
+/// the frame any more.
+async fn set_content_copy_is_masked(
+    run: &LiveRun,
+    page: &TestPage,
+    html: &str,
+    settled: &str,
+    secret: &str,
+) -> TestResult {
+    run.invoke(
+        "page.setContent",
+        json!({ "call": { "timeoutMs": 10_000 }, "page": brand(page), "html": html }),
+    )
+    .await?;
+    let swept = run.swept();
+    assert!(
+        swept.iter().any(|value| value == secret),
+        "setContent itself tells the host of {secret}: {swept:?}"
+    );
+    until_true(run, page, settled).await?;
+    let who = json!({
+        "$neo": "locator",
+        "page": brand(page),
+        "chunks": [{ "parts": [{
+            "name": "css",
+            "body": [{ "simples": [{ "selector": { "css": "#who", "functions": [] }, "combinator": "" }] }],
+            "source": "#who",
+        }] }],
+        "display": "locator('#who')",
+    });
+    let reads = [
+        ("page.title", json!({ "page": brand(page) })),
+        ("page.content", json!({ "page": brand(page) })),
+        (
+            "locator.textContent",
+            json!({ "target": who, "strict": "strict" }),
+        ),
+    ];
+    for (op, input) in reads {
+        let output = as_the_host_returns(run, run.invoke(op, input).await?);
+        assert!(
+            !output.to_string().contains(secret),
+            "{op} holds {secret} raw: {output}"
+        );
+    }
+    Ok(())
+}
+
+/// A script in setContent's HTML runs in the page's main world. Before the write, it reads a
+/// value from the same-site frame the old document held, through the window the page kept: the
+/// frame is gone from the new document, but its document lives on. Only the sweep before the
+/// write sees that field.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_set_content_masks_a_value_its_script_copies_from_the_old_documents_frame()
+-> TestResult {
+    on_page("/kept.html", |run, _server, page| async move {
+        let result = async {
+            until_true(&run, &page, "window.kept !== undefined").await?;
+            run.eval(
+                &page,
+                "kept.document.querySelector('input').value = 'kept-secret-82'",
+            )
+            .await?;
+            let html = "<!doctype html><title>pending</title><h1 id=\"who\">nobody</h1><script>\
+                        const value = kept.document.querySelector('input').value;\
+                        document.title = value;\
+                        document.getElementById('who').textContent = 'Signed in with ' + value;\
+                        </script>";
+            set_content_copy_is_masked(
+                &run,
+                &page,
+                html,
+                "window.length === 0 && document.title !== 'pending'",
+                "kept-secret-82",
+            )
+            .await
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+/// A script in setContent's HTML opens a same-site frame whose server filled a password field
+/// and copies the value into the new document; later the page removes the frame. Only the
+/// sweep after the load state sees that field.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_set_content_masks_a_value_its_script_copies_from_a_frame_it_opened()
+-> TestResult {
+    on_page("/other.html", |run, server, page| async move {
+        let result = async {
+            let html = format!(
+                "<!doctype html><title>pending</title><h1 id=\"who\">nobody</h1>\
+                 <iframe id=\"api\" src=\"{}\"></iframe><script>\
+                 document.getElementById('api').addEventListener('load', (event) => {{\
+                   const value = event.target.contentDocument.querySelector('input').value;\
+                   document.title = value;\
+                   document.getElementById('who').textContent = 'Signed in with ' + value;\
+                 }});\
+                 window.drop = () => document.getElementById('api')?.remove();\
+                 </script>",
+                server.url("127.0.0.1", "/filled.html")
+            );
+            set_content_copy_is_masked(
+                &run,
+                &page,
+                &html,
+                "document.title !== 'pending' && (drop(), window.length === 0)",
+                "filled-secret-93",
+            )
+            .await
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+/// How a test's tab came to be: the agent's own, which core sets up for its file chooser
+/// interception, or one the agent did not open, which core leaves as it found it.
+#[derive(Clone, Copy, Debug)]
+enum Opened {
+    ByAgent,
+    Adopted,
+}
+
+/// Opens [`FRAMED`] on the fixture server in a tab opened as `opened` says, and runs `body`
+/// with the ids of its `same` and `cross` frames, once both loaded.
+async fn on_framed<F, Fut>(opened: Opened, body: F) -> TestResult
+where
+    F: FnOnce(LiveRun, TestPage, Value, Value) -> Fut,
+    Fut: Future<Output = (LiveRun, TestResult)>,
+{
+    let run = LiveRun::connect().await?;
+    let server = fixtures().await?;
+    let framed = FRAMED.replace("{other}", &server.url("localhost", ""));
+    let pages = HashMap::from([
+        ("/framed.html".to_owned(), Page::html(&framed)),
+        ("/field.html".to_owned(), Page::html(FIELD)),
+        ("/filled.html".to_owned(), Page::html(FILLED)),
+        ("/moved.html".to_owned(), Page::html(MOVED)),
+    ]);
+    let framed_server = FixtureServer::start(pages).await?;
+    let url = framed_server.url("127.0.0.1", "/framed.html");
+    let page = match opened {
+        Opened::ByAgent => run.new_page().await?,
+        Opened::Adopted => run.open_adopted(&url).await?,
+    };
+    let loaded = async {
+        if matches!(opened, Opened::ByAgent) {
+            goto(&run, &page, &url).await?;
+        }
+        until_true(
+            &run,
+            &page,
+            "document.querySelector('iframe[name=same]')?.contentDocument?.readyState === 'complete'",
+        )
+        .await?;
+        let same = frame_named(&run, &page, "same").await?;
+        let cross = frame_named(&run, &page, "cross").await?;
+        run.invoke(
+            "page.waitForLoadState",
+            json!({ "call": { "timeoutMs": 10_000 }, "page": brand(&page), "frame": cross, "state": "load" }),
+        )
+        .await?;
+        TestResult::<(Value, Value)>::Ok((same, cross))
+    }
+    .await;
+    let (same, cross) = match loaded {
+        Ok(ids) => ids,
+        Err(error) => {
+            run.close_page(&page).await;
+            return Err(error);
+        }
+    };
+    let (run, result) = body(run, page.clone(), same, cross).await;
+    run.close_page(&page).await;
+    drop(framed_server);
+    result
+}
+
+/// The id `page.frames` gives the frame named `name`, waiting for it to be listed.
+async fn frame_named(run: &LiveRun, page: &TestPage, name: &str) -> TestResult<Value> {
+    let started = Instant::now();
+    loop {
+        let frames = run
+            .invoke("page.frames", json!({ "page": brand(page) }))
+            .await?;
+        let found = frames
+            .get("frames")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|frame| frame.get("name").and_then(Value::as_str) == Some(name))
+            .and_then(|frame| frame.get("id").cloned());
+        if let Some(id) = found {
+            return Ok(id);
+        }
+        if started.elapsed() > Duration::from_secs(10) {
+            return Err(format!("no frame named {name} in {frames}").into());
+        }
+        time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// `frame.<method>` as the prelude sends it: the page op named `op`, with the frame's id and
+/// the frame form's own name for upstream's prefix.
+async fn in_frame(
+    run: &LiveRun,
+    page: &TestPage,
+    frame: &Value,
+    api: &str,
+    op: &str,
+    fields: Value,
+) -> Result<Value, PlaywrightError> {
+    let mut input = json!({ "call": { "api": api, "timeoutMs": 10_000 }, "page": brand(page),
+                            "frame": frame });
+    if let (Some(input), Value::Object(fields)) = (input.as_object_mut(), fields) {
+        input.extend(fields);
+    }
+    run.invoke(op, input).await
+}
+
+/// A same-site child frame's script reaches its parent's document as the page's own scripts
+/// do, so `frame.evaluate` and `frame.waitForFunction` run in the child and are masked with
+/// every field of the site, the parent's included; `frame.title` and `frame.content` read the
+/// child's own document.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_same_site_child_frames_script_reads_its_parents_field_masked() -> TestResult {
+    on_framed(Opened::ByAgent, |run, page, same, _cross| async move {
+        let result = async {
+            run.eval(
+                &page,
+                "document.getElementById('pw').value = 'parent-secret-41'; \
+                 frames[0].document.querySelector('input').value = 'child-secret-42'",
+            )
+            .await?;
+            run.clear_calls();
+            let script = "() => [document.title, parent.document.getElementById('pw').value, \
+                          document.querySelector('input').value]";
+            let read = in_frame(
+                &run,
+                &page,
+                &same,
+                "frame.evaluate",
+                "page.evaluate",
+                json!({ "script": script_input(script) }),
+            )
+            .await?;
+            assert_eq!(
+                read,
+                json!({ "a": ["Field", "[private]", "[private]"], "id": 1 }),
+                "the script ran in the child, and both frames' values are masked"
+            );
+            assert_eq!(
+                run.calls(),
+                [EnvCall::Recheck, EnvCall::MarkSent],
+                "one send, rechecked and marked"
+            );
+            for secret in ["parent-secret-41", "child-secret-42"] {
+                assert!(
+                    run.swept().iter().any(|value| value == secret),
+                    "the host is told {secret}"
+                );
+            }
+            let waited = in_frame(
+                &run,
+                &page,
+                &same,
+                "frame.waitForFunction",
+                "page.waitForFunction",
+                json!({ "script": script_input("() => parent.document.getElementById('pw').value") }),
+            )
+            .await?;
+            assert_eq!(
+                waited.get("value"),
+                Some(&json!("[private]")),
+                "frame.waitForFunction runs in the child too: {waited}"
+            );
+            let title = in_frame(&run, &page, &same, "frame.title", "page.title", json!({})).await?;
+            assert_eq!(title, json!("Field"), "frame.title reads the child's document");
+            let content =
+                in_frame(&run, &page, &same, "frame.content", "page.content", json!({})).await?;
+            let content = content.as_str().unwrap_or_default();
+            assert!(
+                content.contains("<title>Field</title>") && !content.contains("Framed"),
+                "frame.content serializes the child's document: {content}"
+            );
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+/// An out-of-process frame's script runs on that frame's own session, and its own field's
+/// value, filled by its server, comes back masked.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_an_out_of_process_frames_script_reads_its_own_field_masked() -> TestResult {
+    on_framed(Opened::ByAgent, |run, page, _same, cross| async move {
+        let result = async {
+            run.clear_calls();
+            let read = in_frame(
+                &run,
+                &page,
+                &cross,
+                "frame.evaluate",
+                "page.evaluate",
+                json!({ "script": script_input(
+                    "() => [location.hostname, document.querySelector('input').value]"
+                ) }),
+            )
+            .await?;
+            assert_eq!(
+                read,
+                json!({ "a": ["localhost", "[private]"], "id": 1 }),
+                "the script ran in the out-of-process frame, its field masked"
+            );
+            assert!(
+                run.swept().iter().any(|value| value == "filled-secret-93"),
+                "the host is told the frame's value"
+            );
+            let title =
+                in_frame(&run, &page, &cross, "frame.title", "page.title", json!({})).await?;
+            assert_eq!(title, json!("Filled"));
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+/// A child frame that navigates to another site mid-wait moves to another renderer, and so to
+/// another CDP session, while it stays the same frame: upstream's `frame.waitForFunction` goes
+/// on polling in the new document. Neo's does too, in each way a frame can move: out of
+/// process to another site, out of process back to its parent's site, and in process out to
+/// another site. The predicate is true only in the new document, where it reads the new
+/// document's own field, which comes back masked, so the sweeps around its polls covered the
+/// new site; every poll is one send, rechecked and marked.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_frame_wait_for_function_follows_its_frame_into_another_process() -> TestResult {
+    for (name, host) in [
+        ("cross", "[::1]"),
+        ("cross", "127.0.0.1"),
+        ("same", "localhost"),
+    ] {
+        on_framed(Opened::ByAgent, |run, page, same, cross| async move {
+            let result = async {
+                let frame = if name == "cross" { &cross } else { &same };
+                run.eval(
+                    &page,
+                    &format!(
+                        "setTimeout(() => {{ document.querySelector('iframe[name={name}]').src = \
+                         `http://{host}:${{location.port}}/moved.html`; }}, 400)"
+                    ),
+                )
+                .await?;
+                run.clear_calls();
+                let predicate = format!(
+                    "() => location.hostname === '{host}' && document.title === 'Moved' && \
+                     [location.hostname, document.querySelector('input').value]"
+                );
+                let started = Instant::now();
+                let waited = in_frame(
+                    &run,
+                    &page,
+                    frame,
+                    "frame.waitForFunction",
+                    "page.waitForFunction",
+                    json!({ "script": script_input(&predicate) }),
+                )
+                .await
+                .map_err(|error| format!("{name} to {host}: {error}"))?;
+                assert_eq!(
+                    waited.get("value"),
+                    Some(&json!({ "a": [host, "[private]"], "id": 1 })),
+                    "{name} to {host}: polled on in the new document, its field masked: {waited}"
+                );
+                assert!(
+                    started.elapsed() >= Duration::from_millis(300),
+                    "{name} to {host}: it waited for the navigation, {:?}",
+                    started.elapsed()
+                );
+                assert!(
+                    run.swept().iter().any(|value| value == "moved-secret-57"),
+                    "{name} to {host}: the host is told the new document's value"
+                );
+                let effects: Vec<EnvCall> = run
+                    .calls()
+                    .into_iter()
+                    .filter(|call| !matches!(call, EnvCall::Note(_)))
+                    .collect();
+                assert!(
+                    !effects.is_empty()
+                        && effects
+                            .chunks(2)
+                            .all(|pair| pair == [EnvCall::Recheck, EnvCall::MarkSent]),
+                    "{name} to {host}: every poll rechecked, then marked: {effects:?}"
+                );
+                Ok(())
+            }
+            .await;
+            (run, result)
+        })
+        .await?;
+    }
+    Ok(())
+}
+
+/// `frame.waitForURL` on a same-site child frame that navigates to another site mid-wait, and so
+/// moves out of the page's process to a renderer of its own, on another session: the wait
+/// follows the frame there and matches the navigation that committed in its new renderer, as
+/// upstream's does (red before the follow: it waited out its 10 s timeout on the old session).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_frame_wait_for_url_follows_its_frame_out_of_process() -> TestResult {
+    on_framed(Opened::ByAgent, |run, page, same, _cross| async move {
+        let result = async {
+            run.eval(
+                &page,
+                "setTimeout(() => { document.querySelector('iframe[name=same]').src = \
+                 `http://localhost:${location.port}/moved.html`; }, 400), true",
+            )
+            .await?;
+            let started = Instant::now();
+            let waited = frame_wait_for_url(&run, &page, &same, "**/moved.html").await?;
+            let url = waited
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            assert!(
+                url.starts_with("http://localhost:") && url.ends_with("/moved.html"),
+                "matched in the frame's new renderer: {waited}"
+            );
+            assert!(
+                started.elapsed() >= Duration::from_millis(300),
+                "it waited for the navigation, {:?}",
+                started.elapsed()
+            );
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+/// `frame.setContent` replaces a child frame's document, in process and out of it, and leaves
+/// the page's own document alone; it waits for the child's load state as the page form does.
+/// On a tab the agent did not open, core enables no `Page` domain on the out-of-process frame's
+/// session, whose `documentOpened` the wait needs, so the op's own document watch does
+/// (red without it: the out-of-process write timed out there).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_frame_set_content_writes_the_child_frames_document() -> TestResult {
+    for opened in [Opened::ByAgent, Opened::Adopted] {
+        on_framed(opened, |run, page, same, cross| async move {
+            let result = async {
+                for (frame, name) in [(&cross, "CrossWritten"), (&same, "SameWritten")] {
+                    run.clear_calls();
+                    let started = Instant::now();
+                    let html =
+                        format!("<!doctype html><title>{name}</title><p id=\"w\">{name}</p>");
+                    let written = in_frame(
+                        &run,
+                        &page,
+                        frame,
+                        "frame.setContent",
+                        "page.setContent",
+                        json!({ "html": html }),
+                    )
+                    .await?;
+                    assert_eq!(written, json!({}), "{opened:?} {name}");
+                    assert!(
+                        started.elapsed() < Duration::from_secs(5),
+                        "{opened:?} {name}: the write's load state was seen, after {:?}",
+                        started.elapsed()
+                    );
+                    let effects: Vec<EnvCall> = run
+                        .calls()
+                        .into_iter()
+                        .filter(|call| !matches!(call, EnvCall::Note(_)))
+                        .collect();
+                    assert_eq!(
+                        effects,
+                        [EnvCall::Recheck, EnvCall::MarkSent],
+                        "{opened:?} {name}"
+                    );
+                    let title =
+                        in_frame(&run, &page, frame, "frame.title", "page.title", json!({}))
+                            .await?;
+                    assert_eq!(title, json!(name), "{opened:?}");
+                }
+                assert_eq!(
+                    run.eval(&page, "document.title").await?,
+                    json!("Framed"),
+                    "{opened:?}: the page's own document stays"
+                );
+                Ok(())
+            }
+            .await;
+            (run, result)
+        })
+        .await?;
+    }
+    Ok(())
+}
+
+/// `frame.waitForURL(glob)` as the prelude sends it.
+async fn frame_wait_for_url(
+    run: &LiveRun,
+    page: &TestPage,
+    frame: &Value,
+    glob: &str,
+) -> Result<Value, PlaywrightError> {
+    in_frame(
+        run,
+        page,
+        frame,
+        "frame.waitForURL",
+        "page.waitForURL",
+        json!({ "url": { "glob": glob } }),
+    )
+    .await
+}
+
+/// `frame.waitForURL` watches the child frame's own document: a URL already there resolves at
+/// once, in process and out of it, and a later navigation of the frame matches, its URL
+/// returned for the prelude's `frame.url()`, on the agent's own tab and on one it did not open.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_frame_wait_for_url_watches_the_child_frames_navigations() -> TestResult {
+    for opened in [Opened::ByAgent, Opened::Adopted] {
+        on_framed(opened, |run, page, same, cross| async move {
+            let result = async {
+                for (frame, path) in [(&same, "/field.html"), (&cross, "/filled.html")] {
+                    let waited =
+                        frame_wait_for_url(&run, &page, frame, &format!("**{path}")).await?;
+                    let url = waited
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    assert!(url.ends_with(path), "{path}: {waited}");
+                }
+                run.eval(
+                    &page,
+                    "setTimeout(() => { frames[0].location.href = '/filled.html?moved'; }, 300)",
+                )
+                .await?;
+                let started = Instant::now();
+                let waited = frame_wait_for_url(&run, &page, &same, "**/filled.html?moved").await?;
+                assert!(
+                    waited
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .is_some_and(|url| url.ends_with("/filled.html?moved")),
+                    "{waited}"
+                );
+                assert!(
+                    started.elapsed() >= Duration::from_millis(200),
+                    "it waited for the navigation, {:?}",
+                    started.elapsed()
+                );
+                Ok(())
+            }
+            .await;
+            (run, result)
+        })
+        .await?;
+    }
+    Ok(())
+}
+
+/// A frame the page removed is detached: its script forms fail as upstream's do (measured on
+/// stock Chromium and BrowserOS with Playwright 1.64.1), with nothing sent, and `frame.title`
+/// answers `""`, as upstream's swallows the failure.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_detached_frames_forms_fail_as_upstreams_do() -> TestResult {
+    on_framed(Opened::ByAgent, |run, page, same, _cross| async move {
+        let result = async {
+            run.eval(
+                &page,
+                "document.querySelector('iframe[name=same]').remove()",
+            )
+            .await?;
+            let forms = [
+                (
+                    "frame.evaluate",
+                    "page.evaluate",
+                    json!({ "script": script_input("() => 1") }),
+                ),
+                (
+                    "frame.waitForFunction",
+                    "page.waitForFunction",
+                    json!({ "script": script_input("() => true") }),
+                ),
+                (
+                    "frame.setContent",
+                    "page.setContent",
+                    json!({ "html": "<p>x</p>" }),
+                ),
+                ("frame.content", "page.content", json!({})),
+            ];
+            for (api, op, fields) in forms {
+                run.clear_calls();
+                let error = in_frame(&run, &page, &same, api, op, fields)
+                    .await
+                    .err()
+                    .ok_or(format!("{api} on a detached frame fails"))?;
+                assert_eq!(
+                    first_line(&error),
+                    format!("{api}: Frame was detached"),
+                    "{error}"
+                );
+                assert!(
+                    !run.calls().contains(&EnvCall::MarkSent),
+                    "{api}: nothing was sent: {:?}",
+                    run.calls()
+                );
+            }
+            let title =
+                in_frame(&run, &page, &same, "frame.title", "page.title", json!({})).await?;
+            assert_eq!(title, json!(""), "upstream's title of a detached frame");
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+/// A function script as the prelude sends it, its argument `undefined`.
+fn script_input(function: &str) -> Value {
+    script(function, true, &undefined())
 }
 
 /// `page.waitForURL(url)` as the prelude sends it, with `timeout_ms`.

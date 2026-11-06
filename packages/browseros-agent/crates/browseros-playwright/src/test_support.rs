@@ -361,7 +361,19 @@ pub(crate) trait TabScript: Send + Sync + 'static {
     fn left(&self) -> bool {
         false
     }
+
+    /// The reply to one call into the page's main world, `function` called on `object`: the
+    /// main frame's document as `DOM.resolveNode` names it ([`SCRIPTED_DOCUMENT`]), or an object
+    /// an earlier reply handed out, such as a poller. `Err` is the protocol error Chromium fails
+    /// the call with. `None` answers as for any other object the tab holds.
+    fn main_world(&self, _object: &str, _function: &str) -> Option<Result<Value, &'static str>> {
+        None
+    }
 }
+
+/// The main frame's document in its main world, as the scripted tab's `DOM.resolveNode` names
+/// it.
+pub(crate) const SCRIPTED_DOCUMENT: &str = "main-doc";
 
 /// The CDP client's own request timeout, browseros-cdp's default: a command unanswered by then
 /// fails `CdpError::Timeout`.
@@ -578,9 +590,8 @@ impl<S: TabScript> ScriptedTab<S> {
             "DOM.describeNode" => json!({ "node": { "backendNodeId": 1,
                 "nodeName": "#document", "childNodeCount": 0, "children": [] } }),
             // The document's node in its main world, where a page script runs.
-            "DOM.resolveNode" => {
-                json!({ "object": { "type": "object", "subtype": "node", "objectId": "main-doc" } })
-            }
+            "DOM.resolveNode" => json!({ "object": { "type": "object", "subtype": "node",
+                "objectId": SCRIPTED_DOCUMENT } }),
             "Runtime.callFunctionOn" => return self.call(params).await,
             _ => json!({}),
         })
@@ -611,6 +622,12 @@ impl<S: TabScript> ScriptedTab<S> {
             );
         }
         let function = params["functionDeclaration"].as_str().unwrap_or_default();
+        if let Some(answer) = params["objectId"]
+            .as_str()
+            .and_then(|object| self.script.main_world(object, function))
+        {
+            return answer.map_err(protocol_error);
+        }
         Ok(if function.contains("takeHost") {
             // The seal reported no shadow host.
             json!({ "result": { "type": "object", "subtype": "null", "value": null } })

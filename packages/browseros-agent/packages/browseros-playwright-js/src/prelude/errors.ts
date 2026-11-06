@@ -195,6 +195,17 @@ export function assertionError(message: string): Error {
   return new PlaywrightError(message)
 }
 
+/**
+ * An op's answer the prelude could not read, as when QuickJS's stack overflows in a deep
+ * result's parse: the op's failure, `<api>: <message>`, named `Error` as the bootstrap's
+ * rejection of an op is once shaped. It carries no claw-sdk fields, since the op itself
+ * answered, so an uncaught one ends the run as the script's own error.
+ */
+export function answerError(api: string, thrown: unknown): Error {
+  const message = thrown instanceof Error ? thrown.message : String(thrown)
+  return new PlaywrightError(`${api}: ${message}`)
+}
+
 /** Rethrows `error` with the script's method first, for errors the prelude passes through. */
 export function prefixed(api: string, error: unknown): unknown {
   if (error instanceof Error && !error.message.startsWith(`${api}: `))

@@ -68,12 +68,14 @@ impl LateRetry {
     }
 }
 
-/// Where one try of a sweep or an install is cut. The first try is not ([`TryCut::default`]):
-/// it has its full frame budgets, so a frame late on it missed Neo's budget, and an op timeout
-/// that ends sooner is the op's own, as before any retry: inside `OpScope::within` it times the
-/// op out, and outside it (`waitForFunction`'s first sweep) the try ends on its budgets. Every
-/// later try is cut at its [`LateRetry`] window's end, and a frame cut there is late, as one
-/// past its budget is: its try's values still go to the host, and the op fails with Neo's
+/// Where one try of a sweep or an install is cut. A read's or an install's first try is not
+/// ([`TryCut::default`]): it has its full frame budgets, so a frame late on it missed Neo's
+/// budget, and an op timeout that ends sooner is the op's own, inside `OpScope::within`. A
+/// main-world guard's first try is cut at the op's own deadline ([`OpPage::deadline_cut`]),
+/// because no guard sweep runs inside a timeout that would drop it with what it found: a frame
+/// the deadline cut there never had its whole budget, so the op times out as upstream's does.
+/// Every later try is cut at its [`LateRetry`] window's end, and a frame cut there is late, as
+/// one past its budget is: its try's values still go to the host, and the op fails with Neo's
 /// refusal, true to its word since the first try gave the frame its whole budget.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct TryCut(Option<Instant>);
@@ -83,6 +85,11 @@ impl TryCut {
     pub(crate) fn budget(self) -> Instant {
         let budget = Instant::now() + FRAME_BUDGET;
         self.0.map_or(budget, |until| budget.min(until))
+    }
+
+    /// Whether the cut has come: a try cut here ended at it.
+    pub(crate) fn passed(self) -> bool {
+        self.0.is_some_and(|until| Instant::now() >= until)
     }
 
     /// `work`'s output, or `None` when the cut came first. Not an `async fn`, whose state would
@@ -187,6 +194,12 @@ impl<'op> OpPage<'op> {
             frame,
             kind,
         }
+    }
+
+    /// Where a main-world guard's first sweep try ends at the latest: the op's own deadline, or
+    /// nowhere for an op without a timeout.
+    pub(crate) fn deadline_cut(&self) -> TryCut {
+        TryCut(self.deadline)
     }
 
     /// The window in which this op tries a frame that missed its privacy budget again, from

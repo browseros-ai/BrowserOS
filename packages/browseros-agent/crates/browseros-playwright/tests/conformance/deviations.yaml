@@ -158,29 +158,27 @@
     returned: 1
 - case: evaluate-errors
   path: /returned/deepest
-  kind: finding
-  route: J4 prelude
+  kind: decided
   reason: "held design synthesis, graft 5 and spike S-depth: Rust carries a result as deep as
     upstream's CDP limit (99 nested objects, 297 JSON levels) and refuses one deeper with
     upstream's message. The agent's realm is QuickJS with claw-sdk's 512 KiB stack, though,
-    where Playwright's client is Node; the format nests three levels per object. Until
-    d2d42f39d claw-sdk's bootstrap revived an op's result recursively and overflowed first,
-    inside the op, which threw 'page.evaluate: Maximum call stack size exceeded' (measured on
-    d2d42f39d's parent: the stack is bootstrap.js's revive). Since d2d42f39d the revive walks
-    with a stack of its own, and the value reaches the prelude, whose vendored
-    parseEvaluationResultValue (utilityScriptSerializers) recurses once per level and overflows
-    outside the op, so the script gets an unprefixed RangeError (measured on d2d42f39d and on
-    m6b-harden: the stack is prelude.js's parseEvaluationResultValue). In Runner N's debug
-    build, with claw-sdk's limits, 51 nested objects come back and 52 overflow, the same edge in
-    every try (measured at load 14 to 15). A release build's frames are smaller, so its limit is
-    higher (unmeasured). The value is refused, never cut; an iterative parse in the prelude, as
-    the bootstrap's revive now is, would carry it."
+    where Playwright's client is Node; the format nests three levels per object. claw-sdk's
+    bootstrap revives an op's result with a stack of its own since d2d42f39d, and the value
+    reaches the prelude, whose vendored parseEvaluationResultValue (utilityScriptSerializers)
+    recurses once per level and overflows first. In Runner N's debug build, with claw-sdk's
+    limits, 51 nested objects come back and 52 overflow, the same edge in every try (measured
+    at load 14 to 15). A release build's frames are smaller, so its limit is higher
+    (unmeasured). The prelude reads every op's result in one place (evaluation.ts
+    fromPageValue), which fails the op it read with the op's method first, so the script gets
+    'page.evaluate: Maximum call stack size exceeded', as it did when the bootstrap's revive
+    overflowed inside the op (b77171f42 measured both refs). The value is refused, never cut;
+    an iterative parse in the prelude would carry it."
   p:
     returned: 99
   n:
     threw:
-      message: Maximum call stack size exceeded
-      name: RangeError
+      message: "page.evaluate: Maximum call stack size exceeded"
+      name: Error
 - case: evaluate-values
   path: /returned/url/1
   kind: decided
@@ -534,14 +532,6 @@
     - text: Code
     - textbox "Code": ••••
     - paragraph: Confirm your code [private]
-- case: wait-for-load-state
-  path: /returned/badState/threw/message
-  kind: finding
-  route: J4 prelude
-  reason: "Upstream's client checks the state before its API wrapper, so the message has no
-    \"page.waitForLoadState: \" prefix. Neo's prelude adds it. Cosmetic."
-  p: "state: expected one of (load|domcontentloaded|networkidle|commit)"
-  n: "page.waitForLoadState: state: expected one of (load|domcontentloaded|networkidle|commit)"
 - case: nest-f6-unreadable-frame
   path: /returned/frameD
   kind: decided
@@ -552,3 +542,45 @@
   n: >2-
       - iframe [ref=e1]
         # partial: http://hang.localtest.me:<port>/nest/hang.html?hang not read (timeout after <n>ms)
+- case: set-content
+  path: /returned/page/networkidle
+  kind: decided
+  reason: "M2 review 3, declined: Neo's networkidle is Chromium's own networkIdle lifecycle
+    event (load_state.rs), and the crate never enables the Network domain, whose traffic every
+    request of every page would pay (decisions.md). After a document write Chromium fires
+    documentOpened, init, DOMContentLoaded and load again under the same loader, but never
+    networkAlmostIdle or networkIdle (measured on BrowserOS neo, 4 s after the write), so the
+    wait could only time out. Neo refuses it before anything is sent, with advice. Upstream counts
+    the frame subtree's requests itself, which needs the Network domain: the owner's call. Use
+    waitUntil load."
+  p:
+    returned: null
+  n:
+    threw:
+      message: 'page.setContent: waitUntil "networkidle" cannot be observed after setContent in Neo; use "load"'
+      name: Error
+- case: goto-javascript
+  path: /returned/outcomes/0/threw/message
+  kind: decided
+  reason: "M2, cherry-picked ec5ad8675: Chromium runs a javascript: URL that Page.navigate is
+    given in the current document's main world, and only then reports the navigation aborted
+    (upstream's net::ERR_ABORTED, after the script set the title). That script would run outside
+    Neo's privacy sweep and read any same-site frame, so Neo refuses the URL, however it is
+    spelled, as neo / unsupported before the page is admitted or anything is sent. Run the
+    script with page.evaluate, which the sweep brackets."
+  p: "page.goto: net::ERR_ABORTED at javascript:void(document.title = 'ran')"
+  n: "page.goto: Neo does not open javascript: URLs, whose script runs in the page's main world outside Neo's privacy sweep; run the script with page.evaluate"
+- case: goto-javascript
+  path: /returned/outcomes/1/threw/message
+  kind: decided
+  reason: "M2, cherry-picked ec5ad8675: the same refusal for a URL spelled with a leading space
+    and another case, which Chromium reads as javascript: too."
+  p: "page.goto: net::ERR_ABORTED at javascript:void(document.title = 'ran')"
+  n: "page.goto: Neo does not open javascript: URLs, whose script runs in the page's main world outside Neo's privacy sweep; run the script with page.evaluate"
+- case: goto-javascript
+  path: /returned/title
+  kind: decided
+  reason: "M2: what the refusal above leaves of the page. Upstream's goto ran the URL's script
+    in the document, which set the title; Neo sent nothing, so the document is untouched."
+  p: ran
+  n: Child

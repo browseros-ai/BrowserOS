@@ -409,7 +409,10 @@ export class ElementHandle extends EventEmitter {
     const api = 'elementHandle.evaluate'
     this.#live(api)
     const script = pageCall(api, 'handle', pageFunction, arg, options)
-    return fromPageValue(await this.#op('locator.evaluate', api, 0, { script }))
+    return fromPageValue(
+      api,
+      await this.#op('locator.evaluate', api, 0, { script }),
+    )
   }
 
   /** `pageFunction(element, arg)` on the first match under this handle's node now, or upstream's failure. */
@@ -431,7 +434,7 @@ export class ElementHandle extends EventEmitter {
         script,
       },
     )
-    return fromPageValue(value)
+    return fromPageValue(api, value)
   }
 
   /** `pageFunction(elements, arg)` on every match under this handle's node now. */
@@ -447,7 +450,7 @@ export class ElementHandle extends EventEmitter {
       { api, timeoutMs: timeoutMs(api, 0) },
       { target: this.#rooted(api, selector), script },
     )
-    return fromPageValue(value)
+    return fromPageValue(api, value)
   }
 
   async screenshot(options: ScreenshotOptionsInput = {}): Promise<unknown> {

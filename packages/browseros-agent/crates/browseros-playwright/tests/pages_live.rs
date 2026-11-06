@@ -338,6 +338,52 @@ async fn tests_that_frames_lists_out_of_process_frames_under_their_embedders() -
     .await
 }
 
+/// Chromium runs a `javascript:` URL in the current document's main world, outside the
+/// privacy sweep, so `goto` refuses one, however it is spelled, before it is sent.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_goto_refuses_a_javascript_url_before_it_is_sent() -> TestResult {
+    with_page(|run, server, page| async move {
+        let result = async {
+            goto(&run, &page, &server.url("/child.html"), "load").await?;
+            for url in [
+                "javascript:void(document.title = 'ran')",
+                " JavaScript:void(document.title = 'ran')",
+                "java\tscript:void(document.title = 'ran')",
+            ] {
+                run.clear_calls();
+                let error = goto(&run, &page, url, "load")
+                    .await
+                    .err()
+                    .ok_or(format!("{url:?} is refused"))?;
+                assert_eq!(
+                    (error.error_code(), error.owner(), error.answer()),
+                    (
+                        Some(ErrorCode::Unsupported),
+                        ErrorOwner::Neo,
+                        Answer::Definite
+                    ),
+                    "{url:?}: {error}"
+                );
+                assert!(
+                    run.calls().is_empty(),
+                    "{url:?}: nothing was rechecked or sent: {:?}",
+                    run.calls()
+                );
+                assert_eq!(
+                    run.eval(&page, "document.title").await?,
+                    json!("child"),
+                    "{url:?}: its script never ran"
+                );
+            }
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_captures_return_bytes_and_stop_when_the_host_refuses() -> TestResult {

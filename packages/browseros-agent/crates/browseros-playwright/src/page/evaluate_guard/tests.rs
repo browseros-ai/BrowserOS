@@ -1,6 +1,6 @@
 use std::error::Error;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
@@ -15,8 +15,8 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::time::{self, Instant};
 
 use super::{
-    ArgText, Called, EvaluateGuard, FRAME_BUDGET, MainWorldCall, Outcome, RemoteObject, Reply,
-    Script, Subject, Unmasked, decode, masked, not_run, returned,
+    ArgText, Called, EvaluateGuard, FIRST_POLL, FRAME_BUDGET, MainWorldCall, NAVIGATED, Outcome,
+    RemoteObject, Reply, SETTLED, Script, Subject, Unmasked, decode, masked, not_run, returned,
 };
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
@@ -27,8 +27,8 @@ use crate::probe::{PROBE_PROTOCOL, ProbeFailure};
 use crate::target::{CallHeader, PageRef};
 use crate::test_env::{self, TestEnv};
 use crate::test_support::{
-    ProbeAnswer, RecordingHooks, SCRIPTED_CHILD, SCRIPTED_OOPIF, ScriptedRun, ScriptedTab,
-    TabScript,
+    ProbeAnswer, RecordingHooks, SCRIPTED_CHILD, SCRIPTED_DOCUMENT, SCRIPTED_OOPIF, ScriptedRun,
+    ScriptedTab, TabScript,
 };
 use crate::world::Place;
 use crate::{ErrorCode, Op, Playwright, PlaywrightError, resolve};
@@ -117,6 +117,7 @@ fn tests_that_a_gone_document_is_an_outcome_and_other_errors_fail() {
     let ended = |message: &str| match not_run::<()>(protocol(message)) {
         Ok(Called::Ended(Outcome::NotRun)) => "not run",
         Ok(Called::Ended(Outcome::Destroyed)) => "destroyed",
+        Ok(Called::Ended(Outcome::Navigated)) => "navigated",
         Ok(_) => "another outcome",
         Err(_) => "failed",
     };
@@ -124,9 +125,21 @@ fn tests_that_a_gone_document_is_an_outcome_and_other_errors_fail() {
     assert_eq!(ended("Could not find object with given id"), "not run");
     assert_eq!(ended("Execution context was destroyed."), "destroyed");
     assert_eq!(
+        ended("Inspected target navigated or closed"),
+        "navigated",
+        "a call a navigation cut off may have run"
+    );
+    assert_eq!(
         ended("Internal error"),
         "failed",
         "an unknown CDP error is the op's failure"
+    );
+    assert!(
+        matches!(
+            not_run::<()>(CoreError::Cdp(CdpError::SessionGone)),
+            Ok(Called::Ended(Outcome::NotRun))
+        ),
+        "Chromium refuses a call on a session that is gone before it reaches the page"
     );
 }
 
@@ -277,10 +290,10 @@ async fn tests_that_a_binding_function_fails_as_upstreams_server_fails_it() -> T
 #[test]
 fn tests_that_a_pending_guard_can_only_be_swept() {
     let source = include_str!("../evaluate_guard.rs");
-    let methods = |owner: &str| -> Vec<String> {
-        let opening = format!("impl<'op> {owner}<'op> {{");
+    let document = include_str!("document_write.rs");
+    let methods_in = |source: &str, opening: &str| -> Vec<String> {
         let block = source
-            .split(opening.as_str())
+            .split(opening)
             .nth(1)
             .and_then(|rest| rest.split("\n}\n").next())
             .unwrap_or_default();
@@ -296,19 +309,27 @@ fn tests_that_a_pending_guard_can_only_be_swept() {
             .collect()
     };
     assert_eq!(
-        source.matches("impl<'op> Pending<'op> {").count(),
-        1,
-        "one impl block holds Pending's methods"
+        (
+            source.matches("> Pending<'op").count(),
+            document.matches("> Pending<'op").count()
+        ),
+        (1, 0),
+        "one impl block holds Pending's methods, whatever it guards"
     );
     assert_eq!(
-        methods("Pending"),
+        methods_in(source, "impl<'op, G: Guarded> Pending<'op, G> {"),
         ["sweep"],
         "a pending guard can only be swept"
     );
     assert_eq!(
-        methods("EvaluateGuard"),
+        methods_in(source, "impl<'op> EvaluateGuard<'op> {"),
         ["open", "run", "finish"],
-        "only a swept guard sends or lets an answer out"
+        "only a swept guard sends a script or lets its answer out"
+    );
+    assert_eq!(
+        methods_in(document, "impl<'op> EvaluateGuard<'op, DocumentWrite> {"),
+        ["open_document", "write", "close"],
+        "only a swept guard writes a document or lets the write's end out"
     );
 }
 
@@ -335,7 +356,7 @@ fn tests_that_page_text_is_opaque_outside_the_guard() {
         "a send hands back only its Pending"
     );
     assert!(
-        source.contains("-> Result<(EvaluateGuard<'op>, Outcome), PlaywrightError> {"),
+        source.contains("-> Result<(EvaluateGuard<'op, G>, G::Outcome), PlaywrightError> {"),
         "the outcome leaves with the guard its sweep made"
     );
 }
@@ -506,7 +527,7 @@ async fn tests_that_a_frame_has_one_budget_from_its_attach_to_its_sweep() -> Tes
     let op = Op::from_name("page.waitForFunction").ok_or("page.waitForFunction is an op")?;
     let scope = OpScope::new(&env, op, timeout_ms(1_500));
     let started = Instant::now();
-    let call = MainWorldCall::poll(script("() => 1"));
+    let call = MainWorldCall::poll(script("() => 1"), None);
     let swept = EvaluateGuard::open(&playwright, &scope, &page, call).await;
     let took = started.elapsed();
     let error = swept.err().ok_or(format!(
@@ -538,7 +559,7 @@ async fn tests_that_the_guard_lets_in_only_a_declared_op_and_a_script_to_run() -
     let env = TestEnv::new();
     let screenshot = Op::from_name("page.screenshot").ok_or("page.screenshot is an op")?;
     let undeclared = OpScope::new(&env, screenshot, CallHeader::default());
-    let call = MainWorldCall::once(script("() => 1"), Subject::Page);
+    let call = MainWorldCall::once(script("() => 1"), Subject::Frame(None));
     let refused = EvaluateGuard::open(&playwright, &undeclared, &page_ref(1, 1)?, call)
         .await
         .err()
@@ -552,7 +573,7 @@ async fn tests_that_the_guard_lets_in_only_a_declared_op_and_a_script_to_run() -
     let declared = OpScope::new(&env, evaluate, CallHeader::default());
     let unserializable = MainWorldCall::once(
         Script::Refused("Passed function is not well-serializable!".to_owned()),
-        Subject::Page,
+        Subject::Frame(None),
     );
     let raised = EvaluateGuard::open(&playwright, &declared, &page_ref(1, 1)?, unserializable)
         .await
@@ -567,7 +588,7 @@ async fn tests_that_the_guard_lets_in_only_a_declared_op_and_a_script_to_run() -
         ),
         "upstream's server-side message, before the page is admitted"
     );
-    let call = MainWorldCall::once(script("() => 1"), Subject::Page);
+    let call = MainWorldCall::once(script("() => 1"), Subject::Frame(None));
     let admitting = EvaluateGuard::open(&playwright, &declared, &page_ref(1, 1)?, call)
         .await
         .err()
@@ -665,7 +686,7 @@ async fn open_beside_late_child(
     let run = ScriptedRun::over(tab).await?;
     let op = Op::from_name(op).ok_or("an op")?;
     let scope = OpScope::new(&run.env, op, header);
-    let call = MainWorldCall::poll(script("() => 1"));
+    let call = MainWorldCall::poll(script("() => 1"), None);
     let started = Instant::now();
     let refused = EvaluateGuard::open(&run.playwright, &scope, &run.page, call)
         .await
@@ -720,7 +741,7 @@ async fn tests_that_a_frame_late_to_the_deadline_fails_closed_as_before() -> Tes
     let run = ScriptedRun::over(&tab).await?;
     let op = Op::from_name("page.waitForFunction").ok_or("an op")?;
     let scope = OpScope::new(&run.env, op, timeout_ms(2_500));
-    let call = MainWorldCall::poll(script("() => 1"));
+    let call = MainWorldCall::poll(script("() => 1"), None);
     let started = Instant::now();
     let opening = async {
         let opened = EvaluateGuard::open(&run.playwright, &scope, &run.page, call).await;
@@ -822,7 +843,7 @@ async fn tests_that_a_try_longer_than_the_last_is_cut_at_the_deadline_as_late() 
     let run = ScriptedRun::over(&tab).await?;
     let op = Op::from_name("page.waitForFunction").ok_or("an op")?;
     let scope = OpScope::new(&run.env, op, timeout_ms(2_500));
-    let call = MainWorldCall::poll(script("() => 1"));
+    let call = MainWorldCall::poll(script("() => 1"), None);
     let started = Instant::now();
     let opened = EvaluateGuard::open(&run.playwright, &scope, &run.page, call).await;
     let took = started.elapsed();
@@ -929,7 +950,7 @@ async fn tests_that_a_stall_past_the_untimed_window_fails_after_one_that_recover
     let run = ScriptedRun::over(&tab).await?;
     let op = Op::from_name("page.waitForFunction").ok_or("an op")?;
     let scope = OpScope::new(&run.env, op, timeout_ms(0));
-    let call = MainWorldCall::poll(script("() => 1"));
+    let call = MainWorldCall::poll(script("() => 1"), None);
     let started = Instant::now();
     let guard = EvaluateGuard::open(&run.playwright, &scope, &run.page, call).await?;
     let recovered = started.elapsed();
@@ -1051,7 +1072,7 @@ async fn tests_that_the_sweep_after_a_script_is_tried_again_before_its_result_le
         let run = ScriptedRun::over(&tab).await?;
         let op = Op::from_name("page.waitForFunction").ok_or("an op")?;
         let scope = OpScope::new(&run.env, op, timeout_ms(2_500));
-        let call = MainWorldCall::poll(script("() => 1"));
+        let call = MainWorldCall::poll(script("() => 1"), None);
         let guard = EvaluateGuard::open(&run.playwright, &scope, &run.page, call).await?;
         let pending = guard.run(&scope).await?;
         let started = Instant::now();
@@ -1135,5 +1156,206 @@ async fn tests_that_a_read_after_a_late_frame_is_masked_with_every_tries_values(
             }
         }
     }
+    Ok(())
+}
+
+/// How Chromium fails a call into a frame that a navigation moved to another renderer while
+/// the call was pending (measured by M6a, a poll during a cross-site goto).
+const MOVED: &str = "Inspected target navigated or closed";
+
+/// A tab whose main world cuts off every call into its document, as that navigation does,
+/// counting them.
+#[derive(Default)]
+struct CutOff {
+    calls: AtomicUsize,
+}
+
+impl TabScript for CutOff {
+    fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+        ProbeAnswer::empty_sweep()
+    }
+
+    fn main_world(&self, object: &str, _function: &str) -> Option<Result<Value, &'static str>> {
+        (object == SCRIPTED_DOCUMENT).then(|| {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(MOVED)
+        })
+    }
+}
+
+/// A script a navigation cut off may have run, so `page.evaluate` never sends it again and
+/// fails as upstream's does, with the message its `rewriteError` gives that failure.
+#[tokio::test(start_paused = true)]
+async fn tests_that_an_evaluate_a_navigation_cut_off_is_not_sent_again() -> TestResult {
+    let tab = ScriptedTab::new(CutOff::default());
+    let run = ScriptedRun::over(&tab).await?;
+    let op = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
+    let input = json!({ "page": serde_json::to_value(&run.page)?,
+                        "script": { "run": { "expression": "() => window.ran = true",
+                                             "isFunction": true, "arg": r#"{"v":"undefined"}"# } } });
+    let error = run
+        .playwright
+        .invoke(&run.env, op, input)
+        .await
+        .err()
+        .ok_or("a script a navigation cut off does not answer")?;
+    assert_eq!(
+        (error.error_code(), error.message()),
+        (
+            Some(ErrorCode::PageError),
+            format!("page.evaluate: {NAVIGATED}").as_str()
+        ),
+    );
+    assert_eq!(
+        tab.script().calls.load(Ordering::SeqCst),
+        1,
+        "the script went out once"
+    );
+    Ok(())
+}
+
+/// A tab whose first call into its main frame's document is cut off by that navigation, and in
+/// whose next document the predicate holds at once: every probe sweep and main-world call, in
+/// order.
+#[derive(Default)]
+struct MovesOnce {
+    log: Mutex<Vec<&'static str>>,
+}
+
+impl MovesOnce {
+    fn log(&self) -> Vec<&'static str> {
+        self.log
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn push(&self, entry: &'static str) -> usize {
+        let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
+        log.push(entry);
+        log.iter().filter(|logged| **logged == entry).count()
+    }
+}
+
+impl TabScript for MovesOnce {
+    fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+        self.push("sweep");
+        ProbeAnswer::empty_sweep()
+    }
+
+    fn main_world(&self, object: &str, function: &str) -> Option<Result<Value, &'static str>> {
+        match object {
+            SCRIPTED_DOCUMENT if self.push("build") == 1 => Some(Err(MOVED)),
+            SCRIPTED_DOCUMENT => Some(Ok(
+                json!({ "result": { "type": "function", "objectId": "poller" } }),
+            )),
+            "poller" if function == FIRST_POLL => {
+                self.push("first poll");
+                Some(Ok(
+                    json!({ "result": { "type": "object", "subtype": "array",
+                                            "value": [true, "true"] } }),
+                ))
+            }
+            "poller" if function == SETTLED => {
+                self.push("settled");
+                Some(Ok(
+                    json!({ "result": { "type": "boolean", "value": true } }),
+                ))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// A predicate a navigation cut off is side-effect free, as upstream's are meant to be, so the
+/// wait goes on in the frame's next document, as upstream's does: the poller is built again
+/// there, only after a sweep that followed the cut-off call.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_wait_a_navigation_cut_off_polls_again_after_a_sweep() -> TestResult {
+    let tab = ScriptedTab::new(MovesOnce::default());
+    let run = ScriptedRun::over(&tab).await?;
+    let op = Op::from_name("page.waitForFunction").ok_or("page.waitForFunction is an op")?;
+    let input = json!({ "call": { "timeoutMs": 5_000 }, "page": serde_json::to_value(&run.page)?,
+                        "script": { "run": { "expression": "() => true", "isFunction": true,
+                                             "arg": r#"{"v":"undefined"}"# } } });
+    let waited = run.playwright.invoke(&run.env, op, input).await?;
+    assert_eq!(
+        waited,
+        json!({ "value": true, "preview": "true" }),
+        "settled in the next document"
+    );
+    assert_eq!(
+        tab.script().log(),
+        [
+            "sweep",
+            "build",
+            "sweep",
+            "build",
+            "first poll",
+            "settled",
+            "sweep"
+        ],
+        "a sweep between the cut-off call and the poller built again"
+    );
+    Ok(())
+}
+
+/// A sweep the op's own timeout cuts is never dropped with what it found: the frame that
+/// answered reports its value to the host, though a same-site frame stalls past the timeout,
+/// and the op fails with upstream's timeout, not with Neo's refusal, which would name a budget
+/// the frame never had. setContent's sweep before its write and waitForFunction's before its
+/// first poll ran inside the op's timeout, which dropped them whole (M2R review F2).
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_sweep_the_op_timeout_cuts_reports_what_it_found() -> TestResult {
+    let wait = json!({ "script": { "run": { "expression": "() => 1", "isFunction": true,
+                                            "arg": r#"{"v":"undefined"}"# } } });
+    let mut ended = Vec::new();
+    for (name, mut input) in [
+        ("page.waitForFunction", wait),
+        ("page.setContent", json!({ "html": "<p>hi</p>" })),
+    ] {
+        let tab = ScriptedTab::new(LateChild::new(every));
+        let run = ScriptedRun::over(&tab).await?;
+        let op = Op::from_name(name).ok_or("an op")?;
+        if let Some(fields) = input.as_object_mut() {
+            fields.insert("page".to_owned(), serde_json::to_value(&run.page)?);
+            fields.insert("call".to_owned(), json!({ "timeoutMs": 500 }));
+        }
+        let error = run
+            .playwright
+            .invoke(&run.env, op, input)
+            .await
+            .err()
+            .ok_or(format!("{name}: a frame stalled past the timeout"))?;
+        ended.push((
+            name,
+            error.error_code(),
+            error
+                .message()
+                .starts_with(&format!("{name}: Timeout 500ms exceeded.")),
+            run.hooks.swept().iter().any(|value| value == "main-try-1"),
+            run.env.calls().contains(&test_env::EnvCall::MarkSent),
+        ));
+    }
+    assert_eq!(
+        ended,
+        [
+            (
+                "page.waitForFunction",
+                Some(ErrorCode::WaitTimeout),
+                true,
+                true,
+                false
+            ),
+            (
+                "page.setContent",
+                Some(ErrorCode::WaitTimeout),
+                true,
+                true,
+                false
+            ),
+        ],
+        "(op, code, upstream's timeout, the answered value reached the host, anything sent)"
+    );
     Ok(())
 }

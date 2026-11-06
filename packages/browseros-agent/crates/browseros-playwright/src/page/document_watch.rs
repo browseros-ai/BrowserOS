@@ -47,6 +47,10 @@ pub(crate) enum WatchError {
     Core(CoreError),
     /// The frame is no longer in its session's frame tree.
     FrameDetached,
+    /// The frame left the watched session while a navigation was awaited: its document there
+    /// was detached, as when it moves to another renderer or the page removes it, or the
+    /// session itself went away. The frame may live on elsewhere (`waitForURL` follows it).
+    Left,
 }
 
 impl From<CoreError> for WatchError {
@@ -72,6 +76,10 @@ struct WatchedFrame {
     navigations: VecDeque<Navigated>,
     /// The frame's URL as last reported, for the prelude's synchronous `page.url()`.
     url: Option<String>,
+    /// The frame left the watched session: `Page.frameDetached` named it there, either reason
+    /// (`swap`, `remove`), or the session detached. Only [`DocumentWatch::navigated`] acts on
+    /// it.
+    left: bool,
 }
 
 /// A document the frame committed.
@@ -145,6 +153,21 @@ impl DocumentWatch {
         self.frame.url.as_deref()
     }
 
+    /// Turns on the `Page` domain for the session, for a watch whose frame may be an
+    /// out-of-process iframe's. Chromium sends an OOPIF's `documentOpened`, `frameNavigated` and
+    /// lifecycle events only on a session with `Page` enabled (measured, spike
+    /// S-setcontent-oopif: none arrive without it, all of them with it), and core enables it
+    /// there only on an agent's own tab, for its file chooser interception; on a page's own
+    /// session core enabled it already, and a second enable changes nothing. Sent before the
+    /// watch reads the frame, so a navigation between that read and the wait is still seen.
+    ///
+    /// It lives here, under the op's timeout, rather than in a sealed world's session setup,
+    /// whose calls spend a frame's sweep budget.
+    pub(crate) async fn enable_page(&self) -> Result<(), WatchError> {
+        self.session.send_value("Page.enable", json!({})).await?;
+        Ok(())
+    }
+
     /// Turns on `Page.lifecycleEvent` for the session. Chromium then replays the states the
     /// current document already reached, so a wait never misses one that happened earlier.
     pub(crate) async fn enable_lifecycle(&self) -> Result<(), WatchError> {
@@ -198,11 +221,16 @@ impl DocumentWatch {
     }
 
     /// Waits for the frame's next navigation since the watch started, a new document or a move
-    /// inside the current one, each once and in order.
+    /// inside the current one, each once and in order. [`WatchError::Left`] once the frame left
+    /// the session with no navigation still to hand out: a navigation that commits in another
+    /// renderer is never seen here.
     pub(crate) async fn navigated(&mut self) -> Result<Navigated, WatchError> {
         loop {
             if let Some(navigated) = self.frame.navigations.pop_front() {
                 return Ok(navigated);
+            }
+            if self.frame.left {
+                return Err(WatchError::Left);
             }
             self.next().await?;
         }
@@ -235,6 +263,13 @@ impl DocumentWatch {
             Ok(event) => {
                 if event.session_id.as_ref() == Some(&self.session_id) {
                     self.frame.apply(&event, &self.frame_id);
+                } else if event.method == "Target.detachedFromTarget"
+                    && event.params.get("sessionId").and_then(Value::as_str)
+                        == Some(self.session_id.as_str())
+                {
+                    // Sent on the session that attached ours, or the browser's, never on ours:
+                    // an out-of-process frame whose renderer it left.
+                    self.frame.left = true;
                 }
                 Ok(())
             }
@@ -296,6 +331,13 @@ impl WatchedFrame {
                     self.reopen(frame.loader_id);
                 }
             }
+            "Page.frameDetached" => {
+                if let Some(Detached { frame_id: id }) = parse(&event.params)
+                    && id == frame_id.as_str()
+                {
+                    self.left = true;
+                }
+            }
             "Page.navigatedWithinDocument" => {
                 if let Some(WithinDocument { frame_id: id, url }) = parse(&event.params)
                     && id == frame_id.as_str()
@@ -352,6 +394,13 @@ impl WatchedFrame {
             .and_then(|loader| self.reached.get(loader))
             .is_some_and(|reached| reached.contains(&state))
     }
+}
+
+/// `Page.frameDetached`, reduced to what the watch reads.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Detached {
+    frame_id: String,
 }
 
 /// `Page.frameNavigated`, reduced to what the watch reads.

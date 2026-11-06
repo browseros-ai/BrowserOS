@@ -3,8 +3,9 @@
 //! document a frame shows now.
 //!
 //! ```text
-//!  admit ── DocumentWatch (subscribe, lifecycle on) ── send_effect ── Page.navigate, reload or
-//!     navigateToHistoryEntry ── that document's commit ── its waitUntil state ── the response
+//!  (goto: a javascript: URL refused) ── admit ── DocumentWatch (subscribe, lifecycle on) ──
+//!     send_effect ── Page.navigate, reload or navigateToHistoryEntry ── that document's
+//!     commit ── its waitUntil state ── the response
 //! ```
 //!
 //! The response comes from the new document's navigation timing entry (`responseStatus`), so
@@ -111,15 +112,46 @@ struct Response {
 }
 
 impl GotoInput {
-    /// The page, the navigation and its `waitUntil`.
-    pub(crate) fn into_parts(self) -> (PageRef, Navigation, LoadState) {
+    /// The page, the navigation and its `waitUntil`. A `javascript:` URL is refused here, before
+    /// the page is admitted or anything is sent: Chromium runs it in the current document's main
+    /// world, outside the sweep that guards every other main-world script, and only then
+    /// reports the navigation aborted. That refusal is why `page.goto` does not declare
+    /// `Capability::MainWorld`: every URL it sends runs the new document's own script in that
+    /// document's origin, as a link would, or the agent's in a `data:` document's opaque
+    /// origin, which reaches no other document.
+    pub(crate) fn into_parts(
+        self,
+        scope: &OpScope<'_>,
+    ) -> Result<(PageRef, Navigation, LoadState), PlaywrightError> {
+        if runs_script(&self.url) {
+            return Err(scope.fail(
+                ErrorCode::Unsupported,
+                "Neo does not open javascript: URLs, whose script runs in the page's main world \
+                 outside Neo's privacy sweep; run the script with page.evaluate",
+            ));
+        }
         let navigation = Navigation::Goto {
             frame: self.frame,
             url: complete_user_url(self.url),
             referer: self.referer,
         };
-        (self.page, navigation, self.wait_until)
+        Ok((self.page, navigation, self.wait_until))
     }
+}
+
+/// Whether `url` is a `javascript:` URL, its scheme read as the URL Standard and Chromium read
+/// it: the C0 controls and spaces around the URL dropped, the tabs and newlines inside it
+/// removed, then everything before the first `:`, compared without ASCII case. So
+/// ` JavaScript:` and `java\tscript:` are, and `/javascript:` (no scheme) and `java script:`
+/// (no URL Chromium navigates to) are not.
+fn runs_script(url: &str) -> bool {
+    let url: String = url
+        .trim_matches(|c: char| c <= ' ')
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
+    url.split_once(':')
+        .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("javascript"))
 }
 
 impl NavigateInput {
@@ -289,6 +321,7 @@ pub(crate) async fn wait_for_load_state(
     };
     let mut watch = DocumentWatch::new(pw.browser(), session, session_id, frame);
     let wait = async {
+        watch.enable_page().await?;
         watch.read_current().await?;
         watch.enable_lifecycle().await?;
         watch.reached(input.state).await
@@ -340,7 +373,9 @@ async fn frame_host(
 pub(crate) fn watch_error(scope: &OpScope<'_>, error: &WatchError) -> PlaywrightError {
     match error {
         WatchError::Core(error) => scope.core_error(error),
-        WatchError::FrameDetached => scope.fail(ErrorCode::TargetClosed, "Frame was detached"),
+        WatchError::FrameDetached | WatchError::Left => {
+            scope.fail(ErrorCode::TargetClosed, "Frame was detached")
+        }
     }
 }
 
@@ -522,7 +557,71 @@ fn status_text(status: u16) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{complete_user_url, status_text};
+    use std::error::Error;
+    use std::sync::Arc;
+
+    use browseros_trace::ErrorOwner;
+    use serde_json::json;
+
+    use super::{complete_user_url, runs_script, status_text};
+    use crate::test_env::{self, TestEnv};
+    use crate::test_support::RecordingHooks;
+    use crate::{Answer, ErrorCode, Op, Playwright};
+
+    #[test]
+    fn tests_that_a_javascript_url_is_script_however_it_is_spelled() {
+        for (url, script) in [
+            ("javascript:void(document.title = 'x')", true),
+            ("JavaScript:void(0)", true),
+            // The browser drops what surrounds a URL, and the tabs and newlines inside it.
+            (" \u{1}java\tscr\nipt:void(0)\r\n", true),
+            ("https://bank.example/javascript:void(0)", false),
+            (
+                "data:text/html,<script>document.title = 'x'</script>",
+                false,
+            ),
+            ("about:blank", false),
+            ("/javascript:void(0)", false),
+            ("java script:void(0)", false),
+            ("javascript", false),
+        ] {
+            assert_eq!(runs_script(url), script, "{url:?}");
+        }
+    }
+
+    /// Offline, any op that reaches the browser fails as disconnected, so `unsupported` with no
+    /// host call shows the refusal came first.
+    #[tokio::test]
+    async fn tests_that_goto_refuses_a_javascript_url_before_anything_is_sent()
+    -> Result<(), Box<dyn Error>> {
+        let playwright = Playwright::new(
+            test_env::offline_session(),
+            Arc::new(RecordingHooks::default()),
+        );
+        let goto = Op::from_name("page.goto").ok_or("page.goto is an op")?;
+        for frame in [None, Some("child-frame")] {
+            let env = TestEnv::new();
+            let input = json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 },
+                                "frame": frame, "url": " JavaScript:void(document.title = 'ran')" });
+            let error = playwright
+                .invoke(&env, goto, input)
+                .await
+                .err()
+                .ok_or("a javascript: URL is refused")?;
+            assert_eq!(
+                (error.error_code(), error.owner(), error.answer()),
+                (
+                    Some(ErrorCode::Unsupported),
+                    ErrorOwner::Neo,
+                    Answer::Definite
+                ),
+                "{error}"
+            );
+            assert!(error.message().contains("javascript:"), "{error}");
+            assert!(env.calls().is_empty(), "nothing was rechecked or sent");
+        }
+        Ok(())
+    }
 
     #[test]
     fn tests_that_a_bare_local_address_gets_a_scheme_as_upstream_does() {

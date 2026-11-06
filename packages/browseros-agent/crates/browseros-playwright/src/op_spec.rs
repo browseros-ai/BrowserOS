@@ -46,9 +46,9 @@ pub struct OpSpec {
 pub enum Capability {
     /// Runs agent-supplied script, or HTML whose scripts run, in a page's main world. There the
     /// script reads the page's own state and every frame of its site, and no seal masks a
-    /// field. Gateway: the evaluate guard's entry, `EvaluateGuard::open`. `page.setContent`
-    /// reaches the main world without passing it, because its HTML is written from the sealed
-    /// world, so it is declared but not gated ([`OpSpec::gated`]).
+    /// field. Gateway: the evaluate guard's entries, `EvaluateGuard::open` for a script and
+    /// `EvaluateGuard::open_document` for `page.setContent`, whose HTML the sealed world writes
+    /// and whose scripts the main world runs.
     MainWorld,
     /// Returns the page's pixels, which no seal masks: `page.screenshot`, with its element
     /// forms, and `page.pdf`. A host refuses such an op on a private tab, and withholds pixels

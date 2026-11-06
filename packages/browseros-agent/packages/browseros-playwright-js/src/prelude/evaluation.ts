@@ -30,7 +30,12 @@ import {
   serializeValue,
 } from '../../../../crates/browseros-playwright/third_party/playwright/packages/protocol/src/serializers'
 import { ElementHandle } from './element-handle'
-import { clientError, plainError, unsupportedError } from './errors'
+import {
+  answerError,
+  clientError,
+  plainError,
+  unsupportedError,
+} from './errors'
 import { WaitHandle } from './frame'
 import { isHandle } from './options'
 import type { ElementBrand, PageScript, SerializedValue } from './wire'
@@ -196,7 +201,7 @@ function serializeArgument(api: string, arg: unknown) {
         return { h: clientHandles.length - 1 }
       }
       if (value instanceof WaitHandle) {
-        if (!copies.has(value)) copies.set(value, value._value())
+        if (!copies.has(value)) copies.set(value, value._value(api))
         return fallThrough(copies.get(value))
       }
       if (!isHandle(value)) return fallThrough(value)
@@ -253,9 +258,19 @@ function validateValue(
  * The op's masked result, in the page's format, as the agent's value: the vendored
  * `parseEvaluationResultValue`. Rust already applied upstream's server-to-client step (an
  * ArrayBuffer is `{}`), so this one walk gives what upstream's three do.
+ *
+ * The walk recurses once per level of the value, and claw-sdk's QuickJS stack is far smaller
+ * than Node's, so a result nested as deep as Chromium carries one overflows it where
+ * upstream's client reads it (tier 1 `evaluate-errors`, `deepest`). The op ran and answered,
+ * and reading its answer failed, so the failure is the op's, named for `api`, as it was when
+ * claw-sdk's bootstrap revived the answer and overflowed inside the op.
  */
-export function fromPageValue(value: SerializedValue): unknown {
-  return parseEvaluationResultValue(value as never)
+export function fromPageValue(api: string, value: SerializedValue): unknown {
+  try {
+    return parseEvaluationResultValue(value as never)
+  } catch (error) {
+    throw answerError(api, error)
+  }
 }
 
 /*

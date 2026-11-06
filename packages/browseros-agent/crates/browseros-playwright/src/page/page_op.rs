@@ -81,7 +81,8 @@ impl PageOp {
                 PAGE,
                 "replace the document's HTML and wait for the load state",
             )
-            .using(&[Capability::MainWorld]),
+            .using(&[Capability::MainWorld])
+            .policed(),
             Self::Close => OpSpec::write("page.close", PAGE, "close the tab"),
             Self::Opener => OpSpec::read("page.opener", PAGE, "the page that opened this one"),
             Self::Frames => OpSpec::read(
@@ -146,7 +147,8 @@ pub(crate) async fn invoke(
 ) -> Result<Value, PlaywrightError> {
     match op {
         PageOp::Goto => {
-            let (page, navigation, wait_until) = args.decode::<GotoInput>(scope)?.into_parts();
+            let (page, navigation, wait_until) =
+                args.decode::<GotoInput>(scope)?.into_parts(scope)?;
             let page = page.checked(pw.browser(), scope).await?;
             navigation::navigate(pw, scope, &page, navigation, wait_until).await
         }
@@ -173,8 +175,14 @@ pub(crate) async fn invoke(
         PageOp::Content => {
             document_op::read(pw, scope, args.decode(scope)?, DocumentPart::Content).await
         }
-        PageOp::SetContent => document_op::set_content(pw, scope, args.decode(scope)?).await,
-        PageOp::WaitForUrl => wait_for_url::wait_for_url(pw, scope, args.decode(scope)?).await,
+        // Boxed for the same reason: each holds its frame's world install inside its timeout,
+        // and setContent's guard its sweeps too.
+        PageOp::SetContent => {
+            Box::pin(document_op::set_content(pw, scope, args.decode(scope)?)).await
+        }
+        PageOp::WaitForUrl => {
+            Box::pin(wait_for_url::wait_for_url(pw, scope, args.decode(scope)?)).await
+        }
         PageOp::EvaluateOnElement => {
             Box::pin(element_evaluate::evaluate_on_element(
                 pw,

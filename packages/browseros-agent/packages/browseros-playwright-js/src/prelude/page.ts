@@ -837,7 +837,14 @@ export class Page extends EventEmitter {
     url: UrlMatcher,
     options: TimeoutOption & { waitUntil?: LoadState } = {},
   ): Promise<void> {
-    const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
+    // Neo's waitForURL keeps the prefix it always gave; upstream's depends on whether the URL
+    // already matched (waitForLoadState's check, or waitForNavigation's wrapped one).
+    let waitUntil: LoadState
+    try {
+      waitUntil = loadState('waitUntil', options.waitUntil ?? 'load')
+    } catch (error) {
+      throw prefixed(api, error)
+    }
     const timeout = frame._navigationTimeout(options)
     const args = await frame._frameArgs(api)
     if (typeof url !== 'function') {
@@ -896,7 +903,7 @@ export class Page extends EventEmitter {
     api: 'page.reload' | 'page.goBack' | 'page.goForward',
     options: NavigateOptions = {},
   ): Promise<Response | null> {
-    const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
+    const waitUntil = loadState('waitUntil', options.waitUntil ?? 'load')
     const result = await invoke(
       api,
       this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)),

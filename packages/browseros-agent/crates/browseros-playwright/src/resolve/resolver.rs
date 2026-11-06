@@ -511,6 +511,11 @@ impl<'a> Resolver<'a> {
             }
             Started::Missing => Err(Step::Missing),
             Started::Gone(world) => Err(Step::Gone(world)),
+            Started::Detached => {
+                return Err(self
+                    .scope
+                    .fail(ErrorCode::TargetClosed, "Frame was detached"));
+            }
         })
     }
 

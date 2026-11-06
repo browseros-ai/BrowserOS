@@ -1,21 +1,21 @@
-//! The main-world scripts on a real BrowserOS, through MCP `run` (S4): each API that runs the
-//! agent's script in the page behaves as Playwright 1.64.1's, no password field's value reaches
-//! the realm or the trace raw, an owner's lock that blocks reads withholds what a script that was
-//! already running read, and `page.setContent` stays held.
+//! The main-world scripts on a real BrowserOS, through MCP `run` (S4, S5): each API that runs the
+//! agent's script or HTML in the page behaves as Playwright 1.64.1's, the frame forms in a child
+//! frame included, no password field's value reaches the realm or the trace raw, and an owner's
+//! lock that blocks reads withholds what a script that was already running read.
 //!
 //! ```text
 //!  page.evaluate, frame.evaluate ──────────────────────────────────▶ page.evaluate
 //!  page.waitForFunction, frame.waitForFunction ────────────────────▶ page.waitForFunction
 //!  locator.evaluate, elementHandle.evaluate, $eval (page, frame, handle) ─▶ locator.evaluate
 //!  locator.evaluateAll, $$eval (page, frame, handle) ──────────────▶ locator.evaluateAll
+//!  page.setContent, frame.setContent ──────────────────────────────▶ page.setContent
 //!    each op: the crate's evaluate guard sweeps, sends, sweeps, masks ─ the door: RunMask, and the
 //!    rules again as a read of the tab ─▶ the realm, and the trace the host reads back
 //! ```
 //!
 //! Each case's script returns what it saw, as the realm saw it, and the test compares that with
-//! what Playwright gives. The frame forms in a child frame are refused as not built yet (the
-//! crate's milestone 1). Like `e2e_browseros.rs`, it runs only when `CLAW_SDK_E2E_BROWSER` names a
-//! BrowserOS binary.
+//! what Playwright gives. Like `e2e_browseros.rs`, it runs only when `CLAW_SDK_E2E_BROWSER` names
+//! a BrowserOS binary.
 
 #[path = "support/browseros_rig.rs"]
 pub mod browseros_rig;
@@ -77,8 +77,8 @@ async fn evaluate_all_and_dollar_dollar_eval_behave_as_playwright_on_browseros()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn set_content_stays_held_on_browseros() -> TestResult {
-    on_browseros(|rig| Box::pin(set_content_held(rig))).await
+async fn set_content_behaves_as_playwright_on_browseros() -> TestResult {
+    on_browseros(|rig| Box::pin(set_content(rig))).await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -163,8 +163,9 @@ fn threw(name: &str, owner: &str, code: &str, delivery: &str, message: &str) -> 
 }
 
 /// `page.evaluate`, and `frame.evaluate`, which sends it: Playwright's value transport both ways,
-/// an expression, element handles as arguments, upstream's error with its prefix, and the child
-/// frame the crate does not serve yet.
+/// an expression, element handles as arguments, upstream's error with its prefix, Neo's bound on
+/// a result's depth, and a script in a same-site child frame, which runs there and reaches its
+/// parent.
 async fn page_evaluate(rig: &Rig) -> TestResult {
     let script = r"
         const got = await page.evaluate(() => {
@@ -177,6 +178,16 @@ async fn page_evaluate(rig: &Rig) -> TestResult {
           };
         });
         const [field, item] = [await page.$('#user'), await page.$('.item')];
+        const nested = (levels) => page.evaluate((levels) => {
+          let value = 'bottom';
+          for (let level = 0; level < levels; level++) value = { down: value };
+          return value;
+        }, levels);
+        const depth = (value) => {
+          let levels = 0;
+          for (; typeof value === 'object'; levels++) value = value.down;
+          return levels;
+        };
         return {
           values: {
             undefined: 'u' in got && got.u === undefined,
@@ -199,7 +210,10 @@ async fn page_evaluate(rig: &Rig) -> TestResult {
           handles: await page.evaluate(([f, i]) => `${f.value}:${i.textContent}`, [field, item]),
           mainFrame: await page.mainFrame().evaluate(() => document.title),
           thrown: await failed(() => page.evaluate(() => { throw new Error('boom'); })),
-          childFrame: await failed(() => page.frames()[1].evaluate(() => document.title)),
+          nested: [depth(await nested(40)), await failed(() => nested(80))],
+          childFrame: await page.frames()[1].evaluate(() => [
+            document.getElementById('inner').textContent, parent.document.title, window === top,
+          ]),
         };";
     let value = observed(rig, "evaluate", script).await?;
     assert_eq!(
@@ -217,9 +231,13 @@ async fn page_evaluate(rig: &Rig) -> TestResult {
             "handles": "ada:one",
             "mainFrame": "Main world",
             "thrown": threw("Error", "website", "page_error", "done", "page.evaluate: Error: boom"),
-            "childFrame": threw(
-                "Error", "neo", "internal_error", "not_sent", "frame.evaluate: not built yet"
-            ),
+            // The realm's stack bounds how deep a result it reads, where Playwright reads 98
+            // levels; the op answered, so its error carries no owner, code or delivery.
+            "nested": [
+                40,
+                { "name": "Error", "message": "page.evaluate: Maximum call stack size exceeded" },
+            ],
+            "childFrame": ["in frame", "Main world", false],
         }),
         "page.evaluate as Playwright runs it"
     );
@@ -227,8 +245,8 @@ async fn page_evaluate(rig: &Rig) -> TestResult {
 }
 
 /// `page.waitForFunction`, and `frame.waitForFunction`, which sends it: a wait on the page's own
-/// change, an argument, a polling interval, upstream's timeout and errors, and Neo's two
-/// differences, a handle that holds the value and a child frame not served yet.
+/// change, an argument, a polling interval, upstream's timeout and errors, a wait that polls in a
+/// child frame, and Neo's difference, a handle that holds the value.
 async fn wait_for_function(rig: &Rig) -> TestResult {
     let script = r"
         const ready = await page.waitForFunction(() => window.ready);
@@ -244,7 +262,9 @@ async fn wait_for_function(rig: &Rig) -> TestResult {
           defaultTimeout: await failed(() => page.waitForFunction(() => false)),
           polling: await failed(() => page.waitForFunction(() => true, null, { polling: 'mutation' })),
           thrown: await failed(() => page.waitForFunction(() => { throw new Error('nope'); })),
-          childFrame: await failed(() => page.frames()[1].waitForFunction(() => true)),
+          childFrame: await page.frames()[1]
+            .waitForFunction(() => document.getElementById('inner')?.textContent)
+            .then((handle) => handle.jsonValue()),
         };";
     let value = observed(rig, "wait", script).await?;
     assert_eq!(
@@ -274,11 +294,9 @@ async fn wait_for_function(rig: &Rig) -> TestResult {
             "thrown": threw(
                 "Error", "website", "page_error", "done", "page.waitForFunction: Error: nope"
             ),
-            "childFrame": threw(
-                "Error", "neo", "internal_error", "not_sent", "frame.waitForFunction: not built yet"
-            ),
+            "childFrame": "in frame",
         }),
-        "page.waitForFunction as Playwright runs it, but for Neo's two differences"
+        "page.waitForFunction as Playwright runs it, but for Neo's handle"
     );
     Ok(())
 }
@@ -369,24 +387,45 @@ async fn evaluate_all(rig: &Rig) -> TestResult {
     Ok(())
 }
 
-/// `page.setContent` stays held while the crate does not gate it, through both APIs that send it:
-/// refused with nothing sent, the page as it was, and each try one row of the run's trace.
-async fn set_content_held(rig: &Rig) -> TestResult {
-    let script = r"
-        const tried = async (call) => {
-          try {
-            await call();
-            return 'resolved';
-          } catch (error) {
-            return [error.owner, error.code, error.delivery, error.message.includes('`page.setContent` is held')];
-          }
-        };
-        const replacement = '<title>replaced</title><script>document.title = window.appState</script>';
-        return {
-          page: await tried(() => page.setContent(replacement)),
-          frame: await tried(() => page.mainFrame().setContent(replacement)),
-          title: await page.title(),
-        };";
+/// The password [`set_content`]'s HTML gives its field. The agent's code holds it whole, as the
+/// code of an agent that writes such a page does.
+const WRITTEN_SECRET: &str = "setc-pw-7Rb3";
+
+/// `page.setContent`, and `frame.setContent`, which sends it, on a child frame and on the main
+/// frame: each writes its own frame's document, the HTML's inline script runs once, and Neo
+/// refuses `networkidle`, which it cannot observe after a write. A password field the HTML writes
+/// reads masked through every read the realm has, a child frame's script reaching its parent
+/// included, and the record the host reads back keeps no copy of it: not the op's own `html`,
+/// and not the run's code.
+async fn set_content(rig: &Rig) -> TestResult {
+    let script = format!(
+        r#"
+        const SECRET = {secret};
+        const child = page.frames()[1];
+        await child.setContent('<title>Child</title><p id="c">child written</p>');
+        const childWrite = [
+          await child.title(), await child.locator('#c').textContent(), await child.content(),
+          await page.title(),
+        ];
+        const written = await page.setContent(`<title>Written</title>
+          <input type="password" id="pw" value="${{SECRET}}"><p id="w">written</p>
+          <iframe srcdoc="<p id=inner>inner</p>"></iframe>
+          <script>window.runs = (window.runs || 0) + 1;</script>`);
+        const seen = (value) => [value, value.includes(SECRET)];
+        const content = await page.content();
+        return {{
+          childWrite,
+          written: [written === undefined, await page.title(), await page.locator('#w').textContent()],
+          runs: await page.evaluate(() => window.runs),
+          content: seen(content.match(/<input[^>]*id="pw"[^>]*>/)?.[0] ?? content),
+          inputValue: seen(await page.locator('#pw').inputValue()),
+          evaluate: seen(await page.evaluate(() => document.getElementById('pw').value)),
+          childFrame: seen(await page.frames()[1].evaluate(() => parent.document.getElementById('pw').value)),
+          mainFrame: await page.mainFrame().setContent('<title>Again</title>').then(() => page.title()),
+          networkidle: await failed(() => page.setContent('<p>x</p>', {{ waitUntil: 'networkidle' }})),
+        }};"#,
+        secret = json!(WRITTEN_SECRET)
+    );
     rig.until_ready().await?;
     let client = rig.client().await?;
     let result = browseros_rig::run(
@@ -396,29 +435,73 @@ async fn set_content_held(rig: &Rig) -> TestResult {
     )
     .await?;
     client.cancel().await?;
-    let held = json!(["script", "method_unavailable", "not_sent", true]);
+    // The main world reads the field's value as `[private]`, and the sealed world shows it as
+    // `••••`, as an aria snapshot does.
+    let masked = json!(["[private]", false]);
+    let sealed = json!(["••••", false]);
     assert_eq!(
         returned(&result)?,
-        json!({ "page": held, "frame": held, "title": "Main world" }),
-        "both APIs are refused with the hold, and the page is untouched"
+        json!({
+            "childWrite": [
+                "Child", "child written",
+                "<html><head><title>Child</title></head><body><p id=\"c\">child written</p></body></html>",
+                "Main world",
+            ],
+            "written": [true, "Written", "written"],
+            "runs": 1,
+            "content": [r#"<input type="password" id="pw" value="••••">"#, false],
+            "inputValue": sealed,
+            "evaluate": masked,
+            "childFrame": masked,
+            "mainFrame": "Again",
+            "networkidle": threw(
+                "Error", "neo", "unsupported", "not_sent",
+                "page.setContent: waitUntil \"networkidle\" cannot be observed after setContent in Neo; use \"load\"",
+            ),
+        }),
+        "setContent as Playwright runs it, but for networkidle, with the written password masked"
     );
-    let recorded = run_record(rig, &result).await?;
-    let tries: Vec<(&str, Option<&str>)> = operations(&recorded)?
+    set_content_recorded(&run_record(rig, &result).await?)
+}
+
+/// [`set_content`]'s run as the host reads it back: one row per write, and the password nowhere.
+fn set_content_recorded(recorded: &Value) -> TestResult {
+    let text = recorded.to_string();
+    assert!(
+        !text.contains(WRITTEN_SECRET),
+        "the run's records keep no copy of the password: {text}"
+    );
+    let writes: Vec<&Value> = operations(recorded)?
         .iter()
         .filter(|row| row.get("name") == Some(&json!("page.setContent")))
+        .collect();
+    let tries: Vec<(Option<&str>, Option<&str>)> = writes
+        .iter()
         .map(|row| {
             (
-                row.get("delivery")
-                    .and_then(Value::as_str)
-                    .unwrap_or("none"),
-                row.pointer("/error/code").and_then(Value::as_str),
+                row.pointer("/args/call/api").and_then(Value::as_str),
+                row.get("delivery").and_then(Value::as_str),
             )
         })
         .collect();
     assert_eq!(
         tries,
-        [("not_sent", Some("method_unavailable")); 2],
-        "each try is one row, as the crate op both APIs share: {recorded}"
+        [
+            (Some("frame.setContent"), Some("done")),
+            (Some("page.setContent"), Some("done")),
+            (Some("frame.setContent"), Some("done")),
+            (Some("page.setContent"), Some("not_sent")),
+        ],
+        "each write is one row, as the crate op both APIs share: {recorded}"
+    );
+    let stored = writes
+        .iter()
+        .filter_map(|row| row.pointer("/args/html").and_then(Value::as_str))
+        .find(|html| html.contains("id=\"pw\""))
+        .ok_or_else(|| format!("the password write is stored with its html: {recorded}"))?;
+    assert!(
+        stored.contains(r#"<input type="password" id="pw" value="[private]">"#),
+        "the op's html is stored with the value Neo's sweep found in the page masked: {stored}"
     );
     Ok(())
 }

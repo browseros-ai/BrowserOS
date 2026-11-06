@@ -20,7 +20,8 @@
 //!                                   in the frame they are in
 //!  page.title / page.content ─ document_op: the sealed world's read, masked with the read
 //!                              frame's site (site_sweep, which every read and snapshot uses)
-//!  page.setContent ─ document_op: written in the sealed world, a new seq, the load state
+//!  page.setContent ─ document_op: the same guard around a write from the sealed world, a new
+//!                    seq and the load state, because the HTML's scripts run in the main world
 //!  page.waitForURL ─ wait_for_url: each navigation matched in the sealed world, the load state
 //! ```
 

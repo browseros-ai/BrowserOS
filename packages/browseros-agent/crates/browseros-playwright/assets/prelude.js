@@ -113,6 +113,10 @@
   function assertionError(message) {
     return new PlaywrightError(message);
   }
+  function answerError(api, thrown) {
+    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    return new PlaywrightError(`${api}: ${message}`);
+  }
   function prefixed(api, error) {
     if (error instanceof Error && !error.message.startsWith(`${api}: `))
       error.message = `${api}: ${error.message}`;
@@ -6356,12 +6360,12 @@ ${value.stack}`;
   }
 
   // packages/browseros-playwright-js/src/prelude/frame.ts
-  function loadState(api, name, state) {
+  function loadState(name, state) {
     if (state === "networkidle0")
       return "networkidle";
     if (state === "load" || state === "domcontentloaded" || state === "networkidle" || state === "commit")
       return state;
-    throw clientError(api, `${name}: expected one of (load|domcontentloaded|networkidle|commit)`);
+    throw plainError(`${name}: expected one of (load|domcontentloaded|networkidle|commit)`);
   }
 
   class Frame extends EventEmitter {
@@ -6685,7 +6689,7 @@ ${value.stack}`;
     }
     async _evaluateOn(api, selector, strict, script, noWait, options = {}) {
       const value = await this._selectorOp("locator.evaluate", api, selector, strict, noWait ? 0 : this._timeout(options), noWait ? { script, noWait: true, selector } : { script });
-      return fromPageValue(value);
+      return fromPageValue(api, value);
     }
     async _evaluateAll(api, selector, script) {
       const target = await this._locatorBrand(api, selector);
@@ -6693,7 +6697,7 @@ ${value.stack}`;
         target,
         script
       });
-      return fromPageValue(value);
+      return fromPageValue(api, value);
     }
     async _snapshot(api, selector, options = {}) {
       if (options.boxes)
@@ -6741,7 +6745,7 @@ ${value.stack}`;
     async _goto(api, url, options = {}) {
       if (typeof url !== "string")
         throw clientError(api, `url: expected string, got ${typeof url}`);
-      const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
+      const waitUntil = loadState("waitUntil", options.waitUntil ?? "load");
       const args = await this._frameArgs(api);
       const result = await invoke("page.goto", this._call(api, this._navigationTimeout(options)), {
         ...args,
@@ -6752,7 +6756,7 @@ ${value.stack}`;
       return await this._page._navigated(api, this, result);
     }
     async _waitForLoadState(api, state, options = {}) {
-      const verified = loadState(api, "state", state ?? "load");
+      const verified = loadState("state", state ?? "load");
       const result = await invoke("page.waitForLoadState", this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), state: verified });
       await this._page._navigated(api, this, result);
     }
@@ -6760,7 +6764,7 @@ ${value.stack}`;
       return await invoke("page.content", this._call(api, 0), await this._frameArgs(api));
     }
     async _setContent(api, html, options = {}) {
-      const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
+      const waitUntil = loadState("waitUntil", options.waitUntil ?? "load");
       const result = await invoke("page.setContent", this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), html, waitUntil });
       await this._page._navigated(api, this, result);
     }
@@ -6770,7 +6774,7 @@ ${value.stack}`;
         ...await this._frameArgs(api),
         script
       });
-      return fromPageValue(value);
+      return fromPageValue(api, value);
     }
     async _waitForFunction(api, pageFunction, arg, options = {}) {
       if (typeof options.polling === "string" && options.polling !== "raf")
@@ -6827,10 +6831,10 @@ ${value.stack}`;
       markHandle(this);
     }
     async jsonValue() {
-      return fromPageValue(this.#value);
+      return fromPageValue("jsHandle.jsonValue", this.#value);
     }
-    _value() {
-      return fromPageValue(this.#value);
+    _value(api) {
+      return fromPageValue(api, this.#value);
     }
     asElement() {
       return null;
@@ -6937,7 +6941,7 @@ ${value.stack}`;
         }
         if (value instanceof WaitHandle) {
           if (!copies.has(value))
-            copies.set(value, value._value());
+            copies.set(value, value._value(api));
           return fallThrough(copies.get(value));
         }
         if (!isHandle(value))
@@ -6974,8 +6978,12 @@ ${value.stack}`;
       validateValue(api, entry.v, `${path}.o[${index}].v`);
     });
   }
-  function fromPageValue(value) {
-    return parseEvaluationResultValue(value);
+  function fromPageValue(api, value) {
+    try {
+      return parseEvaluationResultValue(value);
+    } catch (error) {
+      throw answerError(api, error);
+    }
   }
   function normalizeEvaluationExpression(expression, isFunction) {
     expression = expression.trim();
@@ -7204,7 +7212,7 @@ ${value.stack}`;
       const api = "elementHandle.evaluate";
       this.#live(api);
       const script = pageCall(api, "handle", pageFunction, arg, options);
-      return fromPageValue(await this.#op("locator.evaluate", api, 0, { script }));
+      return fromPageValue(api, await this.#op("locator.evaluate", api, 0, { script }));
     }
     async $eval(selector, pageFunction, arg) {
       const api = "elementHandle.$eval";
@@ -7216,13 +7224,13 @@ ${value.stack}`;
         selector,
         script
       });
-      return fromPageValue(value);
+      return fromPageValue(api, value);
     }
     async $$eval(selector, pageFunction, arg) {
       const api = "elementHandle.$$eval";
       const script = pageCall(api, "query", pageFunction, arg);
       const value = await invoke("locator.evaluateAll", { api, timeoutMs: timeoutMs(api, 0) }, { target: this.#rooted(api, selector), script });
-      return fromPageValue(value);
+      return fromPageValue(api, value);
     }
     async screenshot(options = {}) {
       const api = "elementHandle.screenshot";
@@ -7770,7 +7778,12 @@ ${value.stack}`;
       this.emit("close", this);
     }
     async _waitForURL(api, frame, url, options = {}) {
-      const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
+      let waitUntil;
+      try {
+        waitUntil = loadState("waitUntil", options.waitUntil ?? "load");
+      } catch (error) {
+        throw prefixed(api, error);
+      }
       const timeout = frame._navigationTimeout(options);
       const args = await frame._frameArgs(api);
       if (typeof url !== "function") {
@@ -7812,7 +7825,7 @@ ${value.stack}`;
       }
     }
     async#history(api, options = {}) {
-      const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
+      const waitUntil = loadState("waitUntil", options.waitUntil ?? "load");
       const result = await invoke(api, this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)), { page: await this._brand(api), waitUntil });
       return await this._navigated(api, this._mainFrame, result);
     }

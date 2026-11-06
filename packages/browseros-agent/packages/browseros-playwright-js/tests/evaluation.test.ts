@@ -236,3 +236,37 @@ it('tests that locator.evaluate refuses a signal before anything is sent, and pa
   expect(runtime.sent('locator.evaluate')).toEqual([])
   expect(runtime.sent('page.evaluate')).toHaveLength(1)
 })
+
+it('tests that an answer the prelude cannot read fails as the op that answered it', async () => {
+  // A pattern no engine compiles: the vendored parse throws at it, as QuickJS's stack does at a
+  // result nested past its depth (tier 1's evaluate-errors deepest).
+  const unreadable = { r: { p: '(', f: '' } }
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) =>
+      call.name === 'page.evaluate' || call.name === 'locator.evaluate'
+        ? unreadable
+        : null,
+  })
+  const outcomes = json(
+    await runtime.run(`
+      const outcome = (work) =>
+        work.then(() => 'returned', (e) => [e.name, e.message.split(':')[0], e.code ?? null])
+      return [
+        await outcome(page.evaluate(() => 1)),
+        await outcome(page.locator('h1').evaluate(() => 1)),
+        await outcome(page.mainFrame().evaluate(() => 1)),
+      ]
+    `),
+  )
+  expect(outcomes).toEqual([
+    ['Error', 'page.evaluate', null],
+    ['Error', 'locator.evaluate', null],
+    ['Error', 'frame.evaluate', null],
+  ])
+  expect(runtime.calls.map((call) => call.name)).toEqual([
+    'page.evaluate',
+    'locator.evaluate',
+    'page.evaluate',
+  ])
+})

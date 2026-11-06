@@ -56,9 +56,9 @@ static PLAYWRIGHT_LINE: LazyLock<String> = LazyLock::new(|| {
 });
 
 /// What [`PLAYWRIGHT_LINE`] says whatever is held: what Playwright 1.64.1 does, and then each way
-/// Neo's differs that a script would trip on. The main-world scripts' differences are the crate's
-/// (its milestone 1, tier 1 `deviations.yaml`), but for the result depth, which the realm's stack
-/// bounds (`Defaults::JS_STACK_BYTES`, measured on BrowserOS in a debug build).
+/// Neo's differs that a script would trip on. The main-world scripts' and `setContent`'s
+/// differences are the crate's (tier 1 `deviations.yaml`), but for the result depth, which the
+/// realm's stack bounds (`Defaults::JS_STACK_BYTES`, measured on BrowserOS in a debug build).
 const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser`, as \
     Playwright 1.64.1 behaves where this does not say otherwise: locators (`getByRole`, `getByText`, `getByLabel`, `getByTestId`, `locator`, \
     `frameLocator`, `filter`, `nth`) that wait and are strict, frames (`page.frames()`, \
@@ -71,9 +71,10 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `down`, `up`, `click`, `dblclick`, `wheel`), navigation (`goto`, `reload`, `waitForURL`, \
     `waitForLoadState`), scripts in the page's main world (`page.evaluate`, \
     `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, `elementHandle.evaluate`, \
-    and `$eval` and `$$eval` on a page, frame or element handle) with Playwright's values, \
-    arguments, element handles and errors, `screenshot` and `pdf`, events (`page.on`, \
-    `waitForEvent`), and `expect`: \
+    and `$eval` and `$$eval` on a page, frame or element handle; a `frame` form runs in its \
+    frame, a child frame too) with Playwright's values, arguments, element handles and errors, \
+    `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, `screenshot` and \
+    `pdf`, events (`page.on`, `waitForEvent`), and `expect`: \
     retrying locator matchers (`toBeVisible`, `toBeChecked`, `toHaveText`, `toContainText`, \
     `toHaveValue`, `toHaveCount`, `toHaveAttribute`, ...) and page matchers (`toHaveTitle`, \
     `toHaveURL`), with `.not`, value matchers (`toBe`, `toEqual`, ...), `expect.poll` and \
@@ -83,12 +84,12 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     card or one-time-code field's value reads `[private]`. Unlike Playwright, `waitForFunction` \
     polls every 100 ms for its default `polling: 'raf'`, since animation frames never fire in \
     Neo's background tabs, and the handle it resolves to holds a snapshot of the value, which \
-    `jsonValue()` reads; `frame.evaluate` and `frame.waitForFunction` in a child frame fail \
-    `internal_error` (not built yet), while `frame.$eval`, `frame.$$eval` and a frame's locators \
-    reach into it; a `URL` result has a URL's fields but is not a `URL`, since the script's realm \
-    has none; and a result nested more than about 50 objects deep can fail `RangeError: Maximum \
-    call stack size exceeded`, where Playwright allows 98. `goto` and `reload` open only `http`, \
-    `https`, `data` and `about` URLs. `setInputFiles` uploads any file Neo's process can read, as Playwright does \
+    `jsonValue()` reads; `setContent` refuses `waitUntil: 'networkidle'`, which Neo cannot \
+    observe after a write, with nothing sent; a `URL` result has a URL's fields but is not a \
+    `URL`, since the script's realm has none; and a result nested more than about 50 objects \
+    deep can fail `Maximum call stack size exceeded`, where Playwright allows 98. `goto` and \
+    `reload` open only `http`, `https`, `data` and `about` URLs. `setInputFiles` uploads any \
+    file Neo's process can read, as Playwright does \
     (a relative path resolves against Neo's working directory), except Neo's own secret files, \
     which fail `neo_secret_upload_refused` with nothing sent: the caller sandboxes the \
     filesystem. `{ name, mimeType, buffer }` payloads need no file and total under 10 MiB a \
@@ -787,20 +788,16 @@ mod tests {
     }
 
     /// A model reads which ops are held before it writes a call, so the line names each one the
-    /// op table holds and no other, and nowhere else offers one.
+    /// op table holds and no other, and nowhere else offers one. With none held, as on this door,
+    /// the clause is empty.
     #[test]
-    fn the_description_names_each_held_op_and_only_those() -> Result<(), Box<dyn Error>> {
+    fn the_description_names_each_held_op_and_only_those() {
         let held: BTreeSet<&str> = Op::all()
             .map(Op::spec)
             .filter(|spec| Hold::of(spec).is_some())
             .map(|spec| spec.name)
             .collect();
-        assert!(
-            !held.is_empty(),
-            "this door holds ops, so the line names some"
-        );
-        let clause =
-            op_marks::held_clause(Op::all().map(Op::spec)).ok_or("the held ops have a clause")?;
+        let clause = op_marks::held_clause(Op::all().map(Op::spec)).unwrap_or_default();
         let line: &str = &PLAYWRIGHT_LINE;
         assert!(line.contains(&clause), "the line says what is held: {line}");
         assert_eq!(
@@ -822,7 +819,6 @@ mod tests {
             None,
             "with nothing held, the line adds nothing"
         );
-        Ok(())
     }
 
     /// A model calls only what the line offers, so outside the held clause it names each op the

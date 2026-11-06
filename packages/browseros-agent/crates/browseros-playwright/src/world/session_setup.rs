@@ -15,14 +15,20 @@ use crate::world::ContextWatch;
 /// How a session reached the crate, which decides what its setup must enable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SessionKind {
-    /// The page's own session. Core enabled `Runtime` on it when it attached the tab.
+    /// The page's own session. Core enabled `Runtime` and `Page` on it when it attached the tab.
     Page,
-    /// An out-of-process iframe's session. Core enables only `DOM` and `Accessibility` there.
+    /// An out-of-process iframe's session. Core enables only `DOM` and `Accessibility` there,
+    /// and `Page` too on an agent's own tab, for its file chooser interception.
     Oopif,
 }
 
 /// Per CDP session, once, before its first seal: `Runtime.enable` on an OOPIF session, then
 /// `Runtime.addBinding { name: __neoJournal, executionContextName: browseros-sdk }`.
+///
+/// Only what a sealed world needs belongs here: a frame's first sweep installs its world, so
+/// every call this setup sends spends that frame's `FRAME_BUDGET`, and under load each one can
+/// wait hundreds of milliseconds behind the renderer's other work. `Page` events are enabled by
+/// the ops that watch documents instead (`DocumentWatch::enable_page`).
 ///
 /// The order is measured, not chosen. The seal reads `globalThis.__neoJournal` once, when it
 /// installs, so the binding must already be in the world by then; and Chromium puts a
