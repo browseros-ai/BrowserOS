@@ -262,8 +262,9 @@ pub enum RunEnd {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Delivery {
-    /// No input reached the page's handlers: none was written, or Neo verifiably blocked it
-    /// before the page saw it.
+    /// No input reached the page's handlers: none was written, or Neo verifiably blocked it.
+    /// A press Neo's hit-target interceptor blocked still moved the pointer, and listeners the
+    /// page added to `window` before Neo's script saw its events; nothing past `window` did.
     NotSent,
     /// Every input event was written and acknowledged.
     Done,
