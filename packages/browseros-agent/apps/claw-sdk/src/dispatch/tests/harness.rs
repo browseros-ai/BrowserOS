@@ -2,14 +2,14 @@
 
 use std::error::Error;
 use std::future::{self, Future};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
 use browseros_trace::{
     Effect, OperationId, OperationRow, RedactionLimits, Redactor, RunId, SecretSet,
-    SecretSetConfig, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    SecretSetConfig, SecretValue, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -27,18 +27,84 @@ use crate::test_support::FakeCdp;
 /// How many overlapping calls `test.gate` waits for before any of them returns.
 pub(super) const GATE_PARTIES: usize = 50;
 
-/// The door's own tests have no journal, so nothing is ever held.
-struct NothingHeld;
+/// What builtins' `TypedValues` holds for every run, as a test sets it: nothing, until a test
+/// holds a value, as a field typed a moment ago is held, or loses them, as a run does past the
+/// cap, now or at a given ask.
+#[derive(Default)]
+pub(super) struct HeldFake {
+    values: Mutex<Vec<String>>,
+    lost: AtomicBool,
+    /// How many times runs asked what they hold.
+    asks: AtomicUsize,
+    /// The ask that loses what is held ([`HeldFake::lose_at_ask`]); none when 0.
+    lost_at: AtomicUsize,
+}
 
-impl HeldValues for NothingHeld {
-    fn watch(self: Arc<Self>) -> Box<dyn HeldWatch> {
-        Box::new(NothingHeld)
+/// One run's watch on the fake.
+struct HeldFakeWatch(Arc<HeldFake>);
+
+impl HeldFake {
+    /// Every run holds `value` from now on.
+    pub(super) fn hold(&self, value: &str) {
+        self.values
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(value.to_owned());
+    }
+
+    /// Every run has lost the values held so far from now on: they mask nothing any more, as a
+    /// value forgotten past the cap does.
+    pub(super) fn lose(&self) {
+        self.values
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        self.lost.store(true, Ordering::SeqCst);
+    }
+
+    /// Every run loses the values held so far as runs ask what they hold for the `ask`-th time
+    /// from now, so a test can put the loss between any two asks of one op.
+    pub(super) fn lose_at_ask(&self, ask: usize) {
+        self.lost_at
+            .store(self.asks.load(Ordering::SeqCst) + ask, Ordering::SeqCst);
+    }
+
+    /// How many times runs asked what they hold so far.
+    pub(super) fn asks(&self) -> usize {
+        self.asks.load(Ordering::SeqCst)
     }
 }
 
-impl HeldWatch for NothingHeld {
+impl HeldValues for HeldFake {
+    fn watch(self: Arc<Self>) -> Box<dyn HeldWatch> {
+        Box::new(HeldFakeWatch(self))
+    }
+}
+
+impl HeldWatch for HeldFakeWatch {
     fn held(&self) -> Held {
-        Held::Kept(None)
+        let ask = self.0.asks.fetch_add(1, Ordering::SeqCst) + 1;
+        if ask == self.0.lost_at.load(Ordering::SeqCst) {
+            self.0.lose();
+        }
+        let values = self
+            .0
+            .values
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let set = (!values.is_empty()).then(|| {
+            let set = SecretSet::new(SecretSetConfig::default());
+            for value in values {
+                let _registration = set.register(SecretValue::new(value), None);
+            }
+            Arc::new(set)
+        });
+        if self.0.lost.load(Ordering::SeqCst) {
+            Held::Lost(set)
+        } else {
+            Held::Kept(set)
+        }
     }
 }
 
@@ -50,6 +116,8 @@ pub(super) struct Harness {
     pub(super) store: TraceStore,
     pub(super) sink: TraceSink,
     pub(super) secrets: Arc<SecretSet>,
+    /// What every run holds beyond `secrets`.
+    pub(super) held: Arc<HeldFake>,
     pub(super) lock: Arc<TabLock>,
     pub(super) seen: Arc<SeenChecks>,
     /// Notified when `test.hang` has sent and is waiting forever.
@@ -118,12 +186,13 @@ impl Harness {
             Arc::clone(&lock) as Arc<dyn Policy>,
             Arc::clone(&seen) as Arc<dyn Policy>,
         ];
+        let held = Arc::new(HeldFake::default());
         let dispatcher = Arc::new(Dispatcher::new(
             registry.build(),
             policies,
             Arc::clone(&secrets),
             sink.clone(),
-            Arc::new(NothingHeld),
+            Arc::clone(&held) as Arc<dyn HeldValues>,
             Arc::clone(&link),
             Arc::clone(&tabs),
         ));
@@ -134,6 +203,7 @@ impl Harness {
             store,
             sink,
             secrets,
+            held,
             lock,
             seen,
             hung,

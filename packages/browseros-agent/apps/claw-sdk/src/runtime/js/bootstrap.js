@@ -83,15 +83,34 @@
   // Playwright prelude's "page" and "element".
   const brands = new Map([['bytes', (json) => fromBase64(json.base64)]])
 
-  // In place: every object here came from JSON.parse, so a "__proto__" key is an own data
-  // property and assigning to it never reaches the prototype.
+  // Revives every brand in a reply's value, in place. It walks with a stack of its own, never the
+  // run's: browseros-playwright carries results 297 JSON levels deep, and recursion on the run's
+  // 512 KiB stack overflowed past about 50 in a debug build. The walk keeps recursion's order,
+  // depth first and in each object's key order, because the page and element revivers make a
+  // Page for each tab they meet, so that order is context.pages()'s. A brand goes to its reviver
+  // whole, and what comes back takes its place. Every object here came from JSON.parse, so a
+  // "__proto__" key is an own data property and assigning to it never reaches the prototype.
   function revive(value) {
-    if (value === null || typeof value !== 'object') return value
-    if (typeof value.$neo === 'string' && brands.has(value.$neo)) {
-      return brands.get(value.$neo)(value)
+    const root = { value }
+    // One frame per object on the path walked so far: its keys as they were when it was reached,
+    // and the next one to visit.
+    const frames = [{ holder: root, keys: ['value'], next: 0 }]
+    while (frames.length > 0) {
+      const frame = frames[frames.length - 1]
+      if (frame.next === frame.keys.length) {
+        frames.pop()
+        continue
+      }
+      const key = frame.keys[frame.next++]
+      const item = frame.holder[key]
+      if (item === null || typeof item !== 'object') continue
+      if (typeof item.$neo === 'string' && brands.has(item.$neo)) {
+        frame.holder[key] = brands.get(item.$neo)(item)
+        continue
+      }
+      frames.push({ holder: item, keys: Object.keys(item), next: 0 })
     }
-    for (const key of Object.keys(value)) value[key] = revive(value[key])
-    return value
+    return root.value
   }
 
   class CodecError extends Error {}

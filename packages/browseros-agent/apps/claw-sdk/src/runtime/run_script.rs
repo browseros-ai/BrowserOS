@@ -25,7 +25,8 @@ use crate::browser::PageRef;
 use crate::builtins::PLAYWRIGHT_PRELUDE;
 use crate::config::Defaults;
 use crate::dispatch::{
-    Dispatcher, ErrorCode, OpFailure, OperationError, PageFact, RunCtx, StopReason,
+    Dispatcher, ErrorCode, OpFailure, OperationError, PageFact, RunCtx, RunMask, StopReason,
+    TEXT_CHARS,
 };
 
 /// The bootstrap: `NeoError`, the codec, envelopes, call sites, console, timers, `__neo.run`.
@@ -53,8 +54,6 @@ const AGENT_FILE: &str = "run";
 const SETTLED_OVERHEAD: usize = 16;
 /// The bootstrap's prefix for a returned value, which the result limit applies to.
 const SETTLED_OK: &str = r#"{"ok":"#;
-/// How much of a thrown error's name and of its message the run's error keeps, in characters.
-const ERROR_TEXT_CHARS: usize = 4096;
 
 /// One script to run. A plain data bag.
 #[derive(Debug)]
@@ -160,7 +159,7 @@ pub(crate) fn run_script<'a>(
         let bridge = Arc::new(Bridge::new(Arc::clone(run), Arc::clone(dispatcher)));
         let cause = Arc::new(HaltCause::default());
         let outcome = match evaluate(run, &bridge, &cause, script).await {
-            Evaluated::Settled(json) => settle(&json, &bridge, dispatcher.secrets()),
+            Evaluated::Settled(json) => settle(&json, &bridge, run, dispatcher.secrets()),
             Evaluated::Uncompiled(message) => {
                 ScriptOutcome::Failed(OperationError::script(ErrorCode::SYNTAX_ERROR, message))
             }
@@ -383,7 +382,7 @@ fn interrupt_handler(
     })
 }
 
-fn settle(json: &str, bridge: &Bridge, secrets: &SecretSet) -> ScriptOutcome {
+fn settle(json: &str, bridge: &Bridge, run: &RunCtx, secrets: &SecretSet) -> ScriptOutcome {
     // Before parsing, so a huge value is refused without building its tree. A thrown error's
     // text is not held to it: it parses into three strings, masked and clipped below.
     if json.starts_with(SETTLED_OK) && json.len() > Defaults::MAX_RESULT_BYTES + SETTLED_OVERHEAD {
@@ -414,7 +413,12 @@ fn settle(json: &str, bridge: &Bridge, secrets: &SecretSet) -> ScriptOutcome {
             name,
             message,
             stack,
-        })) => ScriptOutcome::Failed(thrown_error(name, message, &stack, secrets)),
+        })) => ScriptOutcome::Failed(thrown_error(
+            name,
+            message,
+            &stack,
+            &RunMask::of(secrets, &run.held_values()),
+        )),
         Err(error) => ScriptOutcome::Failed(OperationError::neo(
             ErrorCode::INTERNAL_ERROR,
             format_args!("the bootstrap settled the run with JSON Neo cannot read: {error}"),
@@ -422,15 +426,18 @@ fn settle(json: &str, bridge: &Bridge, secrets: &SecretSet) -> ScriptOutcome {
     }
 }
 
-/// What the script threw, as the run's error. QuickJS reports a full heap as a catchable
-/// `InternalError`, which the bootstrap caught like any other throw.
-fn thrown_error(name: String, message: String, stack: &str, secrets: &SecretSet) -> OperationError {
+/// What the script threw, as the run's error, its name and message each masked, then cut to
+/// [`TEXT_CHARS`]. `mask` holds what the run holds as well as the process's set: the realm never
+/// receives a held value, but the script can know one itself, a password it typed, and a cut
+/// through it would leave a prefix that no later mask recognizes (graft G3). QuickJS reports a
+/// full heap as a catchable `InternalError`, which the bootstrap caught like any other throw.
+fn thrown_error(name: String, message: String, stack: &str, mask: &RunMask<'_>) -> OperationError {
     if name == "InternalError" && message == "out of memory" {
         return out_of_memory();
     }
     let (name, message) = (
-        mask_then_clip(name, secrets),
-        mask_then_clip(message, secrets),
+        mask.shown(name, TEXT_CHARS),
+        mask.shown(message, TEXT_CHARS),
     );
     let site = agent_site(stack);
     let text = if name.is_empty() {
@@ -439,17 +446,6 @@ fn thrown_error(name: String, message: String, stack: &str, secrets: &SecretSet)
         format!("{name}: {message}")
     };
     OperationError::script(ErrorCode::SCRIPT_ERROR, located(&text, site.as_deref()))
-}
-
-/// `text` with every known secret masked, then cut to `ERROR_TEXT_CHARS`. In that order: a cut
-/// through a secret leaves a prefix no later mask recognizes.
-fn mask_then_clip(mut text: String, secrets: &SecretSet) -> String {
-    secrets.mask_str(&mut text);
-    if let Some((cut, _)) = text.char_indices().nth(ERROR_TEXT_CHARS) {
-        text.truncate(cut);
-        text.push('…');
-    }
-    text
 }
 
 fn halted(run: &RunCtx, cause: Option<Halt>, message: &str) -> ScriptOutcome {

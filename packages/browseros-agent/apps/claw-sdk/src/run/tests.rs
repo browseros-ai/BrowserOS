@@ -816,6 +816,39 @@ fn context_pages_lists_a_tab_opened_before_the_run_in_its_first_statement() -> R
     })
 }
 
+/// The run's init is the realm's other entry (decision 35b): each tab it lists is masked as a
+/// reply's page facts are, with what the run holds too. Here the owner typed a value a moment
+/// before the run, so the value is no secret of the process's set yet, and their tab's URL shows
+/// it.
+#[test]
+fn a_runs_init_lists_its_tabs_masked_with_what_it_holds() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let value = "owner-typed-7Qx";
+        let owner = rig
+            .owner_tab(&format!("https://owner.example/?code={value}"))
+            .await?;
+        type_into(&rig, &owner, value, TypedBy::NotAgent);
+        // Reversed, so the reply's own mask could not hide a value the script was handed.
+        let code = "return context.pages().map((tab) => [...tab.url()].reverse().join(''));";
+        let reply = rig
+            .run_service(GRACE)
+            .run(request(code, meta(None, None)?)?)
+            .await;
+        assert_eq!(reply.status, ReplyStatus::Ok, "{reply:?}");
+        let masked: String = "https://owner.example/?code=[private]"
+            .chars()
+            .rev()
+            .collect();
+        assert_eq!(
+            reply.value,
+            json!([masked]),
+            "the tab's URL is masked before the script's first statement"
+        );
+        Ok(())
+    })
+}
+
 #[test]
 fn without_the_browser_a_call_is_refused_and_its_request_id_stays_free() -> Result<(), TestError> {
     on_neo_runtime(async {
@@ -1045,7 +1078,8 @@ fn a_page_fact_that_echoes_what_the_reads_own_sweep_found_is_masked_in_every_rec
 
 /// Each start record is masked with what is held as it is sent: here a value the owner typed a
 /// moment before, in the run's host data and in the input of an op still running. Until that op
-/// ends, its start row is all a host reads of it.
+/// ends, its start row is all a host reads of it. The script's realm never receives a held value
+/// (decision 35b), so the script names it from its own code, as an agent told the password would.
 #[test]
 fn a_value_held_as_a_run_starts_is_in_none_of_its_start_records() -> Result<(), TestError> {
     on_neo_runtime(async {
@@ -1056,12 +1090,10 @@ fn a_value_held_as_a_run_starts_is_in_none_of_its_start_records() -> Result<(), 
             .await?;
         type_into(&rig, &page, value, TypedBy::NotAgent);
         let events = rig.sink.subscribe();
-        let code = "const title = await __neo.invoke('test.title', { page: context.pages()[0] });\n\
-                    await __neo.invoke('test.gate', { title });\n\
-                    return 1;";
+        let code = format!("await __neo.invoke('test.gate', {{ typed: '{value}' }});\nreturn 1;");
         let meta = RunMeta::parse(Some(&json!({ "hostData": { "echo": value } })))
             .map_err(|error| error.to_string())?;
-        let run = caller(&rig.run_service(GRACE), request(code, meta)?);
+        let run = caller(&rig.run_service(GRACE), request(&code, meta)?);
         let running = within(Duration::from_secs(10), async {
             loop {
                 rig.sink.flush().await?;
@@ -1208,31 +1240,35 @@ fn a_swept_value_a_held_one_extends_masks_the_run_and_is_never_registered() -> R
     })
 }
 
-/// The trace keeps an op's name as the door hands it over, and a script can call any name. One
-/// named after what it read, a value still held, is masked in the op's record as in the reply.
-/// So is one where that value overlaps a secret the process knows: masked with one set after the
-/// other, it would keep the held value's tail.
+/// A script can call any name, and its op's start record gets the name as typed, for the trace
+/// writer to mask with the process's set and what the run holds. One named after a value its run
+/// holds is masked in the op's record as in the reply. So is one where that value overlaps a
+/// secret the process knows: the writer masks both sets' matches at once, where one set after the
+/// other would keep the held value's tail. The realm never receives a held value (decision 35b),
+/// so the script names it from its own code, as an agent does with a password it typed itself.
 #[test]
 fn an_unknown_methods_name_is_masked_in_its_record_with_what_its_run_holds() -> Result<(), TestError>
 {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
         let value = "owner-typed-7Qx";
-        let page = rig.owner_tab_titled("https://b.test/typed", value).await?;
-        type_into(&rig, &page, value, TypedBy::NotAgent);
+        let page = rig.owner_tab("https://b.test/typed").await?;
+        type_into(&rig, &page, value, TypedBy::Agent);
         let _registration = rig
             .secrets
             .register(SecretValue::new("known-owner".to_owned()), None);
         let events = rig.sink.subscribe();
-        let code = "const title = await __neo.invoke('test.title', { page: context.pages()[0] });\n\
-                    const said = [];\n\
-                    for (const name of [title, 'known-' + title]) {\n\
-                      try { await __neo.invoke(name, {}); } catch (error) { said.push(error.message); }\n\
-                    }\n\
-                    return said;";
+        let code = format!(
+            "const typed = '{value}';\n\
+             const said = [];\n\
+             for (const name of [typed, 'known-' + typed]) {{\n\
+               try {{ await __neo.invoke(name, {{}}); }} catch (error) {{ said.push(error.message); }}\n\
+             }}\n\
+             return said;"
+        );
         let reply = rig
             .run_service(GRACE)
-            .run(request(code, meta(None, None)?)?)
+            .run(request(&code, meta(None, None)?)?)
             .await;
         let said = serde_json::to_string(&reply.value)?;
         assert!(
@@ -1252,7 +1288,7 @@ fn an_unknown_methods_name_is_masked_in_its_record_with_what_its_run_holds() -> 
             .collect();
         assert_eq!(
             names,
-            ["test.title", "[private]", "[withheld]"],
+            ["[private]", "[private]"],
             "a name the held value overlaps a known secret in is masked whole, never in part"
         );
         Ok(())

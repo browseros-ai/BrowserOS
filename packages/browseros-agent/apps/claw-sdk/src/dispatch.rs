@@ -13,7 +13,10 @@
 //! [`OpCtx`]; they never decide delivery and never reach another method except as a child op.
 //! Every record a run sends, the run's own and its ops', carries the values held since the run
 //! began ([`HeldValues`]), so the trace masks it with at least what the run's reply is masked
-//! with. A run that lost one of them past the cap withholds what it produces instead ([`Held`]).
+//! with. A script's op replies are masked with them too on their way into its realm
+//! ([`RunMask`]), so the script never receives a value it could carry out of Neo before its field
+//! goes quiet. A run that lost one of them past the cap withholds what it produces instead
+//! ([`Held`]).
 //!
 //! Ops run as tokio tasks on their run's `JoinSet`, never inside the JS runtime: a method's
 //! panic stays in its own task and still answers, ops progress while the script computes, and
@@ -34,6 +37,7 @@ mod page_target;
 mod policy;
 mod registry;
 mod run_ctx;
+mod run_mask;
 #[cfg(test)]
 mod tests;
 
@@ -46,3 +50,4 @@ pub(crate) use page_target::PageTarget;
 pub(crate) use policy::{Policy, PolicyCheck, ResultHold};
 pub(crate) use registry::{Registry, RegistryBuilder, RegistryError};
 pub(crate) use run_ctx::{OpLine, OpsReport, RunCtx, RunEnd, RunGuard, RunStart, StopReason};
+pub(crate) use run_mask::{RunMask, TEXT_CHARS};

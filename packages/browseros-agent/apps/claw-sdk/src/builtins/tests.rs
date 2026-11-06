@@ -2184,21 +2184,21 @@ async fn a_field_typed_a_key_at_a_time_masks_its_final_value_and_no_prefix()
         .fake
         .open_tab("https://bank.example/", "hunte or hunter2?");
     let page = harness.listed(tab).await?;
-    let (run, _guard) = harness.run()?;
-    let title = || async {
-        let reply = harness
-            .submit(&run, "page.opener", json!({ "page": handle(&page) }))
-            .await;
-        reply.pages.first().and_then(|fact| fact.title.clone())
-    };
     for value in ["h", "hu", "hun", "hunt", "hunte", "hunter", "hunter2"] {
         harness
             .hooks
             .field_entered(page.id.clone(), keystroke(value), TypedBy::NotAgent);
     }
     time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(250)).await;
+    // Read by a run that begins now. A run going while the field was typed holds each prefix it
+    // may have read, and its realm sees none of them (decision 35b), so only a later run shows
+    // what the process's set learned.
+    let (run, _guard) = harness.run()?;
+    let reply = harness
+        .submit(&run, "page.opener", json!({ "page": handle(&page) }))
+        .await;
     assert_eq!(
-        title().await,
+        reply.pages.first().and_then(|fact| fact.title.clone()),
         Some("hunte or [private]?".to_owned()),
         "once the field went quiet its value is a secret, and `hunte`, a prefix, is still text"
     );
@@ -2212,7 +2212,6 @@ async fn a_read_between_two_keystrokes_registers_no_prefix() -> Result<(), Box<d
         .fake
         .open_tab("https://bank.example/", "hunt, hunte or hunter2?");
     let page = harness.listed(tab).await?;
-    let (run, _guard) = harness.run()?;
     harness
         .hooks
         .field_entered(page.id.clone(), keystroke("hunt"), TypedBy::NotAgent);
@@ -2228,6 +2227,9 @@ async fn a_read_between_two_keystrokes_registers_no_prefix() -> Result<(), Box<d
             .field_entered(page.id.clone(), keystroke(value), TypedBy::NotAgent);
     }
     time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(250)).await;
+    // A run that begins after the field went quiet holds none of its prefixes, so its read shows
+    // what the process's set learned.
+    let (run, _guard) = harness.run()?;
     let reply = harness
         .submit(&run, "page.opener", json!({ "page": handle(&page) }))
         .await;

@@ -3,7 +3,9 @@
 use std::error::Error;
 use std::fmt;
 
-use browseros_trace::{Delivery, ErrorOwner, ErrorRecord, OperationId, SecretSet};
+use browseros_trace::{Delivery, ErrorOwner, ErrorRecord, OperationId};
+
+use super::RunMask;
 
 /// A failure and who must change to fix it (STYLE.md P5). Leaves, rules and the door build one
 /// with the owner-named constructors at the point that knows the cause; the door adds delivery,
@@ -78,9 +80,9 @@ impl OperationError {
         self.timed_out
     }
 
-    /// Replaces every known secret in the message.
-    pub(super) fn mask(&mut self, secrets: &SecretSet) {
-        secrets.mask_str(&mut self.message);
+    /// Masks the message with `mask`.
+    pub(super) fn mask(&mut self, mask: &RunMask<'_>) {
+        mask.mask_str(&mut self.message);
     }
 
     /// The error as the trace stores it. The writer masks and bounds the message.

@@ -19,7 +19,7 @@ use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
 use crate::browser::{BrowserLink, PageRef, RunView, TabRegistry};
 use crate::config::Defaults;
 use crate::dispatch::{
-    Dispatcher, ErrorCode, OperationError, PageFact, RunCtx, RunStart, StopReason,
+    Dispatcher, ErrorCode, OperationError, PageFact, RunCtx, RunMask, RunStart, StopReason,
 };
 use crate::runtime::{Script, run_script};
 
@@ -260,21 +260,24 @@ impl RunService {
     /// Every tab open as the run starts, for its init (decision 25, PB input 4): Playwright's
     /// `context.pages()` is synchronous, so the prelude can list a tab only once something named
     /// it, and this names them all before the script's first op. The facts are a reply's, masked
-    /// the same way. A listing that fails leaves the list empty, and replies then name the tabs
-    /// the script touches. Raced with the run's stop, inside the race with its deadline.
+    /// the same way: the init is the realm's other entry, so a tab showing a value the run holds
+    /// shows it masked (decision 35b). A listing that fails leaves the list empty, and replies
+    /// then name the tabs the script touches. Raced with the run's stop, inside the race with its
+    /// deadline.
     async fn open_pages(&self, run: &RunCtx) -> Vec<PageFact> {
         let listing = tokio::select! {
             biased;
             () = run.cancel_token().cancelled() => return Vec::new(),
             listing = run.view().list_pages() => listing,
         };
+        let mask = RunMask::of(&self.secrets, &run.held_values());
         match listing {
             Ok(listing) => listing
                 .pages
                 .into_iter()
                 .map(|info| {
                     let mut fact = PageFact::from(info);
-                    fact.mask(&self.secrets);
+                    fact.mask(&mask);
                     fact
                 })
                 .collect(),

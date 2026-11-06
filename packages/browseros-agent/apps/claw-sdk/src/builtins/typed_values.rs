@@ -2,6 +2,8 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(test)]
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::{future, mem};
 
@@ -24,16 +26,21 @@ use crate::dispatch::{Held, HeldValues, HeldWatch};
 ///
 /// ```text
 ///  PrivacyHooks::field_entered ─ note: a value that extends a held one supersedes it
-///  PrivacyHooks::values_swept ── sweep: a value no held one covers is held beside the rest,
-///                                       and one a held value extends is kept as superseded
-///    quiet for TYPED_QUIET ─────────────── every held value ─┬─▶ SecretSet::register
-///    its tab closes (TabRegistry) ──────── that tab's ───────┘
+///  PrivacyHooks::values_swept ── sweep: a value no held or learned one covers is held beside
+///                                       the rest, and one that such a value extends is kept as
+///                                       superseded
+///    quiet for TYPED_QUIET ─────────────── every held value ─┬─▶ promote ─▶ SecretSet::register
+///    its tab closes (TabRegistry) ──────── that tab's ───────┤   learning until it returns
+///    more than MAX_TYPED held ──────────── the one in front ─┘
+///    learned ─────── kept while a run that went on as it left goes, so a sweep that reports it
+///                    again holds nothing new
 ///    superseded ──── kept while a run that began before it goes, then forgotten, never
 ///                    registered
 ///  RunCtx::start ─ watch (dispatch's HeldValues): the run's watch keeps what is superseded
 ///    while it goes, until the run's context drops
-///  each record a run sends, and its reply ─ its watch: what is held and what was superseded
-///    since it began, as a set of its own (dispatch's Held) ─▶ masked with it too
+///  each record a run sends, and its reply ─ its watch: what is held, what the set is still
+///    learning and what was superseded since the run began, as a set of its own
+///    (dispatch's Held) ─▶ masked with it too
 /// ```
 ///
 /// The seal reports every keystroke as the field's whole value. Registering each entry made every
@@ -58,17 +65,96 @@ pub(crate) struct TypedValues {
     pending: Mutex<Pending>,
     /// Wakes the timer when an entry moves its deadline, and when this is dropped.
     wake: Arc<Notify>,
+    /// Holds the next promotion between taking its values from what is held and handing them
+    /// to the set, so tests can ask a run's held set in that gap.
+    #[cfg(test)]
+    promotion_pause: Mutex<Option<PromotionPause>>,
+}
+
+/// The pause [`TypedValues::pause_next_promotion`] sets: `reached` fires when a promotion is
+/// held, `resume` lets it go on.
+#[cfg(test)]
+struct PromotionPause {
+    reached: mpsc::Sender<()>,
+    resume: mpsc::Receiver<()>,
+}
+
+/// The test's ends of a [`PromotionPause`]: `reached` hears that the promotion is held, and a
+/// send on `resume` lets it go on, as dropping `resume` does.
+#[cfg(test)]
+struct PausedPromotion {
+    reached: mpsc::Receiver<()>,
+    resume: mpsc::Sender<()>,
 }
 
 /// The held values, a read's in front and the keystrokes in the order typed, and when they are
-/// registered unless another entry comes first; the values a keystroke superseded, oldest first;
-/// and the runs going, which those are kept for.
+/// registered unless another entry comes first; what left them for the process's set; the values
+/// a keystroke superseded, oldest first; and the runs going, which those are kept for.
 #[derive(Default)]
 struct Pending {
     values: Vec<Typed>,
     quiet_until: Option<Instant>,
+    promotions: Promotions,
     superseded: VecDeque<Superseded>,
     runs: Vec<Arc<Going>>,
+}
+
+/// What left the held values for the process's set ([`TypedValues::promote`]). The set learns a
+/// value after the lock is released, since `SecretSet::register` rebuilds its matcher for each
+/// one, and the value stays here, learning, until that returns: every run's held set takes it in
+/// meanwhile ([`TypedValues::held_since`]). The door masks a reply with the run's held set and
+/// the process's set, so a value already out of what is held and not yet in the set would reach
+/// the script raw, and the trace writer would keep it in the record.
+///
+/// What left while a run was going is kept after, as long as such a run goes ([`Pending::sweep`]).
+/// browseros-playwright reports a main-world script's sweeps as their union, before each send
+/// and after it, so a prefix the field was typed past comes back beside the field's value once
+/// the set learned it, and would otherwise be held as new: it would restart the quiet period
+/// and become a secret for a day. At most [`Defaults::MAX_LEARNED`] are kept. Past that, the
+/// oldest is forgotten, and nothing recognizes its prefix any more, so until every run that went
+/// on as it left ends, a read's value that nothing covers is kept for masking only.
+#[derive(Default)]
+struct Promotions {
+    /// The values the set is learning now, each under the ticket its promotion takes it back by.
+    learning: Vec<Handoff>,
+    /// The next value's ticket.
+    next: Ticket,
+    /// What left while a run was going, oldest first.
+    kept: VecDeque<Learned>,
+    /// When the newest value forgotten past the cap left. Cleared once no run that was going
+    /// then goes.
+    forgot: Option<Instant>,
+}
+
+/// Names one value on its way to the set, so that its promotion takes that value alone out of
+/// what is learning, whatever other promotions go on beside it.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct Ticket(u64);
+
+/// One value on its way to the set, under its ticket. A plain data bag.
+struct Handoff {
+    ticket: Ticket,
+    /// Zeroed when dropped.
+    value: Zeroizing<String>,
+}
+
+/// A value the set learned while a run was going, kept for that run's sweeps. A plain data bag.
+struct Learned {
+    /// The value and the page it was typed or read on.
+    typed: Typed,
+    /// When it left what is held.
+    taken: Instant,
+}
+
+/// How a value a read found on a page stands to the values held for that page and those kept
+/// for it ([`Promotions`]).
+enum Standing {
+    /// One of them: nothing new.
+    Same,
+    /// A prefix of one: the field was typed past it since, or it is another field's value.
+    Under,
+    /// Neither.
+    New,
 }
 
 /// One field's latest value and where it was typed or read. A plain data bag.
@@ -117,6 +203,8 @@ impl TypedValues {
             secrets,
             pending: Mutex::default(),
             wake: Arc::new(Notify::new()),
+            #[cfg(test)]
+            promotion_pause: Mutex::default(),
         });
         tokio::spawn(register_when_due(
             Arc::downgrade(&values),
@@ -133,8 +221,7 @@ impl TypedValues {
             tab,
             value: entry.value,
         };
-        let overflow = self.lock().note(typed, Instant::now());
-        self.register(overflow);
+        self.promote(|pending, now| pending.note(typed, now).into_iter().collect());
         self.wake.notify_one();
     }
 
@@ -148,48 +235,38 @@ impl TypedValues {
                 value: Zeroizing::new(value.to_owned()),
             })
             .collect();
-        let overflow = self.lock().sweep(swept, Instant::now());
-        self.register(overflow);
+        self.promote(|pending, now| pending.sweep(swept, now));
         self.wake.notify_one();
     }
 
     /// Registers every held value now: when the values are dropped, and when a missed close could
     /// have been any held value's tab.
     fn register_all(&self) {
-        let held = {
-            let mut pending = self.lock();
+        self.promote(|pending, _| {
             pending.quiet_until = None;
             mem::take(&mut pending.values)
-        };
-        self.register(held);
+        });
     }
 
     /// Registers the values typed on `tab`, which closed: its fields can take no more input.
     fn register_tab(&self, tab: TabId) {
-        let closed = {
-            let mut pending = self.lock();
-            let (closed, open): (Vec<Typed>, Vec<Typed>) = mem::take(&mut pending.values)
-                .into_iter()
-                .partition(|typed| typed.tab == Some(tab));
-            pending.values = open;
-            closed
-        };
-        self.register(closed);
+        self.promote(|pending, _| {
+            pending
+                .values
+                .extract_if(.., |typed| typed.tab == Some(tab))
+                .collect()
+        });
     }
 
     /// Registers what is held once no entry came for the quiet period.
     fn register_if_quiet(&self, now: Instant) {
-        let held = {
-            let mut pending = self.lock();
-            match pending.quiet_until {
-                Some(until) if until <= now => {
-                    pending.quiet_until = None;
-                    mem::take(&mut pending.values)
-                }
-                Some(_) | None => return,
+        self.promote(|pending, _| match pending.quiet_until {
+            Some(until) if until <= now => {
+                pending.quiet_until = None;
+                mem::take(&mut pending.values)
             }
-        };
-        self.register(held);
+            Some(_) | None => Vec::new(),
+        });
     }
 
     /// When what is held goes quiet.
@@ -197,20 +274,42 @@ impl TypedValues {
         self.lock().quiet_until
     }
 
-    /// Registers each value with the set's full TTL, moving its buffer into the secret, which
-    /// zeroes it when dropped. A value the set already holds keeps the later expiry.
-    fn register(&self, values: impl IntoIterator<Item = Typed>) {
-        for Typed { mut value, .. } in values {
+    /// Hands the process's set what `take` takes out of the held values, and returns once the set
+    /// learned all of it. `take` runs under the lock, with the instant it runs at: what it
+    /// supersedes is timed against the runs' starts, which are taken under the lock too. Every
+    /// way a value leaves what is held goes through here: its field quiet, its tab closed, past
+    /// the cap, or everything at once.
+    ///
+    /// Each value stays learning until the set has it ([`Promotions`]). It is registered with the
+    /// set's full TTL, its buffer moved into the secret, which zeroes it when dropped; a value
+    /// the set already holds keeps the later expiry.
+    fn promote(&self, take: impl FnOnce(&mut Pending, Instant) -> Vec<Typed>) {
+        let handed = {
+            let mut pending = self.lock();
+            let now = Instant::now();
+            let taken = take(&mut pending, now);
+            pending.hand(taken, now)
+        };
+        if handed.is_empty() {
+            return;
+        }
+        #[cfg(test)]
+        self.pause_if_asked();
+        for Handoff { ticket, mut value } in handed {
             // Too short to mask without masking ordinary text: the set keeps nothing, which is
             // its rule, not a failure here.
             let _registration = self
                 .secrets
                 .register(SecretValue::new(mem::take(&mut *value)), None);
+            // Only once the set has it: a run's held set built until now masks it, and the
+            // process's set masks it for every one built after.
+            self.lock().promotions.learned(ticket);
         }
     }
 
-    /// Every value held at any moment since `going` began, those a keystroke superseded since
-    /// included, as a secret set of its own that registers nothing in the process's set.
+    /// Every value held at any moment since `going` began, those a keystroke superseded since and
+    /// those the process's set is still learning included, as a secret set of its own that keeps
+    /// every one of them and registers nothing in the process's set.
     ///
     /// The reply is masked with the process's set first, which leaves a held value that extends a
     /// registered one as `[private]` plus the rest. So each value is here as typed and as that mask
@@ -229,22 +328,35 @@ impl TypedValues {
                 .values
                 .iter()
                 .map(|typed| &typed.value)
+                .chain(pending.promotions.learning())
                 .chain(superseded)
                 .cloned()
                 .collect();
             (values, going.lost.load(Ordering::Relaxed))
         };
         let set = (!values.is_empty()).then(|| {
-            let held = SecretSet::new(SecretSetConfig::default());
+            let mut spellings = Vec::new();
             for mut value in values {
                 let mut masked = value.clone();
                 if self.secrets.mask_str(&mut masked) {
-                    let _registration =
-                        held.register(SecretValue::new(mem::take(&mut *masked)), None);
+                    spellings.push(SecretValue::new(mem::take(&mut *masked)));
                 }
-                let _registration = held.register(SecretValue::new(mem::take(&mut *value)), None);
+                spellings.push(SecretValue::new(mem::take(&mut *value)));
             }
-            Arc::new(held)
+            // Room for every spelling: past `max_entries` a set drops its oldest values and masks
+            // with the rest, and a value dropped would reach the reply raw before the process's
+            // set learns it. A read reports every sensitive field on its page, so one promotion
+            // can hand the process's set more values than a set keeps by default. This set needs
+            // no cap of its own: past what is held and superseded, which their own caps bound, it
+            // holds what promotions are handing the process's set, and each of those values costs
+            // a rebuild of that set's matcher, where this costs one build over them all.
+            let keep_all = SecretSetConfig {
+                max_entries: spellings.len(),
+                ..SecretSetConfig::default()
+            };
+            // One matcher build over all of them: each record and reply of the run builds this
+            // set, and `SecretSet::register` would rebuild the matcher for every value.
+            Arc::new(SecretSet::with_values(keep_all, spellings))
         });
         if lost {
             Held::Lost(set)
@@ -256,6 +368,38 @@ impl TypedValues {
     /// Outside an await, and never held while registering.
     fn lock(&self) -> MutexGuard<'_, Pending> {
         self.pending.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Holds the next promotion that has values to hand the set, once it took them from what is
+    /// held and before the set learns them.
+    #[cfg(test)]
+    fn pause_next_promotion(&self) -> PausedPromotion {
+        let (reached, heard) = mpsc::channel();
+        let (resume, resumed) = mpsc::channel();
+        *self
+            .promotion_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(PromotionPause {
+            reached,
+            resume: resumed,
+        });
+        PausedPromotion {
+            reached: heard,
+            resume,
+        }
+    }
+
+    #[cfg(test)]
+    fn pause_if_asked(&self) {
+        let pause = self
+            .promotion_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(pause) = pause {
+            let _held = pause.reached.send(());
+            let _resumed = pause.resume.recv();
+        }
     }
 }
 
@@ -349,18 +493,20 @@ impl Pending {
     /// `separatePW` in one field beside `separatePWX` in the next reads like a field typed past
     /// `separatePW`. So it is kept as a superseded value is, from now: it masks the runs going,
     /// and, like any prefix, it is never registered.
+    ///
+    /// What the set learned while a run was going counts as held here ([`Promotions`]): that
+    /// run's sweeps come back as their union, the field's learned value and the prefixes it was
+    /// typed past included. A value that extends a learned one is new: the field was typed
+    /// further. Once a learned value was forgotten past the cap, a value nothing covers may be
+    /// its prefix, so while a run that may report one goes, it is kept as superseded too.
     fn sweep(&mut self, swept: Vec<Typed>, now: Instant) -> Vec<Typed> {
-        let (covered, fresh): (Vec<Typed>, Vec<Typed>) = swept.into_iter().partition(|typed| {
-            self.values
-                .iter()
-                .any(|held| held.page == typed.page && held.value.starts_with(typed.value.as_str()))
-        });
-        for left_out in covered {
-            let held_already = self.values.iter().any(|held| {
-                held.page == left_out.page && held.value.as_str() == left_out.value.as_str()
-            });
-            if !held_already {
-                self.supersede(left_out.value, now);
+        let mut fresh = Vec::new();
+        for typed in swept {
+            match self.standing(&typed) {
+                Standing::Same => {}
+                Standing::Under => self.supersede(typed.value, now),
+                Standing::New if self.promotions.forgot_one() => self.supersede(typed.value, now),
+                Standing::New => fresh.push(typed),
             }
         }
         if fresh.is_empty() {
@@ -373,6 +519,36 @@ impl Pending {
         self.quiet_until = Some(now + Defaults::TYPED_QUIET);
         let excess = self.values.len().saturating_sub(Defaults::MAX_TYPED);
         self.values.drain(..excess).collect()
+    }
+
+    /// How `typed`, a value a read found, stands to the values held for its page and to those
+    /// kept for it.
+    fn standing(&self, typed: &Typed) -> Standing {
+        let mut standing = Standing::New;
+        for known in self.values.iter().chain(self.promotions.kept()) {
+            if known.page != typed.page {
+                continue;
+            }
+            if known.value.as_str() == typed.value.as_str() {
+                return Standing::Same;
+            }
+            if known.value.starts_with(typed.value.as_str()) {
+                standing = Standing::Under;
+            }
+        }
+        standing
+    }
+
+    /// Hands `taken`, which left what is held at `now`, to the set ([`Promotions::hand`]). While
+    /// a run is going it is kept too: the run's sweeps may report it again.
+    fn hand(&mut self, taken: Vec<Typed>, now: Instant) -> Vec<Handoff> {
+        let handed = self.promotions.hand(&taken);
+        if !self.runs.is_empty() {
+            for typed in taken {
+                self.promotions.keep(typed, now);
+            }
+        }
+        handed
     }
 
     /// Keeps `value`, which stopped being held at `now` or which a read found under a held one,
@@ -391,9 +567,8 @@ impl Pending {
             // nothing masks it out of what those runs send from now on, so they are lost: their
             // output is withheld instead. Never registered, since it may be a prefix, and never
             // dropped unseen, since a lost run's output would then stay raw. Keeping it past the
-            // cap instead only moves the question to another bound, and the matcher a record
-            // builds over these values costs O(N²) in them (`SecretSet::register` rebuilds it
-            // per value), which is what the cap bounds.
+            // cap instead only moves the question to another bound, and each record builds a
+            // matcher over these values, whose cost the cap bounds.
             for run in &self.runs {
                 if run.start <= gone.until {
                     run.lost.store(true, Ordering::Relaxed);
@@ -421,8 +596,12 @@ impl Pending {
 
     /// Forgets the superseded values no run that is going and not lost can need: those
     /// superseded before the oldest such run began, or every one when there is none. A lost run
-    /// needs none, since what it sends from then on is withheld.
+    /// needs none, since what it sends from then on is withheld. And forgets what was kept of
+    /// what the set learned once no run that was going as it left goes, lost or not: a lost
+    /// run's ops still report what they sweep.
     fn forget_unneeded(&mut self) {
+        let oldest_run = self.runs.iter().map(|run| run.start).min();
+        self.promotions.forget(oldest_run);
         let oldest = self
             .runs
             .iter()
@@ -441,6 +620,82 @@ impl Pending {
             }
             None => self.superseded.clear(),
         }
+    }
+}
+
+impl Promotions {
+    /// Takes `taken`, which just left what is held, on its way to the set, and returns each value
+    /// under its ticket for the promotion to register.
+    fn hand(&mut self, taken: &[Typed]) -> Vec<Handoff> {
+        let mut handed = Vec::with_capacity(taken.len());
+        for typed in taken {
+            let ticket = self.next;
+            self.next = Ticket(ticket.0.wrapping_add(1));
+            // Copies, each zeroed when dropped: this one masks the runs until the set has the
+            // value, and the promotion moves the other into the set.
+            self.learning.push(Handoff {
+                ticket,
+                value: typed.value.clone(),
+            });
+            handed.push(Handoff {
+                ticket,
+                value: typed.value.clone(),
+            });
+        }
+        handed
+    }
+
+    /// The set learned the value under `ticket`: the process's set masks it from now on.
+    fn learned(&mut self, ticket: Ticket) {
+        self.learning.retain(|handoff| handoff.ticket != ticket);
+    }
+
+    /// Every value the set is learning now.
+    fn learning(&self) -> impl Iterator<Item = &Zeroizing<String>> {
+        self.learning.iter().map(|handoff| &handoff.value)
+    }
+
+    /// Keeps `typed`, which left what is held at `taken` while a run was going, for that run's
+    /// sweeps, and forgets the oldest kept value past [`Defaults::MAX_LEARNED`].
+    fn keep(&mut self, typed: Typed, taken: Instant) {
+        self.kept.push_back(Learned { typed, taken });
+        if self.kept.len() > Defaults::MAX_LEARNED
+            && let Some(gone) = self.kept.pop_front()
+        {
+            // A run that was going as `gone` left may still report its prefix, which nothing
+            // recognizes from now on. Until those runs end, a value no held or kept one covers
+            // is kept for masking only (`Pending::sweep`): registering it could make that prefix
+            // a secret for a day, and every later read of ordinary text would show it masked.
+            self.forgot = self.forgot.max(Some(gone.taken));
+        }
+    }
+
+    /// The values kept for the runs' sweeps.
+    fn kept(&self) -> impl Iterator<Item = &Typed> {
+        self.kept.iter().map(|learned| &learned.typed)
+    }
+
+    /// Whether a run going may report the prefix of a value forgotten past the cap.
+    fn forgot_one(&self) -> bool {
+        self.forgot.is_some()
+    }
+
+    /// Forgets what no run going can report again: what left before `oldest_run` began, the
+    /// oldest run going, or everything when no run goes.
+    fn forget(&mut self, oldest_run: Option<Instant>) {
+        let Some(oldest) = oldest_run else {
+            self.kept.clear();
+            self.forgot = None;
+            return;
+        };
+        while self
+            .kept
+            .front()
+            .is_some_and(|learned| learned.taken < oldest)
+        {
+            self.kept.pop_front();
+        }
+        self.forgot = self.forgot.filter(|forgot| *forgot >= oldest);
     }
 }
 
@@ -489,13 +744,16 @@ async fn sleep_until_due(due: Option<Instant>) {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
     use std::ops::Range;
     use std::sync::Arc;
+    use std::thread;
     use std::time::{Duration, Instant};
 
     use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
     use browseros_core::{PageId, TabId};
     use browseros_trace::{SecretSet, SecretSetConfig, SecretValue};
+    use tokio::runtime::Handle;
     use tokio::sync::broadcast;
     use tokio::time;
 
@@ -558,6 +816,56 @@ mod tests {
             for value in [format!("v{pair:04}a"), format!("v{pair:04}ab")] {
                 values.note(page.clone(), Some(TabId(1)), keystroke(&value));
             }
+        }
+    }
+
+    /// The ways a held value leaves for the process's set.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Promotion {
+        /// Its field went quiet.
+        Quiet,
+        /// Its tab closed.
+        TabClosed,
+        /// Every held value at once: the values are dropped, or a tab close was missed.
+        Everything,
+        /// A keystroke held one value past the cap, so the one typed longest ago went at once.
+        KeystrokePastTheCap,
+        /// A read found a value with the cap full, so the read's own went at once.
+        ReadPastTheCap,
+    }
+
+    /// Holds `hunter2` on page 1, in tab 1, so that `promotion` is what sends it to the set
+    /// next. The values that fill the cap are other pages', so none supersedes another.
+    fn hold_for(values: &TypedValues, promotion: Promotion) {
+        let filler = match promotion {
+            Promotion::Quiet | Promotion::TabClosed | Promotion::Everything => 0,
+            Promotion::KeystrokePastTheCap => Defaults::MAX_TYPED - 1,
+            Promotion::ReadPastTheCap => Defaults::MAX_TYPED,
+        };
+        if promotion != Promotion::ReadPastTheCap {
+            values.note(PageId(1), Some(TabId(1)), keystroke("hunter2"));
+        }
+        for page in (2_u32..).take(filler) {
+            values.note(
+                PageId(page),
+                Some(TabId(2)),
+                keystroke(&format!("filler-{page:03}")),
+            );
+        }
+    }
+
+    /// Sends what [`hold_for`] held for `promotion` to the set, the way it names.
+    fn promote_by(values: &TypedValues, promotion: Promotion) {
+        match promotion {
+            Promotion::Quiet => {
+                values.register_if_quiet(time::Instant::now() + Defaults::TYPED_QUIET);
+            }
+            Promotion::TabClosed => values.register_tab(TabId(1)),
+            Promotion::Everything => values.register_all(),
+            Promotion::KeystrokePastTheCap => {
+                values.note(PageId(999), Some(TabId(2)), keystroke("one-more"));
+            }
+            Promotion::ReadPastTheCap => read(values, &PageId(1), TabId(1), &["hunter2"]),
         }
     }
 
@@ -794,6 +1102,126 @@ mod tests {
         );
     }
 
+    /// M1 handoff line 2: browseros-playwright reports what an op's sweeps found after every
+    /// sweep, before each send and after it, as the union of what the op swept so far. So a value
+    /// the field was typed past since an earlier sweep comes back in each later report, beside the
+    /// field's latest value, and both keep coming back once the set learned that value. None of
+    /// it is a keystroke: the field goes quiet a second after its last key, another field a
+    /// second after its own, and the prefix the union repeats is never registered.
+    #[tokio::test(start_paused = true)]
+    async fn a_union_reported_before_each_send_restarts_no_quiet_period() {
+        let (secrets, values, _closes) = typed_values();
+        let page = PageId(1);
+        // The run of the op that reports: its sweeps keep coming for as long as it goes.
+        let _reporting = run(&values);
+        // The op's first sweep finds the field mid-typing; then the page types its last key.
+        read(&values, &page, TabId(1), &["hunte"]);
+        time::sleep(Duration::from_millis(100)).await;
+        values.note(page.clone(), Some(TabId(1)), keystroke("hunter2"));
+        let last_key = time::Instant::now();
+        for _ in 0..3 {
+            time::sleep(Duration::from_millis(200)).await;
+            read(&values, &page, TabId(1), &["hunte", "hunter2"]);
+        }
+        assert_eq!(
+            masked(&secrets, "hunter2"),
+            "hunter2",
+            "the field's last key was 600 ms ago, so it may still be typed"
+        );
+        time::sleep_until(last_key + Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        assert_eq!(
+            masked(&secrets, "hunte or hunter2"),
+            "hunte or [private]",
+            "the reports restarted nothing, and the prefix they repeated never became a secret"
+        );
+        // The op goes on reporting the same union while another field is typed.
+        values.note(PageId(2), Some(TabId(2)), keystroke("swordfish"));
+        let other_key = time::Instant::now();
+        for _ in 0..3 {
+            time::sleep(Duration::from_millis(200)).await;
+            read(&values, &page, TabId(1), &["hunte", "hunter2"]);
+        }
+        time::sleep_until(other_key + Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        assert_eq!(
+            masked(&secrets, "swordfish"),
+            "[private]",
+            "a report of what the set learned is no keystroke either, so the other field went quiet"
+        );
+        time::sleep(Defaults::TYPED_QUIET).await;
+        assert_eq!(
+            masked(&secrets, "hunte or hunter2"),
+            "hunte or [private]",
+            "the prefix the union repeats after its field's value registered never became a secret"
+        );
+        assert_eq!(
+            secrets.count(),
+            2,
+            "the set learned the two fields' values and nothing else"
+        );
+    }
+
+    /// A read of the field after its value registered that finds the value typed further finds
+    /// a new value, which is held and learned as any other.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_of_a_learned_value_typed_further_registers_the_new_value() {
+        let (secrets, values, _closes) = typed_values();
+        let page = PageId(1);
+        let _reporting = run(&values);
+        values.note(page.clone(), Some(TabId(1)), keystroke("hunter2"));
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        read(&values, &page, TabId(1), &["hunter2", "hunter2!x"]);
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        assert_eq!(
+            masked(&secrets, "hunter2 or hunter2!x"),
+            "[private] or [private]",
+            "the read found the field typed past its learned value, and that is its final value"
+        );
+    }
+
+    /// Past the cap on what is kept of what the set learned, nothing recognizes a forgotten
+    /// value's prefix in a later report. So while a run that was going as it left goes, a read's
+    /// value that nothing covers masks that run and is never registered, and once those runs
+    /// end, a read's new value registers again.
+    #[tokio::test(start_paused = true)]
+    async fn past_the_cap_on_what_was_learned_a_report_registers_no_prefix() {
+        let (secrets, values, _closes) = typed_values();
+        let page = PageId(1);
+        let early = run(&values);
+        read(&values, &page, TabId(1), &["hunte"]);
+        values.note(page.clone(), Some(TabId(1)), keystroke("hunter2"));
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        // As many other fields as the cap keeps, each learned once quiet: `hunter2` goes first.
+        for other in (2_u32..).take(Defaults::MAX_LEARNED) {
+            values.note(
+                PageId(other),
+                Some(TabId(2)),
+                keystroke(&format!("learned-{other:04}")),
+            );
+            time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        }
+        read(&values, &page, TabId(1), &["hunte", "hunter2"]);
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        assert_eq!(
+            masked(&secrets, "hunte"),
+            "hunte",
+            "nothing kept knows `hunte` for a prefix any more, so it was never registered"
+        );
+        assert_eq!(
+            reply_masked(&secrets, &early.held(), "hunte"),
+            "[private]",
+            "it masks the run that may have read it"
+        );
+        drop(early);
+        let _late = run(&values);
+        read(&values, &PageId(2000), TabId(2), &["swordfish"]);
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        assert_eq!(
+            masked(&secrets, "swordfish"),
+            "[private]",
+            "no run that was going as `hunter2` left goes, so a read's new value registers again"
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_page_read_more_often_than_the_cap_costs_its_run_nothing() {
         let (secrets, values, _closes) = typed_values();
@@ -816,13 +1244,112 @@ mod tests {
         );
     }
 
+    /// Each promotion takes its values from what is held under the lock, and the set learns them
+    /// after the lock is released, since `SecretSet::register` rebuilds its matcher. A run's held
+    /// set asked in between must still have them: the door masks a reply with that set first and
+    /// with the process's set after, so a value in neither reaches the script raw.
+    #[tokio::test(start_paused = true)]
+    async fn a_value_on_its_way_to_the_set_masks_the_runs_going() -> Result<(), Box<dyn Error>> {
+        let runtime = Handle::current();
+        let mut shown = Vec::new();
+        for promotion in [
+            Promotion::Quiet,
+            Promotion::TabClosed,
+            Promotion::Everything,
+            Promotion::KeystrokePastTheCap,
+            Promotion::ReadPastTheCap,
+        ] {
+            let (secrets, values, _closes) = typed_values();
+            let going = run(&values);
+            hold_for(&values, promotion);
+            thread::scope(|scope| -> Result<(), Box<dyn Error>> {
+                // Dropped as this returns, so the promotion never waits on a test that failed.
+                let paused = values.pause_next_promotion();
+                scope.spawn(|| {
+                    // On the test's paused clock, as every other entry is.
+                    let _runtime = runtime.enter();
+                    promote_by(&values, promotion);
+                });
+                paused.reached.recv_timeout(Duration::from_secs(10))?;
+                let reply = reply_masked(&secrets, &going.held(), "hunter2");
+                if reply != "[private]" {
+                    shown.push((promotion, reply));
+                }
+                paused.resume.send(())?;
+                Ok(())
+            })?;
+            assert_eq!(
+                masked(&secrets, "hunter2"),
+                "[private]",
+                "{promotion:?}: the set learned the value once the promotion went on"
+            );
+        }
+        assert!(
+            shown.is_empty(),
+            "a reply masked after the promotion took the value and before the set learned it \
+             showed it: {shown:?}"
+        );
+        Ok(())
+    }
+
+    /// A page can hold more sensitive fields than a secret set keeps by default, and a read
+    /// reports every one: what is past [`Defaults::MAX_TYPED`] leaves for the process's set in
+    /// one promotion. A run's held set built while those are on their way holds every value the
+    /// run holds, the one typed a moment ago included, which the process's set has not learned.
+    #[tokio::test(start_paused = true)]
+    async fn every_value_a_run_holds_masks_its_reply_however_many_a_read_finds()
+    -> Result<(), Box<dyn Error>> {
+        let runtime = Handle::current();
+        // A process's set that keeps one value: the promotion registers thousands, and each
+        // registration rebuilds the set's matcher over every value it keeps. The run's held set
+        // is a set of its own.
+        let secrets = Arc::new(SecretSet::new(SecretSetConfig {
+            max_entries: 1,
+            ..SecretSetConfig::default()
+        }));
+        let (_closes, closed) = broadcast::channel(16);
+        let values = TypedValues::start(Arc::clone(&secrets), closed);
+        let going = run(&values);
+        values.note(PageId(1), Some(TabId(1)), keystroke("hunter2"));
+        let fields: Vec<String> = (0..SecretSetConfig::default().max_entries + Defaults::MAX_TYPED)
+            .map(|field| format!("field-{field:05}"))
+            .collect();
+        let found: Vec<&str> = fields.iter().map(String::as_str).collect();
+        let everything_held = format!("hunter2 {}", found.join(" "));
+        let reply = thread::scope(|scope| -> Result<String, Box<dyn Error>> {
+            // Dropped as this returns, so the promotion never waits on a test that failed.
+            let paused = values.pause_next_promotion();
+            scope.spawn(|| {
+                let _runtime = runtime.enter();
+                read(&values, &PageId(2), TabId(2), &found);
+            });
+            paused.reached.recv_timeout(Duration::from_secs(10))?;
+            let reply = reply_masked(&secrets, &going.held(), &everything_held);
+            paused.resume.send(())?;
+            Ok(reply)
+        })?;
+        let shown: Vec<&str> = reply
+            .split(' ')
+            .filter(|word| *word != "[private]")
+            .collect();
+        assert!(
+            shown.is_empty(),
+            "the run's held set keeps all {} values the run holds, so none reaches its reply raw: \
+             {} did, first {:?}",
+            found.len() + 1,
+            shown.len(),
+            shown.first()
+        );
+        Ok(())
+    }
+
     /// The cost of the set each record of a run builds ([`TypedValues::held_since`]) at the cap,
-    /// and of the matcher behind it: `SecretSet::register` rebuilds it per value, so N values
-    /// cost O(N²), while one more value past N costs what a single build of all N would. Run it
-    /// in debug and release:
+    /// of the one matcher build behind it (`SecretSet::with_values`) past the cap and past what a
+    /// secret set keeps by default, and of what a promotion pays for each value it hands a full
+    /// process's set. Run it in debug and release:
     /// `cargo test -p claw-sdk --lib [--release] held_set_build_cost -- --ignored --nocapture`.
     #[tokio::test(start_paused = true)]
-    #[ignore = "a measurement, not a check: it prints build times and takes minutes in debug"]
+    #[ignore = "a measurement, not a check: it prints build times"]
     #[expect(clippy::print_stdout, reason = "the measurement is what it prints")]
     async fn held_set_build_cost() {
         let (_secrets, values, _closes) = typed_values();
@@ -846,21 +1373,28 @@ mod tests {
                 began.elapsed()
             );
         }
-        for count in [64_usize, 256, 320, 1024, 4096] {
-            let set = SecretSet::new(SecretSetConfig::default());
+        for count in [64_usize, 256, 320, 1024, 4096, 16384] {
             let began = Instant::now();
-            for value in 0..count - 1 {
-                let _registration =
-                    set.register(SecretValue::new(format!("Pw-{value:05}-x7!Qz")), None);
-            }
-            let last = Instant::now();
-            let _registration = set.register(SecretValue::new("Pw-last-x7!Qz".to_owned()), None);
-            assert_eq!(set.count(), count, "every value was kept");
-            println!(
-                "{count:5} values: {:?} in all, {:?} for the last (one build over all {count})",
-                began.elapsed(),
-                last.elapsed()
+            let set = SecretSet::with_values(
+                SecretSetConfig {
+                    max_entries: count,
+                    ..SecretSetConfig::default()
+                },
+                (0..count).map(|value| SecretValue::new(format!("Pw-{value:05}-x7!Qz"))),
             );
+            assert_eq!(set.count(), count, "every value was kept");
+            println!("{count:5} values: {:?}", began.elapsed());
         }
+        let full = SecretSet::with_values(
+            SecretSetConfig::default(),
+            (0..SecretSetConfig::default().max_entries)
+                .map(|value| SecretValue::new(format!("Pw-{value:05}-x7!Qz"))),
+        );
+        let began = Instant::now();
+        let _registration = full.register(SecretValue::new("Pw-promoted-x7!Qz".to_owned()), None);
+        println!(
+            "one value promoted into a full process's set: {:?}",
+            began.elapsed()
+        );
     }
 }

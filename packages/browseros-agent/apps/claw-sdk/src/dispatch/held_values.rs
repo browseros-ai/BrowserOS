@@ -10,7 +10,8 @@ use super::{ErrorCode, OperationError};
 pub(crate) const WITHHELD: &str = "[withheld]";
 
 /// The values Neo masks out of a run's reply that the process's secret set has not learned yet,
-/// so that the run's trace records keep none of them either (decision 34).
+/// so that the run's trace records keep none of them either (decision 34), and its script's realm
+/// never receives one (decision 35b).
 ///
 /// builtins' `TypedValues` owns them: what was typed into, or read from, a password, card or code
 /// field that is not done yet (sdk-traces decision 32), as browseros-playwright's journal and
@@ -32,7 +33,8 @@ pub(crate) trait HeldWatch: Send + Sync {
     fn held(&self) -> Held;
 }
 
-/// What a run's records and its reply are masked with beyond the process's set, as of asking.
+/// What a run's records, its reply and what enters its realm are masked with beyond the process's
+/// set, as of asking.
 pub(crate) enum Held {
     /// Every value held at any moment since the run began, the ones superseded since included, as
     /// a set of its own that registers nothing in the process's set. `None`, with nothing built,
@@ -40,7 +42,8 @@ pub(crate) enum Held {
     Kept(Option<Arc<SecretSet>>),
     /// One of those values is gone, forgotten past the cap on what is kept, and the run may have
     /// read it. The rest still mask its records, but nothing masks that one: what the run
-    /// produces is withheld from every record it sends from now on, and from its reply.
+    /// produces is withheld from every record it sends from now on, from its reply, and from
+    /// what enters its realm.
     Lost(Option<Arc<SecretSet>>),
 }
 

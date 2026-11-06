@@ -11,12 +11,12 @@ use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 use super::op_ctx::{OpCore, OpState, PageChange, PageReport};
-use super::operation_guard::{Ending, OpStart, OperationGuard, StartTab};
+use super::operation_guard::{Ending, OpName, OpStart, OperationGuard, StartTab};
 use super::page_target::TargetHandle;
 use super::registry::DecodedCall;
 use super::{
-    ErrorCode, Held, HeldValues, LeafError, MethodSpec, OpFailure, OperationError, PageTarget,
-    Policy, PolicyCheck, Registry, ResultHold, RunCtx, Visibility, WITHHELD,
+    ErrorCode, HeldValues, LeafError, MethodSpec, OpFailure, OperationError, PageTarget, Policy,
+    PolicyCheck, Registry, ResultHold, RunCtx, RunMask, Visibility,
 };
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 
@@ -24,7 +24,8 @@ use crate::browser::{BrowserLink, PageRef, TabRegistry};
 /// Playwright's page entry `{ page, url }` (`OpenedPage`) after reporting the page
 /// `PageChange::Opened`.
 const DEFAULT_PAGE_OPENER: &str = "context.newPage";
-/// How much of a method name the trace and the error keep: a script can send any string.
+/// How many characters of a method name its refusal keeps: a script can send any string. The
+/// trace writer clips the name its record keeps.
 const NAME_CHARS: usize = 128;
 /// The spec recorded for a name with no method. `Write`, so an unknown call is never recorded
 /// as a harmless read.
@@ -344,17 +345,27 @@ impl Dispatcher {
         let registered = self.registry.get(&name);
         let callable =
             registered.is_some_and(|registered| caller.may_call(registered.spec().visibility));
-        // A name the caller may not call is its own string: the run's held values may be in it.
-        let held = (!callable).then(|| run.held_values());
-        let shown = shown_name(name, &self.secrets, held.as_ref());
         // An `Internal` name gets the same answer as a missing one, so a script cannot probe
         // for hidden methods; the record keeps the real spec and its redaction.
-        let decoded = match registered {
-            Some(registered) if callable => registered.decode(&input),
-            Some(_) | None => Err(OperationError::script(
-                ErrorCode::METHOD_UNAVAILABLE,
-                format_args!("`{shown}` is not a Neo method"),
-            )),
+        //
+        // A name the caller may not call is the script's own string, and may hold a value its
+        // run holds (decision 34). The start record gets it as typed, and the trace writer masks
+        // it there with the process's set and the start's `also_mask`, then clips it; a start
+        // sent once the run lost a held value withholds it instead, decided with that same
+        // `also_mask` ([`OpName::Uncallable`]). The refusal is the door's own text: the name in it
+        // is masked and cut here, which bounds its size, and masked again, or withheld, with what
+        // the run holds as the refusal enters the realm.
+        let (decoded, name) = match registered {
+            Some(registered) if callable => (registered.decode(&input), OpName::Callable(name)),
+            Some(_) | None => {
+                let shown =
+                    RunMask::of(&self.secrets, &run.held_values()).shown(name.clone(), NAME_CHARS);
+                let refusal = OperationError::script(
+                    ErrorCode::METHOD_UNAVAILABLE,
+                    format_args!("`{shown}` is not a Neo method"),
+                );
+                (Err(refusal), OpName::Uncallable(name))
+            }
         };
         let (spec, redaction) = registered.map_or_else(
             || (UNKNOWN_METHOD, Arc::default()),
@@ -372,7 +383,7 @@ impl Dispatcher {
         };
         let start = OpStart {
             state: Arc::clone(&state),
-            name: shown,
+            name,
             spec,
             redaction,
             args: input,
@@ -619,10 +630,10 @@ impl PageFact {
         }
     }
 
-    /// Replaces every known secret in what a script would see of the page: its URL and title.
-    pub(crate) fn mask(&mut self, secrets: &SecretSet) {
+    /// Masks what a script would see of the page, its URL and title, with `mask`.
+    pub(crate) fn mask(&mut self, mask: &RunMask<'_>) {
         for text in [&mut self.url, &mut self.title].into_iter().flatten() {
-            secrets.mask_str(text);
+            mask.mask_str(text);
         }
     }
 
@@ -641,22 +652,6 @@ impl PageFact {
 impl From<PageInfo> for PageFact {
     fn from(info: PageInfo) -> Self {
         Self::new(PageRef::from(&info), Some(info))
-    }
-}
-
-impl OpReply {
-    /// Replaces every known secret in what a script would see: the value, the error message,
-    /// and each page's URL and title.
-    pub(super) fn mask(&mut self, secrets: &SecretSet) {
-        match &mut self.outcome {
-            Ok(value) => {
-                secrets.mask_json(value);
-            }
-            Err(failure) => failure.error.mask(secrets),
-        }
-        for page in &mut self.pages {
-            page.mask(secrets);
-        }
     }
 }
 
@@ -720,43 +715,6 @@ fn disconnected() -> OperationError {
         ErrorCode::BROWSER_DISCONNECTED,
         "the browser connection dropped or was replaced since this run began",
     )
-}
-
-/// A script can send any string as a method name, and the trace writer stores an op's name as
-/// the door hands it over: it masks a record's other texts with the record's sets, but not the
-/// name. So the record and the error keep the name's start, masked first: with the process's set,
-/// and, for a name the caller may not call, with what its run holds as well (`held`, decision
-/// 34). A cut through a known secret would leave a prefix no mask recognizes.
-fn shown_name(name: String, secrets: &SecretSet, held: Option<&Held>) -> String {
-    let shown = match held {
-        // The run lost a held value, and nothing could mask that one out of the name.
-        Some(Held::Lost(_)) => WITHHELD.to_owned(),
-        Some(Held::Kept(Some(set))) => masked_with_both(name, secrets, set),
-        Some(Held::Kept(None)) | None => {
-            let mut name = name;
-            secrets.mask_str(&mut name);
-            name
-        }
-    };
-    shown.chars().take(NAME_CHARS).collect()
-}
-
-/// `text` masked with both sets at once, as the trace writer masks a record's other texts:
-/// every match of either goes. One set after the other would not do, since a match of the first
-/// can cut a value of the second so that it no longer matches, and keep the rest of it. A set
-/// keeps where its matches are to itself, so a text both sets match in becomes [`WITHHELD`]
-/// whole, which never hides less than the union of their matches would.
-fn masked_with_both(text: String, secrets: &SecretSet, held: &SecretSet) -> String {
-    let mut by_secrets = text.clone();
-    let mut by_held = text;
-    match (
-        secrets.mask_str(&mut by_secrets),
-        held.mask_str(&mut by_held),
-    ) {
-        (true, true) => WITHHELD.to_owned(),
-        (true, false) => by_secrets,
-        (false, _) => by_held,
-    }
 }
 
 #[cfg(test)]

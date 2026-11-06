@@ -38,8 +38,9 @@ pub(crate) struct RunCtx {
     /// socket, so the door refuses once the link's epoch differs.
     epoch: u64,
     /// Every value held since the run began ([`super::HeldValues::watch`]), asked at every record
-    /// the run and its ops send. It lives as long as the context, since an op that settles after
-    /// the run's end, its task aborted at teardown, still sends a record.
+    /// the run and its ops send, and at every reply into the script's realm. It lives as long as
+    /// the context, since an op that settles after the run's end, its task aborted at teardown,
+    /// still sends a record.
     watch: Box<dyn HeldWatch>,
     deadline: Instant,
     /// Cancelled exactly when [`RunCtx::stop`] is first called, and only by it.
@@ -250,8 +251,8 @@ impl RunCtx {
     }
 
     /// Every value held since the run began, as of now: what each of its records is masked with
-    /// on top of the process's secret set, and its reply too, or, once the run lost one of them,
-    /// what says to withhold its output instead.
+    /// on top of the process's secret set, its reply and what enters its realm too, or, once the
+    /// run lost one of them, what says to withhold its output instead.
     #[must_use]
     pub(crate) fn held_values(&self) -> Held {
         self.watch.held()

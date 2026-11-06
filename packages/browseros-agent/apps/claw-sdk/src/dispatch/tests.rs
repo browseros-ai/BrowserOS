@@ -20,6 +20,7 @@ use self::harness::{GATE_PARTIES, Harness, SeenCheck, within};
 use crate::browser::PageRef;
 use crate::dispatch::{
     Call, Caller, ErrorCode, OpFailure, OpReply, OpsReport, PendingReply, RunEnd, StopReason,
+    WITHHELD,
 };
 
 /// The page brand a script sends for `page`.
@@ -645,6 +646,152 @@ async fn known_secrets_are_masked_in_everything_a_script_sees() -> Result<(), Bo
         Some("https://example.com/?t=[private]"),
         "in page facts"
     );
+    Ok(())
+}
+
+/// Decision 35b. A value typed or swept a moment ago is held, and no secret yet: its field may
+/// still be typed, and the process's set learns it once the field goes quiet. The script's own
+/// `goto` could carry it out of Neo meanwhile, so a reply into the realm is masked with what the
+/// run holds too, wherever the value is in it.
+#[tokio::test]
+async fn a_reply_into_the_realm_is_masked_with_what_the_run_holds() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let page = harness.page("https://example.com/").await?;
+    let (run, _guard) = harness.run()?;
+    harness.held.hold("typed-pw-7Qx");
+
+    let echo = json!({ "text": "the field holds typed-pw-7Qx", "fail": false });
+    let (_, value) = harness.submit(&run, "test.echo", echo).await;
+    assert_eq!(
+        value.outcome,
+        Ok(json!({ "text": "the field holds [private]" })),
+        "in values"
+    );
+
+    let echo = json!({ "text": "typed-pw-7Qx", "fail": true });
+    let failure = failure(harness.submit(&run, "test.echo", echo).await.1)?;
+    assert_eq!(
+        failure.error.message(),
+        "the page said [private]",
+        "in error messages"
+    );
+
+    let navigate = json!({ "page": handle(&page), "url": "https://example.com/?pw=typed-pw-7Qx" });
+    let (_, navigated) = harness.submit(&run, "test.navigate", navigate).await;
+    let fact = navigated.pages.first().ok_or("the target's facts")?;
+    assert_eq!(
+        fact.url.as_deref(),
+        Some("https://example.com/?pw=[private]"),
+        "in page facts"
+    );
+    Ok(())
+}
+
+/// Decision 35b, for a run that lost a held value past the cap: nothing can mask that value out
+/// of what the run's realm receives any more, so each reply from then on is `neo /
+/// output_withheld`, and its page facts keep only Neo's own facts. The script still learns
+/// whether its write landed, and the op's record keeps its real outcome.
+#[tokio::test]
+async fn a_lost_runs_replies_into_its_realm_are_withheld() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let page = harness.page("https://example.com/").await?;
+    let (run, _guard) = harness.run()?;
+    harness.held.lose();
+
+    let navigate = json!({ "page": handle(&page), "url": "https://example.com/next" });
+    let (operation, navigated) = harness.submit(&run, "test.navigate", navigate).await;
+    let fact = navigated.pages.first().ok_or("the target's facts")?;
+    assert_eq!(
+        (fact.tab, fact.url.as_deref(), fact.title.as_deref()),
+        (page.tab, Some(WITHHELD), Some(WITHHELD)),
+        "the page fact names the tab, and nothing the page showed"
+    );
+    let withheld = failure(navigated)?;
+    assert_eq!(
+        owner_and_code(&withheld),
+        (ErrorOwner::Neo, ErrorCode::OUTPUT_WITHHELD),
+        "the navigation went through, and its result is withheld"
+    );
+    assert_eq!(
+        (withheld.operation, withheld.delivery, withheld.retryable),
+        (operation, Delivery::Done, false),
+        "with the op's id and real delivery, so the script knows the write landed"
+    );
+    let row = harness.row(operation).await?;
+    assert_eq!(
+        (row.outcome, row.delivery),
+        (Some(Outcome::Ok), Some(Delivery::Done)),
+        "the op's record keeps its real outcome"
+    );
+
+    let echo = json!({ "text": "typed-pw-7Qx", "fail": true });
+    let withheld = failure(harness.submit(&run, "test.echo", echo).await.1)?;
+    assert_eq!(
+        (withheld.error.code(), withheld.delivery),
+        (ErrorCode::OUTPUT_WITHHELD, Delivery::NotSent),
+        "a failure is withheld too, as not sent when nothing was"
+    );
+    Ok(())
+}
+
+/// The trace writer masks an op's name with the process's set and what its run holds. A name the
+/// script made up is its own text, though, and once its run lost a held value nothing masks that
+/// value out of it, so the op's record withholds the name, as it withholds the start's input.
+#[tokio::test]
+async fn a_lost_runs_own_method_name_is_withheld_from_its_record() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    harness.held.lose();
+
+    let (operation, reply) = harness.submit(&run, "typed-pw-7Qx", json!({})).await;
+    assert_eq!(
+        failure(reply)?.error.code(),
+        ErrorCode::OUTPUT_WITHHELD,
+        "the refusal reaches the realm withheld"
+    );
+    assert_eq!(
+        harness.row(operation).await?.name,
+        WITHHELD,
+        "the record keeps none of the name"
+    );
+    Ok(())
+}
+
+/// A run can lose a held value while the door admits its op, between any two of the times the
+/// door asks what the run holds. Wherever the loss falls, neither the op's record nor the refusal
+/// the realm receives keeps a name the script made up raw.
+#[tokio::test]
+async fn a_run_that_turns_lost_as_its_own_method_name_is_admitted_records_none_of_it()
+-> Result<(), Box<dyn Error>> {
+    const NAME: &str = "typed-pw-7Qx";
+    // How many times admitting and refusing such a name asks what the run holds.
+    let asks = {
+        let harness = Harness::new().await?;
+        let (run, _guard) = harness.run()?;
+        let before = harness.held.asks();
+        harness.submit(&run, NAME, json!({})).await;
+        harness.held.asks() - before
+    };
+    // Each of the op's asks, and one past them, where nothing is lost while the op goes.
+    for ask in 1..=asks + 1 {
+        let harness = Harness::new().await?;
+        let (run, _guard) = harness.run()?;
+        harness.held.hold(NAME);
+        harness.held.lose_at_ask(ask);
+        let (operation, reply) = harness.submit(&run, NAME, json!({})).await;
+        let refusal = failure(reply)?;
+        assert!(
+            !refusal.error.message().contains(NAME),
+            "lost at ask {ask} of {asks}: the realm receives the name masked or withheld: {}",
+            refusal.error.message()
+        );
+        let row = harness.row(operation).await?;
+        assert!(
+            !format!("{row:?}").contains(NAME),
+            "lost at ask {ask} of {asks}: the record keeps the name masked or withheld: {:?}",
+            row.name
+        );
+    }
     Ok(())
 }
 

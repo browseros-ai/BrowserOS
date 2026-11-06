@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use browseros_core::pages::NewPageOptions;
-use browseros_core::sensitive_fields::FieldValues;
-use browseros_core::{NativeCapabilities, TabId};
+use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
+use browseros_core::{NativeCapabilities, PageId, TabId};
 use browseros_playwright::PlaywrightHooks;
 use browseros_trace::{
     Effect, Privacy, RedactionLimits, Redactor, RunId, SecretSet, SecretSetConfig, TaskId,
@@ -218,6 +218,16 @@ impl TestRig {
             .find(|page| page.tab_id == tab)
             .ok_or("core lists the fake's tab")?;
         Ok(PageRef::from(info))
+    }
+
+    /// Holds `value` as if it was just typed into a password field: every run holds it, and the
+    /// process's set learns it only once the field goes quiet.
+    pub(crate) fn hold(&self, value: &str) {
+        let typed = JournalEntry {
+            kind: SensitiveKind::Password,
+            value: value.to_owned().into(),
+        };
+        self.typed.note(PageId(0), None, typed);
     }
 
     /// A recorded run with `budget` left and no default page yet.

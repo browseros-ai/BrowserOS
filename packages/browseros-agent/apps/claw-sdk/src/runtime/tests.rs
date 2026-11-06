@@ -202,6 +202,32 @@ fn a_thrown_error_is_a_script_error_at_its_line() -> Result<(), TestError> {
     })
 }
 
+/// Graft G3. A script can hold a value its realm never received, such as a password it typed
+/// itself, and throw it. The thrown text is masked with what the run holds too, before it is cut
+/// to `TEXT_CHARS`: a cut through the value would leave a prefix that no mask recognizes, in the
+/// run's error and its replay.
+#[test]
+fn a_thrown_errors_held_value_is_masked_before_its_clip() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let value = "typed-pw-7Qx-0123";
+        rig.hold(value);
+        // The message keeps 4096 characters, so this cut falls inside the value.
+        let code = format!("throw new Error('x'.repeat(4090) + '{value}');");
+        let error = failed(script(&rig, &code).await?)?;
+        let message = error.message();
+        let prefix = value.get(..4).unwrap_or(value);
+        assert!(
+            !message.contains(prefix),
+            "no part of the held value survives the cut: {}",
+            message
+                .get(message.len().saturating_sub(40)..)
+                .unwrap_or_default()
+        );
+        Ok(())
+    })
+}
+
 #[test]
 fn code_that_does_not_compile_is_a_syntax_error() -> Result<(), TestError> {
     on_neo_runtime(async {
@@ -273,6 +299,83 @@ fn a_page_brand_revives_into_one_page_object() -> Result<(), TestError> {
             value.get("url"),
             Some(&json!("about:blank")),
             "page facts from the reply feed the sync accessors"
+        );
+        Ok(())
+    })
+}
+
+/// M1 handoff line 4. browseros-playwright carries a result 297 JSON levels deep, and a reply's
+/// value is revived on the run's 512 KiB stack. This one is 5,000 objects deep, with a brand at
+/// the bottom, and goes to `revive` as a reply's value does: a reply listener swaps it in, so no
+/// JSON parse or Rust bound stands between it and `revive`.
+#[test]
+fn a_result_far_deeper_than_the_js_stack_revives_whole() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r#"
+            let deep = { bottom: { $neo: "bytes", base64: "AQI=" } };
+            for (let level = 0; level < 5000; level++) deep = { down: deep };
+            let feed = true;
+            __neo.onReply((envelope) => {
+              if (feed) { feed = false; envelope.ok = deep; }
+            });
+            const revived = await __neo.invoke("test.echo", {});
+            let depth = 0;
+            let node = revived;
+            while (node.down !== undefined) { node = node.down; depth++; }
+            const bottom = node.bottom instanceof Uint8Array ? Array.from(node.bottom) : node.bottom;
+            return { depth, same: revived === deep, bottom };"#;
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({ "depth": 5000, "same": true, "bottom": [1, 2] }),
+            "every level is walked, in place, and the brand at the bottom is revived"
+        );
+        Ok(())
+    })
+}
+
+/// The Playwright prelude's page and element revivers make a `Page` for each tab they meet, so
+/// the order `revive` meets brands in is the order of `context.pages()`. It meets them depth
+/// first, in each object's key order, and hands each brand to its reviver whole, assigning what
+/// comes back in place.
+#[test]
+fn revive_visits_brands_in_pre_order_and_key_order_and_replaces_each_whole() -> Result<(), TestError>
+{
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r#"
+            const seen = [];
+            __neo.brands.register("probe", (json) => { seen.push(json.n); return { revived: json.n }; });
+            const items = [{ $neo: "probe", n: "b" }, { deeper: { $neo: "probe", n: "c" } }];
+            // Key order puts integer keys first, ascending: 2, 10, zeta, alpha.
+            const value = {
+              zeta: items,
+              2: { $neo: "probe", n: "a", inner: { $neo: "probe", n: "never" } },
+              alpha: { $neo: "probe", n: "d" },
+              10: { plain: true },
+            };
+            let feed = true;
+            __neo.onReply((envelope) => {
+              if (feed) { feed = false; envelope.ok = value; }
+            });
+            const revived = await __neo.invoke("test.echo", {});
+            return {
+              seen,
+              inPlace: revived === value && revived.zeta === items,
+              whole: revived[2],
+              revived: [revived.zeta[0], revived.zeta[1].deeper, revived.alpha],
+              untouched: revived[10],
+            };"#;
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({
+                "seen": ["a", "b", "c", "d"],
+                "inPlace": true,
+                "whole": { "revived": "a" },
+                "revived": [{ "revived": "b" }, { "revived": "c" }, { "revived": "d" }],
+                "untouched": { "plain": true },
+            }),
+            "depth first in key order, a brand whole and never what is inside it"
         );
         Ok(())
     })

@@ -92,9 +92,16 @@ impl Defaults {
     /// The most superseded values kept for the runs going (decision 34). Past this the oldest is
     /// forgotten, never registered, since it may be a prefix, and each run that may have read it
     /// withholds its output from then on. A page can raise input events on its own fields. Each
-    /// record a run sends builds a matcher over these values, at O(N²) in them while
-    /// `SecretSet::register` rebuilds it per value, and this bounds that.
+    /// record a run sends builds a matcher over these values, and this bounds its cost.
     pub(crate) const MAX_SUPERSEDED: usize = 256;
+    /// The most values the secret set learned from typing and reads that are kept to recognize a
+    /// later read of them, while a run that went on as they were learned goes (decision 29).
+    /// browseros-playwright reports a main-world script's sweeps as their union, so a prefix the
+    /// field was typed past comes back after the field's value registered. Past this the oldest
+    /// is forgotten, and until those runs end a read's value that nothing covers masks them only
+    /// and is never registered, since it may be that value's prefix. A page can raise input
+    /// events on its own fields, and these cost a comparison per read, not a matcher.
+    pub(crate) const MAX_LEARNED: usize = 256;
     /// Tokio worker stacks. QuickJS plus nested futures overflowed the default 2 MiB in debug
     /// builds on Linux, which aborts the process. Reserved address space, committed as used.
     pub(crate) const WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;
