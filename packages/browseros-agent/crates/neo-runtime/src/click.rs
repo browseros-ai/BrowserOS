@@ -754,7 +754,8 @@ struct LoopAWaits {
 impl LoopAWaits {
     fn new(timeout_ms: f64) -> Self {
         let mut backoff = LOOP_A_BACKOFF_MS.to_vec();
-        if timeout_ms > 0.0 {
+        // Playwright's `if (progress.timeout)`: a negative timeout caps too, dropping every entry.
+        if timeout_ms != 0.0 {
             while backoff
                 .last()
                 .is_some_and(|&wait| f64::from(wait) > timeout_ms / 5.0)
@@ -1714,6 +1715,7 @@ mod tests {
         assert_eq!(take(1000.0), [0, 20, 50, 100, 100, 100, 100, 100]);
         assert_eq!(take(30_000.0), [0, 20, 50, 100, 100, 500, 500, 500]);
         assert_eq!(take(50.0), [0; 8], "every backoff dropped: no wait at all");
+        assert_eq!(take(-1.0), [0; 8], "a negative timeout is a timeout");
     }
 
     #[test]

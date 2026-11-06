@@ -155,7 +155,7 @@ fn run_end(stop: Stop) -> RunEnd {
 pub(crate) struct Progress {
     entry: Arc<CallEntry>,
     /// `metadata.timeout` in ms exactly as the client sent it, for the timeout message and for
-    /// Playwright's backoff caps; `0.0` means none.
+    /// Playwright's backoff caps; only `0.0` means none.
     timeout_ms: f64,
     /// When this call times out on its own. `None` for no timeout, and also when its timeout
     /// reaches the run's deadline: then only the run can stop it, so the two deadlines never
@@ -173,11 +173,20 @@ impl Progress {
         run: RunScope,
         page_closed: CancellationToken,
     ) -> Self {
-        let own_deadline = Duration::try_from_secs_f64(timeout_ms / 1000.0)
-            .ok()
-            .filter(|timeout| !timeout.is_zero())
-            .and_then(|timeout| Instant::now().checked_add(timeout))
-            .filter(|at| *at < run.deadline.at());
+        // Playwright's `deadline = timeout ? now + timeout : 0` (`progress.ts` `run`): only zero
+        // waits forever, and a negative timeout is a deadline already past, so the call fails
+        // at its first wait with `Timeout -1ms exceeded.`.
+        let own_deadline = if timeout_ms == 0.0 {
+            None
+        } else if timeout_ms < 0.0 {
+            Some(Instant::now())
+        } else {
+            // A timeout too large for a `Duration` is past the run's deadline anyway.
+            Duration::try_from_secs_f64(timeout_ms / 1000.0)
+                .ok()
+                .and_then(|timeout| Instant::now().checked_add(timeout))
+        }
+        .filter(|at| *at < run.deadline.at());
         Self {
             entry,
             timeout_ms,
@@ -852,6 +861,20 @@ mod tests {
             })
         );
         assert_eq!(started.elapsed(), Duration::from_millis(500));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_negative_timeout_times_out_at_once_with_playwrights_message() {
+        let run = scope(Duration::from_secs(30));
+        let progress = progress(-1.0, &run, &CancellationToken::new());
+        let expected = CallError::Playwright(PlaywrightError {
+            name: ErrorName::TimeoutError,
+            message: "Timeout -1ms exceeded.".to_string(),
+        });
+        assert_eq!(progress.check(), Err(expected.clone()));
+        let started = Instant::now();
+        assert_eq!(progress.race(future::pending::<()>()).await, Err(expected));
+        assert_eq!(started.elapsed(), Duration::ZERO);
     }
 
     #[tokio::test(start_paused = true)]
