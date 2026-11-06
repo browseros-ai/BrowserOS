@@ -448,8 +448,9 @@ impl Tabs {
         }
     }
 
-    /// Creation replies identify writes that already reached the browser. Read them before
-    /// taking the outcome, even beyond the ordinary one-second call drain (CDP is bounded).
+    /// Waits for owned creation tasks within the caller's shared finish deadline. Dropping
+    /// this wait does not abort a task: an unanswered creation may be absent from the
+    /// outcome, but its unkept tab is closed when the reply eventually arrives.
     pub(crate) async fn finish_creations(&self) {
         self.0.creations.close();
         self.0.creations.wait().await;
@@ -463,7 +464,8 @@ impl Tabs {
             .map_or_else(|_| Vec::new(), |pages| pages.clone());
         for page in pages {
             if page.close_requested.load(Ordering::Acquire) {
-                let _checked = time::timeout(Duration::from_secs(1), self.is_closed(&page)).await;
+                // The caller bounds the whole batch, not each page separately.
+                let _checked = self.is_closed(&page).await;
             }
         }
     }

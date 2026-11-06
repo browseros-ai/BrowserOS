@@ -17,9 +17,10 @@
 //! ```
 //!
 //! The registry and session writers share each `PageSession`. Its last owner detaches the
-//! session; ordinary browser tabs survive the run. Creation replies and failed-creation
-//! cleanup settle before the outcome names the tabs. Input turns (`page.rs` `TabInputs`) are
-//! shared by every call and run of a `Runtime` on the same target.
+//! session; ordinary browser tabs survive the run. Finish shares one bounded wait across
+//! creation replies, task draining and closing-state reads. Late unkept creations close
+//! after the outcome, even when their IDs were not yet known. Input turns (`page.rs`
+//! `TabInputs`) are shared by every call and run of a `Runtime` on the same target.
 //!
 //! Locator construction does no I/O. The SDK uses Playwright's selector code, with the test
 //! id attribute shared with the page through `world.rs`.

@@ -32,8 +32,8 @@ pub struct RunRequest {
     /// script: it may `await` and `return`.
     pub code: String,
     pub page: PageId,
-    /// Wall-clock budget from the tab check to the script's return. Cleanup and pending
-    /// creation acknowledgements may outlive it so the outcome accounts for browser writes.
+    /// Wall-clock budget from the tab check to the script's return. Finish adds one bounded
+    /// drain; cleanup tasks still pending then continue in the background.
     pub timeout: Duration,
     /// Cancelling ends the run with [`RunStatus::Cancelled`] at the script's next instruction,
     /// timer or getter.
@@ -107,9 +107,9 @@ pub struct RunOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<RunError>,
     pub calls: Vec<CallRecord>,
-    /// Pages handed to the script or created by the run, in first-seen order with the run
-    /// page first. Failed creations stay recorded after cleanup. IDs can be passed to a
-    /// later `RunRequest`; successful tabs outlive runs.
+    /// Pages handed out or acknowledged before finish's bounded drain ends, in first-seen
+    /// order with the run page first. Creations acknowledged later are closed in the
+    /// background. IDs can be passed to a later `RunRequest`; successful tabs outlive runs.
     pub pages: Vec<RunPage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calls_dropped: Option<DroppedCalls>,
