@@ -6,7 +6,9 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_trace::{Delivery, ErrorOwner, OperationId, Outcome};
+use browseros_trace::{
+    Delivery, ErrorOwner, OperationId, Outcome, SecretSetConfig, SecretSource, SecretValue,
+};
 use rquickjs::{AsyncContext, AsyncRuntime};
 use serde_json::{Value, json};
 use tokio::time::{self, Instant};
@@ -497,6 +499,41 @@ fn a_thrown_error_is_a_script_error_at_its_line() -> Result<(), TestError> {
             thrown.message(),
             "plain text",
             "a thrown non-error is its own text"
+        );
+        Ok(())
+    })
+}
+
+/// A value the secret set refuses is masked nowhere, so every run going is lost: what enters its
+/// realm from then on is `neo / output_withheld`, in place of what each op returned.
+#[test]
+fn a_value_the_set_refuses_withholds_what_enters_the_realm() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        // The set keeps one value, the host's, which nothing pushes out: it refuses the next.
+        let rig = TestRig::with_secret_set(SecretSetConfig {
+            max_entries: 1,
+            ..SecretSetConfig::default()
+        })
+        .await?;
+        let _host = rig.secrets.register_from(
+            SecretValue::new("host-secret-7Qx".to_owned()),
+            None,
+            SecretSource::Host,
+        );
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        rig.hold("agent-pw-7Qx");
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(250)).await;
+        let code = r#"
+            try {
+              return await __neo.invoke("test.echo", { said: "hello" });
+            } catch (e) {
+              return [e.owner, e.code];
+            }"#;
+        assert_eq!(
+            returned(run_code(&rig, &run, code).await)?,
+            json!(["neo", "output_withheld"]),
+            "the field went quiet and the set refused its value, so the run held a value \
+             nothing masks"
         );
         Ok(())
     })

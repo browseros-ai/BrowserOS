@@ -13,7 +13,7 @@ use std::time::Duration;
 use browseros_core::pages::NewPageOptions;
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
 use browseros_core::{NativeCapabilities, PageId, TabId};
-use browseros_playwright::PlaywrightHooks;
+use browseros_playwright::{PlaywrightHooks, TypedBy};
 use browseros_trace::{
     Effect, Privacy, RedactionLimits, Redactor, RunId, SecretSet, SecretSetConfig, TaskId,
     TraceSink, TraceStore, WriterConfig, spawn_writer,
@@ -104,6 +104,16 @@ impl TestRig {
     /// As [`TestRig::new`], with the trace writer configured, e.g. a replay window that has
     /// already passed.
     pub(crate) async fn with_writer(writer: WriterConfig) -> Result<Self, TestError> {
+        Self::build(writer, SecretSetConfig::default()).await
+    }
+
+    /// As [`TestRig::new`], with the process's secret set configured, e.g. small enough for a
+    /// test to fill.
+    pub(crate) async fn with_secret_set(secrets: SecretSetConfig) -> Result<Self, TestError> {
+        Self::build(WriterConfig::default(), secrets).await
+    }
+
+    async fn build(writer: WriterConfig, secrets: SecretSetConfig) -> Result<Self, TestError> {
         let fake = FakeCdp::new();
         let tabs = Arc::new(TabRegistry::new());
         let connect = Arc::clone(&fake);
@@ -120,7 +130,7 @@ impl TestRig {
         .await?;
         let dir = tempfile::tempdir()?;
         let store = open_store(dir.path().join("trace.db")).await?;
-        let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
+        let secrets = Arc::new(SecretSet::new(secrets));
         let redactor = Redactor::new(Arc::clone(&secrets), RedactionLimits::default());
         let sink = spawn_writer(&store, redactor, writer, None);
         let privacy = Privacy::new(Arc::clone(&secrets), Arc::new(sink.clone()), HashMap::new());
@@ -221,14 +231,14 @@ impl TestRig {
         Ok(PageRef::from(info))
     }
 
-    /// Holds `value` as if it was just typed into a password field: every run holds it, and the
-    /// process's set learns it only once the field goes quiet.
+    /// Holds `value` as if the agent just typed it into a password field: every run holds it,
+    /// and the process's set learns it only once the field goes quiet.
     pub(crate) fn hold(&self, value: &str) {
         let typed = JournalEntry {
             kind: SensitiveKind::Password,
             value: value.to_owned().into(),
         };
-        self.typed.note(PageId(0), None, typed);
+        self.typed.note(PageId(0), None, typed, TypedBy::Agent);
     }
 
     /// A recorded run with `budget` left and no default page yet.

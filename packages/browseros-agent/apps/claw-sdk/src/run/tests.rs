@@ -8,12 +8,12 @@ use std::time::Duration;
 use std::{fs, io};
 
 use browseros_core::PageId;
-use browseros_core::sensitive_fields::{JournalEntry, SensitiveKind};
+use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
 use browseros_playwright::{PlaywrightHooks, TypedBy};
 use browseros_trace::{
     Delivery, EpochMillis, ErrorOwner, OperationId, Outcome, RequestId, RunEnded, RunId, RunQuery,
-    RunStarted, RunStatus, RunSummary, SecretValue, TailQuery, TaskId, TraceRecordEvent,
-    WriterConfig,
+    RunStarted, RunStatus, RunSummary, SecretSetConfig, SecretSource, SecretValue, TailQuery,
+    TaskId, TraceRecordEvent, WriterConfig,
 };
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
@@ -29,7 +29,7 @@ use super::{
 };
 use crate::browser::PageRef;
 use crate::config::Defaults;
-use crate::dispatch::{ErrorCode, OperationError};
+use crate::dispatch::{ErrorCode, HeldValues, OperationError};
 use crate::test_rig::{TestError, TestRig, on_neo_runtime, within};
 
 /// Long enough that only the tests about orphans ever see it run out.
@@ -787,9 +787,11 @@ fn context_pages_lists_a_tab_opened_before_the_run_in_its_first_statement() -> R
 {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        let _registration = rig
-            .secrets
-            .register(SecretValue::new("hunter22".to_owned()), None);
+        let _registration = rig.secrets.register_from(
+            SecretValue::new("hunter22".to_owned()),
+            None,
+            SecretSource::Host,
+        );
         let owner = rig
             .owner_tab("https://owner.example/?code=hunter22")
             .await?;
@@ -881,9 +883,11 @@ fn without_the_browser_a_call_is_refused_and_its_request_id_stays_free() -> Resu
 fn known_secrets_are_masked_in_the_reply() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        let _registration = rig
-            .secrets
-            .register(SecretValue::new("hunter22".to_owned()), None);
+        let _registration = rig.secrets.register_from(
+            SecretValue::new("hunter22".to_owned()),
+            None,
+            SecretSource::Host,
+        );
         let code = "console.log('typed hunter22'); return { said: 'hunter22' };";
         let reply = rig
             .run_service(GRACE)
@@ -912,7 +916,8 @@ fn a_value_typed_during_the_run_is_masked_in_its_reply_before_its_field_goes_qui
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
         for value in ["hunt", "hunte", "hunter", "hunter2"] {
-            rig.typed.note(PageId(1), None, keystroke(value));
+            rig.typed
+                .note(PageId(1), None, keystroke(value), TypedBy::NotAgent);
         }
         let code = "return 'hunte or hunter2?';";
         let reply = rig
@@ -934,7 +939,8 @@ fn a_run_that_ends_while_another_field_is_typed_registers_none_of_it() -> Result
         let rig = TestRig::new().await?;
         // The owner is typing a password into another tab while an unrelated run goes on.
         for value in ["hunt", "hunte"] {
-            rig.typed.note(PageId(1), None, keystroke(value));
+            rig.typed
+                .note(PageId(1), None, keystroke(value), TypedBy::NotAgent);
         }
         let reply = rig
             .run_service(GRACE)
@@ -951,7 +957,8 @@ fn a_run_that_ends_while_another_field_is_typed_registers_none_of_it() -> Result
             "the run's end registered nothing: `hunte` may be a prefix"
         );
         for value in ["hunter", "hunter2"] {
-            rig.typed.note(PageId(1), None, keystroke(value));
+            rig.typed
+                .note(PageId(1), None, keystroke(value), TypedBy::NotAgent);
         }
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(250)).await;
         assert_eq!(
@@ -1174,7 +1181,8 @@ fn a_run_that_loses_a_value_it_read_past_the_cap_withholds_its_output() -> Resul
             .field_entered(page.id.clone(), keystroke("hunter"), TypedBy::NotAgent);
         for pair in 0..=Defaults::MAX_SUPERSEDED {
             for value in [format!("v{pair:03}a"), format!("v{pair:03}ab")] {
-                rig.typed.note(PageId(999), None, keystroke(&value));
+                rig.typed
+                    .note(PageId(999), None, keystroke(&value), TypedBy::NotAgent);
             }
         }
         within(Duration::from_secs(10), rig.gate.wait()).await?;
@@ -1192,6 +1200,85 @@ fn a_run_that_loses_a_value_it_read_past_the_cap_withholds_its_output() -> Resul
             masked(&rig, "hunte"),
             "hunte",
             "a value forgotten past the cap is never registered: it may be a prefix"
+        );
+        Ok(())
+    })
+}
+
+/// A set full of values no page value pushes out refuses a swept one (`Registration::Full`), and
+/// every run going loses its output to it. A lost run's end record still stores its code and its
+/// host data, though, and here both name the value, which the run met only through a sweep after
+/// it began. So nothing but the end record's own set can mask it there.
+#[test]
+fn a_run_that_lost_a_value_the_set_refused_stores_its_code_and_host_data_masked()
+-> Result<(), TestError> {
+    on_neo_runtime(async {
+        // The set keeps two values, the host's and one the agent typed, and no page value pushes
+        // either out, so it refuses the next page value.
+        let rig = TestRig::with_secret_set(SecretSetConfig {
+            max_entries: 2,
+            ..SecretSetConfig::default()
+        })
+        .await?;
+        let _host = rig.secrets.register_from(
+            SecretValue::new("host-secret-7Qx".to_owned()),
+            None,
+            SecretSource::Host,
+        );
+        rig.hold("agent-earlier-7Qx");
+        within(Duration::from_secs(10), async {
+            while masked(&rig, "agent-earlier-7Qx") != "[private]" {
+                time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        let value = "page-pw-7Qx";
+        let code = format!(
+            "await __neo.invoke('test.gate', {{}});\n\
+             await __neo.invoke('test.gate', {{}});\n\
+             return '{value}'.length;"
+        );
+        let meta = RunMeta::parse(Some(&json!({ "hostData": { "echo": value } })))
+            .map_err(|error| error.to_string())?;
+        let events = rig.sink.subscribe();
+        let run = caller(&rig.run_service(GRACE), request(&code, meta)?);
+        within(Duration::from_secs(10), rig.gate.wait()).await?;
+        // Going beside the run as the set answers, so the refusal loses it too: that is how the
+        // test knows the set refused the value before the run ends.
+        let witness = Arc::clone(&rig.typed).watch(RunId::new());
+        rig.hooks
+            .values_swept(PageId(1), &FieldValues::new([value.to_owned().into()]));
+        within(Duration::from_secs(10), async {
+            while witness.held().withheld().is_none() {
+                time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        within(Duration::from_secs(10), rig.gate.wait()).await?;
+        let reply = run.await?;
+        let error = error_of(&reply)?;
+        assert_eq!(
+            (error.owner, error.code.as_str(), &reply.value),
+            (ErrorOwner::Neo, "output_withheld", &Value::Null),
+            "the run held a value the set refused, so its output is withheld: {reply:?}"
+        );
+        assert_eq!(masked(&rig, value), value, "the set refused the value");
+        assert_no_record_keeps(&rig, reply.id, value, events).await?;
+        let detail = rig
+            .store
+            .run(reply.id)
+            .await?
+            .ok_or("the run is recorded")?;
+        assert_eq!(
+            (
+                detail
+                    .code
+                    .as_deref()
+                    .map(|code| code.ends_with("return '[private]'.length;")),
+                detail.host_data
+            ),
+            (Some(true), Some(json!({ "echo": "[private]" }))),
+            "the end record stored the code and the host data, the refused value masked in both"
         );
         Ok(())
     })
@@ -1254,9 +1341,11 @@ fn an_unknown_methods_name_is_masked_in_its_record_with_what_its_run_holds() -> 
         let value = "owner-typed-7Qx";
         let page = rig.owner_tab("https://b.test/typed").await?;
         type_into(&rig, &page, value, TypedBy::Agent);
-        let _registration = rig
-            .secrets
-            .register(SecretValue::new("known-owner".to_owned()), None);
+        let _registration = rig.secrets.register_from(
+            SecretValue::new("known-owner".to_owned()),
+            None,
+            SecretSource::Host,
+        );
         let events = rig.sink.subscribe();
         let code = format!(
             "const typed = '{value}';\n\
@@ -1299,9 +1388,11 @@ fn an_unknown_methods_name_is_masked_in_its_record_with_what_its_run_holds() -> 
 fn a_secret_across_the_console_limit_is_masked_before_the_cut() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        let _registration = rig
-            .secrets
-            .register(SecretValue::new("hunter22".to_owned()), None);
+        let _registration = rig.secrets.register_from(
+            SecretValue::new("hunter22".to_owned()),
+            None,
+            SecretSource::Host,
+        );
         // One byte over the limit, so the cut falls inside the secret.
         let code = format!(
             "console.log('x'.repeat({}) + 'hunter22');",
@@ -1327,9 +1418,11 @@ fn a_secret_across_the_console_limit_is_masked_before_the_cut() -> Result<(), Te
 fn a_secret_across_an_error_text_limit_is_masked_before_the_cut() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        let _registration = rig
-            .secrets
-            .register(SecretValue::new("hunter22".to_owned()), None);
+        let _registration = rig.secrets.register_from(
+            SecretValue::new("hunter22".to_owned()),
+            None,
+            SecretSource::Host,
+        );
         let service = rig.run_service(GRACE);
         // A thrown message keeps 4096 characters; this cut falls inside the secret.
         let thrown = service

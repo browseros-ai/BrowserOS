@@ -10,7 +10,8 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use browseros_trace::{
-    Delivery, Effect, ErrorOwner, OperationId, Outcome, RunEffects, RunStatus, SecretValue,
+    Delivery, Effect, ErrorOwner, OperationId, Outcome, RunEffects, RunStatus, SecretSource,
+    SecretValue,
 };
 use futures_util::future;
 use serde_json::{Value, json};
@@ -623,9 +624,11 @@ async fn known_secrets_are_masked_in_everything_a_script_sees() -> Result<(), Bo
     let harness = Harness::new().await?;
     let page = harness.page("https://example.com/").await?;
     let (run, _guard) = harness.run()?;
-    harness
-        .secrets
-        .register(SecretValue::new("hunter2-token".to_owned()), None);
+    let _registration = harness.secrets.register_from(
+        SecretValue::new("hunter2-token".to_owned()),
+        None,
+        SecretSource::Host,
+    );
 
     let echo = json!({ "text": "the token is hunter2-token", "fail": false });
     let (_, value) = harness.submit(&run, "test.echo", echo).await;
@@ -945,9 +948,11 @@ async fn a_refusal_reason_is_masked_with_what_its_run_holds_then_clipped()
     const HELD: &str = "typed-pw-7Qx-0123";
     let harness = Harness::new().await?;
     let (run, _guard) = harness.run()?;
-    harness
-        .secrets
-        .register(SecretValue::new(SECRET.to_owned()), None);
+    let _registration = harness.secrets.register_from(
+        SecretValue::new(SECRET.to_owned()),
+        None,
+        SecretSource::Host,
+    );
     harness.held.hold(HELD);
 
     for value in [SECRET, HELD] {

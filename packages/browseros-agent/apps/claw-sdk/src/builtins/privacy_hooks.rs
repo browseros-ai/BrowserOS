@@ -75,11 +75,13 @@ impl PrivacyHooks {
 
 impl PlaywrightHooks for PrivacyHooks {
     /// Masked once its field is done, whoever typed it, the agent included, as the takeover
-    /// journal masks the owner's typing. A page's privacy is the takeover's and the host's to
-    /// decide, so a value entered here never makes the tab private by itself.
-    fn field_entered(&self, page: PageId, entry: JournalEntry, _by: TypedBy) {
+    /// journal masks the owner's typing. `by` decides what a full secret set may drop for it: a
+    /// value the agent typed outranks a page's (`TypedValues::note`). A page's privacy is the
+    /// takeover's and the host's to decide, so a value entered here never makes the tab private
+    /// by itself.
+    fn field_entered(&self, page: PageId, entry: JournalEntry, by: TypedBy) {
         let tab = self.tabs.tab_of(&page);
-        self.typed.note(page, tab, entry);
+        self.typed.note(page, tab, entry, by);
     }
 
     /// Held until its field is done, as a typed value is: a read between two keystrokes finds a

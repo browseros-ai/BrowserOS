@@ -2242,3 +2242,70 @@ async fn a_read_between_two_keystrokes_registers_no_prefix() -> Result<(), Box<d
     );
     Ok(())
 }
+
+/// A read the page's script echoes into its title and URL sweeps the field while its op runs:
+/// after the op's start record went out, before the op settles. That op's page facts must come
+/// back masked with the run's held set, in the reply its realm gets and in the `page_after` its
+/// end record stores, since the process's set learns the value only once its field goes quiet
+/// (decision 35p, claw-sdk's half). The crate's own sweeps run in a sealed world the fake browser
+/// does not have, so the test sweeps through the crate's hook while the op's one CDP call waits.
+#[tokio::test]
+async fn a_value_swept_while_an_op_runs_masks_that_ops_page_facts_in_its_reply_and_its_record()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let value = "swept-mid-op-7Qx";
+    let tab = harness.fake.open_tab(
+        &format!("https://bank.example/?echo={value}"),
+        &format!("Welcome {value}"),
+    );
+    let page = harness.listed(tab).await?;
+    let (run, _guard) = harness.run()?;
+    let asked = harness.fake.count("Target.getTargetInfo");
+    harness.fake.hold_next("Target.getTargetInfo");
+    let pending = harness.dispatcher.submit(
+        &run,
+        Call::script(
+            "page.opener".to_owned(),
+            json!({ "page": handle(&page) }),
+            None,
+        ),
+    );
+    let operation = pending.operation();
+    within(async {
+        while harness.fake.count("Target.getTargetInfo") == asked {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    harness.hooks.values_swept(
+        page.id.clone(),
+        &FieldValues::new([value.to_owned().into()]),
+    );
+    harness.fake.release_held();
+    let reply = pending.wait().await;
+    let masked = (
+        Some("https://bank.example/?echo=[private]"),
+        Some("Welcome [private]"),
+    );
+    let fact = reply
+        .pages
+        .first()
+        .ok_or("the reply reports the op's page")?;
+    assert_eq!(
+        (fact.url.as_deref(), fact.title.as_deref()),
+        masked,
+        "the realm gets the op's page facts masked with what its run held as the op settled"
+    );
+    let row = harness.row(operation).await?;
+    assert_eq!(
+        (row.page.url.as_deref(), row.page.title.as_deref()),
+        masked,
+        "the end record's `page_after` is masked with the held set the record carries"
+    );
+    let mut learned = value.to_owned();
+    assert!(
+        !harness.privacy.secrets().mask_str(&mut learned),
+        "the value is still held, so the run's held set masked both, not the process's set"
+    );
+    Ok(())
+}

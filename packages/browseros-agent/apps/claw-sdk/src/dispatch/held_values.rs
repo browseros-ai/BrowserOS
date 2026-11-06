@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use browseros_trace::SecretSet;
+use browseros_trace::{RunId, SecretSet};
 
 use super::{ErrorCode, OperationError};
 
@@ -21,10 +21,11 @@ pub(crate) const WITHHELD: &str = "[withheld]";
 /// only once its field goes quiet. Without this, a value the reply hides stays raw in everything
 /// the host reads: `/v1/runs`, `/v1/operations`, `/v1/trace`, `/v1/events` and `trace.db`.
 pub(crate) trait HeldValues: Send + Sync {
-    /// Starts keeping, for a run that begins now, every value held from now on, until the watch
-    /// it returns is dropped. The run's context owns the watch, so it lasts as long as anything
-    /// can still send one of the run's records, an op that settles after the run's end included.
-    fn watch(self: Arc<Self>) -> Box<dyn HeldWatch>;
+    /// Starts keeping, for run `run`, which begins now, every value held from now on, until the
+    /// watch it returns is dropped. The run's context owns the watch, so it lasts as long as
+    /// anything can still send one of the run's records, an op that settles after the run's end
+    /// included. The id names the run in what Neo logs about it.
+    fn watch(self: Arc<Self>, run: RunId) -> Box<dyn HeldWatch>;
 }
 
 /// One run's watch on the held values ([`HeldValues::watch`]).
@@ -40,10 +41,12 @@ pub(crate) enum Held {
     /// a set of its own that registers nothing in the process's set. `None`, with nothing built,
     /// when there is none.
     Kept(Option<Arc<SecretSet>>),
-    /// One of those values is gone, forgotten past the cap on what is kept, and the run may have
-    /// read it. The rest still mask its records, but nothing masks that one: what the run
-    /// produces is withheld from every record it sends from now on, from its reply, and from
-    /// what enters its realm.
+    /// One of those values is out of the process's set's reach, and the run may have read it: it
+    /// was forgotten past the cap on what is kept, or the process's set was full and refused it.
+    /// So what the run produces is withheld from every record it sends from now on, from its
+    /// reply, and from what enters its realm. The set still masks what those records keep, its
+    /// end's code and host data included: every value the run kept, a refused one too, but never
+    /// a forgotten one.
     Lost(Option<Arc<SecretSet>>),
 }
 
@@ -64,9 +67,8 @@ impl Held {
             Self::Kept(_) => None,
             Self::Lost(_) => Some(OperationError::neo(
                 ErrorCode::OUTPUT_WITHHELD,
-                "while this run went on, more values were typed into password, card or code \
-                 fields than Neo keeps to mask its output, so the output could show one of them \
-                 and is withheld",
+                "while this run went on, Neo ran out of room to mask a value from a password, \
+                 card or code field, so the output could show it and is withheld",
             )),
         }
     }

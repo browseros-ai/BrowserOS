@@ -152,7 +152,7 @@ impl RunService {
     /// held as it is refused, as a run's are with what was held while it went on.
     fn record_refused(&self, code: String, meta: RunMeta, mut reply: RunReply) -> Arc<RunReply> {
         let id = reply.id;
-        let held = Arc::clone(self.dispatcher.held()).watch().held();
+        let held = Arc::clone(self.dispatcher.held()).watch(id).held();
         reply.mask_held(&held);
         self.trace.run_started(RunStarted {
             id,

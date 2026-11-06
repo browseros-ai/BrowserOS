@@ -76,7 +76,7 @@ impl HeldFake {
 }
 
 impl HeldValues for HeldFake {
-    fn watch(self: Arc<Self>) -> Box<dyn HeldWatch> {
+    fn watch(self: Arc<Self>, _run: RunId) -> Box<dyn HeldWatch> {
         Box::new(HeldFakeWatch(self))
     }
 }
@@ -94,11 +94,10 @@ impl HeldWatch for HeldFakeWatch {
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
         let set = (!values.is_empty()).then(|| {
-            let set = SecretSet::new(SecretSetConfig::default());
-            for value in values {
-                let _registration = set.register(SecretValue::new(value), None);
-            }
-            Arc::new(set)
+            Arc::new(SecretSet::with_values(
+                SecretSetConfig::default(),
+                values.into_iter().map(SecretValue::new),
+            ))
         });
         if self.0.lost.load(Ordering::SeqCst) {
             Held::Lost(set)

@@ -186,7 +186,7 @@ impl RunCtx {
             deadline,
             default_page,
         } = start;
-        let watch = Arc::clone(door.held()).watch();
+        let watch = Arc::clone(door.held()).watch(id);
         let trace = door.trace();
         trace.run_started(RunStarted {
             id,

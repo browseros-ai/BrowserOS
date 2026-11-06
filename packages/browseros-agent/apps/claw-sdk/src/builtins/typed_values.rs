@@ -10,7 +10,8 @@ use std::{future, mem};
 
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
 use browseros_core::{PageId, TabId};
-use browseros_trace::{SecretSet, SecretSetConfig, SecretValue};
+use browseros_playwright::TypedBy;
+use browseros_trace::{Registration, RunId, SecretSet, SecretSetConfig, SecretSource, SecretValue};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Notify, broadcast};
 use tokio::time::{self, Instant};
@@ -31,13 +32,15 @@ use crate::dispatch::{Held, HeldValues, HeldWatch};
 ///  PrivacyHooks::values_swept ── sweep: a value no held or learned one covers is held beside
 ///                                       the rest, and one that such a value extends is kept as
 ///                                       superseded
-///    quiet for the quiet period ────────── every held value ─┬─▶ promote ─▶ SecretSet::register
-///    its tab closes (TabRegistry) ──────── that tab's ───────┤   learning until it returns
-///    more than MAX_TYPED held ──────────── the one in front ─┘
+///    quiet for the quiet period ────────── every held value ─┬─▶ promote ─▶ register_from,
+///    its tab closes (TabRegistry) ──────── that tab's ───────┤   learning until it returns;
+///    more than MAX_TYPED held ──────────── the one in front ─┘   refused, every run going lost
 ///    learned ─────── kept while a run that went on as it left goes, so a sweep that reports it
 ///                    again holds nothing new
-///    superseded ──── kept while a run that began before it goes, then forgotten, never
-///                    registered
+///    refused ─────── kept the same, but a sweep that reports it, or a prefix of it, again keeps
+///                    that for masking only; and superseded as the set refuses it
+///    superseded ──── kept while a run that began before it goes, lost or not, then forgotten,
+///                    never registered
 ///  RunCtx::start ─ watch (dispatch's HeldValues): the run's watch keeps what is superseded
 ///    while it goes, until the run's context drops
 ///  each record a run sends, and its reply ─ its watch: what is held, what the set is still
@@ -62,6 +65,15 @@ use crate::dispatch::{Held, HeldValues, HeldWatch};
 /// longer. At most [`Defaults::MAX_SUPERSEDED`] are kept. Past that, the oldest is forgotten
 /// anyway, and each run that may have read it loses it ([`Held::Lost`]): what such a run produces
 /// is withheld from then on, since nothing can mask it out any more.
+///
+/// The set learns each value under who put it in its field ([`Origin`]), which decides what a
+/// full set drops for it (sdk-traces decision 53). A page decides what its fields hold, so a read
+/// can report any number of values, and the set makes room for each by pushing out a page value,
+/// never one the agent typed. With no page value left to push out, the set refuses the value, and
+/// it masks the value nowhere from then on. Every run going held it, so each is lost, as past the
+/// cap on superseded values. Lost withholds a run's output, but not the code and host data its end
+/// record stores, so the value is superseded as it is refused, and masks those until the run ends
+/// ([`Pending::refused`]).
 pub(crate) struct TypedValues {
     secrets: Arc<SecretSet>,
     /// How long what is held waits for another entry before the set learns it.
@@ -104,11 +116,11 @@ struct Pending {
 }
 
 /// What left the held values for the process's set ([`TypedValues::promote`]). The set learns a
-/// value after the lock is released, since `SecretSet::register` rebuilds its matcher for each
-/// one, and the value stays here, learning, until that returns: every run's held set takes it in
-/// meanwhile ([`TypedValues::held_since`]). The door masks a reply with the run's held set and
-/// the process's set, so a value already out of what is held and not yet in the set would reach
-/// the script raw, and the trace writer would keep it in the record.
+/// value after the lock is released, since `SecretSet::register_from` rebuilds its matcher for
+/// each one, and the value stays here, learning, until that returns: every run's held set takes
+/// it in meanwhile ([`TypedValues::held_since`]). The door masks a reply with the run's held set
+/// and the process's set, so a value already out of what is held and not yet in the set would
+/// reach the script raw, and the trace writer would keep it in the record.
 ///
 /// What left while a run was going is kept after, as long as such a run goes ([`Pending::sweep`]).
 /// browseros-playwright reports a main-world script's sweeps as their union, before each send
@@ -117,6 +129,9 @@ struct Pending {
 /// and become a secret for a day. At most [`Defaults::MAX_LEARNED`] are kept. Past that, the
 /// oldest is forgotten, and nothing recognizes its prefix any more, so until every run that went
 /// on as it left ends, a read's value that nothing covers is kept for masking only.
+///
+/// A value the set refused stays kept too, marked, since the union brings it back as well
+/// ([`Pending::standing`]).
 #[derive(Default)]
 struct Promotions {
     /// The values the set is learning now, each under the ticket its promotion takes it back by.
@@ -138,16 +153,22 @@ struct Ticket(u64);
 /// One value on its way to the set, under its ticket. A plain data bag.
 struct Handoff {
     ticket: Ticket,
+    /// Who put it in its field: the set learns it as theirs.
+    origin: Origin,
     /// Zeroed when dropped.
     value: Zeroizing<String>,
 }
 
-/// A value the set learned while a run was going, kept for that run's sweeps. A plain data bag.
+/// A value that left for the set while a run was going, kept for that run's sweeps. A plain data
+/// bag.
 struct Learned {
     /// The value and the page it was typed or read on.
     typed: Typed,
     /// When it left what is held.
     taken: Instant,
+    /// The set refused it, so the process's set masks it nowhere ([`Pending::refused`]). Until
+    /// then the set learned it, is learning it, or keeps nothing that short.
+    refused: bool,
 }
 
 /// How a value a read found on a page stands to the values held for that page and those kept
@@ -166,15 +187,54 @@ struct Typed {
     page: PageId,
     /// The page's tab when an op had touched it, so that the tab's close registers the value.
     tab: Option<TabId>,
+    /// Who put the value in its field.
+    origin: Origin,
     /// Zeroed when dropped.
     value: Zeroizing<String>,
 }
 
+/// Who put a held value in its field, as far as Neo can tell: the source the process's set
+/// learns it under (sdk-traces decision 53). Declared in the set's rank order, lowest first, so
+/// `max` keeps the one that outranks the other. Only these two reach the held values: the host
+/// and the owner register their values themselves, through `POST /v1/secrets` and the
+/// takeover's control journal.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Origin {
+    /// A page: a read found the value in a field, or someone other than the agent typed it. The
+    /// crate cannot tell the page's own scripts, autofill and the owner in a takeover apart, and a
+    /// page can raise input events on its own fields at will, so all of it is the page's, or a
+    /// page could fill the set with values no page value pushes out. The owner's typing still
+    /// registers as the owner's, through the control journal: the set keeps the higher source of
+    /// a value registered twice.
+    Page,
+    /// The agent: one of its input ops was typing on the page ([`TypedBy::Agent`]).
+    Agent,
+}
+
+impl Origin {
+    /// The source the process's set registers the value under.
+    fn source(self) -> SecretSource {
+        match self {
+            Self::Page => SecretSource::Page,
+            Self::Agent => SecretSource::Agent,
+        }
+    }
+}
+
+impl From<TypedBy> for Origin {
+    fn from(by: TypedBy) -> Self {
+        match by {
+            TypedBy::Agent => Self::Agent,
+            TypedBy::NotAgent => Self::Page,
+        }
+    }
+}
+
 /// A value that stopped being held when a keystroke superseded it: a prefix the field was typed
 /// past, or what a backspace took back. Or one a read found that a held value extends, which may
-/// be such a prefix or another field's value ([`Pending::sweep`]). A run that was going while it
-/// was held may have read it, so it masks that run's records and reply for as long as such a run
-/// goes. A plain data bag.
+/// be such a prefix or another field's value ([`Pending::sweep`]). Or one the process's set refused
+/// ([`Pending::refused`]). A run that was going while it was held may have read it, so it masks
+/// that run's records and reply for as long as such a run goes, lost or not. A plain data bag.
 struct Superseded {
     /// Zeroed when dropped.
     value: Zeroizing<String>,
@@ -184,11 +244,15 @@ struct Superseded {
 
 /// A run going, as what is kept for it sees it. [`Pending`] and the run's [`RunWatch`] share it.
 struct Going {
+    /// Which run it is, for the log line that says the run was lost.
+    id: RunId,
     /// When the run began. Every value superseded since masks the run's records and reply.
     start: Instant,
-    /// Set for good once a value superseded since `start` was forgotten past
-    /// [`Defaults::MAX_SUPERSEDED`]. Written and read under [`Pending`]'s lock only; atomic so
-    /// that the watch can share it.
+    /// Set for good once the run may have read a value out of the process's set's reach: one
+    /// superseded since `start` was forgotten past [`Defaults::MAX_SUPERSEDED`], or the process's
+    /// set refused one the run held ([`Pending::refused`]). A lost run still needs what is
+    /// superseded since `start` ([`Pending::forget_unneeded`]). Written and read under
+    /// [`Pending`]'s lock only; atomic so that the watch can share it.
     lost: AtomicBool,
 }
 
@@ -223,11 +287,12 @@ impl TypedValues {
         values
     }
 
-    /// Holds `entry`, the whole value of a field on `page` that just got input.
-    pub(crate) fn note(&self, page: PageId, tab: Option<TabId>, entry: JournalEntry) {
+    /// Holds `entry`, the whole value of a field on `page` that just got input, which `by` typed.
+    pub(crate) fn note(&self, page: PageId, tab: Option<TabId>, entry: JournalEntry, by: TypedBy) {
         let typed = Typed {
             page,
             tab,
+            origin: Origin::from(by),
             value: entry.value,
         };
         self.promote(|pending, now| pending.note(typed, now, self.quiet).into_iter().collect());
@@ -241,6 +306,7 @@ impl TypedValues {
             .map(|value| Typed {
                 page: page.clone(),
                 tab,
+                origin: Origin::Page,
                 value: Zeroizing::new(value.to_owned()),
             })
             .collect();
@@ -289,9 +355,10 @@ impl TypedValues {
     /// way a value leaves what is held goes through here: its field quiet, its tab closed, past
     /// the cap, or everything at once.
     ///
-    /// Each value stays learning until the set has it ([`Promotions`]). It is registered with the
-    /// set's full TTL, its buffer moved into the secret, which zeroes it when dropped; a value
-    /// the set already holds keeps the later expiry.
+    /// Each value stays learning until the set answers ([`Promotions`]). It is registered with
+    /// the set's full TTL, its buffer moved into the secret, which zeroes it when dropped; a value
+    /// the set already holds keeps the later expiry. A value the set refuses loses every run
+    /// going ([`Pending::refused`]), and a promotion that had any refused logs one warning.
     fn promote(&self, take: impl FnOnce(&mut Pending, Instant) -> Vec<Typed>) {
         let handed = {
             let mut pending = self.lock();
@@ -304,15 +371,46 @@ impl TypedValues {
         }
         #[cfg(test)]
         self.pause_if_asked();
-        for Handoff { ticket, mut value } in handed {
-            // Too short to mask without masking ordinary text: the set keeps nothing, which is
-            // its rule, not a failure here.
-            let _registration = self
-                .secrets
-                .register(SecretValue::new(mem::take(&mut *value)), None);
-            // Only once the set has it: a run's held set built until now masks it, and the
-            // process's set masks it for every one built after.
-            self.lock().promotions.learned(ticket);
+        let mut refused = 0_usize;
+        let mut lost = Vec::new();
+        for Handoff {
+            ticket,
+            origin,
+            mut value,
+        } in handed
+        {
+            let registration = self.secrets.register_from(
+                SecretValue::new(mem::take(&mut *value)),
+                None,
+                origin.source(),
+            );
+            // The value leaves learning only once the set answered, under the lock held sets are
+            // built under. Each one built until then masks it, and each one built after finds
+            // the process's set masking it or, refused, its run lost.
+            let mut pending = self.lock();
+            match registration {
+                // Too short to mask without masking ordinary text: the set keeps nothing, which
+                // is its rule, not a failure here.
+                Registration::Registered | Registration::Refreshed | Registration::TooShort => {
+                    pending.promotions.answered(ticket);
+                }
+                Registration::Full => {
+                    refused += 1;
+                    lost.extend(pending.refused(ticket, Instant::now()));
+                }
+            }
+        }
+        if refused > 0 {
+            lost.sort_unstable();
+            lost.dedup();
+            let runs: Vec<String> = lost.iter().map(RunId::to_string).collect();
+            tracing::warn!(
+                refused,
+                runs = %runs.join(","),
+                "the secret set was full of host, owner and agent values and refused values from \
+                 password, card or code fields; nothing masks them, so every run going lost its \
+                 output, which is withheld"
+            );
         }
     }
 
@@ -364,7 +462,7 @@ impl TypedValues {
                 ..SecretSetConfig::default()
             };
             // One matcher build over all of them: each record and reply of the run builds this
-            // set, and `SecretSet::register` would rebuild the matcher for every value.
+            // set, and `SecretSet::register_from` would rebuild the matcher for every value.
             Arc::new(SecretSet::with_values(keep_all, spellings))
         });
         if lost {
@@ -413,11 +511,11 @@ impl TypedValues {
 }
 
 impl HeldValues for TypedValues {
-    fn watch(self: Arc<Self>) -> Box<dyn HeldWatch> {
+    fn watch(self: Arc<Self>, run: RunId) -> Box<dyn HeldWatch> {
         let going = {
             let mut pending = self.lock();
             // Taken under the lock, so no value superseded after the run began can miss it.
-            pending.run_began(Instant::now())
+            pending.run_began(run, Instant::now())
         };
         Box::new(RunWatch {
             values: self,
@@ -458,7 +556,12 @@ impl Pending {
     /// the same page, is a backspace there, which supersedes that value. Anything else is held
     /// beside the rest. A shorter value is not taken for the same field otherwise: a security code
     /// that starts like its card number would erase a value nothing registered yet.
-    fn note(&mut self, typed: Typed, now: Instant, quiet: Duration) -> Option<Typed> {
+    ///
+    /// The value keeps the highest origin of the held values it replaces in its field, as the set
+    /// keeps the higher source of a value registered twice. So what the agent typed stays the
+    /// agent's when the page then edits the field, echoes the value back, or the journal reports
+    /// a key after the agent's typing window closed: none of that leaves it for a page flood.
+    fn note(&mut self, mut typed: Typed, now: Instant, quiet: Duration) -> Option<Typed> {
         let value = typed.value.as_str();
         let backspace = self.values.last().is_some_and(|last| {
             last.page == typed.page
@@ -468,6 +571,7 @@ impl Pending {
                     .is_some_and(|removed| removed.chars().count() == 1)
         });
         if backspace && let Some(taken_back) = self.values.pop() {
+            typed.origin = typed.origin.max(taken_back.origin);
             self.supersede(taken_back.value, now);
         }
         let typed_past: Vec<Typed> = self
@@ -477,6 +581,7 @@ impl Pending {
             })
             .collect();
         for prefix in typed_past {
+            typed.origin = typed.origin.max(prefix.origin);
             if prefix.value.as_str() != value {
                 self.supersede(prefix.value, now);
             }
@@ -507,7 +612,8 @@ impl Pending {
     /// run's sweeps come back as their union, the field's learned value and the prefixes it was
     /// typed past included. A value that extends a learned one is new: the field was typed
     /// further. Once a learned value was forgotten past the cap, a value nothing covers may be
-    /// its prefix, so while a run that may report one goes, it is kept as superseded too.
+    /// its prefix, so while a run that may report one goes, it is kept as superseded too. So is
+    /// a value the set refused, and any prefix of one ([`Pending::standing`]).
     fn sweep(&mut self, swept: Vec<Typed>, now: Instant, quiet: Duration) -> Vec<Typed> {
         let mut fresh = Vec::new();
         for typed in swept {
@@ -532,9 +638,16 @@ impl Pending {
 
     /// How `typed`, a value a read found, stands to the values held for its page and to those
     /// kept for it.
+    ///
+    /// A value the set refused is masked nowhere, so a read that finds it again must not take it
+    /// for known, as it does a learned one. Held again, though, it would go to the set at the
+    /// next quiet period, be refused again, and lose every run going, each time a union brings it
+    /// back. So it stands under the refused value, as a prefix does, and so does any prefix of
+    /// it: kept for masking only, it masks every run going, one that began after the refusal
+    /// included, and is never registered.
     fn standing(&self, typed: &Typed) -> Standing {
         let mut standing = Standing::New;
-        for known in self.values.iter().chain(self.promotions.kept()) {
+        for known in self.values.iter().chain(self.promotions.learned()) {
             if known.page != typed.page {
                 continue;
             }
@@ -545,7 +658,11 @@ impl Pending {
                 standing = Standing::Under;
             }
         }
-        standing
+        let refused = self
+            .promotions
+            .refused()
+            .any(|known| known.page == typed.page && known.value.starts_with(typed.value.as_str()));
+        if refused { Standing::Under } else { standing }
     }
 
     /// Hands `taken`, which left what is held at `now`, to the set ([`Promotions::hand`]). While
@@ -560,9 +677,9 @@ impl Pending {
         handed
     }
 
-    /// Keeps `value`, which stopped being held at `now` or which a read found under a held one,
-    /// for the runs going. One too short to mask anything is dropped, and an older copy of it
-    /// gives way to this one, which masks every run the older one did.
+    /// Keeps `value`, which stopped being held at `now`, which a read found under a held one, or
+    /// which the set refused, for the runs going. One too short to mask anything is dropped, and
+    /// an older copy of it gives way to this one, which masks every run the older one did.
     fn supersede(&mut self, value: Zeroizing<String>, now: Instant) {
         if value.chars().count() < SecretSetConfig::default().min_length {
             return;
@@ -587,9 +704,31 @@ impl Pending {
         self.forget_unneeded();
     }
 
-    /// A run began at `now`: from now on, what is superseded is kept for it.
-    fn run_began(&mut self, now: Instant) -> Arc<Going> {
+    /// The process's set refused the value under `ticket`, at `now`, and masks it nowhere from
+    /// now on. Every run going held it, as each held set took it in while it was learning, and
+    /// may have read it. So each is lost, and what it sends from now on is withheld (decision
+    /// 34a). Returns the runs' ids.
+    ///
+    /// Lost withholds a run's reply and its ops' outputs, but its end record still stores its code
+    /// and host data, masked with the run's held set, and either may hold the value. So the value
+    /// is superseded at `now` too. Every run going began by then, since runs begin under this
+    /// lock, so it masks each of them until it ends, and it is never registered.
+    fn refused(&mut self, ticket: Ticket, now: Instant) -> Vec<RunId> {
+        let mut lost = Vec::with_capacity(self.runs.len());
+        for run in &self.runs {
+            run.lost.store(true, Ordering::Relaxed);
+            lost.push(run.id);
+        }
+        if let Some(value) = self.promotions.refuse(ticket) {
+            self.supersede(value, now);
+        }
+        lost
+    }
+
+    /// Run `id` began at `now`: from now on, what is superseded is kept for it.
+    fn run_began(&mut self, id: RunId, now: Instant) -> Arc<Going> {
         let going = Arc::new(Going {
+            id,
             start: now,
             lost: AtomicBool::new(false),
         });
@@ -603,21 +742,15 @@ impl Pending {
         self.forget_unneeded();
     }
 
-    /// Forgets the superseded values no run that is going and not lost can need: those
-    /// superseded before the oldest such run began, or every one when there is none. A lost run
-    /// needs none, since what it sends from then on is withheld. And forgets what was kept of
-    /// what the set learned once no run that was going as it left goes, lost or not: a lost
-    /// run's ops still report what they sweep.
+    /// Forgets the superseded values no run going can need: those superseded before the oldest
+    /// run going began, or every one when none goes. And forgets what was kept of what the set
+    /// learned once no run that was going as it left goes. A lost run counts like any other: its
+    /// ops still report what they sweep, and its end record stores its code and host data masked
+    /// with its held set, which must keep every value superseded since the run began.
     fn forget_unneeded(&mut self) {
         let oldest_run = self.runs.iter().map(|run| run.start).min();
         self.promotions.forget(oldest_run);
-        let oldest = self
-            .runs
-            .iter()
-            .filter(|run| !run.lost.load(Ordering::Relaxed))
-            .map(|run| run.start)
-            .min();
-        match oldest {
+        match oldest_run {
             Some(oldest) => {
                 while self
                     .superseded
@@ -644,19 +777,39 @@ impl Promotions {
             // value, and the promotion moves the other into the set.
             self.learning.push(Handoff {
                 ticket,
+                origin: typed.origin,
                 value: typed.value.clone(),
             });
             handed.push(Handoff {
                 ticket,
+                origin: typed.origin,
                 value: typed.value.clone(),
             });
         }
         handed
     }
 
-    /// The set learned the value under `ticket`: the process's set masks it from now on.
-    fn learned(&mut self, ticket: Ticket) {
+    /// The set answered for the value under `ticket`, which is on its way no more: the process's
+    /// set masks it from now on, or keeps nothing that short.
+    fn answered(&mut self, ticket: Ticket) {
         self.learning.retain(|handoff| handoff.ticket != ticket);
+    }
+
+    /// The set refused the value under `ticket`, which is on its way no more, and hands it back.
+    /// Every copy kept of it is masked nowhere, whatever page it was typed or read on, since the
+    /// set holds none.
+    fn refuse(&mut self, ticket: Ticket) -> Option<Zeroizing<String>> {
+        let at = self
+            .learning
+            .iter()
+            .position(|handoff| handoff.ticket == ticket)?;
+        let refused = self.learning.remove(at);
+        for learned in &mut self.kept {
+            if learned.typed.value == refused.value {
+                learned.refused = true;
+            }
+        }
+        Some(refused.value)
     }
 
     /// Every value the set is learning now.
@@ -667,7 +820,11 @@ impl Promotions {
     /// Keeps `typed`, which left what is held at `taken` while a run was going, for that run's
     /// sweeps, and forgets the oldest kept value past [`Defaults::MAX_LEARNED`].
     fn keep(&mut self, typed: Typed, taken: Instant) {
-        self.kept.push_back(Learned { typed, taken });
+        self.kept.push_back(Learned {
+            typed,
+            taken,
+            refused: false,
+        });
         if self.kept.len() > Defaults::MAX_LEARNED
             && let Some(gone) = self.kept.pop_front()
         {
@@ -679,9 +836,20 @@ impl Promotions {
         }
     }
 
-    /// The values kept for the runs' sweeps.
-    fn kept(&self) -> impl Iterator<Item = &Typed> {
-        self.kept.iter().map(|learned| &learned.typed)
+    /// The values kept for the runs' sweeps that the set did not refuse.
+    fn learned(&self) -> impl Iterator<Item = &Typed> {
+        self.kept
+            .iter()
+            .filter(|learned| !learned.refused)
+            .map(|learned| &learned.typed)
+    }
+
+    /// The values kept for the runs' sweeps that the set refused.
+    fn refused(&self) -> impl Iterator<Item = &Typed> {
+        self.kept
+            .iter()
+            .filter(|learned| learned.refused)
+            .map(|learned| &learned.typed)
     }
 
     /// Whether a run going may report the prefix of a value forgotten past the cap.
@@ -755,20 +923,24 @@ async fn sleep_until_due(due: Option<Instant>) {
 mod tests {
     use std::error::Error;
     use std::ops::Range;
-    use std::sync::Arc;
-    use std::thread;
+    use std::sync::{Arc, Mutex, Once, PoisonError};
     use std::time::{Duration, Instant};
+    use std::{io, thread};
 
     use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
     use browseros_core::{PageId, TabId};
-    use browseros_trace::{SecretSet, SecretSetConfig, SecretValue};
+    use browseros_playwright::TypedBy;
+    use browseros_trace::{
+        ErrorOwner, Registration, RunId, SecretSet, SecretSetConfig, SecretSource, SecretValue,
+    };
     use tokio::runtime::Handle;
     use tokio::sync::broadcast;
     use tokio::time;
+    use tracing::subscriber;
 
     use super::TypedValues;
     use crate::config::Defaults;
-    use crate::dispatch::{Held, HeldValues, HeldWatch};
+    use crate::dispatch::{ErrorCode, Held, HeldValues, HeldWatch};
 
     fn keystroke(value: &str) -> JournalEntry {
         JournalEntry {
@@ -794,15 +966,101 @@ mod tests {
 
     /// Values over a fresh secret set, and the sender a tab registry would close tabs on.
     fn typed_values() -> (Arc<SecretSet>, Arc<TypedValues>, broadcast::Sender<TabId>) {
-        let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
+        typed_values_keeping(SecretSetConfig::default().max_entries)
+    }
+
+    /// As [`typed_values`], over a set that keeps `max_entries` values, so a test can fill it.
+    fn typed_values_keeping(
+        max_entries: usize,
+    ) -> (Arc<SecretSet>, Arc<TypedValues>, broadcast::Sender<TabId>) {
+        let secrets = Arc::new(SecretSet::new(SecretSetConfig {
+            max_entries,
+            ..SecretSetConfig::default()
+        }));
         let (closes, closed) = broadcast::channel(16);
         let values = TypedValues::start(Arc::clone(&secrets), Defaults::TYPED_QUIET, closed);
         (secrets, values, closes)
     }
 
+    /// What a read of a page with `count` sensitive fields reports: each field's whole value.
+    fn read_fields(values: &TypedValues, page: &PageId, tab: TabId, count: usize) {
+        let fields: Vec<String> = (0..count)
+            .map(|field| format!("page-field-{field:02}"))
+            .collect();
+        let found: Vec<&str> = fields.iter().map(String::as_str).collect();
+        read(values, page, tab, &found);
+    }
+
     /// A run beginning now, as the door begins one.
     fn run(values: &Arc<TypedValues>) -> Box<dyn HeldWatch> {
-        Arc::clone(values).watch()
+        Arc::clone(values).watch(RunId::new())
+    }
+
+    /// The owner and code of what a run's reply, records and realm get in place of its output,
+    /// once it lost a value nothing masks; `None` while it lost none.
+    fn withheld(run: &dyn HeldWatch) -> Option<(ErrorOwner, ErrorCode)> {
+        run.held()
+            .withheld()
+            .map(|error| (error.owner(), error.code()))
+    }
+
+    /// A set over `values` that no page or agent value may push anything out of: it holds one
+    /// host value and one the agent typed, and keeps two. Returns once the set learned both.
+    async fn full_of_host_and_agent_values() -> (Arc<SecretSet>, Arc<TypedValues>) {
+        let (secrets, values, _closes) = typed_values_keeping(2);
+        let host = secrets.register_from(
+            SecretValue::new("host-secret-7Qx".to_owned()),
+            None,
+            SecretSource::Host,
+        );
+        assert_eq!(host, Registration::Registered, "the set had room");
+        type_into(
+            &values,
+            &PageId(9),
+            TabId(9),
+            "agent-earlier-7Qx",
+            TypedBy::Agent,
+        );
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        (secrets, values)
+    }
+
+    /// Every line `tracing` writes in this test binary from the first call on, through one
+    /// global subscriber. Not one scoped to a test's thread: while it is the only subscriber
+    /// registered, tracing-core asks the thread that first reaches a callsite whether anything
+    /// listens there, and caches that thread's answer for every thread. Another test reaching the
+    /// same `warn!` first would leave a scoped subscriber deaf to it. A test finds its own lines
+    /// by its run ids.
+    fn test_log() -> &'static Mutex<Vec<u8>> {
+        static LOG: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+        static INSTALL: Once = Once::new();
+        INSTALL.call_once(|| {
+            let collector = tracing_subscriber::fmt()
+                .with_ansi(false)
+                .with_writer(|| Written(&LOG))
+                .finish();
+            // Fails only if another global subscriber is set, and no lib test sets one: a test
+            // that reads this log would then find nothing.
+            let _installed = subscriber::set_global_default(collector);
+        });
+        &LOG
+    }
+
+    /// One write of the subscriber [`test_log`] installs.
+    struct Written(&'static Mutex<Vec<u8>>);
+
+    impl io::Write for Written {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     /// What a read of `page` reports: each sensitive field's whole value.
@@ -811,10 +1069,18 @@ mod tests {
         values.swept(page, Some(tab), &found);
     }
 
-    fn type_into(values: &TypedValues, page: &PageId, tab: TabId, typed: &str) {
+    /// What the journal reports as `by` enters `value`, a field's whole value, in a field of
+    /// `page` in `tab`.
+    fn enter(values: &TypedValues, page: &PageId, tab: TabId, value: &str, by: TypedBy) {
+        values.note(page.clone(), Some(tab), keystroke(value), by);
+    }
+
+    /// What the journal reports as `by` types `typed` into a field of `page`, a key at a time:
+    /// the field's whole value after each key.
+    fn type_into(values: &TypedValues, page: &PageId, tab: TabId, typed: &str, by: TypedBy) {
         for end in 1..=typed.len() {
             let prefix = typed.get(..end).unwrap_or(typed);
-            values.note(page.clone(), Some(tab), keystroke(prefix));
+            enter(values, page, tab, prefix, by);
         }
     }
 
@@ -823,7 +1089,7 @@ mod tests {
     fn supersede_pairs(values: &TypedValues, page: &PageId, pairs: Range<usize>) {
         for pair in pairs {
             for value in [format!("v{pair:04}a"), format!("v{pair:04}ab")] {
-                values.note(page.clone(), Some(TabId(1)), keystroke(&value));
+                enter(values, page, TabId(1), &value, TypedBy::NotAgent);
             }
         }
     }
@@ -852,13 +1118,15 @@ mod tests {
             Promotion::ReadPastTheCap => Defaults::MAX_TYPED,
         };
         if promotion != Promotion::ReadPastTheCap {
-            values.note(PageId(1), Some(TabId(1)), keystroke("hunter2"));
+            enter(values, &PageId(1), TabId(1), "hunter2", TypedBy::NotAgent);
         }
         for page in (2_u32..).take(filler) {
-            values.note(
-                PageId(page),
-                Some(TabId(2)),
-                keystroke(&format!("filler-{page:03}")),
+            enter(
+                values,
+                &PageId(page),
+                TabId(2),
+                &format!("filler-{page:03}"),
+                TypedBy::NotAgent,
             );
         }
     }
@@ -872,7 +1140,13 @@ mod tests {
             Promotion::TabClosed => values.register_tab(TabId(1)),
             Promotion::Everything => values.register_all(),
             Promotion::KeystrokePastTheCap => {
-                values.note(PageId(999), Some(TabId(2)), keystroke("one-more"));
+                enter(
+                    values,
+                    &PageId(999),
+                    TabId(2),
+                    "one-more",
+                    TypedBy::NotAgent,
+                );
             }
             Promotion::ReadPastTheCap => read(values, &PageId(1), TabId(1), &["hunter2"]),
         }
@@ -882,7 +1156,7 @@ mod tests {
     async fn a_field_typed_a_key_at_a_time_is_learned_once_quiet_and_its_prefixes_never() {
         let (secrets, values, _closes) = typed_values();
         let page = PageId(1);
-        type_into(&values, &page, TabId(1), "hunter2");
+        type_into(&values, &page, TabId(1), "hunter2", TypedBy::NotAgent);
         assert_eq!(
             masked(&secrets, "hunter2"),
             "hunter2",
@@ -899,9 +1173,9 @@ mod tests {
     async fn each_keystroke_starts_the_quiet_period_again() {
         let (secrets, values, _closes) = typed_values();
         let page = PageId(1);
-        type_into(&values, &page, TabId(1), "hunter");
+        type_into(&values, &page, TabId(1), "hunter", TypedBy::NotAgent);
         time::sleep(Defaults::TYPED_QUIET.saturating_sub(Duration::from_millis(100))).await;
-        values.note(page.clone(), Some(TabId(1)), keystroke("hunter2"));
+        enter(&values, &page, TabId(1), "hunter2", TypedBy::NotAgent);
         time::sleep(Duration::from_millis(200)).await;
         assert_eq!(
             masked(&secrets, "hunter"),
@@ -916,13 +1190,19 @@ mod tests {
     async fn a_backspace_replaces_the_value_and_another_field_is_kept_beside_it() {
         let (secrets, values, _closes) = typed_values();
         let page = PageId(1);
-        type_into(&values, &page, TabId(1), "hunter22");
-        values.note(page.clone(), Some(TabId(1)), keystroke("hunter2"));
+        type_into(&values, &page, TabId(1), "hunter22", TypedBy::NotAgent);
+        enter(&values, &page, TabId(1), "hunter2", TypedBy::NotAgent);
         // The security code starts like the card number, and is kept beside it.
-        type_into(&values, &page, TabId(1), "4242424242424242");
-        values.note(page.clone(), Some(TabId(1)), keystroke("4242"));
+        type_into(
+            &values,
+            &page,
+            TabId(1),
+            "4242424242424242",
+            TypedBy::NotAgent,
+        );
+        enter(&values, &page, TabId(1), "4242", TypedBy::NotAgent);
         // Digits that extend the code, on another page, are another field's.
-        type_into(&values, &PageId(2), TabId(2), "42424");
+        type_into(&values, &PageId(2), TabId(2), "42424", TypedBy::NotAgent);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         for (text, expected) in [
             ("hunter2", "[private]"),
@@ -937,8 +1217,14 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_closed_tab_registers_its_values_at_once() {
         let (secrets, values, closes) = typed_values();
-        type_into(&values, &PageId(1), TabId(1), "hunter2");
-        type_into(&values, &PageId(2), TabId(2), "swordfish");
+        type_into(&values, &PageId(1), TabId(1), "hunter2", TypedBy::NotAgent);
+        type_into(
+            &values,
+            &PageId(2),
+            TabId(2),
+            "swordfish",
+            TypedBy::NotAgent,
+        );
         closes.send(TabId(1)).ok();
         time::sleep(Duration::from_millis(1)).await;
         assert_eq!(
@@ -953,8 +1239,18 @@ mod tests {
         let (secrets, values, _closes) = typed_values();
         let run = run(&values);
         // An old password the set knows, and a new one typed as the old one extended.
-        let _registration = secrets.register(SecretValue::new("hunter2".to_owned()), None);
-        type_into(&values, &PageId(1), TabId(1), "hunter2!!");
+        let _registration = secrets.register_from(
+            SecretValue::new("hunter2".to_owned()),
+            None,
+            SecretSource::Host,
+        );
+        type_into(
+            &values,
+            &PageId(1),
+            TabId(1),
+            "hunter2!!",
+            TypedBy::NotAgent,
+        );
         assert_eq!(
             reply_masked(&secrets, &run.held(), "new: hunter2!!, old: hunter2"),
             "new: [private], old: [private]"
@@ -970,11 +1266,11 @@ mod tests {
     async fn what_was_superseded_since_a_run_began_masks_its_reply_and_never_what_was_before() {
         let (secrets, values, _closes) = typed_values();
         let page = PageId(1);
-        type_into(&values, &page, TabId(1), "hunt");
+        type_into(&values, &page, TabId(1), "hunt", TypedBy::NotAgent);
         let early = run(&values);
         // Typed past, then a key too many taken back: every value in between was held a moment.
         for value in ["hunte", "hunter", "hunter2", "hunter22", "hunter2"] {
-            values.note(page.clone(), Some(TabId(1)), keystroke(value));
+            enter(&values, &page, TabId(1), value, TypedBy::NotAgent);
         }
         assert_eq!(
             reply_masked(
@@ -1003,7 +1299,7 @@ mod tests {
     async fn a_superseded_value_masks_a_run_that_saw_it_for_as_long_as_the_run_goes() {
         let (secrets, values, _closes) = typed_values();
         let long = run(&values);
-        type_into(&values, &PageId(1), TabId(1), "hunter2");
+        type_into(&values, &PageId(1), TabId(1), "hunter2", TypedBy::NotAgent);
         // Longer than any run may last: what keeps the prefixes is the run going, not a clock.
         time::sleep(Defaults::RUN_TIMEOUT_MAX * 2).await;
         assert_eq!(
@@ -1022,7 +1318,7 @@ mod tests {
     async fn a_read_that_raced_the_typing_erases_nothing_and_registers_no_prefix() {
         let (secrets, values, _closes) = typed_values();
         let page = PageId(1);
-        type_into(&values, &page, TabId(1), "hunter2");
+        type_into(&values, &page, TabId(1), "hunter2", TypedBy::NotAgent);
         // A read of the password from before its last key, and a security code that starts like
         // its card number: two fields, read at once.
         read(
@@ -1032,7 +1328,13 @@ mod tests {
             &["hunter", "4242", "4242424242424242"],
         );
         // A read of another password from before a backspace: longer than the field now is.
-        type_into(&values, &PageId(2), TabId(2), "swordfish");
+        type_into(
+            &values,
+            &PageId(2),
+            TabId(2),
+            "swordfish",
+            TypedBy::NotAgent,
+        );
         read(&values, &PageId(2), TabId(2), &["swordfish!"]);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         for text in ["hunter2", "4242", "4242424242424242", "swordfish"] {
@@ -1099,7 +1401,7 @@ mod tests {
     async fn a_page_read_again_and_again_still_goes_quiet() {
         let (secrets, values, _closes) = typed_values();
         let page = PageId(1);
-        type_into(&values, &page, TabId(1), "hunter2");
+        type_into(&values, &page, TabId(1), "hunter2", TypedBy::NotAgent);
         for _ in 0..3 {
             time::sleep(Defaults::TYPED_QUIET / 2).await;
             read(&values, &page, TabId(1), &["hunter2"]);
@@ -1126,7 +1428,7 @@ mod tests {
         // The op's first sweep finds the field mid-typing; then the page types its last key.
         read(&values, &page, TabId(1), &["hunte"]);
         time::sleep(Duration::from_millis(100)).await;
-        values.note(page.clone(), Some(TabId(1)), keystroke("hunter2"));
+        enter(&values, &page, TabId(1), "hunter2", TypedBy::NotAgent);
         let last_key = time::Instant::now();
         for _ in 0..3 {
             time::sleep(Duration::from_millis(200)).await;
@@ -1144,7 +1446,13 @@ mod tests {
             "the reports restarted nothing, and the prefix they repeated never became a secret"
         );
         // The op goes on reporting the same union while another field is typed.
-        values.note(PageId(2), Some(TabId(2)), keystroke("swordfish"));
+        enter(
+            &values,
+            &PageId(2),
+            TabId(2),
+            "swordfish",
+            TypedBy::NotAgent,
+        );
         let other_key = time::Instant::now();
         for _ in 0..3 {
             time::sleep(Duration::from_millis(200)).await;
@@ -1176,7 +1484,7 @@ mod tests {
         let (secrets, values, _closes) = typed_values();
         let page = PageId(1);
         let _reporting = run(&values);
-        values.note(page.clone(), Some(TabId(1)), keystroke("hunter2"));
+        enter(&values, &page, TabId(1), "hunter2", TypedBy::NotAgent);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         read(&values, &page, TabId(1), &["hunter2", "hunter2!x"]);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
@@ -1197,14 +1505,16 @@ mod tests {
         let page = PageId(1);
         let early = run(&values);
         read(&values, &page, TabId(1), &["hunte"]);
-        values.note(page.clone(), Some(TabId(1)), keystroke("hunter2"));
+        enter(&values, &page, TabId(1), "hunter2", TypedBy::NotAgent);
         time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         // As many other fields as the cap keeps, each learned once quiet: `hunter2` goes first.
         for other in (2_u32..).take(Defaults::MAX_LEARNED) {
-            values.note(
-                PageId(other),
-                Some(TabId(2)),
-                keystroke(&format!("learned-{other:04}")),
+            enter(
+                &values,
+                &PageId(other),
+                TabId(2),
+                &format!("learned-{other:04}"),
+                TypedBy::NotAgent,
             );
             time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
         }
@@ -1236,7 +1546,7 @@ mod tests {
         let (secrets, values, _closes) = typed_values();
         let page = PageId(1);
         let polling = run(&values);
-        type_into(&values, &page, TabId(1), "separatePWX");
+        type_into(&values, &page, TabId(1), "separatePWX", TypedBy::NotAgent);
         // A second field whose value the first's extends, read over and over.
         for _ in 0..=Defaults::MAX_SUPERSEDED {
             read(&values, &page, TabId(1), &["separatePWX", "separatePW"]);
@@ -1253,10 +1563,336 @@ mod tests {
         );
     }
 
+    /// A page decides what its fields hold, so a read can report any number of values, and past
+    /// its cap the set pushes out its oldest page value for each new one (sdk-traces decision
+    /// 53). What the agent typed is the agent's, which no page value pushes out.
+    #[tokio::test(start_paused = true)]
+    async fn a_value_the_agent_typed_registers_as_the_agents() {
+        let (secrets, values, _closes) = typed_values_keeping(4);
+        type_into(
+            &values,
+            &PageId(1),
+            TabId(1),
+            "agent-pw-7Qx",
+            TypedBy::Agent,
+        );
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        read_fields(&values, &PageId(2), TabId(2), 8);
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        assert_eq!(
+            masked(&secrets, "page-field-00 page-field-07"),
+            "page-field-00 [private]",
+            "the page's eight values went through a set that keeps four, the oldest pushed out"
+        );
+        assert_eq!(
+            masked(&secrets, "agent-pw-7Qx"),
+            "[private]",
+            "no page value pushes out a value the agent typed"
+        );
+    }
+
+    /// A page may enter its own value in a field the agent typed in, and the journal reports a
+    /// key that comes after the agent's typing window closed as `NotAgent`. Either way the field's
+    /// value stays the agent's, since it keeps the highest origin of the values it replaced.
+    #[tokio::test(start_paused = true)]
+    async fn a_field_the_agent_typed_in_stays_the_agents_whoever_enters_it_after() {
+        let (secrets, values, _closes) = typed_values_keeping(4);
+        // The page echoes the agent's value back.
+        type_into(
+            &values,
+            &PageId(1),
+            TabId(1),
+            "agent-pw-7Qx",
+            TypedBy::Agent,
+        );
+        enter(
+            &values,
+            &PageId(1),
+            TabId(1),
+            "agent-pw-7Qx",
+            TypedBy::NotAgent,
+        );
+        // The page appends to it.
+        type_into(
+            &values,
+            &PageId(2),
+            TabId(2),
+            "agent-pw-8Rz",
+            TypedBy::Agent,
+        );
+        enter(
+            &values,
+            &PageId(2),
+            TabId(2),
+            "agent-pw-8Rz!",
+            TypedBy::NotAgent,
+        );
+        // The page takes its last character back.
+        type_into(
+            &values,
+            &PageId(3),
+            TabId(3),
+            "agent-pw-9Sy!",
+            TypedBy::Agent,
+        );
+        enter(
+            &values,
+            &PageId(3),
+            TabId(3),
+            "agent-pw-9Sy",
+            TypedBy::NotAgent,
+        );
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        read_fields(&values, &PageId(4), TabId(4), 8);
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        assert_eq!(
+            masked(&secrets, "agent-pw-7Qx agent-pw-8Rz! agent-pw-9Sy"),
+            "[private] [private] [private]",
+            "each field's value is the agent's, which no page value pushes out"
+        );
+    }
+
+    /// A read reports what a page put in its fields, and the journal reports as `NotAgent` all
+    /// typing but the agent's: the page's own scripts, autofill, the owner in a takeover. Both
+    /// are the page's, which later page values push out, oldest first.
+    #[tokio::test(start_paused = true)]
+    async fn a_swept_value_or_one_the_agent_did_not_type_registers_as_the_pages() {
+        let (secrets, values, _closes) = typed_values_keeping(4);
+        read(&values, &PageId(1), TabId(1), &["page-pw-7Qx"]);
+        type_into(
+            &values,
+            &PageId(2),
+            TabId(2),
+            "other-pw-7Qx",
+            TypedBy::NotAgent,
+        );
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        assert_eq!(
+            masked(&secrets, "page-pw-7Qx other-pw-7Qx"),
+            "[private] [private]",
+            "both fields went quiet"
+        );
+        read_fields(&values, &PageId(3), TabId(3), 4);
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        assert_eq!(
+            masked(&secrets, "page-pw-7Qx other-pw-7Qx"),
+            "page-pw-7Qx other-pw-7Qx",
+            "four later page values pushed out the four the set kept, these two first"
+        );
+    }
+
+    /// A set full of values that no page or agent value may push out refuses the next one
+    /// (`Registration::Full`), and nothing masks that value from then on. Every run going held
+    /// it, as every run's held set holds every held value: one going since before it was typed,
+    /// and one that began while it was held. Each is lost, so its records and its realm get
+    /// `neo / output_withheld` in place of its output. A run that begins after the refusal never
+    /// held the value, and loses nothing until a read finds the value again and the set refuses
+    /// it again.
+    #[tokio::test(start_paused = true)]
+    async fn a_value_the_set_refuses_loses_every_run_that_held_it() {
+        let (secrets, values) = full_of_host_and_agent_values().await;
+        let before = run(&values);
+        type_into(
+            &values,
+            &PageId(1),
+            TabId(1),
+            "agent-pw-7Qx",
+            TypedBy::Agent,
+        );
+        let during = run(&values);
+        assert_eq!(
+            withheld(&*during),
+            None,
+            "the value is held, so it masks the run"
+        );
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        assert_eq!(
+            masked(&secrets, "agent-pw-7Qx"),
+            "agent-pw-7Qx",
+            "the set refused the value, so it masks nothing"
+        );
+        for (which, going) in [("before", &before), ("during", &during)] {
+            assert_eq!(
+                withheld(&**going),
+                Some((ErrorOwner::Neo, ErrorCode::OUTPUT_WITHHELD)),
+                "the run going {which} the typing held the value, which nothing masks now"
+            );
+        }
+        drop((before, during));
+
+        let late = run(&values);
+        assert_eq!(
+            withheld(&*late),
+            None,
+            "a run that began after the refusal never held the value"
+        );
+        read(&values, &PageId(1), TabId(1), &["agent-pw-7Qx"]);
+        let held = late.held();
+        assert_eq!(
+            reply_masked(&secrets, &held, "agent-pw-7Qx"),
+            "[private]",
+            "a read found the value again: it is held, so it masks the run"
+        );
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        assert_eq!(
+            withheld(&*late),
+            Some((ErrorOwner::Neo, ErrorCode::OUTPUT_WITHHELD)),
+            "the set refused it again, so the run that held it is lost"
+        );
+    }
+
+    /// While a run that went on as a refused value was taken goes, what was taken stays kept for
+    /// that run's sweeps, and its ops report the value again, as a union, before each send. A
+    /// read that finds the value again, or a prefix of it, keeps that for masking only: it masks
+    /// the runs going, a run that began after the refusal included, and never goes to the set
+    /// again. Held again instead, the value would be refused at every quiet period, and each
+    /// refusal would lose every run going.
+    #[tokio::test(start_paused = true)]
+    async fn a_refused_value_read_again_masks_its_reader_and_is_never_offered_again() {
+        let (secrets, values) = full_of_host_and_agent_values().await;
+        let early = run(&values);
+        type_into(
+            &values,
+            &PageId(1),
+            TabId(1),
+            "agent-pw-7Qx",
+            TypedBy::Agent,
+        );
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        assert!(withheld(&*early).is_some(), "the set refused the value");
+        let late = run(&values);
+        read(&values, &PageId(1), TabId(1), &["agent-pw", "agent-pw-7Qx"]);
+        assert_eq!(
+            reply_masked(&secrets, &late.held(), "agent-pw or agent-pw-7Qx"),
+            "[private] or [private]",
+            "the read found the value and a prefix of it again, and both mask the run"
+        );
+        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(1)).await;
+        assert_eq!(
+            withheld(&*late),
+            None,
+            "kept for masking only, the value never went to the set again, so no refusal lost \
+             the run"
+        );
+        assert_eq!(
+            reply_masked(&secrets, &late.held(), "agent-pw-7Qx"),
+            "[private]",
+            "it still masks the run that read it"
+        );
+    }
+
+    /// A value on its way to the set masks every run's held set, one that began after the
+    /// promotion took the value included. So that run held it too, and once the set refuses the
+    /// value, it is lost as well: losing only the runs going as the value was taken would leave
+    /// it masked by nothing.
+    #[tokio::test(start_paused = true)]
+    async fn a_run_that_began_while_a_refused_value_was_on_its_way_is_lost_too()
+    -> Result<(), Box<dyn Error>> {
+        let runtime = Handle::current();
+        let (secrets, values) = full_of_host_and_agent_values().await;
+        enter(
+            &values,
+            &PageId(1),
+            TabId(1),
+            "agent-pw-7Qx",
+            TypedBy::Agent,
+        );
+        let late = thread::scope(|scope| -> Result<Box<dyn HeldWatch>, Box<dyn Error>> {
+            // Dropped as this returns, so the promotion never waits on a test that failed.
+            let paused = values.pause_next_promotion();
+            scope.spawn(|| {
+                let _runtime = runtime.enter();
+                values.register_all();
+            });
+            paused.reached.recv_timeout(Duration::from_secs(10))?;
+            let late = run(&values);
+            assert_eq!(
+                reply_masked(&secrets, &late.held(), "agent-pw-7Qx"),
+                "[private]",
+                "on its way to the set, the value masks a run that began after it was taken"
+            );
+            paused.resume.send(())?;
+            Ok(late)
+        })?;
+        assert_eq!(
+            withheld(&*late),
+            Some((ErrorOwner::Neo, ErrorCode::OUTPUT_WITHHELD)),
+            "the run held the value the set refused"
+        );
+        Ok(())
+    }
+
+    /// A value shorter than the set's minimum is no secret, by the set's rule: a full set keeps
+    /// nothing of it, as any set does, and no run loses its output for it.
+    #[tokio::test(start_paused = true)]
+    async fn a_value_too_short_to_be_a_secret_loses_no_run() {
+        let (_secrets, values) = full_of_host_and_agent_values().await;
+        let going = run(&values);
+        enter(&values, &PageId(1), TabId(1), "pin", TypedBy::Agent);
+        values.register_all();
+        assert_eq!(
+            withheld(&*going),
+            None,
+            "the set kept nothing of `pin` because it is short, not because it is full"
+        );
+    }
+
+    /// The operator's one sign that runs lost their output to a full set: a warning for each
+    /// promotion the set refused values in, with how many and the runs it lost. A value never
+    /// reaches the log (STYLE P4).
+    #[tokio::test(start_paused = true)]
+    async fn a_refusal_is_logged_once_with_the_runs_it_lost_and_never_the_value() {
+        let log = test_log();
+        let (_secrets, values) = full_of_host_and_agent_values().await;
+        let (first, second) = (RunId::new(), RunId::new());
+        let _runs = (
+            Arc::clone(&values).watch(first),
+            Arc::clone(&values).watch(second),
+        );
+        enter(
+            &values,
+            &PageId(1),
+            TabId(1),
+            "agent-pw-7Qx",
+            TypedBy::Agent,
+        );
+        enter(
+            &values,
+            &PageId(2),
+            TabId(2),
+            "page-pw-8Rz",
+            TypedBy::NotAgent,
+        );
+        values.register_all();
+        let written = String::from_utf8_lossy(&log.lock().unwrap_or_else(PoisonError::into_inner))
+            .into_owned();
+        let first = first.to_string();
+        let lines: Vec<&str> = written
+            .lines()
+            .filter(|line| line.contains(&first))
+            .collect();
+        assert_eq!(
+            lines.len(),
+            1,
+            "one promotion refused both values and logged once: {lines:?}"
+        );
+        let line = lines[0];
+        assert!(
+            line.contains("WARN")
+                && line.contains("refused=2")
+                && line.contains(&second.to_string()),
+            "a warning says how many values the set refused and names both runs lost: {line}"
+        );
+        assert!(
+            !line.contains("-pw-"),
+            "no value, nor any part of one, is logged: {line}"
+        );
+    }
+
     /// Each promotion takes its values from what is held under the lock, and the set learns them
-    /// after the lock is released, since `SecretSet::register` rebuilds its matcher. A run's held
-    /// set asked in between must still have them: the door masks a reply with that set first and
-    /// with the process's set after, so a value in neither reaches the script raw.
+    /// after the lock is released, since `SecretSet::register_from` rebuilds its matcher. A run's
+    /// held set asked in between must still have them: the door masks a reply with that set first
+    /// and with the process's set after, so a value in neither reaches the script raw.
     #[tokio::test(start_paused = true)]
     async fn a_value_on_its_way_to_the_set_masks_the_runs_going() -> Result<(), Box<dyn Error>> {
         let runtime = Handle::current();
@@ -1319,7 +1955,7 @@ mod tests {
         let (_closes, closed) = broadcast::channel(16);
         let values = TypedValues::start(Arc::clone(&secrets), Defaults::TYPED_QUIET, closed);
         let going = run(&values);
-        values.note(PageId(1), Some(TabId(1)), keystroke("hunter2"));
+        enter(&values, &PageId(1), TabId(1), "hunter2", TypedBy::NotAgent);
         let fields: Vec<String> = (0..SecretSetConfig::default().max_entries + Defaults::MAX_TYPED)
             .map(|field| format!("field-{field:05}"))
             .collect();
@@ -1365,10 +2001,12 @@ mod tests {
         let full = run(&values);
         supersede_pairs(&values, &PageId(1), 0..Defaults::MAX_SUPERSEDED);
         for page in (2_u32..).take(Defaults::MAX_TYPED) {
-            values.note(
-                PageId(page),
-                Some(TabId(1)),
-                keystroke(&format!("Pw-{page:05}-x7!Qz")),
+            enter(
+                &values,
+                &PageId(page),
+                TabId(1),
+                &format!("Pw-{page:05}-x7!Qz"),
+                TypedBy::NotAgent,
             );
         }
         for _ in 0..5 {
@@ -1400,7 +2038,11 @@ mod tests {
                 .map(|value| SecretValue::new(format!("Pw-{value:05}-x7!Qz"))),
         );
         let began = Instant::now();
-        let _registration = full.register(SecretValue::new("Pw-promoted-x7!Qz".to_owned()), None);
+        let _registration = full.register_from(
+            SecretValue::new("Pw-promoted-x7!Qz".to_owned()),
+            None,
+            SecretSource::Page,
+        );
         println!(
             "one value promoted into a full process's set: {:?}",
             began.elapsed()
