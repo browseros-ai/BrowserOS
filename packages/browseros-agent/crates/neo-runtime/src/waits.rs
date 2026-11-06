@@ -1012,6 +1012,44 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn tests_that_domcontentloaded_waits_for_the_event_within_its_deadline() {
+        let mut observed = Vec::new();
+        for arrival_ms in [50, 150] {
+            let tab = FakeTab::new();
+            let run = Run::new(100.0);
+            let started = Instant::now();
+            let ((result, elapsed), ()) = tokio::join!(
+                async {
+                    let result = wait_for_load_state(
+                        &tab,
+                        &load(LifecycleEvent::Domcontentloaded),
+                        &run.progress,
+                    )
+                    .await;
+                    (result, started.elapsed())
+                },
+                async {
+                    time::sleep(Duration::from_millis(arrival_ms)).await;
+                    tab.emit(Event::Dom);
+                }
+            );
+            observed.push((arrival_ms, result, elapsed));
+            assert_eq!(tab.subscribers(), (0, 0));
+        }
+        assert_eq!(
+            observed,
+            [
+                (50, Ok(()), Duration::from_millis(50)),
+                (
+                    150,
+                    Err(CallError::Playwright(PlaywrightError::timeout(100.0))),
+                    Duration::from_millis(100),
+                ),
+            ]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn tests_that_lifecycle_events_survive_a_commit_before_the_waiter_wakes() {
         for (state, event) in [
             (LifecycleEvent::Load, Event::Load),
