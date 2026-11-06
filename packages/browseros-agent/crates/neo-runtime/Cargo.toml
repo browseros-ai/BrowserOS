@@ -23,6 +23,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+ulid.workspace = true
 url.workspace = true
 
 # clap backs the `neo_run` example. tokio-tungstenite serves the fake browser in
