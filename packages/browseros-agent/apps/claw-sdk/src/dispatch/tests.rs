@@ -695,6 +695,43 @@ async fn a_reply_into_the_realm_is_masked_with_what_the_run_holds() -> Result<()
     Ok(())
 }
 
+/// Decision 35z. A number cannot hold `[private]`, and the realm's mask and the trace writer read
+/// only strings, so a number whose text is a value the run holds leaves a main-world script's op
+/// as that masked text, in its reply and in its record alike. The number next to the value stays
+/// a number. A sealed op's numbers are Neo's own facts, such as a page brand's tab, and stay
+/// numbers whatever they spell, or the brand would stop naming its tab.
+#[tokio::test]
+async fn a_number_that_spells_a_held_value_leaves_a_main_world_answer_as_its_masked_text()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    harness.held.hold("734921");
+
+    let answer = json!({ "code": 734_921, "next": 734_922 });
+    let (operation, reply) = harness.submit(&run, "test.script", answer).await;
+    let masked = json!({ "code": "[private]", "next": 734_922 });
+    assert_eq!(reply.outcome, Ok(masked.clone()), "into the realm");
+    assert_eq!(
+        harness.row(operation).await?.result,
+        Some(masked),
+        "in the op's record"
+    );
+
+    let opened = json!({ "page": { "$neo": "page", "id": 2, "tab": 1_734_921 } });
+    let (operation, reply) = harness.submit(&run, "test.any", opened.clone()).await;
+    assert_eq!(
+        reply.outcome,
+        Ok(opened.clone()),
+        "a sealed op's tab reaches the realm as the number it is"
+    );
+    assert_eq!(
+        harness.row(operation).await?.result,
+        Some(opened),
+        "and its record"
+    );
+    Ok(())
+}
+
 /// Decision 35b, for a run that lost a held value past the cap: nothing can mask that value out
 /// of what the run's realm receives any more, so each reply from then on is `neo /
 /// output_withheld`, and its page facts keep only Neo's own facts. The script still learns

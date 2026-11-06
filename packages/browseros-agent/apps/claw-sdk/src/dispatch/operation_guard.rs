@@ -14,7 +14,7 @@ use tokio::sync::oneshot;
 use super::op_ctx::OpState;
 use super::{
     Answer, CallSite, Caller, ErrorCode, Held, LeafError, Lifetime, MethodSpec, OpFailure, OpLine,
-    OpReply, OperationError, PageFact, RunCtx, RunMask, StopReason, WITHHELD,
+    OpReply, OperationError, PageFact, PageScript, RunCtx, RunMask, StopReason, WITHHELD,
 };
 use crate::browser::PageRef;
 
@@ -316,7 +316,21 @@ fn settle(open: Open, ending: Ending, mut pages: Vec<PageFact>, default_page: Op
     }
     let id = state.id();
     let sent_at = state.sent_at();
-    let settlement = Settlement::decide(sent_at.is_some(), &spec, ending);
+    let mut settlement = Settlement::decide(sent_at.is_some(), &spec, ending);
+    let mask = RunMask::of(&secrets, &held);
+    // A main-world script's answer leaves twice, in this op's record and into the realm, and the
+    // trace writer and `RunMask::outcome` mask only its strings. The crate masks its numbers too,
+    // but only with what this op swept, so `Number(otp.value)` of a field that is gone, or of one
+    // of the process's secrets, would leave whole. So such a number gives way to its masked text
+    // here, once, for both (decision 35z). A stopgap until the crate masks its answers with these
+    // sets (ask A9): until then a typed array or a Date's time value that holds such a value
+    // leaves as it is. Every other op's numbers are Neo's own facts, a page brand's tab among
+    // them, and stay numbers.
+    if spec.page_script == PageScript::MainWorld
+        && let Settled::Value(value) = &mut settlement.result
+    {
+        mask.mask_numbers(value);
+    }
     for mut note in state.take_notes() {
         secrets.mask_str(&mut note);
         tracing::debug!(operation = %id, method = spec.name, %note, "op note");
@@ -381,7 +395,6 @@ fn settle(open: Open, ending: Ending, mut pages: Vec<PageFact>, default_page: Op
     // run lost one of those values, they are withheld instead. The record keeps the real outcome.
     let outcome = match caller {
         Caller::Script => {
-            let mask = RunMask::of(&secrets, &held);
             for page in &mut pages {
                 page.mask(&mask);
             }

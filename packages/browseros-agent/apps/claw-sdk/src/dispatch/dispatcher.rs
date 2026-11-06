@@ -16,8 +16,8 @@ use super::page_target::TargetHandle;
 use super::refusal_brand::RefusalBrand;
 use super::registry::DecodedCall;
 use super::{
-    ErrorCode, HeldValues, LeafError, MethodSpec, OpFailure, OperationError, PageTarget, Policy,
-    PolicyCheck, Registry, ResultHold, RunCtx, RunMask, Visibility,
+    Answer, ErrorCode, HeldValues, LeafError, MethodSpec, OpFailure, OperationError, PageScript,
+    PageTarget, Policy, PolicyCheck, Registry, ResultHold, RunCtx, RunMask, Visibility,
 };
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 
@@ -492,20 +492,29 @@ impl Dispatcher {
             () = run.cancel_token().cancelled() => run.stop_reason().map_or(Ending::Lost, Ending::Stopped),
             result = decoded.run(op) => ending_of(&run, &state, result),
         };
-        // A takeover that blocks reads may have begun while this read ran (sdk-traces D13,
-        // reads: block), or a capture's tab may have gone private (D6), so a read's result is
-        // released only past the rules again, then past every hold taken at admission.
-        let ending = match ending {
-            Ending::Returned(value) if spec.effect == Effect::Read => {
-                match self
-                    .check(&check)
-                    .and_then(|()| holds.into_iter().try_for_each(|hold| hold()))
-                {
-                    Ok(()) => Ending::Returned(value),
-                    Err(refusal) => Ending::Refused(refusal),
-                }
+        // A takeover that blocks reads may have begun while the op ran (sdk-traces D13, reads:
+        // block), or a capture's tab may have gone private (D6), so what the page answered is
+        // released only past the rules again, then past every hold taken at admission. The rules
+        // see it as a read of the op's tab: a main-world script is a write, and any lock refuses
+        // a write, which would withhold a script that read the page before the owner took it.
+        let ending = if released_past_the_rules(&spec, &ending) {
+            let read = MethodSpec {
+                effect: Effect::Read,
+                ..spec
+            };
+            let release = PolicyCheck {
+                method: &read,
+                ..check
+            };
+            match self
+                .check(&release)
+                .and_then(|()| holds.into_iter().try_for_each(|hold| hold()))
+            {
+                Ok(()) => ending,
+                Err(refusal) => Ending::Refused(refusal),
             }
-            ending => ending,
+        } else {
+            ending
         };
         let pages = self.page_facts(&run, page.as_ref(), &state).await;
         guard.finish(ending, pages, default_page);
@@ -702,6 +711,22 @@ impl PendingReply {
                 default_page: None,
             }
         })
+    }
+}
+
+/// Whether `ending` is page data the door checks against the rules again before release: a read's
+/// value, and what a main-world script answered (decision 35c), its value or the error the page
+/// answered with, whose text the script wrote. A write's own end, a click's say, reports what it
+/// did, not what it read, and an unanswered failure carries Neo's text alone.
+fn released_past_the_rules(spec: &MethodSpec, ending: &Ending) -> bool {
+    match ending {
+        Ending::Returned(_) => {
+            spec.effect == Effect::Read || spec.page_script == PageScript::MainWorld
+        }
+        Ending::Failed(leaf) => {
+            spec.page_script == PageScript::MainWorld && leaf.answer == Some(Answer::Definite)
+        }
+        Ending::Refused(_) | Ending::Stopped(_) | Ending::Panicked | Ending::Lost => false,
     }
 }
 

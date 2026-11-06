@@ -57,6 +57,9 @@ pub(crate) struct MethodSpec {
     pub(crate) lifetime: Lifetime,
     /// Whether the result holds the target tab's pixels, which a private tab never gives.
     pub(crate) output: Output,
+    /// Whether the method runs the agent's own script in its page's main world, which decides
+    /// what of its end the door checks against the rules before release.
+    pub(crate) page_script: PageScript,
     /// Input fields (JSON pointers) the trace always stores as `[redacted]`.
     pub(crate) secret_args: &'static [&'static str],
     /// Input fields redacted when the target turned out to be a sensitive field.
@@ -74,6 +77,7 @@ impl MethodSpec {
             listing: Listing::Hidden,
             lifetime: Lifetime::Operation,
             output: Output::Data,
+            page_script: PageScript::Sealed,
             secret_args: &[],
             sensitive_args: &[],
         }
@@ -111,6 +115,19 @@ pub(crate) enum Output {
     /// withholds its result if the tab went private at any point while it ran, closed since or
     /// not.
     Pixels,
+}
+
+/// Where a method runs script in its page (decision 35c).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PageScript {
+    /// In Neo's sealed world alone, where field values are masked at the source, or nowhere.
+    Sealed,
+    /// The agent's own script in the page's main world (`page.evaluate`, `waitForFunction` and the
+    /// element scripts). What it answers, a value or the error it threw, is what it read of the
+    /// page, though the op is a write: the door releases that answer only past the rules again,
+    /// as a read of its tab, so a takeover that blocks reads and began while the script ran
+    /// withholds it.
+    MainWorld,
 }
 
 /// Whether a method is a normal operation or a background pull.

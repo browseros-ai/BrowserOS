@@ -53,6 +53,16 @@ The host sends its ids in `_meta["com.browseros.neo/run"]` as `{ requestId?, tas
 
 The result carries `_meta["com.browseros.neo/run"]` as `{ id, status, effects, error?, unknown }`. `id` is the run's id in the trace. `status` is `ok`, `error`, `cancelled`, or `timeout`, and `isError` is set unless it is `ok`. `effects` is `none`, `done`, or `unknown`. `unknown` lists the writes that were sent and never confirmed.
 
+The script's `page`, `context`, `browser` and `expect` behave as Playwright 1.64.1's, except where Neo says otherwise in the `run` description, which lists each difference a script would trip on. A call that waits gives up after 5 s unless given a `timeout`, and a navigation after 30 s. For the main-world scripts (`page.evaluate`, `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, `elementHandle.evaluate`, `$eval` and `$$eval`) those are:
+
+- A password, card or one-time-code field's value reads `[private]`, in what the script gets and in the trace.
+- `waitForFunction` polls every 100 ms for its default `polling: 'raf'`, because animation frames never fire in Neo's background tabs. The handle it resolves to holds a snapshot of the value, so `jsonValue()` reads it and `evaluate` on it fails `neo / unsupported`.
+- `frame.evaluate` and `frame.waitForFunction` in a child frame fail `neo / internal_error` ("not built yet"). `frame.$eval`, `frame.$$eval` and a frame's locators reach into it.
+- A `URL` result has a URL's fields but is not a `URL`, since the realm has none.
+- A result nested more than about 50 objects deep can fail `RangeError: Maximum call stack size exceeded` in the realm, where Playwright allows 98. The crate's result parser recurses on the realm's 512 KiB stack (`Defaults::JS_STACK_BYTES`); 50 was measured in a debug build.
+- `page.setContent` and `frame.setContent` are held: they fail `script / method_unavailable` with nothing sent, until the crate guards the HTML they write.
+- An owner's lock that blocks reads, taken while a script runs, withholds what the script read: the call fails `host / owner_has_control`, delivery `done`.
+
 A `requestId` never runs twice. A repeat while its run is going joins it and gets the same reply. A repeat within 10 minutes of the end gets the stored reply, from memory or from the trace store, so this holds across a restart. Later repeats are refused as `host / duplicate_request`, naming the first run. If the store cannot be read, Neo refuses the call as `neo / trace_unavailable` rather than risk a second run. Neo notices a gone client at the next SSE keep-alive, within 5 seconds. A run with a `requestId` then keeps going for 15 seconds, so a retry can join it. A run without one stops at once.
 
 ## Module map
@@ -68,7 +78,7 @@ A `requestId` never runs twice. A repeat while its run is going joins it and get
 | `run` | One `run` call from admission to reply: replay, joins, the orphan grace, and the deadline. |
 | `runtime` | The per-run QuickJS realm, the JS bootstrap and the `neo` prelude in `runtime/js/` plus browseros-playwright's prelude, and the strings-only bridge to the dispatcher. The only module that names rquickjs. |
 | `dispatch` | The door: `Dispatcher`, the `Method` trait, the `Registry`, the policy rules, and the error model. |
-| `builtins` | The methods Neo serves: every browseros-playwright op but those it holds, and a `goto` to any URL but `http`, `https`, `data` and `about`, or a `reload` of a page on one (a local file would show Neo's own secrets), on the process's one `Playwright` (`playwright_ops.rs`, with the privacy hooks it reports to, which also name Neo's secret files to the crate's upload deny list, and `event_release.rs`, which puts every event an event pull returns through the rules on its own tab) and `neo.solveCaptcha`; and the idle-tab janitor. `op_marks.rs` reads each op's declared capabilities: Neo holds an op the crate does not guard at its gateways, and one that declares a capability the door does not police yet (script in the page's main world, Neo's screen), so a held op answers `method_unavailable` with nothing sent. |
+| `builtins` | The methods Neo serves: every browseros-playwright op but those it holds, and a `goto` to any URL but `http`, `https`, `data` and `about`, or a `reload` of a page on one (a local file would show Neo's own secrets), on the process's one `Playwright` (`playwright_ops.rs`, with the privacy hooks it reports to, which also name Neo's secret files to the crate's upload deny list, and `event_release.rs`, which puts every event an event pull returns through the rules on its own tab) and `neo.solveCaptcha`; and the idle-tab janitor. `op_marks.rs` reads each op's declared capabilities: Neo holds an op the crate does not guard at its gateways (`page.setContent`), and one that declares a capability the door does not police yet (Neo's screen), so a held op answers `method_unavailable` with nothing sent. It marks each main-world script, whose answer the door releases only as a read of its tab. |
 | `browser` | The CDP link to Chromium, its reconnects, and what Neo knows about each tab. |
 | `host` | The host API's lifecycle and the takeover lock the door checks. |
 | `test_rig` | The unit tests' rig: a fake browser, a real trace store, and test methods. |
@@ -97,17 +107,20 @@ CARGO_BUILD_BUILD_DIR="$(git rev-parse --show-toplevel)/packages/browseros-agent
   apps/claw-sdk/check.sh
 ```
 
-Unit and integration tests run against `FakeCdp`. Four integration tests drive a real headless BrowserOS instead. Stock Chrome does not work, because core uses BrowserOS-only CDP methods. The tests pass without doing anything unless `CLAW_SDK_E2E_BROWSER` names the browser binary:
+Unit and integration tests run against `FakeCdp`. The `*_browseros.rs` integration tests drive a real headless BrowserOS instead. Stock Chrome does not work, because core uses BrowserOS-only CDP methods. The tests pass without doing anything unless `CLAW_SDK_E2E_BROWSER` names the browser binary:
 
 ```sh
 CLAW_SDK_E2E_BROWSER=/Applications/BrowserOS.app/Contents/MacOS/BrowserOS \
   cargo test -p claw-sdk --locked --test e2e_browseros --test acceptance_browseros \
-    --test playwright_browseros --test uploads_browseros
+    --test playwright_browseros --test uploads_browseros --test served_methods_browseros \
+    --test main_world_browseros
 ```
 
 - `tests/e2e_browseros.rs` launches the built binary the way Chromium does, runs scripts over MCP, and reads them back over the host socket.
 - `tests/playwright_browseros.rs` runs one Playwright script over MCP, the way a model trained on Playwright writes it. The script loads a page with a same-origin iframe into the run's own `page`, reads its `ariaSnapshot({ mode: 'ai' })`, reads elements by a printed ref through `getByRef` and `aria-ref=`, and reads through locators and inside the frame.
 - `tests/uploads_browseros.rs` uploads through `setInputFiles` over MCP. Neo's own secret files (the host token, a CAPTCHA key, `trace.db`, the profile's `Local State`, and a symlink to the token) are each refused with no path named, while a file of the agent's own, a payload and `[]` reach the page.
+- `tests/served_methods_browseros.rs` checks what the script's realm receives: a dialog that shows a typed password reaches it masked, and the prelude's refusal of a method Neo does not serve is one row of the run's trace.
+- `tests/main_world_browseros.rs` runs each main-world script API (`page.evaluate`, `waitForFunction`, `locator.evaluate`, `evaluateAll`, `elementHandle.evaluate`, `$eval` and `$$eval`) as Playwright does: its values, arguments, handles and errors. No password field's value reaches the realm or the trace raw, an owner's lock that blocks reads withholds what a running script read, and `page.setContent` stays held. A unit test, `every_capability_op_has_a_browseros_case` in `src/builtins/op_marks.rs`, fails until every op that reaches the main world, Neo's files or Neo's screen names a test in one of these BrowserOS suites that proves it served or held.
 - `tests/acceptance_browseros.rs` runs one task end to end. The agent drives a tab, and the host reads its trace, locks the tab, sees the agent's next write refused, releases the lock, and finds the tab's picture after that write.
 
 `packages/browseros/docker/neo/smoke_sdk.py` checks a running claw-sdk Neo container from the host. It checks health and readiness, that `/mcp` lists the one `run` tool without issuing a session id, and that one run loads a page and reads its title. Run it as `python3 smoke_sdk.py --mcp-port <port>`. The port defaults to 9010.

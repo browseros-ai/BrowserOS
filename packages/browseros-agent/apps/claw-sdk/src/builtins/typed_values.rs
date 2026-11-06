@@ -384,6 +384,14 @@ impl TypedValues {
                 None,
                 origin.source(),
             );
+            // One line per value handed to the set, never the value: how often a page's fields
+            // reach the set, which a main-world wait sweeping every 100 ms would show, and what
+            // over-masking or a full set traces back to.
+            tracing::debug!(
+                source = ?origin.source(),
+                ?registration,
+                "a field value went to the secret set"
+            );
             // The value leaves learning only once the set answered, under the lock held sets are
             // built under. Each one built until then masks it, and each one built after finds
             // the process's set masking it or, refused, its run lost.

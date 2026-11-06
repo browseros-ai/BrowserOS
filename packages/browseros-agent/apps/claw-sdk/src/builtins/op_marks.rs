@@ -5,13 +5,16 @@
 
 use browseros_playwright::{Capability, OpLifetime, OpSpec};
 
-use crate::dispatch::{ErrorCode, Lifetime, Listing, MethodSpec, OperationError, Output};
+use crate::dispatch::{
+    ErrorCode, Lifetime, Listing, MethodSpec, OperationError, Output, PageScript,
+};
 
 /// One crate op as the door registers it. A plain data bag, built once per op at startup.
 pub(super) struct OpMarks {
     /// The crate's name, effect, lifetime and sensitive args, plus the marks the door's rules key
-    /// by, derived from the op's capabilities: `output` is `Pixels` for a `Capture` op. Listed
-    /// under the Playwright line when served, unlisted when held.
+    /// by, derived from the op's capabilities: `output` is `Pixels` for a `Capture` op, and
+    /// `page_script` is `MainWorld` for a `MainWorld` one. Listed under the Playwright line when
+    /// served, unlisted when held.
     pub(super) spec: MethodSpec,
     /// `Some` when claw-sdk holds the op, which is then registered as its refusal alone.
     pub(super) hold: Option<Hold>,
@@ -52,19 +55,11 @@ const fn policing(capability: Capability) -> Policing {
         // `Output::Pixels`: tab privacy refuses a capture of a private tab, and holds sdk-traces'
         // `CaptureGuard` until the pixels go out (`PrivacyHooks`).
         Capability::Capture => Policing::Ready,
-        // Not until the door masks every reply into the realm with what its run holds, and
-        // releases a main-world result only as a read of its tab: such a script reads fields no
-        // seal masks.
-        Capability::MainWorld => Policing::NotYet(Hold {
-            why: "runs script in the page's main world, where no seal masks a password, card or \
-                  code field",
-            meanwhile: "read the page through locators (`textContent`, `innerText`, \
-                        `getAttribute`, `inputValue`), `page.content()` or `page.title()`, wait \
-                        through a locator, `page.waitForURL()` or `page.waitForLoadState()`, and \
-                        open HTML as a page of its own with \
-                        `page.goto('data:text/html,' + encodeURIComponent(html))`, whose scripts \
-                        run in an origin of their own",
-        }),
+        // Such a script reads fields no seal masks. The crate's evaluate guard sweeps before and
+        // after every send and masks the answer with what it swept; the door then masks every
+        // reply into the realm with what the op's run holds (`RunMask`), and releases a script's
+        // answer only past the rules again, as a read of its tab (`PageScript::MainWorld`).
+        Capability::MainWorld => Policing::Ready,
         // The crate's upload refuses, before it reads a file, every path into Neo's own secret
         // files (the host token, the CAPTCHA keys, the trace store and the browser profile),
         // which `PrivacyHooks::secret_paths` names from config, and every path into `/dev` or
@@ -81,17 +76,47 @@ const fn policing(capability: Capability) -> Policing {
 
 /// The hold of an op whose every capability the door polices, but which the crate does not guard
 /// at its gateways yet ([`OpSpec::gated`] is false). A door rule cannot stand in for a guard the
-/// crate lacks.
-const UNGATED: Hold = Hold {
-    why: "reaches beyond the page's sealed world before Neo's Playwright guards that reach",
-    meanwhile: "reach the page through the rest of the Playwright API",
-};
+/// crate lacks. What a script does meanwhile depends on what the op reaches, so `reach` is the
+/// first capability it declares.
+const fn ungated(reach: Option<Capability>) -> Hold {
+    match reach {
+        // `page.setContent`: the crate writes its HTML from the sealed world, outside the evaluate
+        // guard, and that HTML's scripts run in the main world.
+        Some(Capability::MainWorld) => Hold {
+            why: "runs script in the page's main world, where Neo's Playwright does not guard it \
+                  yet",
+            meanwhile: "open the HTML as a page of its own with \
+                        `page.goto('data:text/html,' + encodeURIComponent(html))`, whose scripts \
+                        run in an origin of their own",
+        },
+        Some(Capability::Capture | Capability::HostFiles | Capability::Screen) | None => Hold {
+            why: "reaches beyond the page's sealed world before Neo's Playwright guards that reach",
+            meanwhile: "reach the page through the rest of the Playwright API",
+        },
+    }
+}
 
-/// How every held op answers, and which Playwright APIs are held with it. Named by receiver, not
-/// by op, so it stays true whichever ops are held.
-const HELD_TAIL: &str = "A held op fails `method_unavailable` with nothing sent, and so does \
-    every API that sends it: the `frame` forms send the `page` ops, and `$eval`, `$$eval` and \
-    element handles send `locator` ones.";
+/// Which other Playwright APIs send the ops of a receiver: the prelude's aliases, by the receiver
+/// of the op they send. The held clause names those of a receiver only while one of its ops is
+/// held, so it never calls an API held that the line offers.
+const SENDERS: [Senders; 2] = [
+    Senders {
+        receiver: "page.",
+        phrase: "the `frame` forms send the `page` ops",
+    },
+    Senders {
+        receiver: "locator.",
+        phrase: "`$eval`, `$$eval` and element handles send `locator` ones",
+    },
+];
+
+/// The Playwright APIs that send one receiver's ops besides its own methods. A plain data bag.
+struct Senders {
+    /// The prefix of the receiver's op names: `page.` or `locator.`.
+    receiver: &'static str,
+    /// How the held clause names those APIs.
+    phrase: &'static str,
+}
 
 /// The ops one hold keeps, in the order the crate lists them, so the clause names them together.
 struct HeldGroup {
@@ -136,7 +161,25 @@ pub(super) fn held_clause(specs: impl IntoIterator<Item = OpSpec>) -> Option<Str
             )
         })
         .collect();
-    sentences.push(HELD_TAIL.to_owned());
+    let held_senders: Vec<&str> = SENDERS
+        .iter()
+        .filter(|senders| {
+            groups
+                .iter()
+                .flat_map(|group| &group.names)
+                .any(|name| name.starts_with(senders.receiver))
+        })
+        .map(|senders| senders.phrase)
+        .collect();
+    sentences.push(if held_senders.is_empty() {
+        "A held op fails `method_unavailable` with nothing sent.".to_owned()
+    } else {
+        format!(
+            "A held op fails `method_unavailable` with nothing sent, and so does every API that \
+             sends it: {}.",
+            held_senders.join(", and ")
+        )
+    });
     Some(sentences.join(" "))
 }
 
@@ -170,6 +213,11 @@ impl OpMarks {
             } else {
                 Output::Data
             },
+            page_script: if spec.uses(Capability::MainWorld) {
+                PageScript::MainWorld
+            } else {
+                PageScript::Sealed
+            },
             sensitive_args: spec.sensitive_args,
             ..MethodSpec::new(spec.name, spec.effect)
         };
@@ -194,7 +242,7 @@ impl Hold {
         match unpoliced {
             Some(hold) => Some(hold),
             None if spec.gated() => None,
-            None => Some(UNGATED),
+            None => Some(ungated(spec.capabilities.first().copied())),
         }
     }
 
@@ -215,12 +263,14 @@ impl Hold {
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    use std::fs;
+    use std::path::Path;
 
     use browseros_playwright::{Capability, Op, OpSpec};
     use browseros_trace::ErrorOwner;
 
-    use super::{OpMarks, Policing, policing};
-    use crate::dispatch::{ErrorCode, Listing, Output};
+    use super::{Hold, OpMarks, Policing};
+    use crate::dispatch::{ErrorCode, Listing, Output, PageScript};
 
     /// The line a served op is listed under, in these tests.
     const LINE: &str = "the Playwright API";
@@ -279,40 +329,41 @@ mod tests {
                 policed: vec![HostFiles],
                 placement: Served,
             },
+            // Its HTML's scripts run outside the crate's evaluate guard until its milestone 2.
             Row {
                 op: "page.setContent",
                 declared: vec![MainWorld],
                 gated: false,
-                policed: vec![],
+                policed: vec![MainWorld],
                 placement: Held,
             },
             Row {
                 op: "page.evaluate",
                 declared: vec![MainWorld],
                 gated: true,
-                policed: vec![],
-                placement: Held,
+                policed: vec![MainWorld],
+                placement: Served,
             },
             Row {
                 op: "locator.evaluate",
                 declared: vec![MainWorld],
                 gated: true,
-                policed: vec![],
-                placement: Held,
+                policed: vec![MainWorld],
+                placement: Served,
             },
             Row {
                 op: "locator.evaluateAll",
                 declared: vec![MainWorld],
                 gated: true,
-                policed: vec![],
-                placement: Held,
+                policed: vec![MainWorld],
+                placement: Served,
             },
             Row {
                 op: "page.waitForFunction",
                 declared: vec![MainWorld],
                 gated: true,
-                policed: vec![],
-                placement: Held,
+                policed: vec![MainWorld],
+                placement: Served,
             },
             Row {
                 op: "page.screenshot",
@@ -340,7 +391,7 @@ mod tests {
                     .capabilities
                     .iter()
                     .copied()
-                    .filter(|&capability| policing(capability) == Policing::Ready)
+                    .filter(|&capability| super::policing(capability) == Policing::Ready)
                     .collect(),
                 placement: match OpMarks::of(&spec, LINE).hold {
                     Some(_) => Held,
@@ -390,16 +441,15 @@ mod tests {
 
     /// While the door does not police a capability, every op that declares it is held, guarded
     /// by the crate or not, alone or beside a capability the door does police. On this door
-    /// captures and host files are policed.
+    /// captures, main-world scripts and host files are policed, and the screen is not.
     #[test]
     fn a_capability_the_door_does_not_police_yet_holds_every_op_declaring_it()
     -> Result<(), Box<dyn Error>> {
         use Capability::{Capture, HostFiles, MainWorld, Screen};
-        let unpoliced: [&'static [Capability]; 5] = [
-            &[MainWorld],
+        let unpoliced: [&'static [Capability]; 4] = [
             &[Screen],
-            &[Capture, MainWorld],
-            &[HostFiles, MainWorld],
+            &[Capture, Screen],
+            &[MainWorld, Screen],
             &[HostFiles, Screen],
         ];
         for capabilities in unpoliced {
@@ -414,8 +464,10 @@ mod tests {
         // nothing, which the crate counts as guarded whatever its mark says.
         for (capabilities, policed) in [
             (&[Capture][..], true),
+            (&[MainWorld], true),
             (&[HostFiles], true),
             (&[Capture, HostFiles], true),
+            (&[HostFiles, MainWorld], true),
             (&[], true),
             (&[], false),
         ] {
@@ -423,6 +475,30 @@ mod tests {
             assert_eq!(marks.hold, None, "{capabilities:?}, policed: {policed}");
             assert_eq!(marks.spec.listing, Listing::Grouped(LINE));
         }
+        Ok(())
+    }
+
+    /// The clause says which other APIs are held with a held op by the op's receiver, and names
+    /// no sender of a receiver whose ops are all served: the line offers `$eval` while only a
+    /// `page` op is held.
+    #[test]
+    fn the_held_clause_names_the_senders_of_held_ops_alone() -> Result<(), Box<dyn Error>> {
+        let page_op = new_op(&[Capability::MainWorld], false)?;
+        let locator_op = OpSpec {
+            name: "locator.newOp",
+            ..page_op
+        };
+        let page_only = super::held_clause([page_op]).ok_or("an ungated op is held")?;
+        assert!(
+            page_only.contains("the `frame` forms send the `page` ops")
+                && !page_only.contains("$eval"),
+            "{page_only}"
+        );
+        let both = super::held_clause([page_op, locator_op]).ok_or("both are held")?;
+        assert!(
+            both.contains("`$eval`, `$$eval` and element handles"),
+            "{both}"
+        );
         Ok(())
     }
 
@@ -446,5 +522,196 @@ mod tests {
             );
         }
         assert!(captures > 0, "the crate declares its captures");
+    }
+
+    /// The door releases a main-world script's answer as a read of its tab, so the mark comes from
+    /// the crate's declaration: no list of op names can miss a script the crate adds.
+    #[test]
+    fn a_main_world_op_is_a_page_script_and_no_other_op_is() {
+        let mut scripts = 0;
+        for spec in Op::all().map(Op::spec) {
+            let expected = if spec.uses(Capability::MainWorld) {
+                scripts += 1;
+                PageScript::MainWorld
+            } else {
+                PageScript::Sealed
+            };
+            assert_eq!(
+                OpMarks::of(&spec, LINE).spec.page_script,
+                expected,
+                "{}",
+                spec.name
+            );
+        }
+        assert!(scripts > 0, "the crate declares its main-world scripts");
+    }
+
+    /// What a BrowserOS case proves of its op on a real browser.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Proves {
+        /// The op runs as Playwright 1.64.1's does, through the APIs that send it.
+        Served,
+        /// The op stays held: every API that sends it fails `method_unavailable`, nothing sent.
+        Held,
+    }
+
+    /// One BrowserOS case: a test in `tests/<file>` that drives `op` on a real BrowserOS. A plain
+    /// data bag.
+    struct BrowserosCase {
+        op: &'static str,
+        file: &'static str,
+        test: &'static str,
+        proves: Proves,
+    }
+
+    /// The BrowserOS cases of the ops that reach past their page's sealed world into the main
+    /// world, Neo's files or Neo's screen, where no fake browser shows what a real one does.
+    const BROWSEROS_CASES: &[BrowserosCase] = &[
+        BrowserosCase {
+            op: "page.evaluate",
+            file: "main_world_browseros.rs",
+            test: "page_evaluate_behaves_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "page.evaluate",
+            file: "main_world_browseros.rs",
+            test: "a_password_field_reaches_neither_the_realm_nor_the_record_raw",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "page.evaluate",
+            file: "main_world_browseros.rs",
+            test: "an_owner_lock_that_blocks_reads_withholds_what_a_running_script_read",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "page.waitForFunction",
+            file: "main_world_browseros.rs",
+            test: "wait_for_function_behaves_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "page.waitForFunction",
+            file: "main_world_browseros.rs",
+            test: "a_password_field_reaches_neither_the_realm_nor_the_record_raw",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "page.waitForFunction",
+            file: "main_world_browseros.rs",
+            test: "a_long_wait_on_a_password_field_registers_its_value_once_not_once_per_poll",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "locator.evaluate",
+            file: "main_world_browseros.rs",
+            test: "locator_evaluate_and_dollar_eval_behave_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "locator.evaluateAll",
+            file: "main_world_browseros.rs",
+            test: "evaluate_all_and_dollar_dollar_eval_behave_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "locator.evaluateAll",
+            file: "main_world_browseros.rs",
+            test: "a_password_field_reaches_neither_the_realm_nor_the_record_raw",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "page.setContent",
+            file: "main_world_browseros.rs",
+            test: "set_content_stays_held_on_browseros",
+            proves: Proves::Held,
+        },
+        BrowserosCase {
+            op: "locator.setInputFiles",
+            file: "uploads_browseros.rs",
+            test: "an_upload_of_neos_host_token_is_refused_and_an_ordinary_file_uploads",
+            proves: Proves::Served,
+        },
+    ];
+
+    /// The capabilities whose every op needs a BrowserOS case. A capture is policed by tab
+    /// privacy alone, which the fake browser shows.
+    const ON_BROWSEROS: [Capability; 3] = [
+        Capability::MainWorld,
+        Capability::HostFiles,
+        Capability::Screen,
+    ];
+
+    /// Whether `source` defines `test` as a test: `fn test(` right under a test attribute.
+    fn defines_test(source: &str, test: &str) -> bool {
+        let heads = [format!("async fn {test}("), format!("fn {test}(")];
+        let lines: Vec<&str> = source.lines().map(str::trim).collect();
+        lines.windows(2).any(|pair| match pair {
+            [attribute, signature] => {
+                (attribute.starts_with("#[tokio::test") || *attribute == "#[test]")
+                    && heads
+                        .iter()
+                        .any(|head| signature.starts_with(head.as_str()))
+            }
+            _ => false,
+        })
+    }
+
+    /// The coverage tripwire (decision 35a). Every op the crate marks `MainWorld`, `HostFiles` or
+    /// `Screen` has a BrowserOS case that proves where the door places it now, served or held, and
+    /// every case still proves that of its op. So an op the crate adds with such a capability turns
+    /// this red until it has a case, and so does an op the door starts serving, or holds again,
+    /// until a case proves it so.
+    #[test]
+    fn every_capability_op_has_a_browseros_case() -> Result<(), Box<dyn Error>> {
+        let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+        let reaching = |spec: &OpSpec| ON_BROWSEROS.iter().any(|&capability| spec.uses(capability));
+        let placed = |spec: &OpSpec| match Hold::of(spec) {
+            Some(_) => Proves::Held,
+            None => Proves::Served,
+        };
+        for spec in Op::all().map(Op::spec).filter(|spec| reaching(spec)) {
+            let placement = placed(&spec);
+            assert!(
+                BROWSEROS_CASES
+                    .iter()
+                    .any(|case| case.op == spec.name && case.proves == placement),
+                "{} is {placement:?} on this door, and no BrowserOS case proves it: add one to \
+                 BROWSEROS_CASES",
+                spec.name
+            );
+        }
+        for case in BROWSEROS_CASES {
+            let spec = Op::from_name(case.op)
+                .ok_or_else(|| format!("{} is no crate op", case.op))?
+                .spec();
+            assert!(
+                reaching(&spec),
+                "{}: it reaches nothing a BrowserOS case is kept for",
+                case.op
+            );
+            assert_eq!(
+                case.proves,
+                placed(&spec),
+                "{} ({}): the case proves what the door no longer does",
+                case.op,
+                case.test
+            );
+            assert!(
+                case.file.ends_with("_browseros.rs"),
+                "{}: a BrowserOS suite",
+                case.file
+            );
+            let source = fs::read_to_string(tests.join(case.file))
+                .map_err(|error| format!("tests/{}: {error}", case.file))?;
+            assert!(
+                defines_test(&source, case.test),
+                "{} has no test `{}`",
+                case.file,
+                case.test
+            );
+        }
+        Ok(())
     }
 }

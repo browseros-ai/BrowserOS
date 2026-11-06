@@ -6,9 +6,9 @@ use browseros_trace::OperationId;
 use super::{Caller, MethodSpec, OperationError};
 
 /// One rule the door applies to every op: at admission, again when a leaf is about to send
-/// (`OpCtx::recheck`), and to a read once more before its result is released, which is what
-/// keeps a result taken while a rule's state changed, such as a capture whose tab went private,
-/// from reaching the script. A state that can change and change back while the op runs, which
+/// (`OpCtx::recheck`), and once more before a read's result or a main-world script's answer is
+/// released, as a read of its tab, which is what keeps a result taken while a rule's state
+/// changed, such as a capture whose tab went private, from reaching the script. A state that can change and change back while the op runs, which
 /// no single check sees, needs a hold taken at admission instead ([`Policy::hold`]). A result
 /// that carries other tabs' data, such as an event pull's, also goes past the rules once per
 /// tab it names (`OpCtx::check_tab`).

@@ -326,6 +326,11 @@ impl Rig {
         Ok(time::timeout(PATIENCE, self.neo.wait()).await??.code())
     }
 
+    /// What claw-sdk has written to stderr so far.
+    pub fn neo_log(&self) -> Result<String, Box<dyn Error>> {
+        Ok(fs::read_to_string(self.dir.path().join("neo.log"))?)
+    }
+
     /// Both processes' output, for a failure message.
     #[must_use]
     pub fn logs(&self) -> String {

@@ -21,7 +21,7 @@ use super::harness::TabLock;
 use crate::browser::PageRef;
 use crate::dispatch::{
     ErrorCode, LeafError, Lifetime, Method, MethodSpec, OpCtx, OperationError, PageChange,
-    PageTarget, RegistryBuilder, RegistryError, Visibility,
+    PageScript, PageTarget, RegistryBuilder, RegistryError, Visibility,
 };
 use crate::test_support::FakeCdp;
 
@@ -68,6 +68,7 @@ pub(super) fn test_methods(
     registry.define(Budget)?;
     registry.define(Echo)?;
     registry.define(AnyInput)?;
+    registry.define(MainWorldScript)?;
     registry.define(Pump)
 }
 
@@ -698,6 +699,34 @@ impl Method for AnyInput {
 
     fn spec(&self) -> MethodSpec {
         MethodSpec::new("test.any", Effect::Read)
+    }
+
+    fn target(_input: &Value) -> Option<&PageTarget> {
+        None
+    }
+
+    fn call(
+        &self,
+        _op: &OpCtx<Self>,
+        input: Value,
+    ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        future::ready(Ok(input))
+    }
+}
+
+/// `test.script`: a main-world script as `OpMarks` marks `page.evaluate`, answering its input,
+/// so a test chooses what the script read of the page.
+struct MainWorldScript;
+
+impl Method for MainWorldScript {
+    type Input = Value;
+    type Output = Value;
+
+    fn spec(&self) -> MethodSpec {
+        MethodSpec {
+            page_script: PageScript::MainWorld,
+            ..MethodSpec::new("test.script", Effect::Write)
+        }
     }
 
     fn target(_input: &Value) -> Option<&PageTarget> {

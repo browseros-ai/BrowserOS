@@ -380,31 +380,19 @@ fn a_script_drives_a_page_through_the_playwright_api() -> TestResult {
     })
 }
 
+/// `page.setContent` stays held while the crate does not gate it (its milestone 2), through
+/// every API that sends it, though the door serves the other main-world scripts: each try is
+/// refused with nothing sent and recorded as the crate op it shares.
 #[test]
-fn every_api_that_runs_script_in_the_pages_main_world_is_held() -> TestResult {
+fn set_content_is_held_through_every_api_that_sends_it() -> TestResult {
     on_neo_runtime(async {
         let neo = Neo::start().await?;
         let client = neo.modern_client().await?;
-        // Every such API a script reaches through the real prelude. An element handle needs a
-        // page with a sealed world, which the fake browser has not, so builtins/tests.rs sends
-        // `elementHandle.evaluate`'s call to the door instead.
         let code = r"
-            const frame = page.mainFrame();
-            const field = page.locator('input[type=password]');
             const html = '<script>document.title = window.appState.password</script>';
             const attempts = {
-              'page.evaluate': () => page.evaluate(() => document.title),
-              'page.waitForFunction': () => page.waitForFunction(() => true),
-              'frame.evaluate': () => frame.evaluate(() => document.title),
-              'frame.waitForFunction': () => frame.waitForFunction(() => true),
-              'locator.evaluate': () => field.evaluate((el) => el.value),
-              'locator.evaluateAll': () => field.evaluateAll((els) => els.length),
-              'page.$eval': () => page.$eval('input', (el) => el.value),
-              'page.$$eval': () => page.$$eval('input', (els) => els.length),
-              'frame.$eval': () => frame.$eval('input', (el) => el.value),
-              'frame.$$eval': () => frame.$$eval('input', (els) => els.length),
               'page.setContent': () => page.setContent(html),
-              'frame.setContent': () => frame.setContent(html),
+              'frame.setContent': () => page.mainFrame().setContent(html),
             };
             const outcomes = {};
             for (const [api, attempt] of Object.entries(attempts)) {
@@ -426,16 +414,6 @@ fn every_api_that_runs_script_in_the_pages_main_world_is_held() -> TestResult {
         assert_eq!(
             result.structured_content,
             Some(json!({ "value": {
-                "page.evaluate": refused,
-                "page.waitForFunction": refused,
-                "frame.evaluate": refused,
-                "frame.waitForFunction": refused,
-                "locator.evaluate": refused,
-                "locator.evaluateAll": refused,
-                "page.$eval": refused,
-                "page.$$eval": refused,
-                "frame.$eval": refused,
-                "frame.$$eval": refused,
                 "page.setContent": refused,
                 "frame.setContent": refused,
             } })),
@@ -459,20 +437,7 @@ fn every_api_that_runs_script_in_the_pages_main_world_is_held() -> TestResult {
         let held = |name| (name, Some("method_unavailable"), Some(Delivery::NotSent));
         assert_eq!(
             ops,
-            [
-                held("page.evaluate"),
-                held("page.waitForFunction"),
-                held("page.evaluate"),
-                held("page.waitForFunction"),
-                held("locator.evaluate"),
-                held("locator.evaluateAll"),
-                held("locator.evaluate"),
-                held("locator.evaluateAll"),
-                held("locator.evaluate"),
-                held("locator.evaluateAll"),
-                held("page.setContent"),
-                held("page.setContent"),
-            ],
+            [held("page.setContent"), held("page.setContent")],
             "the trace records each attempt as the crate op its API shares"
         );
         assert!(

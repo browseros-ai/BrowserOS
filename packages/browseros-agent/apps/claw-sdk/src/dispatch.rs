@@ -3,7 +3,8 @@
 //! ```text
 //!  script ─▶ bridge ─▶ Dispatcher::submit ─ op id, decode, op_started ─▶ task on the run's
 //!    JoinSet ─▶ gates ─▶ target ─▶ rules ─▶ Method::call(&OpCtx) raced with the run's stop
-//!    ─▶ reads checked again ─▶ page facts ─▶ OperationGuard::finish ─▶ reply over a oneshot
+//!    ─▶ a read's value or a main-world script's answer checked again, as a read ─▶ page facts
+//!    ─▶ OperationGuard::finish ─▶ reply over a oneshot
 //!  a method ─▶ OpCtx::invoke ─▶ the same door, inline, as a child op
 //! ```
 //!
@@ -44,7 +45,7 @@ mod tests;
 
 pub(crate) use dispatcher::{Call, CallSite, Caller, Dispatcher, OpReply, PageFact, PendingReply};
 pub(crate) use held_values::{Held, HeldValues, HeldWatch, WITHHELD};
-pub(crate) use method::{Lifetime, Listing, Method, MethodSpec, Output, Visibility};
+pub(crate) use method::{Lifetime, Listing, Method, MethodSpec, Output, PageScript, Visibility};
 pub(crate) use op_ctx::{OpCtx, PageChange};
 pub(crate) use operation_error::{Answer, ErrorCode, LeafError, OpFailure, OperationError};
 pub(crate) use page_target::PageTarget;

@@ -27,6 +27,7 @@ use futures_util::future::{self, Either};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tempfile::TempDir;
+use tokio::sync::Notify;
 use tokio::time::{self, Instant};
 
 use super::op_marks::Hold;
@@ -36,7 +37,7 @@ use crate::browser::{BrowserLink, PageRef, TabRegistry};
 use crate::config::{Defaults, SecretFiles};
 use crate::dispatch::{
     Call, Dispatcher, ErrorCode, LeafError, Lifetime, Listing, Method, MethodSpec, OpCtx,
-    OpFailure, OpReply, OperationError, PageTarget, PendingReply, Policy, PolicyCheck,
+    OpFailure, OpReply, OperationError, PageScript, PageTarget, PendingReply, Policy, PolicyCheck,
     RegistryBuilder, RegistryError, RunCtx, RunGuard, RunStart, StopReason, Visibility,
 };
 use crate::host::{FlagRecovery, TakeoverLock};
@@ -771,6 +772,212 @@ async fn a_capture_that_ends_after_its_tab_went_private_is_withheld_closed_or_no
     Ok(())
 }
 
+/// What the page shows once the owner took it, which a script that ran before the lock still
+/// read: what the owner typed into a field no seal masks.
+const OWNERS_TEXT: &str = "the owner typed 4 Elm St";
+
+/// `test.write`: a write on a page that marks itself sent, then answers only once the test says
+/// so, so that the owner can take the tab while it runs. `page_script` says what it stands for:
+/// a main-world script, as `OpMarks` marks `page.evaluate`, or a sealed write such as a click.
+/// Either way it answers what the page shows, [`OWNERS_TEXT`]: as its value, or, with `throws`,
+/// as the error the page threw.
+struct PausedWrite {
+    page_script: PageScript,
+    /// Notified once the op is sent and waits.
+    running: Arc<Notify>,
+    /// Lets the op answer.
+    answer: Arc<Notify>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PausedWriteInput {
+    page: PageTarget,
+    throws: bool,
+}
+
+impl Method for PausedWrite {
+    type Input = PausedWriteInput;
+    type Output = Value;
+
+    fn spec(&self) -> MethodSpec {
+        MethodSpec {
+            page_script: self.page_script,
+            ..MethodSpec::new("test.write", Effect::Write)
+        }
+    }
+
+    fn target(input: &PausedWriteInput) -> Option<&PageTarget> {
+        Some(&input.page)
+    }
+
+    async fn call(&self, op: &OpCtx<Self>, input: PausedWriteInput) -> Result<Value, LeafError> {
+        op.recheck()?;
+        op.mark_sent();
+        self.running.notify_one();
+        self.answer.notified().await;
+        if input.throws {
+            Err(LeafError::definite(OperationError::website(
+                ErrorCode::PAGE_ERROR,
+                format_args!("page.evaluate: Error: {OWNERS_TEXT}"),
+            )))
+        } else {
+            Ok(json!({ "read": OWNERS_TEXT }))
+        }
+    }
+}
+
+/// A [`PausedWrite`] standing for `page_script` on `page`, run through the app's rules in the
+/// app's order. The owner takes the tab with `reads` once it is sent, and it answers once the
+/// lock refuses. Returns its op and reply.
+async fn answer_after_the_owner_took_the_tab(
+    harness: &Harness,
+    page: &PageRef,
+    page_script: PageScript,
+    reads: Reads,
+    throws: bool,
+) -> Result<(OperationId, OpReply), Box<dyn Error>> {
+    let running = Arc::new(Notify::new());
+    let answer = Arc::new(Notify::new());
+    let write = PausedWrite {
+        page_script,
+        running: Arc::clone(&running),
+        answer: Arc::clone(&answer),
+    };
+    let claims = Arc::new(CaptchaClaims::default());
+    let door = harness.dispatcher_with(
+        super::door_rules(&harness.takeover, &harness.hooks, &claims),
+        |registry| registry.define(write),
+    )?;
+    let (run, _guard) = harness.run()?;
+    let input = json!({ "page": handle(page), "throws": throws });
+    let pending = door.submit(&run, Call::script("test.write".to_owned(), input, None));
+    let operation = pending.operation();
+    within(running.notified()).await?;
+    // The lock refuses from the moment it is in the table; it settles once the write it found in
+    // flight ends, so the op answers before the lock returns.
+    let (lock, reply) = tokio::join!(harness.lock(page.tab, reads), async {
+        while !harness.takeover.is_locked(page.tab) {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+        answer.notify_one();
+        pending.wait().await
+    });
+    harness.locks.unlock_host(lock?.id)?;
+    Ok((operation, reply))
+}
+
+/// G2 (decision 35c). A main-world script is a write, but what it answers is what it read of the
+/// page. A takeover that blocks reads, taken while the script ran, withholds its answer as it
+/// withholds a read's: the script ran, so the op is `done`, and neither the realm nor the record
+/// gets what the owner's tab showed.
+#[tokio::test]
+async fn a_reads_blocking_takeover_taken_while_a_main_world_script_runs_withholds_its_result()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    for throws in [false, true] {
+        let (operation, reply) = answer_after_the_owner_took_the_tab(
+            &harness,
+            &owners,
+            PageScript::MainWorld,
+            Reads::Block,
+            throws,
+        )
+        .await?;
+        let withheld = failure(reply).map_err(|error| format!("throws: {throws}: {error}"))?;
+        assert_eq!(
+            (
+                withheld.error.owner(),
+                withheld.error.code(),
+                withheld.delivery,
+                withheld.retryable,
+            ),
+            (
+                ErrorOwner::Host,
+                ErrorCode::OWNER_HAS_CONTROL,
+                Delivery::Done,
+                false
+            ),
+            "throws: {throws}: the script ran, and the owner's tab answered it: {}",
+            withheld.error
+        );
+        assert!(
+            !withheld.error.message().contains(OWNERS_TEXT),
+            "throws: {throws}: the realm gets none of what the script read: {}",
+            withheld.error
+        );
+        let row = harness.row(operation).await?;
+        assert_eq!(
+            (
+                row.delivery,
+                row.error.as_ref().map(|error| error.code.as_str())
+            ),
+            (Some(Delivery::Done), Some("owner_has_control")),
+            "throws: {throws}: the record says the lock withheld it"
+        );
+        let recorded = serde_json::to_string(&(&row.result, &row.error))?;
+        assert!(
+            !recorded.contains(OWNERS_TEXT),
+            "throws: {throws}: nor does the record: {recorded}"
+        );
+    }
+    Ok(())
+}
+
+/// A lock that lets reads through releases what a main-world script read before it was taken,
+/// as it releases a read's value: only a lock that blocks reads withholds it.
+#[tokio::test]
+async fn a_takeover_that_allows_reads_still_releases_a_main_world_result()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    let (_, reply) = answer_after_the_owner_took_the_tab(
+        &harness,
+        &owners,
+        PageScript::MainWorld,
+        Reads::Allow,
+        false,
+    )
+    .await?;
+    assert_eq!(value(reply)?, json!({ "read": OWNERS_TEXT }));
+    Ok(())
+}
+
+/// A sealed write's end goes out as it ended, a reads-blocking lock or not: the door's release
+/// check is for what a script read, and a click's own result is not that.
+#[tokio::test]
+async fn a_sealed_write_is_released_as_it_ended_under_a_reads_blocking_takeover()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    let (_, reply) = answer_after_the_owner_took_the_tab(
+        &harness,
+        &owners,
+        PageScript::Sealed,
+        Reads::Block,
+        false,
+    )
+    .await?;
+    assert_eq!(value(reply)?, json!({ "read": OWNERS_TEXT }));
+    let (_, thrown) = answer_after_the_owner_took_the_tab(
+        &harness,
+        &owners,
+        PageScript::Sealed,
+        Reads::Block,
+        true,
+    )
+    .await?;
+    let failed = failure(thrown)?;
+    assert_eq!(
+        (failed.error.code(), failed.delivery),
+        (ErrorCode::PAGE_ERROR, Delivery::Done),
+        "and so does its error: {}",
+        failed.error
+    );
+    Ok(())
+}
+
 /// What a run's event pulls brought back. A plain data bag.
 #[derive(Debug, Default)]
 struct Pulled {
@@ -1415,128 +1622,50 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
     Ok(())
 }
 
-/// Each Playwright API that runs the agent's script in the main world, as the prelude sends it:
-/// the crate op its alias shares, and the input, whose `call.api` names the API. Some name the
-/// run's lazy page and some `owners_page`; the hold answers both before the door resolves a page.
-fn main_world_calls(owners_page: &Value) -> [(&'static str, Value); 10] {
-    let lazy = json!({ "$neo": "page", "id": null });
-    let field = json!({
-        "$neo": "element", "page": owners_page, "seq": 0, "node": 12,
-        "display": "locator('input[type=password]')",
-    });
-    let read_value = "(field) => field.value";
-    let read_values = "(fields) => fields.map((field) => field.value)";
+/// `page.setContent` and `frame.setContent` as the prelude sends them: both send the crate's
+/// `page.setContent` op, one on the run's lazy page and one on a child frame of `owners_page`. The
+/// hold answers both before the door resolves a page.
+fn set_content_calls(owners_page: &Value) -> [Value; 2] {
     [
-        (
-            "page.evaluate",
-            json!({
-                "call": { "api": "page.evaluate", "timeoutMs": 0 },
-                "page": lazy,
-                "expression": "() => document.querySelector('input[type=password]').value",
-                "isFunction": true,
-            }),
-        ),
-        (
-            "page.evaluate",
-            json!({
-                "call": { "api": "frame.evaluate", "timeoutMs": 0 },
-                "page": owners_page, "frame": "F1",
-                "expression": "() => document.querySelector('input[type=password]').value",
-                "isFunction": true,
-            }),
-        ),
-        (
-            "page.waitForFunction",
-            json!({
-                "call": { "api": "page.waitForFunction", "timeoutMs": 1000 },
-                "page": lazy,
-                "expression": "() => document.readyState === 'complete'",
-                "isFunction": true,
-                "polling": "raf",
-            }),
-        ),
-        (
-            "locator.evaluate",
-            json!({
-                "call": { "api": "locator.evaluate", "timeoutMs": 5000 },
-                "target": locator(owners_page), "strict": "strict",
-                "expression": read_value, "isFunction": true,
-            }),
-        ),
-        (
-            "locator.evaluate",
-            json!({
-                "call": { "api": "page.$eval", "timeoutMs": 0 },
-                "target": locator(&lazy), "strict": "firstMatch", "noWait": true,
-                "expression": read_value, "isFunction": true,
-            }),
-        ),
-        (
-            "locator.evaluate",
-            json!({
-                "call": { "api": "elementHandle.evaluate", "timeoutMs": 0 },
-                "target": field, "strict": "strict",
-                "expression": read_value, "isFunction": true,
-            }),
-        ),
-        (
-            "locator.evaluateAll",
-            json!({
-                "call": { "api": "locator.evaluateAll", "timeoutMs": 0 },
-                "target": locator(owners_page),
-                "expression": read_values, "isFunction": true,
-            }),
-        ),
-        (
-            "locator.evaluateAll",
-            json!({
-                "call": { "api": "page.$$eval", "timeoutMs": 0 },
-                "target": locator(&lazy),
-                "expression": read_values, "isFunction": true,
-            }),
-        ),
-        (
-            "page.setContent",
-            json!({
-                "call": { "api": "page.setContent", "timeoutMs": 30000 },
-                "page": lazy,
-                "html": "<script>document.title = window.appState.password</script>",
-                "waitUntil": "load",
-            }),
-        ),
-        (
-            "page.setContent",
-            json!({
-                "call": { "api": "frame.setContent", "timeoutMs": 30000 },
-                "page": owners_page, "frame": "F1",
-                "html": "<script>document.title = parent.document.cookie</script>",
-                "waitUntil": "load",
-            }),
-        ),
+        json!({
+            "call": { "api": "page.setContent", "timeoutMs": 30000 },
+            "page": { "$neo": "page", "id": null },
+            "html": "<script>document.title = window.appState.password</script>",
+            "waitUntil": "load",
+        }),
+        json!({
+            "call": { "api": "frame.setContent", "timeoutMs": 30000 },
+            "page": owners_page, "frame": "F1",
+            "html": "<script>document.title = parent.document.cookie</script>",
+            "waitUntil": "load",
+        }),
     ]
 }
 
+/// `page.setContent` writes HTML whose scripts run in the main world, outside the crate's
+/// evaluate guard, so the crate does not gate it until its milestone 2, and the door holds it
+/// whichever API sends it, though it serves the other main-world ops: nothing reaches the browser,
+/// and the refusal says how to open the HTML instead.
 #[tokio::test]
-async fn the_ops_that_run_script_in_the_pages_main_world_are_held() -> Result<(), Box<dyn Error>> {
+async fn page_set_content_stays_held_whichever_api_sends_it() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
     let owners = harness.owner_tab("https://bank.example/").await?;
     let (run, _guard) = harness.run()?;
-    let calls = main_world_calls(&handle(&owners));
-    let tried: HashSet<&str> = calls.iter().map(|(name, _)| *name).collect();
-    let main_world: HashSet<&str> = Op::all()
+    let held: HashSet<&str> = Op::all()
         .map(Op::spec)
-        .filter(|spec| spec.uses(Capability::MainWorld))
+        .filter(|spec| spec.uses(Capability::MainWorld) && Hold::of(spec).is_some())
         .map(|spec| spec.name)
         .collect();
     assert_eq!(
-        tried, main_world,
-        "every op that declares the main world is tried"
+        held,
+        HashSet::from(["page.setContent"]),
+        "of the main-world ops, the door holds the one the crate does not gate yet"
     );
 
     let before = harness.fake.calls().len();
-    for (name, input) in calls {
+    for input in set_content_calls(&handle(&owners)) {
         let api = input["call"]["api"].clone();
-        let (operation, reply) = harness.submit_op(&run, name, input).await;
+        let (operation, reply) = harness.submit_op(&run, "page.setContent", input).await;
         let refused = failure(reply)?;
         assert_eq!(
             (
@@ -1549,14 +1678,13 @@ async fn the_ops_that_run_script_in_the_pages_main_world_are_held() -> Result<()
                 ErrorCode::METHOD_UNAVAILABLE,
                 Delivery::NotSent
             ),
-            "{api} ({name}): {}",
+            "{api}: {}",
             refused.error
         );
         let message = refused.error.message();
         assert!(
-            message.contains(&format!("`{name}` is held")) && message.contains("main world"),
-            "{api}: the message names the op and says why, so the agent reads the page another \
-             way: {}",
+            message.contains("`page.setContent` is held") && message.contains("page.goto('data:"),
+            "{api}: the message names the op and how to open the HTML instead: {}",
             refused.error
         );
         assert_eq!(
@@ -1572,6 +1700,56 @@ async fn the_ops_that_run_script_in_the_pages_main_world_are_held() -> Result<()
         Vec::<String>::new(),
         "refused before the door resolves a page: nothing reached the browser"
     );
+    Ok(())
+}
+
+/// The other main-world ops are served: the door hands them to the crate, which serves the main
+/// frame only for now (its milestone 1) and refuses a script in a child frame as not built yet,
+/// before anything is sent.
+#[tokio::test]
+async fn a_main_world_script_reaches_the_crate_which_refuses_a_child_frame_as_not_built()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    let (run, _guard) = harness.run()?;
+    let script = json!({ "run": {
+        "expression": "() => document.title", "isFunction": true, "arg": "{\"v\":\"undefined\"}",
+    } });
+    for (op, api) in [
+        ("page.evaluate", "frame.evaluate"),
+        ("page.waitForFunction", "frame.waitForFunction"),
+    ] {
+        let input = json!({
+            "call": { "api": api, "timeoutMs": 0 },
+            "page": handle(&owners), "frame": "F1", "script": script,
+        });
+        let (operation, reply) = harness.submit_op(&run, op, input).await;
+        let refused = failure(reply)?;
+        assert_eq!(
+            (
+                refused.error.owner(),
+                refused.error.code(),
+                refused.delivery
+            ),
+            (
+                ErrorOwner::Neo,
+                ErrorCode::INTERNAL_ERROR,
+                Delivery::NotSent
+            ),
+            "{api}: the crate's refusal, not the door's hold: {}",
+            refused.error
+        );
+        assert!(
+            refused.error.message().contains("not built yet"),
+            "{api}: {}",
+            refused.error
+        );
+        assert_eq!(
+            harness.row(operation).await?.tab,
+            Some(owners.tab),
+            "{api}: the door resolved the op's tab and ran its rules on it"
+        );
+    }
     Ok(())
 }
 

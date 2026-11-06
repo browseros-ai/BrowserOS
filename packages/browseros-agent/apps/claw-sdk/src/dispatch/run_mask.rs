@@ -4,7 +4,8 @@
 //! ```text
 //!  into the realm ─┬ OperationGuard::settle: a script's op reply, its value, error and pages
 //!                  └ RunService::open_pages: the run's init pages
-//!  kept by Neo ────┬ Dispatcher::admit: an unknown name in its refusal, cut at 128 characters
+//!  kept by Neo ────┬ OperationGuard::settle: a main-world answer's numbers, in its record too
+//!                  ├ Dispatcher::admit: an unknown name in its refusal, cut at 128 characters
 //!                  ├ RefusalBrand::refusal: a prelude refusal's reason, cut at TEXT_CHARS
 //!                  └ run_script::thrown_error: what the script threw, cut at TEXT_CHARS
 //! ```
@@ -122,6 +123,32 @@ impl<'a> RunMask<'a> {
         }
     }
 
+    /// Masks every number in `value` whose text holds a value of either set, as
+    /// browseros-playwright masks a number in a main-world answer: the number gives way to its
+    /// text, masked as [`RunMask::mask_str`] masks one, as a string, since a number cannot hold
+    /// `[private]`. Strings and keys are left to [`RunMask::mask_json`] and the trace writer.
+    pub(super) fn mask_numbers(&self, value: &mut Value) {
+        match value {
+            Value::Number(number) => {
+                let mut text = number.to_string();
+                if self.mask_str(&mut text) {
+                    *value = Value::String(text);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    self.mask_numbers(item);
+                }
+            }
+            Value::Object(fields) => {
+                for field in fields.values_mut() {
+                    self.mask_numbers(field);
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::String(_) => {}
+        }
+    }
+
     /// `text` as the door keeps or shows it: masked, then cut to `chars` characters with `…`
     /// marking the cut. In that order, since a cut through a known value leaves a prefix that no
     /// mask recognizes.
@@ -153,5 +180,50 @@ impl<'a> RunMask<'a> {
                 Err(error)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use browseros_trace::{SecretSet, SecretSetConfig, SecretSource, SecretValue};
+    use serde_json::json;
+
+    use super::RunMask;
+    use crate::dispatch::Held;
+
+    /// Decision 35z's stopgap. A number cannot hold `[private]`, so one whose text holds a value
+    /// the run holds, or one of the process's, gives way to the string of its masked text,
+    /// wherever it nests. Every other number stays a number, the ones next to a value included.
+    #[test]
+    fn a_number_that_spells_a_masked_value_gives_way_to_its_masked_text() {
+        let secrets = SecretSet::new(SecretSetConfig::default());
+        let _host = secrets.register_from(
+            SecretValue::new("4242".to_owned()),
+            None,
+            SecretSource::Host,
+        );
+        let held = Held::Kept(Some(Arc::new(SecretSet::with_values(
+            SecretSetConfig::default(),
+            [SecretValue::new("734921".to_owned())],
+        ))));
+        let mut value = json!({
+            "held": 734_921,
+            "known": 4242,
+            "inside": [{ "longer": 17_349_210 }, -734_921.5],
+            "near": [734_922, 73_492, 424],
+        });
+        RunMask::of(&secrets, &held).mask_numbers(&mut value);
+        assert_eq!(
+            value,
+            json!({
+                "held": "[private]",
+                "known": "[private]",
+                "inside": [{ "longer": "1[private]0" }, "-[private].5"],
+                "near": [734_922, 73_492, 424],
+            }),
+            "a number is masked as its text would be, and no number without a value changes"
+        );
     }
 }

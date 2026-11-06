@@ -55,9 +55,12 @@ static PLAYWRIGHT_LINE: LazyLock<String> = LazyLock::new(|| {
     line
 });
 
-/// What [`PLAYWRIGHT_LINE`] says whatever is held.
-const PLAYWRIGHT_API: &str = "Playwright's API (as of 1.64.1) on `page`, `context` and \
-    `browser`: locators (`getByRole`, `getByText`, `getByLabel`, `getByTestId`, `locator`, \
+/// What [`PLAYWRIGHT_LINE`] says whatever is held: what Playwright 1.64.1 does, and then each way
+/// Neo's differs that a script would trip on. The main-world scripts' differences are the crate's
+/// (its milestone 1, tier 1 `deviations.yaml`), but for the result depth, which the realm's stack
+/// bounds (`Defaults::JS_STACK_BYTES`, measured on BrowserOS in a debug build).
+const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser`, as \
+    Playwright 1.64.1 behaves where this does not say otherwise: locators (`getByRole`, `getByText`, `getByLabel`, `getByTestId`, `locator`, \
     `frameLocator`, `filter`, `nth`) that wait and are strict, frames (`page.frames()`, \
     `frame.locator`), reads (`textContent`, `innerText`, `getAttribute`, `inputValue`, \
     `count`, `isVisible`, `page.content()`, `page.title()`), actions that wait until the \
@@ -66,13 +69,26 @@ const PLAYWRIGHT_API: &str = "Playwright's API (as of 1.64.1) on `page`, `contex
     `focus`, `blur`, `dragTo`, `dispatchEvent`, `scrollIntoViewIfNeeded`; no `tap`), \
     `page.keyboard` (`press`, `type`, `insertText`, `down`, `up`), `page.mouse` (`move`, \
     `down`, `up`, `click`, `dblclick`, `wheel`), navigation (`goto`, `reload`, `waitForURL`, \
-    `waitForLoadState`), `screenshot`, events (`page.on`, `waitForEvent`), and `expect`: \
+    `waitForLoadState`), scripts in the page's main world (`page.evaluate`, \
+    `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, `elementHandle.evaluate`, \
+    and `$eval` and `$$eval` on a page, frame or element handle) with Playwright's values, \
+    arguments, element handles and errors, `screenshot` and `pdf`, events (`page.on`, \
+    `waitForEvent`), and `expect`: \
     retrying locator matchers (`toBeVisible`, `toBeChecked`, `toHaveText`, `toContainText`, \
     `toHaveValue`, `toHaveCount`, `toHaveAttribute`, ...) and page matchers (`toHaveTitle`, \
     `toHaveURL`), with `.not`, value matchers (`toBe`, `toEqual`, ...), `expect.poll` and \
     `toPass`; soft assertions, `toBeOK` and screenshot, snapshot and `toMatchAriaSnapshot` \
-    comparisons are not available. `goto` and `reload` open only `http`, `https`, `data` and \
-    `about` URLs. `setInputFiles` uploads any file Neo's process can read, as Playwright does \
+    comparisons are not available. A call that waits gives up after 5 s unless given a `timeout`, \
+    and a navigation after 30 s. A main-world script sees what the page sees, but a password, \
+    card or one-time-code field's value reads `[private]`. Unlike Playwright, `waitForFunction` \
+    polls every 100 ms for its default `polling: 'raf'`, since animation frames never fire in \
+    Neo's background tabs, and the handle it resolves to holds a snapshot of the value, which \
+    `jsonValue()` reads; `frame.evaluate` and `frame.waitForFunction` in a child frame fail \
+    `internal_error` (not built yet), while `frame.$eval`, `frame.$$eval` and a frame's locators \
+    reach into it; a `URL` result has a URL's fields but is not a `URL`, since the script's realm \
+    has none; and a result nested more than about 50 objects deep can fail `RangeError: Maximum \
+    call stack size exceeded`, where Playwright allows 98. `goto` and `reload` open only `http`, \
+    `https`, `data` and `about` URLs. `setInputFiles` uploads any file Neo's process can read, as Playwright does \
     (a relative path resolves against Neo's working directory), except Neo's own secret files, \
     which fail `neo_secret_upload_refused` with nothing sent: the caller sandboxes the \
     filesystem. `{ name, mimeType, buffer }` payloads need no file and total under 10 MiB a \
@@ -807,6 +823,33 @@ mod tests {
             "with nothing held, the line adds nothing"
         );
         Ok(())
+    }
+
+    /// A model calls only what the line offers, so outside the held clause it names each op the
+    /// door serves that reaches past the page's sealed world: by its wire name, or by the method a
+    /// script calls (`pdf`, `setInputFiles`).
+    #[test]
+    fn the_line_offers_every_served_op_that_reaches_past_the_sealed_world() {
+        let line: &str = &PLAYWRIGHT_LINE;
+        let offered = match op_marks::held_clause(Op::all().map(Op::spec)) {
+            Some(clause) => line.replacen(&clause, "", 1),
+            None => line.to_owned(),
+        };
+        for spec in Op::all()
+            .map(Op::spec)
+            .filter(|spec| !spec.capabilities.is_empty() && Hold::of(spec).is_none())
+        {
+            let method = spec
+                .name
+                .rsplit_once('.')
+                .map_or(spec.name, |(_, method)| method);
+            assert!(
+                offered.contains(&format!("`{}`", spec.name))
+                    || offered.contains(&format!("`{method}`")),
+                "{} is served, so the line offers it: {offered}",
+                spec.name
+            );
+        }
     }
 
     #[test]
