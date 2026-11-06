@@ -3,13 +3,14 @@
 //! including a click's: the lazy domains, the utility world and the glue's page calls (answered
 //! by glue name, as a page holding one ready button, [`BUTTON`], would answer them), quads, and
 //! mouse input. A test can hold back the answers to the calls a run may be stopped while
-//! awaiting (the attach, the navigation-history read, mouse input), and can read back every
-//! command with its answer to see what a run did and what it left behind.
+//! awaiting (the attach, the navigation-history read, mouse input), close the tab while the
+//! page's domains are being enabled, and read back every command with its answer to see what a
+//! run did and what it left behind.
 //!
 //! Test crates include this file with `#[path]`. Cargo builds only top-level `tests/*.rs` files
 //! as test crates, so it is never one on its own.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -69,6 +70,11 @@ pub struct Replies {
     /// `Input.dispatchMouseEvent`, counted per event: `answers: 2` acknowledges a click's move
     /// and press and holds its release.
     pub mouse: Reply,
+    /// The tab closes the moment a session's first `Page.enable` arrives, and the fake does
+    /// what BrowserOS does then (measured): it never answers the command in flight, reports
+    /// `Target.detachedFromTarget` for the session, and answers every later command on it with
+    /// `Session with given id not found.`.
+    pub closes_at_page_enable: bool,
 }
 
 /// One command the fake received, and its answer once the fake has sent it.
@@ -199,6 +205,8 @@ struct Calls {
     mouse: usize,
     /// Whether `install.js` ran, so a later `attach.js` finds the glue.
     installed: bool,
+    /// Sessions whose tab closed under them (`Replies::closes_at_page_enable`).
+    closed: HashSet<String>,
     /// Returned page objects by id, with the own properties `Runtime.getProperties` lists.
     objects: HashMap<String, Value>,
     next_object: usize,
@@ -245,7 +253,27 @@ async fn serve_cdp(stream: TcpStream, replies: Replies, exchanges: Arc<Mutex<Vec
             });
             exchanges.len() - 1
         };
-        let (mut reply, when) = answer(&command, replies, &mut calls);
+        let session = command["sessionId"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let (mut reply, when) = if calls.closed.contains(&session) {
+            (
+                json!({ "error": { "code": -32001, "message": "Session with given id not found." } }),
+                Some(Duration::ZERO),
+            )
+        } else if replies.closes_at_page_enable && command["method"] == "Page.enable" {
+            calls.closed.insert(session.clone());
+            let detached = json!({
+                "method": "Target.detachedFromTarget",
+                "params": { "sessionId": session, "targetId": PAGE },
+            });
+            // Fails only once the connection is gone, when nobody is left to read it.
+            let _ = outgoing.send(detached.to_string());
+            (Value::Null, None)
+        } else {
+            answer(&command, replies, &mut calls)
+        };
         let Some(delay) = when else {
             continue;
         };

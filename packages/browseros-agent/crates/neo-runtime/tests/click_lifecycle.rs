@@ -265,3 +265,53 @@ async fn a_getter_only_run_enables_nothing() {
          the detach"
     );
 }
+
+/// The tab closes while the run's first browser call is enabling the page's domains. BrowserOS
+/// never answers the `Page.enable` in flight, so only `Target.detachedFromTarget` can tell the
+/// click; it ends at once with what Playwright's client throws for a closed page, not with its
+/// 20 s timeout.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tab_closed_while_its_domains_are_enabled_ends_the_click() {
+    let browser = FakeBrowser::start(Replies {
+        closes_at_page_enable: true,
+        ..Replies::default()
+    })
+    .await;
+    let started = Instant::now();
+    let outcome = browser
+        .runtime()
+        .await
+        .run(run_request(
+            "try { await page.click('#go', { timeout: 20000 }) } catch (error) { return [error.name, error.message] }",
+            Duration::from_secs(30),
+            CancellationToken::new(),
+        ))
+        .await;
+
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert_eq!(
+        outcome.value,
+        Some(json!([
+            "Error",
+            "page.click: Target page, context or browser has been closed\nCall log:\n  - waiting for #go\n",
+        ]))
+    );
+    let [call] = outcome.calls.as_slice() else {
+        panic!("one record: {outcome:?}");
+    };
+    assert_eq!(
+        (&call.result, call.delivery),
+        (
+            &CallResult::Error {
+                name: "TargetClosedError".to_string(),
+                message: "Target page, context or browser has been closed".to_string(),
+            },
+            Some(Delivery::NotSent)
+        )
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the close ended the click, not its timeout: {:?}",
+        started.elapsed()
+    );
+}

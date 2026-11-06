@@ -236,6 +236,11 @@ impl PageSession {
     /// enable triggers (a dialog already open is reported then) is missed. Never
     /// `events_targeted`, which is exclusive per method across the whole shared client.
     ///
+    /// The watcher starts before `Page.enable` is sent, because only the watcher can tell the
+    /// run that the tab closed: Chromium never answers a command in flight when its target
+    /// closes (measured on BrowserOS neo), so a close during the enable would otherwise hang
+    /// the call until its timeout instead of ending it with `TargetClosedError`.
+    ///
     /// # Errors
     ///
     /// The CDP error of `Page.enable`.
@@ -243,10 +248,9 @@ impl PageSession {
         self.prepared
             .get_or_try_init(|| async {
                 let events = self.session.cdp.events();
-                self.send("Page.enable", json!({})).await?;
                 let (state, receiver) = watch::channel(PageState::default());
-                // Guarded before the spawn: if this setup is dropped before it finishes (the
-                // call stopped), the guard stops the watcher it already started.
+                // Guarded before the spawn: if this setup fails or is dropped before it
+                // finishes (the call stopped), the guard stops the watcher it already started.
                 let stop = CancellationToken::new();
                 let stop_guard = stop.clone().drop_guard();
                 self.session.tokio.spawn(watch_events(
@@ -258,6 +262,7 @@ impl PageSession {
                     self.closed.clone(),
                     stop,
                 ));
+                self.send("Page.enable", json!({})).await?;
                 let focus = self
                     .send(
                         "Emulation.setFocusEmulationEnabled",
