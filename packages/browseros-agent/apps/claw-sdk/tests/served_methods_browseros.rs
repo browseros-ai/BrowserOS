@@ -1,11 +1,14 @@
 //! What the script's realm receives on a real BrowserOS, through MCP `run`: no value the run holds
 //! reaches it raw, whichever way Neo hands the script a text (decision 35b). The Playwright methods
-//! the held round serves get their cases here as each one is served.
+//! the held round serves get their cases here as each one is served, and so does what a script
+//! gets for one Neo does not serve: the prelude's refusal is a door call (FR/RC), which keeps its
+//! code in the run's error and is one row of the run's trace.
 //!
 //! ```text
 //!  page.fill(password) ─ the seal's journal ─ held: no secret until its field is quiet for 1 s
 //!  click ─ the page alerts the field ─ events.next ─ the door: masked with what the run holds
 //!    ─▶ page.on('dialog') in the realm reads [private], and the run's records keep none of it
+//!  throw __neo.refuse('page.route', …) ─ the door: refused, recorded ─▶ script / method_unavailable
 //! ```
 //!
 //! Like `e2e_browseros.rs`, it runs only when `CLAW_SDK_E2E_BROWSER` names a BrowserOS binary.
@@ -18,6 +21,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use browseros_rig::{CaptchaKey, HOST_TOKEN, Rig, TestResult};
+use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
 use tokio::time;
 
@@ -51,9 +55,17 @@ const message = await shown;
 return { message, sawTheValue: message.includes(SECRET), afterMs: Date.now() - typedAt };
 "#;
 
+/// What the Playwright prelude raises for `page.route`, which Neo does not serve.
+const ROUTE_REASON: &str = "page.route: network interception is not available in Neo";
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_dialog_that_shows_a_typed_password_reaches_the_script_masked() -> TestResult {
     on_browseros(|rig| Box::pin(dialog_of_a_typed_password(rig))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refusal_is_one_trace_row_and_fails_the_run_with_its_code() -> TestResult {
+    on_browseros(|rig| Box::pin(refusal_on_the_record(rig))).await
 }
 
 /// `drive` on a fresh BrowserOS within the test's budget, with both processes' logs on failure.
@@ -122,6 +134,102 @@ async fn dialog_of_a_typed_password(rig: &Rig) -> TestResult {
     assert!(
         recorded.contains("events.") && !recorded.contains(secret),
         "the run's records, the dialog's event op among them, keep none of the password: {recorded}"
+    );
+    Ok(())
+}
+
+/// FR/RC C1–C4. The prelude's refusal reaches the door as a call of its own, so the model reads
+/// the refusal's code, op and delivery instead of a `script_error`, and the host's trace has one
+/// row for the try: the row gap 13 counts, by `error.code` and `name`.
+async fn refusal_on_the_record(rig: &Rig) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let code = format!(
+        "throw __neo.refuse('page.route', 'method_unavailable', {});",
+        json!(ROUTE_REASON)
+    );
+    let result = browseros_rig::run(&client, &code, &json!({ "taskId": "refusal" })).await?;
+    client.cancel().await?;
+    let meta = browseros_rig::outcome(&result)?;
+    let operation = meta
+        .pointer("/error/operationId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("the run's error names the refusal's op: {result:?}"))?;
+    assert_eq!(
+        meta.get("error"),
+        Some(&json!({
+            "owner": "script", "code": "method_unavailable", "message": ROUTE_REASON,
+            "retryable": true, "operationId": operation, "delivery": "not_sent",
+        })),
+        "the run fails with the refusal's code: {result:?}"
+    );
+    let seq = operation
+        .rsplit_once('.')
+        .map(|(_, seq)| seq)
+        .ok_or_else(|| format!("an op id is `<run>.<seq>`: {operation}"))?;
+    let text = result
+        .content
+        .first()
+        .and_then(ContentBlock::as_text)
+        .map(|content| content.text.as_str());
+    assert_eq!(
+        text.and_then(|text| text.lines().next()),
+        Some(
+            format!("script / method_unavailable: {ROUTE_REASON} (op {seq}, delivery not_sent)")
+                .as_str()
+        ),
+        "what the model reads"
+    );
+
+    let id = meta
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("the run has an id: {meta}"))?;
+    let read = rig
+        .host(
+            "GET",
+            &format!("/v1/runs/{id}?wait=30"),
+            Some(HOST_TOKEN),
+            None,
+        )
+        .await?;
+    assert_eq!(read.status, 200, "{}", read.text());
+    let recorded = read.json()?;
+    let rows: Vec<&Value> = recorded
+        .get("operations")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("a run read lists its ops: {recorded}"))?
+        .iter()
+        .filter(|row| row.get("name") == Some(&json!("page.route")))
+        .collect();
+    let [row] = rows.as_slice() else {
+        return Err(format!("one row for the one try: {recorded}").into());
+    };
+    let fields = |names: &[&str]| -> Value {
+        names
+            .iter()
+            .map(|name| {
+                (
+                    (*name).to_owned(),
+                    row.get(*name).cloned().unwrap_or(Value::Null),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(
+        fields(&[
+            "id", "kind", "effect", "args", "outcome", "delivery", "error"
+        ]),
+        json!({
+            "id": operation, "kind": "builtin", "effect": "write",
+            "args": { "$neo": "refused", "code": "method_unavailable", "reason": ROUTE_REASON },
+            "outcome": "error", "delivery": "not_sent",
+            "error": {
+                "owner": "script", "code": "method_unavailable", "message": ROUTE_REASON,
+                "retryable": true, "operationId": operation,
+            },
+        }),
+        "the refusal's stored row: {row}"
     );
     Ok(())
 }

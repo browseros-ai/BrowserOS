@@ -2,10 +2,10 @@
 //
 // The bridge's three natives take and return strings only. This file turns them into the agent
 // API's plumbing: NeoError and TimeoutError, the input codec, reply envelopes, call sites,
-// handle brands, console, timers, and the run itself. After it and the preludes run, the realm's
-// globals are QuickJS's own plus __neo_invoke, __neo_log, __neo_sleep and __neo (pinned by
-// runtime/tests.rs): the agent's API reaches its code as the parameters of its function, never
-// as globals.
+// handle brands, a prelude's refusals as door calls, console, timers, and the run itself. After
+// it and the preludes run, the realm's globals are QuickJS's own plus __neo_invoke, __neo_log,
+// __neo_sleep and __neo (pinned by runtime/tests.rs): the agent's API reaches its code as the
+// parameters of its function, never as globals.
 
 ;(() => {
   const nativeInvoke = globalThis.__neo_invoke // (name, inputJson, site) => Promise<string>, never rejects
@@ -17,9 +17,10 @@
   // since a clip through a secret would leave a prefix no mask recognizes.
   const STACK_CHARS = 4096
 
-  // Every NeoError this file built, with the op it came from. An error the script made or edited
-  // itself is not here, so it can never pass for an op's failure as the run's error: Rust looks
-  // the op up and reports the failure the door decided.
+  // Every NeoError this file built, with the op it came from: its id, or, for a refusal whose
+  // door call has not answered yet, a promise of the id (`refuse`). An error the script made or
+  // edited itself is not here, so it can never pass for an op's failure as the run's error: Rust
+  // looks the op up and reports the failure the door decided.
   const genuine = new WeakMap()
 
   /** Every SDK failure. The fields are the trace's, so the agent and the record agree. */
@@ -222,6 +223,71 @@
     return revive(envelope.ok)
   }
 
+  // Refusals whose answer has not reached the realm yet. The door records a refusal at the call
+  // (run_script.rs `install`), but the realm learns its op id only once `nativeInvoke` resolves,
+  // which takes a yield to Rust. `run` waits on this set before serializing the value, so a
+  // refusal the script returns carries its op id; a thrown one waits on its own id in
+  // `settleThrown`.
+  const refusing = new Set()
+
+  /**
+   * A prelude's refusal as a door call: `throw __neo.refuse('page.route', 'method_unavailable',
+   * 'page.route: network interception is not available in Neo')`. Synchronous, so a getter or a
+   * sync method can throw what it returns. The door records the call under `api` and refuses it
+   * (dispatch/refusal_brand.rs); its answer then sets the error's code, owner, delivery and op,
+   * which the door decides and the prelude only proposes. The message stays `reason`, the
+   * realm's own text.
+   */
+  function refuse(api, code, reason) {
+    // Before anything async, while the agent's frame is still on the stack.
+    const site = callSite()
+    const error = new NeoError({
+      code,
+      owner: 'script',
+      delivery: 'not_sent',
+      retryable: true,
+      operationId: undefined,
+      message: reason,
+    })
+    const brand = JSON.stringify({
+      $neo: 'refused',
+      code: String(code),
+      reason: String(reason),
+    })
+    // Never rejects: `settleThrown` awaits it, and a rejection there would end the run as Neo's
+    // internal error. An answer the realm cannot take, a reply listener's throw included, leaves
+    // the op id unset, so the error settles as the script's own throw, never as a claim on an op.
+    const recorded = nativeInvoke(String(api), brand, site).then(
+      (text) => {
+        try {
+          const envelope = JSON.parse(text)
+          for (const listener of replyListeners) listener(envelope)
+          const decided = envelope.err
+          if (decided === undefined) return undefined
+          error.code = decided.code
+          error.owner = decided.owner
+          error.delivery = decided.delivery
+          error.retryable = decided.retryable
+          error.operationId = decided.operationId
+          return decided.operationId
+        } catch {
+          return undefined
+        }
+      },
+      () => undefined,
+    )
+    genuine.set(error, recorded)
+    refusing.add(recorded)
+    recorded.then(() => refusing.delete(recorded))
+    return error
+  }
+
+  // Resolves once the realm has the answer to every refusal raised so far, and to any raised
+  // while it waits.
+  async function allAnswered() {
+    while (refusing.size > 0) await Promise.allSettled([...refusing])
+  }
+
   function textOf(read) {
     try {
       const text = read()
@@ -308,10 +374,11 @@
     return text.length > STACK_CHARS ? text.slice(0, STACK_CHARS) : text
   }
 
-  function settleThrown(error) {
+  // Async because a refusal's op id is a promise until its door call answers.
+  async function settleThrown(error) {
     const operationId =
       error !== null && typeof error === 'object'
-        ? genuine.get(error)
+        ? await genuine.get(error)
         : undefined
     if (operationId !== undefined) {
       return JSON.stringify({ thrown: { kind: 'operation', operationId } })
@@ -333,8 +400,13 @@
   async function run(main, initJson) {
     try {
       const init = JSON.parse(initJson)
-      const args = [...provided.values()].map((build) => build(init))
+      // Each awaited, in order: a provider may build its parameter with an op before the agent's
+      // first statement, as the Playwright prelude's `page` reads its frame tree.
+      const args = []
+      for (const build of provided.values()) args.push(await build(init))
       const value = await main(...args)
+      // Before serializing, so a caught refusal returned as the value carries its op id.
+      await allAnswered()
       const json = JSON.stringify(
         value === undefined ? null : value,
         jsonSafe(),
@@ -347,6 +419,7 @@
 
   globalThis.__neo = Object.freeze({
     invoke,
+    refuse,
     brands: Object.freeze({
       register(brand, fromJson) {
         brands.set(String(brand), fromJson)

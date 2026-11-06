@@ -10,7 +10,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use browseros_trace::{
-    Delivery, ErrorOwner, OperationId, Outcome, RunEffects, RunStatus, SecretValue,
+    Delivery, Effect, ErrorOwner, OperationId, Outcome, RunEffects, RunStatus, SecretValue,
 };
 use futures_util::future;
 use serde_json::{Value, json};
@@ -20,7 +20,7 @@ use self::harness::{GATE_PARTIES, Harness, SeenCheck, within};
 use crate::browser::PageRef;
 use crate::dispatch::{
     Call, Caller, ErrorCode, OpFailure, OpReply, OpsReport, PendingReply, RunEnd, StopReason,
-    WITHHELD,
+    TEXT_CHARS, WITHHELD,
 };
 
 /// The page brand a script sends for `page`.
@@ -37,6 +37,11 @@ fn failure(reply: OpReply) -> Result<OpFailure, Box<dyn Error>> {
 
 fn owner_and_code(failure: &OpFailure) -> (ErrorOwner, ErrorCode) {
     (failure.error.owner(), failure.error.code())
+}
+
+/// The refusal brand `__neo.refuse(api, 'method_unavailable', reason)` sends (FR/RC C1).
+fn refused(reason: &str) -> Value {
+    json!({ "$neo": "refused", "code": "method_unavailable", "reason": reason })
 }
 
 #[tokio::test]
@@ -792,6 +797,226 @@ async fn a_run_that_turns_lost_as_its_own_method_name_is_admitted_records_none_o
             row.name
         );
     }
+    Ok(())
+}
+
+/// FR/RC C4. A script's refusal brand is refused under the name it was sent with, whatever that
+/// name is: a method the script may call never runs on it, and an unknown or Internal name answers
+/// exactly as a registered one does, so the brand cannot probe for hidden methods. No rule runs
+/// for it, and it is recorded as every admission refusal is.
+#[tokio::test]
+async fn a_refusal_brand_is_refused_under_its_name_and_never_runs() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let brand = refused("not served here");
+
+    // A registered method, an Internal one and no method at all, with the spec each record keeps.
+    for (name, effect) in [
+        ("test.any", Effect::Read),
+        ("test.hidden", Effect::Read),
+        ("page.route", Effect::Write),
+    ] {
+        let (operation, reply) = harness.submit(&run, name, brand.clone()).await;
+        let refusal = failure(reply)?;
+        assert_eq!(
+            (
+                owner_and_code(&refusal),
+                refusal.error.message(),
+                refusal.delivery,
+                refusal.retryable
+            ),
+            (
+                (ErrorOwner::Script, ErrorCode::METHOD_UNAVAILABLE),
+                "not served here",
+                Delivery::NotSent,
+                true
+            ),
+            "{name}: the brand's own code and reason, the same for every name"
+        );
+        assert!(
+            harness
+                .seen
+                .all()
+                .iter()
+                .all(|check| check.operation != operation),
+            "{name}: no rule ran for it"
+        );
+        let row = harness.row(operation).await?;
+        assert_eq!(
+            (row.name.as_str(), row.effect, row.tab, row.args.as_ref()),
+            (name, effect, None, Some(&brand)),
+            "recorded as sent, on no tab, under the spec the name has (unknown names are writes)"
+        );
+        assert_eq!(
+            (row.outcome, row.delivery),
+            (Some(Outcome::Error), Some(Delivery::NotSent))
+        );
+    }
+    Ok(())
+}
+
+/// FR/RC C4, the spoof rule. A script can send the refusal brand itself through `__neo_invoke`, so
+/// a brand claims only the two codes a script's own mistake carries, and its owner is always the
+/// script, never Neo, the host or the website. Its other fields are recorded and otherwise ignored.
+#[tokio::test]
+async fn a_refusal_brand_cannot_claim_another_owner_or_code() -> Result<(), Box<dyn Error>> {
+    const MALFORMED: &str =
+        "`page.route`: a refusal may name only method_unavailable or invalid_input";
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+
+    for brand in [
+        json!({ "$neo": "refused", "code": "browser_disconnected", "reason": "page.route: x" }),
+        json!({ "$neo": "refused", "code": 7, "reason": "page.route: x" }),
+        json!({ "$neo": "refused", "code": "method_unavailable" }),
+        json!({ "$neo": "refused", "code": "method_unavailable", "reason": ["page.route: x"] }),
+    ] {
+        let refusal = failure(harness.submit(&run, "page.route", brand.clone()).await.1)?;
+        assert_eq!(
+            (
+                owner_and_code(&refusal),
+                refusal.error.message(),
+                refusal.delivery
+            ),
+            (
+                (ErrorOwner::Script, ErrorCode::INVALID_INPUT),
+                MALFORMED,
+                Delivery::NotSent
+            ),
+            "{brand}: the script's own bad input"
+        );
+    }
+
+    let spoofed = json!({
+        "$neo": "refused", "code": "method_unavailable", "reason": "page.route: x",
+        "owner": "neo", "delivery": "done", "retryable": false,
+    });
+    let (operation, reply) = harness.submit(&run, "page.route", spoofed.clone()).await;
+    let refusal = failure(reply)?;
+    assert_eq!(
+        (
+            owner_and_code(&refusal),
+            refusal.delivery,
+            refusal.retryable
+        ),
+        (
+            (ErrorOwner::Script, ErrorCode::METHOD_UNAVAILABLE),
+            Delivery::NotSent,
+            true
+        ),
+        "the door decides the owner and the delivery, whatever the brand says"
+    );
+    let row = harness.row(operation).await?;
+    assert_eq!(
+        row.args,
+        Some(spoofed),
+        "every field the brand carried is on the record"
+    );
+    assert_eq!(
+        row.error.map(|error| (error.owner, error.code)),
+        Some((ErrorOwner::Script, "method_unavailable".to_owned()))
+    );
+
+    let option = json!({
+        "$neo": "refused", "code": "invalid_input",
+        "reason": "page.screenshot: path is not available in Neo",
+    });
+    let refusal = failure(harness.submit(&run, "page.screenshot", option).await.1)?;
+    assert_eq!(
+        (owner_and_code(&refusal), refusal.error.message()),
+        (
+            (ErrorOwner::Script, ErrorCode::INVALID_INPUT),
+            "page.screenshot: path is not available in Neo"
+        ),
+        "the other code a refusal may name, with its reason"
+    );
+    Ok(())
+}
+
+/// FR/RC C4 and graft G3. A refusal's reason is the script's own text, and can hold a value Neo
+/// knows: a process secret, or one its run holds, such as a password the script typed itself. The
+/// door masks it with both before cutting it to `TEXT_CHARS`: a cut through such a value would
+/// leave a prefix that no later mask recognizes, in the run's error and the reply the host reads.
+/// A run that lost a held value withholds the refusal, as it withholds every reply.
+#[tokio::test]
+async fn a_refusal_reason_is_masked_with_what_its_run_holds_then_clipped()
+-> Result<(), Box<dyn Error>> {
+    const SECRET: &str = "hunter2-token-0123";
+    const HELD: &str = "typed-pw-7Qx-0123";
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    harness
+        .secrets
+        .register(SecretValue::new(SECRET.to_owned()), None);
+    harness.held.hold(HELD);
+
+    for value in [SECRET, HELD] {
+        let whole = refused(&format!("page.route: {value}"));
+        let refusal = failure(harness.submit(&run, "page.route", whole).await.1)?;
+        assert_eq!(refusal.error.message(), "page.route: [private]");
+
+        // The cut keeps TEXT_CHARS characters, so it falls inside the value.
+        let reason = format!("{}{value}", "x".repeat(TEXT_CHARS - 6));
+        let refusal = failure(harness.submit(&run, "page.route", refused(&reason)).await.1)?;
+        let message = refusal.error.message();
+        assert!(
+            !message.contains(value.get(..4).unwrap_or(value)),
+            "no part of {value} survives the cut: …{}",
+            message
+                .get(message.len().saturating_sub(40)..)
+                .unwrap_or_default()
+        );
+        assert!(
+            message.chars().count() == TEXT_CHARS + 1 && message.ends_with('…'),
+            "cut to TEXT_CHARS, and the cut marked"
+        );
+    }
+
+    harness.held.lose();
+    let (operation, reply) = harness
+        .submit(&run, "page.route", refused(&format!("page.route: {HELD}")))
+        .await;
+    let withheld = failure(reply)?;
+    assert_eq!(
+        (owner_and_code(&withheld), withheld.delivery),
+        (
+            (ErrorOwner::Neo, ErrorCode::OUTPUT_WITHHELD),
+            Delivery::NotSent
+        ),
+        "nothing masks a lost value any more, so the realm gets no reason"
+    );
+    let row = harness.row(operation).await?;
+    assert!(
+        !format!("{row:?}").contains(HELD),
+        "nor does the record: {row:?}"
+    );
+    Ok(())
+}
+
+/// FR/RC C4 is honoured for the script only. Neo's own Rust never sends a refusal brand, so one in
+/// a Neo call's input, such as script data a method passes on to a child op, is input like any
+/// other: it reaches the method, where the same brand from the script is refused.
+#[tokio::test]
+async fn a_neo_callers_refusal_brand_is_ordinary_input() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let brand = refused("not served here");
+
+    let from_neo = harness
+        .dispatcher
+        .invoke_child(&run, None, "test.any", brand.clone())
+        .await;
+    assert_eq!(
+        from_neo,
+        Ok(brand.clone()),
+        "the method ran, with the brand as its input"
+    );
+    let from_script = failure(harness.submit(&run, "test.any", brand).await.1)?;
+    assert_eq!(
+        owner_and_code(&from_script),
+        (ErrorOwner::Script, ErrorCode::METHOD_UNAVAILABLE),
+        "the same brand from the script is refused"
+    );
     Ok(())
 }
 

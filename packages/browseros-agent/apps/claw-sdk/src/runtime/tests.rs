@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_trace::{Delivery, ErrorOwner, Outcome};
+use browseros_trace::{Delivery, ErrorOwner, OperationId, Outcome};
 use rquickjs::{AsyncContext, AsyncRuntime};
 use serde_json::{Value, json};
 use tokio::time::{self, Instant};
@@ -181,6 +181,306 @@ fn a_script_cannot_pass_its_own_error_off_as_an_operations() -> Result<(), TestE
     })
 }
 
+/// Waits out one timer, which yields to Rust: `await null` would resume before the door had
+/// answered anything the script sent, since the realm's natives run only once its jobs drain.
+const YIELD_TO_RUST: &str = "await new Promise((resolve) => setTimeout(resolve, 0));";
+
+/// The refusal brand `__neo.refuse('page.route', 'method_unavailable', 'page.route: x')` sends.
+fn route_refusal() -> Value {
+    json!({ "$neo": "refused", "code": "method_unavailable", "reason": "page.route: x" })
+}
+
+/// FR/RC C1–C4. A Playwright method Neo does not serve is refused by the door, as a call of its
+/// own: thrown uncaught, the refusal fails the run with the failure the door decided, code and op
+/// included, never as a `script_error`. The door recorded it under the API the script called.
+#[test]
+fn an_uncaught_refusal_fails_the_run_with_its_code_and_op() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code = format!(
+            "{YIELD_TO_RUST}\nthrow __neo.refuse('page.route', 'method_unavailable', 'page.route: x');"
+        );
+        let end = run_code(&rig, &run, &code).await;
+        let ScriptOutcome::OperationFailed(failure) = end.outcome else {
+            return Err(format!("expected the refusal's failure, got {:?}", end.outcome).into());
+        };
+        assert_eq!(
+            (
+                failure.error.owner(),
+                failure.error.code(),
+                failure.error.message()
+            ),
+            (
+                ErrorOwner::Script,
+                ErrorCode::METHOD_UNAVAILABLE,
+                "page.route: x"
+            ),
+            "the run keeps the code the prelude refused with"
+        );
+        assert_eq!(
+            (failure.delivery, failure.retryable, failure.operation.run),
+            (Delivery::NotSent, true, run.id()),
+            "a refusal sends nothing, so it is safe to repeat, and it is this run's op"
+        );
+        rig.sink.flush().await?;
+        let row = rig
+            .store
+            .operation(failure.operation)
+            .await?
+            .ok_or("the refusal is on the record")?;
+        assert_eq!(
+            row.name, "page.route",
+            "recorded under the API the script called"
+        );
+        assert_eq!(
+            (row.outcome, row.delivery, row.args),
+            (
+                Some(Outcome::Error),
+                Some(Delivery::NotSent),
+                Some(route_refusal())
+            ),
+            "a refused try, with the brand as its input"
+        );
+        Ok(())
+    })
+}
+
+/// FR/RC C3. A refusal thrown as the script's first statement escapes before its door call has
+/// even run, so the run waits for the door's answer before it settles.
+#[test]
+fn a_refusal_thrown_before_any_await_settles_as_its_op() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code = "throw __neo.refuse('page.route', 'method_unavailable', 'page.route: x');";
+        let end = run_code(&rig, &run, code).await;
+        let ScriptOutcome::OperationFailed(failure) = end.outcome else {
+            return Err(format!("expected the refusal's failure, got {:?}", end.outcome).into());
+        };
+        assert_eq!(
+            (failure.operation, failure.error.code()),
+            (
+                OperationId {
+                    run: run.id(),
+                    seq: 1
+                },
+                ErrorCode::METHOD_UNAVAILABLE
+            ),
+            "the run's first op, though the script threw it before it ever yielded to Rust"
+        );
+        Ok(())
+    })
+}
+
+/// FR/RC C2. A refusal the script catches is still a try the trace counts, answered and on the
+/// record by the time a run that returns has settled.
+#[test]
+fn a_caught_refusal_is_on_the_record_and_never_left_running() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code = format!(
+            "{YIELD_TO_RUST}
+            try {{
+              throw __neo.refuse('page.route', 'method_unavailable', 'page.route: x');
+            }} catch {{}}
+            return 1;"
+        );
+        assert_eq!(returned(run_code(&rig, &run, &code).await)?, json!(1));
+        run.stop(StopReason::ScriptReturned);
+        let mut ops = run.close_ops();
+        within(Duration::from_secs(5), async {
+            while ops.join_next().await.is_some() {}
+        })
+        .await?;
+        assert!(
+            run.report().not_awaited.is_empty(),
+            "the door answered the refusal before the run settled: {:?}",
+            run.report().not_awaited
+        );
+        rig.sink.flush().await?;
+        let row = rig
+            .store
+            .operation(OperationId {
+                run: run.id(),
+                seq: 1,
+            })
+            .await?
+            .ok_or("the caught refusal is on the record")?;
+        assert_eq!(
+            (row.name.as_str(), row.outcome, row.delivery),
+            ("page.route", Some(Outcome::Error), Some(Delivery::NotSent))
+        );
+        Ok(())
+    })
+}
+
+/// FR/RC C2. A run that ends on a throw of the script's own waits on no refusal but the one it
+/// throws, so a caught refusal is on the record only because the door admits each call at the
+/// call. Raised after the script's first yield, its door call would otherwise never run.
+#[test]
+fn a_caught_refusal_is_on_the_record_when_the_script_then_throws() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code = format!(
+            "{YIELD_TO_RUST}
+            try {{
+              throw __neo.refuse('page.route', 'method_unavailable', 'page.route: x');
+            }} catch {{}}
+            throw new Error('after the refusal');"
+        );
+        let error = failed(run_code(&rig, &run, &code).await)?;
+        assert_eq!(
+            (error.owner(), error.code()),
+            (ErrorOwner::Script, ErrorCode::SCRIPT_ERROR),
+            "the run fails with the script's own throw: {error}"
+        );
+        rig.sink.flush().await?;
+        let row = rig
+            .store
+            .operation(OperationId {
+                run: run.id(),
+                seq: 1,
+            })
+            .await?
+            .ok_or("the caught refusal is on the record")?;
+        assert_eq!(
+            (row.name.as_str(), row.outcome, row.delivery),
+            ("page.route", Some(Outcome::Error), Some(Delivery::NotSent))
+        );
+        Ok(())
+    })
+}
+
+/// FR/RC C2. A caught refusal the script returns as its value is serialized only once the door
+/// answered it, so the agent reads the op that links it to its trace row, though the script never
+/// yielded to Rust.
+#[test]
+fn a_caught_refusal_returned_as_the_value_carries_its_operation_id() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code = "try {
+              throw __neo.refuse('page.route', 'method_unavailable', 'page.route: x');
+            } catch (e) {
+              return e;
+            }";
+        let value = returned(run_code(&rig, &run, code).await)?;
+        assert_eq!(
+            (value.get("code"), value.get("operationId")),
+            (
+                Some(&json!("method_unavailable")),
+                Some(&json!(format!("{}.1", run.id())))
+            ),
+            "the returned refusal names its op: {value}"
+        );
+        Ok(())
+    })
+}
+
+/// FR/RC C1. The door is the source of truth for a refusal's fields: once the script has yielded
+/// to Rust, the error it holds carries the op the door recorded and the code the door decided,
+/// even where the prelude named a code a refusal may not claim. Its message stays the realm's own
+/// text.
+#[test]
+fn a_refusal_takes_its_fields_from_the_door() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code = format!(
+            "const refused = __neo.refuse('page.route', 'method_unavailable', 'page.route: x');
+            const spoofed = __neo.refuse('page.route', 'browser_disconnected', 'page.route: y');
+            {YIELD_TO_RUST}
+            const fields = (e) => ({{ name: e.name, neo: e instanceof NeoError, code: e.code,
+              owner: e.owner, delivery: e.delivery, retryable: e.retryable,
+              operationId: e.operationId, message: e.message }});
+            return {{ refused: fields(refused), spoofed: fields(spoofed) }};"
+        );
+        let fields = returned(run_code(&rig, &run, &code).await)?;
+        let expected = |seq: u32, code: &str, message: &str| {
+            json!({
+                "name": "NeoError", "neo": true, "code": code, "owner": "script",
+                "delivery": "not_sent", "retryable": true,
+                "operationId": format!("{}.{seq}", run.id()), "message": message,
+            })
+        };
+        assert_eq!(
+            fields,
+            json!({
+                "refused": expected(1, "method_unavailable", "page.route: x"),
+                "spoofed": expected(2, "invalid_input", "page.route: y"),
+            }),
+            "each error names its op, and carries the code the door gave it"
+        );
+        Ok(())
+    })
+}
+
+/// FR/RC C5. A provider may build its parameter asynchronously, as the Playwright prelude's `page`
+/// reads its frame tree through an op before the agent's first statement. One that rejects fails
+/// the run like any throw. `__neo.run` is what `run_script` calls with the agent's function.
+#[test]
+fn a_provider_may_return_a_promise() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r#"
+            const init = '{"page":null,"pages":[]}';
+            __neo.provide('frames', async () =>
+              (await __neo.invoke('test.echo', { frames: ['main'] })).frames);
+            const built = JSON.parse(
+              await __neo.run(async (...args) => ({ frames: args[args.length - 1] }), init));
+            __neo.provide('broken', async () => { throw new Error('the page could not be read'); });
+            const broken = JSON.parse(await __neo.run(async () => 'ran', init));
+            return { built, broken: [broken.thrown?.kind, broken.thrown?.message] };"#;
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({
+                "built": { "ok": { "frames": ["main"] } },
+                "broken": ["error", "the page could not be read"],
+            }),
+            "the agent's function gets what the promise resolved to, and never runs past a rejection"
+        );
+        Ok(())
+    })
+}
+
+/// FR/RC C1. A reply listener that throws on a refusal's answer leaves the realm without the door's
+/// fields, so the refusal settles as the script's own throw: never a false op claim, and never Neo's
+/// internal error. The door still recorded the try.
+#[test]
+fn a_refusal_whose_reply_listener_throws_settles_as_a_script_error() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code = r"
+            __neo.onReply(() => { throw new Error('a reply listener broke'); });
+            throw __neo.refuse('page.route', 'method_unavailable', 'page.route: x');";
+        let error = failed(run_code(&rig, &run, code).await)?;
+        assert_eq!(
+            (error.owner(), error.code()),
+            (ErrorOwner::Script, ErrorCode::SCRIPT_ERROR),
+            "{error}"
+        );
+        assert!(
+            error.message().starts_with("NeoError: page.route: x"),
+            "the refusal the script threw, as its own error: {error}"
+        );
+        rig.sink.flush().await?;
+        let row = rig
+            .store
+            .operation(OperationId {
+                run: run.id(),
+                seq: 1,
+            })
+            .await?
+            .ok_or("the refusal is on the record")?;
+        assert_eq!(row.name, "page.route");
+        Ok(())
+    })
+}
+
 #[test]
 fn a_thrown_error_is_a_script_error_at_its_line() -> Result<(), TestError> {
     on_neo_runtime(async {
@@ -269,6 +569,38 @@ fn an_operation_left_running_names_the_line_that_started_it() -> Result<(), Test
         assert!(
             matches!(line.site, Some(CallSite { column, .. }) if column > 0),
             "with its column"
+        );
+        Ok(())
+    })
+}
+
+/// An op reaches the door at the script's call, wherever the script is: one it calls after its
+/// first yield to Rust and never awaits is on the record too, cut as not awaited once the script
+/// returns. A call that waited for the realm to yield again would never reach the door from a
+/// script that returns first.
+#[test]
+fn an_operation_left_running_after_an_await_is_still_cut_as_not_awaited() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code = format!("{YIELD_TO_RUST}\n__neo.invoke('test.hang', {{}});\nreturn 1;");
+        assert_eq!(returned(run_code(&rig, &run, &code).await)?, json!(1));
+        run.stop(StopReason::ScriptReturned);
+        let mut ops = run.close_ops();
+        within(Duration::from_secs(5), async {
+            while ops.join_next().await.is_some() {}
+        })
+        .await?;
+        let names: Vec<&str> = run
+            .report()
+            .not_awaited
+            .iter()
+            .map(|line| line.name)
+            .collect();
+        assert_eq!(
+            names,
+            ["test.hang"],
+            "the op the script left running was admitted, then cut"
         );
         Ok(())
     })

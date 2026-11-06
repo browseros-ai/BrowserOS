@@ -293,8 +293,13 @@ fn install(ctx: &Ctx<'_>, bridge: &Arc<Bridge>) -> rquickjs::Result<()> {
     let invoke = {
         let bridge = Arc::clone(bridge);
         move |name: String, input: String, site: String| {
+            // rquickjs calls this closure at the script's call and spawns the future it returns,
+            // which first runs when the realm next yields to Rust. So the door admits the call
+            // here: a script that settles before it yields again, as one that never awaits an op
+            // does, would otherwise leave that op with no id and no record.
+            let pending = bridge.submit(name, &input, &site);
             let bridge = Arc::clone(&bridge);
-            async move { bridge.invoke(name, input, site).await }
+            async move { bridge.answer(pending).await }
         }
     };
     globals.set("__neo_invoke", Func::from(Async(invoke)))?;

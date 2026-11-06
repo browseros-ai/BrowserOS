@@ -13,6 +13,7 @@ use tokio::sync::oneshot;
 use super::op_ctx::{OpCore, OpState, PageChange, PageReport};
 use super::operation_guard::{Ending, OpName, OpStart, OperationGuard, StartTab};
 use super::page_target::TargetHandle;
+use super::refusal_brand::RefusalBrand;
 use super::registry::DecodedCall;
 use super::{
     ErrorCode, HeldValues, LeafError, MethodSpec, OpFailure, OperationError, PageTarget, Policy,
@@ -322,8 +323,8 @@ impl Dispatcher {
     }
 
     /// The synchronous front of the door: the op id, the method, the decoded input, and the
-    /// start record. A call refused here (unknown or hidden name, bad input) is answered at
-    /// once; anything else comes back to run.
+    /// start record. A call refused here (a script's refusal brand, an unknown or hidden name,
+    /// bad input) is answered at once; anything else comes back to run.
     fn admit(
         &self,
         run: &Arc<RunCtx>,
@@ -345,27 +346,45 @@ impl Dispatcher {
         let registered = self.registry.get(&name);
         let callable =
             registered.is_some_and(|registered| caller.may_call(registered.spec().visibility));
+        // A refusal brand (FR/RC C4) is the prelude's refusal of a method Neo does not serve. It is
+        // honoured from the script alone: Neo's own Rust never sends one, so a brand in a Neo
+        // call's input is input like any other, script data a method passes on to a child op
+        // included.
+        let brand = match caller {
+            Caller::Script => RefusalBrand::of(&input),
+            Caller::Neo => None,
+        };
         // An `Internal` name gets the same answer as a missing one, so a script cannot probe
-        // for hidden methods; the record keeps the real spec and its redaction.
+        // for hidden methods; the record keeps the real spec and its redaction. A brand is
+        // decided before visibility is, so it gets one answer under every name, and it is never
+        // decoded or run, its page never opened and no rule asked.
         //
         // A name the caller may not call is the script's own string, and may hold a value its
         // run holds (decision 34). The start record gets it as typed, and the trace writer masks
         // it there with the process's set and the start's `also_mask`, then clips it; a start
         // sent once the run lost a held value withholds it instead, decided with that same
-        // `also_mask` ([`OpName::Uncallable`]). The refusal is the door's own text: the name in it
-        // is masked and cut here, which bounds its size, and masked again, or withheld, with what
-        // the run holds as the refusal enters the realm.
-        let (decoded, name) = match registered {
-            Some(registered) if callable => (registered.decode(&input), OpName::Callable(name)),
-            Some(_) | None => {
+        // `also_mask` ([`OpName::Uncallable`]). A refusal is the door's own text: the name and a
+        // brand's reason in it are masked and cut here, which bounds its size, and masked again,
+        // or withheld, with what the run holds as the refusal enters the realm.
+        let decoded = match (brand, registered) {
+            (Some(brand), _) => {
+                let mask = RunMask::of(&self.secrets, &run.held_values());
+                Err(brand.refusal(&mask.shown(name.clone(), NAME_CHARS), &mask))
+            }
+            (None, Some(registered)) if callable => registered.decode(&input),
+            (None, Some(_) | None) => {
                 let shown =
                     RunMask::of(&self.secrets, &run.held_values()).shown(name.clone(), NAME_CHARS);
-                let refusal = OperationError::script(
+                Err(OperationError::script(
                     ErrorCode::METHOD_UNAVAILABLE,
                     format_args!("`{shown}` is not a Neo method"),
-                );
-                (Err(refusal), OpName::Uncallable(name))
+                ))
             }
+        };
+        let name = if callable {
+            OpName::Callable(name)
+        } else {
+            OpName::Uncallable(name)
         };
         let (spec, redaction) = registered.map_or_else(
             || (UNKNOWN_METHOD, Arc::default()),

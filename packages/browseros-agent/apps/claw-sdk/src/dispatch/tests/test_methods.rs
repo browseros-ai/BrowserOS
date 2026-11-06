@@ -67,6 +67,7 @@ pub(super) fn test_methods(
     registry.define(Fill)?;
     registry.define(Budget)?;
     registry.define(Echo)?;
+    registry.define(AnyInput)?;
     registry.define(Pump)
 }
 
@@ -683,6 +684,32 @@ impl Method for Echo {
             Ok(json!({ "text": input.text }))
         };
         future::ready(echoed)
+    }
+}
+
+/// Hands back whatever input it gets. It has no input type of its own, so it runs on any JSON
+/// the door lets through: whether it ran shows whether the door read an input as a call or as
+/// a refusal brand.
+struct AnyInput;
+
+impl Method for AnyInput {
+    type Input = Value;
+    type Output = Value;
+
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new("test.any", Effect::Read)
+    }
+
+    fn target(_input: &Value) -> Option<&PageTarget> {
+        None
+    }
+
+    fn call(
+        &self,
+        _op: &OpCtx<Self>,
+        input: Value,
+    ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        future::ready(Ok(input))
     }
 }
 

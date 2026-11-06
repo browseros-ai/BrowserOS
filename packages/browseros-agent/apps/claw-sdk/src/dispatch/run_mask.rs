@@ -5,6 +5,7 @@
 //!  into the realm ─┬ OperationGuard::settle: a script's op reply, its value, error and pages
 //!                  └ RunService::open_pages: the run's init pages
 //!  kept by Neo ────┬ Dispatcher::admit: an unknown name in its refusal, cut at 128 characters
+//!                  ├ RefusalBrand::refusal: a prelude refusal's reason, cut at TEXT_CHARS
 //!                  └ run_script::thrown_error: what the script threw, cut at TEXT_CHARS
 //! ```
 //!

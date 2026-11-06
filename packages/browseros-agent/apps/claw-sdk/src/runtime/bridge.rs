@@ -12,7 +12,7 @@ use tokio::time::{self, Duration, Instant};
 use super::{LogLevel, RunLogs};
 use crate::browser::PageRef;
 use crate::dispatch::{
-    Call, CallSite, Dispatcher, OpFailure, OpReply, PageFact, RunCtx, StopReason,
+    Call, CallSite, Dispatcher, OpFailure, OpReply, PageFact, PendingReply, RunCtx, StopReason,
 };
 
 /// How many failed ops a run remembers for its own error. A script's uncaught `NeoError` is
@@ -90,12 +90,18 @@ impl Bridge {
         }
     }
 
-    /// `__neo_invoke(name, inputJson, site)`: one SDK call through the door. Always resolves to
-    /// an envelope, never rejects, so every failure reaches the script as a `NeoError` with its
-    /// owner and delivery.
-    pub(crate) async fn invoke(&self, name: String, input_json: String, site: String) -> String {
-        let call = Call::script(name, decode_input(&input_json), CallSite::parse(&site));
-        let reply = self.dispatcher.submit(&self.run, call).wait().await;
+    /// `__neo_invoke(name, inputJson, site)`, as the script calls it: one SDK call through the
+    /// door, admitted now, so it has its op id and its start record before the realm runs on. A
+    /// prelude's refusal comes this way too, as a refusal brand (`dispatch/refusal_brand.rs`).
+    pub(crate) fn submit(&self, name: String, input_json: &str, site: &str) -> PendingReply {
+        let call = Call::script(name, decode_input(input_json), CallSite::parse(site));
+        self.dispatcher.submit(&self.run, call)
+    }
+
+    /// The answer `__neo_invoke`'s promise resolves to. Always an envelope, never a rejection, so
+    /// every failure reaches the script as a `NeoError` with its owner and delivery.
+    pub(crate) async fn answer(&self, pending: PendingReply) -> String {
+        let reply = pending.wait().await;
         if let Err(failure) = &reply.outcome {
             let mut failures = lock(&self.failures);
             if failures.len() == FAILURES_REMEMBERED {

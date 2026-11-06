@@ -8,7 +8,8 @@
 //!      │        natives: __neo_invoke(name, json, site) → Promise<string>, never rejects
 //!      │                 __neo_log(level, text)       __neo_sleep(ms) → Promise
 //!      ▼
-//!  Bridge::invoke ─▶ Dispatcher::submit ─▶ op task on the run's JoinSet ─▶ envelope over a oneshot
+//!  Bridge::submit, at the call ─▶ Dispatcher::submit ─▶ op task on the run's JoinSet
+//!      ─▶ Bridge::answer, once the realm yields: the envelope, over a oneshot
 //! ```
 //!
 //! Three rules keep QuickJS safe inside a multi-threaded server:
