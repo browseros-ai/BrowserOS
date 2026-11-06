@@ -856,9 +856,9 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tests_that_forms_reach_the_stubs_and_reply_with_served_error_envelopes() {
+    async fn tests_that_remaining_forms_stubs_reply_with_served_error_envelopes() {
         let tab = FakeTab::ready();
-        for method in FORMS {
+        for method in ["press", "check", "uncheck"] {
             let progress = Progress::for_test(1000.0);
             let route = route_frame(method, forms_params(method, "input"))
                 .route

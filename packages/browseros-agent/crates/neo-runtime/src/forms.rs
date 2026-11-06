@@ -300,54 +300,129 @@ fn finish_select(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use std::time::Duration;
+
     use neo_runtime_spec::injected::MissingState;
+    use tokio::time;
 
     use super::*;
-    use crate::click::tests::FakeTab;
+    use crate::click::tests::{FakeTab, Step};
     use crate::progress::DeliveryCell;
     use crate::run::Delivery;
 
-    // The skeleton must not call a page step. P3/P4 can script these methods on the same
-    // FakeTab; the click behavior and its counters are already shared, without another fake.
-    impl FormTab for FakeTab {
-        async fn fill(
-            &self,
-            _element: &u32,
-            _value: &str,
-            _force: bool,
-            _input: Self::Input,
-            _ticket: InputTicket,
-        ) -> Result<FillOutcome, PageError> {
-            panic!("the forms skeleton must not fill")
+    pub(crate) struct FormSteps {
+        pub(crate) fill: Step<Result<InjectedFillResult, PageError>>,
+        pub(crate) select: Step<Result<InjectedSelectOptionsResult, PageError>>,
+        pub(crate) value: Step<Result<Option<InputValueMatch>, PageError>>,
+        pub(crate) checked: Step<Result<CheckedState, PageError>>,
+        pub(crate) focus: Step<Result<FocusOutcome, PageError>>,
+        pub(crate) input_wait: Duration,
+    }
+
+    impl FormSteps {
+        pub(crate) fn ready() -> Self {
+            let trip = Duration::from_millis(1);
+            Self {
+                fill: Step::always(
+                    trip,
+                    Ok(InjectedFillResult {
+                        outcome: FormFillOutcome::Status(FormFillOutcomeStatus::Done),
+                    }),
+                ),
+                select: Step::always(
+                    trip,
+                    Ok(InjectedSelectOptionsResult {
+                        values: Some(vec!["one".into()]),
+                        outcome: None,
+                    }),
+                ),
+                value: Step::always(
+                    trip,
+                    Ok(Some(InputValueMatch {
+                        value: "one".into(),
+                        preview: "<input/>".into(),
+                    })),
+                ),
+                checked: Step::always(
+                    trip,
+                    Ok(CheckedState {
+                        matches: false,
+                        received: Some("unchecked".into()),
+                        is_radio: Some(false),
+                    }),
+                ),
+                focus: Step::always(trip, Ok(FocusOutcome::Done)),
+                input_wait: Duration::ZERO,
+            }
         }
-        async fn select_options(
+    }
+
+    impl FormTab for FakeTab {
+        fn fill(
             &self,
             _element: &u32,
-            _options: &[SelectOption],
-            _force: bool,
-            _input: Self::Input,
-            _ticket: InputTicket,
-        ) -> Result<SelectOutcome, PageError> {
-            panic!("the forms skeleton must not select options")
+            value: &str,
+            force: bool,
+            input: Self::Input,
+            ticket: InputTicket,
+        ) -> impl Future<Output = Result<FillOutcome, PageError>> + Send {
+            self.record("fill");
+            self.record(format!("fill {value:?} force={force}"));
+            let result = self.forms.fill.next();
+            let duration = self.forms.fill.duration;
+            let (sender, receiver) = oneshot::channel();
+            tokio::spawn(async move {
+                time::sleep(duration).await;
+                let result = finish_fill(result, ticket);
+                drop(input);
+                let _waiting = sender.send(result);
+            });
+            async move { receiver.await.expect("fake page task") }
+        }
+        fn select_options(
+            &self,
+            _element: &u32,
+            options: &[SelectOption],
+            force: bool,
+            input: Self::Input,
+            ticket: InputTicket,
+        ) -> impl Future<Output = Result<SelectOutcome, PageError>> + Send {
+            self.record("select_options");
+            self.record(format!("select {options:?} force={force}"));
+            let result = self.forms.select.next();
+            let duration = self.forms.select.duration;
+            let (sender, receiver) = oneshot::channel();
+            tokio::spawn(async move {
+                time::sleep(duration).await;
+                let result = finish_select(result, ticket);
+                drop(input);
+                let _waiting = sender.send(result);
+            });
+            async move { receiver.await.expect("fake page task") }
         }
         async fn checked_state(&self, _element: &u32) -> Result<CheckedState, PageError> {
-            panic!("the forms skeleton must not query checked state")
+            self.record("checked_state");
+            self.forms.checked.answer().await
         }
         async fn focus(
             &self,
             _element: &u32,
-            _reset: bool,
-            _input: Self::Input,
+            reset: bool,
+            input: Self::Input,
         ) -> Result<FocusOutcome, PageError> {
-            panic!("the forms skeleton must not focus")
+            self.record(format!("focus {reset}"));
+            let result = self.forms.focus.answer().await;
+            drop(input);
+            result
         }
         async fn input_value(
             &self,
             _selector: &str,
             _strict: bool,
         ) -> Result<Option<InputValueMatch>, PageError> {
-            panic!("the forms skeleton must not read values")
+            self.record("input_value");
+            self.forms.value.answer().await
         }
     }
 

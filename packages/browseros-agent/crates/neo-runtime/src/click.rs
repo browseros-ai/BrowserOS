@@ -1088,6 +1088,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::click_goldens;
+    use crate::forms::tests::FormSteps;
     use crate::progress::{self, ErrorName};
     use crate::run::Delivery;
 
@@ -1186,6 +1187,7 @@ pub(crate) mod tests {
 
     /// A scripted tab. Every page step records its name in `calls`.
     pub(crate) struct FakeTab {
+        pub(crate) forms: FormSteps,
         /// Instant, like every preparation after the run's first.
         pub(crate) prepare: Step<Result<(), PageError>>,
         pub(crate) describe: Step<Result<SelectorFacts, PageError>>,
@@ -1205,6 +1207,7 @@ pub(crate) mod tests {
         /// The `ok` page: one button that every step finds ready.
         pub(crate) fn ready() -> Self {
             Self {
+                forms: FormSteps::ready(),
                 prepare: Step::always(Duration::ZERO, Ok(())),
                 describe: Step::always(
                     ROUND_TRIP,
@@ -1306,8 +1309,11 @@ pub(crate) mod tests {
             self.geometry.answer().await
         }
 
-        /// Granted at once: one call per test never waits for a turn.
+        /// Forms can script a blocked input wait; click tests grant their turns at once.
         async fn input(&self) -> FakeInput {
+            if !self.forms.input_wait.is_zero() {
+                time::sleep(self.forms.input_wait).await;
+            }
             self.record("input");
             FakeInput {
                 _turn: Arc::new(FakeTurn(Arc::clone(&self.calls))),
