@@ -41,6 +41,7 @@ from leak_plan import (
     HELD,
     KINDS,
     LONG_SPELLINGS,
+    OPENER_PROBES,
     PLACES,
     SPECIAL_TAIL,
     SPECS,
@@ -2436,9 +2437,12 @@ def assign_residuals(cells: Sequence[Cell]) -> list[Cell]:
     A record or disk copy of a leak takes the residual of the agent-side leak of the same
     plant through the same run (`derived_from`). A copy that names its run inherits from
     that run only: when the run's own answer did not leak the plant, the copy is a new
-    leak, whatever other runs leaked. One with no run takes a residual only when every
-    agent-side leak of that plant carries the same one; otherwise it is new. Without
-    this, one cold FX-F read would show up as six new host leaks.
+    leak, whatever other runs leaked. When it did, the copy takes that answer's label even
+    over a rule that labels the copy itself, since a copy of a new leak is new (a record
+    of a script's read of another tab would otherwise read as BD-L2). One with no run
+    takes a residual only when every agent-side leak of that plant carries the same one,
+    and keeps a rule's label; otherwise it is new. Without this, one cold FX-F read would
+    show up as six new host leaks.
     """
     out: list[Cell] = []
     agent_leaks: dict[str, list[Cell]] = {}
@@ -2453,7 +2457,7 @@ def assign_residuals(cells: Sequence[Cell]) -> list[Cell]:
         ):
             agent_leaks.setdefault(cell.region.plant.id, []).append(labelled)
     for i, cell in enumerate(out):
-        if cell.verdict is not Verdict.LEAKED or cell.residual is not None:
+        if cell.verdict is not Verdict.LEAKED:
             continue
         if (
             SPECS[cell.channel].family in AGENT_FAMILIES
@@ -2463,8 +2467,10 @@ def assign_residuals(cells: Sequence[Cell]) -> list[Cell]:
         sources = agent_leaks.get(cell.region.plant.id, [])
         if cell.run_id:
             pool = [s for s in sources if s.run_id == cell.run_id]
-        else:
+        elif cell.residual is None:
             pool = sources
+        else:
+            continue
         labels = {s.residual for s in pool}
         if pool and len(labels) == 1:
             out[i] = dataclasses.replace(
@@ -2652,9 +2658,11 @@ def judge(evidence: Evidence) -> Judgement:
                 o.hit,
             )
         )
-    labelled = assign_residuals(cells)
+    evaluations = _evaluations(evidence)
+    labelled = assign_residuals(_sent_refusals(cells, evaluations))
     searched = {k: (v[0], v[1]) for k, v in observer.searched.items()}
     headline = _headline(labelled)
+    headline.update(_opener_links(labelled, evaluations))
     captures = {c.id: c for c in evidence.captures}
     replays = [c for c in evidence.captures if c.replay_of in captures]
     if replays:
@@ -2678,6 +2686,93 @@ def judge(evidence: Evidence) -> Judgement:
         if live(proof, region)
     )
     return Judgement(tuple(labelled), evidence.failures, headline, searched, present)
+
+
+def _evaluations(evidence: Evidence) -> dict[str, list[str]]:
+    """Each run's page.evaluate ops by their delivery ("not_sent", "done", "unknown"), as
+    the host's operation records state it. A run refused before any op has none."""
+    out: dict[str, list[str]] = {}
+    for c in evidence.captures:
+        if c.channel is not ChannelId.OPERATION or not c.run_id:
+            continue
+        try:
+            record = json.loads(evidence.blob(c.blob))
+        except (OSError, ValueError):
+            continue
+        if isinstance(record, dict) and record.get("name") == "page.evaluate":
+            out.setdefault(c.run_id, []).append(str(record.get("delivery")))
+    return out
+
+
+def _sent_refusals(
+    cells: Sequence[Cell], evaluations: Mapping[str, Sequence[str]]
+) -> list[Cell]:
+    """An opener probe's refusal holds only with nothing sent: once its run's script
+    reached a page (delivery done or unknown), the refusal no longer shows the other tab
+    stayed untouched, so its cells are unproven."""
+    out = []
+    for cell in cells:
+        sent = sorted(
+            {d for d in evaluations.get(cell.run_id or "", ()) if d != "not_sent"}
+        )
+        if cell.channel in OPENER_PROBES and cell.verdict is Verdict.WITHHELD and sent:
+            why = (
+                f"refused ({cell.why}) after page.evaluate was sent ({', '.join(sent)})"
+            )
+            cell = dataclasses.replace(cell, verdict=Verdict.INCONCLUSIVE, why=why)
+        out.append(cell)
+    return out
+
+
+def _opener_links(
+    cells: Sequence[Cell], evaluations: Mapping[str, Sequence[str]]
+) -> dict[str, str]:
+    """Each main-world read across an opener link (finding 6) in one line.
+
+    Refused, it is closed only when nothing was sent and none of the probe page's values
+    turns up raw in any exit: the reply and its error, every /v1 record and event,
+    trace.db. A refused run returns nothing, so even a by-design residual found raw
+    reopens it. Served, it is what its reads came back as, new leaks apart from the known
+    residuals (the PLAIN control and the R1 and R3 gaps leave raw by design)."""
+    out = {}
+    for channel in OPENER_PROBES:
+        key = f"{channel} across the opener link (finding 6)"
+        agent = [c for c in cells if c.channel is channel]
+        judged = [c for c in agent if c.verdict is not Verdict.NOT_APPLICABLE]
+        if not judged:
+            out[key] = "not measured"
+            continue
+        plants = {c.region.plant.id for c in agent}
+        raw = [
+            c
+            for c in cells
+            if c.verdict is Verdict.LEAKED and c.region.plant.id in plants
+        ]
+        refused = {c.why for c in judged if c.verdict is Verdict.WITHHELD}
+        if all(c.verdict is Verdict.WITHHELD for c in judged):
+            sent = sorted(
+                {d for c in judged for d in evaluations.get(c.run_id or "", ())}
+            )
+            delivery = f"page.evaluate {', '.join(sent)}" if sent else "no op"
+            found = f"LEAK: {len(raw)} cells raw" if raw else "nothing raw in any exit"
+            out[key] = f"refused ({', '.join(sorted(refused))}; {delivery}), {found}"
+            continue
+        new = [c for c in raw if c.residual is None]
+        known = collections.Counter(c.residual for c in raw if c.residual)
+        verdicts = collections.Counter(c.verdict for c in judged)
+        parts = [f"{len(new)} new leaks" if new else "no new leak"]
+        parts += [
+            f"{verdicts[v]} {v}"
+            for v in (Verdict.MASKED, Verdict.WITHHELD, Verdict.INCONCLUSIVE)
+            if verdicts[v]
+        ]
+        if known:
+            parts.append(
+                "raw by design: "
+                + ", ".join(f"{n} {k}" for k, n in sorted(known.items()))
+            )
+        out[key] = "served: " + "; ".join(parts)
+    return out
 
 
 def _neo_uploads(cells: Sequence[Cell], steps: Sequence[Step]) -> str:

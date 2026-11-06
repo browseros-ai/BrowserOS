@@ -1882,6 +1882,12 @@ COPY_REFUSED = frozenset({"script/sensitive_copy_refused"})
 _COPY_OPS = frozenset({"keyboard.press", "locator.focus"})
 # A main-world method the prelude itself refuses (neo/unsupported) is not built yet.
 SCRIPT_NOT_BUILT = NOT_BUILT | {"neo/unsupported"}
+# A main-world script on a page an opener link connects to another tab, refused by
+# sdk-playwright M3's default recheck_reach until the host implements it: fail closed, with
+# nothing sent. Held, and closed only if nothing was sent and no value turns up anywhere
+# (leak_judge's opener-link headline).
+REACH_REFUSED = frozenset({"neo/unsupported"})
+OPENER_PROBES = (ChannelId.OPENER_EVALUATE, ChannelId.POPUP_EVALUATE)
 # page.evaluate and waitForFunction reach what the top document's own script can.
 _TOP_WORLD = reach(fields=tuple(MAIN_WORLD_STEPS), exposures=(Exposure.ECHO,))
 
@@ -2332,8 +2338,8 @@ SPECS: Mapping[ChannelId, ChannelSpec] = {
             reach(fields=OPENER_FIELDS, exposures=(Exposure.ECHO,)),
             code=opener_read,
             batch="page",
-            refusals=HELD,
-            not_built=SCRIPT_NOT_BUILT,
+            refusals=HELD | REACH_REFUSED,
+            not_built=NOT_BUILT,
             ops=frozenset({"page.evaluate", "context.pages"}),
             by_selector=False,
         ),
@@ -2343,8 +2349,8 @@ SPECS: Mapping[ChannelId, ChannelSpec] = {
             reach(fields=(Location.POPUP,)),
             code=popup_read,
             batch="page",
-            refusals=HELD,
-            not_built=SCRIPT_NOT_BUILT,
+            refusals=HELD | REACH_REFUSED,
+            not_built=NOT_BUILT,
             ops=frozenset({"page.evaluate"}),
             by_selector=False,
         ),

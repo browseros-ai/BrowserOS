@@ -3359,6 +3359,49 @@ class FinishTests(unittest.TestCase):
             self.assertFalse(session.captcha_key_file.exists())
 
 
+class OpenerLinkTests(unittest.TestCase):
+    """Finding 6's two probes, while M3's default recheck_reach refuses them: closed only
+    when nothing was sent and no value of the probe's page turns up raw in any exit."""
+
+    KEY = f"{P.ChannelId.OPENER_EVALUATE} across the opener link (finding 6)"
+
+    def setUp(self) -> None:
+        self.inst = P.make_instance(P.Layout.SCRIPT, seed="ol", index=1)
+        self.pw = self.inst.plant(P.Kind.PASSWORD, P.Location.MAIN)
+        (self.field,) = self.inst.field_regions(self.pw)
+
+    def refused(self) -> J.Cell:
+        refusal = J.Refusal("neo", "unsupported")
+        o = obs(self.field, channel=P.ChannelId.OPENER_EVALUATE, refusal=refusal)
+        return cell(o, run="run1")
+
+    def line(self, cells: list[J.Cell], delivery: str) -> str:
+        evaluations = {"run1": [delivery]}
+        cells = J.assign_residuals(J._sent_refusals(cells, evaluations))
+        return J._opener_links(cells, evaluations)[self.KEY]
+
+    def test_a_reach_refusal_with_nothing_sent_or_raw_closes_the_link(self) -> None:
+        self.assertIs(self.refused().verdict, J.Verdict.WITHHELD)
+        self.assertEqual(
+            self.line([self.refused()], "not_sent"),
+            "refused (neo/unsupported; page.evaluate not_sent), nothing raw in any exit",
+        )
+
+    def test_a_refusal_after_its_script_was_sent_is_unproven(self) -> None:
+        (sent,) = J._sent_refusals([self.refused()], {"run1": ["done"]})
+        self.assertIs(sent.verdict, J.Verdict.INCONCLUSIVE)
+
+    def test_a_value_raw_in_trace_db_reopens_a_refused_link(self) -> None:
+        hit = J.Hit(self.pw.id, self.field.id, J.Form.PLAIN, 0, "")
+        disk = cell(
+            obs(self.field, channel=P.ChannelId.TRACE_STORE, source="disk", hit=hit)
+        )
+        self.assertEqual(
+            self.line([self.refused(), disk], "not_sent"),
+            "refused (neo/unsupported; page.evaluate not_sent), LEAK: 1 cells raw",
+        )
+
+
 class ResidualTests(unittest.TestCase):
     def setUp(self) -> None:
         self.inst = P.make_instance(P.Layout.ECHOES, seed="res", index=1)
@@ -3390,6 +3433,22 @@ class ResidualTests(unittest.TestCase):
         )
         self.assertEqual(
             [c.residual for c in J.assign_residuals([script, text])], [None, "BD-L2"]
+        )
+
+    def test_a_record_of_a_new_leak_across_tabs_is_new_not_l2(self) -> None:
+        inst = P.make_instance(P.Layout.SCRIPT, seed="res", index=3)
+        plant = inst.plant(P.Kind.PASSWORD, P.Location.POPUP)
+        (field,) = inst.field_regions(plant)
+        hit = J.Hit(plant.id, field.id, J.Form.PLAIN, 0, "")
+        agent, record = (
+            cell(obs(field, channel=channel, hit=hit, source=source), run="run1")
+            for channel, source in (
+                (P.ChannelId.POPUP_EVALUATE, "c1"),
+                (P.ChannelId.RUN, "h1"),
+            )
+        )
+        self.assertEqual(
+            [c.residual for c in J.assign_residuals([agent, record])], [None, None]
         )
 
     def test_a_cold_cross_site_echo_is_xsite_and_a_short_one_by_design(self) -> None:
