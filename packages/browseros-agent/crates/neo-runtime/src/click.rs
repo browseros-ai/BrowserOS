@@ -992,6 +992,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
+    use futures_util::future;
     use tokio::sync::oneshot;
     use tokio::time;
     use tokio::time::Instant;
@@ -1216,12 +1217,16 @@ mod tests {
             self.geometry.answer().await
         }
 
-        /// Granted at once: one call per test never waits for a turn.
-        async fn input(&self) -> FakeInput {
-            self.record("input");
-            FakeInput {
-                _turn: Arc::new(FakeTurn(Arc::clone(&self.calls))),
-            }
+        /// Granted at once: one call per test never waits for a turn. `future::lazy`, not an
+        /// `async fn` without an await (Rust 1.98's `unused_async_trait_impl`), so the turn is
+        /// still recorded only when the click first polls it.
+        fn input(&self) -> impl Future<Output = FakeInput> + Send {
+            future::lazy(|_| {
+                self.record("input");
+                FakeInput {
+                    _turn: Arc::new(FakeTurn(Arc::clone(&self.calls))),
+                }
+            })
         }
 
         async fn arm(
