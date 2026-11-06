@@ -71,6 +71,24 @@ test('tests that every forms key list follows the Playwright schema', () => {
   }
 })
 
+test('tests that missing inputValue and selectOption results are contract errors', async () => {
+  const connection = new Connection(0)
+  connection.send = async () => undefined
+  const page = new Page(
+    'page@T',
+    'frame@T',
+    '',
+    new BrowserContext(),
+    connection,
+  )
+  await expect(page.mainFrame().inputValue('input')).rejects.toThrow(
+    /contract error/,
+  )
+  await expect(page.mainFrame().selectOption('select', 'one')).rejects.toThrow(
+    /contract error/,
+  )
+})
+
 test('tests that forms send the outer API name, strictness and timeout and unwrap results', async () => {
   const connection = new Connection(0)
   const calls: Parameters<Connection['send']>[] = []
@@ -112,7 +130,9 @@ test('tests that forms send the outer API name, strictness and timeout and unwra
         ...positional,
         { timeout: 77, ignored: true },
       ])
-      const [apiName, guid, actualWire, params, timeout] = calls.at(-1)!
+      const call = calls.at(-1)
+      if (!call) throw new Error('forms operation sent no call')
+      const [apiName, guid, actualWire, params, timeout] = call
       expect([apiName, guid, actualWire, timeout]).toEqual([
         `${scope}.${method}`,
         'frame@T',

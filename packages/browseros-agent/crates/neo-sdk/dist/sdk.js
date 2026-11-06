@@ -477,6 +477,8 @@ class Frame {
       selector,
       ...options
     }), this._page._timeoutSettings.timeout(options));
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.inputValue contract error: missing result");
     return result.value;
   }
   async check(selector, options = {}) {
@@ -506,6 +508,8 @@ class Frame {
       ...convertSelectOptionValues(values),
       ...options
     }), this._page._timeoutSettings.timeout(options));
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.selectOption contract error: missing result");
     return result.values;
   }
   async setChecked(selector, checked, options = {}) {

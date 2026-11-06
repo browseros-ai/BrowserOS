@@ -187,7 +187,11 @@ export class Frame {
       }) as FrameInputValueParams,
       this._page._timeoutSettings.timeout(options),
     )
-    return result!.value
+    if (result === undefined)
+      throw new Error(
+        'neo-sdk: Frame.inputValue contract error: missing result',
+      )
+    return result.value
   }
 
   async check(selector: string, options: CheckOptions = {}): Promise<void> {
@@ -265,7 +269,11 @@ export class Frame {
       }) as FrameSelectOptionParams,
       this._page._timeoutSettings.timeout(options),
     )
-    return result!.values
+    if (result === undefined)
+      throw new Error(
+        'neo-sdk: Frame.selectOption contract error: missing result',
+      )
+    return result.values
   }
 
   async setChecked(
