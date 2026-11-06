@@ -83,6 +83,17 @@ export const providerTemplates: ProviderTemplate[] = [
     apiKeyUrl: 'https://platform.moonshot.ai/console/api-keys',
     setupGuideUrl: 'https://platform.moonshot.ai/console/api-keys',
   },
+  {
+    id: 'nvidia',
+    name: 'NVIDIA NIM',
+    defaultBaseUrl: 'https://integrate.api.nvidia.com/v1',
+    defaultModelId: 'nvidia/nemotron-3-super-120b-a12b',
+    supportsImages: false,
+    contextWindow: 128000,
+    apiKeyUrl: 'https://build.nvidia.com',
+    setupGuideUrl:
+      'https://docs.browseros.com/features/bring-your-own-llm#nvidia',
+  },
   enrichTemplate('openai', {
     defaultModelId: 'gpt-5',
     apiKeyUrl: 'https://platform.openai.com/api-keys',
@@ -152,6 +163,7 @@ export const providerTypeOptions: { value: ProviderType; label: string }[] = [
   { value: 'github-copilot', label: 'GitHub Copilot' },
   { value: 'qwen-code', label: 'Qwen Code' },
   { value: 'moonshot', label: 'Moonshot AI' },
+  { value: 'nvidia', label: 'NVIDIA NIM' },
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'openai', label: 'OpenAI' },
   { value: 'openai-compatible', label: 'OpenAI Compatible' },
@@ -182,6 +194,7 @@ const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   'github-copilot': 'https://api.githubcopilot.com',
   'qwen-code': 'https://portal.qwen.ai/v1',
   moonshot: 'https://api.moonshot.ai/v1',
+  nvidia: 'https://integrate.api.nvidia.com/v1',
   anthropic: 'https://api.anthropic.com/v1',
   openai: 'https://api.openai.com/v1',
   'openai-compatible': '',
