@@ -124,6 +124,8 @@ dist
 packages/*/dist
 # neo-runtime embeds this bundle at compile time, so cargo needs it without a Bun build.
 !/crates/neo-sdk/dist/
+# Agent scripts the neo end-to-end tests run, not compiled test output.
+!/crates/neo-sdk/tests/scripts/*.js
 
 # Gatsby files
 .cache/
