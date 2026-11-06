@@ -141,6 +141,15 @@ class Locator {
   async textContent(options) {
     return await this._frame._textContent("locator.textContent", this._selector, { strict: true, ...options });
   }
+  async innerText(options) {
+    return await this._frame._innerText("locator.innerText", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async getAttribute(name, options) {
+    return await this._frame._getAttribute("locator.getAttribute", this._selector, name, { strict: true, ...options });
+  }
   async fill(value, options = {}) {
     return await this._frame._fill("locator.fill", this._selector, value, {
       strict: true,
@@ -263,6 +272,8 @@ function setTestIdAttribute(attributeName) {
 // src/protocol.ts
 var FRAME_GOTO_KEYS = ["url", "waitUntil", "referer"];
 var FRAME_TEXT_CONTENT_KEYS = ["selector", "strict"];
+var FRAME_INNER_TEXT_KEYS = ["selector", "strict"];
+var FRAME_GET_ATTRIBUTE_KEYS = ["selector", "strict", "name"];
 var FRAME_ARIA_SNAPSHOT_KEYS = [
   "mode",
   "selector",
@@ -406,6 +417,27 @@ class Frame {
       selector,
       ...options
     }), this._page._timeoutSettings.timeout(options));
+    return result.value === undefined ? null : result.value;
+  }
+  async innerText(selector, options = {}) {
+    return await this._innerText("frame.innerText", selector, options);
+  }
+  async _innerText(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "innerText", pickParams(FRAME_INNER_TEXT_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}));
+    return result.value;
+  }
+  async getAttribute(selector, name, options = {}) {
+    return await this._getAttribute("frame.getAttribute", selector, name, options);
+  }
+  async _getAttribute(apiName, selector, name, options) {
+    const result = await this._connection.send(apiName, this._guid, "getAttribute", pickParams(FRAME_GET_ATTRIBUTE_KEYS, {
+      selector,
+      name,
+      ...options
+    }), this._page._timeoutSettings.timeout(options ?? {}));
     return result.value === undefined ? null : result.value;
   }
   async _ariaSnapshot(apiName, options) {
@@ -628,6 +660,12 @@ class Page {
   }
   async textContent(selector, options = {}) {
     return await this.#mainFrame._textContent("page.textContent", selector, options);
+  }
+  async innerText(selector, options = {}) {
+    return await this.#mainFrame._innerText("page.innerText", selector, options);
+  }
+  async getAttribute(selector, name, options = {}) {
+    return await this.#mainFrame._getAttribute("page.getAttribute", selector, name, options);
   }
   async ariaSnapshot(options = {}) {
     return await this.#mainFrame._ariaSnapshot("page.ariaSnapshot", options);

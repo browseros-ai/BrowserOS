@@ -9,7 +9,9 @@ import {
   type ClickOptions,
   type FillOptions,
   Frame,
+  type GetAttributeOptions,
   type GotoOptions,
+  type InnerTextOptions,
   type InputValueOptions,
   type PressOptions,
   type SelectOptionOptions,
@@ -24,9 +26,9 @@ import { TimeoutSettings } from './timeout-settings'
 
 /**
  * Playwright's `Page`, backed by live reads from its own tab, which its guid names. Its
- * selector builders, `goto`, `title`, `textContent` and browser actions forward to the main
- * frame, as Playwright's do (`client/page.ts`); `ariaSnapshot` snapshots the main frame's
- * document. Only the run's `BrowserContext` builds one, once per guid.
+ * selector builders, `goto`, `title`, `textContent`, `innerText`, `getAttribute` and browser
+ * actions forward to the main frame, as Playwright's do (`client/page.ts`); `ariaSnapshot`
+ * snapshots the main frame's document. Only the run's `BrowserContext` builds one, once per guid.
  *
  * Known limitation: once the tab is closed, `url()` returns the last URL this object returned,
  * not the last URL the tab committed. Navigate `/a` to `/final`, close the tab before the
@@ -157,6 +159,26 @@ export class Page {
     return await this.#mainFrame._textContent(
       'page.textContent',
       selector,
+      options,
+    )
+  }
+
+  async innerText(
+    selector: string,
+    options: InnerTextOptions = {},
+  ): Promise<string> {
+    return await this.#mainFrame._innerText('page.innerText', selector, options)
+  }
+
+  async getAttribute(
+    selector: string,
+    name: string,
+    options: GetAttributeOptions = {},
+  ): Promise<string | null> {
+    return await this.#mainFrame._getAttribute(
+      'page.getAttribute',
+      selector,
+      name,
       options,
     )
   }
