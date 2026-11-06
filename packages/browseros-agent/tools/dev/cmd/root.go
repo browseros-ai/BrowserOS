@@ -11,10 +11,10 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "browseros-dev",
-	Short: "BrowserOS development & testing CLI",
-	Long: proc.BoldColor.Sprint("browseros-dev") + proc.DimColor.Sprint(" — development & testing CLI for BrowserOS") + `
+	Short: "BrowserOS neo development CLI",
+	Long: proc.BoldColor.Sprint("browseros-dev") + proc.DimColor.Sprint(" — development CLI for BrowserOS neo") + `
 
-Manages browser, server, and extension processes for local development and testing.`,
+Manages the BrowserOS neo app, claw-server, and browser processes for local development.`,
 	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	SilenceUsage:      true,
 	SilenceErrors:     true,

@@ -37,7 +37,7 @@ func TestDogfoodSidecarRecordsOnlyReleaseStampedVersions(t *testing.T) {
 			DevUserDataDir:   t.TempDir(),
 			BrowserOSDir:     "/tmp/browseros-dogfood",
 			BrowserOSAppPath: writeStampedBundle(t, bundleVersion),
-			Ports:            config.Ports{CDP: 9015, Server: 9115, Extension: 9315},
+			Ports:            config.Ports{CDP: 49337, Server: 9200},
 		}
 		path := dogfoodSidecarConfigPath(cfg)
 		if err := writeDogfoodSidecarConfig(path, cfg, "/repo/resources"); err != nil {

@@ -9,17 +9,15 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "browseros-dogfood",
-	Short: "BrowserOS dogfooding CLI",
-	Long:  "browseros-dogfood - BrowserOS dogfooding CLI",
-	Example: `  browseros-dogfood --browseros init
-  browseros-dogfood --claw init
-  browseros-dogfood --browseros start
-  browseros-dogfood --claw start
-  browseros-dogfood --claw start-background
-  browseros-dogfood --claw status
-  browseros-dogfood --claw logs tail
-  browseros-dogfood --claw restart --pull
-  browseros-dogfood --claw stop`,
+	Short: "BrowserOS neo dogfooding CLI",
+	Long:  "browseros-dogfood - BrowserOS neo dogfooding CLI",
+	Example: `  browseros-dogfood init
+  browseros-dogfood start
+  browseros-dogfood start-background
+  browseros-dogfood status
+  browseros-dogfood logs tail
+  browseros-dogfood restart --pull
+  browseros-dogfood stop`,
 	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 	SilenceUsage:      true,
 	SilenceErrors:     true,
@@ -55,6 +53,9 @@ func init() {
 	)
 	rootCmd.SetHelpCommandGroupID(groupOther)
 	rootCmd.SetUsageTemplate(usageTemplate)
+
+	rootCmd.PersistentFlags().BoolP("claw", "c", false, "No-op; BrowserOS neo is the only dogfood target")
+	_ = rootCmd.PersistentFlags().MarkDeprecated("claw", "BrowserOS neo is the only dogfood target; drop the flag")
 }
 
 func Execute() {

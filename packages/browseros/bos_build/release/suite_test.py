@@ -38,6 +38,10 @@ from bos_build.release.suite import (
 
 
 SOURCE_SHA = "1" * 40
+# BrowserOS's source left the tree, but the suite keeps its components to parse
+# legacy transactions such as #2534, so fixture repositories carry stand-in
+# manifests for them.
+RETIRED_SOURCE_VERSIONS = {"server": "0.0.168", "agent": "0.0.161", "app-onboard": "0.0.2"}
 RESERVATION_SHA = "2" * 40
 STATE_SHA = "3" * 40
 MERGE_SHA = "4" * 40
@@ -720,11 +724,8 @@ class GitHubSuiteBackendTest(unittest.TestCase):
         paths = {
             "packages/browseros/resources/BROWSEROS_VERSION",
             "packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET",
-            "packages/browseros-agent/apps/server/package.json",
-            "packages/browseros-agent/apps/app/package.json",
             "packages/browseros-agent/apps/claw-server/Cargo.toml",
             "packages/browseros-agent/apps/claw-app/package.json",
-            "packages/browseros-agent/apps/app-onboard/package.json",
             "packages/browseros-agent/apps/claw-onboard/package.json",
             "packages/browseros-agent/bun.lock",
             "packages/browseros-agent/Cargo.lock",
@@ -734,6 +735,26 @@ class GitHubSuiteBackendTest(unittest.TestCase):
             target = repo / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_root / relative, target)
+        lockfile = repo / "packages/browseros-agent/bun.lock"
+        workspaces = ""
+        for component_id, version in RETIRED_SOURCE_VERSIONS.items():
+            component = COMPONENTS[component_id]
+            target = repo / component.manifest_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                f'{{"name": "{component.package_name}", "version": "{version}"}}\n'
+            )
+            workspaces += (
+                f'    "{component.workspace_path}": {{\n'
+                f'      "name": "{component.package_name}",\n'
+                f'      "version": "{version}",\n'
+                "    },\n"
+            )
+        lockfile.write_text(
+            lockfile.read_text().replace(
+                '  "workspaces": {\n', '  "workspaces": {\n' + workspaces, 1
+            )
+        )
         self._git(repo, "add", ".")
         self._git(repo, "commit", "-m", "source")
         self._git(repo, "push", "-u", "origin", "main")

@@ -123,7 +123,8 @@ class SpecTableTest(unittest.TestCase):
 
     def test_in_repo_manifest_paths_exist_in_working_tree(self):
         monorepo_root = get_package_root().parent.parent
-        for name in ("agent", "browserclaw"):
+        # The agent extension's source was removed with the BrowserOS product.
+        for name in ("browserclaw",):
             spec = spec_by_name(name)
             source = spec.source
             self.assertIsInstance(source, InRepoSource)

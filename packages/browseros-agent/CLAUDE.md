@@ -1,6 +1,6 @@
 # BrowserOS Agent contributor ground rules
 
-A Bun-workspaces monorepo for the BrowserOS MCP server, agent extension UI, and shared packages.
+A Bun and Cargo workspace for BrowserOS neo: the Rust claw-server, the claw-app extension UI, the claw-onboard flow, and shared packages.
 
 ## Before you push
 
@@ -28,8 +28,3 @@ bun run test
 - Logger messages should not include `[prefix]` tags; development logging already adds file, line, and function.
 - Keep comments minimal. Comment hidden constraints, subtle invariants, critical warnings, or surprising behavior; do not restate obvious code.
 - New packages go in `packages/`; apps go in `apps/`. Avoid package-wide `index.ts` barrels and expose narrow files with both `types` and `default` entries in `package.json`.
-
-## Where to look
-
-- For server-specific guidance, see `apps/server/CLAUDE.md`.
-- For extension/app UI specifics, see `apps/app/CLAUDE.md`.

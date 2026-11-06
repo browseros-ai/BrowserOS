@@ -94,10 +94,15 @@ func IsPortAvailable(port int) bool {
 	return true
 }
 
-func KillPorts(p Ports) {
-	KillPort(p.CDP)
-	KillPort(p.Server)
-	KillPort(p.Extension)
+// Assigned lists the configured ports, skipping any the stack leaves unset.
+func (p Ports) Assigned() []int {
+	var ports []int
+	for _, port := range []int{p.CDP, p.Server, p.Extension} {
+		if port > 0 {
+			ports = append(ports, port)
+		}
+	}
+	return ports
 }
 
 func (r *PortReservations) ReleaseCDP() {
@@ -152,7 +157,7 @@ func KillPortAndWait(port int, timeout time.Duration) error {
 }
 
 func KillPortsAndWait(p Ports, timeout time.Duration) error {
-	for _, port := range []int{p.CDP, p.Server, p.Extension} {
+	for _, port := range p.Assigned() {
 		if err := KillPortAndWait(port, timeout); err != nil {
 			return err
 		}

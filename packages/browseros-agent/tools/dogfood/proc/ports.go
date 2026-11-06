@@ -10,10 +10,6 @@ import (
 )
 
 func ResolvePorts(start config.Ports) (config.Ports, bool, error) {
-	return ResolveTargetPorts(start, true)
-}
-
-func ResolveTargetPorts(start config.Ports, includeExtension bool) (config.Ports, bool, error) {
 	used := map[int]bool{}
 	cdp, err := resolvePort("CDP", start.CDP, used)
 	if err != nil {
@@ -24,16 +20,7 @@ func ResolveTargetPorts(start config.Ports, includeExtension bool) (config.Ports
 	if err != nil {
 		return config.Ports{}, false, err
 	}
-	extension := start.Extension
-	if includeExtension {
-		used[server] = true
-		resolvedExtension, err := resolvePort("extension", start.Extension, used)
-		if err != nil {
-			return config.Ports{}, false, err
-		}
-		extension = resolvedExtension
-	}
-	resolved := config.Ports{CDP: cdp, Server: server, Extension: extension}
+	resolved := config.Ports{CDP: cdp, Server: server}
 	return resolved, resolved != start, nil
 }
 
