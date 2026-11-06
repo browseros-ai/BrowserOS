@@ -9,11 +9,12 @@
  * - Imports point at the vendored copies; `isString` comes straight from `stringUtils.ts`,
  *   which Playwright's `rtti.ts` re-exports it from.
  * - The constructor drops Playwright's `inspect.custom` hook (Node's `util`, absent in QuickJS).
- * - `click` passes its `apiName`, `locator.click`, to `Frame._click`: Playwright reads it off V8
+ * - Actions pass their public `apiName` to the corresponding `Frame` helper: Playwright reads it off V8
  *   stack frames, and QuickJS frames carry no class names (`connection.ts`).
  * - Absent: `frameLocator`, `contentFrame` (frames come later; calling one is a `TypeError`),
  *   `toString` and `description` (they need Playwright's ~2,500-line locator generators), and
- *   every action and read until Neo serves it. `_apiName` and `_wrapApiCall` have no use here.
+ *   actions and reads Neo does not serve. Explicit names preserve the outer `clear` and
+ *   `setChecked` API names through their delegated calls (`_wrapApiCall` in Playwright).
  *
  * Frame identity is load-bearing: `has`, `hasNot`, `and`, `or` and `locator(Locator)` throw
  * unless both locators hold the same `Frame` object, which is why a page builds its main frame
@@ -34,8 +35,18 @@ import {
   escapeForTextSelector,
   isString,
 } from '../vendor/playwright/isomorphic/stringUtils'
-import type { ClickOptions, Frame } from './frame'
+import type {
+  CheckOptions,
+  ClickOptions,
+  FillOptions,
+  Frame,
+  InputValueOptions,
+  PressOptions,
+  SelectOptionOptions,
+  UncheckOptions,
+} from './frame'
 import type { Page } from './page'
+import type { SelectOptionValues } from './select-option'
 
 export type LocatorOptions = {
   hasText?: string | RegExp
@@ -93,6 +104,76 @@ export class Locator {
       strict: true,
       ...options,
     })
+  }
+
+  async fill(value: string, options: FillOptions = {}): Promise<void> {
+    return await this._frame._fill('locator.fill', this._selector, value, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async press(key: string, options: PressOptions = {}): Promise<void> {
+    return await this._frame._press('locator.press', this._selector, key, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async inputValue(options: InputValueOptions = {}): Promise<string> {
+    return await this._frame._inputValue('locator.inputValue', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async check(options: CheckOptions = {}): Promise<void> {
+    return await this._frame._check('locator.check', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async uncheck(options: UncheckOptions = {}): Promise<void> {
+    return await this._frame._uncheck('locator.uncheck', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async selectOption(
+    values: SelectOptionValues,
+    options: SelectOptionOptions = {},
+  ): Promise<string[]> {
+    return await this._frame._selectOption(
+      'locator.selectOption',
+      this._selector,
+      values,
+      { strict: true, ...options },
+    )
+  }
+
+  async clear(options: FillOptions = {}): Promise<void> {
+    return await this._frame._fill('locator.clear', this._selector, '', {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async setChecked(
+    checked: boolean,
+    options: CheckOptions = {},
+  ): Promise<void> {
+    if (checked)
+      await this._frame._check('locator.setChecked', this._selector, {
+        strict: true,
+        ...options,
+      })
+    else
+      await this._frame._uncheck('locator.setChecked', this._selector, {
+        strict: true,
+        ...options,
+      })
   }
 
   locator(

@@ -37,13 +37,18 @@ extern crate self as neo_runtime;
 mod fake_browser;
 
 mod bridge;
+mod check;
 mod click;
 #[cfg(test)]
 mod click_goldens;
 mod deadline;
 mod dispatch;
+mod fill;
+mod forms;
 mod getters;
+mod keyboard;
 mod page;
+mod press;
 mod progress;
 mod realm;
 mod run;

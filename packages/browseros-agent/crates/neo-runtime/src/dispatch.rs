@@ -34,7 +34,10 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use neo_runtime_spec::serve::{
-    BrowserContextCall, FrameCall, FrameClickParams, Metadata, PageCall,
+    BrowserContextCall, FrameCall, FrameCheckParams, FrameCheckResult, FrameClickParams,
+    FrameFillParams, FrameFillResult, FrameInputValueParams, FrameInputValueResult,
+    FramePressParams, FramePressResult, FrameSelectOptionParams, FrameSelectOptionResult,
+    FrameUncheckParams, FrameUncheckResult, Metadata, PageCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -44,8 +47,13 @@ use tokio::time;
 use tokio::time::Instant;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
+use crate::check::{self, CheckOptions};
 use crate::click::{self, ClickOptions};
+use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
+use crate::forms::FormTab;
+use crate::keyboard::KeyboardTab;
 use crate::page::PageSession;
+use crate::press::{self, PressOptions};
 use crate::progress::{
     self, CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
 };
@@ -74,6 +82,9 @@ const MAX_REQUEST_BYTES_IN_FLIGHT: usize = 8 * 1024 * 1024;
 /// frame only, and without this check the injected engine would match nothing there and the call
 /// would time out without saying why.
 const FRAMES_UNSUPPORTED: &str = "Neo does not support frames yet: the selector enters a frame";
+
+/// Neo has no `ElementHandle` objects to pass as `selectOption` values.
+const ELEMENTS_UNSUPPORTED: &str = "Neo does not support ElementHandle values in selectOption yet";
 
 // `serve` replies to a click with `{id}` and no `result`, which is right only while
 // Playwright's spec declares no `returns` for `Frame.click`. A spec that gives it a result stops
@@ -179,8 +190,18 @@ enum ObjectCall {
 }
 
 /// What a message asks for. One variant per served (object, method).
+#[derive(Debug)]
+#[expect(
+    clippy::enum_variant_names,
+    reason = "routes name both the interface and method; sibling pieces add Page and BrowserContext variants"
+)]
 enum Route {
     FrameClick(ClickOptions),
+    FrameFill(FillOptions),
+    FramePress(PressOptions),
+    FrameInputValue(InputValueOptions),
+    FrameSetChecked(CheckOptions),
+    FrameSelectOption(SelectOptions),
 }
 
 impl Dispatcher {
@@ -310,8 +331,24 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
         ObjectKind::Page => {
             PageCall::decode(method, params).map(|call| (call.meta(), Ok(ObjectCall::Page(call))))
         }
-        ObjectKind::Frame => FrameCall::decode(method, params)
-            .map(|call| (call.meta(), route_frame_call(call).map(ObjectCall::Frame))),
+        ObjectKind::Frame => {
+            // ElementHandleChannel is uninhabited in Neo, so reject non-empty arrays before
+            // serde tries to decode their members. Keep the method's input flag and title.
+            if method == "selectOption"
+                && params
+                    .as_ref()
+                    .and_then(|params| params.get("elements"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|elements| !elements.is_empty())
+            {
+                return Routed {
+                    meta: Some(FrameSelectOptionParams::META),
+                    route: Err(PlaywrightError::error(ELEMENTS_UNSUPPORTED)),
+                };
+            }
+            FrameCall::decode(method, params)
+                .map(|call| (call.meta(), route_frame_call(call).map(ObjectCall::Frame)))
+        }
         ObjectKind::Unknown => {
             return Routed {
                 meta: None,
@@ -342,6 +379,36 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
             Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
         }
         FrameCall::Click(params) => ClickOptions::from_params(params).map(Route::FrameClick),
+        FrameCall::Fill(params) if enters_frame(&params.selector) => {
+            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
+        }
+        FrameCall::Fill(params) => Ok(Route::FrameFill(FillOptions::from_params(params))),
+        FrameCall::Press(params) if enters_frame(&params.selector) => {
+            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
+        }
+        FrameCall::Press(params) => Ok(Route::FramePress(PressOptions::from_params(params))),
+        FrameCall::InputValue(params) if enters_frame(&params.selector) => {
+            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
+        }
+        FrameCall::InputValue(params) => Ok(Route::FrameInputValue(
+            InputValueOptions::from_params(params),
+        )),
+        FrameCall::Check(params) if enters_frame(&params.selector) => {
+            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
+        }
+        FrameCall::Check(params) => Ok(Route::FrameSetChecked(CheckOptions::from_check(params))),
+        FrameCall::Uncheck(params) if enters_frame(&params.selector) => {
+            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
+        }
+        FrameCall::Uncheck(params) => {
+            Ok(Route::FrameSetChecked(CheckOptions::from_uncheck(params)))
+        }
+        FrameCall::SelectOption(params) if enters_frame(&params.selector) => {
+            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
+        }
+        FrameCall::SelectOption(params) => {
+            Ok(Route::FrameSelectOption(SelectOptions::from_params(params)))
+        }
         FrameCall::Goto(_) => Err(not_served_yet("goto")),
         FrameCall::Title(_) => Err(not_served_yet("title")),
         FrameCall::TextContent(_) => Err(not_served_yet("textContent")),
@@ -416,11 +483,7 @@ async fn serve(
     id: Value,
     reply: oneshot::Sender<String>,
 ) {
-    let result = match route {
-        Route::FrameClick(options) => click::click(&page, &options, &progress)
-            .await
-            .map(|()| None),
-    };
+    let result = serve_route(&page, route, &progress).await;
     finish_reply(
         result,
         CallReply {
@@ -450,6 +513,55 @@ fn finish_reply(result: Result<Option<Value>, CallError>, target: CallReply) {
     // The script may have stopped waiting (the realm is gone); the record already holds the
     // outcome.
     let _sent = reply.send(encode_reply(&id, answer, Some(&log)));
+}
+
+/// The typed handler dispatch, also used by the skeleton's tests with click's existing fake.
+async fn serve_route<T: FormTab + KeyboardTab>(
+    tab: &T,
+    route: Route,
+    progress: &Progress,
+) -> Result<Option<Value>, CallError> {
+    match route {
+        Route::FrameClick(options) => click::click(tab, &options, progress).await.map(|()| None),
+        Route::FrameFill(options) => fill::fill(tab, &options, progress)
+            .await
+            .and_then(|()| encode_result::<FrameFillParams>(&FrameFillResult {})),
+        Route::FramePress(options) => press::press(tab, &options, progress)
+            .await
+            .and_then(|()| encode_result::<FramePressParams>(&FramePressResult {})),
+        Route::FrameSetChecked(options) => {
+            let checked = options.checked;
+            check::set_checked(tab, &options, progress)
+                .await
+                .and_then(|()| {
+                    if checked {
+                        encode_result::<FrameCheckParams>(&FrameCheckResult {})
+                    } else {
+                        encode_result::<FrameUncheckParams>(&FrameUncheckResult {})
+                    }
+                })
+        }
+        Route::FrameInputValue(options) => fill::input_value(tab, &options, progress)
+            .await
+            .and_then(|value| {
+                encode_result::<FrameInputValueParams>(&FrameInputValueResult { value })
+            }),
+        Route::FrameSelectOption(options) => fill::select_option(tab, &options, progress)
+            .await
+            .and_then(|values| {
+                encode_result::<FrameSelectOptionParams>(&FrameSelectOptionResult { values })
+            }),
+    }
+}
+
+/// Like `Command::reply`, without retaining the raw params once their options are decoded.
+fn encode_result<C: Command>(result: &C::Result) -> Result<Option<Value>, CallError> {
+    if C::VOID_RESULT {
+        return Ok(None);
+    }
+    serde_json::to_value(result).map(Some).map_err(|error| {
+        PlaywrightError::error(format!("encoding {} result: {error}", C::META.method)).into()
+    })
 }
 
 /// What a run's unfinished calls hold now, against [`MAX_CALLS_IN_FLIGHT`] and
@@ -697,11 +809,16 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use neo_runtime_spec::injected::Point;
+
+    use crate::click::tests::FakeTab;
     use crate::click_goldens;
     use crate::deadline::Deadline;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::forms::SelectOption;
     use crate::page::TabInputs;
     use crate::progress::ErrorName;
+    use crate::run::Delivery;
     use crate::run::PageId;
     use tokio::runtime::Handle;
     use tokio_util::task::TaskTracker;
@@ -818,6 +935,190 @@ mod tests {
             Ok(_) => panic!("expected the call to be refused"),
             Err(error) => error,
         }
+    }
+
+    /// The frame route inside a routed Frame message.
+    fn frame_route(route: Result<ObjectCall, PlaywrightError>) -> Result<Route, PlaywrightError> {
+        route.map(|call| match call {
+            ObjectCall::Frame(route) => route,
+            ObjectCall::Context(_) | ObjectCall::Page(_) => {
+                panic!("a Frame message routed to another object")
+            }
+        })
+    }
+
+    fn forms_params(method: &str, selector: &str) -> Value {
+        match method {
+            "fill" => {
+                json!({ "selector": selector, "strict": true, "value": "hello", "force": true })
+            }
+            "press" => {
+                json!({ "selector": selector, "strict": true, "key": "Shift+Enter", "delay": 25.0, "noWaitAfter": true })
+            }
+            "inputValue" => json!({ "selector": selector, "strict": true }),
+            "check" | "uncheck" => {
+                json!({ "selector": selector, "strict": true, "force": true, "scroll": "none", "position": { "x": 2, "y": 3 }, "trial": true })
+            }
+            "selectOption" => {
+                json!({ "selector": selector, "strict": true, "elements": [], "options": [{ "valueOrLabel": "one", "value": "1", "label": "One", "index": 0 }], "force": true })
+            }
+            _ => panic!("unknown test method"),
+        }
+    }
+
+    const FORMS: [&str; 6] = [
+        "fill",
+        "press",
+        "inputValue",
+        "check",
+        "uncheck",
+        "selectOption",
+    ];
+
+    #[test]
+    fn tests_that_each_forms_command_decodes_routes_and_retains_its_options() {
+        for method in FORMS {
+            let routed = route_frame(method, forms_params(method, "input"));
+            let meta = routed.meta.expect("served method metadata");
+            assert_eq!(meta.has(MethodFlag::Input), method != "inputValue");
+            assert!(meta.title.is_some());
+            match frame_route(routed.route).expect("served form route") {
+                Route::FrameFill(options) => {
+                    assert_eq!(
+                        options,
+                        FillOptions {
+                            selector: "input".into(),
+                            strict: true,
+                            value: "hello".into(),
+                            force: true
+                        }
+                    );
+                }
+                Route::FramePress(options) => {
+                    assert_eq!(
+                        options,
+                        PressOptions {
+                            selector: "input".into(),
+                            strict: true,
+                            key: "Shift+Enter".into(),
+                            delay: Some(25.0),
+                            wait_after: false
+                        }
+                    );
+                }
+                Route::FrameInputValue(options) => {
+                    assert_eq!(
+                        options,
+                        InputValueOptions {
+                            selector: "input".into(),
+                            strict: true
+                        }
+                    );
+                }
+                Route::FrameSetChecked(options) => {
+                    assert_eq!(options.checked, method == "check");
+                    assert_eq!(options.click.selector, "input");
+                    assert!(options.click.strict && options.click.force && options.click.trial);
+                    assert!(!options.click.scroll);
+                    assert_eq!(options.click.position, Some(Point { x: 2.0, y: 3.0 }));
+                }
+                Route::FrameSelectOption(options) => {
+                    assert!(options.strict && options.force);
+                    assert_eq!(options.selector, "input");
+                    assert_eq!(
+                        options.options,
+                        [SelectOption {
+                            value_or_label: Some("one".into()),
+                            value: Some("1".into()),
+                            label: Some("One".into()),
+                            index: Some(0)
+                        }]
+                    );
+                }
+                Route::FrameClick(_) => panic!("a form is not a click"),
+            }
+        }
+    }
+
+    #[test]
+    fn tests_that_all_forms_refuse_frames_and_malformed_params_before_page_work() {
+        for method in FORMS {
+            let routed = route_frame(
+                method,
+                forms_params(method, "iframe >> internal:control=enter-frame >> input"),
+            );
+            assert_eq!(error_of(routed), PlaywrightError::error(FRAMES_UNSUPPORTED));
+            let mut params = forms_params(method, "input");
+            params["selector"] = json!(5);
+            let error = error_of(route_frame(method, params));
+            assert!(
+                error
+                    .message
+                    .starts_with(&format!("invalid params for Frame.{method}: ")),
+                "{error:?}"
+            );
+        }
+        let mut params = forms_params("selectOption", "select");
+        params["elements"] = json!([{ "guid": "element@1" }]);
+        let routed = route_frame("selectOption", params);
+        assert_eq!(
+            routed.meta.and_then(|meta| meta.title),
+            Some("Select option")
+        );
+        assert_eq!(
+            error_of(routed),
+            PlaywrightError::error(ELEMENTS_UNSUPPORTED)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_press_is_served_with_a_void_reply() {
+        let tab = FakeTab::ready();
+        let progress = Progress::for_test(1000.0);
+        let route = frame_route(route_frame("press", forms_params("press", "input")).route)
+            .expect("routed");
+        let result = serve_route(&tab, route, &progress).await;
+        assert_eq!(result, Ok(None));
+        assert_eq!(
+            progress.delivery().expect("test cell").delivery(),
+            Delivery::Done
+        );
+        assert_eq!(
+            encode_reply(&json!(7), Ok(None), Some(&progress.folded_log())),
+            json!({ "id": 7 }).to_string()
+        );
+    }
+
+    #[test]
+    fn tests_that_forms_success_results_have_the_playwright_shapes() {
+        assert_eq!(
+            encode_result::<FrameInputValueParams>(&FrameInputValueResult { value: "x".into() })
+                .expect("encodes"),
+            Some(json!({ "value": "x" }))
+        );
+        assert_eq!(
+            encode_result::<FrameSelectOptionParams>(&FrameSelectOptionResult {
+                values: vec!["1".into(), "2".into()]
+            })
+            .expect("encodes"),
+            Some(json!({ "values": ["1", "2"] }))
+        );
+        assert_eq!(
+            encode_result::<FrameFillParams>(&FrameFillResult {}).expect("void"),
+            None
+        );
+        assert_eq!(
+            encode_result::<FramePressParams>(&FramePressResult {}).expect("void"),
+            None
+        );
+        assert_eq!(
+            encode_result::<FrameCheckParams>(&FrameCheckResult {}).expect("void"),
+            None
+        );
+        assert_eq!(
+            encode_result::<FrameUncheckParams>(&FrameUncheckResult {}).expect("void"),
+            None
+        );
     }
 
     #[test]
@@ -1025,6 +1326,18 @@ mod tests {
         replies.insert(
             "targetClosed",
             encode_reply(&id, Err(&PlaywrightError::target_closed()), Some(&[])),
+        );
+        let value =
+            encode_result::<FrameInputValueParams>(&FrameInputValueResult { value: "x".into() })
+                .expect("value encodes");
+        replies.insert("inputValueOk", encode_reply(&id, Ok(value.as_ref()), None));
+        let values = encode_result::<FrameSelectOptionParams>(&FrameSelectOptionResult {
+            values: vec!["a".into()],
+        })
+        .expect("values encode");
+        replies.insert(
+            "selectOptionOk",
+            encode_reply(&id, Ok(values.as_ref()), None),
         );
         let mut fixture = serde_json::to_string_pretty(&replies).expect("strings serialize");
         fixture.push('\n');

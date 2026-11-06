@@ -84,11 +84,17 @@ impl Tab {
         let turn = ONE_BROWSER.lock().await;
         let origin = serve_fixture(fixture).await;
         let browser = Browser::launch(binary);
+        let defaults = ConnectOptions::new(browser.port);
         let cdp = CdpClient::connect(ConnectOptions {
             host: Some("127.0.0.1".to_string()),
             // The default exits the test process once the browser is gone at teardown.
             reconnect_policy: ReconnectPolicy::KeepTrying,
-            ..ConnectOptions::new(browser.port)
+            // A loaded machine can stall a live browser for longer than the default 10 s; the
+            // keepalive then marks the link lost and fails every request in flight with "CDP
+            // connection lost" (a SIGSTOPped browser reproduces it at 30 + 10 s). A dead browser
+            // closes the socket at once anyway, so each request's own timeout is the bound.
+            keepalive_timeout: defaults.request_timeout,
+            ..defaults
         })
         .await
         .unwrap_or_else(|error| panic!("connect to the browser: {error}"));

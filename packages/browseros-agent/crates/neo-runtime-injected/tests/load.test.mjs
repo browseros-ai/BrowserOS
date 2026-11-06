@@ -290,14 +290,202 @@ async function callIn(cdp, sessionId, executionContextId, entry, args) {
   return reply.result
 }
 
+test('forms glue preserves Playwright values, state checks, targeting and errors', {
+  skip: browserBinary ? false : 'NEO_E2E_BROWSER is unset',
+  timeout: 180_000,
+}, async () => {
+  const cleanups = []
+  try {
+    const browser = await launchBrowser(cleanups, browserBinary)
+    const cdp = await connectCdp(cleanups, browser.port)
+    const html = `<title>Forms glue</title>
+      <label for="text" id="label">Name</label><input id="text" value="hello">
+      <input id="other" value="other"><input id="readonly" readonly>
+      <input id="hidden" hidden><input id="inert" inert>
+      <input id="date" type="date"><input id="checkbox" type="checkbox" checked>
+      <input id="radio" type="radio"><div id="wrong">not an input</div>
+      <select id="select" multiple><option value="a">Alpha</option><option value="b">Beta</option><option value="c" disabled>Disabled</option></select>
+      <script>globalThis.marked = []; document.addEventListener('__playwright_reset_targets__', () => marked = []); document.addEventListener('__playwright_mark_target__', e => marked.push(e.target.id));</script>`
+    const { targetId } = await cdp.send('Target.createTarget', {
+      url: `data:text/html,${encodeURIComponent(html)}`,
+    })
+    const session = await attachTo(cdp, targetId)
+    await waitForTitle(cdp, session, 'Forms glue')
+    const context = await isolatedWorld(cdp, session, targetId)
+    const glue = await callIn(cdp, session, context, bundle.install, [
+      key,
+      bundle.specSha256,
+      initializer,
+    ])
+    const page = (name, params, handles = []) =>
+      pageCall(cdp, session, glue, name, params, handles)
+    const resolve = async (selector) =>
+      (
+        await handleCall(cdp, session, glue, 'resolve', {
+          selector,
+          strict: true,
+        })
+      ).element
+    const text = await resolve('#text')
+    const date = await resolve('#date')
+    const checkbox = await resolve('#checkbox')
+    const radio = await resolve('#radio')
+    const select = await resolve('#select')
+    const wrong = await resolve('#wrong')
+    assert.deepEqual(
+      await page('fill', { value: 'abc', force: false }, [text]),
+      { value: { outcome: 'needsinput' } },
+    )
+    assert.deepEqual(
+      await page('fill', { value: '2025-05-04', force: false }, [date]),
+      { value: { outcome: 'done' } },
+    )
+    assert.equal(
+      (await page('inputValue', { selector: '#date', strict: true })).value
+        .matched.value,
+      '2025-05-04',
+    )
+    for (const [selector, state] of [
+      ['#readonly', 'editable'],
+      ['#hidden', 'visible'],
+      ['#inert', 'non-inert'],
+    ]) {
+      const element = await resolve(selector)
+      assert.deepEqual(
+        await page('fill', { value: 'x', force: false }, [element]),
+        { value: { outcome: { missingState: state } } },
+      )
+    }
+    assert.deepEqual(
+      await page('fill', { value: 'x', force: true }, [
+        await resolve('#hidden'),
+      ]),
+      { value: { outcome: 'needsinput' } },
+    )
+    assert.deepEqual(
+      await page(
+        'selectOptions',
+        { options: [{ label: 'Beta' }, { index: 0 }], force: false },
+        [select],
+      ),
+      { value: { values: ['a', 'b'] } },
+    )
+    assert.deepEqual(
+      await page(
+        'selectOptions',
+        { options: [{ value: 'missing' }], force: false },
+        [select],
+      ),
+      { value: { outcome: 'error:optionsnotfound' } },
+    )
+    assert.deepEqual(
+      await page('selectOptions', { options: [{ value: 'c' }], force: false }, [
+        select,
+      ]),
+      { value: { outcome: 'error:optionnotenabled' } },
+    )
+    const selected = await cdp.send(
+      'Runtime.callFunctionOn',
+      {
+        objectId: select.objectId,
+        functionDeclaration:
+          'function () { return [...this.selectedOptions].map(o => o.value) }',
+        returnByValue: true,
+      },
+      session,
+    )
+    assert.deepEqual(
+      selected.result.value,
+      ['a', 'b'],
+      'selection failures leave earlier values intact',
+    )
+    assert.deepEqual(
+      await page('elementState', { state: 'checked' }, [checkbox]),
+      { value: { matches: true, received: 'checked', isRadio: false } },
+    )
+    assert.deepEqual(
+      await page('elementState', { state: 'unchecked' }, [radio]),
+      { value: { matches: true, received: 'unchecked', isRadio: true } },
+    )
+    assert.equal(
+      (await page('elementState', { state: 'checked' }, [wrong])).exception
+        .description,
+      'Error: Not a checkbox or radio button',
+    )
+    assert.deepEqual(
+      await page('focusElement', { resetSelectionIfNotFocused: true }, [text]),
+      { value: { outcome: 'done' } },
+    )
+    assert.equal(
+      (await page('inputValue', { selector: '#label', strict: true })).value
+        .matched.value,
+      'hello',
+      'inputValue follows labels',
+    )
+    assert.deepEqual(
+      await page('inputValue', { selector: '#missing', strict: true }),
+      { value: {} },
+    )
+    assert.equal(
+      (await page('inputValue', { selector: '#wrong', strict: true })).exception
+        .description,
+      'Error: Node is not an <input>, <textarea> or <select> element',
+    )
+    await page('inputValue', { selector: '#text, #other', strict: false })
+    const marked = await cdp.send(
+      'Runtime.evaluate',
+      { expression: 'globalThis.marked', returnByValue: true },
+      session,
+    )
+    assert.deepEqual(
+      marked.result.value,
+      ['text'],
+      'inputValue marks only the first match',
+    )
+    await cdp.send(
+      'Runtime.callFunctionOn',
+      {
+        objectId: text.objectId,
+        functionDeclaration: 'function () { this.remove() }',
+      },
+      session,
+    )
+    assert.deepEqual(await page('fill', { value: 'x', force: false }, [text]), {
+      value: { outcome: 'error:notconnected' },
+    })
+    assert.deepEqual(
+      await page('fill', { value: 'x', force: true }, [text]),
+      { value: { outcome: 'needsinput' } },
+      "forced fill preserves Playwright's absence of a connectedness check",
+    )
+    assert.deepEqual(
+      await page('focusElement', { resetSelectionIfNotFocused: true }, [text]),
+      { value: { outcome: 'error:notconnected' } },
+    )
+    assert.deepEqual(await page('elementState', { state: 'checked' }, [text]), {
+      value: { matches: false, received: 'error:notconnected' },
+    })
+    assert.deepEqual(
+      await page('selectOptions', { options: [], force: false }, [select]),
+      { value: { values: [] } },
+    )
+  } finally {
+    for (const cleanup of cleanups.reverse()) await cleanup()
+  }
+})
+
 /** One page call by the convention in dist/call.js: `{value}` or `{exception}`. */
-async function pageCall(cdp, sessionId, glue, name, params) {
+async function pageCall(cdp, sessionId, glue, name, params, handles = []) {
   const reply = await cdp.send(
     'Runtime.callFunctionOn',
     {
       objectId: glue.objectId,
       functionDeclaration: bundle.call,
-      arguments: [{ value: name }, { value: params }],
+      arguments: [
+        { value: name },
+        { value: params },
+        ...handles.map((handle) => ({ objectId: handle.objectId })),
+      ],
       returnByValue: true,
       awaitPromise: true,
     },
