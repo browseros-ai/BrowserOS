@@ -12,10 +12,11 @@
 //! use real time. Follow's pause is re-checked each second, so its test takes a few.
 
 use browseros_cdp::{CdpError, CdpEvent};
+use browseros_core::sensitive_fields::JOURNAL_BINDING;
 use browseros_core::testing::{TestCall, TestConnection, cdp_error};
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TabId};
-use browseros_takeover::testing::{FakeXvnc, NoStamps};
+use browseros_takeover::testing::{FakeXvnc, NoStamps, owner_presses};
 use browseros_takeover::{
     Admitted, BrowserTabs, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow, Front,
     FrontError, Journal, LockBinding, LockTtl, Locks, OwnerHasScreen, PartError, Reads,
@@ -24,8 +25,8 @@ use browseros_takeover::{
 use browseros_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, Privacy, PrivacyRecord, PrivacyStore, PrivateReason, RedactionLimits, Redactor, RunId,
-    RunStarted, SecretSet, SecretSetConfig, TargetSensitivity, TaskId, TraceError, TraceSink,
-    TraceStore, WriterConfig, spawn_writer,
+    RunStarted, SecretSet, SecretSetConfig, SecretSource, TargetSensitivity, TaskId, TraceError,
+    TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use bytes::Bytes;
 use futures_util::FutureExt;
@@ -84,9 +85,16 @@ const PRIVATE_PX: [u8; 4] = [0xde, 0xad, 0xbe, 0xef];
 const KEY_A: [u8; 8] = [4, 1, 0, 0, 0, 0, 0, 0x61];
 const KEY_B: [u8; 8] = [4, 1, 0, 0, 0, 0, 0, 0x62];
 const QEMU_A: [u8; 12] = [255, 0, 0, 1, 0, 0, 0, 0x61, 0, 0, 0, 0x1e];
+/// Key `a` up, both ways.
+const KEY_A_UP: [u8; 8] = [4, 0, 0, 0, 0, 0, 0, 0x61];
+const QEMU_A_UP: [u8; 12] = [255, 0, 0, 0, 0, 0, 0, 0x61, 0, 0, 0, 0x1e];
 const HOVER: [u8; 6] = [5, 0, 0, 10, 0, 20];
 const CLICK: [u8; 6] = [5, 1, 0, 10, 0, 20];
 const PASTE: [u8; 11] = [6, 0, 0, 0, 0, 0, 0, 3, b'p', b'w', b'd'];
+/// An extended clipboard paste: a length of −8, then 4 bytes of flags and 4 of text.
+const EXTENDED_PASTE: [u8; 16] = [
+    6, 0, 0, 0, 0xff, 0xff, 0xff, 0xf8, 0x10, 0, 0, 0x01, b'x', b'y', b'z', b'w',
+];
 const PIXEL_FORMAT: [u8; 20] = [
     0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0,
 ];
@@ -427,6 +435,8 @@ struct Harness {
     privacy: Arc<Privacy>,
     sink: TraceSink,
     locks: Arc<Locks>,
+    /// The journal the displays arm, and whose owner presses their control displays count.
+    journal: Journal,
     displays: Arc<Displays>,
 }
 
@@ -462,12 +472,13 @@ async fn harness_at(xvnc: FakeXvnc, addr: SocketAddr) -> Result<Harness, BoxErro
         Arc::new(Viewports::default()),
     );
     let locks = Locks::new(store.clone(), sink.clone());
+    let journal = Journal::new(tabs.clone(), secrets);
     let displays = Displays::new(
         addr,
-        tabs.clone(),
+        tabs,
         Arc::clone(&privacy),
         Arc::new(NoStamps),
-        Journal::new(tabs, secrets),
+        journal.clone(),
         Arc::clone(&locks),
         sink.clone(),
         store,
@@ -480,6 +491,7 @@ async fn harness_at(xvnc: FakeXvnc, addr: SocketAddr) -> Result<Harness, BoxErro
         privacy,
         sink,
         locks,
+        journal,
         displays,
     })
 }
@@ -524,6 +536,24 @@ impl Harness {
             .make_private(TabId(tab), PrivateReason::Host, EpochMillis::now())
             .await?;
         Ok(())
+    }
+
+    /// A session a journal is armed on: one that got the journal's new-document script.
+    fn armed_session(&self) -> Result<SessionId, BoxError> {
+        self.calls("Page.addScriptToEvaluateOnNewDocument")?
+            .into_iter()
+            .find_map(|call| call.session)
+            .ok_or_else(|| "no journal is armed".into())
+    }
+
+    /// A real key puts `value` in a sensitive field on `session`: the seal's trusted entry.
+    fn key_enters(&self, session: &SessionId, value: &str) {
+        let payload = json!({ "kind": "password", "value": value, "trusted": true }).to_string();
+        self.browser.script.emit(
+            "Runtime.bindingCalled",
+            json!({ "name": JOURNAL_BINDING, "payload": payload, "executionContextId": 11 }),
+            Some(session.clone()),
+        );
     }
 
     /// The sweep's reads of a frame's sensitive fields.
@@ -962,6 +992,11 @@ async fn a_failed_commit_drops_that_input_and_the_next_input_tries_again() -> Te
         "key a never reached Xvnc"
     );
     assert_eq!(h.flags.committed(), [TabId(3), TabId(4)]);
+    assert_eq!(
+        owner_presses(&h.journal),
+        1,
+        "the dropped key is not a press of the owner's"
+    );
     Ok(())
 }
 
@@ -1117,6 +1152,95 @@ async fn a_control_display_arms_the_journal_on_every_tab_and_on_tabs_that_open()
 
     h.displays.tab_opened(TabId(6)).await;
     assert_eq!(armed(&h)?.len(), 3, "no display is open to arm a new tab");
+    Ok(())
+}
+
+/// sdk-traces decision 54: Neo counts the owner's presses outside the page, as a control display
+/// sends them on to Xvnc. Each key-down, as either key message, and each paste is one press. A
+/// key-up, a click and a hover move are none.
+#[tokio::test]
+async fn a_control_display_counts_each_key_down_and_paste_it_sends_on() -> TestResult {
+    let h = harness().await?;
+    let control = h.control(None).await?;
+    control.send(HANDSHAKE);
+    let sent = [
+        &KEY_A[..],
+        &KEY_A_UP,
+        &QEMU_A,
+        &QEMU_A_UP,
+        &PASTE,
+        &EXTENDED_PASTE,
+        &CLICK,
+        &HOVER,
+    ];
+    for message in sent {
+        control.send(message);
+    }
+    let mut expected = handshake_received();
+    expected.extend(sent.iter().map(|message| message.to_vec()));
+    assert_eq!(
+        h.received(0, expected.len()).await?,
+        expected,
+        "all of it reached Xvnc"
+    );
+    assert_eq!(
+        owner_presses(&h.journal),
+        4,
+        "2 key-downs and 2 pastes; the key-ups, the click and the hover move are not presses"
+    );
+    Ok(())
+}
+
+/// A view drops its viewer's keys and pastes, so none of them is a press of the owner's.
+#[tokio::test]
+async fn a_view_display_counts_no_press() -> TestResult {
+    let h = harness().await?;
+    let view = h.view(None).await?;
+    view.send(HANDSHAKE);
+    for message in [&KEY_A[..], &QEMU_A, &PASTE, &EXTENDED_PASTE, &UPDATE] {
+        view.send(message);
+    }
+    let mut expected = handshake_received();
+    expected.push(UPDATE.to_vec());
+    assert_eq!(
+        h.received(0, expected.len()).await?,
+        expected,
+        "the update request passed, so every input before it was judged"
+    );
+    assert_eq!(owner_presses(&h.journal), 0);
+    Ok(())
+}
+
+/// Through a control display, end to end: the trusted entries its own journal takes are the
+/// owner's while the keys the display sent pay for them. The entry past them, such as one an
+/// agent's key over CDP makes, is a page value.
+#[tokio::test]
+async fn a_control_displays_journal_makes_owner_values_only_from_the_keys_it_sent() -> TestResult {
+    let h = harness().await?;
+    let mut control = h.control(None).await?;
+    control.send(HANDSHAKE);
+    let sent = [&QEMU_A[..], &QEMU_A_UP, &KEY_B, &KEY_A_UP];
+    for message in sent {
+        control.send(message);
+    }
+    h.received(0, handshake_received().len() + sent.len())
+        .await?;
+    let session = h.armed_session()?;
+    for value in ["OWNERKEY_1v8q", "OWNERKEY_2j5t", "AGENTKEY_3p6m"] {
+        h.key_enters(&session, value);
+    }
+
+    control.leave();
+    assert_eq!(control.ended().await?, DisplayEnd::ViewerLeft);
+    let secrets = h.privacy.secrets();
+    assert_eq!(
+        (
+            secrets.count_from(SecretSource::Owner),
+            secrets.count_from(SecretSource::Page)
+        ),
+        (2, 1),
+        "two key-downs pay for two owner values (owner, page)"
+    );
     Ok(())
 }
 

@@ -5,11 +5,14 @@
 //!
 //! sdk-privacy's seal carries the journal: in the sealed world, a capture-phase listener sends
 //! `{kind, value, trusted}` through the `JOURNAL_BINDING` binding when a sensitive field gets
-//! input, `trusted` saying whether the owner's key, paste or drop entered it. This module arms it
-//! during control and feeds the secret set:
+//! input, `trusted` saying whether a real key, paste or drop entered it, the owner's or an agent's
+//! typed over CDP. This module arms it during control and feeds the secret set, counting the
+//! owner's presses apart:
 //!
 //! ```text
+//!  control display ─ each key-down and paste it sends on to Xvnc ─▶ Journal's press count
 //!  Journal::arm(tabs) ─ subscribe first ─▶ ArmedJournal: its listener, and the listener's worker
+//!    the listener's credits: the presses counted from now on, banked up to MAX_OWNER_CREDITS
 //!    each tab: its page's session, then each OOPIF's (sealed_frames' walk), once per session:
 //!      Page.enable, Runtime.enable
 //!      Runtime.addBinding {JOURNAL_BINDING, executionContextName: SEALED_WORLD}
@@ -17,8 +20,9 @@
 //!    then sealed_frames' seal: closed shadow roots watched, any frame the script missed sealed
 //!  listener, from its own binding-call channel:
 //!            Runtime.bindingCalled on an armed session ─▶ JournalEntry::parse_with_trust
-//!              ─▶ Pending ─ a second with no entry, disarm or drop ─▶ SecretSet: the owner's
-//!                 value if the seal reported it trusted, else a page value
+//!              ─▶ Pending: an owner entry if trusted and a credit is left, which it spends
+//!              ─ a second with no entry, disarm or drop ─▶ SecretSet: the owner's values, and
+//!                the rest as page values
 //!  listener, from the connection's broadcast:
 //!            Target.attachedToTarget, an iframe ─▶ worker: armed the same way, if its parent is
 //!            a lag ─▶ worker: every armed tab swept
@@ -51,8 +55,9 @@
 //! **Who arms it** is the display's and the flow's business (decision 31): a takeover arms its
 //! tab at start, and every control display arms every open tab and calls
 //! [`ArmedJournal::arm_tab`] for each tab that opens while it is open. Over the one screen the
-//! owner can switch to any tab and type there. The journal cannot tell the owner's typing from
-//! the agent's; registering a value the agent typed only over-protects.
+//! owner can switch to any tab and type there. An agent typing over CDP meanwhile reaches the
+//! journal too, but no control display sent its keys, so what it types registers as a page value,
+//! which is masked but never kept past the set's cap.
 //!
 //! **Both domains on every armed session (measured on Chromium 155).** Without `Page.enable` on a
 //! session, its new-document script never runs in the next document; without `Runtime.enable`, a
@@ -75,32 +80,47 @@
 //! captures its pixels; the sealed world masks the field in every read; and a takeover's tab is
 //! locked to the agent.
 //!
-//! **Only what the owner's keys, pastes and drops entered is the owner's (sdk-traces decision
-//! 53).** A full set never drops or refuses an owner value, and lets owner values pass its cap,
-//! because people type at human speed. A page's script can enter values into its own fields at
-//! any rate: with `input` events it dispatches itself, which are untrusted, or with
-//! `document.execCommand`, whose `input` events the browser dispatches as trusted ones. Neither
-//! comes with a trusted `keydown`, `paste` or `drop`, so the seal reports an entry trusted only
-//! when one of those reached the field since its last trusted entry: at most one entry per key,
-//! paste or drop. A trusted entry registers as the owner's, and any other as a page value. A
-//! page value is masked like the rest, but a flood of them pushes out only the page's earlier
+//! **An entry is the owner's only when the seal trusts it and one of the owner's presses pays for
+//! it (sdk-traces decisions 53 and 54).** A full set never drops or refuses an owner value, and
+//! lets owner values pass its cap, because people type at human speed. So both must hold, and
+//! any other entry registers as a page value:
+//! - The seal reports the entry trusted. A page's script can enter values into its own fields at
+//!   any rate: with `input` events it dispatches itself, which are untrusted, or with
+//!   `document.execCommand`, whose `input` events the browser dispatches as trusted ones. Neither
+//!   comes with a trusted `keydown`, `paste` or `drop`, so the seal reports an entry trusted only
+//!   when one of those reached the field since its last trusted entry: at most one entry per key,
+//!   paste or drop.
+//! - The listener has a credit, and the entry spends it. Each key-down and each paste that a
+//!   control display sends on to Xvnc is one of the owner's presses, counted outside the browser
+//!   (displays.rs), and gives every armed journal one credit. An agent typing over CDP makes
+//!   trusted entries too, but no display sent its keys, so they find no credit. Each listener
+//!   keeps its own account from the moment its journal is armed, so a takeover's journal and its
+//!   display's, armed on one tab, never spend each other's credits. Presses that type nothing,
+//!   such as arrows and modifiers, bank only up to `MAX_OWNER_CREDITS`.
+//!
+//! So the owner values one journal makes never outnumber the owner's presses since it was armed.
+//! A page value is masked like the rest, but a flood of them pushes out only the page's earlier
 //! values and never grows the set past its cap. A value entered both ways is the owner's.
 //!
 //! Chromium dispatches a trusted `keydown` before each field it autofills (measured on Chromium
-//! 148) and before each key an IME takes (keyCode 229), so both are the owner's. Text inserted
-//! with no key, paste or drop, such as an emoji panel's, is a page value.
+//! 148) and before each key an IME takes (keyCode 229), so the seal trusts both. An IME's keys
+//! are presses. An autofill or a drop the owner makes with the mouse comes with no press, so it is
+//! the owner's only while earlier presses left a credit banked. Text inserted with no key, paste
+//! or drop, such as an emoji panel's, is a page value.
 //!
 //! A deliberate page can still make what the owner types a page value, which a flood can then
 //! push out (measured on Chromium 156). An edit from its own `keydown` or `beforeinput` listener
 //! spends the owner's grant before the keystroke lands, and stopping `keydown` at window capture,
 //! before the seal's listener, makes no grant. That was open before the grant too: stopping
 //! `input` the same way keeps the value from the journal, so only the release or close sweep
-//! finds it, as a page value.
+//! finds it, as a page value. Credits do not close it either. Within one keystroke, the page's
+//! edit and the owner's character are both trusted browser input, and nothing in the page or in
+//! the journal tells them apart, so the edit can spend that key's credit (decision 54).
 //!
 //! The binding stays at disarm (see [`ArmedJournal::disarm`]). Values are never logged: not a
 //! value, not a length, not a payload.
 
-use crate::limits::{JOURNAL_QUIET, MAX_JOURNAL_PENDING};
+use crate::limits::{JOURNAL_QUIET, MAX_JOURNAL_PENDING, MAX_OWNER_CREDITS};
 use crate::sealed_frames::{TabFrames, step};
 use crate::{BrowserTabs, PartError, sweep};
 use browseros_cdp::CdpEvent;
@@ -109,6 +129,7 @@ use browseros_core::{CoreError, ProtocolSession, SessionId, TabId};
 use browseros_trace::{Registration, SecretSet, SecretSource, SecretValue};
 use serde_json::json;
 use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -122,6 +143,11 @@ use zeroize::Zeroizing;
 pub struct Journal {
     tabs: BrowserTabs,
     secrets: Arc<SecretSet>,
+    /// The owner's presses (sdk-traces decision 54): every key-down and every paste a control
+    /// display has sent on to Xvnc. Neo counts them outside the browser, so no page and no CDP
+    /// client can add to it. Every clone shares the one count, and it only grows. Each armed
+    /// journal's listener reads it for its own [`Credits`].
+    presses: Arc<AtomicU64>,
 }
 
 impl Journal {
@@ -129,22 +155,47 @@ impl Journal {
     /// process-wide set every result and record is masked with.
     #[must_use]
     pub fn new(tabs: BrowserTabs, secrets: Arc<SecretSet>) -> Self {
-        Self { tabs, secrets }
+        Self {
+            tabs,
+            secrets,
+            presses: Arc::default(),
+        }
+    }
+
+    /// Counts one of the owner's presses: a control display is sending a key-down or a paste on
+    /// to Xvnc. Only the display's proxy calls it, for input it forwards as the owner's.
+    pub(crate) fn owner_pressed(&self) {
+        self.presses.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// How many presses the owner's control displays have sent on so far.
+    pub(crate) fn owner_presses(&self) -> u64 {
+        self.presses.load(Ordering::SeqCst)
     }
 
     /// Arms the journal on `tabs` until the returned [`ArmedJournal`] is disarmed or dropped. A
-    /// tab that cannot be armed is logged and skipped; the final sweep still reads it.
+    /// tab that cannot be armed is logged and skipped; the final sweep still reads it. Its credits
+    /// are the owner's presses from now on.
     pub async fn arm(&self, tabs: &[TabId]) -> ArmedJournal {
         let armed = Arc::new(Armed {
             tabs: self.tabs.clone(),
             secrets: Arc::clone(&self.secrets),
             sessions: Mutex::default(),
         });
+        // Read here, not when the listener first runs, so no press the owner makes from now on
+        // is missed.
+        let credits = Credits::new(Arc::clone(&self.presses));
         // Subscribed before any session is armed, so no entry is sent where no one listens.
         let bindings = self.tabs.binding_calls();
         let events = self.tabs.events();
         let (stop, stopped) = oneshot::channel();
-        let listener = tokio::spawn(listen(Arc::clone(&armed), bindings, events, stopped));
+        let listener = tokio::spawn(listen(
+            Arc::clone(&armed),
+            bindings,
+            events,
+            stopped,
+            credits,
+        ));
         for &tab in tabs {
             if let Err(error) = armed.arm_tab(tab).await {
                 tracing::warn!(tab = tab.0, %error, "the journal could not arm a tab");
@@ -398,10 +449,11 @@ async fn listen(
     mut bindings: mpsc::UnboundedReceiver<CdpEvent>,
     mut events: broadcast::Receiver<CdpEvent>,
     mut stop: oneshot::Receiver<()>,
+    credits: Credits,
 ) {
     let (jobs, queued) = mpsc::unbounded_channel();
     let worker = tokio::spawn(work(Arc::clone(&armed), queued));
-    let mut pending = Pending::new(Arc::clone(&armed.secrets));
+    let mut pending = Pending::new(Arc::clone(&armed.secrets), credits);
     loop {
         tokio::select! {
             biased;
@@ -479,6 +531,8 @@ async fn quiet(until: Option<Instant>) {
 /// registered yet.
 struct Pending {
     secrets: Arc<SecretSet>,
+    /// What lets a trusted entry be the owner's.
+    credits: Credits,
     /// The value typed last is last.
     values: Vec<Held>,
     /// When `values` is registered, unless another entry comes first.
@@ -491,15 +545,16 @@ struct Pending {
 struct Held {
     /// Zeroed when dropped.
     value: Zeroizing<String>,
-    /// Whether the seal reported this value trusted: the owner's key, paste or drop entered it.
+    /// Whether the value is the owner's: an owner entry made it, or it repeats a value one made.
     /// If so it registers as the owner's, else as a page value.
-    trusted: bool,
+    owner: bool,
 }
 
 impl Pending {
-    fn new(secrets: Arc<SecretSet>) -> Self {
+    fn new(secrets: Arc<SecretSet>, credits: Credits) -> Self {
         Self {
             secrets,
+            credits,
             values: Vec::new(),
             quiet_until: None,
             refused: 0,
@@ -507,14 +562,15 @@ impl Pending {
     }
 
     /// Takes one entry: the whole value of a field that got input, and whether the seal reported
-    /// it trusted.
+    /// it trusted. A trusted entry is the owner's if a credit is left, and spends it.
     fn note(&mut self, value: Zeroizing<String>, trusted: bool) {
-        // An untrusted entry never replaces a trusted one, as a backspace here or as a longer
-        // value below. A page's script could otherwise push out what the owner typed with a
-        // synthetic event one character shorter or longer, and the owner's value would be
-        // registered nowhere.
+        let owner = trusted && self.credits.spend();
+        // An entry that is not the owner's never replaces one that is, as a backspace here or as
+        // a longer value below. A page's script, or an agent's keys, could otherwise push out
+        // what the owner typed with an entry one character shorter or longer, and the owner's
+        // value would be registered nowhere.
         let backspace = self.values.last().is_some_and(|last| {
-            (trusted || !last.trusted)
+            (owner || !last.owner)
                 && last
                     .value
                     .strip_prefix(value.as_str())
@@ -525,20 +581,20 @@ impl Pending {
         }
         // A repeat of a value the owner typed stays the owner's, as the set keeps the higher
         // source of a value registered twice. That ownership only labels the value kept: what
-        // this entry may replace is decided by its own event's trust, so a page's replay of one
-        // owner value clears none of the owner's others.
-        let owned = trusted
+        // this entry may replace is decided by whether the entry itself is the owner's, so a
+        // page's replay of one owner value clears none of the owner's others.
+        let owned = owner
             || self
                 .values
                 .iter()
-                .any(|held| held.trusted && held.value.as_str() == value.as_str());
+                .any(|held| held.owner && held.value.as_str() == value.as_str());
         self.values.retain(|held| {
             held.value.as_str() != value.as_str()
-                && !(value.starts_with(held.value.as_str()) && (trusted || !held.trusted))
+                && !(value.starts_with(held.value.as_str()) && (owner || !held.owner))
         });
         self.values.push(Held {
             value,
-            trusted: owned,
+            owner: owned,
         });
         if self.values.len() > MAX_JOURNAL_PENDING {
             let oldest = self.values.remove(0);
@@ -557,8 +613,8 @@ impl Pending {
         if self.refused > 0 {
             tracing::error!(
                 refused = self.refused,
-                "the secret set is full of values it never drops, so values the journal took \
-                 from a page's own input events are masked nowhere"
+                "the secret set is full of values it never drops, so page values the journal took \
+                 are masked nowhere"
             );
             self.refused = 0;
         }
@@ -574,17 +630,58 @@ impl Drop for Pending {
     }
 }
 
+/// One armed journal's owner credits (sdk-traces decision 54): the owner's presses since it was
+/// armed, less the owner entries it made, banked up to [`MAX_OWNER_CREDITS`]. Only its listener
+/// holds it, so two journals armed on one tab, such as a takeover's and its display's, each
+/// read every entry and spend their own credits, never each other's.
+struct Credits {
+    /// [`Journal`]'s press count, which every control display adds to.
+    presses: Arc<AtomicU64>,
+    /// The count when this account last read it.
+    seen: u64,
+    /// Credits not spent yet.
+    banked: u64,
+}
+
+impl Credits {
+    /// An account with nothing banked: the presses counted so far are not its credits.
+    fn new(presses: Arc<AtomicU64>) -> Self {
+        let seen = presses.load(Ordering::SeqCst);
+        Self {
+            presses,
+            seen,
+            banked: 0,
+        }
+    }
+
+    /// Banks the presses counted since the last call, up to the cap, then spends one credit.
+    /// `false` when none is left. A display counts a press before its bytes reach Xvnc, so the
+    /// press behind an entry is always counted by the time the entry arrives here.
+    fn spend(&mut self) -> bool {
+        let now = self.presses.load(Ordering::SeqCst);
+        self.banked = self
+            .banked
+            .saturating_add(now.saturating_sub(self.seen))
+            .min(MAX_OWNER_CREDITS);
+        self.seen = now;
+        if self.banked == 0 {
+            return false;
+        }
+        self.banked -= 1;
+        true
+    }
+}
+
 /// Registers a held value for the set's full TTL, moving its buffer into the secret, which
 /// zeroes it when dropped. Returns whether the set refused it.
 ///
-/// A value the seal reported trusted is the owner's, which a full set never drops or refuses
-/// (sdk-traces decision 53), so only one too short to mask goes unregistered. Any other value
-/// is a page value: a page's own script entered it, or nothing the owner pressed, pasted or
-/// dropped did. A full set pushes out the page value that expires first to keep it, and refuses
-/// it when every value it holds is protected. A refused value is masked nowhere, as the sweep's
-/// are.
+/// An owner value is one a full set never drops or refuses (sdk-traces decision 53), so only one
+/// too short to mask goes unregistered. Any other value is a page value: a page's own script
+/// entered it, or no press of the owner's paid for it, as with an agent typing over CDP. A full
+/// set pushes out the page value that expires first to keep it, and refuses it when every value
+/// it holds is protected. A refused value is masked nowhere, as the sweep's are.
 fn register_value(secrets: &SecretSet, mut held: Held) -> bool {
-    let source = if held.trusted {
+    let source = if held.owner {
         SecretSource::Owner
     } else {
         SecretSource::Page

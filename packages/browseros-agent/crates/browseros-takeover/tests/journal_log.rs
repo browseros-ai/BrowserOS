@@ -7,6 +7,7 @@ use browseros_core::sensitive_fields::JOURNAL_BINDING;
 use browseros_core::testing::{TestConnection, cdp_error};
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, TabId};
+use browseros_takeover::testing::add_owner_presses;
 use browseros_takeover::{BrowserTabs, Journal};
 use browseros_trace::{Registration, SecretSet, SecretSetConfig, SecretSource, SecretValue};
 use serde_json::json;
@@ -128,9 +129,8 @@ async fn no_value_reaches_the_log() -> Result<(), BoxError> {
         BrowserSession::new(connection.clone(), BrowserSessionHooks::default()),
         Arc::new(Viewports::default()),
     );
-    let armed = Journal::new(tabs, Arc::clone(&secrets))
-        .arm(&[TabId(3)])
-        .await;
+    let journal = Journal::new(tabs, Arc::clone(&secrets));
+    let armed = journal.arm(&[TabId(3)]).await;
     let page = connection
         .calls()?
         .into_iter()
@@ -145,25 +145,27 @@ async fn no_value_reaches_the_log() -> Result<(), BoxError> {
             Some(page.clone()),
         );
     };
-    let type_keys = |value: &str| {
+    // The owner's keys on a control display: each one a press, then the entry it makes.
+    let owner_types = |value: &str| {
         for (start, key) in value.char_indices() {
+            add_owner_presses(&journal, 1);
             enter(&value[..start + key.len_utf8()], true);
         }
     };
 
     let values = ["QUIETVAL_4e2a", "LAGGEDVAL_8b3f", "DISARMVAL_1f9c"];
-    type_keys(values[0]);
+    owner_types(values[0]);
     tokio::time::sleep(Duration::from_secs(2)).await;
     let refused = "SYNTHVAL_5d7e";
     enter(refused, false);
     tokio::time::sleep(Duration::from_secs(2)).await;
-    type_keys(values[1]);
+    owner_types(values[1]);
     tokio::time::sleep(Duration::from_millis(10)).await;
     for _ in 0..80 {
         connection.emit("Test.filler", json!({}), None);
     }
     tokio::time::sleep(Duration::from_millis(10)).await;
-    type_keys(values[2]);
+    owner_types(values[2]);
     armed.disarm().await;
 
     let text = log.text()?;

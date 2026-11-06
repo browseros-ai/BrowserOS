@@ -41,6 +41,8 @@
 //!  GET /v1/display ─▶ Displays::admit ─ upgrade ─▶ Admitted::serve ─ RFB, filtered ─▶ Xvnc
 //!    control: first input ─▶ views close ─▶ every open tab stamped, then private ─▶ the input
 //!      goes on
+//!    control: each key-down and paste sent on ─▶ Journal's count of the owner's presses ─▶
+//!      each armed journal's credits, which a trusted entry spends to be the owner's
 //!    view: follow ─ the task's operations, Neo's front moves ─▶ the front turn ─▶ activateTab
 //!    views: tab.private, a 250 ms poll ─ a private tab in front ─▶ every view closes
 //!  door (app) ─▶ Front::check (sync) ─ the screen rule over the owner's holds

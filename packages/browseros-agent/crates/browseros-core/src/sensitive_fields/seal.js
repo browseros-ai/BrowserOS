@@ -401,10 +401,12 @@
     if (!journal) return;
     var value = rawValue(el);
     var trusted = event.isTrusted && granted.has(el);
-    // The same value again is sent only when it is trusted and the last was not: a value the
-    // page reported first, that the owner then pastes or types over, becomes the owner's.
+    // The same value again is sent only when a fresh key, paste or drop backs it, once for that
+    // grant, which it spends. Whether it is the owner's is the takeover journal's call, from the
+    // keys the owner's control display sent: a value the page or the agent entered first, that
+    // the owner then pastes or types over, becomes the owner's there.
     var sent = lastSent.get(el);
-    if (!value || (sent && sent.value === value && (sent.trusted || !trusted))) return;
+    if (!value || (sent && sent.value === value && !trusted)) return;
     lastSent.set(el, { value: value, trusted: trusted });
     if (trusted) granted.delete(el);
     journal(raw.stringify({ kind: k, value: value, trusted: trusted }));

@@ -37,6 +37,17 @@ pub(crate) const JOURNAL_QUIET: Duration = Duration::from_secs(1);
 /// its own fields, so past this the value typed longest ago is registered at once, and each entry
 /// is checked against a bounded set.
 pub(crate) const MAX_JOURNAL_PENDING: usize = 64;
+
+/// The most owner credits one armed journal banks (sdk-traces decision 54). Each key-down or
+/// paste that a control display sends on gives every armed journal one credit, and each owner
+/// entry spends one. A credit only has to last from a press to the entry it causes, so a few
+/// cover typing at full speed. The presses that type nothing, such as arrows, modifiers, Enter
+/// and a clipboard sync, stop banking here. Unbounded, they would build a reserve that keys the
+/// display never sent, such as an agent's typed over CDP, could spend as owner values. If the
+/// browser falls more than this many presses behind the owner's keys, the entries past the cap
+/// are page values, which stay masked until a flood of page values pushes them out.
+pub(crate) const MAX_OWNER_CREDITS: u64 = 32;
+
 /// A screen side under this gets no fit at all: Xvnc can report one, and no viewport is that
 /// small (core's `viewport::MIN_SIZE`).
 pub(crate) const MIN_SIDE: u16 = 100;

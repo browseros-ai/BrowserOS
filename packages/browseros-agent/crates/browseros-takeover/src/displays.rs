@@ -11,7 +11,8 @@
 //!        ◀─ Xvnc bytes, untouched ─────────────────────────────┘
 //!          view: follow runs beside it (follow.rs), and the front-tab watch closes it when a
 //!                private tab is in front (front_tab.rs)
-//!          control: at its end, the close sweep of every open tab, then the journal disarms
+//!          control: each key-down and paste sent on counts as the owner's press (Journal),
+//!                   and at its end, the close sweep of every open tab, then the journal disarms
 //! ```
 //!
 //! **Admission comes before the WebSocket upgrade**, so the host gets a refusal as an HTTP
@@ -66,6 +67,15 @@
 //! owner can reach any tab, and a value can reach a field without an `input` event the journal
 //! sees. A takeover's release waits for this sweep ([`DisplayBinding::close`]) before it sweeps
 //! its own tab.
+//!
+//! **A control display counts the owner's presses** (sdk-traces decision 54). Each key-down, as
+//! either key message, and each paste that it sends on to Xvnc as the owner's input adds one to
+//! the [`Journal`]'s press count, before the bytes go. Neo counts them here, outside the browser,
+//! so neither a page nor a CDP client can add to the count. A view's input is dropped and counts
+//! nothing, and neither does an input that a failed commit drops. Each press gives every armed
+//! journal one credit, and a trusted journal entry is the owner's only if its journal has a
+//! credit to spend, so the owner values a journal makes never outnumber what the owner pressed
+//! (journal.rs).
 
 use crate::browser_tabs::ScreenHoldGuard;
 use crate::follow::Follower;
@@ -870,6 +880,12 @@ impl<'a> Proxy<'a> {
             };
             if input && !self.taint(from_viewer).await? {
                 continue;
+            }
+            // Counted before the bytes go, so a journal entry they cause can never reach a
+            // listener before its credit. A write that fails ends the display, so at most one
+            // press is counted that Xvnc never got.
+            if input && message.is_press() {
+                self.displays.journal.owner_pressed();
             }
             to_server
                 .write_all(&bytes)

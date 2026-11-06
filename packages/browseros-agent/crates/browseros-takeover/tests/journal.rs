@@ -1,12 +1,14 @@
 //! The control journal over core's scripted connection: what arming sends and disarming takes
-//! back, which binding calls reach the secret set and when, and frames that attach during
-//! control. The clock is paused, so a test moves past the journal's quiet period without waiting
-//! for it.
+//! back, which binding calls reach the secret set and when, whose values they are, and frames
+//! that attach during control. The clock is paused, so a test moves past the journal's quiet
+//! period without waiting for it. The owner's presses are counted here with no display, as a
+//! control display counts the keys it sends on.
 
 use browseros_core::sensitive_fields::{JOURNAL_BINDING, SEALED_WORLD, seal_source};
 use browseros_core::testing::{TestCall, TestConnection, cdp_pending};
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TabId};
+use browseros_takeover::testing::add_owner_presses;
 use browseros_takeover::{BrowserTabs, Journal, PartError};
 use browseros_trace::{SecretSet, SecretSetConfig, SecretSource, SecretValue};
 use serde_json::{Value, json};
@@ -24,6 +26,9 @@ const QUIET: Duration = Duration::from_secs(1);
 
 /// More events than the scripted connection's broadcast holds for a reader that is behind.
 const FLOOD: usize = 80;
+
+/// Decision 54: the most credits one armed journal banks from the owner's presses.
+const MAX_OWNER_CREDITS: usize = 32;
 
 fn tab(id: i64) -> Value {
     json!({
@@ -124,7 +129,7 @@ impl Harness {
     }
 
     /// What the seal's binding sends when a sensitive field gets input: its whole value, and
-    /// whether the owner's key, paste or drop entered it (`trusted`).
+    /// whether a real key, paste or drop entered it (`trusted`).
     fn input(&self, session: &SessionId, binding: &str, value: &str, trusted: bool) {
         let payload = json!({ "kind": "password", "value": value, "trusted": trusted }).to_string();
         self.connection.emit(
@@ -134,9 +139,38 @@ impl Harness {
         );
     }
 
-    /// The owner's keys put `value` in a sensitive field: a trusted entry.
+    /// A real key puts `value` in a sensitive field: a trusted entry, as the seal sends for the
+    /// owner's key and for an agent's typed over CDP alike. It is the owner's only with a press
+    /// to spend ([`Harness::press`]).
     fn type_into(&self, session: &SessionId, binding: &str, value: &str) {
         self.input(session, binding, value, true);
+    }
+
+    /// The owner presses `count` keys on a control display, which counts each before it reaches
+    /// the browser.
+    fn press(&self, count: usize) {
+        add_owner_presses(&self.journal, u64::try_from(count).unwrap_or(u64::MAX));
+    }
+
+    /// The owner enters `value` with one press, such as a paste: a press, then a trusted entry.
+    fn owner_enters(&self, session: &SessionId, value: &str) {
+        self.press(1);
+        self.type_into(session, JOURNAL_BINDING, value);
+    }
+
+    /// The owner types `value` key by key into an empty field on a control display: a press for
+    /// each key, then a trusted entry for each.
+    fn owner_types(&self, session: &SessionId, value: &str) {
+        self.press(keys(value).len());
+        self.type_keys(session, value);
+    }
+
+    /// How many values the secret set holds as the owner's, and how many as page values.
+    fn sources(&self) -> (usize, usize) {
+        (
+            self.secrets.count_from(SecretSource::Owner),
+            self.secrets.count_from(SecretSource::Page),
+        )
     }
 
     /// A page's script puts each of `values` in a sensitive field and dispatches `input` itself:
@@ -147,14 +181,15 @@ impl Harness {
         }
     }
 
-    /// `values`, one input event each.
+    /// `values`, one trusted entry each.
     fn send(&self, session: &SessionId, values: &[&str]) {
         for value in values {
             self.type_into(session, JOURNAL_BINDING, value);
         }
     }
 
-    /// `value` typed key by key into an empty field.
+    /// `value` typed key by key into an empty field, a trusted entry per key, with no press
+    /// counted for them.
     fn type_keys(&self, session: &SessionId, value: &str) {
         self.send(session, &keys(value));
     }
@@ -470,7 +505,7 @@ async fn what_the_owner_typed_outlasts_a_flood_of_page_values() -> TestResult {
     let armed = h.journal.arm(&[TabId(3)]).await;
     let page = h.page_session()?;
 
-    h.type_keys(&page, "OWNERTYPED_9k2x");
+    h.owner_types(&page, "OWNERTYPED_9k2x");
     h.registered("OWNERTYPED_9k2x").await?;
     for i in 0..8 {
         let _registration = h
@@ -506,7 +541,7 @@ async fn what_a_page_script_entered_is_a_page_value_and_what_the_owner_typed_is_
         "the script's value is the page's (owner, page)"
     );
 
-    h.type_keys(&page, "OWNERTYPED_3m8v");
+    h.owner_types(&page, "OWNERTYPED_3m8v");
     tokio::time::sleep(QUIET * 2).await;
     assert_eq!(h.masked("OWNERTYPED_3m8v"), "[private]");
     assert_eq!(
@@ -530,9 +565,9 @@ async fn a_page_script_never_displaces_what_the_owner_typed() -> TestResult {
     let armed = h.journal.arm(&[TabId(3)]).await;
     let page = h.page_session()?;
 
-    h.type_keys(&page, "OWNERLONG_4k");
+    h.owner_types(&page, "OWNERLONG_4k");
     h.script_enters(&page, &["OWNERLONG_4kx"]);
-    h.type_keys(&page, "OWNERDEL_7q");
+    h.owner_types(&page, "OWNERDEL_7q");
     h.script_enters(&page, &["OWNERDEL_7"]);
     tokio::time::sleep(QUIET * 2).await;
     assert_eq!(
@@ -558,8 +593,8 @@ async fn a_page_scripts_replay_of_one_owner_value_keeps_the_others() -> TestResu
     let armed = h.journal.arm(&[TabId(3)]).await;
     let page = h.page_session()?;
 
-    h.type_into(&page, JOURNAL_BINDING, "OWNERPASS_EXT9");
-    h.type_into(&page, JOURNAL_BINDING, "OWNERPASS");
+    h.owner_enters(&page, "OWNERPASS_EXT9");
+    h.owner_enters(&page, "OWNERPASS");
     h.script_enters(&page, &["OWNERPASS_EXT9"]);
     tokio::time::sleep(QUIET * 2).await;
     assert_eq!(
@@ -584,9 +619,9 @@ async fn a_value_both_the_owner_and_a_page_script_entered_stays_the_owners() -> 
     let armed = h.journal.arm(&[TabId(3)]).await;
     let page = h.page_session()?;
 
-    h.type_into(&page, JOURNAL_BINDING, "TYPEDFIRST_5k1p");
+    h.owner_enters(&page, "TYPEDFIRST_5k1p");
     h.script_enters(&page, &["TYPEDFIRST_5k1p", "SCRIPTFIRST_8d3r"]);
-    h.type_into(&page, JOURNAL_BINDING, "SCRIPTFIRST_8d3r");
+    h.owner_enters(&page, "SCRIPTFIRST_8d3r");
     tokio::time::sleep(QUIET * 2).await;
     assert_eq!(
         h.masked("TYPEDFIRST_5k1p SCRIPTFIRST_8d3r"),
@@ -619,7 +654,7 @@ async fn a_page_flooding_input_events_grows_no_owner_value_and_the_set_no_furthe
     let armed = h.journal.arm(&[TabId(3)]).await;
     let page = h.page_session()?;
 
-    h.type_keys(&page, "OWNERTYPED_6w4n");
+    h.owner_types(&page, "OWNERTYPED_6w4n");
     h.registered("OWNERTYPED_6w4n").await?;
     let flood = (0..100)
         .map(|i| format!("PAGEFLOOD_{i:03}"))
@@ -638,6 +673,136 @@ async fn a_page_flooding_input_events_grows_no_owner_value_and_the_set_no_furthe
         "the owner's value and the newest page value stay masked, and the oldest page value went"
     );
     armed.disarm().await;
+    Ok(())
+}
+
+/// sdk-traces decision 54: an agent typing over CDP during control makes the same trusted
+/// entries as the owner's keys, but no control display sent its keys, so what it types is a page
+/// value.
+#[tokio::test(start_paused = true)]
+async fn trusted_entries_with_no_owner_press_are_page_values() -> TestResult {
+    let h = harness(&["page-script"])?;
+    let armed = h.journal.arm(&[TabId(3)]).await;
+    let page = h.page_session()?;
+
+    h.type_keys(&page, "AGENTTYPED_5r8k");
+    tokio::time::sleep(QUIET * 2).await;
+    assert_eq!(
+        h.masked("AGENTTYPED_5r8k"),
+        "[private]",
+        "masked all the same"
+    );
+    assert_eq!(h.sources(), (0, 1), "(owner, page)");
+    armed.disarm().await;
+    Ok(())
+}
+
+/// Each press lets one trusted entry be the owner's, in the order the entries come.
+#[tokio::test(start_paused = true)]
+async fn each_press_makes_one_trusted_entry_the_owners_and_the_entry_past_them_a_page_value()
+-> TestResult {
+    let h = harness_with(
+        &["page-script"],
+        SecretSetConfig {
+            max_entries: 4,
+            ..SecretSetConfig::default()
+        },
+    )?;
+    let armed = h.journal.arm(&[TabId(3)]).await;
+    let page = h.page_session()?;
+
+    h.press(3);
+    h.send(
+        &page,
+        &[
+            "PRESSED_1x7q",
+            "PRESSED_2m4w",
+            "PRESSED_3k9z",
+            "UNPRESSED_4d2r",
+        ],
+    );
+    tokio::time::sleep(QUIET * 2).await;
+    assert_eq!(h.sources(), (3, 1), "(owner, page)");
+    let _registration = h
+        .secrets
+        .register(SecretValue::new("PAGEFLOOD_0001".into()), None);
+    assert_eq!(
+        h.masked("PRESSED_1x7q PRESSED_2m4w PRESSED_3k9z UNPRESSED_4d2r"),
+        "[private] [private] [private] UNPRESSED_4d2r",
+        "a page value pushed out the entry no press paid for, and none of the owner's"
+    );
+    armed.disarm().await;
+    Ok(())
+}
+
+/// Presses that type nothing, such as arrows and modifiers, bank as credits only up to 32, so
+/// they build no reserve that keys the display never sent could spend. A press after the bank
+/// ran dry pays for its own entry.
+#[tokio::test(start_paused = true)]
+async fn presses_bank_at_most_32_credits() -> TestResult {
+    let h = harness(&["page-script"])?;
+    let armed = h.journal.arm(&[TabId(3)]).await;
+    let page = h.page_session()?;
+
+    h.press(MAX_OWNER_CREDITS + 8);
+    let values = (0..MAX_OWNER_CREDITS + 8)
+        .map(|i| format!("BANKED_{i:03}"))
+        .collect::<Vec<_>>();
+    h.send(
+        &page,
+        &values.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    tokio::time::sleep(QUIET * 2).await;
+    assert_eq!(h.sources(), (MAX_OWNER_CREDITS, 8), "(owner, page)");
+
+    h.owner_enters(&page, "PRESSEDLATER_7w");
+    tokio::time::sleep(QUIET * 2).await;
+    assert_eq!(h.sources(), (MAX_OWNER_CREDITS + 1, 8), "(owner, page)");
+    armed.disarm().await;
+    Ok(())
+}
+
+/// A journal's account starts when it is armed: presses from before are not its credits.
+#[tokio::test(start_paused = true)]
+async fn presses_from_before_a_journal_was_armed_are_not_its_credits() -> TestResult {
+    let h = harness(&["page-script"])?;
+    h.press(5);
+    let armed = h.journal.arm(&[TabId(3)]).await;
+    let page = h.page_session()?;
+
+    h.type_into(&page, JOURNAL_BINDING, "AFTERARMING_8n2v");
+    tokio::time::sleep(QUIET * 2).await;
+    assert_eq!(h.sources(), (0, 1), "(owner, page)");
+    armed.disarm().await;
+    Ok(())
+}
+
+/// Each armed journal keeps its own account. A takeover's journal and its display's, armed on
+/// one tab, both read every entry, and each makes it the owner's from the same press: neither
+/// spends the other's credit. The journal disarmed first registers alone, so its own verdict
+/// shows, and each of the two goes first once.
+#[tokio::test(start_paused = true)]
+async fn two_journals_on_one_tab_each_make_the_owners_value_from_the_same_press() -> TestResult {
+    for first in [0, 1] {
+        let h = harness(&["first-script", "second-script"])?;
+        let mut armed = vec![
+            h.journal.arm(&[TabId(3)]).await,
+            h.journal.arm(&[TabId(3)]).await,
+        ];
+        let page = h.page_session()?;
+
+        h.press(1);
+        h.type_into(&page, JOURNAL_BINDING, "BOTHJOURNALS_6t");
+        settle().await;
+        armed.remove(first).disarm().await;
+        assert_eq!(
+            h.sources(),
+            (1, 0),
+            "journal {first}, disarmed first, made it the owner's (owner, page)"
+        );
+        armed.remove(0).disarm().await;
+        assert_eq!(h.sources(), (1, 0), "(owner, page)");
+    }
     Ok(())
 }
 

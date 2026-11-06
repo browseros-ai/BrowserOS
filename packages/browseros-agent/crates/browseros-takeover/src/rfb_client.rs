@@ -1,7 +1,9 @@
 //! The client's side of RFB 3.8, as Neo's display reads what a viewer sends to Xvnc: the bytes
 //! cut into whole messages, and the one table of what each display mode lets through (design
 //! D12, decision 23). Pure: the proxy pushes whatever a WebSocket frame carried and takes whole
-//! messages out, so frames that split or merge messages never change what is judged.
+//! messages out, so frames that split or merge messages never change what is judged. It also
+//! says which messages are the owner's presses ([`ClientMessage::is_press`]): each key going
+//! down and each paste, which a control display counts for the journal (sdk-traces decision 54).
 //!
 //! ```text
 //!  viewer ── "RFB 003.008\n" ── security type 1 (None) ── ClientInit (sent on as 1, shared)
@@ -46,7 +48,10 @@ pub(crate) enum ClientMessage {
     /// Type 3.
     UpdateRequest,
     /// Type 4: a key, by keysym.
-    Key,
+    Key {
+        /// The key went down: the message's down flag is not 0, as Xvnc reads it.
+        down: bool,
+    },
     /// Type 5, with its button mask. A mask of 0 is a hover move.
     Pointer {
         /// The buttons held down.
@@ -62,7 +67,23 @@ pub(crate) enum ClientMessage {
     SetDesktopSize,
     /// Type 255, subtype 0: QEMU's extended key event, a key with its scancode. noVNC 1.3.0
     /// sends every key that has a scancode this way, never as type 4.
-    QemuKey,
+    QemuKey {
+        /// The key went down: the message's u16 down flag is not 0, as Xvnc reads it.
+        down: bool,
+    },
+}
+
+impl ClientMessage {
+    /// Whether this is one of the owner's presses when a control display sends it on (sdk-traces
+    /// decision 54): a key going down, as either key message, or a paste. A key going up, a
+    /// click and every other message are not presses. A held key repeats its down, so each
+    /// character the hold types is a press.
+    pub(crate) const fn is_press(self) -> bool {
+        matches!(
+            self,
+            Self::Key { down: true } | Self::QemuKey { down: true } | Self::CutText
+        )
+    }
 }
 
 /// What a display does with one message.
@@ -89,13 +110,16 @@ pub(crate) const fn verdict(mode: DisplayMode, message: ClientMessage) -> Verdic
             Version | Security | ClientInit | SetPixelFormat | SetEncodings | UpdateRequest
             | ContinuousUpdates | Fence,
         ) => Verdict::Pass,
-        (DisplayMode::View, Key | Pointer { .. } | CutText | SetDesktopSize | QemuKey) => {
-            Verdict::Drop
-        }
+        (
+            DisplayMode::View,
+            Key { .. } | Pointer { .. } | CutText | SetDesktopSize | QemuKey { .. },
+        ) => Verdict::Drop,
         // A hover move reveals nothing, and noVNC sends one on every mouse move. A resize fits
         // the screen to the owner's viewer; it types nothing.
         (DisplayMode::Control, Pointer { buttons: 0 } | SetDesktopSize) => Verdict::Pass,
-        (DisplayMode::Control, Key | Pointer { .. } | CutText | QemuKey) => Verdict::Input,
+        (DisplayMode::Control, Key { .. } | Pointer { .. } | CutText | QemuKey { .. }) => {
+            Verdict::Input
+        }
     }
 }
 
@@ -198,7 +222,11 @@ fn message(buffer: &[u8]) -> Parse<ClientMessage> {
             ),
         },
         3 => whole(buffer, ClientMessage::UpdateRequest, 10),
-        4 => whole(buffer, ClientMessage::Key, 8),
+        // Type, a u8 down flag, padding, the u32 keysym.
+        4 => match buffer.get(1) {
+            None => Parse::Incomplete,
+            Some(&down) => whole(buffer, ClientMessage::Key { down: down != 0 }, 8),
+        },
         5 => match buffer.get(1) {
             None => Parse::Incomplete,
             Some(&buttons) => whole(buffer, ClientMessage::Pointer { buttons }, 6),
@@ -222,10 +250,11 @@ fn message(buffer: &[u8]) -> Parse<ClientMessage> {
                 8 + 16 * usize::from(screens),
             ),
         },
-        255 => match buffer.get(1) {
-            None => Parse::Incomplete,
-            Some(0) => whole(buffer, ClientMessage::QemuKey, 12),
-            Some(_) => Parse::Invalid("a QEMU message other than the extended key event"),
+        // Type, subtype, a u16 down flag, the u32 keysym, the u32 scancode.
+        255 => match (buffer.get(1), u16_at(buffer, 2)) {
+            (None, _) | (Some(0), None) => Parse::Incomplete,
+            (Some(0), Some(down)) => whole(buffer, ClientMessage::QemuKey { down: down != 0 }, 12),
+            (Some(_), _) => Parse::Invalid("a QEMU message other than the extended key event"),
         },
         _ => Parse::Invalid("a message type the display does not know"),
     }
@@ -298,7 +327,14 @@ mod tests {
                 ClientMessage::UpdateRequest,
                 vec![3, 1, 0, 0, 0, 0, 0x06, 0x40, 0x03, 0xe8],
             ),
-            (ClientMessage::Key, vec![4, 1, 0, 0, 0, 0, 0, 0x61]),
+            (
+                ClientMessage::Key { down: true },
+                vec![4, 1, 0, 0, 0, 0, 0, 0x61],
+            ),
+            (
+                ClientMessage::Key { down: false },
+                vec![4, 0, 0, 0, 0, 0, 0, 0x61],
+            ),
             (
                 ClientMessage::Pointer { buttons: 0 },
                 vec![5, 0, 0, 10, 0, 20],
@@ -322,8 +358,12 @@ mod tests {
             ),
             (ClientMessage::SetDesktopSize, set_desktop_size),
             (
-                ClientMessage::QemuKey,
+                ClientMessage::QemuKey { down: true },
                 vec![255, 0, 0, 1, 0, 0, 0, 0x61, 0, 0, 0, 0x1e],
+            ),
+            (
+                ClientMessage::QemuKey { down: false },
+                vec![255, 0, 0, 0, 0, 0, 0, 0x61, 0, 0, 0, 0x1e],
             ),
         ]
     }
@@ -488,6 +528,67 @@ mod tests {
         assert!(refused.is_some(), "type 9 after a whole update request");
     }
 
+    /// An extended paste: a negative length, then 4 bytes of flags and the text.
+    const EXTENDED_PASTE: [u8; 16] = [
+        6, 0, 0, 0, 0xff, 0xff, 0xff, 0xf8, 0x10, 0, 0, 0x01, b'x', b'y', b'z', b'w',
+    ];
+
+    /// Client messages, and whether each is a press of the owner's.
+    const PRESSES: [(&str, &[u8], bool); 12] = [
+        ("a key down", &[4, 1, 0, 0, 0, 0, 0, 0x61], true),
+        ("the same key up", &[4, 0, 0, 0, 0, 0, 0, 0x61], false),
+        (
+            "a key down flag other than 1",
+            &[4, 0x80, 0, 0, 0, 0, 0, 0x61],
+            true,
+        ),
+        (
+            "a QEMU key down",
+            &[255, 0, 0, 1, 0, 0, 0, 0x61, 0, 0, 0, 0x1e],
+            true,
+        ),
+        (
+            "the same QEMU key up",
+            &[255, 0, 0, 0, 0, 0, 0, 0x61, 0, 0, 0, 0x1e],
+            false,
+        ),
+        (
+            "a QEMU key down flag in its high byte",
+            &[255, 0, 1, 0, 0, 0, 0, 0x61, 0, 0, 0, 0x1e],
+            true,
+        ),
+        ("a paste", &[6, 0, 0, 0, 0, 0, 0, 3, b'p', b'w', b'd'], true),
+        ("an extended paste", &EXTENDED_PASTE, true),
+        ("a click", &[5, 1, 0, 10, 0, 20], false),
+        ("a hover move", &[5, 0, 0, 10, 0, 20], false),
+        (
+            "a resize",
+            &[
+                251, 0, 0x01, 0x86, 0x03, 0x4c, 1, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0x01, 0x86, 0x03,
+                0x4c, 0, 0, 0, 0,
+            ],
+            false,
+        ),
+        (
+            "an update request",
+            &[3, 1, 0, 0, 0, 0, 0x06, 0x40, 0x03, 0xe8],
+            false,
+        ),
+    ];
+
+    /// sdk-traces decision 54: the owner's presses are each key going down, as either key
+    /// message, and each paste. Xvnc reads any non-zero down flag as down, a QEMU key's whole
+    /// u16 included, so the count agrees with what reaches the browser.
+    #[test]
+    fn a_key_going_down_and_a_paste_are_presses_and_a_key_going_up_is_not() {
+        for (name, bytes, press) in PRESSES {
+            let framed = frame(&[&after_handshake(bytes)]);
+            let message = framed.as_ref().ok().and_then(|framed| framed.get(3));
+            let is_press = message.map(|(message, _)| message.is_press());
+            assert_eq!(is_press, Some(press), "{name}: {framed:?}");
+        }
+    }
+
     #[test]
     fn view_passes_the_screen_and_drops_every_input_paste_and_resize() {
         for (message, _) in every_message() {
@@ -512,8 +613,8 @@ mod tests {
         for (message, _) in every_message() {
             let input = matches!(
                 message,
-                ClientMessage::Key
-                    | ClientMessage::QemuKey
+                ClientMessage::Key { .. }
+                    | ClientMessage::QemuKey { .. }
                     | ClientMessage::CutText
                     | ClientMessage::Pointer { buttons: 1.. }
             );
