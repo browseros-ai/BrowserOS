@@ -124,7 +124,7 @@ impl Harness {
     }
 
     /// What the seal's binding sends when a sensitive field gets input: its whole value, and
-    /// whether the browser dispatched the event (`isTrusted`).
+    /// whether the owner's key, paste or drop entered it (`trusted`).
     fn input(&self, session: &SessionId, binding: &str, value: &str, trusted: bool) {
         let payload = json!({ "kind": "password", "value": value, "trusted": trusted }).to_string();
         self.connection.emit(
@@ -134,13 +134,13 @@ impl Harness {
         );
     }
 
-    /// The owner's keys put `value` in a sensitive field: a trusted event.
+    /// The owner's keys put `value` in a sensitive field: a trusted entry.
     fn type_into(&self, session: &SessionId, binding: &str, value: &str) {
         self.input(session, binding, value, true);
     }
 
     /// A page's script puts each of `values` in a sensitive field and dispatches `input` itself:
-    /// an untrusted event each.
+    /// an untrusted entry each.
     fn script_enters(&self, session: &SessionId, values: &[&str]) {
         for value in values {
             self.input(session, JOURNAL_BINDING, value, false);

@@ -100,10 +100,12 @@ impl JournalEntry {
         (!value.is_empty()).then_some(Self { kind, value })
     }
 
-    /// [`Self::parse`], and whether the browser dispatched the event the entry came from
-    /// (`event.isTrusted` in `seal.js`): a key, a paste or an IME commit, but also an edit a
-    /// page's script made with `document.execCommand` (measured on Chromium 156). An event a
-    /// page's script dispatched itself is untrusted.
+    /// [`Self::parse`], and whether the owner entered the value. `seal.js` reports `trusted`
+    /// when the browser dispatched the entry's event (`event.isTrusted`) and a trusted `keydown`,
+    /// `paste` or `drop` reached the field since its last trusted entry, so each key, paste or
+    /// drop makes at most one entry trusted. A page's script can dispatch none of those three
+    /// trusted, and its `document.execCommand` edits fire a trusted `input` event but none of
+    /// them (measured on Chromium 156), so its entries read untrusted.
     ///
     /// Anything but `"trusted": true`, a payload without the field included, reads as
     /// untrusted. The trust is read apart from the entry, so every entry `parse` keeps is kept
@@ -207,12 +209,17 @@ mod tests {
     ];
 
     #[test]
-    fn the_seal_reports_each_entry_with_its_events_trust_as_rust_reads_it() {
+    fn the_seal_reports_each_entry_with_its_trust_as_rust_reads_it() {
         assert_eq!(
             super::SEAL_TEMPLATE
-                .matches(
-                    "journal(raw.stringify({ kind: k, value: value, trusted: event.isTrusted }))"
-                )
+                .matches("var trusted = event.isTrusted && granted.has(el);")
+                .count(),
+            1,
+            "seal.js decides trust as parse_with_trust's doc says"
+        );
+        assert_eq!(
+            super::SEAL_TEMPLATE
+                .matches("journal(raw.stringify({ kind: k, value: value, trusted: trusted }))")
                 .count(),
             1,
             "seal.js sends each entry as this exact object"

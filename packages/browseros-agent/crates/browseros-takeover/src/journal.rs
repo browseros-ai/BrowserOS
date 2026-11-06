@@ -5,8 +5,8 @@
 //!
 //! sdk-privacy's seal carries the journal: in the sealed world, a capture-phase listener sends
 //! `{kind, value, trusted}` through the `JOURNAL_BINDING` binding when a sensitive field gets
-//! input, `trusted` being the event's `isTrusted`. This module arms it during control and feeds
-//! the secret set:
+//! input, `trusted` saying whether the owner's key, paste or drop entered it. This module arms it
+//! during control and feeds the secret set:
 //!
 //! ```text
 //!  Journal::arm(tabs) ─ subscribe first ─▶ ArmedJournal: its listener, and the listener's worker
@@ -18,7 +18,7 @@
 //!  listener, from its own binding-call channel:
 //!            Runtime.bindingCalled on an armed session ─▶ JournalEntry::parse_with_trust
 //!              ─▶ Pending ─ a second with no entry, disarm or drop ─▶ SecretSet: the owner's
-//!                 value if a trusted event entered it, else a page value
+//!                 value if the seal reported it trusted, else a page value
 //!  listener, from the connection's broadcast:
 //!            Target.attachedToTarget, an iframe ─▶ worker: armed the same way, if its parent is
 //!            a lag ─▶ worker: every armed tab swept
@@ -75,17 +75,27 @@
 //! captures its pixels; the sealed world masks the field in every read; and a takeover's tab is
 //! locked to the agent.
 //!
-//! **Only what a trusted event entered is the owner's (sdk-traces decision 53).** A full set
-//! never drops or refuses an owner value, and lets owner values pass its cap, because people
-//! type at human speed. A page's script can raise `input` events on its own fields at any rate,
-//! and those events are untrusted. So a value the owner's keys left in a field registers as the
-//! owner's, and one that only a page's own events entered registers as a page value. A page
-//! value is masked like the rest, but a flood of them pushes out only the page's earlier values
-//! and never grows the set past its cap. A value entered both ways is the owner's.
+//! **Only what the owner's keys, pastes and drops entered is the owner's (sdk-traces decision
+//! 53).** A full set never drops or refuses an owner value, and lets owner values pass its cap,
+//! because people type at human speed. A page's script can enter values into its own fields at
+//! any rate: with `input` events it dispatches itself, which are untrusted, or with
+//! `document.execCommand`, whose `input` events the browser dispatches as trusted ones. Neither
+//! comes with a trusted `keydown`, `paste` or `drop`, so the seal reports an entry trusted only
+//! when one of those reached the field since its last trusted entry: at most one entry per key,
+//! paste or drop. A trusted entry registers as the owner's, and any other as a page value. A
+//! page value is masked like the rest, but a flood of them pushes out only the page's earlier
+//! values and never grows the set past its cap. A value entered both ways is the owner's.
 //!
-//! `isTrusted` misses one path. The browser itself dispatches the `input` of a page's
-//! `document.execCommand` edit, as a trusted event (measured on Chromium 156), so a page can
-//! still register owner values that way.
+//! Chromium dispatches a trusted `keydown` before each field it autofills (measured on Chromium
+//! 148) and before each key an IME takes (keyCode 229), so both are the owner's. Text inserted
+//! with no key, paste or drop, such as an emoji panel's, is a page value.
+//!
+//! A deliberate page can still make what the owner types a page value, which a flood can then
+//! push out (measured on Chromium 156). An edit from its own `keydown` or `beforeinput` listener
+//! spends the owner's grant before the keystroke lands, and stopping `keydown` at window capture,
+//! before the seal's listener, makes no grant. That was open before the grant too: stopping
+//! `input` the same way keeps the value from the journal, so only the release or close sweep
+//! finds it, as a page value.
 //!
 //! The binding stays at disarm (see [`ArmedJournal::disarm`]). Values are never logged: not a
 //! value, not a length, not a payload.
@@ -481,8 +491,8 @@ struct Pending {
 struct Held {
     /// Zeroed when dropped.
     value: Zeroizing<String>,
-    /// Whether a trusted event entered this value. If so it registers as the owner's, else as a
-    /// page value.
+    /// Whether the seal reported this value trusted: the owner's key, paste or drop entered it.
+    /// If so it registers as the owner's, else as a page value.
     trusted: bool,
 }
 
@@ -496,8 +506,8 @@ impl Pending {
         }
     }
 
-    /// Takes one entry: the whole value of a field that got input, and whether the browser
-    /// dispatched its event.
+    /// Takes one entry: the whole value of a field that got input, and whether the seal reported
+    /// it trusted.
     fn note(&mut self, value: Zeroizing<String>, trusted: bool) {
         // An untrusted entry never replaces a trusted one, as a backspace here or as a longer
         // value below. A page's script could otherwise push out what the owner typed with a
@@ -567,11 +577,12 @@ impl Drop for Pending {
 /// Registers a held value for the set's full TTL, moving its buffer into the secret, which
 /// zeroes it when dropped. Returns whether the set refused it.
 ///
-/// A value a trusted event entered is the owner's, which a full set never drops or refuses
+/// A value the seal reported trusted is the owner's, which a full set never drops or refuses
 /// (sdk-traces decision 53), so only one too short to mask goes unregistered. Any other value
-/// came from a page's own input events and is a page value. A full set pushes out the page
-/// value that expires first to keep it, and refuses it when every value it holds is protected.
-/// A refused value is masked nowhere, as the sweep's are.
+/// is a page value: a page's own script entered it, or nothing the owner pressed, pasted or
+/// dropped did. A full set pushes out the page value that expires first to keep it, and refuses
+/// it when every value it holds is protected. A refused value is masked nowhere, as the sweep's
+/// are.
 fn register_value(secrets: &SecretSet, mut held: Held) -> bool {
     let source = if held.trusted {
         SecretSource::Owner

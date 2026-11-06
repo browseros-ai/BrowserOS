@@ -350,6 +350,8 @@
   var journal = typeof globalThis.__neoJournal === "function" ? globalThis.__neoJournal : null;
   delete globalThis.__neoJournal;
   var lastSent = new WeakMap();
+  // The fields a trusted keydown, paste or drop reached since their last trusted entry (record).
+  var granted = new WeakSet();
   // The closed roots Rust handed to watch(), held weakly: a component the page removed and
   // dropped dies with its root and is swept no more, and the values swept from it before stay
   // with the host's mask. A root the page keeps and attaches again is still watched, its
@@ -373,6 +375,24 @@
     pendingHosts.push(el);
     journal('{"hiddenRoot":true}');
   };
+  // One event grants once. A key reaches every root the seal listens on along its path (the
+  // document, then each watched shadow root a slotted field sits in), and a page listener between
+  // two of them could spend the grant and have the next root grant it again.
+  var granting = new WeakSet();
+  var grant = function (event) {
+    var el = raw.composedPath.call(event)[0];
+    if (!event.isTrusted || granting.has(event) || !isField(el)) return;
+    granting.add(event);
+    granted.add(el);
+  };
+  // An entry is trusted when the browser dispatched its event and a trusted keydown, paste or
+  // drop reached the field since its last trusted entry. A trusted entry spends that grant, so
+  // each of the owner's keys, pastes and drops makes at most one entry trusted. An untrusted
+  // entry spends none: an input a page dispatches from its own keydown listener would otherwise
+  // take the grant from the owner's keystroke. A page's script can dispatch none of the three
+  // trusted, and its execCommand edits fire trusted input events but none of them, so those
+  // report false unless they run inside the owner's key and spend its grant. Takeover's journal
+  // registers an untrusted entry as a page value (JournalEntry::parse_with_trust in seal.rs).
   var record = function (event) {
     var path = raw.composedPath.call(event);
     var el = path && path[0];
@@ -380,15 +400,14 @@
     if (!k) return reportHost(event, el);
     if (!journal) return;
     var value = rawValue(el);
-    // The same value again is sent only when its event is trusted and the last was not: a value
-    // the page reported first, that the owner then pastes or types over, becomes the owner's.
+    var trusted = event.isTrusted && granted.has(el);
+    // The same value again is sent only when it is trusted and the last was not: a value the
+    // page reported first, that the owner then pastes or types over, becomes the owner's.
     var sent = lastSent.get(el);
-    if (!value || (sent && sent.value === value && (sent.trusted || !event.isTrusted))) return;
-    lastSent.set(el, { value: value, trusted: event.isTrusted });
-    // trusted is event.isTrusted: false when a page's script dispatched the event itself, true
-    // when the browser did (a page's execCommand edits included). Takeover's journal registers
-    // an untrusted entry as a page value (JournalEntry::parse_with_trust in seal.rs).
-    journal(raw.stringify({ kind: k, value: value, trusted: event.isTrusted }));
+    if (!value || (sent && sent.value === value && (sent.trusted || !trusted))) return;
+    lastSent.set(el, { value: value, trusted: trusted });
+    if (trusted) granted.delete(el);
+    journal(raw.stringify({ kind: k, value: value, trusted: trusted }));
   };
   // The elements and fragments Rust handed to watch(): the nodes a main-world script receives,
   // which may be out of the document (a handle's node the page removed, or one it never
@@ -412,6 +431,9 @@
     }
     raw.addEventListener.call(root, "input", record, true);
     raw.addEventListener.call(root, "change", record, true);
+    raw.addEventListener.call(root, "keydown", grant, true);
+    raw.addEventListener.call(root, "paste", grant, true);
+    raw.addEventListener.call(root, "drop", grant, true);
     observeTypes(root);
     if (!(root instanceof ShadowRoot) || watchedHosts.has(root.host)) return;
     watchedHosts.set(root.host, root);
