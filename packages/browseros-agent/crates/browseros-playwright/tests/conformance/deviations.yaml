@@ -8,9 +8,12 @@
 #   route   (findings) the unit to route it to
 #   reason  why they differ
 #   p, n    each runner's value there, "(absent)" for a missing key
+#   timing  (optional) why the runners sometimes agree there: the entry's values must still
+#           match whenever they differ, but a run where they agree does not make it stale
 #
 # diff.mjs fails when an entry's values stop matching or the difference goes away, so an entry
-# is deleted in the commit that closes it. `diff.mjs --stubs` prints new entries to fill in.
+# is deleted in the commit that closes it. An entry with `timing` is the one exception to the
+# second rule. `diff.mjs --stubs` prints new entries to fill in.
 - case: actions-check
   path: /returned/clicks
   kind: finding
@@ -283,6 +286,11 @@
 - case: nest-f7-navigated-frame
   path: /returned/navigated/A1/threw/message
   kind: decided
+  timing: "Neo fails a1's old ref at once only when the crate has seen a1's new document by
+    the read. When the read's first lookup races the commit, the ref is looked for in the new
+    document, as upstream looks, and times out with upstream's own message, so the runners
+    agree (seen in the mediator's low-load M2 run). Both outcomes are safe: the old ref never
+    acts in another document."
   reason: "decisions.md (build start): a new frame seq for every committed document. a1 navigated,
     so its old ref fails at once (element_detached). Upstream keeps a child frame's seq across
     navigations and waits for the old ref in the new document until the timeout."
@@ -291,6 +299,11 @@
 - case: nest-f7-navigated-frame
   path: /returned/navigated/A1/threw/name
   kind: decided
+  timing: "Neo fails a1's old ref at once only when the crate has seen a1's new document by
+    the read. When the read's first lookup races the commit, the ref is looked for in the new
+    document, as upstream looks, and times out with upstream's own message, so the runners
+    agree (seen in the mediator's low-load M2 run). Both outcomes are safe: the old ref never
+    acts in another document."
   reason: "decisions.md (build start): a new frame seq for every committed document. a1 navigated,
     so its old ref fails at once (element_detached). Upstream keeps a child frame's seq across
     navigations and waits for the old ref in the new document until the timeout."

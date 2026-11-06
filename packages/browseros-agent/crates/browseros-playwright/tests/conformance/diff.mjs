@@ -12,7 +12,9 @@
  * Every remaining difference must be listed in deviations.yaml, matched by case and JSON
  * pointer, with both runners' values and a reason. The run fails on a difference not listed,
  * a listed one whose values changed, a listed one that no longer happens (delete it), a case
- * only one runner ran, and a runner that broke.
+ * only one runner ran, and a runner that broke. An entry with a `timing` reason is one whose
+ * runners sometimes agree: its values must still match whenever they differ, but a run where
+ * they agree does not make it stale.
  *
  *   PLAYWRIGHT_NODE_MODULES=<node_modules with playwright-core> [CONFORMANCE_CASES_DIR=cases/tier2] \
  *   node diff.mjs <P outcomes dir> <N outcomes dir> <deviations.yaml> [--stubs]
@@ -159,6 +161,13 @@ function loadDeviations(file) {
       problems.push(`${where}: kind is decided or finding`)
     if (entry?.kind === 'finding' && !entry.route)
       problems.push(`${where}: a finding names the unit to route it to`)
+    if (
+      'timing' in (entry ?? {}) &&
+      (typeof entry.timing !== 'string' || entry.timing.trim() === '')
+    )
+      problems.push(
+        `${where}: timing, when given, says why the runners sometimes agree`,
+      )
     const key = `${entry?.case} ${entry?.path}`
     if (byKey.has(key)) problems.push(`${where}: listed twice`)
     byKey.set(key, { ...entry, used: false })
@@ -261,7 +270,7 @@ const caseFiles = new Set(
   ),
 )
 for (const entry of byKey.values())
-  if (!entry.used && names.includes(entry.case))
+  if (!entry.used && names.includes(entry.case) && entry.timing === undefined)
     problems.push(
       `${entry.case} ${entry.path}: listed, but P and N no longer differ there; delete the entry`,
     )
