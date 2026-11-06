@@ -8,7 +8,10 @@
  * when they do not fit, worded by serde rather than by Playwright's validator.
  */
 
-import type { FrameClickParams } from '@browseros/neo-runtime-spec/serve'
+import type {
+  FrameClickParams,
+  PageCloseParams,
+} from '@browseros/neo-runtime-spec/serve'
 
 /** `Frame.click`'s params in Playwright's schema order (`spec/playwright/frame.yml`). */
 export const FRAME_CLICK_KEYS = [
@@ -39,6 +42,16 @@ type _FrameClickKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_CLICK_KEYS)[number], true>,
     Required<FrameClickParams>
+  >
+>
+
+/** `Page.close`'s params (`spec/playwright/page.yml`). */
+export const PAGE_CLOSE_KEYS = ['reason'] as const
+
+type _PageCloseKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_CLOSE_KEYS)[number], true>,
+    Required<PageCloseParams>
   >
 >
 

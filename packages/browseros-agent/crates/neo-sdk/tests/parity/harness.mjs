@@ -14,14 +14,33 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import http from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // Playwright dims the call log in error messages whenever the environment suggests colour
 // (`COLORTERM`, `TERM=xterm-*`, inherited from the terminal even without a TTY), and reads the
 // setting when it loads. The goldens were recorded with colours off, so this must run before
 // playwright-core is imported, and tests take `chromium` from here, never from playwright-core.
 process.env.FORCE_COLOR = '0'
-export const { chromium } = await import('playwright-core')
+/**
+ * The Playwright every parity test compares against: `playwright-core` from npm (this package's
+ * devDependency), or a build of Playwright's source at the vendored commit when
+ * `NEO_PARITY_PLAYWRIGHT` names its `packages/playwright-core` directory (`npm ci && npm run build`
+ * in a checkout of its own). The two are different revisions; tests report `playwrightVersion`
+ * so every result names the one it ran against.
+ */
+const playwrightDir = process.env.NEO_PARITY_PLAYWRIGHT
+// Two literal imports, so dependency checks still see `playwright-core` used.
+export const { chromium } = playwrightDir
+  ? await import(pathToFileURL(join(playwrightDir, 'index.mjs')).href)
+  : await import('playwright-core')
+export const playwrightVersion = JSON.parse(
+  readFileSync(
+    playwrightDir
+      ? join(playwrightDir, 'package.json')
+      : fileURLToPath(import.meta.resolve('playwright-core/package.json')),
+    'utf8',
+  ),
+).version
 
 export const browserBinary = process.env.NEO_E2E_BROWSER
 /**
@@ -132,6 +151,56 @@ export async function findPage(context, targetId) {
     await sleep(50)
   }
   assert.fail(`Playwright never saw target ${targetId}`)
+}
+
+/**
+ * Opens a tab on `url` with the test's own CDP client, as a tab the user had open before a run,
+ * and returns its target id and an attached session once the tab has committed `url`.
+ */
+export async function openTab(cdp, url) {
+  const { targetId } = await cdp.send('Target.createTarget', { url })
+  const { sessionId } = await cdp.send('Target.attachToTarget', {
+    targetId,
+    flatten: true,
+  })
+  await waitForUrl(cdp, sessionId, url)
+  return { targetId, sessionId }
+}
+
+/**
+ * Runs an agent script's source on the tab `targetId` through Playwright, with Playwright's
+ * `page` and `context` in scope as neo_run puts Neo's. Settles with `{ value }` or
+ * `{ error: { name, message } }`.
+ */
+export async function runInPlaywright(context, targetId, source) {
+  const page = await findPage(context, targetId)
+  const AsyncFunction = (async () => {}).constructor
+  return await new AsyncFunction('page', 'context', source)(page, context).then(
+    (value) => ({ value }),
+    (error) => ({ error: { name: error.name, message: error.message } }),
+  )
+}
+
+/**
+ * Runs the script file at `scriptPath` on the tab `targetId` through Neo. Settles as
+ * `runInPlaywright` does, plus the run's whole `outcome`.
+ */
+export async function runInNeo(neoRun, port, targetId, scriptPath) {
+  const neo = startNeo(neoRun, port, targetId, scriptPath)
+  await neo.connected
+  const outcome = await neo.outcome
+  return outcome.status === 'ok'
+    ? { value: outcome.value, outcome }
+    : { error: outcome.error, outcome }
+}
+
+/** Calls `check` every 50 ms until it returns true, and fails once `timeoutMs` has passed. */
+export async function eventually(check, what, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs
+  while (!(await check())) {
+    assert.ok(Date.now() < deadline, `timed out waiting until ${what}`)
+    await sleep(50)
+  }
 }
 
 /**

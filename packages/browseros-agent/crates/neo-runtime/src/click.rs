@@ -7,7 +7,7 @@
 //! ```text
 //!  click(tab, options, progress)                         log: waiting for <locator>
 //!   loop A  waits 0,20,50,100,100,500…  (entries > timeout/5 dropped; the last repeats)
-//!   │ prepare the tab (the run's first browser call enables its domains; then a no-op)
+//!   │ prepare the tab (this page's first click enables its domains; then a no-op)
 //!   │ unless force: wait out a pending main-frame navigation
 //!   │ first time only: describe → name the locator │ invalid selector → Error, at once
 //!   │ resolve(selector, strict) → element? │ throws strict violation → Error, at once
@@ -54,7 +54,7 @@ use crate::progress::{
 // The seam: what click needs from a tab, in domain terms.
 // ---------------------------------------------------------------------------------------------
 
-/// What click needs from the run's tab. Each method is one Playwright step: one page call, one
+/// What click needs from its target tab. Each method is one Playwright step: one page call, one
 /// CDP command, or one wait. Every returned future is cancel-safe: dropping it in
 /// [`Progress::race`] loses only the answer. Implemented by `Arc<PageSession>` (`page.rs`) and
 /// by the tests' `FakeTab`.
@@ -82,8 +82,8 @@ pub(crate) trait Tab: Send + Sync {
     /// Navigation requests recorded from the moment [`Tab::watch_navigations`] returns.
     type Navigations: Send;
 
-    /// Makes the tab ready for page steps: the run's first browser call enables the page's
-    /// domains and starts its event watcher; later calls find it done. Playwright's page is
+    /// Prepares this page's domains and watcher once, on its first click or beforeunload call.
+    /// Later calls find it done. Playwright's page is
     /// ready before any call, so this comes after the call names its locator, and a failure
     /// retries like any page step.
     fn prepare(&self) -> impl Future<Output = Result<(), PageError>> + Send;
@@ -992,6 +992,7 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
+    use futures_util::future;
     use tokio::sync::oneshot;
     use tokio::time;
     use tokio::time::Instant;
@@ -1216,12 +1217,16 @@ mod tests {
             self.geometry.answer().await
         }
 
-        /// Granted at once: one call per test never waits for a turn.
-        async fn input(&self) -> FakeInput {
-            self.record("input");
-            FakeInput {
-                _turn: Arc::new(FakeTurn(Arc::clone(&self.calls))),
-            }
+        /// Granted at once: one call per test never waits for a turn. `future::lazy`, not an
+        /// `async fn` without an await (Rust 1.98's `unused_async_trait_impl`), so the turn is
+        /// still recorded only when the click first polls it.
+        fn input(&self) -> impl Future<Output = FakeInput> + Send {
+            future::lazy(|_| {
+                self.record("input");
+                FakeInput {
+                    _turn: Arc::new(FakeTurn(Arc::clone(&self.calls))),
+                }
+            })
         }
 
         async fn arm(

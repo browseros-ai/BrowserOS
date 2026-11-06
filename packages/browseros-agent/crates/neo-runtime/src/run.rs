@@ -1,4 +1,4 @@
-//! The data a caller hands `Runtime::run` and gets back: one agent script, one tab, one outcome.
+//! A script, its starting tab, and the outcome with every created or handed-out page.
 
 use std::time::Duration;
 
@@ -25,14 +25,15 @@ impl PageId {
     }
 }
 
-/// One script to run against one tab.
+/// One script to start from a tab; its context may hand it additional pages.
 #[derive(Debug, Clone)]
 pub struct RunRequest {
     /// The body of an async function that receives `page` and `context`, as in a Playwright
     /// script: it may `await` and `return`.
     pub code: String,
     pub page: PageId,
-    /// Wall-clock budget for the whole run, from the tab check to the script's return.
+    /// Wall-clock budget from the tab check to the script's return. Finish adds one bounded
+    /// drain; cleanup tasks still pending then continue in the background.
     pub timeout: Duration,
     /// Cancelling ends the run with [`RunStatus::Cancelled`] at the script's next instruction,
     /// timer or getter.
@@ -106,6 +107,10 @@ pub struct RunOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<RunError>,
     pub calls: Vec<CallRecord>,
+    /// Pages handed out or acknowledged before finish's bounded drain ends, in first-seen
+    /// order with the run page first. Creations acknowledged later are closed in the
+    /// background. IDs can be passed to a later `RunRequest`; successful tabs outlive runs.
+    pub pages: Vec<RunPage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calls_dropped: Option<DroppedCalls>,
 }
@@ -118,6 +123,7 @@ impl RunOutcome {
             logs,
             error: None,
             calls: Vec::new(),
+            pages: Vec::new(),
             calls_dropped: None,
         }
     }
@@ -129,6 +135,7 @@ impl RunOutcome {
             logs,
             error: Some(error),
             calls: Vec::new(),
+            pages: Vec::new(),
             calls_dropped: None,
         }
     }
@@ -144,6 +151,7 @@ impl RunOutcome {
             logs,
             error,
             calls: Vec::new(),
+            pages: Vec::new(),
             calls_dropped: None,
         }
     }
@@ -161,6 +169,19 @@ impl RunOutcome {
             ..self
         }
     }
+
+    pub(crate) fn with_pages(self, pages: Vec<RunPage>) -> Self {
+        Self { pages, ..self }
+    }
+}
+
+/// A page identity handed out or created by the run, and the lifecycle changes it made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunPage {
+    pub id: String,
+    pub created: bool,
+    pub closed: bool,
 }
 
 /// One browser call (`__neo_runtime.call`), as the dispatcher saw it. Derived when the run ends

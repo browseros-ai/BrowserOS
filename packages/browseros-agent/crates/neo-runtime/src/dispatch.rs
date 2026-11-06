@@ -33,26 +33,29 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use neo_runtime_spec::serve::{FrameCall, FrameClickParams, Metadata};
+use neo_runtime_spec::serve::{
+    BrowserContextCall, FrameCall, FrameClickParams, Metadata, PageCall,
+};
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio::time;
-use tokio_util::sync::DropGuard;
+use tokio::time::Instant;
+use tokio_util::sync::{CancellationToken, DropGuard};
 
-use crate::bridge;
 use crate::click::{self, ClickOptions};
 use crate::page::PageSession;
 use crate::progress::{
     self, CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
 };
-use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, PageId, RunEnd};
+use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
+use crate::tab_calls;
+use crate::tabs::{PageEntry, Tabs};
 
-/// How long `finish` waits, after the realm is gone, for the run's calls to end so their
-/// records read final results and deliveries. A task still running past it keeps running and
-/// its record reads `Unfinished`. The wait adds to the run's wall time only when a call is
-/// still in flight at the end.
+/// The shared budget for creation settlement, call draining and closing-state reads after
+/// the realm ends. Tasks still running keep their state and records read `Unfinished`.
+/// Unkept creations close their tabs when their late acknowledgements arrive.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
 
 /// The most browser calls one run may have unfinished at once. Each holds its params, its call
@@ -88,10 +91,8 @@ const _: () = assert!(
 pub(crate) struct Dispatcher(Arc<Inner>);
 
 struct Inner {
-    /// Owns the run's CDP session (`page.rs`): the session stays attached while this lives.
-    page: Arc<PageSession>,
-    page_guid: String,
-    frame_guid: String,
+    /// Owns every session attached for this run; frame calls resolve their own tab here.
+    tabs: Tabs,
     run: RunScope,
     trace: Trace,
     /// What the run's unfinished calls hold, bounded at admission.
@@ -160,7 +161,21 @@ impl Future for PendingReply {
 /// to run or why not.
 struct Routed {
     meta: Option<&'static MethodMeta>,
-    route: Result<Route, PlaywrightError>,
+    route: Result<ObjectCall, PlaywrightError>,
+}
+
+#[derive(Clone, Copy)]
+enum ObjectKind {
+    Context,
+    Page,
+    Frame,
+    Unknown,
+}
+
+enum ObjectCall {
+    Context(BrowserContextCall),
+    Page(PageCall),
+    Frame(Route),
 }
 
 /// What a message asks for. One variant per served (object, method).
@@ -169,11 +184,9 @@ enum Route {
 }
 
 impl Dispatcher {
-    pub(crate) fn new(page: Arc<PageSession>, run: RunScope, page_id: &PageId) -> Self {
+    pub(crate) fn new(tabs: Tabs, run: RunScope) -> Self {
         Self(Arc::new(Inner {
-            page,
-            page_guid: bridge::page_guid(page_id),
-            frame_guid: bridge::frame_guid(page_id),
+            tabs,
             _ending: run.ended.clone().drop_guard(),
             run,
             trace: Trace::default(),
@@ -199,13 +212,17 @@ impl Dispatcher {
                 return PendingReply::ready(Err(BridgeError::BadMessage(error.to_string())));
             }
         };
-        let Routed { meta, route } = route(
-            &inner.page_guid,
-            &inner.frame_guid,
-            &guid,
-            &method,
-            params.clone(),
-        );
+        let target = inner.tabs.resolve(&guid);
+        let object = if guid == "context@default" {
+            ObjectKind::Context
+        } else if target.is_none() {
+            ObjectKind::Unknown
+        } else if guid.starts_with("frame@") {
+            ObjectKind::Frame
+        } else {
+            ObjectKind::Page
+        };
+        let Routed { meta, route } = route(object, &method, params.clone());
         let metadata = metadata.unwrap_or(Metadata {
             location: None,
             title: None,
@@ -234,21 +251,33 @@ impl Dispatcher {
                 return PendingReply::ready(Ok(encode_reply(&id, Err(&error), None)));
             }
         };
+        // Close must finish its own acknowledgement after cancelling this page's other
+        // calls. A context call also survives the original run page being closed.
+        let closed = if matches!(route, ObjectCall::Page(PageCall::Close(_))) {
+            CancellationToken::new()
+        } else {
+            target
+                .as_ref()
+                .map_or_else(CancellationToken::new, |page| page.closed.clone())
+        };
         let progress = Progress::new(
             Arc::clone(&entry),
             metadata.timeout.unwrap_or(0.0),
             inner.run.clone(),
-            inner.page.closed(),
+            closed,
         );
         let (reply, receiver) = oneshot::channel();
-        let served = serve(
-            Arc::clone(&inner.page),
+        let served = serve_call(
+            inner.tabs.clone(),
+            target,
             route,
             progress,
-            entry,
-            inner.trace.clone(),
-            id,
-            reply,
+            CallReply {
+                entry,
+                trace: inner.trace.clone(),
+                id,
+                reply,
+            },
         );
         inner.run.tasks.spawn(async move {
             // The call's share of the in-flight caps, given back however the task ends.
@@ -259,49 +288,49 @@ impl Dispatcher {
     }
 
     /// Ends the run's calls after the realm is gone: records why the run ended (the first
-    /// reason wins), cancels every call, waits up to [`RECORDS_WAIT`] for the run's tasks, and
-    /// returns the records and the dropped-calls summary.
+    /// reason wins), and shares [`RECORDS_WAIT`] across creation settlement, task draining
+    /// and closing-state reads before returning the records and dropped-calls summary.
     pub(crate) async fn finish(&self, reason: RunEnd) -> (Vec<CallRecord>, Option<DroppedCalls>) {
+        let deadline = Instant::now() + RECORDS_WAIT;
         let run = &self.0.run;
         run.end(reason);
+        let _created = time::timeout_at(deadline, self.0.tabs.finish_creations()).await;
         run.tasks.close();
-        let _waited = time::timeout(RECORDS_WAIT, run.tasks.wait()).await;
+        let _waited = time::timeout_at(deadline, run.tasks.wait()).await;
+        let _refreshed = time::timeout_at(deadline, self.0.tabs.refresh_closing()).await;
         self.0.trace.take(reason)
     }
 }
 
 /// Names a message's target and decodes its params. Pure.
-fn route(
-    page_guid: &str,
-    frame_guid: &str,
-    guid: &str,
-    method: &str,
-    params: Option<Value>,
-) -> Routed {
-    if guid == frame_guid {
-        return match FrameCall::decode(method, params) {
-            Ok(call) => Routed {
-                meta: Some(call.meta()),
-                route: route_frame_call(call),
-            },
-            Err(error) => Routed {
-                meta: match &error {
-                    CallDecodeError::InvalidParams { meta, .. } => Some(*meta),
-                    CallDecodeError::UnknownMethod { .. } => None,
-                },
-                route: Err(PlaywrightError::error(error.to_string())),
-            },
-        };
-    }
-    let error = if guid == page_guid {
-        PlaywrightError::error(format!("Neo does not serve Page.{method}"))
-    } else {
-        // Playwright's dispatcher answers a guid it does not know with `TargetClosedError`.
-        PlaywrightError::target_closed()
+fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
+    let decoded = match object {
+        ObjectKind::Context => BrowserContextCall::decode(method, params)
+            .map(|call| (call.meta(), Ok(ObjectCall::Context(call)))),
+        ObjectKind::Page => {
+            PageCall::decode(method, params).map(|call| (call.meta(), Ok(ObjectCall::Page(call))))
+        }
+        ObjectKind::Frame => FrameCall::decode(method, params)
+            .map(|call| (call.meta(), route_frame_call(call).map(ObjectCall::Frame))),
+        ObjectKind::Unknown => {
+            return Routed {
+                meta: None,
+                route: Err(PlaywrightError::target_closed()),
+            };
+        }
     };
-    Routed {
-        meta: None,
-        route: Err(error),
+    match decoded {
+        Ok((meta, route)) => Routed {
+            meta: Some(meta),
+            route,
+        },
+        Err(error) => Routed {
+            meta: match &error {
+                CallDecodeError::InvalidParams { meta, .. } => Some(*meta),
+                CallDecodeError::UnknownMethod { .. } => None,
+            },
+            route: Err(PlaywrightError::error(error.to_string())),
+        },
     }
 }
 
@@ -324,6 +353,57 @@ fn not_served_yet(method: &str) -> PlaywrightError {
     PlaywrightError::error(format!("Neo does not serve Frame.{method} yet"))
 }
 
+struct CallReply {
+    entry: Arc<CallEntry>,
+    trace: Trace,
+    id: Value,
+    reply: oneshot::Sender<String>,
+}
+
+/// Attachment can block or be cancelled independently of a frame handler. Once attached,
+/// `serve` retains its original contract: the `PageSession` always belongs to this call's tab.
+async fn serve_call(
+    tabs: Tabs,
+    target: Option<Arc<PageEntry>>,
+    route: ObjectCall,
+    progress: Progress,
+    reply: CallReply,
+) {
+    let result = match (route, target) {
+        (ObjectCall::Context(call), _) => tab_calls::context(&tabs, call, &progress).await,
+        (ObjectCall::Page(call), Some(page)) => {
+            tab_calls::page(&tabs, &page, call, &progress).await
+        }
+        (ObjectCall::Frame(route), Some(page)) => {
+            let session = match page.attached_session() {
+                Some(session) => Ok(session),
+                None => match progress.race(tabs.session(&page)).await {
+                    Ok(result) => result.map_err(CallError::from),
+                    Err(error) => Err(error),
+                },
+            };
+            match session {
+                Ok(page) => {
+                    serve(
+                        page,
+                        route,
+                        progress,
+                        reply.entry,
+                        reply.trace,
+                        reply.id,
+                        reply.reply,
+                    )
+                    .await;
+                    return;
+                }
+                Err(error) => Err(error),
+            }
+        }
+        _ => Err(PlaywrightError::target_closed().into()),
+    };
+    finish_reply(result, reply);
+}
+
 /// One call's task: serves the route, ends the trace entry and sends the reply. A call the run
 /// ended leaves its entry open, so its record reads `Unfinished`, and sends nothing: nobody
 /// waits for it. The task holds the page, so the session stays attached while it runs.
@@ -341,6 +421,24 @@ async fn serve(
             .await
             .map(|()| None),
     };
+    finish_reply(
+        result,
+        CallReply {
+            entry,
+            trace,
+            id,
+            reply,
+        },
+    );
+}
+
+fn finish_reply(result: Result<Option<Value>, CallError>, target: CallReply) {
+    let CallReply {
+        entry,
+        trace,
+        id,
+        reply,
+    } = target;
     let (record, answer) = match result {
         Err(CallError::RunEnded(_)) => return,
         Ok(value) => (CallResult::Ok, Ok(value)),
@@ -600,13 +698,119 @@ mod tests {
 
     use super::*;
     use crate::click_goldens;
+    use crate::deadline::Deadline;
+    use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::page::TabInputs;
     use crate::progress::ErrorName;
+    use crate::run::PageId;
+    use tokio::runtime::Handle;
+    use tokio_util::task::TaskTracker;
 
-    const PAGE: &str = "page@T";
-    const FRAME: &str = "frame@T";
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_an_attached_frame_call_starts_when_first_polled_after_run_end() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let deadline = Deadline::new(Duration::from_secs(5), CancellationToken::new());
+        let run = RunScope::new(deadline, tasks.clone());
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            tasks,
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap();
+        let page = tabs.resolve(&format!("frame@{PAGE}")).unwrap();
+        let entry = Arc::new(CallEntry::new(CallStart {
+            call_id: 1,
+            guid: format!("frame@{PAGE}"),
+            method: "click".to_string(),
+            title: Some("Click"),
+            params: json!({"selector":"#nothing"}),
+            location: None,
+            input: true,
+        }));
+        let trace = Trace::default();
+        trace.push(Arc::clone(&entry));
+        let progress = Progress::new(Arc::clone(&entry), 0.0, run.clone(), page.closed.clone());
+        let route = route_frame("click", json!({"selector":"#nothing"}))
+            .route
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let (reply, _receiver) = oneshot::channel();
+        // This future is deliberately not polled until the run has ended. No scheduler
+        // interleaving can let the call start early and hide the regression.
+        let call = serve_call(
+            tabs,
+            Some(page),
+            route,
+            progress,
+            CallReply {
+                entry,
+                trace: trace.clone(),
+                id: json!(1),
+                reply,
+            },
+        );
+        run.end(RunEnd::Settled);
+        call.await;
+        let (records, _) = trace.take(RunEnd::Settled);
+        assert!(
+            records[0]
+                .log
+                .iter()
+                .any(|line| line.contains("waiting for #nothing")),
+            "attached call never entered click policy: {records:?}"
+        );
+        assert_eq!(
+            records[0].result,
+            CallResult::Unfinished {
+                reason: RunEnd::Settled
+            },
+            "the ended run still cancels the click"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_closing_pages_share_one_finish_budget() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        browser.page.lock().unwrap().tabs.push(json!({
+            "targetId":"other", "url":"about:blank", "windowId":1,
+            "liveBrowserContextId":"profile", "isActive":false,
+        }));
+        let tasks = TaskTracker::new();
+        let run = RunScope::new(
+            Deadline::new(Duration::from_secs(10), CancellationToken::new()),
+            tasks.clone(),
+        );
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            tasks,
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap();
+        tabs.pages().await.unwrap();
+        for target in [PAGE, "other"] {
+            tabs.resolve(&format!("page@{target}"))
+                .unwrap()
+                .request_close();
+        }
+        browser.page.lock().unwrap().tab_info_delay = Some(Duration::from_secs(3));
+        let dispatcher = Dispatcher::new(tabs, run);
+        let started = Instant::now();
+        dispatcher.finish(RunEnd::Settled).await;
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "each closing page received another finish budget: {:?}",
+            started.elapsed()
+        );
+    }
 
     fn route_frame(method: &str, params: Value) -> Routed {
-        route(PAGE, FRAME, FRAME, method, Some(params))
+        route(ObjectKind::Frame, method, Some(params))
     }
 
     fn error_of(routed: Routed) -> PlaywrightError {
@@ -620,7 +824,7 @@ mod tests {
     fn a_frame_click_routes_with_its_options_and_title() {
         let routed = route_frame("click", json!({ "selector": "#go", "strict": true }));
         assert_eq!(routed.meta.and_then(|meta| meta.title), Some("Click"));
-        let Ok(Route::FrameClick(options)) = routed.route else {
+        let Ok(ObjectCall::Frame(Route::FrameClick(options))) = routed.route else {
             panic!("a click on the run's frame routes to Frame.click");
         };
         assert_eq!((options.selector.as_str(), options.strict), ("#go", true));
@@ -671,7 +875,7 @@ mod tests {
         ] {
             let routed = route_frame("click", json!({ "selector": selector }));
             assert!(
-                matches!(routed.route, Ok(Route::FrameClick(_))),
+                matches!(routed.route, Ok(ObjectCall::Frame(Route::FrameClick(_)))),
                 "{selector} is a click, not a frame"
             );
         }
@@ -703,12 +907,12 @@ mod tests {
                 PlaywrightError::error("Neo does not serve Frame.goto yet"),
             ),
             (
-                route(PAGE, FRAME, PAGE, "click", None),
+                route(ObjectKind::Page, "click", None),
                 None,
                 PlaywrightError::error("Neo does not serve Page.click"),
             ),
             (
-                route(PAGE, FRAME, "frame@another-tab", "click", None),
+                route(ObjectKind::Unknown, "click", None),
                 None,
                 PlaywrightError::target_closed(),
             ),

@@ -1,0 +1,11 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>tab</title>
+<script>
+// The tab parity tests serve this page at several paths. A click on the button counts in
+// window.__clicks, which the test reads to see which tab a click reached. beforeunload leaves a
+// mark in the origin's localStorage, which outlives the tab, so the test can tell whether a
+// close ran the page's beforeunload handlers.
+window.__clicks = 0;
+addEventListener('beforeunload', () => localStorage.setItem(`beforeunload ${location.pathname}`, 'ran'));
+</script></head><body>
+<button type="button" id="count" onclick="__clicks++">Count</button>
+</body></html>

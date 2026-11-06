@@ -12,6 +12,17 @@
 # response (`page.goto` resolves to `null`). To serve responses, add `Response: []` (and
 # `Request: []`, which its initializer requires) and regenerate.
 interfaces:
+  BrowserContext:
+    - newPage
+  # A BrowserContext initializer requires these three. Neo never sends one (a run receives its
+  # context at start) and serves no command on them; listing them keeps the type constructible.
+  APIRequestContext: []
+  Debugger: []
+  Tracing: []
+  Page:
+    - close
+    - runBeforeUnload
+    - bringToFront
   Frame:
     - goto
     - title
