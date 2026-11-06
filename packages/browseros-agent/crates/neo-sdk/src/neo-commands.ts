@@ -7,8 +7,9 @@
  *
  * ```text
  *  page.waitForURL('https://a.test/done.html') → frame._waitForURL → Connection.sendNeo
- *    {"guid":"frame@T","method":"neo:waitForURL","metadata":{…,"timeout":30000},
- *     "params":{"url":{"glob":"https://a.test/done.html"},"waitUntil":"load"}}
+ *    {"id":7,"guid":"frame@T","method":"neo:waitForURL",
+ *     "params":{"url":{"glob":"https://a.test/done.html"},"waitUntil":"load"},
+ *     "metadata":{"location":{…},"timeout":30000}}
  *    ── Rust: dispatch.rs decodes it before the spec's FrameCall; waits.rs waits ──▶
  *    ◀ {"id":7,"result":{}}  → undefined
  * ```
@@ -19,7 +20,7 @@
  *    command name, and the vendored protocol is untouched.
  * 2. These types are hand-written here and in Rust (`waits.rs` `NeoWaitForUrlParams`,
  *    `NeoWaitForLoadStateParams`), not generated: both sides pin the exact JSON in a unit test
- *    (`tests/unit/waits.test.ts`, waits.rs's decode tests). Change one side, change both.
+ *    (`tests/unit/waits.test.ts`, dispatch.rs's decode tests). Change one side, change both.
  * 3. `url` is a string glob or a `RegExp`, serialized as Playwright's `serializeURLMatch` without
  *    `urlPattern` (QuickJS has no `URLPattern`). A predicate function cannot cross: it would have
  *    to run in the realm on every navigation while the call is parked in Rust, so the SDK refuses
