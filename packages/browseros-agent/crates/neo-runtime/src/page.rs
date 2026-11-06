@@ -67,7 +67,6 @@ use crate::click::{
     Arming, Geometry, MouseButton, MouseClick, NotReady, PageError, PressReport, Resolved, Scroll,
     SelectorFacts, StatesCheck, Tab, Verdict,
 };
-use crate::getters;
 use crate::navigate::{
     Lifecycle, NavigateReply, Navigation, NavigationState, NavigationTab, Observation,
 };
@@ -322,13 +321,9 @@ impl PageSession {
                 let (seed_ready, ready) = oneshot::channel();
                 let cdp = self.session.cdp.clone();
                 let session = self.session.id.clone();
-                let page = PageId::new(self.main_frame.clone());
-                let initial_url = async move {
-                    if ready.await.is_err() {
-                        return Ok(None);
-                    }
-                    getters::url(&cdp, &session, &page).await
-                };
+                let initial_url = seed_url(ready, move |method| async move {
+                    cdp.send(method, json!({}), Some(&session)).await
+                });
                 // Guarded before the spawn: if this setup fails or is dropped before it
                 // finishes (the call stopped), the guard stops the watcher it already started.
                 let stop = CancellationToken::new();
@@ -352,7 +347,7 @@ impl PageSession {
                 // including pages loaded before this run and restored from bfcache.
                 self.send("Page.setLifecycleEventsEnabled", json!({ "enabled": true }))
                     .await?;
-                // The watcher reads history only after Page.enable and lifecycle replay.
+                // The watcher reads the frame tree after Page.enable and lifecycle replay.
                 // Preparation never waits for that read: clicks must not pay for the seed.
                 let _ = seed_ready.send(());
                 let focus = self
@@ -582,6 +577,31 @@ pub(crate) struct InputPermit {
 // The watcher.
 // ---------------------------------------------------------------------------------------------
 
+/// Playwright's attach source (`chromium/crPage.ts:500-502,689-694`): the same main-frame URL
+/// and fragment as a commit event, including chrome-error URLs. An abandoned setup never
+/// queries the page or completes its seed; its stop guard disposes the watcher instead.
+async fn seed_url<F, Fut>(ready: oneshot::Receiver<()>, read: F) -> Result<Option<String>, CdpError>
+where
+    F: FnOnce(&'static str) -> Fut,
+    Fut: Future<Output = Result<Value, CdpError>>,
+{
+    if ready.await.is_err() {
+        return future::pending().await;
+    }
+    let reply = read("Page.getFrameTree").await?;
+    // frameTree and Page.frameNavigated carry the same frame payload; child frames are ignored.
+    let tree: FrameNavigated = serde_json::from_value(reply["frameTree"].clone())?;
+    let frame = tree.frame;
+    if frame.url.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "{}{}",
+        frame.url,
+        frame.url_fragment.as_deref().unwrap_or("")
+    )))
+}
+
 /// The watcher task: one `cdp.events()` receiver for the run, filtered to this session (and to
 /// `Target.detachedFromTarget` naming it). Answers dialogs with `Page.handleJavaScriptDialog`
 /// on its own task, so no click await can block the answer; applies every event to `state`;
@@ -612,7 +632,7 @@ async fn watch_events(
     loop {
         let event = tokio::select! {
             // The CDP reader publishes events and replies in socket order. Drain events
-            // before applying the history reply, even if both became ready in one poll.
+            // before applying the frame-tree reply, even if both became ready in one poll.
             biased;
             () = stop.cancelled() => return,
             event = events.recv() => event,
@@ -628,7 +648,7 @@ async fn watch_events(
                             true
                         });
                     }
-                    Ok(None) => { closed.cancel(); return; }
+                    Ok(None) => debug!(%session, "initial page URL empty; waiting for a commit"),
                     Err(error) => debug!(%session, %error, "initial page URL unavailable; waiting for a commit"),
                 }
                 continue;
@@ -2079,6 +2099,112 @@ mod tests {
             tokio::join!(watcher, verify);
             assert_eq!(current.borrow().load_count, 1);
         }
+    }
+
+    async fn assert_seed_keeps_watcher_open(
+        initial_url: impl Future<Output = Result<Option<String>, CdpError>>,
+    ) {
+        use crate::fake_browser::{FakeBrowser, Replies};
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let cdp = browser.cdp().await;
+        let (events, receiver) = broadcast::channel(16);
+        let (state, mut current) = watch::channel(PageState::default());
+        let (navigations, _) = broadcast::channel(16);
+        let closed = CancellationToken::new();
+        let stop = CancellationToken::new();
+        let watcher = watch_events(
+            receiver,
+            cdp.clone(),
+            SessionId::from(SESSION),
+            MAIN.to_string(),
+            PageUpdates {
+                state,
+                navigations,
+                world: Arc::new(World::new(cdp, SessionId::from(SESSION), MAIN.to_string())),
+                initial_url,
+            },
+            closed.clone(),
+            stop.clone(),
+        );
+        time::timeout(Duration::from_secs(1), async {
+            tokio::join!(watcher, async {
+                time::sleep(Duration::from_millis(10)).await;
+                assert!(!closed.is_cancelled(), "a seed cannot close an open tab");
+                assert!(current.borrow().committed_url.is_none());
+                events
+                    .send(event(
+                        "Page.frameNavigated",
+                        Some(SESSION),
+                        json!({
+                            "frame": {"id": MAIN, "url": "https://a.test/later", "loaderId": "new"}
+                        }),
+                    ))
+                    .expect("watcher still subscribed");
+                current
+                    .wait_for(|state| {
+                        state.committed_url.as_deref() == Some("https://a.test/later")
+                    })
+                    .await
+                    .expect("watcher still applies commits");
+                assert!(!closed.is_cancelled());
+                stop.cancel();
+            });
+        })
+        .await
+        .expect("seed paths and stop must be bounded");
+    }
+
+    #[tokio::test]
+    async fn tests_that_failed_or_empty_seeds_do_not_close_the_tab() {
+        for result in [Ok(None), Err(CdpError::Json("seed failed".to_string()))] {
+            assert_seed_keeps_watcher_open(future::ready(result)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn tests_that_the_seed_uses_frame_tree_urls_including_error_pages_and_fragments() {
+        for (url, fragment, expected) in [
+            ("https://a.test/", "#part", Some("https://a.test/#part")),
+            (
+                "chrome-error://chromewebdata/",
+                "",
+                Some("chrome-error://chromewebdata/"),
+            ),
+            ("", "", None),
+        ] {
+            let (enabled, ready) = oneshot::channel();
+            enabled.send(()).expect("enable completed");
+            let result = time::timeout(
+                Duration::from_secs(1),
+                seed_url(ready, |method| {
+                    assert_eq!(method, "Page.getFrameTree");
+                    future::ready(Ok(json!({"frameTree":{"frame":{
+                        "id": MAIN, "url": url, "urlFragment": fragment,
+                        "unreachableUrl": "http://127.0.0.1:9/unreachable"
+                    }}})))
+                }),
+            )
+            .await
+            .expect("bounded seed")
+            .expect("frame tree");
+            assert_eq!(result.as_deref(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn tests_that_abandoning_prepare_never_closes_the_tab_or_queries_a_url() {
+        use std::sync::atomic::AtomicBool;
+
+        let (enabled, ready) = oneshot::channel::<()>();
+        let queried = AtomicBool::new(false);
+        drop(enabled);
+        let seed = seed_url(ready, |_| {
+            queried.store(true, Ordering::Relaxed);
+            future::ready(Ok(json!({})))
+        });
+        assert_seed_keeps_watcher_open(seed).await;
+        assert!(!queried.load(Ordering::Relaxed));
     }
 
     #[tokio::test(start_paused = true)]
