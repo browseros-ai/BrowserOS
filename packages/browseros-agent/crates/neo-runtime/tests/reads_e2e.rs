@@ -393,3 +393,33 @@ async fn tests_that_a_snapshot_with_a_selector_is_refused() {
     );
     tab.close().await;
 }
+
+/// A lone surrogate (a truncated emoji) reads as U+FFFD. Rust strings are UTF-8, and
+/// browseros-cdp drops a CDP reply that escapes one, so without the glue's replacement both reads
+/// would wait out their timeout. Playwright returns the lone surrogate unchanged.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_lone_surrogate_reads_as_a_replacement_character() {
+    let Some(tab) = open().await else { return };
+    tab.evaluate(
+        "document.body.innerHTML = ''; const b = document.createElement('button'); \
+         b.textContent = 'Go \\ud83d'; const p = document.createElement('p'); \
+         p.textContent = 'cut \\ude00 here'; document.body.append(b, p)",
+    )
+    .await;
+    let outcome = run(
+        &tab,
+        "return {
+           text: await page.locator('body > p').textContent({ timeout: 5000 }),
+           snapshot: await page.ariaSnapshot({ timeout: 5000 }),
+         };",
+    )
+    .await;
+    assert_eq!(
+        value(&outcome),
+        json!({
+            "text": "cut \u{fffd} here",
+            "snapshot": "- button \"Go \u{fffd}\"\n- paragraph: cut \u{fffd} here",
+        })
+    );
+    tab.close().await;
+}
