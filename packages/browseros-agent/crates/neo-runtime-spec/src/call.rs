@@ -11,13 +11,16 @@ use std::fmt;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// The seal. `Sealed` is public so it can bound the public traits, but this module is private,
-/// so no other crate can name it, let alone implement it.
+/// so no other crate can name it, let alone implement it. Generated code implements it next to
+/// each call trait.
 mod sealed {
     pub trait Sealed {}
 }
+
+pub(crate) use sealed::Sealed;
 
 /// A Playwright protocol command Neo serves, implemented by the command's params type.
 ///
@@ -45,7 +48,7 @@ mod sealed {
 ///     };
 /// }
 /// ```
-pub trait Command: Serialize + DeserializeOwned + sealed::Sealed {
+pub trait Command: Serialize + DeserializeOwned + Sealed {
     /// The command's result as Playwright's wire defines it.
     type Result: Serialize;
     /// Playwright's metainfo for the command, for tracing.
@@ -81,7 +84,7 @@ pub trait Command: Serialize + DeserializeOwned + sealed::Sealed {
 ///     const NAME: &'static str = "click";
 /// }
 /// ```
-pub trait InjectedCall: Serialize + sealed::Sealed {
+pub trait InjectedCall: Serialize + Sealed {
     /// The glue table key, as written in `spec/injected.yml`.
     const NAME: &'static str;
 }
@@ -195,6 +198,19 @@ pub enum CallDecodeError {
         /// What serde reported.
         source: serde_json::Error,
     },
+}
+
+impl CallDecodeError {
+    /// Decodes the params of command `C`, for the generated `*Call::decode`. Absent params
+    /// decode as `{}`: Playwright's client omits them for a command that declares none, and a
+    /// command that does declare params then fails on its first required field.
+    pub(crate) fn params<C: Command>(params: Option<Value>) -> Result<C, Self> {
+        let params = params.unwrap_or_else(|| Value::Object(Map::new()));
+        serde_json::from_value(params).map_err(|source| Self::InvalidParams {
+            meta: C::META,
+            source,
+        })
+    }
 }
 
 impl fmt::Display for CallDecodeError {

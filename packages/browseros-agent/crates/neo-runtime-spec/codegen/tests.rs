@@ -5,13 +5,30 @@ use std::fs;
 use std::path::Path;
 
 use crate::dialect::{DefKind, DialectFile, Grammar, Prop, Protocol, Type};
+use crate::output::{Mode, REGENERATE};
 use crate::spec_files::{self, SpecFile};
-use crate::{UPSTREAM, check_upstream, upstream_text, yaml};
+use crate::{Outcome, UPSTREAM, check_upstream, translate, upstream_text, yaml};
 
 /// The spec files on disk.
 fn committed_spec() -> Vec<SpecFile> {
     spec_files::read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("spec"))
         .expect("spec/ is readable")
+}
+
+/// The drift gate CI runs through plain `cargo test`: the committed files are exactly what the
+/// spec on disk generates, compared as `--check` compares them.
+#[test]
+fn committed_output_matches_spec() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    match translate(crate_dir, Mode::Check) {
+        Ok(Outcome::Translated { drift, .. }) => assert!(
+            drift.is_empty(),
+            "generated files are stale: {:?}; run `{REGENERATE}`",
+            drift.lines()
+        ),
+        Ok(Outcome::Pinned { .. }) => panic!("check mode never pins"),
+        Err(error) => panic!("{error}"),
+    }
 }
 
 fn playwright_protocol() -> Protocol {
