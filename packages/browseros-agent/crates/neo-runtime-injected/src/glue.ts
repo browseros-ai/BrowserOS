@@ -109,6 +109,30 @@ export const glue = {
     }
   },
 
+  isVisible: (injected, { selector, strict }) => {
+    const [element] = query(injected, selector, strict)
+    return {
+      value: element
+        ? injected.elementState(element, 'visible', true).matches
+        : false,
+    }
+  },
+
+  isChecked: (injected, { selector, strict }) => {
+    const [element] = query(injected, selector, strict, {
+      markTargets: 'first',
+    })
+    if (!element) return {}
+    const { matches, received } = injected.elementState(element, 'checked')
+    return {
+      matched: {
+        checked: matches,
+        received,
+        preview: injected.previewNode(element),
+      },
+    }
+  },
+
   ariaSnapshot: (injected, { selector, strict, mode, depth, boxes }) => {
     const [element] = query(injected, selector, strict)
     if (!element) return {}

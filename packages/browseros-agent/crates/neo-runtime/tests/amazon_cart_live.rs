@@ -81,7 +81,7 @@ async fn tests_that_one_runtime_adds_one_pack_and_reads_its_cart_in_a_later_run(
         Duration::from_secs(10),
     )
     .await;
-    let shopping = run(&runtime, &page, SHOP, Duration::from_secs(180)).await;
+    let shopping = run(&runtime, &page, SHOP, Duration::from_mins(3)).await;
     let after = run(
         &runtime,
         &page,

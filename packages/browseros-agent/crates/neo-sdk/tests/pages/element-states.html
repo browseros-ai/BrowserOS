@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Element states</title>
+<button id="later" type="button">Show later</button>
+<div id="visible">Visible</div>
+<div id="display-none" style="display:none">Display none</div>
+<div id="visibility-hidden" style="visibility:hidden">Visibility hidden</div>
+<div id="zero-size" style="width:0;height:0"></div>
+<div class="dup">First duplicate</div>
+<div class="dup" hidden>Second duplicate</div>
+<input id="unchecked" type="checkbox">
+<label id="label">Agree <input id="labelled" type="checkbox" checked></label>
+<input id="radio" type="radio" checked>
+<script>
+// Non-semantic role=checkbox elements are what these cases read; built here so the markup stays
+// lint-clean.
+for (const [id, checked] of [['aria-true', 'true'], ['aria-mixed', 'mixed']]) {
+  const box = document.createElement('div')
+  box.id = id
+  box.setAttribute('role', 'checkbox')
+  box.setAttribute('aria-checked', checked)
+  box.textContent = `ARIA ${checked}`
+  document.currentScript.before(box)
+}
+</script>
+<div id="plain">Plain element</div>
+<div id="appears" hidden>Shown later</div>
+<script>
+// The click starts the timer, never page load: Neo's half starts seconds after its page loads.
+// One task shows #appears and inserts a checked #late, so a read that has waited for #late sees
+// both.
+document.querySelector('#later').addEventListener('click', () => setTimeout(() => {
+  document.querySelector('#appears').hidden = false
+  const late = document.createElement('input')
+  late.id = 'late'
+  late.type = 'checkbox'
+  late.checked = true
+  document.body.append(late)
+}, 500), { once: true })
+window.__facts = () => ({
+  checked: Object.fromEntries([...document.querySelectorAll('input')].map(e => [e.id, e.checked])),
+  aria: Object.fromEntries([...document.querySelectorAll('[role=checkbox]')].map(e => [e.id, e.getAttribute('aria-checked')])),
+  appears: !document.querySelector('#appears').hidden,
+})
+</script>

@@ -101,6 +101,27 @@ Injected:
       returns:
         matched: AttributeMatch?
 
+    # Resolves one frame chunk without marking matches and reads visibility, for
+    # `Frame.isVisible`. No match is `false`; neo-runtime never polls this call.
+    isVisible:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+      returns:
+        value: boolean
+
+    # Resolves and marks the first match, then reads its checked state following labels,
+    # for `Frame.isChecked`. Throws for anything other than a checkbox or radio control.
+    isChecked:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+      returns:
+        # Absent while nothing matches; neo-runtime keeps polling until the deadline.
+        matched: CheckedStateMatch?
+
     # Resolves one frame chunk and snapshots its first match with
     # `InjectedScript.ariaSnapshotJSON`, for `Frame.ariaSnapshot`, which also records the tree
     # for `aria-ref` lookups in this world. neo-runtime stitches each iframe's document into its
@@ -444,6 +465,16 @@ HitTargetBlocked:
   type: object
   properties:
     hitTargetDescription: string
+
+# The first match's checked state and preview, for `isChecked`.
+CheckedStateMatch:
+  type: object
+  properties:
+    # `ElementStateQueryResult.matches` for `checked`.
+    checked: boolean
+    # `error:notconnected` ends the call as Playwright's `throwElementIsNotAttached` does.
+    received: string?
+    preview: string
 
 # The first matching element's text.
 TextMatch:

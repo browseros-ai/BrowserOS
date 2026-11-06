@@ -46,6 +46,8 @@ import type {
   GetAttributeOptions,
   InnerTextOptions,
   InputValueOptions,
+  IsCheckedOptions,
+  IsVisibleOptions,
   PressOptions,
   SelectOptionOptions,
   TextContentOptions,
@@ -166,6 +168,20 @@ export class Locator {
 
   async inputValue(options: InputValueOptions = {}): Promise<string> {
     return await this._frame._inputValue('locator.inputValue', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async isVisible(options?: IsVisibleOptions): Promise<boolean> {
+    return await this._frame._isVisible('locator.isVisible', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async isChecked(options?: IsCheckedOptions): Promise<boolean> {
+    return await this._frame._isChecked('locator.isChecked', this._selector, {
       strict: true,
       ...options,
     })

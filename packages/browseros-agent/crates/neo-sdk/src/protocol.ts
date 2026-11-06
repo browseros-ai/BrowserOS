@@ -17,6 +17,8 @@ import type {
   FrameGotoParams,
   FrameInnerTextParams,
   FrameInputValueParams,
+  FrameIsCheckedParams,
+  FrameIsVisibleParams,
   FramePressParams,
   FrameQueryCountParams,
   FrameSelectOptionParams,
@@ -78,6 +80,12 @@ export const FRAME_PRESS_KEYS = [
 
 /** `Frame.inputValue` in Playwright schema order. */
 export const FRAME_INPUT_VALUE_KEYS = ['selector', 'strict'] as const
+
+/** `Frame.isChecked` in Playwright schema order. */
+export const FRAME_IS_CHECKED_KEYS = ['selector', 'strict'] as const
+
+/** `Frame.isVisible` in Playwright schema order. */
+export const FRAME_IS_VISIBLE_KEYS = ['selector', 'strict'] as const
 
 /** `Frame.check` in Playwright schema order. */
 export const FRAME_CHECK_KEYS = [
@@ -177,6 +185,18 @@ type _FrameInputValueKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_INPUT_VALUE_KEYS)[number], true>,
     Required<FrameInputValueParams>
+  >
+>
+type _FrameIsCheckedKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_IS_CHECKED_KEYS)[number], true>,
+    Required<FrameIsCheckedParams>
+  >
+>
+type _FrameIsVisibleKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_IS_VISIBLE_KEYS)[number], true>,
+    Required<FrameIsVisibleParams>
   >
 >
 type _FrameCheckKeysMatchSpec = Assert<
