@@ -32,6 +32,99 @@ class BrowserContext {
   }
 }
 
+// src/errors.ts
+class PlaywrightError extends Error {
+  log = [];
+}
+
+class TimeoutError extends PlaywrightError {
+  constructor(message) {
+    super(message);
+    this.name = "TimeoutError";
+  }
+}
+
+class TargetClosedError extends PlaywrightError {
+  constructor(cause) {
+    super(cause || "Target page, context or browser has been closed");
+  }
+}
+function parseError(error) {
+  if (error.name === "TimeoutError")
+    return new TimeoutError(error.message);
+  if (error.name === "TargetClosedError")
+    return new TargetClosedError(error.message);
+  return Object.assign(new PlaywrightError(error.message), {
+    name: error.name
+  });
+}
+
+// src/runtime-bridge.ts
+function get(guid, field) {
+  return JSON.parse(__neo_runtime.get(JSON.stringify({ guid, field })));
+}
+function call(message) {
+  return __neo_runtime.call(message);
+}
+
+// src/connection.ts
+var SCRIPT_FILE = "run.js";
+var AGENT_FRAME = /^ {4}at .* \(<input>:(\d+):(\d+)\)$/;
+
+class Connection {
+  #nextId = 1;
+  #lineOffset;
+  constructor(lineOffset) {
+    this.#lineOffset = lineOffset;
+  }
+  async send(apiName, guid, method, params, timeout) {
+    const metadata = {
+      location: captureLocation(this.#lineOffset),
+      timeout
+    };
+    const message = { id: this.#nextId++, guid, method, params, metadata };
+    const reply = JSON.parse(await call(JSON.stringify(message)));
+    if (reply.error)
+      throw rebuildError(apiName, reply.error.error, reply.log);
+    return reply.result;
+  }
+}
+function captureLocation(lineOffset) {
+  const stackTraceLimit = Error.stackTraceLimit;
+  Error.stackTraceLimit = 50;
+  const stack = new Error().stack ?? "";
+  Error.stackTraceLimit = stackTraceLimit;
+  return agentLocation(stack, lineOffset);
+}
+function agentLocation(stack, lineOffset) {
+  for (const frame of stack.split(`
+`)) {
+    const match = AGENT_FRAME.exec(frame);
+    if (match)
+      return {
+        file: SCRIPT_FILE,
+        line: Number(match[1]) - lineOffset,
+        column: Number(match[2])
+      };
+  }
+  return { file: SCRIPT_FILE };
+}
+function rebuildError(apiName, error, log) {
+  const rebuilt = parseError(error);
+  rebuilt.log = log || [];
+  rebuilt.message = `${apiName}: ${rebuilt.message}${formatCallLog(log)}`;
+  return rebuilt;
+}
+function formatCallLog(log) {
+  if (!log?.some((line) => !!line))
+    return "";
+  return `
+Call log:
+${log.join(`
+`)}
+`;
+}
+
 // vendor/playwright/isomorphic/stringUtils.ts
 function isString(obj) {
   return typeof obj === "string" || obj instanceof String;
@@ -133,6 +226,12 @@ class Locator {
   page() {
     return this._frame.page();
   }
+  async click(options = {}) {
+    return await this._frame._click("locator.click", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
   locator(selectorOrLocator, options) {
     if (isString(selectorOrLocator))
       return new Locator(this._frame, this._selector + " >> " + selectorOrLocator, options);
@@ -201,16 +300,52 @@ function setTestIdAttribute(attributeName) {
   _testIdAttributeName = attributeName;
 }
 
+// src/protocol.ts
+var FRAME_CLICK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "noWaitAfter",
+  "modifiers",
+  "position",
+  "delay",
+  "button",
+  "clickCount",
+  "trial",
+  "steps"
+];
+function pickParams(keys, options) {
+  const params = {};
+  for (const key of keys) {
+    const value = options[key];
+    if (value !== undefined)
+      params[key] = value;
+  }
+  return params;
+}
+
 // src/frame.ts
 class Frame {
   _guid;
   _page;
-  constructor(guid, page) {
+  _connection;
+  constructor(guid, page, connection) {
     this._guid = guid;
     this._page = page;
+    this._connection = connection;
   }
   page() {
     return this._page;
+  }
+  async click(selector, options = {}) {
+    return await this._click("frame.click", selector, options);
+  }
+  async _click(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "click", pickParams(FRAME_CLICK_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options));
   }
   locator(selector, options) {
     return new Locator(this, selector, options);
@@ -238,11 +373,6 @@ class Frame {
   }
 }
 
-// src/runtime-bridge.ts
-function get(guid, field) {
-  return JSON.parse(__neo_runtime.get(JSON.stringify({ guid, field })));
-}
-
 // src/page.ts
 class Page {
   #guid;
@@ -250,12 +380,12 @@ class Page {
   #context;
   #mainFrame;
   _timeoutSettings;
-  constructor(guid, mainFrameGuid, url, context) {
+  constructor(guid, mainFrameGuid, url, context, connection) {
     this.#guid = guid;
     this.#lastUrl = url;
     this.#context = context;
     this._timeoutSettings = new TimeoutSettings(context._timeoutSettings);
-    this.#mainFrame = new Frame(mainFrameGuid, this);
+    this.#mainFrame = new Frame(mainFrameGuid, this, connection);
   }
   url() {
     const url = get(this.#guid, "url");
@@ -274,6 +404,9 @@ class Page {
   }
   setDefaultTimeout(timeout) {
     this._timeoutSettings.setDefaultTimeout(timeout);
+  }
+  async click(selector, options = {}) {
+    return await this.#mainFrame._click("page.click", selector, options);
   }
   locator(selector, options) {
     return this.mainFrame().locator(selector, options);
@@ -304,8 +437,9 @@ class Page {
 // src/index.ts
 function createRun(init) {
   setTestIdAttribute(init.testIdAttribute);
+  const connection = new Connection(init.lineOffset);
   const context = new BrowserContext;
-  const page = new Page(init.page, init.mainFrame, init.url, context);
+  const page = new Page(init.page, init.mainFrame, init.url, context, connection);
   return { page, context };
 }
 return { createRun };

@@ -1,13 +1,15 @@
-//! The realm's limits and conversions, through `Runtime::run`, against the fake browser in
-//! `support/fake_browser.rs`. No browser needed.
+//! The realm's limits and conversions, and the browser-call path up to the dispatcher, through
+//! `Runtime::run`, against the fake browser in `support/fake_browser.rs`. No browser needed.
 
 #[path = "support/fake_browser.rs"]
 mod fake_browser;
 
 use std::time::{Duration, Instant};
 
-use fake_browser::{FakeBrowser, PAGE_URL, Replies, Reply, run_request};
-use neo_runtime::{RunOutcome, RunStatus};
+use fake_browser::{FakeBrowser, PAGE, PAGE_URL, Replies, Reply, run_request};
+use neo_runtime::{
+    CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunOutcome, RunStatus,
+};
 use serde_json::{Value, json};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -262,5 +264,159 @@ async fn a_script_cannot_read_a_page_outside_its_run() {
     assert!(
         error.message.contains("page@another-tab"),
         "the bridge names the guid it refused: {error:?}"
+    );
+}
+
+/// What every click replies until Neo serves `Frame.click`.
+fn click_not_served() -> CallResult {
+    CallResult::Error {
+        name: "Error".to_string(),
+        message: "Neo does not serve Frame.click yet".to_string(),
+    }
+}
+
+fn record(outcome: &RunOutcome, index: usize) -> &CallRecord {
+    outcome
+        .calls
+        .get(index)
+        .unwrap_or_else(|| panic!("the run recorded call {index}: {outcome:?}"))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_to_another_object_replies_target_closed_and_leaves_a_record() {
+    let code = "const reply = await __neo_runtime.call(JSON.stringify({
+  id: 7,
+  guid: 'frame@another-tab',
+  method: 'click',
+  params: { selector: '#go' },
+  metadata: { location: { file: 'run.js', line: 1, column: 1 }, timeout: 0 },
+}))
+return JSON.parse(reply)";
+    let outcome = run(code, Duration::from_secs(5)).await;
+
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert_eq!(
+        outcome.value,
+        Some(json!({
+            "id": 7,
+            "error": { "error": {
+                "name": "TargetClosedError",
+                "message": "Target page, context or browser has been closed",
+            } },
+        })),
+        "Playwright's dispatcher answers an unknown guid this way, with no call log"
+    );
+    let call = record(&outcome, 0);
+    assert_eq!(
+        (call.call_id, call.guid.as_str(), call.method.as_str()),
+        (1, "frame@another-tab", "click")
+    );
+    assert_eq!((call.title.as_deref(), call.delivery), (None, None));
+    assert_eq!(
+        call.result,
+        CallResult::Error {
+            name: "TargetClosedError".to_string(),
+            message: "Target page, context or browser has been closed".to_string(),
+        }
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_click_replies_as_playwright_would_and_is_recorded() {
+    let code = "try {
+  await page.getByRole('button', { name: 'Go' }).click({ timeout: 2500, trial: undefined })
+} catch (error) {
+  return { name: error.name, message: error.message, log: error.log }
+}";
+    let outcome = run(code, Duration::from_secs(5)).await;
+
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert_eq!(
+        outcome.value,
+        Some(json!({
+            "name": "Error",
+            "message": "locator.click: Neo does not serve Frame.click yet",
+            "log": [],
+        }))
+    );
+    assert_eq!(outcome.calls.len(), 1, "{outcome:?}");
+    let call = record(&outcome, 0);
+    assert_eq!(call.guid, format!("frame@{PAGE}"));
+    assert_eq!(
+        (call.method.as_str(), call.title.as_deref()),
+        ("click", Some("Click"))
+    );
+    assert_eq!(
+        call.params,
+        json!({ "selector": "internal:role=button[name=\"Go\"i]", "strict": true }),
+        "params carry Playwright's keys only: no timeout, no undefined"
+    );
+    assert_eq!(call.result, click_not_served());
+    assert_eq!(call.delivery, Some(Delivery::NotSent));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_the_script_never_awaits_still_runs_and_leaves_its_record() {
+    let code = "page.click('#go')
+return 'returned'";
+    let outcome = run(code, Duration::from_secs(5)).await;
+
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert_eq!(outcome.value, Some(json!("returned")));
+    assert_eq!(outcome.calls.len(), 1, "{outcome:?}");
+    assert_eq!(record(&outcome, 0).result, click_not_served());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn calls_past_the_record_cap_are_counted_not_kept() {
+    let code = "for (let call = 0; call < 1001; call++) await page.click('#go').catch(() => {})
+return 'done'";
+    let outcome = run(code, Duration::from_secs(30)).await;
+
+    assert_eq!(outcome.status, RunStatus::Ok, "{:?}", outcome.error);
+    assert_eq!(outcome.calls.len(), 1000, "the first 1000 calls are kept");
+    assert_eq!(outcome.calls.last().map(|call| call.call_id), Some(1000));
+    assert_eq!(
+        outcome.calls_dropped,
+        Some(DroppedCalls {
+            count: 1,
+            delivery: Some(Delivery::NotSent),
+        })
+    );
+}
+
+/// The realm builds the agent's code with the `AsyncFunction` constructor, which QuickJS names
+/// `<input>` and reports two lines low; neo-sdk finds the innermost `<input>` frame and
+/// subtracts realm.rs's `AGENT_LINE_OFFSET`. This pins both facts (probe P4): a QuickJS upgrade
+/// that moves them fails here.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_records_the_agents_line_and_column() {
+    let code = "const helper = () => page.click('#b')
+await page.click('#a').catch(() => {})
+await helper().catch(() => {})
+Error.stackTraceLimit = 0
+await page.locator('#c').click().catch(() => {})
+return Error.stackTraceLimit";
+    let outcome = run(code, Duration::from_secs(5)).await;
+
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert_eq!(
+        outcome.value,
+        Some(json!(0)),
+        "the agent's stack trace limit is restored"
+    );
+    let locations: Vec<Option<CallLocation>> =
+        outcome.calls.iter().map(|call| call.location).collect();
+    let at = |line, column| {
+        Some(CallLocation {
+            line,
+            column: Some(column),
+        })
+    };
+    assert_eq!(
+        locations,
+        [at(2, 12), at(1, 27), at(5, 26)],
+        "the click on line 2, the click inside `helper` on line 1, and the click made with \
+         a stack trace limit of 0 on line 5"
     );
 }

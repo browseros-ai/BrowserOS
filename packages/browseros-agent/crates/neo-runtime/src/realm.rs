@@ -17,6 +17,7 @@ use serde_json::Value;
 
 use crate::bridge::{Getters, Logs};
 use crate::deadline::Deadline;
+use crate::dispatch::Dispatcher;
 use crate::run::{RunError, RunOutcome};
 use crate::{bridge, world};
 
@@ -27,6 +28,10 @@ const MAX_STACK_BYTES: usize = 512 * 1024;
 
 /// neo-sdk's bundle. Evaluating it defines no globals; its completion value is
 /// `{ createRun }`. `scripts/neo-check.sh` fails when it is stale.
+///
+/// `ctx.eval` names its frames `eval_script`, and only the agent's code, built by the
+/// `AsyncFunction` constructor, has frames named `<input>`. neo-sdk's `captureLocation` relies on
+/// that to find the agent's call site in a stack (`tests/realm_limits.rs` pins it).
 const SDK_BUNDLE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../neo-sdk/dist/sdk.js"
@@ -60,6 +65,12 @@ const HOST_GLOBALS: &str = r"(sleep) => {
   globalThis.console = { log, info: log, warn: log, error: log, debug: log }
 }";
 
+/// How many lines QuickJS reports before the agent's line 1 in an `AsyncFunction`-constructed
+/// function (`async function anonymous(page,context\n) {\n`). Measured by probe P4 and pinned by
+/// `tests/realm_limits.rs`, which reads the line a call records, so a QuickJS upgrade that
+/// changes the wrapper fails that test, not every recorded location.
+const AGENT_LINE_OFFSET: u32 = 2;
+
 /// What the realm needs to know about the run's page.
 pub(crate) struct Script {
     pub(crate) code: String,
@@ -70,10 +81,17 @@ pub(crate) struct Script {
     pub(crate) url: String,
 }
 
-/// Runs `script` to completion, failure, its deadline or cancellation.
-pub(crate) async fn run(script: Script, getters: Getters, deadline: Deadline) -> RunOutcome {
+/// Runs `script` to completion, failure, its deadline or cancellation. Browser calls go to
+/// `dispatcher`, whose tasks may outlive the realm; this returns with the realm dropped and
+/// leaves ending those calls to the caller (`Dispatcher::finish`).
+pub(crate) async fn run(
+    script: Script,
+    getters: Getters,
+    dispatcher: Dispatcher,
+    deadline: Deadline,
+) -> RunOutcome {
     let logs = Logs::default();
-    let evaluated = evaluate(script, getters, logs.clone(), deadline.clone());
+    let evaluated = evaluate(script, getters, logs.clone(), dispatcher, deadline.clone());
     // Dropping `evaluated` here drops the whole realm mid-script, timers and pending
     // promises included; nothing outlives the run.
     let result = tokio::select! {
@@ -97,6 +115,7 @@ async fn evaluate(
     script: Script,
     getters: Getters,
     logs: Logs,
+    dispatcher: Dispatcher,
     deadline: Deadline,
 ) -> Result<Option<Value>, RunError> {
     let runtime = AsyncRuntime::new().map_err(|error| engine_error(&error))?;
@@ -111,7 +130,7 @@ async fn evaluate(
         .map_err(|error| engine_error(&error))?;
     context
         .async_with(async |ctx| {
-            let returned = start(&ctx, script, getters, logs, deadline)
+            let returned = start(&ctx, script, getters, logs, dispatcher, deadline)
                 .catch(&ctx)
                 .map_err(|error| script_error(&ctx, error))?;
             let value: rquickjs::Value<'_> = returned
@@ -130,9 +149,10 @@ fn start<'js>(
     script: Script,
     getters: Getters,
     logs: Logs,
+    dispatcher: Dispatcher,
     deadline: Deadline,
 ) -> rquickjs::Result<Promise<'js>> {
-    bridge::install(ctx, getters, logs)?;
+    bridge::install(ctx, getters, logs, dispatcher)?;
     let sleep = Func::from(Async(move |delay_ms: f64| {
         let deadline = deadline.clone();
         async move { deadline.sleep(delay_from_millis(delay_ms)).await }
@@ -148,6 +168,7 @@ fn start<'js>(
     init.set("context", "context@default")?;
     init.set("url", script.url)?;
     init.set("testIdAttribute", world::TEST_ID_ATTRIBUTE)?;
+    init.set("lineOffset", AGENT_LINE_OFFSET)?;
     let objects: Object<'js> = create_run.call((init,))?;
     let page: rquickjs::Value<'js> = objects.get("page")?;
     let context: rquickjs::Value<'js> = objects.get("context")?;

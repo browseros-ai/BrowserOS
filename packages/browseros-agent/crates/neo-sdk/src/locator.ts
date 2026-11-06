@@ -9,6 +9,8 @@
  * - Imports point at the vendored copies; `isString` comes straight from `stringUtils.ts`,
  *   which Playwright's `rtti.ts` re-exports it from.
  * - The constructor drops Playwright's `inspect.custom` hook (Node's `util`, absent in QuickJS).
+ * - `click` passes its `apiName`, `locator.click`, to `Frame._click`: Playwright reads it off V8
+ *   stack frames, and QuickJS frames carry no class names (`connection.ts`).
  * - Absent: `frameLocator`, `contentFrame` (frames come later; calling one is a `TypeError`),
  *   `toString` and `description` (they need Playwright's ~2,500-line locator generators), and
  *   every action and read until Neo serves it. `_apiName` and `_wrapApiCall` have no use here.
@@ -32,7 +34,7 @@ import {
   escapeForTextSelector,
   isString,
 } from '../vendor/playwright/isomorphic/stringUtils'
-import type { Frame } from './frame'
+import type { ClickOptions, Frame } from './frame'
 import type { Page } from './page'
 
 export type LocatorOptions = {
@@ -84,6 +86,13 @@ export class Locator {
 
   page(): Page {
     return this._frame.page()
+  }
+
+  async click(options: ClickOptions = {}): Promise<void> {
+    return await this._frame._click('locator.click', this._selector, {
+      strict: true,
+      ...options,
+    })
   }
 
   locator(

@@ -1849,6 +1849,7 @@ dependencies = [
  "browseros-cdp",
  "clap",
  "futures-util",
+ "neo-runtime-spec",
  "rquickjs",
  "serde",
  "serde_json",

@@ -10,6 +10,9 @@
     "test": "bun test tests/unit",
     "test:parity": "node --test 'tests/parity/*.test.mjs'"
   },
+  "dependencies": {
+    "@browseros/neo-runtime-spec": "workspace:*"
+  },
   "devDependencies": {
     "playwright-core": "1.64.1"
   }

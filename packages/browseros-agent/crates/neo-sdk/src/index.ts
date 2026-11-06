@@ -1,4 +1,5 @@
 import { BrowserContext } from './browser-context'
+import { Connection } from './connection'
 import { setTestIdAttribute } from './locator'
 import { Page } from './page'
 
@@ -19,15 +20,25 @@ export interface RunInit {
   /** `world::TEST_ID_ATTRIBUTE`: the attribute `getByTestId` names, the one the page's
    * injected script matches. */
   testIdAttribute: string
+  /** `realm::AGENT_LINE_OFFSET`: lines the realm's `AsyncFunction` wrapper puts before the
+   * agent's line 1, which call locations subtract. */
+  lineOffset: number
 }
 
-/** Builds the `page` and `context` a run's script receives. */
+/** Builds the `page` and `context` a run's script receives, around one `Connection`. */
 export function createRun(init: RunInit): {
   page: Page
   context: BrowserContext
 } {
   setTestIdAttribute(init.testIdAttribute)
+  const connection = new Connection(init.lineOffset)
   const context = new BrowserContext()
-  const page = new Page(init.page, init.mainFrame, init.url, context)
+  const page = new Page(
+    init.page,
+    init.mainFrame,
+    init.url,
+    context,
+    connection,
+  )
   return { page, context }
 }

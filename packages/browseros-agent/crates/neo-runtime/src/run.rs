@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
@@ -87,7 +87,15 @@ impl RunError {
 /// [`RunStatus::Timeout`]. `logs` holds the script's `console` lines, including those written
 /// before a failure, up to 1000 lines and 1 MiB of text; past that, the run keeps no more lines
 /// and the last entry is a note from neo-runtime saying how many it dropped.
+///
+/// `calls` holds one record per browser call the script made, in arrival order, including calls
+/// it never awaited and calls still running when the run ended. It keeps the first 1000 calls
+/// and up to 1 MiB of records (params plus call log). Past either cap, `calls_dropped` counts
+/// the rest and keeps the least safe delivery among them, so a host deciding whether a run may
+/// be repeated never misses a write. The caps exist for the reason `logs` has one: records live
+/// in Rust, outside the realm's memory limit.
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RunOutcome {
     pub status: RunStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -95,6 +103,9 @@ pub struct RunOutcome {
     pub logs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<RunError>,
+    pub calls: Vec<CallRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub calls_dropped: Option<DroppedCalls>,
 }
 
 impl RunOutcome {
@@ -104,6 +115,8 @@ impl RunOutcome {
             value,
             logs,
             error: None,
+            calls: Vec::new(),
+            calls_dropped: None,
         }
     }
 
@@ -113,6 +126,8 @@ impl RunOutcome {
             value: None,
             logs,
             error: Some(error),
+            calls: Vec::new(),
+            calls_dropped: None,
         }
     }
 
@@ -126,6 +141,125 @@ impl RunOutcome {
             value: None,
             logs,
             error,
+            calls: Vec::new(),
+            calls_dropped: None,
         }
     }
+
+    /// Attaches the run's call records. `Runtime::run` calls it last, after the realm is gone
+    /// and `Dispatcher::finish` has ended every call.
+    pub(crate) fn with_calls(
+        self,
+        calls: Vec<CallRecord>,
+        calls_dropped: Option<DroppedCalls>,
+    ) -> Self {
+        Self {
+            calls,
+            calls_dropped,
+            ..self
+        }
+    }
+}
+
+/// One browser call (`__neo_runtime.call`), as the dispatcher saw it. Derived when the run ends
+/// from state kept outside the realm, so a call cut off by the run's deadline or by the script
+/// returning still has its record, its call log and its true delivery.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallRecord {
+    /// Arrival order within the run, from 1. The wire `id` is the SDK's and is not kept.
+    pub call_id: u64,
+    /// The object the call named, such as `frame@<targetId>`.
+    pub guid: String,
+    /// Playwright's wire method, such as `click`.
+    pub method: String,
+    /// Playwright's trace title for the method, such as `Click`; `None` when the call named no
+    /// method Neo serves on that object. Neo records no `apiName`: it never crosses the wire.
+    pub title: Option<String>,
+    /// The params exactly as the SDK sent them.
+    pub params: Value,
+    /// Where the agent's script made the call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<CallLocation>,
+    /// Wall clock at arrival, in Unix milliseconds.
+    pub started_at_ms: u64,
+    #[serde(serialize_with = "serialize_millis")]
+    pub duration: Duration,
+    pub result: CallResult,
+    /// Set for methods Playwright's spec flags `input`, `None` for reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<Delivery>,
+    /// The call log folded as Playwright's error messages show it, kept for successful calls
+    /// too.
+    pub log: Vec<String>,
+}
+
+/// `metadata.location` of a call, without its file, which is always the agent's `run.js`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct CallLocation {
+    /// 1-based, counted in the agent's script.
+    pub line: u32,
+    /// 1-based.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<u32>,
+}
+
+/// How a browser call ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CallResult {
+    Ok,
+    /// The Playwright error the call replied with: its wire `name` (`TimeoutError`,
+    /// `TargetClosedError`, `Error`) and message, without the client's `apiName` prefix or the
+    /// call log.
+    Error {
+        name: String,
+        message: String,
+    },
+    /// The run ended while the call was still running, so it never replied.
+    Unfinished {
+        reason: RunEnd,
+    },
+}
+
+/// Why a run ended under a call that was still running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RunEnd {
+    /// The script returned or threw without awaiting the call.
+    Settled,
+    Timeout,
+    /// The host cancelled the run, or dropped its future (then no outcome is returned).
+    Cancelled,
+}
+
+/// Whether an input call's events reached the page. Derived only from what the call recorded
+/// as it wrote input, never from how the call ended: a click that timed out after every mouse
+/// event was acknowledged is `Done`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Delivery {
+    /// No input reached the page's handlers: none was written, or Neo verifiably blocked it
+    /// before the page saw it.
+    NotSent,
+    /// Every input event was written and acknowledged.
+    Done,
+    /// Some input event was written and not every acknowledgement came back. Never repeat a
+    /// call in this state blindly. Ordered last so `max` is the least safe delivery.
+    Unknown,
+}
+
+/// The calls a run made past the record caps. They ran normally; only their records were not
+/// kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct DroppedCalls {
+    pub count: u64,
+    /// The least safe delivery among the dropped input calls; `None` if none was an input call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<Delivery>,
+}
+
+/// A duration as whole milliseconds, as the rest of the outcome's JSON counts time.
+fn serialize_millis<S: Serializer>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u128(duration.as_millis())
 }

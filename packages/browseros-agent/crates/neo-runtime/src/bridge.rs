@@ -1,5 +1,6 @@
 //! `__neo_runtime`, the only door from a run's JS into Rust. neo-sdk's `runtime-bridge.ts`
-//! calls `get` for every synchronous Playwright getter and the realm's `console` calls `log`.
+//! calls `get` for every synchronous Playwright getter and `call` for every browser call, and
+//! the realm's `console` calls `log`.
 //!
 //! ```text
 //!  page.url()                                    JS, on the run's thread
@@ -7,14 +8,23 @@
 //!         └─ Getters::get: parse → (object, field) → getters::url   ← blocks this thread
 //!              └─ CDP request ──▶ BrowserOS ──▶ reply, read by browseros-cdp's reader task
 //!         ◀─ '"https://…"'                       JSON text of the value
+//!
+//!  locator.click()                               JS, on the run's thread
+//!    └─ __neo_runtime.call('{"id":1,"guid":"frame@<id>","method":"click",…}')
+//!         └─ Dispatcher::call: starts the call on its own tokio task, returns at once
+//!         ◀─ Promise of '{"id":1}' | '{"id":1,"error":{…},"log":[…]}'
 //! ```
+//!
+//! A call's promise only waits for the reply its task sends; this file does no CDP for it. So a
+//! call keeps going while the script spins or a getter blocks, and dropping the realm drops only
+//! the wait, never the call.
 
 use std::future::Future;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
 use browseros_cdp::{CdpClient, CdpError, SessionId};
-use rquickjs::function::Func;
+use rquickjs::function::{Async, Func};
 use rquickjs::{Ctx, Exception, Object};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -22,6 +32,7 @@ use tokio::runtime::Handle;
 use tokio::task;
 
 use crate::deadline::{Deadline, Stop};
+use crate::dispatch::Dispatcher;
 use crate::getters;
 use crate::run::{PageId, RunError};
 
@@ -37,13 +48,33 @@ pub(crate) fn frame_guid(page: &PageId) -> String {
 }
 
 /// Installs `__neo_runtime` as a global of the realm `ctx`.
-pub(crate) fn install<'js>(ctx: &Ctx<'js>, getters: Getters, logs: Logs) -> rquickjs::Result<()> {
+pub(crate) fn install<'js>(
+    ctx: &Ctx<'js>,
+    getters: Getters,
+    logs: Logs,
+    dispatcher: Dispatcher,
+) -> rquickjs::Result<()> {
     let bridge = Object::new(ctx.clone())?;
     bridge.set(
         "get",
         Func::from(move |ctx: Ctx<'js>, request: String| getters.get(&ctx, &request)),
     )?;
     bridge.set("log", Func::from(move |line: String| logs.push(line)))?;
+    bridge.set(
+        "call",
+        // rquickjs makes the promise now and polls this future only while the script awaits.
+        // That is enough because the future only waits for the reply: `Dispatcher::call` has
+        // already started the call on a tokio task. An `Err` rejects the promise with a named
+        // `Error`; only an unreadable envelope (an SDK bug) or a run ending under the call does.
+        Func::from(Async(move |ctx: Ctx<'js>, message: String| {
+            let reply = dispatcher.call(&message);
+            async move {
+                reply
+                    .await
+                    .map_err(|error| throw_named(&ctx, "Error", &error.to_string()))
+            }
+        })),
+    )?;
     ctx.globals().set("__neo_runtime", bridge)
 }
 

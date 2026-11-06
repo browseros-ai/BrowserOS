@@ -1,13 +1,14 @@
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
 import type { BrowserContext } from './browser-context'
-import { Frame } from './frame'
+import type { Connection } from './connection'
+import { type ClickOptions, Frame } from './frame'
 import type { Locator, LocatorOptions } from './locator'
 import { get } from './runtime-bridge'
 import { TimeoutSettings } from './timeout-settings'
 
 /**
  * Playwright's `Page`, backed by live reads from the tab this run is attached to. Its selector
- * builders forward to the main frame, as Playwright's do (`client/page.ts`).
+ * builders and `click` forward to the main frame, as Playwright's do (`client/page.ts`).
  *
  * Known limitation: once the tab is closed, `url()` returns the last URL this object returned,
  * not the last URL the tab committed. Navigate `/a` to `/final`, close the tab before the
@@ -33,12 +34,13 @@ export class Page {
     mainFrameGuid: string,
     url: string,
     context: BrowserContext,
+    connection: Connection,
   ) {
     this.#guid = guid
     this.#lastUrl = url
     this.#context = context
     this._timeoutSettings = new TimeoutSettings(context._timeoutSettings)
-    this.#mainFrame = new Frame(mainFrameGuid, this)
+    this.#mainFrame = new Frame(mainFrameGuid, this, connection)
   }
 
   url(): string {
@@ -61,6 +63,11 @@ export class Page {
 
   setDefaultTimeout(timeout: number): void {
     this._timeoutSettings.setDefaultTimeout(timeout)
+  }
+
+  /** Not strict, as Playwright's `page.click`, which forwards to the main frame. */
+  async click(selector: string, options: ClickOptions = {}): Promise<void> {
+    return await this.#mainFrame._click('page.click', selector, options)
   }
 
   locator(selector: string, options?: LocatorOptions): Locator {

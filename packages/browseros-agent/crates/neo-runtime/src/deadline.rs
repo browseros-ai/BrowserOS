@@ -40,6 +40,13 @@ impl Deadline {
         self.timeout
     }
 
+    /// The instant the run must stop by. A browser call gets a timer of its own only when its
+    /// timeout ends before this (`progress::Progress::new`), so the two never fire together and
+    /// a run that runs out of time always reports the run's own `Timeout`.
+    pub(crate) fn at(&self) -> Instant {
+        self.at
+    }
+
     /// Cancellation wins over the clock, so a run cancelled after its deadline reports the
     /// caller's decision rather than a timeout.
     pub(crate) fn stop(&self) -> Option<Stop> {

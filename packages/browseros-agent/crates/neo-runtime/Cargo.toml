@@ -7,9 +7,11 @@ license.workspace = true
 repository.workspace = true
 description = "Runs an agent's Playwright-style script in a QuickJS realm against one BrowserOS tab."
 
-# browseros-cdp is the only first-party dependency; see crates/NEO_STYLE.md.
+# browseros-cdp and neo-runtime-spec are the only first-party dependencies; see
+# crates/NEO_STYLE.md.
 [dependencies]
 browseros-cdp.workspace = true
+neo-runtime-spec.workspace = true
 rquickjs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -20,10 +22,12 @@ tracing.workspace = true
 
 # clap backs the `neo_run` example. futures-util and tokio-tungstenite serve the fake browser
 # in tests/support/fake_browser.rs; tempfile gives the end-to-end test a throwaway profile.
+# tokio's test-util lets unit tests pause time, so deadline races are deterministic.
 [dev-dependencies]
 clap.workspace = true
 futures-util.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite.workspace = true
 
 [lints.rust]

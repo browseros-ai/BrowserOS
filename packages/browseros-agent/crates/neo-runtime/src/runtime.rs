@@ -1,23 +1,33 @@
 //! The entry point: owns the browser connection and runs one script per call against one tab.
+//!
+//! A run's order, after the tab check and the attach:
+//!
+//! ```text
+//!  Session ─▶ Arc<PageSession> ─▶ Dispatcher ─┬─▶ realm::run(…, dispatcher)   the deadline decides, as before
+//!                                             ├─▶ dispatcher.finish(reason)  cancel calls, wait ≤ 1 s, records
+//!                                             └─▶ last Arc drops ─▶ Session::drop ─▶ detach in background
+//! ```
+//!
+//! No step here detaches anything; ownership does (`page.rs`). The dispatcher holds the page,
+//! so the session detaches once the realm and the dispatcher are gone, also when a caller drops
+//! the run's future.
 
-use std::time::Duration;
+use std::sync::Arc;
 
-use browseros_cdp::{CdpClient, CdpError, SessionId, browser, target};
+use browseros_cdp::{CdpClient, CdpError, browser};
 use serde_json::Value;
 use tokio::runtime::{Handle, RuntimeFlavor};
-use tokio::time;
-use tracing::debug;
+use tokio_util::task::TaskTracker;
 
 use crate::bridge::Getters;
 use crate::deadline::Deadline;
+use crate::dispatch::Dispatcher;
 use crate::getters::CLOSED_TAB_MESSAGE;
+use crate::page::{PageSession, Session};
+use crate::progress::RunScope;
 use crate::realm::Script;
-use crate::run::{PageId, RunError, RunOutcome, RunRequest};
+use crate::run::{PageId, RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
 use crate::{bridge, getters, realm};
-
-/// Detaching is best effort. It runs in the background after a run, so this bound only keeps
-/// a hung browser from piling up detach tasks.
-const DETACH_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// A target id no tab can have, used to see how the browser reports a missing tab.
 const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
@@ -75,7 +85,9 @@ impl Runtime {
 
     /// Runs `request.code` against `request.page` and reports how it ended. Every failure,
     /// including a tab that is already closed, is a [`RunOutcome`] rather than an `Err`. The
-    /// CDP session the run attaches to the tab is detached in the background once it ends.
+    /// outcome carries one record per browser call the script made. The CDP session the run
+    /// attaches to the tab is detached in the background once the run and every task its calls
+    /// started have let go of it.
     ///
     /// Must be called from tokio's multi-threaded runtime. A synchronous getter such as
     /// `page.url()` waits for its CDP reply with `tokio::task::block_in_place`, which the
@@ -103,7 +115,6 @@ impl Runtime {
             }
             opened = self.open(&page, &tokio) => opened,
         };
-        // `session` detaches when it drops at the end of this function.
         let (session, url) = match opened {
             Ok(opened) => opened,
             Err(error) => return RunOutcome::failed(error, Vec::new()),
@@ -115,14 +126,19 @@ impl Runtime {
             frame_guid: bridge::frame_guid(&page),
             url,
         };
+        let tab = Arc::new(PageSession::new(session));
         let getters = Getters::new(
             self.cdp.clone(),
-            page,
-            session.id.clone(),
+            page.clone(),
+            tab.session_id().clone(),
             deadline.clone(),
             tokio,
         );
-        realm::run(script, getters, deadline).await
+        let run = RunScope::new(deadline.clone(), TaskTracker::new());
+        let dispatcher = Dispatcher::new(tab, run, &page);
+        let outcome = realm::run(script, getters, dispatcher.clone(), deadline).await;
+        let (calls, dropped) = dispatcher.finish(run_end_of(&outcome)).await;
+        outcome.with_calls(calls, dropped)
     }
 
     /// Confirms the tab is open, attaches the run's session to it and reads its URL.
@@ -155,61 +171,17 @@ impl Runtime {
     }
 }
 
-/// The run's CDP session on its tab, which owns the attach: dropping it detaches. The
-/// `Runtime`'s connection outlives every run, so a session nobody detaches stays attached
-/// until the browser exits. Tying the detach to the value covers every way a run ends after
-/// the browser answered the attach: the script's end, a failed or stopped setup, an answer
-/// that arrives after the run stopped, and a caller that drops the run's future.
-struct Session {
-    cdp: CdpClient,
-    id: SessionId,
-    /// Drop is synchronous, so the detach runs as a task on this runtime.
-    tokio: Handle,
-}
-
-impl Session {
-    async fn attach(cdp: CdpClient, page: PageId, tokio: Handle) -> Result<Self, CdpError> {
-        let attached: target::AttachToTargetResult = cdp
-            .send_typed(
-                "Target.attachToTarget",
-                target::AttachToTargetParams {
-                    target_id: page.as_str().to_string(),
-                    flatten: Some(true),
-                },
-                None,
-            )
-            .await?;
-        Ok(Self {
-            cdp,
-            id: SessionId::from(attached.session_id),
-            tokio,
-        })
-    }
-}
-
-impl Drop for Session {
-    fn drop(&mut self) {
-        let cdp = self.cdp.clone();
-        let session = self.id.clone();
-        self.tokio.spawn(async move {
-            let detach = cdp.send_typed::<_, Value>(
-                "Target.detachFromTarget",
-                target::DetachFromTargetParams {
-                    session_id: Some(session.as_str().to_string()),
-                    target_id: None,
-                },
-                None,
-            );
-            match time::timeout(DETACH_TIMEOUT, detach).await {
-                Ok(Ok(_)) => {}
-                // Expected once the tab has closed: the session went with it.
-                Ok(Err(error)) => debug!(%session, %error, "detaching a run's session failed"),
-                Err(_) => debug!(%session, "detaching a run's session timed out"),
-            }
-        });
-    }
-}
-
 fn cdp_error(error: &CdpError) -> RunError {
     RunError::new("Error", error.to_string())
+}
+
+/// Why the run ended, for calls still running then. The realm reports `Timeout` or `Cancelled`
+/// whenever the deadline or cancellation fired, even when the script caught the error and
+/// returned, so the outcome's status is the one source for it.
+fn run_end_of(outcome: &RunOutcome) -> RunEnd {
+    match outcome.status {
+        RunStatus::Timeout => RunEnd::Timeout,
+        RunStatus::Cancelled => RunEnd::Cancelled,
+        RunStatus::Ok | RunStatus::Error => RunEnd::Settled,
+    }
 }
