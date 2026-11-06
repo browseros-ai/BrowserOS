@@ -3,6 +3,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use browseros_cdp::{CdpClient, CdpError};
 use neo_runtime_spec::serve::{FrameChannel, FrameInitializer, PageInitializer};
@@ -10,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::runtime::Handle;
 use tokio::sync::OnceCell;
+use tokio::time;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
@@ -125,6 +127,20 @@ impl Tabs {
 
     pub(crate) fn cdp(&self) -> &CdpClient {
         &self.0.cdp
+    }
+
+    pub(crate) fn finish_close(&self, page: Arc<PageSession>) {
+        // Page.close can acknowledge before its beforeunload dialog arrives. Keep the
+        // watcher alive after the script returns so it can answer; otherwise detaching
+        // strands that dialog. Bound the cleanup if the browser never completes closure.
+        self.0.tasks.spawn_on(
+            async move {
+                let _settled =
+                    time::timeout(Duration::from_secs(5), page.closed().cancelled()).await;
+                drop(page);
+            },
+            &self.0.tokio,
+        );
     }
 
     pub(crate) fn resolve(&self, guid: &str) -> Option<Arc<PageEntry>> {

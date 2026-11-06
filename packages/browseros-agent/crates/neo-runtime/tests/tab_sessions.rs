@@ -355,6 +355,37 @@ async fn tests_that_an_unprepared_attached_page_closed_externally_reports_target
     detached(&browser, 2).await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_run_before_unload_keeps_its_watcher_after_the_script_returns() {
+    let browser = FakeBrowser::start(Replies {
+        before_unload_delay: Some(Duration::from_millis(100)),
+        ..Replies::default()
+    })
+    .await;
+    let outcome = run(
+        &browser,
+        &format!(
+            r"{TWO_PAGES}
+      const reply = await call(a.result.page.guid, 'runBeforeUnload');
+      if (reply.error) throw new Error(JSON.stringify(reply));
+    "
+        ),
+    )
+    .await;
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert!(
+        !browser
+            .page
+            .lock()
+            .unwrap()
+            .tabs
+            .iter()
+            .any(|tab| tab["targetId"] == "new-page-1"),
+        "the watcher must survive until the delayed beforeunload completes"
+    );
+    detached(&browser, 3).await;
+}
+
 fn remove_tab(browser: &FakeBrowser, id: &str) {
     browser
         .page

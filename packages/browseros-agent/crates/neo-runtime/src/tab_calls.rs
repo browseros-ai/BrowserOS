@@ -65,6 +65,8 @@ pub(crate) async fn page(
             let page = progress.race(tabs.session(entry)).await??;
             let prepared = progress.race(page.prepare()).await?;
             checked(tabs, entry, progress, prepared).await?;
+            progress.check()?;
+            tabs.finish_close(Arc::clone(&page));
             match progress.race(page.send("Page.close", json!({}))).await {
                 Ok(Ok(_)) => entry.closed_by_run(),
                 Ok(Err(error)) => debug!(%error, "running beforeunload failed"),

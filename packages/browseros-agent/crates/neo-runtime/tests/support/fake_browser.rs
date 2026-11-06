@@ -73,6 +73,9 @@ pub struct Replies {
     pub new_page_attach: Option<Reply>,
     /// Empty committed history URLs before a newly created page reaches about:blank.
     pub new_page_empty_history: usize,
+    /// Beforeunload completes after the Page.close acknowledgement, provided its watcher
+    /// is still attached to answer the delayed dialog.
+    pub before_unload_delay: Option<Duration>,
     /// `Page.getNavigationHistory`, which backs `page.url()`.
     pub history: Reply,
     /// `Input.dispatchMouseEvent`, counted per event: `answers: 2` acknowledges a click's move
@@ -114,6 +117,7 @@ pub struct FakeBrowser {
 pub struct Page {
     pub tabs: Vec<Value>,
     next_tab: usize,
+    detached: HashSet<String>,
     /// The injected script's single hit-target interceptor slot, as Playwright keeps it: a setup
     /// replaces it, and a stop clears it only while it still holds the stopped interceptor.
     /// Releasing an object group leaves it alone.
@@ -133,6 +137,7 @@ impl Default for Page {
                 "liveBrowserContextId": "profile", "isActive": true,
             })],
             next_tab: 0,
+            detached: HashSet::new(),
             interceptor: None,
             next_interceptor: 0,
             clicks: 0,
@@ -335,6 +340,17 @@ async fn serve_cdp(
             .as_str()
             .unwrap_or_default()
             .to_string();
+        if command["method"] == "Page.close"
+            && let Some(delay) = replies.before_unload_delay
+        {
+            tasks.spawn(finish_before_unload(
+                delay,
+                Arc::clone(&page),
+                outgoing.clone(),
+                calls.sessions.get(&session).cloned(),
+                session.clone(),
+            ));
+        }
         let (mut reply, when) = if calls.closed.contains(&session) {
             (
                 json!({ "error": { "code": -32001, "message": "Session with given id not found." } }),
@@ -378,6 +394,46 @@ async fn serve_cdp(
     }
 }
 
+/// Delayed beforeunload requires the run's watcher to still own its session.
+async fn finish_before_unload(
+    delay: Duration,
+    page: Arc<Mutex<Page>>,
+    outgoing: UnboundedSender<String>,
+    target: Option<String>,
+    session: String,
+) {
+    time::sleep(delay).await;
+    {
+        let mut page = lock(&page);
+        if page.detached.contains(&session) {
+            return;
+        }
+        page.tabs
+            .retain(|tab| tab["targetId"].as_str() != target.as_deref());
+    }
+    let _sent = outgoing.send(
+        json!({
+            "method":"Target.detachedFromTarget", "params":{"sessionId":session},
+        })
+        .to_string(),
+    );
+}
+
+fn bring_to_front(command: &Value, calls: &Calls, page: &Mutex<Page>) -> Value {
+    let target = command["sessionId"]
+        .as_str()
+        .and_then(|id| calls.sessions.get(id));
+    let open = lock(page)
+        .tabs
+        .iter()
+        .any(|tab| tab["targetId"].as_str() == target.map(String::as_str));
+    if open {
+        json!({"result":{}})
+    } else {
+        json!({"error":{"code":-32001,"message":"Session with given id not found."}})
+    }
+}
+
 /// The fake's answer to `command`, and when to send it.
 fn answer(
     command: &Value,
@@ -390,23 +446,7 @@ fn answer(
         return answer;
     }
     match command["method"].as_str().unwrap_or_default() {
-        "Page.bringToFront" => {
-            let target = command["sessionId"]
-                .as_str()
-                .and_then(|id| calls.sessions.get(id));
-            let open = lock(page)
-                .tabs
-                .iter()
-                .any(|tab| tab["targetId"].as_str() == target.map(String::as_str));
-            (
-                if open {
-                    json!({"result":{}})
-                } else {
-                    json!({"error":{"code":-32001,"message":"Session with given id not found."}})
-                },
-                now,
-            )
-        }
+        "Page.bringToFront" => (bring_to_front(command, calls, page), now),
         "Target.attachToTarget" => {
             let call = calls.attach;
             calls.attach += 1;
@@ -426,8 +466,17 @@ fn answer(
             )
         }
         "Page.getNavigationHistory" => navigation_history(command, replies, calls, page),
-        "Target.detachFromTarget"
-        | "Browser.getVersion"
+        "Target.detachFromTarget" => {
+            lock(page).detached.insert(
+                command["params"]["sessionId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            );
+            (json!({"result":{}}), now)
+        }
+        "Browser.getVersion"
+        | "Page.close"
         | "Page.enable"
         | "Emulation.setFocusEmulationEnabled"
         | "Runtime.releaseObjectGroup"
