@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { closeDb, initializeDb } from '../../../src/lib/db'
+import { closeDb, getDbHandle, initializeDb } from '../../../src/lib/db'
 import { providers } from '../../../src/lib/db/schema'
 
 describe('database initialization', () => {
@@ -43,6 +43,35 @@ describe('database initialization', () => {
     const second = initializeDb({ dbPath })
 
     expect(second).toBe(first)
+  })
+
+  it('finalizes prepared statements before releasing the database handle', () => {
+    const dbPath = join(mkTempDir(), 'browseros.sqlite')
+    const options = { dbPath, runMigrations: false }
+    const first = initializeDb(options)
+    first.sqlite.exec('CREATE TABLE close_fixture (value INTEGER)')
+    first.sqlite.exec('INSERT INTO close_fixture VALUES (7)')
+    const statement = first.sqlite.prepare<{ value: number }, []>(
+      'SELECT value FROM close_fixture',
+    )
+
+    try {
+      expect(statement.get()).toEqual({ value: 7 })
+      closeDb()
+      expect(() => statement.get()).toThrow('Database has closed')
+      expect(() => getDbHandle()).toThrow('Database not initialized')
+
+      const reopened = initializeDb(options)
+      expect(reopened).not.toBe(first)
+      expect(
+        reopened.sqlite.query('SELECT value FROM close_fixture').get(),
+      ).toEqual({ value: 7 })
+      closeDb()
+      expect(() => closeDb()).not.toThrow()
+    } finally {
+      statement.finalize()
+      closeDb()
+    }
   })
 
   it.each([false, true])(
@@ -195,7 +224,7 @@ describe('database initialization', () => {
         1000,
         1000,
       )
-    sqlite.close()
+    sqlite.close(true)
 
     const handle = initializeDb({ dbPath })
     const legacyTable = handle.sqlite
