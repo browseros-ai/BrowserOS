@@ -94,37 +94,43 @@ impl PageOp {
                 PAGE,
                 "run a function in the main world, behind the sensitive-value sweep",
             )
-            .using(&[Capability::MainWorld]),
+            .using(&[Capability::MainWorld])
+            .policed(),
             Self::EvaluateOnElement => OpSpec::write(
                 "locator.evaluate",
                 TARGET,
                 "run a function on one element in the main world; also $eval",
             )
-            .using(&[Capability::MainWorld]),
+            .using(&[Capability::MainWorld])
+            .policed(),
             Self::EvaluateOnAll => OpSpec::write(
                 "locator.evaluateAll",
                 TARGET,
                 "run a function on every match in the main world; also $$eval",
             )
-            .using(&[Capability::MainWorld]),
+            .using(&[Capability::MainWorld])
+            .policed(),
             Self::WaitForFunction => OpSpec::write(
                 "page.waitForFunction",
                 PAGE,
                 "poll a main-world function from Rust until it returns truthy",
             )
-            .using(&[Capability::MainWorld]),
+            .using(&[Capability::MainWorld])
+            .policed(),
             Self::Screenshot => OpSpec::read(
                 "page.screenshot",
                 PAGE,
                 "capture the page or one element once the host allows it",
             )
-            .using(&[Capability::Capture]),
+            .using(&[Capability::Capture])
+            .policed(),
             Self::Pdf => OpSpec::read(
                 "page.pdf",
                 PAGE,
                 "print the page to PDF once the host allows it",
             )
-            .using(&[Capability::Capture]),
+            .using(&[Capability::Capture])
+            .policed(),
         }
     }
 }

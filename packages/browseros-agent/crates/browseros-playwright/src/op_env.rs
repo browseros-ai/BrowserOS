@@ -11,8 +11,9 @@
 
 use std::sync::Arc;
 
-use browseros_core::BrowserView;
+use browseros_core::{BrowserView, PageId, TabId};
 use browseros_trace::ErrorOwner;
+use serde_json::Value;
 
 use crate::RunState;
 
@@ -42,6 +43,15 @@ pub trait OpEnv: Send + Sync {
     /// One line of Playwright's call log, mirrored into the op's trace record. Lines never
     /// carry a typed value.
     fn note(&self, line: String);
+
+    /// `page`'s frame tree (the page is on tab `tab`), for the host to hand the run's prelude in
+    /// its page facts, so `page.frames()` stays live after any op (FR-2; sdk-skeleton's C6).
+    /// `frames` is `{"seq": n, "frames": [{"id", "parentId", "name", "url"}, ...]}`: the main
+    /// frame first, every frame's `parentId` naming one listed before it (`null` for the main
+    /// frame), and `seq` growing with each report of the run, so the prelude applies only a
+    /// newer tree. Frame names and URLs are the page's own text. The default ignores it, and
+    /// the crate does not report yet.
+    fn report_frames(&self, _page: &PageId, _tab: TabId, _frames: Value) {}
 }
 
 /// A host policy refused the op (`owner_has_control`, `page_private`, ...). It reaches the

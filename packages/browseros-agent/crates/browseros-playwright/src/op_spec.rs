@@ -27,6 +27,10 @@ pub struct OpSpec {
     /// acts in the sealed world or sends trusted input, which is most of them. A unit test pins
     /// every op's list to an audit: changing one changes what a host holds or polices.
     pub capabilities: &'static [Capability],
+    /// Every capability the op declares is policed at its gateway before the op's first
+    /// effect. Set only by the crate's `policed` builder, once that gateway is built and
+    /// reviewed. Hosts read [`OpSpec::gated`], which also covers an op that declares nothing.
+    pub policed: bool,
 }
 
 /// What an op reaches beyond its page's sealed world, where the crate's own reads and actions
@@ -42,9 +46,9 @@ pub struct OpSpec {
 pub enum Capability {
     /// Runs agent-supplied script, or HTML whose scripts run, in a page's main world. There the
     /// script reads the page's own state and every frame of its site, and no seal masks a
-    /// field. Gateway: the evaluate guard's entry, `EvaluateGuard::sweep_before`.
-    /// `page.setContent` reaches the main world without passing it, because its HTML is written
-    /// from the sealed world, so only the audit test keeps its declaration.
+    /// field. Gateway: the evaluate guard's entry, `EvaluateGuard::open`. `page.setContent`
+    /// reaches the main world without passing it, because its HTML is written from the sealed
+    /// world, so it is declared but not gated ([`OpSpec::gated`]).
     MainWorld,
     /// Returns the page's pixels, which no seal masks: `page.screenshot`, with its element
     /// forms, and `page.pdf`. A host refuses such an op on a private tab, and withholds pixels
@@ -107,6 +111,16 @@ impl OpSpec {
         self.capabilities.contains(&capability)
     }
 
+    /// Whether every capability the op declares is policed by its gateway before the op's first
+    /// effect. A host may serve a `MainWorld` or `HostFiles` op only when this is true, and holds
+    /// it otherwise. An op that declares nothing is gated trivially. It fails closed: a new op
+    /// that declares a capability is ungated until its gateway is reviewed and its spec is marked
+    /// `policed`, and a unit test pins every op's answer to the audit.
+    #[must_use]
+    pub fn gated(&self) -> bool {
+        self.capabilities.is_empty() || self.policed
+    }
+
     /// An op that only reads.
     pub(crate) const fn read(name: &'static str, target: OpTarget, doc: &'static str) -> Self {
         Self {
@@ -117,6 +131,7 @@ impl OpSpec {
             lifetime: OpLifetime::Operation,
             sensitive_args: &[],
             capabilities: &[],
+            policed: false,
         }
     }
 
@@ -148,6 +163,15 @@ impl OpSpec {
     pub(crate) const fn using(self, capabilities: &'static [Capability]) -> Self {
         Self {
             capabilities,
+            ..self
+        }
+    }
+
+    /// The same op, with every capability it declares policed at its gateway before its first
+    /// effect ([`OpSpec::gated`]). Said only once that gateway is built and reviewed.
+    pub(crate) const fn policed(self) -> Self {
+        Self {
+            policed: true,
             ..self
         }
     }

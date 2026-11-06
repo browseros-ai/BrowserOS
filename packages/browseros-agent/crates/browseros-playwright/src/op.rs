@@ -178,8 +178,11 @@ mod tests {
     }
 
     /// The audit of record: every op, with exactly what it reaches beyond its page's sealed
-    /// world. A host holds and polices ops by these declarations, so a new op without a row, or
-    /// a declaration changed without its row, fails here until the audit is redone on purpose.
+    /// world, and whether its gateway polices all of it before its first effect (`gated`). A
+    /// host holds and polices ops by these declarations, so a new op without a row, or a
+    /// declaration changed without its row, fails here until the audit is redone on purpose.
+    /// `page.setContent` writes its HTML from the sealed world, past the evaluate guard, and
+    /// `locator.setInputFiles` has no deny list for Neo's own secrets yet: both are ungated.
     ///
     /// The ops with an empty row send selectors, values or trusted input, or read in the sealed
     /// world. `page.goto` reaches no main world: the host refuses `javascript:`, the one scheme
@@ -190,94 +193,99 @@ mod tests {
     #[test]
     fn tests_that_every_op_declares_exactly_its_audited_capabilities() {
         use Capability::{Capture, HostFiles, MainWorld};
-        const AUDITED: [(&str, &[Capability]); 75] = [
-            ("locator.click", &[]),
-            ("locator.dblclick", &[]),
-            ("locator.hover", &[]),
-            ("locator.check", &[]),
-            ("locator.uncheck", &[]),
-            ("locator.dragTo", &[]),
-            ("locator.fill", &[]),
-            ("locator.press", &[]),
-            ("locator.pressSequentially", &[]),
-            ("locator.selectOption", &[]),
-            ("locator.selectText", &[]),
-            ("locator.focus", &[]),
-            ("locator.blur", &[]),
-            ("locator.setInputFiles", &[HostFiles]),
-            ("locator.dispatchEvent", &[]),
-            ("locator.scrollIntoViewIfNeeded", &[]),
-            ("locator.textContent", &[]),
-            ("locator.innerText", &[]),
-            ("locator.innerHTML", &[]),
-            ("locator.getAttribute", &[]),
-            ("locator.inputValue", &[]),
-            ("locator.isEnabled", &[]),
-            ("locator.isDisabled", &[]),
-            ("locator.isEditable", &[]),
-            ("locator.isChecked", &[]),
-            ("locator.isVisible", &[]),
-            ("locator.isHidden", &[]),
-            ("locator.count", &[]),
-            ("locator.allTextContents", &[]),
-            ("locator.allInnerTexts", &[]),
-            ("locator.boundingBox", &[]),
-            ("locator.waitFor", &[]),
-            ("locator.elementHandle", &[]),
-            ("locator.elementHandles", &[]),
-            ("page.ariaSnapshot", &[]),
-            ("locator.ariaSnapshot", &[]),
-            ("expect.locator", &[]),
-            ("expect.page", &[]),
-            ("keyboard.down", &[]),
-            ("keyboard.up", &[]),
-            ("keyboard.press", &[]),
-            ("keyboard.type", &[]),
-            ("keyboard.insertText", &[]),
-            ("mouse.move", &[]),
-            ("mouse.down", &[]),
-            ("mouse.up", &[]),
-            ("mouse.click", &[]),
-            ("mouse.wheel", &[]),
-            ("page.goto", &[]),
-            ("page.reload", &[]),
-            ("page.goBack", &[]),
-            ("page.goForward", &[]),
-            ("page.waitForURL", &[]),
-            ("page.waitForLoadState", &[]),
-            ("page.title", &[]),
-            ("page.content", &[]),
-            ("page.setContent", &[MainWorld]),
-            ("page.close", &[]),
-            ("page.opener", &[]),
-            ("page.frames", &[]),
-            ("page.evaluate", &[MainWorld]),
-            ("locator.evaluate", &[MainWorld]),
-            ("locator.evaluateAll", &[MainWorld]),
-            ("page.waitForFunction", &[MainWorld]),
-            ("page.screenshot", &[Capture]),
-            ("page.pdf", &[Capture]),
-            ("context.pages", &[]),
-            ("context.newPage", &[]),
-            ("events.listen", &[]),
-            ("events.next", &[]),
-            ("events.wait", &[]),
-            ("dialog.accept", &[]),
-            ("dialog.dismiss", &[]),
-            ("download.path", &[]),
-            ("download.saveAs", &[]),
+        const AUDITED: [(&str, &[Capability], bool); 75] = [
+            ("locator.click", &[], true),
+            ("locator.dblclick", &[], true),
+            ("locator.hover", &[], true),
+            ("locator.check", &[], true),
+            ("locator.uncheck", &[], true),
+            ("locator.dragTo", &[], true),
+            ("locator.fill", &[], true),
+            ("locator.press", &[], true),
+            ("locator.pressSequentially", &[], true),
+            ("locator.selectOption", &[], true),
+            ("locator.selectText", &[], true),
+            ("locator.focus", &[], true),
+            ("locator.blur", &[], true),
+            ("locator.setInputFiles", &[HostFiles], false),
+            ("locator.dispatchEvent", &[], true),
+            ("locator.scrollIntoViewIfNeeded", &[], true),
+            ("locator.textContent", &[], true),
+            ("locator.innerText", &[], true),
+            ("locator.innerHTML", &[], true),
+            ("locator.getAttribute", &[], true),
+            ("locator.inputValue", &[], true),
+            ("locator.isEnabled", &[], true),
+            ("locator.isDisabled", &[], true),
+            ("locator.isEditable", &[], true),
+            ("locator.isChecked", &[], true),
+            ("locator.isVisible", &[], true),
+            ("locator.isHidden", &[], true),
+            ("locator.count", &[], true),
+            ("locator.allTextContents", &[], true),
+            ("locator.allInnerTexts", &[], true),
+            ("locator.boundingBox", &[], true),
+            ("locator.waitFor", &[], true),
+            ("locator.elementHandle", &[], true),
+            ("locator.elementHandles", &[], true),
+            ("page.ariaSnapshot", &[], true),
+            ("locator.ariaSnapshot", &[], true),
+            ("expect.locator", &[], true),
+            ("expect.page", &[], true),
+            ("keyboard.down", &[], true),
+            ("keyboard.up", &[], true),
+            ("keyboard.press", &[], true),
+            ("keyboard.type", &[], true),
+            ("keyboard.insertText", &[], true),
+            ("mouse.move", &[], true),
+            ("mouse.down", &[], true),
+            ("mouse.up", &[], true),
+            ("mouse.click", &[], true),
+            ("mouse.wheel", &[], true),
+            ("page.goto", &[], true),
+            ("page.reload", &[], true),
+            ("page.goBack", &[], true),
+            ("page.goForward", &[], true),
+            ("page.waitForURL", &[], true),
+            ("page.waitForLoadState", &[], true),
+            ("page.title", &[], true),
+            ("page.content", &[], true),
+            ("page.setContent", &[MainWorld], false),
+            ("page.close", &[], true),
+            ("page.opener", &[], true),
+            ("page.frames", &[], true),
+            ("page.evaluate", &[MainWorld], true),
+            ("locator.evaluate", &[MainWorld], true),
+            ("locator.evaluateAll", &[MainWorld], true),
+            ("page.waitForFunction", &[MainWorld], true),
+            ("page.screenshot", &[Capture], true),
+            ("page.pdf", &[Capture], true),
+            ("context.pages", &[], true),
+            ("context.newPage", &[], true),
+            ("events.listen", &[], true),
+            ("events.next", &[], true),
+            ("events.wait", &[], true),
+            ("dialog.accept", &[], true),
+            ("dialog.dismiss", &[], true),
+            ("download.path", &[], true),
+            ("download.saveAs", &[], true),
         ];
-        let mut audited: BTreeMap<&str, &[Capability]> = BTreeMap::from(AUDITED);
+        let mut audited: BTreeMap<&str, (&[Capability], bool)> = AUDITED
+            .into_iter()
+            .map(|(name, capabilities, gated)| (name, (capabilities, gated)))
+            .collect();
         let mut differ = Vec::new();
         for spec in Op::all().map(Op::spec) {
             let row = audited.remove(spec.name);
-            if row != Some(spec.capabilities) {
-                differ.push((spec.name, spec.capabilities, row));
+            let declared = (spec.capabilities, spec.gated());
+            if row != Some(declared) {
+                differ.push((spec.name, declared, row));
             }
         }
         assert!(
             differ.is_empty(),
-            "each op declares exactly its audited row (op, declared, audited): {differ:?}"
+            "each op declares exactly its audited row, (capabilities, gated): \
+             (op, declared, audited): {differ:?}"
         );
         assert!(
             audited.is_empty(),
