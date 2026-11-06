@@ -35,10 +35,11 @@ use std::time::Duration;
 
 use neo_runtime_spec::serve::{
     BrowserContextCall, FrameAriaSnapshotParams, FrameCall, FrameCheckParams, FrameCheckResult,
-    FrameClickParams, FrameFillParams, FrameFillResult, FrameGotoParams, FrameInputValueParams,
-    FrameInputValueResult, FramePressParams, FramePressResult, FrameSelectOptionParams,
-    FrameSelectOptionResult, FrameTextContentParams, FrameTitleParams, FrameUncheckParams,
-    FrameUncheckResult, Metadata, PageCall,
+    FrameClickParams, FrameEvalOnSelectorAllParams, FrameFillParams, FrameFillResult,
+    FrameGotoParams, FrameInputValueParams, FrameInputValueResult, FramePressParams,
+    FramePressResult, FrameQueryCountParams, FrameSelectOptionParams, FrameSelectOptionResult,
+    FrameTextContentParams, FrameTitleParams, FrameUncheckParams, FrameUncheckResult, Metadata,
+    PageCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -53,6 +54,7 @@ use crate::click::{self, ClickOptions};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
 use crate::keyboard::KeyboardTab;
+use crate::lists;
 use crate::navigate::{self, GotoOptions};
 use crate::page::PageSession;
 use crate::press::{self, PressOptions};
@@ -88,6 +90,10 @@ const FRAMES_UNSUPPORTED: &str = "Neo does not support frames yet: the selector 
 
 /// Neo has no `ElementHandle` objects to pass as `selectOption` values.
 const ELEMENTS_UNSUPPORTED: &str = "Neo does not support ElementHandle values in selectOption yet";
+
+/// Arbitrary page JS remains outside Neo's typed glue boundary.
+const EVAL_ON_SELECTOR_ALL_UNSERVED: &str =
+    "Neo serves Frame.evalOnSelectorAll only for locator.allTextContents";
 
 // `serve` replies to a click with `{id}` and no `result`, which is right only while
 // Playwright's spec declares no `returns` for `Frame.click`. A spec that gives it a result stops
@@ -203,6 +209,8 @@ enum Route {
     FrameGoto(GotoOptions),
     FrameTitle,
     FrameTextContent(ReadOptions),
+    FrameQueryCount(String),
+    FrameAllTextContents(String),
     FrameAriaSnapshot(SnapshotOptions),
     FrameFill(FillOptions),
     FramePress(PressOptions),
@@ -394,6 +402,22 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::TextContent(params) => {
             Ok(Route::FrameTextContent(ReadOptions::from_params(params)))
         }
+        FrameCall::QueryCount(params) if enters_frame(&params.selector) => {
+            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
+        }
+        FrameCall::QueryCount(params) => Ok(Route::FrameQueryCount(params.selector)),
+        FrameCall::EvalOnSelectorAll(params) if enters_frame(&params.selector) => {
+            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
+        }
+        FrameCall::EvalOnSelectorAll(params)
+            if params.expression == lists::ALL_TEXT_CONTENTS_EXPRESSION
+                && params.is_function == Some(true) =>
+        {
+            Ok(Route::FrameAllTextContents(params.selector))
+        }
+        FrameCall::EvalOnSelectorAll(_) => {
+            Err(PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED))
+        }
         FrameCall::AriaSnapshot(params) => {
             SnapshotOptions::from_params(params).map(Route::FrameAriaSnapshot)
         }
@@ -506,6 +530,14 @@ async fn serve(
         Route::FrameTextContent(options) => reads::text_content(&page, &options, &progress)
             .await
             .and_then(|result| encode_result::<FrameTextContentParams>(&result)),
+        Route::FrameQueryCount(selector) => lists::query_count(&page, &selector, &progress)
+            .await
+            .and_then(|result| encode_result::<FrameQueryCountParams>(&result)),
+        Route::FrameAllTextContents(selector) => {
+            lists::all_text_contents(&page, &selector, &progress)
+                .await
+                .and_then(|result| encode_result::<FrameEvalOnSelectorAllParams>(&result))
+        }
         Route::FrameAriaSnapshot(options) => reads::aria_snapshot(&page, &options, &progress)
             .await
             .and_then(|result| encode_result::<FrameAriaSnapshotParams>(&result)),
@@ -582,6 +614,8 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         Route::FrameGoto(_)
         | Route::FrameTitle
         | Route::FrameTextContent(_)
+        | Route::FrameQueryCount(_)
+        | Route::FrameAllTextContents(_)
         | Route::FrameAriaSnapshot(_) => Err(PlaywrightError::error(
             "neo-runtime: navigation and page reads are served by `serve`",
         )
@@ -1075,6 +1109,8 @@ mod tests {
                 Route::FrameGoto(_)
                 | Route::FrameTitle
                 | Route::FrameTextContent(_)
+                | Route::FrameQueryCount(_)
+                | Route::FrameAllTextContents(_)
                 | Route::FrameAriaSnapshot(_) => panic!("a form is not a navigation or a read"),
             }
         }
@@ -1535,5 +1571,101 @@ mod tests {
             "{} is stale; rerun with NEO_RUNTIME_WRITE_FIXTURES=1. Expected:\n{fixture}",
             path.display()
         );
+    }
+
+    fn all_text_contents_params(selector: &str) -> Value {
+        json!({
+            "selector": selector,
+            "expression": lists::ALL_TEXT_CONTENTS_EXPRESSION,
+            "isFunction": true,
+            "arg": {"value": {"v": "undefined"}, "handles": []},
+        })
+    }
+
+    #[test]
+    fn tests_that_collection_commands_decode_and_route_their_selectors() {
+        let Ok(ObjectCall::Frame(Route::FrameQueryCount(selector))) =
+            route_frame("queryCount", json!({"selector": ".item"})).route
+        else {
+            panic!("queryCount routes");
+        };
+        assert_eq!(selector, ".item");
+        let Ok(ObjectCall::Frame(Route::FrameAllTextContents(selector))) =
+            route_frame("evalOnSelectorAll", all_text_contents_params(".item")).route
+        else {
+            panic!("allTextContents routes");
+        };
+        assert_eq!(selector, ".item");
+    }
+
+    #[test]
+    fn tests_that_collection_eval_refuses_other_expressions_and_non_functions() {
+        let mut other_expression = all_text_contents_params(".item");
+        other_expression["expression"] = json!("ee => ee.length");
+        let mut not_a_function = all_text_contents_params(".item");
+        not_a_function["isFunction"] = json!(false);
+        let mut absent_function = all_text_contents_params(".item");
+        absent_function
+            .as_object_mut()
+            .expect("params")
+            .remove("isFunction");
+        for params in [other_expression, not_a_function, absent_function] {
+            assert_eq!(
+                error_of(route_frame("evalOnSelectorAll", params)),
+                PlaywrightError::error(EVAL_ON_SELECTOR_ALL_UNSERVED)
+            );
+        }
+    }
+
+    #[test]
+    fn tests_that_collection_commands_refuse_frames_before_the_eval_function() {
+        let selector = "iframe >> internal:control=enter-frame >> .item";
+        assert_eq!(
+            error_of(route_frame("queryCount", json!({"selector": selector}))),
+            PlaywrightError::error(FRAMES_UNSUPPORTED)
+        );
+        let mut params = all_text_contents_params(selector);
+        params["expression"] = json!("ee => ee.length");
+        assert_eq!(
+            error_of(route_frame("evalOnSelectorAll", params)),
+            PlaywrightError::error(FRAMES_UNSUPPORTED)
+        );
+    }
+
+    #[test]
+    fn tests_that_serialized_arguments_accept_no_handles() {
+        assert!(
+            FrameCall::decode("evalOnSelectorAll", Some(all_text_contents_params(".item"))).is_ok()
+        );
+        for handle in [json!({"guid": "handle@1"}), json!("handle@1"), json!(null)] {
+            let mut params = all_text_contents_params(".item");
+            params["arg"]["handles"] = json!([handle]);
+            assert!(FrameCall::decode("evalOnSelectorAll", Some(params)).is_err());
+        }
+    }
+
+    #[test]
+    fn tests_that_collection_replies_have_playwrights_generated_shapes() {
+        use neo_runtime_spec::serve::{FrameEvalOnSelectorAllResult, FrameQueryCountResult};
+
+        for (result, expected) in [
+            (
+                encode_result::<FrameQueryCountParams>(&FrameQueryCountResult { value: 3 })
+                    .expect("count encodes"),
+                json!({"id": 7, "result": {"value": 3}}),
+            ),
+            (
+                encode_result::<FrameEvalOnSelectorAllParams>(&FrameEvalOnSelectorAllResult {
+                    value: lists::serialize_strings(vec!["x".to_string()]),
+                })
+                .expect("texts encode"),
+                json!({"id": 7, "result": {"value": {"a": [{"s": "x"}], "id": 1}}}),
+            ),
+        ] {
+            let reply: Value =
+                serde_json::from_str(&encode_reply(&json!(7), Ok(result.as_ref()), None))
+                    .expect("reply");
+            assert_eq!(reply, expected);
+        }
     }
 }

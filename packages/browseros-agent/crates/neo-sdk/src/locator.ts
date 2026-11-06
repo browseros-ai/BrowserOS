@@ -15,6 +15,7 @@
  *   `toString` and `description` (they need Playwright's ~2,500-line locator generators), and
  *   actions and reads Neo does not serve. Explicit names preserve the outer `clear` and
  *   `setChecked` API names through their delegated calls (`_wrapApiCall` in Playwright).
+ * - `allTextContents` reads in Neo's isolated world through its private Frame helper.
  *
  * Frame identity is load-bearing: `has`, `hasNot`, `and`, `or` and `locator(Locator)` throw
  * unless both locators hold the same `Frame` object, which is why a page builds its main frame
@@ -112,6 +113,17 @@ export class Locator {
       'locator.textContent',
       this._selector,
       { strict: true, ...options },
+    )
+  }
+
+  async count(): Promise<number> {
+    return await this._frame._queryCount('locator.count', this._selector)
+  }
+
+  async allTextContents(): Promise<string[]> {
+    return await this._frame._allTextContents(
+      'locator.allTextContents',
+      this._selector,
     )
   }
 

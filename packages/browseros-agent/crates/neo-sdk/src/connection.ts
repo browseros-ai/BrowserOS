@@ -54,6 +54,8 @@ export type ApiName =
   | 'page.textContent'
   | 'frame.textContent'
   | 'locator.textContent'
+  | 'locator.count'
+  | 'locator.allTextContents'
   | 'page.ariaSnapshot'
   | 'frame.fill'
   | 'frame.press'

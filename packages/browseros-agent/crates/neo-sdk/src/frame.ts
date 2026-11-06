@@ -12,6 +12,7 @@
  * What differs from Playwright: `goto` resolves `null` for every navigation, because Neo creates
  * no `Response` objects yet (Playwright returns `null` only for navigations without one, such as
  * `about:blank` or a same-document change).
+ * `allTextContents` reads through fixed glue in Neo's isolated world rather than the main world.
  */
 
 import type {
@@ -23,6 +24,7 @@ import type {
   FrameGotoParams,
   FrameInputValueParams,
   FramePressParams,
+  FrameQueryCountParams,
   FrameSelectOptionParams,
   FrameTextContentParams,
   FrameTextContentResult,
@@ -51,6 +53,7 @@ import {
   FRAME_GOTO_KEYS,
   FRAME_INPUT_VALUE_KEYS,
   FRAME_PRESS_KEYS,
+  FRAME_QUERY_COUNT_KEYS,
   FRAME_SELECT_OPTION_KEYS,
   FRAME_TEXT_CONTENT_KEYS,
   FRAME_UNCHECK_KEYS,
@@ -211,6 +214,65 @@ export class Frame {
       this._page._timeoutSettings.timeout(options),
     )) as FrameTextContentResult
     return result.value === undefined ? null : result.value
+  }
+
+  /** Playwright's `Frame._queryCount`: a non-strict snapshot with `kNoTimeout`. */
+  async _queryCount(apiName: ApiName, selector: string): Promise<number> {
+    const result = await this._connection.send(
+      apiName,
+      this._guid,
+      'queryCount',
+      pickParams(FRAME_QUERY_COUNT_KEYS, { selector }) as FrameQueryCountParams,
+      0,
+    )
+    if (result === undefined)
+      throw new Error(
+        'neo-sdk: Frame.queryCount contract error: missing result',
+      )
+    return result.value
+  }
+
+  /** `client/locator.ts` at 26137face: its one `$$eval` function, on Playwright's wire. */
+  async _allTextContents(
+    apiName: ApiName,
+    selector: string,
+  ): Promise<string[]> {
+    const result = await this._connection.send(
+      apiName,
+      this._guid,
+      'evalOnSelectorAll',
+      {
+        selector,
+        expression: "ee => ee.map(e => e.textContent || '')",
+        isFunction: true,
+        arg: { value: { v: 'undefined' }, handles: [] },
+      },
+      0,
+    )
+    // `protocol/serializers.ts` assigns id 1 to the outer array and encodes each string as {s}.
+    const value = result?.value
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      Object.keys(value).length !== 2 ||
+      value.id !== 1 ||
+      !Array.isArray(value.a)
+    )
+      throw new Error(
+        'neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string array',
+      )
+    return value.a.map((item) => {
+      if (
+        !item ||
+        typeof item !== 'object' ||
+        Object.keys(item).length !== 1 ||
+        typeof item.s !== 'string'
+      )
+        throw new Error(
+          'neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string',
+        )
+      return item.s
+    })
   }
 
   /** Sends `Frame.ariaSnapshot` for the whole frame: no selector, as `page.ariaSnapshot`. */
