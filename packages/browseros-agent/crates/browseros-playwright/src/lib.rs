@@ -15,6 +15,10 @@
 //! The host sees one facade and one op table. Each Playwright call the prelude makes is one
 //! [`Op`] (`locator.click`, `page.ariaSnapshot`, ...); the host registers every op from
 //! [`Op::all`] and hands each call to [`Playwright::invoke`] with an [`OpEnv`] for that call.
+//! Each op's [`OpSpec`] declares the [`Capability`]s it reaches beyond its page's sealed world
+//! (the page's main world, its pixels, Neo's screen, Neo's disk), and the host holds and polices
+//! ops by those declarations, never by op name. Each capability's gateway in the crate refuses
+//! an op whose spec does not declare it.
 //!
 //! ```text
 //!  agent JS ─ prelude ─ __neo.invoke(op, json) ─ host dispatcher (policy, trace, delivery)
@@ -59,7 +63,7 @@ mod world;
 
 pub use op::Op;
 pub use op_env::{OpEnv, Refusal};
-pub use op_spec::{OpLifetime, OpSpec, OpTarget};
+pub use op_spec::{Capability, OpLifetime, OpSpec, OpTarget};
 pub use playwright::Playwright;
 pub use playwright_error::{Answer, ErrorCode, PlaywrightError, TimedOut};
 pub use playwright_hooks::{PlaywrightHooks, TypedBy};

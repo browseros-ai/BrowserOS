@@ -1,30 +1,81 @@
 //! `page.evaluate` and `page.waitForFunction`: the agent's scripts in the page's main world,
-//! between the evaluate guard's two sweeps. Both return the masked value itself, as the
-//! prelude's `wire.ts` reads it.
+//! through the evaluate guard, which sweeps before and after every send. Both answer in
+//! Playwright's serialized format, masked, which the prelude's `wire.ts` reads back with the
+//! vendored `parseEvaluationResultValue`.
 
 use std::time::Duration;
 
 use browseros_core::FrameId;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::op_scope::OpScope;
-use crate::page::evaluate_guard::{EvaluateGuard, Ran, Script, present};
+use crate::page::evaluate_guard::{
+    ArgText, DOCUMENT_REPLACED, EvaluateGuard, MainWorldCall, Outcome, Script, Subject,
+};
 use crate::page::world_call::main_frame_only;
-use crate::target::PageRef;
+use crate::target::{ElementTarget, PageRef};
 use crate::{ErrorCode, Playwright, PlaywrightError};
-
-/// What upstream says when the document went away under a running script.
-const DOCUMENT_REPLACED: &str =
-    "Execution context was destroyed, most likely because of a navigation";
 
 /// How often `waitForFunction` polls for `polling: 'raf'`, its default. Rust polls instead of
 /// the page's animation frames, which never fire in a background tab (measured); 100 ms is
 /// upstream's retry step.
 const RAF_POLL: Duration = Duration::from_millis(100);
 
-/// `page.evaluate(pageFunction, arg)`: `{ page, frame?, expression, isFunction, arg? }`,
-/// upstream's `evaluateExpression` parameters with the argument as JSON.
+/// The script as the prelude sends it (`wire.ts` `PageScript`), decoded once.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) enum ScriptInput {
+    /// upstream's client and server steps passed: the script to run.
+    Run(RunInput),
+    /// The message of the server-side check upstream fails first, raised at its point.
+    Refused(String),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct RunInput {
+    /// `normalizeEvaluationExpression(String(pageFunction), isFunction)`.
+    expression: String,
+    /// `typeof pageFunction === 'function'`.
+    is_function: bool,
+    /// Playwright's in-page serialized argument, as JSON text.
+    arg: String,
+    /// The element handles the argument's `{h: i}` names, in order; left out when none.
+    #[serde(default)]
+    handles: Vec<HandleArg>,
+}
+
+/// A handle argument: an element brand, with its `$neo` tag.
+#[derive(Deserialize)]
+#[serde(tag = "$neo", rename_all = "lowercase")]
+enum HandleArg {
+    Element(ElementTarget),
+}
+
+impl From<ScriptInput> for Script {
+    fn from(input: ScriptInput) -> Self {
+        match input {
+            ScriptInput::Run(RunInput {
+                expression,
+                is_function,
+                arg,
+                handles,
+            }) => Self::Run {
+                expression,
+                is_function,
+                arg: ArgText(arg),
+                handles: handles
+                    .into_iter()
+                    .map(|HandleArg::Element(handle)| handle)
+                    .collect(),
+            },
+            ScriptInput::Refused(message) => Self::Refused(message),
+        }
+    }
+}
+
+/// `page.evaluate(pageFunction, arg)`: `{ page, frame?, script }`.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct EvaluateInput {
@@ -32,14 +83,7 @@ pub(crate) struct EvaluateInput {
     /// A child frame, for `frame.evaluate`; absent is the main frame.
     #[serde(default)]
     frame: Option<FrameId>,
-    /// `String(pageFunction)`.
-    expression: String,
-    /// `typeof pageFunction === 'function'`; absent detects it in the page, as upstream does.
-    #[serde(default)]
-    is_function: Option<bool>,
-    /// The argument as JSON; absent is `undefined`, and `null` stays `null`.
-    #[serde(default, deserialize_with = "present")]
-    arg: Option<Value>,
+    script: ScriptInput,
 }
 
 /// `page.waitForFunction(pageFunction, arg, { polling })`: the evaluate input and `polling`.
@@ -49,29 +93,11 @@ pub(crate) struct WaitForFunctionInput {
     page: PageRef,
     #[serde(default)]
     frame: Option<FrameId>,
-    expression: String,
+    script: ScriptInput,
+    /// An interval in milliseconds; absent is `'raf'`. The prelude refuses any other string,
+    /// as upstream's client does.
     #[serde(default)]
-    is_function: Option<bool>,
-    #[serde(default, deserialize_with = "present")]
-    arg: Option<Value>,
-    /// `'raf'` or an interval in milliseconds; absent is `'raf'`.
-    #[serde(default)]
-    polling: Option<Polling>,
-}
-
-/// `waitForFunction`'s `polling` option.
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(untagged)]
-enum Polling {
-    Raf(RafPolling),
-    Interval(f64),
-}
-
-/// The string `"raf"`.
-#[derive(Clone, Copy, Debug, Deserialize)]
-enum RafPolling {
-    #[serde(rename = "raf")]
-    Raf,
+    polling: Option<f64>,
 }
 
 /// Runs `page.evaluate`. It has no Playwright timeout, as upstream; the run's deadline still
@@ -82,26 +108,30 @@ pub(crate) async fn evaluate(
     input: EvaluateInput,
 ) -> Result<Value, PlaywrightError> {
     main_frame_only(scope, input.frame.as_ref())?;
-    let script = Script::new(input.expression, input.is_function, input.arg);
-    let mut guard =
-        EvaluateGuard::sweep_before(pw, scope, &input.page.checked(pw.browser(), scope).await?)
-            .await?;
+    let call = MainWorldCall::once(input.script.into(), Subject::Page);
+    let mut guard = EvaluateGuard::open(pw, scope, &input.page, call).await?;
     // A document that was gone before the script started ran nothing, so the script is tried
-    // once more in the new one.
+    // once more in the new one, as upstream waits for the new main context.
     for _attempt in 0..2 {
-        match guard.run(scope, &script).await? {
-            Ran::Finished(unmasked) => return guard.finish(scope, unmasked).await,
-            Ran::NotRun => {}
-            Ran::Destroyed => break,
+        let (swept, outcome) = guard.run(scope).await?.sweep(scope).await?;
+        guard = swept;
+        match outcome {
+            Outcome::Answered(answer) => return Ok(guard.finish(scope, answer)?.value),
+            Outcome::NotRun => {}
+            Outcome::Destroyed => break,
+            Outcome::Falsy => {
+                return Err(scope.fail(ErrorCode::Internal, "a script run once answered a poll"));
+            }
         }
     }
     Err(scope.fail(ErrorCode::PageError, DOCUMENT_REPLACED))
 }
 
-/// Runs `page.waitForFunction`: polls from Rust until the script returns a truthy value or
-/// throws. Each poll re-runs the host's policies right before its script (inside
-/// `EvaluateGuard::run`), because each runs script in the page.
-/// Only the last poll's result leaves the page, through the guard's second sweep.
+/// Runs `page.waitForFunction`: polls from Rust until the predicate is truthy or throws. Every
+/// poll is a send of its own, bracketed by sweeps, because the guard's `run` takes a swept
+/// guard; a navigation mid-wait builds the predicate again in the new document, as upstream
+/// retries its wait. The answer is the value in Playwright's format and upstream's preview of
+/// it, which the prelude's wait handle holds.
 pub(crate) async fn wait_for_function(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -109,46 +139,41 @@ pub(crate) async fn wait_for_function(
 ) -> Result<Value, PlaywrightError> {
     main_frame_only(scope, input.frame.as_ref())?;
     let interval = poll_interval(scope, input.polling)?;
-    let script = Script::new(input.expression, input.is_function, input.arg);
-    let mut guard =
-        EvaluateGuard::sweep_before(pw, scope, &input.page.checked(pw.browser(), scope).await?)
-            .await?;
+    let call = MainWorldCall::poll(input.script.into());
+    let mut guard = EvaluateGuard::open(pw, scope, &input.page, call).await?;
     let polls = async {
         loop {
-            // A falsy result polls again, and so does a document a navigation replaced:
-            // upstream retries the wait in the new document.
-            if let Ran::Finished(unmasked) = guard.run(scope, &script).await?
-                && unmasked.ends_wait()
-            {
-                return Ok(unmasked);
+            let (swept, outcome) = guard.run(scope).await?.sweep(scope).await?;
+            guard = swept;
+            if let Outcome::Answered(answer) = outcome {
+                return Ok((guard, answer));
             }
             if scope.sleep(interval).await.is_err() {
                 return Err(scope.timed_out(ErrorCode::WaitTimeout));
             }
         }
     };
-    let last = match scope.within(polls).await {
+    let (guard, answer) = match scope.within(polls).await {
         Ok(polled) => polled?,
         Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
     };
-    guard.finish(scope, last).await
+    let finished = guard.finish(scope, answer)?;
+    Ok(json!({ "value": finished.value, "preview": finished.preview }))
 }
 
-/// The time between polls. Upstream refuses an interval that is not positive.
-fn poll_interval(
-    scope: &OpScope<'_>,
-    polling: Option<Polling>,
-) -> Result<Duration, PlaywrightError> {
-    match polling {
-        None | Some(Polling::Raf(RafPolling::Raf)) => Ok(RAF_POLL),
-        Some(Polling::Interval(millis)) => (millis > 0.0)
-            .then(|| Duration::try_from_secs_f64(millis / 1000.0).ok())
-            .flatten()
-            .ok_or_else(|| {
-                scope.fail(
-                    ErrorCode::InvalidInput,
-                    &format!("Cannot poll with non-positive interval: {millis}"),
-                )
-            }),
-    }
+/// The time between polls. Upstream's server refuses an interval that is not positive, before
+/// it reads the script.
+fn poll_interval(scope: &OpScope<'_>, polling: Option<f64>) -> Result<Duration, PlaywrightError> {
+    let Some(millis) = polling else {
+        return Ok(RAF_POLL);
+    };
+    (millis > 0.0)
+        .then(|| Duration::try_from_secs_f64(millis / 1000.0).ok())
+        .flatten()
+        .ok_or_else(|| {
+            scope.fail(
+                ErrorCode::InvalidInput,
+                &format!("Cannot poll with non-positive interval: {millis}"),
+            )
+        })
 }

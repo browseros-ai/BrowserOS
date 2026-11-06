@@ -1,8 +1,12 @@
 /*
- * Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/isomorphic helpers, for Neo's QuickJS prelude.
+ * Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/isomorphic helpers and packages/protocol value
+ * serializers, for Neo's QuickJS prelude.
  * Playwright: Copyright (c) Microsoft Corporation. Licensed under the Apache License, Version 2.0.
- * Built unmodified from crates/browseros-playwright/third_party/playwright, with
+ * Built from crates/browseros-playwright/third_party/playwright, with
  * packages/browseros-playwright-js/src/prelude, by packages/browseros-playwright-js/scripts/build.ts.
+ * Changed by Neo: isomorphic/utilityScriptSerializers.ts and protocol/src/serializers.ts import
+ * Neo's stand-ins for URL, Buffer, atob and btoa, which QuickJS lacks; every other upstream
+ * module is built unmodified.
  * Do not edit. Notices: crates/browseros-playwright/THIRD_PARTY_NOTICES.md.
  */
 (() => {
@@ -66,6 +70,15 @@
   }
   function clientError(api, message) {
     return withFields(new PlaywrightError(`${api}: ${message}`), {
+      code: "invalid_input",
+      owner: "script",
+      delivery: "not_sent",
+      retryable: false,
+      timeout: false
+    });
+  }
+  function plainError(message) {
+    return withFields(new PlaywrightError(message), {
       code: "invalid_input",
       owner: "script",
       delivery: "not_sent",
@@ -343,29 +356,8 @@
   function markHandle(object) {
     handles.add(object);
   }
-  function findHandle(value, seen) {
-    if (typeof value !== "object" || value === null || seen.has(value))
-      return false;
-    if (handles.has(value))
-      return true;
-    seen.add(value);
-    for (const item of Object.values(value))
-      if (findHandle(item, seen))
-        return true;
-    return false;
-  }
-  function evaluation(api, pageFunction, arg) {
-    if (typeof pageFunction !== "function" && typeof pageFunction !== "string")
-      throw clientError(api, "expected a function or an expression string");
-    if (findHandle(arg, new Set))
-      throw unsupportedError(api, "Neo passes evaluate arguments as JSON, without handles; run the function on the element itself with locator.evaluate(fn) or elementHandle.evaluate(fn)");
-    const call = {
-      expression: String(pageFunction),
-      isFunction: typeof pageFunction === "function"
-    };
-    if (arg !== undefined)
-      call.arg = arg;
-    return call;
+  function isHandle(value) {
+    return typeof value === "object" && value !== null && handles.has(value);
   }
   function inputFilePaths(api, files) {
     const list = Array.isArray(files) ? files : [files];
@@ -3388,6 +3380,597 @@
     tokens.push("$");
     return tokens.join("");
   }
+  // packages/browseros-playwright-js/src/prelude/url.ts
+  var DEFAULT_PORTS = {
+    "http:": "80",
+    "https:": "443",
+    "ws:": "80",
+    "wss:": "443",
+    "ftp:": "21"
+  };
+  var SPECIAL = new Set(["http:", "https:", "ws:", "wss:", "ftp:", "file:"]);
+  var ABSOLUTE = /^([a-zA-Z][a-zA-Z0-9+.-]*:)(?:\/\/(?:([^@/?#]*)@)?(\[[^\]]*\]|[^:/?#]*)(?::(\d*))?)?([^?#]*)(\?[^#]*)?(#.*)?$/;
+  function decode(text) {
+    try {
+      return decodeURIComponent(text.replace(/\+/g, " "));
+    } catch {
+      return text;
+    }
+  }
+  function urlLike(href) {
+    const match = ABSOLUTE.exec(href);
+    if (!match)
+      return null;
+    const [
+      ,
+      scheme = "",
+      userinfo = "",
+      host = "",
+      rawPort = "",
+      path = "",
+      query = "",
+      fragment = ""
+    ] = match;
+    const protocol = scheme.toLowerCase();
+    const special = SPECIAL.has(protocol);
+    const hostname = special ? host.toLowerCase() : host;
+    const port = rawPort === DEFAULT_PORTS[protocol] ? "" : rawPort;
+    const pathname = path === "" && special ? "/" : path;
+    const [username = "", password = ""] = userinfo.split(":");
+    const authority = href.slice(protocol.length).startsWith("//");
+    const hostPort = port ? `${hostname}:${port}` : hostname;
+    const credentials = userinfo ? `${userinfo}@` : "";
+    const normalized = authority ? `${protocol}//${credentials}${hostPort}${pathname}${query}${fragment}` : `${protocol}${pathname}${query}${fragment}`;
+    const search = query === "?" ? "" : query;
+    const pairs = search.slice(1).split("&").filter((pair) => pair !== "").map((pair) => {
+      const equals = pair.indexOf("=");
+      return equals === -1 ? [decode(pair), ""] : [decode(pair.slice(0, equals)), decode(pair.slice(equals + 1))];
+    });
+    return {
+      href: normalized,
+      protocol,
+      username,
+      password,
+      host: hostPort,
+      hostname,
+      port,
+      origin: special && protocol !== "file:" ? `${protocol}//${hostPort}` : "null",
+      pathname,
+      search,
+      hash: fragment === "#" ? "" : fragment,
+      searchParams: {
+        get: (name) => pairs.find(([key]) => key === name)?.[1] ?? null,
+        has: (name) => pairs.some(([key]) => key === name),
+        getAll: (name) => pairs.filter(([key]) => key === name).map(([, value]) => value ?? "")
+      },
+      toString: () => normalized
+    };
+  }
+  function normalizeUrl(text) {
+    return urlLike(text)?.href ?? text;
+  }
+  function globMatches(glob, url) {
+    if (glob === "")
+      return true;
+    return new RegExp(globToRegexPattern(glob)).test(url);
+  }
+
+  // packages/browseros-playwright-js/src/prelude/vendored-globals.ts
+  var BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+  class URL2 {
+    href;
+    constructor(href) {
+      this.href = String(href);
+      Object.assign(this, urlLike(this.href));
+    }
+    toString() {
+      return this.href;
+    }
+    toJSON() {
+      return this.href;
+    }
+  }
+  var Buffer = {
+    from: (buffer, byteOffset, length) => new Uint8Array(buffer, byteOffset, length)
+  };
+  function btoa(binary) {
+    let out = "";
+    for (let index = 0;index < binary.length; index += 3) {
+      const [a = 0, b = 0, c = 0] = [0, 1, 2].map((offset) => binary.charCodeAt(index + offset) || 0);
+      const bits = a << 16 | b << 8 | c;
+      const left = binary.length - index;
+      out += BASE64.charAt(bits >> 18 & 63) + BASE64.charAt(bits >> 12 & 63);
+      out += left > 1 ? BASE64.charAt(bits >> 6 & 63) : "=";
+      out += left > 2 ? BASE64.charAt(bits & 63) : "=";
+    }
+    return out;
+  }
+  function atob(base64) {
+    const digits = String(base64).replace(/[^A-Za-z0-9+/]/g, "");
+    let out = "";
+    let bits = 0;
+    let held = 0;
+    for (const digit of digits) {
+      bits = (bits << 6 | BASE64.indexOf(digit)) & 16777215;
+      held += 6;
+      if (held >= 8) {
+        held -= 8;
+        out += String.fromCharCode(bits >> held & 255);
+      }
+    }
+    return out;
+  }
+
+  // crates/browseros-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers.ts
+  var kFunctionBindingPrefix = "__pw_fn_";
+  var kBindingsControllerProperty = "__playwright__binding__controller__";
+  function isRegExp2(obj) {
+    try {
+      return obj instanceof RegExp || Object.prototype.toString.call(obj) === "[object RegExp]";
+    } catch (error) {
+      return false;
+    }
+  }
+  function isDate(obj) {
+    try {
+      return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";
+    } catch (error) {
+      return false;
+    }
+  }
+  function isURL(obj) {
+    try {
+      return obj instanceof URL2 || Object.prototype.toString.call(obj) === "[object URL]";
+    } catch (error) {
+      return false;
+    }
+  }
+  function isError(obj) {
+    try {
+      return obj instanceof Error || obj && Object.getPrototypeOf(obj)?.name === "Error";
+    } catch (error) {
+      return false;
+    }
+  }
+  function isTypedArray(obj, constructor) {
+    try {
+      return obj instanceof constructor || Object.prototype.toString.call(obj) === `[object ${constructor.name}]`;
+    } catch (error) {
+      return false;
+    }
+  }
+  function isArrayBuffer(obj) {
+    try {
+      return obj instanceof ArrayBuffer || Object.prototype.toString.call(obj) === "[object ArrayBuffer]";
+    } catch (error) {
+      return false;
+    }
+  }
+  function isMap(obj) {
+    try {
+      return obj instanceof Map || Object.prototype.toString.call(obj) === "[object Map]";
+    } catch (error) {
+      return false;
+    }
+  }
+  function isSet(obj) {
+    try {
+      return obj instanceof Set || Object.prototype.toString.call(obj) === "[object Set]";
+    } catch (error) {
+      return false;
+    }
+  }
+  var typedArrayConstructors = {
+    i8: Int8Array,
+    ui8: Uint8Array,
+    ui8c: Uint8ClampedArray,
+    i16: Int16Array,
+    ui16: Uint16Array,
+    i32: Int32Array,
+    ui32: Uint32Array,
+    f32: Float32Array,
+    f64: Float64Array,
+    bi64: BigInt64Array,
+    bui64: BigUint64Array
+  };
+  function typedArrayToBase64(array) {
+    if ("toBase64" in array)
+      return array.toBase64();
+    const binary = Array.from(new Uint8Array(array.buffer, array.byteOffset, array.byteLength)).map((b) => String.fromCharCode(b)).join("");
+    return btoa(binary);
+  }
+  function base64ToTypedArray(base64, TypedArrayConstructor) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0;i < binary.length; i++)
+      bytes[i] = binary.charCodeAt(i);
+    return new TypedArrayConstructor(bytes.buffer);
+  }
+  function parseEvaluationResultValue(value, handles = [], refs = new Map) {
+    if (Object.is(value, undefined))
+      return;
+    if (typeof value === "object" && value) {
+      if ("ref" in value)
+        return refs.get(value.ref);
+      if ("v" in value) {
+        if (value.v === "undefined")
+          return;
+        if (value.v === "null")
+          return null;
+        if (value.v === "NaN")
+          return NaN;
+        if (value.v === "Infinity")
+          return Infinity;
+        if (value.v === "-Infinity")
+          return -Infinity;
+        if (value.v === "-0")
+          return -0;
+        return;
+      }
+      if ("d" in value) {
+        return new Date(value.d);
+      }
+      if ("u" in value)
+        return new URL2(value.u);
+      if ("bi" in value)
+        return BigInt(value.bi);
+      if ("e" in value) {
+        const error = new Error(value.e.m);
+        error.name = value.e.n;
+        error.stack = value.e.s;
+        return error;
+      }
+      if ("r" in value)
+        return new RegExp(value.r.p, value.r.f);
+      if ("a" in value) {
+        const result = [];
+        refs.set(value.id, result);
+        for (const a of value.a)
+          result.push(parseEvaluationResultValue(a, handles, refs));
+        return result;
+      }
+      if ("o" in value) {
+        const result = {};
+        refs.set(value.id, result);
+        for (const { k, v } of value.o) {
+          if (k === "__proto__")
+            continue;
+          result[k] = parseEvaluationResultValue(v, handles, refs);
+        }
+        return result;
+      }
+      if ("m" in value) {
+        const result = new Map;
+        refs.set(value.id, result);
+        for (const { k, v } of value.m)
+          result.set(parseEvaluationResultValue(k, handles, refs), parseEvaluationResultValue(v, handles, refs));
+        return result;
+      }
+      if ("s" in value) {
+        const result = new Set;
+        refs.set(value.id, result);
+        for (const item of value.s)
+          result.add(parseEvaluationResultValue(item, handles, refs));
+        return result;
+      }
+      if ("h" in value)
+        return handles[value.h];
+      if ("fn" in value) {
+        const name = value.fn;
+        return (...args) => globalThis[kBindingsControllerProperty].callBinding(name, ...args);
+      }
+      if ("ta" in value)
+        return base64ToTypedArray(value.ta.b, typedArrayConstructors[value.ta.k]);
+      if ("ab" in value)
+        return base64ToTypedArray(value.ab.b, Uint8Array).buffer;
+    }
+    return value;
+  }
+  function serializeAsCallArgument(value, handleSerializer, options = {}) {
+    return serialize(value, handleSerializer, { visited: new Map, lastId: 0, extendedSerialization: options.extendedSerialization });
+  }
+  function serialize(value, handleSerializer, visitorInfo) {
+    if (value && typeof value === "object") {
+      if (typeof globalThis.Window === "function" && value instanceof globalThis.Window)
+        return "ref: <Window>";
+      if (typeof globalThis.Document === "function" && value instanceof globalThis.Document)
+        return "ref: <Document>";
+      if (typeof globalThis.Node === "function" && value instanceof globalThis.Node)
+        return "ref: <Node>";
+    }
+    return innerSerialize(value, handleSerializer, visitorInfo);
+  }
+  function innerSerialize(value, handleSerializer, visitorInfo) {
+    const result = handleSerializer(value);
+    if ("fallThrough" in result)
+      value = result.fallThrough;
+    else
+      return result;
+    if (typeof value === "symbol")
+      return { v: "undefined" };
+    if (Object.is(value, undefined))
+      return { v: "undefined" };
+    if (Object.is(value, null))
+      return { v: "null" };
+    if (Object.is(value, NaN))
+      return { v: "NaN" };
+    if (Object.is(value, Infinity))
+      return { v: "Infinity" };
+    if (Object.is(value, -Infinity))
+      return { v: "-Infinity" };
+    if (Object.is(value, -0))
+      return { v: "-0" };
+    if (typeof value === "boolean")
+      return value;
+    if (typeof value === "number")
+      return value;
+    if (typeof value === "string")
+      return value;
+    if (typeof value === "bigint")
+      return { bi: value.toString() };
+    if (isError(value)) {
+      let stack;
+      if (value.stack?.startsWith(value.name + ": " + value.message)) {
+        stack = value.stack;
+      } else {
+        stack = `${value.name}: ${value.message}
+${value.stack}`;
+      }
+      return { e: { n: value.name, m: value.message, s: stack } };
+    }
+    if (isDate(value))
+      return { d: value.toJSON() };
+    if (isURL(value))
+      return { u: value.toJSON() };
+    if (isRegExp2(value))
+      return { r: { p: value.source, f: value.flags } };
+    for (const [k, ctor] of Object.entries(typedArrayConstructors)) {
+      if (isTypedArray(value, ctor))
+        return { ta: { b: typedArrayToBase64(value), k } };
+    }
+    if (isArrayBuffer(value))
+      return { ab: { b: typedArrayToBase64(new Uint8Array(value)) } };
+    const id = visitorInfo.visited.get(value);
+    if (id)
+      return { ref: id };
+    if (visitorInfo.extendedSerialization) {
+      if (isMap(value)) {
+        const m = [];
+        const id = ++visitorInfo.lastId;
+        visitorInfo.visited.set(value, id);
+        const iterator = value.entries();
+        const next = new Map().entries().next;
+        while (true) {
+          const entry = next.call(iterator);
+          if (entry.done)
+            break;
+          m.push({ k: serialize(entry.value[0], handleSerializer, visitorInfo), v: serialize(entry.value[1], handleSerializer, visitorInfo) });
+        }
+        return { m, id };
+      }
+      if (isSet(value)) {
+        const s = [];
+        const id = ++visitorInfo.lastId;
+        visitorInfo.visited.set(value, id);
+        const iterator = value.values();
+        const next = new Set().values().next;
+        while (true) {
+          const entry = next.call(iterator);
+          if (entry.done)
+            break;
+          s.push(serialize(entry.value, handleSerializer, visitorInfo));
+        }
+        return { s, id };
+      }
+    }
+    if (Array.isArray(value)) {
+      const a = [];
+      const id = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id);
+      for (let i = 0;i < value.length; ++i)
+        a.push(serialize(value[i], handleSerializer, visitorInfo));
+      return { a, id };
+    }
+    if (typeof value === "object") {
+      const o = [];
+      const id = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id);
+      for (const name of Object.keys(value)) {
+        let item;
+        try {
+          item = value[name];
+        } catch (e) {
+          continue;
+        }
+        if (name === "toJSON" && typeof item === "function")
+          o.push({ k: name, v: { o: [], id: 0 } });
+        else
+          o.push({ k: name, v: serialize(item, handleSerializer, visitorInfo) });
+      }
+      let jsonWrapper;
+      try {
+        if (o.length === 0 && value.toJSON && typeof value.toJSON === "function")
+          jsonWrapper = { value: value.toJSON() };
+      } catch (e) {}
+      if (jsonWrapper)
+        return innerSerialize(jsonWrapper.value, handleSerializer, visitorInfo);
+      return { o, id };
+    }
+    if (typeof value === "function" && value.name.startsWith(kFunctionBindingPrefix))
+      return { fn: value.name };
+  }
+
+  // crates/browseros-playwright/third_party/playwright/packages/protocol/src/serializers.ts
+  function parseSerializedValue(value, handles) {
+    return innerParseSerializedValue(value, handles, new Map, []);
+  }
+  function innerParseSerializedValue(value, handles, refs, accessChain) {
+    if (value.ref !== undefined)
+      return refs.get(value.ref);
+    if (value.n !== undefined)
+      return value.n;
+    if (value.s !== undefined)
+      return value.s;
+    if (value.b !== undefined)
+      return value.b;
+    if (value.v !== undefined) {
+      if (value.v === "undefined")
+        return;
+      if (value.v === "null")
+        return null;
+      if (value.v === "NaN")
+        return NaN;
+      if (value.v === "Infinity")
+        return Infinity;
+      if (value.v === "-Infinity")
+        return -Infinity;
+      if (value.v === "-0")
+        return -0;
+    }
+    if (value.d !== undefined)
+      return new Date(value.d);
+    if (value.u !== undefined)
+      return new URL2(value.u);
+    if (value.bi !== undefined)
+      return BigInt(value.bi);
+    if (value.e !== undefined) {
+      const error = new Error(value.e.m);
+      error.name = value.e.n;
+      error.stack = value.e.s;
+      return error;
+    }
+    if (value.r !== undefined)
+      return new RegExp(value.r.p, value.r.f);
+    if (value.ta !== undefined) {
+      const ctor = typedArrayKindToConstructor[value.ta.k];
+      return new ctor(value.ta.b.buffer, value.ta.b.byteOffset, value.ta.b.length / ctor.BYTES_PER_ELEMENT);
+    }
+    if (value.a !== undefined) {
+      const result = [];
+      refs.set(value.id, result);
+      for (let i = 0;i < value.a.length; i++)
+        result.push(innerParseSerializedValue(value.a[i], handles, refs, [...accessChain, i]));
+      return result;
+    }
+    if (value.o !== undefined) {
+      const result = {};
+      refs.set(value.id, result);
+      for (const { k, v } of value.o)
+        result[k] = innerParseSerializedValue(v, handles, refs, [...accessChain, k]);
+      return result;
+    }
+    if (value.h !== undefined) {
+      if (handles === undefined)
+        throw new Error("Unexpected handle");
+      return handles[value.h];
+    }
+    if (value.fn !== undefined) {
+      const dummy = () => {};
+      Object.defineProperty(dummy, "name", { value: value.fn });
+      return dummy;
+    }
+    throw new Error(`Attempting to deserialize unexpected value${accessChainToDisplayString(accessChain)}: ${value}`);
+  }
+  function serializeValue(value, handleSerializer) {
+    return innerSerializeValue(value, handleSerializer, { lastId: 0, visited: new Map }, []);
+  }
+  function innerSerializeValue(value, handleSerializer, visitorInfo, accessChain) {
+    const handle = handleSerializer(value);
+    if ("fallThrough" in handle)
+      value = handle.fallThrough;
+    else
+      return handle;
+    if (typeof value === "symbol")
+      return { v: "undefined" };
+    if (Object.is(value, undefined))
+      return { v: "undefined" };
+    if (Object.is(value, null))
+      return { v: "null" };
+    if (Object.is(value, NaN))
+      return { v: "NaN" };
+    if (Object.is(value, Infinity))
+      return { v: "Infinity" };
+    if (Object.is(value, -Infinity))
+      return { v: "-Infinity" };
+    if (Object.is(value, -0))
+      return { v: "-0" };
+    if (typeof value === "boolean")
+      return { b: value };
+    if (typeof value === "number")
+      return { n: value };
+    if (typeof value === "string")
+      return { s: value };
+    if (typeof value === "bigint")
+      return { bi: value.toString() };
+    if (isError2(value))
+      return { e: { n: value.name, m: value.message, s: value.stack || "" } };
+    if (isDate2(value))
+      return { d: value.toJSON() };
+    if (isURL2(value))
+      return { u: value.toJSON() };
+    if (isRegExp3(value))
+      return { r: { p: value.source, f: value.flags } };
+    const typedArrayKind = constructorToTypedArrayKind.get(value.constructor);
+    if (typedArrayKind)
+      return { ta: { b: Buffer.from(value.buffer, value.byteOffset, value.byteLength), k: typedArrayKind } };
+    const id = visitorInfo.visited.get(value);
+    if (id)
+      return { ref: id };
+    if (Array.isArray(value)) {
+      const a = [];
+      const id = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id);
+      for (let i = 0;i < value.length; ++i)
+        a.push(innerSerializeValue(value[i], handleSerializer, visitorInfo, [...accessChain, i]));
+      return { a, id };
+    }
+    if (typeof value === "object") {
+      const o = [];
+      const id = ++visitorInfo.lastId;
+      visitorInfo.visited.set(value, id);
+      for (const name of Object.keys(value))
+        o.push({ k: name, v: innerSerializeValue(value[name], handleSerializer, visitorInfo, [...accessChain, name]) });
+      return { o, id };
+    }
+    throw new Error(`Attempting to serialize unexpected value${accessChainToDisplayString(accessChain)}: ${value}`);
+  }
+  function accessChainToDisplayString(accessChain) {
+    const chainString = accessChain.map((accessor, i) => {
+      if (typeof accessor === "string")
+        return i ? `.${accessor}` : accessor;
+      return `[${accessor}]`;
+    }).join("");
+    return chainString.length > 0 ? ` at position "${chainString}"` : "";
+  }
+  function isRegExp3(obj) {
+    return obj instanceof RegExp || Object.prototype.toString.call(obj) === "[object RegExp]";
+  }
+  function isDate2(obj) {
+    return obj instanceof Date || Object.prototype.toString.call(obj) === "[object Date]";
+  }
+  function isURL2(obj) {
+    return obj instanceof URL2 || Object.prototype.toString.call(obj) === "[object URL]";
+  }
+  function isError2(obj) {
+    const proto = obj ? Object.getPrototypeOf(obj) : null;
+    return obj instanceof Error || proto?.name === "Error" || proto && isError2(proto);
+  }
+  var typedArrayKindToConstructor = {
+    i8: Int8Array,
+    ui8: Uint8Array,
+    ui8c: Uint8ClampedArray,
+    i16: Int16Array,
+    ui16: Uint16Array,
+    i32: Int32Array,
+    ui32: Uint32Array,
+    f32: Float32Array,
+    f64: Float64Array,
+    bi64: BigInt64Array,
+    bui64: BigUint64Array
+  };
+  var constructorToTypedArrayKind = new Map(Object.entries(typedArrayKindToConstructor).map(([k, v]) => [v, k]));
+
   // packages/browseros-playwright-js/src/prelude/selectors.ts
   function withLocatorOptions(frame, selector, options) {
     let result = selector;
@@ -3720,11 +4303,15 @@
     elementHandles() {
       return this._frame._elementHandles("locator.elementHandles", this._selector);
     }
-    evaluate(pageFunction, arg, options = {}) {
-      return this._frame._evaluateOn("locator.evaluate", this._selector, true, pageFunction, arg, false, options);
+    async evaluate(pageFunction, arg, options) {
+      const api = "locator.evaluate";
+      refuseSignal(api, options);
+      const script = pageCall(api, "locator", pageFunction, arg, options);
+      return await this._frame._evaluateOn(api, this._selector, true, script, false, typeof options === "object" && options !== null ? options : {});
     }
-    evaluateAll(pageFunction, arg) {
-      return this._frame._evaluateAll("locator.evaluateAll", this._selector, pageFunction, arg);
+    async evaluateAll(pageFunction, arg) {
+      const api = "locator.evaluateAll";
+      return await this._frame._evaluateAll(api, this._selector, pageCall(api, "query", pageFunction, arg));
     }
     ariaSnapshot(options) {
       return this._frame._ariaSnapshot("locator.ariaSnapshot", this._selector, options);
@@ -3834,81 +4421,6 @@
     }
     return [...lines, ...unplaced].join(`
 `);
-  }
-
-  // packages/browseros-playwright-js/src/prelude/url.ts
-  var DEFAULT_PORTS = {
-    "http:": "80",
-    "https:": "443",
-    "ws:": "80",
-    "wss:": "443",
-    "ftp:": "21"
-  };
-  var SPECIAL = new Set(["http:", "https:", "ws:", "wss:", "ftp:", "file:"]);
-  var ABSOLUTE = /^([a-zA-Z][a-zA-Z0-9+.-]*:)(?:\/\/(?:([^@/?#]*)@)?(\[[^\]]*\]|[^:/?#]*)(?::(\d*))?)?([^?#]*)(\?[^#]*)?(#.*)?$/;
-  function decode(text) {
-    try {
-      return decodeURIComponent(text.replace(/\+/g, " "));
-    } catch {
-      return text;
-    }
-  }
-  function urlLike(href) {
-    const match = ABSOLUTE.exec(href);
-    if (!match)
-      return null;
-    const [
-      ,
-      scheme = "",
-      userinfo = "",
-      host = "",
-      rawPort = "",
-      path = "",
-      query = "",
-      fragment = ""
-    ] = match;
-    const protocol = scheme.toLowerCase();
-    const special = SPECIAL.has(protocol);
-    const hostname = special ? host.toLowerCase() : host;
-    const port = rawPort === DEFAULT_PORTS[protocol] ? "" : rawPort;
-    const pathname = path === "" && special ? "/" : path;
-    const [username = "", password = ""] = userinfo.split(":");
-    const authority = href.slice(protocol.length).startsWith("//");
-    const hostPort = port ? `${hostname}:${port}` : hostname;
-    const credentials = userinfo ? `${userinfo}@` : "";
-    const normalized = authority ? `${protocol}//${credentials}${hostPort}${pathname}${query}${fragment}` : `${protocol}${pathname}${query}${fragment}`;
-    const search = query === "?" ? "" : query;
-    const pairs = search.slice(1).split("&").filter((pair) => pair !== "").map((pair) => {
-      const equals = pair.indexOf("=");
-      return equals === -1 ? [decode(pair), ""] : [decode(pair.slice(0, equals)), decode(pair.slice(equals + 1))];
-    });
-    return {
-      href: normalized,
-      protocol,
-      username,
-      password,
-      host: hostPort,
-      hostname,
-      port,
-      origin: special && protocol !== "file:" ? `${protocol}//${hostPort}` : "null",
-      pathname,
-      search,
-      hash: fragment === "#" ? "" : fragment,
-      searchParams: {
-        get: (name) => pairs.find(([key]) => key === name)?.[1] ?? null,
-        has: (name) => pairs.some(([key]) => key === name),
-        getAll: (name) => pairs.filter(([key]) => key === name).map(([, value]) => value ?? "")
-      },
-      toString: () => normalized
-    };
-  }
-  function normalizeUrl(text) {
-    return urlLike(text)?.href ?? text;
-  }
-  function globMatches(glob, url) {
-    if (glob === "")
-      return true;
-    return new RegExp(globToRegexPattern(glob)).test(url);
   }
 
   // packages/browseros-playwright-js/src/prelude/frame.ts
@@ -4063,11 +4575,15 @@
     $$(selector) {
       return this._elementHandles("frame.$$", selector);
     }
-    $eval(selector, pageFunction, arg) {
-      return this._evaluateOn("frame.$eval", selector, false, pageFunction, arg, true);
+    async $eval(selector, pageFunction, arg) {
+      assertMaxArguments(arguments.length, 3);
+      const api = "frame.$eval";
+      return await this._evaluateOn(api, selector, false, pageCall(api, "query", pageFunction, arg), true);
     }
-    $$eval(selector, pageFunction, arg) {
-      return this._evaluateAll("frame.$$eval", selector, pageFunction, arg);
+    async $$eval(selector, pageFunction, arg) {
+      assertMaxArguments(arguments.length, 3);
+      const api = "frame.$$eval";
+      return await this._evaluateAll(api, selector, pageCall(api, "query", pageFunction, arg));
     }
     waitForSelector(selector, options) {
       return this._waitForSelector("frame.waitForSelector", selector, options, false);
@@ -4091,8 +4607,9 @@
     setContent(html, options) {
       return this._setContent("frame.setContent", html, options);
     }
-    evaluate(pageFunction, arg) {
-      return this._evaluate("frame.evaluate", pageFunction, arg);
+    async evaluate(pageFunction, arg, options) {
+      assertMaxArguments(arguments.length, 3);
+      return await this._evaluate("frame.evaluate", pageFunction, arg, options);
     }
     waitForFunction(pageFunction, arg, options) {
       return this._waitForFunction("frame.waitForFunction", pageFunction, arg, options);
@@ -4233,17 +4750,17 @@
         return element ? [element] : [];
       });
     }
-    async _evaluateOn(api, selector, strict, pageFunction, arg, noWait, options = {}) {
-      const call = evaluation(api, pageFunction, arg);
-      return await this._selectorOp("locator.evaluate", api, selector, strict, noWait ? 0 : this._timeout(options), noWait ? { ...call, noWait: true } : call);
+    async _evaluateOn(api, selector, strict, script, noWait, options = {}) {
+      const value = await this._selectorOp("locator.evaluate", api, selector, strict, noWait ? 0 : this._timeout(options), noWait ? { script, noWait: true, selector } : { script });
+      return fromPageValue(value);
     }
-    async _evaluateAll(api, selector, pageFunction, arg) {
-      const call = evaluation(api, pageFunction, arg);
+    async _evaluateAll(api, selector, script) {
       const target = await this._locatorBrand(api, selector);
-      return await invoke("locator.evaluateAll", this._call(api, 0), {
+      const value = await invoke("locator.evaluateAll", this._call(api, 0), {
         target,
-        ...call
+        script
       });
+      return fromPageValue(value);
     }
     async _snapshot(api, selector, options = {}) {
       if (options.boxes)
@@ -4314,23 +4831,24 @@
       const result = await invoke("page.setContent", this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), html, waitUntil });
       await this._page._navigated(api, this, result);
     }
-    async _evaluate(api, pageFunction, arg) {
-      const call = evaluation(api, pageFunction, arg);
-      return await invoke("page.evaluate", this._call(api, 0), {
+    async _evaluate(api, pageFunction, arg, options) {
+      const script = pageCall(api, "frame", pageFunction, arg, options);
+      const value = await invoke("page.evaluate", this._call(api, 0), {
         ...await this._frameArgs(api),
-        ...call
+        script
       });
+      return fromPageValue(value);
     }
     async _waitForFunction(api, pageFunction, arg, options = {}) {
       if (typeof options.polling === "string" && options.polling !== "raf")
-        throw clientError(api, `Unknown polling option: ${options.polling}`);
-      const call = evaluation(api, pageFunction, arg);
-      const value = await invoke("page.waitForFunction", this._call(api, this._timeout(options)), {
+        throw plainError(`Unknown polling option: ${options.polling}`);
+      const script = pageCall(api, "frame", pageFunction, arg);
+      const { value, preview } = await invoke("page.waitForFunction", this._call(api, this._timeout(options)), {
         ...await this._frameArgs(api),
-        ...call,
+        script,
         ...typeof options.polling === "number" ? { polling: options.polling } : {}
       });
-      return new ValueHandle(value);
+      return new WaitHandle(value, preview);
     }
     _update(info) {
       this._name = info.name;
@@ -4365,23 +4883,187 @@
       return 'Neo captures at the device scale; omit scale or pass "device"';
     return;
   }
+  var HELD_VALUE = "Neo's waitForFunction handle holds the value, not the page's object; read it with jsonValue()";
 
-  class ValueHandle {
+  class WaitHandle {
     #value;
-    constructor(value) {
+    #preview;
+    constructor(value, preview) {
       this.#value = value;
+      this.#preview = preview;
       markHandle(this);
     }
     async jsonValue() {
-      return this.#value;
+      return fromPageValue(this.#value);
+    }
+    _value() {
+      return fromPageValue(this.#value);
     }
     asElement() {
       return null;
     }
     async dispose() {}
     toString() {
-      return `JSHandle@${typeof this.#value === "object" ? JSON.stringify(this.#value) : String(this.#value)}`;
+      return this.#preview;
     }
+    evaluate() {
+      return Promise.reject(unsupportedError("jsHandle.evaluate", HELD_VALUE));
+    }
+    evaluateHandle() {
+      return Promise.reject(unsupportedError("jsHandle.evaluateHandle", HELD_VALUE));
+    }
+    getProperty() {
+      return Promise.reject(unsupportedError("jsHandle.getProperty", HELD_VALUE));
+    }
+    getProperties() {
+      return Promise.reject(unsupportedError("jsHandle.getProperties", HELD_VALUE));
+    }
+  }
+
+  // packages/browseros-playwright-js/src/prelude/evaluation.ts
+  var TOO_MANY_ARGUMENTS = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
+  function assertMaxArguments(count, max) {
+    if (count > max)
+      throw plainError(TOO_MANY_ARGUMENTS);
+  }
+  function assertEvaluateOptions(options) {
+    if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
+      throw plainError(TOO_MANY_ARGUMENTS);
+  }
+  function refuseExposedFunctions(api, options) {
+    if (typeof options === "object" && options !== null && Reflect.get(options, "exposeFunctions"))
+      throw unsupportedError(api, "pages cannot call back into the script in Neo; return what the page computed instead");
+  }
+  function refuseSignal(api, options) {
+    if (typeof options === "object" && options !== null && Reflect.get(options, "signal") !== undefined)
+      throw unsupportedError(api, "an op cannot be aborted from the script in Neo; pass timeout instead");
+  }
+  var fallThrough = (value) => ({ fallThrough: value });
+  var FORMS = {
+    frame: { options: true, afterWait: false },
+    locator: { options: true, afterWait: true },
+    handle: { options: true, afterWait: false },
+    query: { options: false, afterWait: false }
+  };
+  function pageCall(api, form, pageFunction, arg, options) {
+    const { options: checksOptions, afterWait } = FORMS[form];
+    if (checksOptions)
+      refuseExposedFunctions(api, options);
+    const build = () => {
+      if (checksOptions)
+        assertEvaluateOptions(options);
+      return script(api, pageFunction, arg);
+    };
+    if (!afterWait)
+      return build();
+    try {
+      return build();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        refused: message.startsWith(`${api}: `) ? message.slice(api.length + 2) : message
+      };
+    }
+  }
+  function script(api, pageFunction, arg) {
+    const isFunction = typeof pageFunction === "function";
+    const { serialized, clientHandles } = serializeArgument(api, arg);
+    let expression;
+    try {
+      expression = normalizeEvaluationExpression(String(pageFunction), isFunction);
+    } catch (error) {
+      return { refused: error instanceof Error ? error.message : String(error) };
+    }
+    const onServer = parseSerializedValue(serialized, clientHandles);
+    const handles = [];
+    const text = JSON.stringify(serializeAsCallArgument(onServer, (value) => {
+      if (!(value instanceof ElementHandle))
+        return fallThrough(value);
+      handles.push(value._brand);
+      return { h: handles.length - 1 };
+    }));
+    return {
+      run: {
+        expression,
+        isFunction,
+        arg: text,
+        ...handles.length > 0 ? { handles } : {}
+      }
+    };
+  }
+  function serializeArgument(api, arg) {
+    let refused;
+    let serialized;
+    const clientHandles = [];
+    const copies = new Map;
+    try {
+      serialized = serializeValue(arg, (value) => {
+        if (value instanceof ElementHandle) {
+          clientHandles.push(value);
+          return { h: clientHandles.length - 1 };
+        }
+        if (value instanceof WaitHandle) {
+          if (!copies.has(value))
+            copies.set(value, value._value());
+          return fallThrough(copies.get(value));
+        }
+        if (!isHandle(value))
+          return fallThrough(value);
+        refused = unsupportedError(api, "Neo passes element handles as evaluate arguments, not pages, frames, locators or JSHandles; pass the value itself, or an element handle");
+        throw refused;
+      });
+    } catch (error) {
+      if (error === refused)
+        throw error;
+      throw plainError(error instanceof Error ? error.message : String(error));
+    }
+    validateValue(api, serialized, "arg.value");
+    clientHandles.forEach((handle, index) => {
+      if (handle._disposed)
+        throw clientError(api, `arg.handles[${index}]: no object with guid ${handle._guid}`);
+    });
+    return { serialized, clientHandles };
+  }
+  function validateValue(api, value, path) {
+    const expectString = (field, at) => {
+      if (typeof field !== "string" && !(field instanceof String))
+        throw clientError(api, `${at}: expected string, got ${typeof field}`);
+    };
+    if (value.d !== undefined)
+      expectString(value.d, `${path}.d`);
+    if (value.e !== undefined)
+      for (const key of ["m", "n", "s"])
+        expectString(value.e[key], `${path}.e.${key}`);
+    value.a?.forEach((item, index) => {
+      validateValue(api, item, `${path}.a[${index}]`);
+    });
+    value.o?.forEach((entry, index) => {
+      validateValue(api, entry.v, `${path}.o[${index}].v`);
+    });
+  }
+  function fromPageValue(value) {
+    return parseEvaluationResultValue(value);
+  }
+  function normalizeEvaluationExpression(expression, isFunction) {
+    expression = expression.trim();
+    if (isFunction) {
+      try {
+        new Function(`(${expression})`);
+      } catch {
+        if (expression.startsWith("async "))
+          expression = `async function ${expression.substring("async ".length)}`;
+        else
+          expression = `function ${expression}`;
+        try {
+          new Function(`(${expression})`);
+        } catch {
+          throw new Error("Passed function is not well-serializable!");
+        }
+      }
+    }
+    if (/^(async)?\s*function(\s|\()/.test(expression))
+      expression = `(${expression})`;
+    return expression;
   }
 
   // packages/browseros-playwright-js/src/prelude/element-handle.ts
@@ -4394,10 +5076,18 @@
       return null;
     return value;
   }
+  function handleGuid() {
+    let digits = "";
+    for (let i = 0;i < 32; i++)
+      digits += Math.floor(Math.random() * 16).toString(16);
+    return `handle@${digits}`;
+  }
 
   class ElementHandle extends EventEmitter {
     _page;
     _brand;
+    _guid = handleGuid();
+    _disposed = false;
     constructor(page, brand) {
       super();
       this._page = page;
@@ -4407,7 +5097,13 @@
     asElement() {
       return this;
     }
-    async dispose() {}
+    async dispose() {
+      this._disposed = true;
+    }
+    #live(api) {
+      if (this._disposed)
+        throw clientError(api, "Target page, context or browser has been closed");
+    }
     toString() {
       return this._brand.display;
     }
@@ -4415,6 +5111,7 @@
       return this._brand;
     }
     async#op(op, api, timeout, args) {
+      this.#live(api);
       const input = {
         target: this._brand,
         strict: "strict",
@@ -4426,6 +5123,7 @@
       return this._page._timeoutSettings.timeout(options);
     }
     #rooted(api, selector) {
+      this.#live(api);
       if (typeof selector !== "string")
         throw clientError(api, `selector: expected string, got ${typeof selector}`);
       return {
@@ -4568,9 +5266,29 @@
     boundingBox() {
       return this.#op("locator.boundingBox", "elementHandle.boundingBox", 0, {});
     }
-    async evaluate(pageFunction, arg) {
+    async evaluate(pageFunction, arg, options) {
       const api = "elementHandle.evaluate";
-      return await this.#op("locator.evaluate", api, 0, evaluation(api, pageFunction, arg));
+      this.#live(api);
+      const script = pageCall(api, "handle", pageFunction, arg, options);
+      return fromPageValue(await this.#op("locator.evaluate", api, 0, { script }));
+    }
+    async $eval(selector, pageFunction, arg) {
+      const api = "elementHandle.$eval";
+      const script = pageCall(api, "query", pageFunction, arg);
+      const value = await invoke("locator.evaluate", { api, timeoutMs: timeoutMs(api, 0) }, {
+        target: this.#rooted(api, selector),
+        strict: "firstMatch",
+        noWait: true,
+        selector,
+        script
+      });
+      return fromPageValue(value);
+    }
+    async $$eval(selector, pageFunction, arg) {
+      const api = "elementHandle.$$eval";
+      const script = pageCall(api, "query", pageFunction, arg);
+      const value = await invoke("locator.evaluateAll", { api, timeoutMs: timeoutMs(api, 0) }, { target: this.#rooted(api, selector), script });
+      return fromPageValue(value);
     }
     async screenshot(options = {}) {
       const api = "elementHandle.screenshot";
@@ -4917,11 +5635,15 @@
     $$(selector) {
       return this._mainFrame._elementHandles("page.$$", selector);
     }
-    $eval(selector, pageFunction, arg) {
-      return this._mainFrame._evaluateOn("page.$eval", selector, false, pageFunction, arg, true);
+    async $eval(selector, pageFunction, arg) {
+      assertMaxArguments(arguments.length, 3);
+      const api = "page.$eval";
+      return await this._mainFrame._evaluateOn(api, selector, false, pageCall(api, "query", pageFunction, arg), true);
     }
-    $$eval(selector, pageFunction, arg) {
-      return this._mainFrame._evaluateAll("page.$$eval", selector, pageFunction, arg);
+    async $$eval(selector, pageFunction, arg) {
+      assertMaxArguments(arguments.length, 3);
+      const api = "page.$$eval";
+      return await this._mainFrame._evaluateAll(api, selector, pageCall(api, "query", pageFunction, arg));
     }
     waitForSelector(selector, options) {
       return this._mainFrame._waitForSelector("page.waitForSelector", selector, options, false);
@@ -4956,8 +5678,9 @@
     setContent(html, options) {
       return this._mainFrame._setContent("page.setContent", html, options);
     }
-    evaluate(pageFunction, arg) {
-      return this._mainFrame._evaluate("page.evaluate", pageFunction, arg);
+    async evaluate(pageFunction, arg, options) {
+      assertMaxArguments(arguments.length, 3);
+      return await this._mainFrame._evaluate("page.evaluate", pageFunction, arg, options);
     }
     waitForFunction(pageFunction, arg, options) {
       return this._mainFrame._waitForFunction("page.waitForFunction", pageFunction, arg, options);
@@ -6080,8 +6803,6 @@ Timeout: ${timeout}ms`);
     Keyboard: {},
     Mouse: {},
     ElementHandle: {
-      $$eval: "not available in Neo yet: it runs on elements like locator.evaluateAll(), which is not built yet; read the matches of elementHandle.$$(selector) with their own methods",
-      $eval: "not available in Neo yet: it runs on an element like locator.evaluate(), which is not built yet; read the match of elementHandle.$(selector) with its own methods",
       contentFrame: "use page.frameLocator() or locator.contentFrame() to enter a frame",
       evaluateHandle: NO_HANDLES,
       getProperties: "Neo returns values as JSON; read them with elementHandle.evaluate(el => el.prop)",

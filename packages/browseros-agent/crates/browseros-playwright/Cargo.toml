@@ -19,7 +19,9 @@ serde.workspace = true
 # serde_json parses a 17-digit float (most rects of a transformed element) one ULP off, the
 # probe's `===` stability check against the echoed rect never passes, and the click times out.
 # Features unify per build, so this also covers the CDP client's own parse of each reply.
-serde_json = { workspace = true, features = ["float_roundtrip", "raw_value"] }
+# `unbounded_depth`: a main-world result in Playwright's format nests up to 297 levels (spike
+# S-depth), past serde's default limit of 128; page_value.rs caps the depth before it parses.
+serde_json = { workspace = true, features = ["float_roundtrip", "raw_value", "unbounded_depth"] }
 # Names the failing field in `invalid_input` messages (`target.chunks[0]: ...`).
 serde_path_to_error.workspace = true
 tokio.workspace = true

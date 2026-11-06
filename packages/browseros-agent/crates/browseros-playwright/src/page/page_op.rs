@@ -8,11 +8,12 @@ use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_output::to_output;
 use crate::op_scope::{OpScope, Sent};
-use crate::op_spec::{OpSpec, PAGE, TARGET};
+use crate::op_spec::{Capability, OpSpec, PAGE, TARGET};
 use crate::page::document_watch::decode;
 use crate::page::navigation::{GotoInput, NavigateInput, Navigation};
 use crate::page::{
-    PageHandle, document_op, evaluate, frame_tree, navigation, pdf, screenshot, wait_for_url,
+    PageHandle, document_op, element_evaluate, evaluate, frame_tree, navigation, pdf, screenshot,
+    wait_for_url,
 };
 use crate::probe::DocumentPart;
 use crate::target::PageRef;
@@ -79,7 +80,8 @@ impl PageOp {
                 "page.setContent",
                 PAGE,
                 "replace the document's HTML and wait for the load state",
-            ),
+            )
+            .using(&[Capability::MainWorld]),
             Self::Close => OpSpec::write("page.close", PAGE, "close the tab"),
             Self::Opener => OpSpec::read("page.opener", PAGE, "the page that opened this one"),
             Self::Frames => OpSpec::read(
@@ -91,38 +93,45 @@ impl PageOp {
                 "page.evaluate",
                 PAGE,
                 "run a function in the main world, behind the sensitive-value sweep",
-            ),
+            )
+            .using(&[Capability::MainWorld]),
             Self::EvaluateOnElement => OpSpec::write(
                 "locator.evaluate",
                 TARGET,
                 "run a function on one element in the main world; also $eval",
-            ),
+            )
+            .using(&[Capability::MainWorld]),
             Self::EvaluateOnAll => OpSpec::write(
                 "locator.evaluateAll",
                 TARGET,
                 "run a function on every match in the main world; also $$eval",
-            ),
+            )
+            .using(&[Capability::MainWorld]),
             Self::WaitForFunction => OpSpec::write(
                 "page.waitForFunction",
                 PAGE,
                 "poll a main-world function from Rust until it returns truthy",
-            ),
+            )
+            .using(&[Capability::MainWorld]),
             Self::Screenshot => OpSpec::read(
                 "page.screenshot",
                 PAGE,
                 "capture the page or one element once the host allows it",
-            ),
+            )
+            .using(&[Capability::Capture]),
             Self::Pdf => OpSpec::read(
                 "page.pdf",
                 PAGE,
                 "print the page to PDF once the host allows it",
-            ),
+            )
+            .using(&[Capability::Capture]),
         }
     }
 }
 
 /// Runs one page op. The ops that run in the page's sealed world (title, content, setContent,
-/// waitForURL) or its main world (evaluate, waitForFunction) are built with those worlds.
+/// waitForURL) or its main world (evaluate, waitForFunction, the element scripts) are built with
+/// those worlds.
 pub(crate) async fn invoke(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -146,9 +155,11 @@ pub(crate) async fn invoke(
         PageOp::Frames => frame_tree::frames(pw, scope, args.decode(scope)?).await,
         PageOp::Screenshot => screenshot::capture(pw, scope, args.decode(scope)?).await,
         PageOp::Pdf => pdf::print(pw, scope, args.decode(scope)?).await,
-        PageOp::Evaluate => evaluate::evaluate(pw, scope, args.decode(scope)?).await,
+        // Boxed, as the other families box their leaves: a script's guard and its polls are the
+        // largest state a page op holds, and every op's future is as large as its largest leaf.
+        PageOp::Evaluate => Box::pin(evaluate::evaluate(pw, scope, args.decode(scope)?)).await,
         PageOp::WaitForFunction => {
-            evaluate::wait_for_function(pw, scope, args.decode(scope)?).await
+            Box::pin(evaluate::wait_for_function(pw, scope, args.decode(scope)?)).await
         }
         PageOp::Title => {
             document_op::read(pw, scope, args.decode(scope)?, DocumentPart::Title).await
@@ -158,7 +169,22 @@ pub(crate) async fn invoke(
         }
         PageOp::SetContent => document_op::set_content(pw, scope, args.decode(scope)?).await,
         PageOp::WaitForUrl => wait_for_url::wait_for_url(pw, scope, args.decode(scope)?).await,
-        PageOp::EvaluateOnElement | PageOp::EvaluateOnAll => Err(scope.not_built()),
+        PageOp::EvaluateOnElement => {
+            Box::pin(element_evaluate::evaluate_on_element(
+                pw,
+                scope,
+                args.decode(scope)?,
+            ))
+            .await
+        }
+        PageOp::EvaluateOnAll => {
+            Box::pin(element_evaluate::evaluate_on_all(
+                pw,
+                scope,
+                args.decode(scope)?,
+            ))
+            .await
+        }
     }
 }
 

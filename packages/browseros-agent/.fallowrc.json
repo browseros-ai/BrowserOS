@@ -19,6 +19,7 @@
     "packages/agent-cursor/scripts/classic-entry.ts",
     "packages/browseros-playwright-js/src/probe/index.ts",
     "packages/browseros-playwright-js/src/prelude/index.ts",
+    "packages/browseros-playwright-js/src/main-world/index.ts",
     "packages/browseros-playwright-js/scripts/build.ts",
     "packages/browseros-playwright-js/scripts/probe-smoke.mjs",
     "packages/browseros-playwright-js/scripts/capture-goldens.mjs",
@@ -28,6 +29,7 @@
     "packages/browseros-playwright-js/src/stubs/consoleApi.ts",
     "packages/browseros-playwright-js/src/stubs/selectorEngine.ts",
     "packages/browseros-playwright-js/src/stubs/protocol/structs.ts",
+    "packages/browseros-playwright-js/src/prelude/vendored-globals.ts",
     "packages/browseros-playwright-js/src/probe/masked-strings.ts"
   ],
   "ignoreDependencies": [

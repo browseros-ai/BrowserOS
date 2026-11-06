@@ -10,6 +10,8 @@
  * cannot drift apart. `OpInputs` and `OpOutputs` must name every op in ops.generated.ts; the
  * `complete` check at the end fails to compile otherwise.
  */
+
+import type { SerializedValue } from '../../../../crates/browseros-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
 import type {
   ExpectParams,
   Point,
@@ -19,6 +21,9 @@ import type {
 } from '../probe/protocol'
 import type { OpName } from './ops.generated'
 import type { AriaSnapshotJSON, ParsedSelector } from './vendored'
+
+/** Playwright's in-page serialized value (`utilityScriptSerializers.ts`), as JSON. */
+export type { SerializedValue }
 
 /**
  * `{"$neo":"page","id":7,"tab":1234}`, the skeleton's page brand: core's process-local page id
@@ -245,14 +250,23 @@ export type ElementStateName =
   | 'editable'
 
 /**
- * A main-world function and its JSON argument (v1 passes no handles). An absent `arg` reaches
- * the function as `undefined`, which JSON cannot carry.
+ * A main-world script on the wire (evaluation.ts `pageCall`), mirrored by Rust's `ScriptInput`:
+ * ready to run, or the message of the server-side check upstream fails first, which Rust raises
+ * at its point with nothing sent.
  */
-export type Evaluation = {
-  expression: string
-  isFunction: boolean
-  arg?: unknown
-}
+export type PageScript =
+  | {
+      run: {
+        /** `normalizeEvaluationExpression(String(pageFunction), isFunction)`. */
+        expression: string
+        isFunction: boolean
+        /** The argument in Playwright's in-page format, as JSON text. */
+        arg: string
+        /** The element handles the argument's `{h: i}` names, in order; left out when none. */
+        handles?: ElementBrand[]
+      }
+    }
+  | { refused: string }
 
 /** The screenshot options Neo captures with; the prelude refuses the others before sending. */
 export type ScreenshotOptions = {
@@ -379,11 +393,18 @@ export type OpInputs = {
   'page.close': PageArgs & { runBeforeUnload?: true }
   'page.opener': PageArgs
   'page.frames': PageArgs
-  'page.evaluate': FrameArgs & Evaluation
+  'page.evaluate': FrameArgs & { script: PageScript }
   /** `noWait` is `$eval`: no waiting for the element, as `locator.evaluate` does. */
-  'locator.evaluate': TargetArgs & Evaluation & { noWait?: true }
-  'locator.evaluateAll': EveryMatchArgs & Evaluation
-  'page.waitForFunction': FrameArgs & Evaluation & { polling?: number }
+  'locator.evaluate': TargetArgs & {
+    script: PageScript
+    /** `$eval`: the first match now instead of waiting for one. */
+    noWait?: true
+    /** `$eval`'s selector as the script wrote it, which upstream's no-match message quotes. */
+    selector?: string
+  }
+  'locator.evaluateAll': EveryMatchArgs & { script: PageScript }
+  /** `polling` in milliseconds; absent is `'raf'`. */
+  'page.waitForFunction': FrameArgs & { script: PageScript; polling?: number }
   /** With `target`, a screenshot of one element (`locator.screenshot`). */
   'page.screenshot': PageArgs & {
     target?: Target
@@ -493,10 +514,12 @@ export type OpOutputs = {
   'page.close': Done
   'page.opener': { opener: PageBrand | null }
   'page.frames': FrameTree
-  'page.evaluate': unknown
-  'locator.evaluate': unknown
-  'locator.evaluateAll': unknown
-  'page.waitForFunction': unknown
+  /** The script's result in Playwright's in-page format, masked. */
+  'page.evaluate': SerializedValue
+  'locator.evaluate': SerializedValue
+  'locator.evaluateAll': SerializedValue
+  /** The predicate's truthy value, masked, and upstream's preview of it (`toString()`). */
+  'page.waitForFunction': { value: SerializedValue; preview: string }
   /** The bootstrap's revived `{"$neo":"bytes"}` value, handed to the script as it is. */
   'page.screenshot': unknown
   'page.pdf': unknown

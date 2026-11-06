@@ -184,10 +184,6 @@ export const UNSUPPORTED = {
   Keyboard: {},
   Mouse: {},
   ElementHandle: {
-    $$eval:
-      'not available in Neo yet: it runs on elements like locator.evaluateAll(), which is not built yet; read the matches of elementHandle.$$(selector) with their own methods',
-    $eval:
-      'not available in Neo yet: it runs on an element like locator.evaluate(), which is not built yet; read the match of elementHandle.$(selector) with its own methods',
     contentFrame:
       'use page.frameLocator() or locator.contentFrame() to enter a frame',
     evaluateHandle: NO_HANDLES,

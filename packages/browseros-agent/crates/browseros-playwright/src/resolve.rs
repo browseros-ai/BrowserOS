@@ -28,6 +28,7 @@ mod handle_site;
 mod resolver;
 
 pub(crate) use frame_path::{FramePath, Hop, HopIframe};
+pub(crate) use frame_start::{FrameStart, Started};
 pub(crate) use handle_site::{HandleSite, handle_detached};
 pub(crate) use resolver::{
     Hopped, Landed, Resolved, Resolver, ask, ask_masked, failed, hop, hop_pinned, refused,

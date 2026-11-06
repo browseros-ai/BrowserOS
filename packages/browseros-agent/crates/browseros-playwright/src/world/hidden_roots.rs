@@ -15,6 +15,8 @@
 //!         ├─ HiddenRoots::scan   DOM.describeNode { the world's document, depth 30, pierce },
 //!         │                      then again from each node the depth cut off, until none is
 //!         ├─ each host the seal reported: __clawSeal.takeHost(), then HiddenRoots::scan of it
+//!         ├─ each tree the seal watches out of the document (an element a main-world script
+//!         │  was handed, then removed): __clawSeal.detachedTops(), then HiddenRoots::scan of it
 //!         └─ the roots this world does not watch yet
 //!              └─ SealedWorld::watch_roots   DOM.resolveNode each into the world, then one
 //!                                            Runtime.callFunctionOn: __clawSeal.watch(root)

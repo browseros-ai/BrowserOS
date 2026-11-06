@@ -13,6 +13,11 @@ import type { BrowserContext } from './context'
 import { ElementHandle, elementBrand } from './element-handle'
 import { EventEmitter } from './emitter'
 import { clientError, prefixed, unsupportedError } from './errors'
+import {
+  assertMaxArguments,
+  type EvaluateOptions,
+  pageCall,
+} from './evaluation'
 import { checkReported, isReported } from './events'
 import {
   type ClickOptions,
@@ -26,9 +31,9 @@ import {
   type StrictOption,
   type TextMatch,
   type UrlMatcher,
-  type ValueHandle,
   type WaitForFunctionOptions,
   type WaitForSelectorOptions,
+  type WaitHandle,
 } from './frame'
 import { Keyboard, Mouse } from './input'
 import type { FrameLocator, Locator } from './locator'
@@ -461,31 +466,35 @@ export class Page extends EventEmitter {
     return this._mainFrame._elementHandles('page.$$', selector)
   }
 
-  $eval(
+  async $eval(
     selector: string,
     pageFunction: unknown,
     arg?: unknown,
   ): Promise<unknown> {
-    return this._mainFrame._evaluateOn(
-      'page.$eval',
+    // biome-ignore lint/complexity/noArguments: upstream counts the arguments passed, not the parameters.
+    assertMaxArguments(arguments.length, 3)
+    const api = 'page.$eval'
+    return await this._mainFrame._evaluateOn(
+      api,
       selector,
       false,
-      pageFunction,
-      arg,
+      pageCall(api, 'query', pageFunction, arg),
       true,
     )
   }
 
-  $$eval(
+  async $$eval(
     selector: string,
     pageFunction: unknown,
     arg?: unknown,
   ): Promise<unknown> {
-    return this._mainFrame._evaluateAll(
-      'page.$$eval',
+    // biome-ignore lint/complexity/noArguments: upstream counts the arguments passed, not the parameters.
+    assertMaxArguments(arguments.length, 3)
+    const api = 'page.$$eval'
+    return await this._mainFrame._evaluateAll(
+      api,
       selector,
-      pageFunction,
-      arg,
+      pageCall(api, 'query', pageFunction, arg),
     )
   }
 
@@ -553,15 +562,26 @@ export class Page extends EventEmitter {
     return this._mainFrame._setContent('page.setContent', html, options)
   }
 
-  evaluate(pageFunction: unknown, arg?: unknown): Promise<unknown> {
-    return this._mainFrame._evaluate('page.evaluate', pageFunction, arg)
+  async evaluate(
+    pageFunction: unknown,
+    arg?: unknown,
+    options?: EvaluateOptions,
+  ): Promise<unknown> {
+    // biome-ignore lint/complexity/noArguments: upstream counts the arguments passed, not the parameters.
+    assertMaxArguments(arguments.length, 3)
+    return await this._mainFrame._evaluate(
+      'page.evaluate',
+      pageFunction,
+      arg,
+      options,
+    )
   }
 
   waitForFunction(
     pageFunction: unknown,
     arg?: unknown,
     options?: WaitForFunctionOptions,
-  ): Promise<ValueHandle> {
+  ): Promise<WaitHandle> {
     return this._mainFrame._waitForFunction(
       'page.waitForFunction',
       pageFunction,

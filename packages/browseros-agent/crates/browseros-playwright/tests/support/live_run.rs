@@ -19,7 +19,7 @@ use browseros_playwright::{
     ErrorCode, Op, OpEnv, Playwright, PlaywrightError, PlaywrightHooks, Refusal, RunState, TypedBy,
 };
 use futures_util::future::BoxFuture;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tokio::sync::{broadcast, mpsc};
 use tokio::time;
 
@@ -33,6 +33,14 @@ pub(crate) enum EnvCall {
     MarkSent,
     MarkSensitiveTarget,
     Note(String),
+}
+
+/// One thing the crate told its host, in the order the host heard it: a call of the run's side,
+/// or the values the evaluate guard reported (`PlaywrightHooks::values_swept`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Heard {
+    Call(EnvCall),
+    Swept(Vec<String>),
 }
 
 /// What the [`Tap`] does to the first command the crate sends with the method a test named.
@@ -173,6 +181,8 @@ struct LiveEnv {
     view: BrowserView,
     run_state: Arc<RunState>,
     calls: Mutex<Vec<EnvCall>>,
+    /// Shared with the hooks, so the order of a report and a mark can be read.
+    heard: Arc<Mutex<Vec<Heard>>>,
     policy: Policy,
     /// What `recheck` refuses with, as a takeover would, until a test allows it again.
     refusal: Mutex<Option<Refusal>>,
@@ -180,6 +190,7 @@ struct LiveEnv {
 
 impl LiveEnv {
     fn record(&self, call: EnvCall) {
+        lock(&self.heard).push(Heard::Call(call.clone()));
         self.calls
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -224,6 +235,7 @@ impl OpEnv for LiveEnv {
 struct LiveHooks {
     capture: Mutex<Option<Refusal>>,
     swept: Mutex<Vec<String>>,
+    heard: Arc<Mutex<Vec<Heard>>>,
     journaled: Mutex<Vec<String>>,
 }
 
@@ -233,6 +245,9 @@ impl PlaywrightHooks for LiveHooks {
     }
 
     fn values_swept(&self, _page: PageId, values: &FieldValues) {
+        lock(&self.heard).push(Heard::Swept(
+            values.registrable().map(str::to_owned).collect(),
+        ));
         self.swept
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -293,7 +308,11 @@ impl LiveRun {
             Arc::clone(&tap) as Arc<dyn CdpConnection>,
             BrowserSessionHooks::default(),
         );
-        let hooks = Arc::new(LiveHooks::default());
+        let heard = Arc::<Mutex<Vec<Heard>>>::default();
+        let hooks = Arc::new(LiveHooks {
+            heard: Arc::clone(&heard),
+            ..LiveHooks::default()
+        });
         let playwright = Playwright::new(
             Arc::clone(&browser),
             Arc::clone(&hooks) as Arc<dyn PlaywrightHooks>,
@@ -302,6 +321,7 @@ impl LiveRun {
             view: BrowserView::unbound(Arc::clone(&browser), None),
             run_state: Arc::default(),
             calls: Mutex::default(),
+            heard,
             policy,
             refusal: Mutex::default(),
         };
@@ -552,11 +572,18 @@ impl LiveRun {
 
     /// Forgets the calls recorded so far.
     pub(crate) fn clear_calls(&self) {
+        lock(&self.env.heard).clear();
         self.env
             .calls
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
+    }
+
+    /// The calls and the guard's reports since the last [`LiveRun::clear_calls`], in the order
+    /// the host heard them.
+    pub(crate) fn heard(&self) -> Vec<Heard> {
+        lock(&self.env.heard).clone()
     }
 
     /// The page's attached session, the one core and the crate use.
@@ -592,4 +619,33 @@ pub(crate) fn test_page(handle: &Value) -> TestResult<TestPage> {
         id: PageId(u32::try_from(id)?),
         tab: TabId(tab),
     })
+}
+
+/// A value in Playwright's in-page format as plain JSON: arrays and objects unwrapped, a
+/// special value as its name, for the assertions.
+pub(crate) fn plain(value: Value) -> Value {
+    match value {
+        Value::Object(mut tagged) => {
+            if let Some(Value::Array(items)) = tagged.remove("a") {
+                return Value::Array(items.into_iter().map(plain).collect());
+            }
+            if let Some(Value::Array(members)) = tagged.remove("o") {
+                let mut object = Map::new();
+                for member in members {
+                    let key = member
+                        .get("k")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned();
+                    object.insert(key, plain(member.get("v").cloned().unwrap_or(Value::Null)));
+                }
+                return Value::Object(object);
+            }
+            if let Some(special) = tagged.remove("v") {
+                return special;
+            }
+            Value::Object(tagged)
+        }
+        other => other,
+    }
 }

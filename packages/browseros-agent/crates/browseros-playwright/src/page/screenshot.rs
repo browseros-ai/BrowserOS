@@ -1,9 +1,10 @@
 //! `page.screenshot()`, after the host allows the capture.
 //!
 //! The capture goes through core's screenshot path, which serializes captures per session and
-//! hides the agent pointer for the shot. The host's privacy layer is asked inside that path,
-//! immediately before `Page.captureScreenshot`, because a page can turn private while the op
-//! waits for admission, the capture lock or the pointer.
+//! hides the agent pointer for the shot. The crate's capture gateway, which also asks the
+//! host's privacy layer (`Playwright::capture_allowed`), runs inside that path, immediately
+//! before `Page.captureScreenshot`, because a page can turn private while the op waits for
+//! admission, the capture lock or the pointer.
 
 use browseros_core::screenshot::{ScreenshotCaptureOptions, ScreenshotFormat, Viewport};
 use serde::Deserialize;
@@ -11,6 +12,7 @@ use serde_json::Value;
 
 use crate::op_output::{Bytes, to_output};
 use crate::op_scope::OpScope;
+use crate::op_spec::Capability;
 use crate::target::{PageRef, Strictness, Target};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
@@ -62,6 +64,9 @@ pub(crate) async fn capture(
     scope: &OpScope<'_>,
     input: ScreenshotInput,
 ) -> Result<Value, PlaywrightError> {
+    // An op that does not declare `Capture` is refused before its page is admitted or
+    // prepared; `capture_allowed` checks again, with the host, right before the pixels.
+    scope.require(Capability::Capture)?;
     if input.target.is_some() {
         return Err(scope.not_built());
     }
@@ -94,12 +99,12 @@ pub(crate) async fn capture(
         }),
     };
     let page = input.page.checked(pw.browser(), scope).await?;
-    // Core asks the host inside its capture lock, after admission and the pointer hide, with
-    // no await before `Page.captureScreenshot`. Asked here instead, the verdict would be stale
-    // by the time the pixels are read.
+    // Core runs the gateway inside its capture lock, after admission and the pointer hide, with
+    // no await before `Page.captureScreenshot`. Run here instead, the host's verdict would be
+    // stale by the time the pixels are read.
     let shot = scope
         .view()
-        .screenshot_checked(page.clone(), options, || pw.hooks().capture_allowed(page))
+        .screenshot_checked(page.clone(), options, || pw.capture_allowed(scope, page))
         .await
         .map_err(|error| scope.core_error(&error))??;
     to_output(scope, &Bytes::from_base64(shot.data))
@@ -112,11 +117,15 @@ mod tests {
 
     use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
     use browseros_core::testing::{TestCall, TestConnection};
-    use browseros_core::{BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId};
+    use browseros_core::{BrowserView, PageId};
     use browseros_trace::ErrorOwner;
     use serde_json::json;
 
-    use crate::test_env::TestEnv;
+    use super::{ScreenshotInput, capture};
+    use crate::op_scope::OpScope;
+    use crate::target::CallHeader;
+    use crate::test_env::{self, TestEnv};
+    use crate::test_support::{self, RecordingHooks};
     use crate::{Op, Playwright, PlaywrightHooks, Refusal, TypedBy};
 
     /// Core's pointer hide, the last thing it does before it captures.
@@ -160,36 +169,12 @@ mod tests {
     async fn tests_that_a_page_turning_private_during_preparation_is_never_captured()
     -> Result<(), Box<dyn Error>> {
         let connection = TestConnection::new([]);
-        connection.always(
-            "Browser.getTabs",
-            json!({ "tabs": [{ "tabId": 7, "targetId": "target-7", "windowId": 1,
-                "url": "https://example.test/", "title": "Account", "isActive": true,
-                "isLoading": false, "loadProgress": 1.0, "isPinned": false, "isHidden": false }] }),
-        )?;
-        for setup in [
-            "Page.enable",
-            "DOM.enable",
-            "Runtime.enable",
-            "Accessibility.enable",
-        ] {
-            connection.always(setup, json!({}))?;
-        }
-        connection.always("Runtime.evaluate", json!({ "result": { "value": true } }))?;
+        let test_support::OneTab { browser, page } = test_support::one_tab(&connection).await?;
         connection.always("Page.captureScreenshot", json!({ "data": "cG5n" }))?;
-        let cdp: Arc<dyn CdpConnection> = Arc::clone(&connection) as Arc<dyn CdpConnection>;
-        let browser = BrowserSession::new(cdp, BrowserSessionHooks::default());
         let hooks = PrivateOncePrepared {
             connection: Arc::clone(&connection),
         };
         let playwright = Playwright::new(Arc::clone(&browser), Arc::new(hooks));
-        let page = browser
-            .pages
-            .list()
-            .await?
-            .first()
-            .ok_or("the tab is listed")?
-            .page_id
-            .clone();
         let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
         let op = Op::from_name("page.screenshot").ok_or("page.screenshot is an op")?;
         let error = playwright
@@ -213,6 +198,80 @@ mod tests {
                 .iter()
                 .all(|call| call.method != "Page.captureScreenshot"),
             "no capture is sent once the host refuses: {calls:?}"
+        );
+        Ok(())
+    }
+
+    /// A host applies its pixel rules only to the ops that declare `Capture`, so the capture
+    /// path gives pixels to no other op: `page.screenshot` gets its shot, and an op that does
+    /// not declare `Capture` is refused before one is taken.
+    #[tokio::test]
+    async fn tests_that_only_an_op_declaring_capture_is_captured() -> Result<(), Box<dyn Error>> {
+        let connection = TestConnection::new([]);
+        let test_support::OneTab { browser, page } = test_support::one_tab(&connection).await?;
+        connection.always("Page.captureScreenshot", json!({ "data": "cG5n" }))?;
+        let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks::default()));
+        let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
+        let input = || {
+            serde_json::from_value::<ScreenshotInput>(
+                json!({ "page": { "$neo": "page", "id": page.0, "tab": 7 } }),
+            )
+        };
+        let screenshot = Op::from_name("page.screenshot").ok_or("page.screenshot is an op")?;
+        let declared = OpScope::new(&env, screenshot, CallHeader::default());
+        capture(&playwright, &declared, input()?).await?;
+        let evaluate = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
+        let undeclared = OpScope::new(&env, evaluate, CallHeader::default());
+        let sent_before = connection.calls()?.len();
+        let error = capture(&playwright, &undeclared, input()?)
+            .await
+            .err()
+            .ok_or("an op that does not declare Capture must not be captured")?;
+        assert_eq!(
+            (error.owner(), error.code()),
+            (ErrorOwner::Neo, "internal"),
+            "{error}"
+        );
+        assert_eq!(
+            connection.calls()?.len(),
+            sent_before,
+            "the undeclared op admitted and prepared nothing"
+        );
+        let captures = connection
+            .calls()?
+            .iter()
+            .filter(|call| call.method == "Page.captureScreenshot")
+            .count();
+        assert_eq!(
+            captures, 1,
+            "only the op that declares Capture was captured"
+        );
+        Ok(())
+    }
+
+    /// The declaration is checked before anything else: an op that does not declare `Capture`
+    /// is refused as `neo / internal` even when its browser is gone, so it never reached the
+    /// page's lookup, admission or the pointer hide.
+    #[tokio::test]
+    async fn tests_that_an_undeclared_op_is_refused_before_its_page_is_looked_up()
+    -> Result<(), Box<dyn Error>> {
+        let playwright = Playwright::new(
+            test_env::offline_session(),
+            Arc::new(RecordingHooks::default()),
+        );
+        let env = TestEnv::new();
+        let evaluate = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
+        let undeclared = OpScope::new(&env, evaluate, CallHeader::default());
+        let input: ScreenshotInput =
+            serde_json::from_value(json!({ "page": { "$neo": "page", "id": 1, "tab": 7 } }))?;
+        let error = capture(&playwright, &undeclared, input)
+            .await
+            .err()
+            .ok_or("an undeclared op is refused")?;
+        assert_eq!(
+            (error.owner(), error.code()),
+            (ErrorOwner::Neo, "internal"),
+            "{error}"
         );
         Ok(())
     }

@@ -41,8 +41,8 @@ use browseros_core::sensitive_fields::FieldValues;
 use serde_json::Value;
 
 use crate::op_scope::OpScope;
-use crate::page::OpPage;
 use crate::page::evaluate_guard::{self, FRAME_BUDGET, Found, TreeFrame, Unswept};
+use crate::page::{OpPage, page_value};
 use crate::probe::{PageText, ProbeMask, ProbeReply};
 use crate::world::SealedWorld;
 use crate::{ErrorCode, Playwright, PlaywrightError, resolve};
@@ -157,7 +157,7 @@ impl SiteValues {
     /// Page text outside a read's value (a document's markup or title, a strict violation's
     /// previews), masked as one string.
     pub(crate) fn mask_text(&self, text: String) -> String {
-        evaluate_guard::mask_text(&self.0, text)
+        page_value::mask_text(&self.0, text)
     }
 
     /// The values themselves, for the snapshot's stitch, which masks every frame's strings with

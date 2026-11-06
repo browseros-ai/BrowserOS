@@ -9,8 +9,9 @@
  *   uncaught failure as the op's own, with the owner and delivery the door decided, where a
  *   copy would settle as the script's `script_error`. It fixes the name and the first line and
  *   adds `timeout`, which the bootstrap says only by its class.
- * - the prelude refused a call before any op: `clientError` and `unsupportedError`, with the
- *   fields the dispatcher would have set for the same refusal (`not_sent`, never retryable).
+ * - the prelude refused a call before any op: `clientError`, `plainError` and
+ *   `unsupportedError`, with the fields the dispatcher would have set for the same refusal
+ *   (`not_sent`, never retryable).
  *   `waitTimeoutError` is the same idea for a wait deadline the prelude keeps across ops.
  *
  * The first line names the method the script called (`page.click: ...`), as playwright-core's
@@ -114,6 +115,21 @@ export function shapeBridgeError(
 /** A call the prelude refuses for its arguments: `script / invalid_input`, nothing sent. */
 export function clientError(api: string, message: string): Error {
   return withFields(new PlaywrightError(`${api}: ${message}`), {
+    code: 'invalid_input',
+    owner: 'script',
+    delivery: 'not_sent',
+    retryable: false,
+    timeout: false,
+  })
+}
+
+/**
+ * What upstream's client throws before it calls the server, with no `<api>:` prefix because the
+ * throw happens outside the channel call that adds one: "Too many arguments...", "Attempting to
+ * serialize unexpected value...", "Unknown polling option...". Fields as `clientError`'s.
+ */
+export function plainError(message: string): Error {
+  return withFields(new PlaywrightError(message), {
     code: 'invalid_input',
     owner: 'script',
     delivery: 'not_sent',

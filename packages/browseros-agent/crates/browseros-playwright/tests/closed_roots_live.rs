@@ -205,8 +205,11 @@ fn reads(page: &TestPage) -> Vec<Read> {
             op: "page.evaluate",
             input: json!({
                 "page": brand(page),
-                "expression": "() => document.getElementById('echo').textContent",
-                "isFunction": true,
+                "script": { "run": {
+                    "expression": "() => document.getElementById('echo').textContent",
+                    "isFunction": true,
+                    "arg": r#"{"v":"undefined"}"#,
+                } },
             }),
             expect: Expect::Is(json!(COPY)),
         },

@@ -351,13 +351,16 @@ mod tests {
 
     use super::{FrameWorlds, ParentLink, Place, SeqLookup, WorldKey};
     use crate::probe::ProbeFailure;
-    use crate::test_env::offline_session;
+    use crate::test_env;
     use crate::world::{FrameSeq, Installed, SealedWorld};
 
     type TestResult = Result<(), Box<dyn Error>>;
 
     fn session(id: &str) -> ProtocolSession {
-        ProtocolSession::for_session(offline_session().connection(), SessionId::from(id))
+        ProtocolSession::for_session(
+            test_env::offline_session().connection(),
+            SessionId::from(id),
+        )
     }
 
     fn key(session: &str, frame: &str) -> WorldKey {

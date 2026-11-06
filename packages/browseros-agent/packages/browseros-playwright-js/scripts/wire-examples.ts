@@ -56,6 +56,7 @@ const ANSWERS: Record<string, unknown> = {
   'locator.ariaSnapshot': { json: [], partial: [] },
   'page.frames': FRAMES,
   'page.opener': { opener: null },
+  'page.waitForFunction': { value: true, preview: 'true' },
   'context.newPage': {
     page: { $neo: 'page', id: 8, tab: 1008 },
     url: 'about:blank',
@@ -94,6 +95,8 @@ const EVERY_OP = `
   await page.waitForURL('**/a'); await page.waitForLoadState(); await page.title(); await page.content()
   await page.setContent('<p>hi</p>'); await page.opener(); await page.evaluate(() => 1)
   await l.evaluate((e) => e.id); await l.evaluateAll((es) => es.length); await page.waitForFunction(() => true)
+  await handle.evaluate((e) => e.id); await handle.$eval('b', (e) => e.id); await handle.$$eval('b', (es) => es.length)
+  await page.$eval('b', (e) => e.id); await page.$$eval('b', (es) => es.length); await page.evaluate((e, h) => h.id, handle)
   await page.screenshot(); await l.screenshot(); await page.pdf()
   const tab = await context.newPage()
   page.on('console', () => {}); context.on('page', () => {})

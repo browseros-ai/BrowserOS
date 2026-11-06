@@ -6,7 +6,11 @@ sources, vendored unmodified under `third_party/playwright/` (see its `README.md
 functions `suitableTextAlternatives` and `escapeClassName` first pass their input through
 Neo's `maskPageText`, and that file and `injectedScript.ts` import Neo's wrappers of
 `isomorphic/stringUtils.ts` helpers, which do the same
-(`packages/browseros-playwright-js/scripts/build.ts`). The bundle's header says so too. It also compiles Rust ports of two Playwright data files,
+(`packages/browseros-playwright-js/scripts/build.ts`). The bundle's header says so too. It
+also embeds `assets/main-world.js`, built from the vendored `packages/injected/src/utilityScript.ts`
+and `packages/isomorphic/utilityScriptSerializers.ts` unmodified, and `assets/prelude.js`, which
+bundles vendored `packages/isomorphic` helpers and `packages/protocol/src/serializers.ts`; there
+the two value serializers import Neo's stand-ins for `URL`, `Buffer`, `atob` and `btoa`. It also compiles Rust ports of two Playwright data files,
 `src/input/us_keyboard_layout.rs` and `src/input/mac_editing_commands.rs`, generated from the
 vendored files with their headers kept. Playwright is licensed under the Apache License,
 Version 2.0. Its `NOTICE` and `LICENSE` follow verbatim, with upstream's CRLF line endings

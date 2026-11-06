@@ -54,6 +54,12 @@ const BOOTSTRAP: &str = include_str!("../../../../apps/claw-sdk/src/runtime/js/b
 /// sites look for in stacks.
 const AGENT_FILE: &str = "run";
 
+/// claw-sdk's limits for one run's QuickJS (`config/defaults.rs` `JS_MEMORY_BYTES` and
+/// `JS_STACK_BYTES`), so a value too deep or too large for the agent's realm fails here as it
+/// does there.
+const JS_MEMORY_BYTES: usize = 64 * 1024 * 1024;
+const JS_STACK_BYTES: usize = 512 * 1024;
+
 /// What `__neo_invoke` hands each op to, as claw-sdk's dispatcher hands it to the crate.
 pub(crate) trait OpHost: Send + Sync {
     /// Runs op `name` with the JSON the prelude sent.
@@ -95,6 +101,8 @@ pub(crate) async fn run_script(
     script: &str,
 ) -> Result<Value, String> {
     let runtime = AsyncRuntime::new().map_err(|error| error.to_string())?;
+    runtime.set_memory_limit(JS_MEMORY_BYTES).await;
+    runtime.set_max_stack_size(JS_STACK_BYTES).await;
     let context = AsyncContext::full(&runtime)
         .await
         .map_err(|error| error.to_string())?;

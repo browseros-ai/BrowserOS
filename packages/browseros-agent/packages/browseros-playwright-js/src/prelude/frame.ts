@@ -11,14 +11,19 @@
 import { invoke, sleep } from './bridge'
 import type { ElementHandle } from './element-handle'
 import { EventEmitter } from './emitter'
-import { clientError, unsupportedError } from './errors'
+import { clientError, plainError, unsupportedError } from './errors'
+import {
+  assertMaxArguments,
+  type EvaluateOptions,
+  fromPageValue,
+  pageCall,
+} from './evaluation'
 import { FrameLocator, Locator, testIdAttributeName } from './locator'
 import type { OpName } from './ops.generated'
 import {
   CHECK_KEYS,
   DBLCLICK_KEYS,
   DRAG_KEYS,
-  evaluation,
   FILL_KEYS,
   HOVER_KEYS,
   inputFilePaths,
@@ -58,8 +63,10 @@ import type {
   OpInputs,
   OpOutputs,
   PageHandle,
+  PageScript,
   PointerOptions,
   ScreenshotOptions,
+  SerializedValue,
   SnapshotResult,
   Strictness,
   WaitForState,
@@ -413,27 +420,36 @@ export class Frame extends EventEmitter {
     return this._elementHandles('frame.$$', selector)
   }
 
-  $eval(
+  async $eval(
     selector: string,
     pageFunction: unknown,
     arg?: unknown,
   ): Promise<unknown> {
-    return this._evaluateOn(
-      'frame.$eval',
+    // biome-ignore lint/complexity/noArguments: upstream counts the arguments passed, not the parameters.
+    assertMaxArguments(arguments.length, 3)
+    const api = 'frame.$eval'
+    return await this._evaluateOn(
+      api,
       selector,
       false,
-      pageFunction,
-      arg,
+      pageCall(api, 'query', pageFunction, arg),
       true,
     )
   }
 
-  $$eval(
+  async $$eval(
     selector: string,
     pageFunction: unknown,
     arg?: unknown,
   ): Promise<unknown> {
-    return this._evaluateAll('frame.$$eval', selector, pageFunction, arg)
+    // biome-ignore lint/complexity/noArguments: upstream counts the arguments passed, not the parameters.
+    assertMaxArguments(arguments.length, 3)
+    const api = 'frame.$$eval'
+    return await this._evaluateAll(
+      api,
+      selector,
+      pageCall(api, 'query', pageFunction, arg),
+    )
   }
 
   waitForSelector(
@@ -482,15 +498,21 @@ export class Frame extends EventEmitter {
     return this._setContent('frame.setContent', html, options)
   }
 
-  evaluate(pageFunction: unknown, arg?: unknown): Promise<unknown> {
-    return this._evaluate('frame.evaluate', pageFunction, arg)
+  async evaluate(
+    pageFunction: unknown,
+    arg?: unknown,
+    options?: EvaluateOptions,
+  ): Promise<unknown> {
+    // biome-ignore lint/complexity/noArguments: upstream counts the arguments passed, not the parameters.
+    assertMaxArguments(arguments.length, 3)
+    return await this._evaluate('frame.evaluate', pageFunction, arg, options)
   }
 
   waitForFunction(
     pageFunction: unknown,
     arg?: unknown,
     options?: WaitForFunctionOptions,
-  ): Promise<ValueHandle> {
+  ): Promise<WaitHandle> {
     return this._waitForFunction(
       'frame.waitForFunction',
       pageFunction,
@@ -943,38 +965,41 @@ export class Frame extends EventEmitter {
     })
   }
 
+  /**
+   * `fn(element, arg)` on `selector`'s element: `$eval` takes the first match now (and quotes
+   * the selector as written when there is none), a locator waits for its element first.
+   */
   async _evaluateOn(
     api: string,
     selector: string,
     strict: boolean,
-    pageFunction: unknown,
-    arg: unknown,
+    script: PageScript,
     noWait: boolean,
     options: TimeoutOption = {},
   ): Promise<unknown> {
-    const call = evaluation(api, pageFunction, arg)
-    return await this._selectorOp(
+    const value = await this._selectorOp(
       'locator.evaluate',
       api,
       selector,
       strict,
       noWait ? 0 : this._timeout(options),
-      noWait ? { ...call, noWait: true } : call,
+      noWait ? { script, noWait: true, selector } : { script },
     )
+    return fromPageValue(value)
   }
 
+  /** `fn(elements, arg)` on every match of `selector` now. */
   async _evaluateAll(
     api: string,
     selector: string,
-    pageFunction: unknown,
-    arg: unknown,
+    script: PageScript,
   ): Promise<unknown> {
-    const call = evaluation(api, pageFunction, arg)
     const target = await this._locatorBrand(api, selector)
-    return await invoke('locator.evaluateAll', this._call(api, 0), {
+    const value = await invoke('locator.evaluateAll', this._call(api, 0), {
       target,
-      ...call,
+      script,
     })
+    return fromPageValue(value)
   }
 
   /** A snapshot rooted at `selector`, or at the page when `selector` is null. */
@@ -1114,39 +1139,43 @@ export class Frame extends EventEmitter {
     await this._page._navigated(api, this, result)
   }
 
+  /** upstream's `Frame.evaluate` after its argument count: the client's checks, then the op. */
   async _evaluate(
     api: string,
     pageFunction: unknown,
     arg: unknown,
+    options: EvaluateOptions | undefined,
   ): Promise<unknown> {
-    const call = evaluation(api, pageFunction, arg)
-    return await invoke('page.evaluate', this._call(api, 0), {
+    const script = pageCall(api, 'frame', pageFunction, arg, options)
+    const value = await invoke('page.evaluate', this._call(api, 0), {
       ...(await this._frameArgs(api)),
-      ...call,
+      script,
     })
+    return fromPageValue(value)
   }
 
+  /** upstream's `Frame.waitForFunction`: its polling check, unprefixed, comes first. */
   async _waitForFunction(
     api: string,
     pageFunction: unknown,
     arg: unknown,
     options: WaitForFunctionOptions = {},
-  ): Promise<ValueHandle> {
+  ): Promise<WaitHandle> {
     if (typeof options.polling === 'string' && options.polling !== 'raf')
-      throw clientError(api, `Unknown polling option: ${options.polling}`)
-    const call = evaluation(api, pageFunction, arg)
-    const value = await invoke(
+      throw plainError(`Unknown polling option: ${options.polling}`)
+    const script = pageCall(api, 'frame', pageFunction, arg)
+    const { value, preview } = await invoke(
       'page.waitForFunction',
       this._call(api, this._timeout(options)),
       {
         ...(await this._frameArgs(api)),
-        ...call,
+        script,
         ...(typeof options.polling === 'number'
           ? { polling: options.polling }
           : {}),
       },
     )
-    return new ValueHandle(value)
+    return new WaitHandle(value, preview)
   }
 
   /** Refreshes this frame from a frame-tree entry. */
@@ -1207,20 +1236,33 @@ export function refusedScreenshotOption(
   return undefined
 }
 
-/**
- * What `waitForFunction` resolves with. Playwright returns a JSHandle to the truthy value; Neo
- * passes values as JSON, so the handle holds the value itself and `jsonValue()` returns it.
- */
-export class ValueHandle {
-  readonly #value: unknown
+const HELD_VALUE =
+  "Neo's waitForFunction handle holds the value, not the page's object; read it with jsonValue()"
 
-  constructor(value: unknown) {
+/**
+ * What `waitForFunction` resolves to: upstream's JSHandle for the truthy value
+ * (`JSHandle.from`, PW:62147), as a snapshot. Neo keeps no page object past an op, so the
+ * handle holds the value Rust read when the wait ended, masked, in Playwright's format, and
+ * upstream's preview of it. `jsonValue()` reads that value afresh on every call, as upstream's
+ * does, and `toString()` is the preview. What needs the page's own object is refused.
+ */
+export class WaitHandle {
+  readonly #value: SerializedValue
+  readonly #preview: string
+
+  constructor(value: SerializedValue, preview: string) {
     this.#value = value
+    this.#preview = preview
     markHandle(this)
   }
 
   async jsonValue(): Promise<unknown> {
-    return this.#value
+    return fromPageValue(this.#value)
+  }
+
+  /** The value, for a script that passes this handle as its argument. */
+  _value(): unknown {
+    return fromPageValue(this.#value)
   }
 
   asElement(): null {
@@ -1230,6 +1272,26 @@ export class ValueHandle {
   async dispose(): Promise<void> {}
 
   toString(): string {
-    return `JSHandle@${typeof this.#value === 'object' ? JSON.stringify(this.#value) : String(this.#value)}`
+    return this.#preview
+  }
+
+  evaluate(): Promise<never> {
+    return Promise.reject(unsupportedError('jsHandle.evaluate', HELD_VALUE))
+  }
+
+  evaluateHandle(): Promise<never> {
+    return Promise.reject(
+      unsupportedError('jsHandle.evaluateHandle', HELD_VALUE),
+    )
+  }
+
+  getProperty(): Promise<never> {
+    return Promise.reject(unsupportedError('jsHandle.getProperty', HELD_VALUE))
+  }
+
+  getProperties(): Promise<never> {
+    return Promise.reject(
+      unsupportedError('jsHandle.getProperties', HELD_VALUE),
+    )
   }
 }

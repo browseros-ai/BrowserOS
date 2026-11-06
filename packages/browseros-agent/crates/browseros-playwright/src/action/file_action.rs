@@ -1,7 +1,11 @@
 //! `setInputFiles(paths)`: upstream's `_setInputFiles` (server/dom.ts at v1.64.1), with the
-//! files set by core's file transfers, whose rules every file Neo hands a page follows.
+//! files set by core's file transfers, whose rules every file Neo hands a page follows. The
+//! crate's only code that hands a page files from Neo's disk, and so the gateway of
+//! `Capability::HostFiles`.
 //!
 //! ```text
+//!  an op whose spec does not declare HostFiles is refused, with nothing admitted
+//!  admit the page, lease its focus
 //!  outer loop (locator: re-resolve │ handle: once); the element only has to be attached
 //!    ① read { fileInput { multiple } }  ─ the input (or the label's control), pinned, after
 //!                                          upstream's checks and messages
@@ -16,16 +20,27 @@
 use browseros_core::CoreError;
 use serde::Deserialize;
 
+use crate::action::focus_lease::lease;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
 use crate::op_scope::{OpScope, Sent};
+use crate::op_spec::Capability;
 use crate::page::OpPage;
 use crate::probe::{ProbeFailure, ProbeReply, ProbeRequest, Read};
 use crate::read::backend_node;
 use crate::resolve::{self, Resolved};
 use crate::target::{Strictness, Target};
 use crate::world::{BackendNodeId, Pin};
-use crate::{ErrorCode, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError};
+
+/// `locator.setInputFiles(paths)`: host paths, which core checks.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SetInputFilesInput {
+    target: Target,
+    strict: Strictness,
+    files: Vec<String>,
+}
 
 /// A `fileInput` read's value (protocol.ts `FileInput`).
 #[derive(Debug, Deserialize)]
@@ -34,15 +49,23 @@ struct FileInput {
     pin: Pin,
 }
 
-/// Sets `files` on `target`'s file input, as upstream's `setInputFiles`.
+/// Sets `input`'s files on its target's file input, as upstream's `setInputFiles`. It admits
+/// its own page so that the op's declaration is checked first: a host serves an op unheld
+/// unless its spec declares `HostFiles`, and such an op must not reach a page here.
 pub(crate) async fn set_input_files(
+    pw: &Playwright,
     scope: &OpScope<'_>,
-    page: &OpPage<'_>,
-    target: &Target,
-    strictness: Strictness,
-    files: &[String],
+    input: SetInputFilesInput,
 ) -> Result<(), PlaywrightError> {
-    let subject = Subject::new(page, scope, target, strictness);
+    scope.require(Capability::HostFiles)?;
+    let SetInputFilesInput {
+        target,
+        strict,
+        files,
+    } = input;
+    let page = OpPage::admit_handle(pw, scope, target.page()).await?;
+    let _lease = lease(scope, &page).await?;
+    let subject = Subject::new(&page, scope, &target, strict);
     subject.log_waiting();
     let backoff = Backoff::outer(scope.timeout());
     // Nothing is waited for once the input is found, so a timeout means it never was.
@@ -57,7 +80,7 @@ pub(crate) async fn set_input_files(
         let Some(located) = located? else {
             continue;
         };
-        let found = scope.within(input_node(scope, &subject, &located, strictness, files));
+        let found = scope.within(input_node(scope, &subject, &located, strict, &files));
         let Ok(found) = found.await else {
             return Err(timed_out());
         };
@@ -65,7 +88,7 @@ pub(crate) async fn set_input_files(
             continue;
         };
         let sent = scope.send_effect()?;
-        return upload(&sent, scope, page, &located, node, files).await;
+        return upload(&sent, scope, &page, &located, node, &files).await;
     }
     Err(timed_out())
 }
@@ -128,5 +151,69 @@ async fn upload(
         Ok(Err(CoreError::Message(message))) => Err(scope.fail(ErrorCode::InvalidInput, &message)),
         Ok(Err(error)) => Err(scope.core_error(&error)),
         Err(_expired) => Err(scope.timed_out(ErrorCode::NotActionable)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::sync::Arc;
+
+    use browseros_trace::ErrorOwner;
+    use serde_json::json;
+
+    use super::{SetInputFilesInput, set_input_files};
+    use crate::op_scope::OpScope;
+    use crate::target::CallHeader;
+    use crate::test_env::{TestEnv, offline_session};
+    use crate::test_support::RecordingHooks;
+    use crate::{ErrorCode, Op, Playwright};
+
+    /// A host serves an op unheld unless its spec declares `HostFiles`, so the file action
+    /// refuses any other op before it admits a page, while `locator.setInputFiles` goes on to
+    /// admit its page, which fails here for want of a browser. Paused: core waits out its own
+    /// attach timeout before it gives up on the page.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_only_an_op_declaring_host_files_reaches_the_page()
+    -> Result<(), Box<dyn Error>> {
+        let playwright = Playwright::new(offline_session(), Arc::new(RecordingHooks::default()));
+        let env = TestEnv::new();
+        let input = || {
+            serde_json::from_value::<SetInputFilesInput>(json!({
+                "target": { "$neo": "locator", "page": { "$neo": "page", "id": 7, "tab": 1007 },
+                            "display": "getByRef('f7e3')",
+                            "chunks": [{ "parts": [{ "name": "aria-ref", "body": "f7e3",
+                                                     "source": "f7e3" }] }] },
+                "strict": "strict",
+                "files": ["/tmp/upload.txt"],
+            }))
+        };
+        let click = Op::from_name("locator.click").ok_or("locator.click is an op")?;
+        let undeclared = OpScope::new(&env, click, CallHeader::default());
+        let refused = set_input_files(&playwright, &undeclared, input()?)
+            .await
+            .err()
+            .ok_or("an op that does not declare HostFiles must not reach the page")?;
+        assert_eq!(
+            (refused.owner(), refused.error_code()),
+            (ErrorOwner::Neo, Some(ErrorCode::Internal)),
+            "{refused}"
+        );
+        let upload = Op::from_name("locator.setInputFiles").ok_or("setInputFiles is an op")?;
+        let declared = OpScope::new(&env, upload, CallHeader::default());
+        let admitting = set_input_files(&playwright, &declared, input()?)
+            .await
+            .err()
+            .ok_or("no browser, no page")?;
+        assert_eq!(
+            admitting.error_code(),
+            Some(ErrorCode::BrowserDisconnected),
+            "the declared op goes on to admit its page: {admitting}"
+        );
+        assert!(
+            env.calls().is_empty(),
+            "neither op noted, rechecked or marked anything sent"
+        );
+        Ok(())
     }
 }

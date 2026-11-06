@@ -3,7 +3,8 @@
 use browseros_trace::{Effect, JsonPointer, RedactionPolicy};
 
 /// One op's registration metadata. claw-sdk copies it field by field into its `MethodSpec`;
-/// the prelude's `ops.generated.ts` carries the same name, effect, target and lifetime.
+/// the prelude's `ops.generated.ts` carries the same name, effect, target and lifetime. A host
+/// holds and polices ops by their [`OpSpec::capabilities`], which the prelude has no use for.
 #[derive(Clone, Copy, Debug)]
 pub struct OpSpec {
     /// The wire name the prelude invokes, such as `locator.click`. Unique across all ops.
@@ -22,6 +23,40 @@ pub struct OpSpec {
     /// sensitive (a password, card or one-time-code field), such as `/value` for a fill. Each
     /// names a top-level field of the op's input and starts with `/`.
     pub sensitive_args: &'static [&'static str],
+    /// What the op reaches beyond its page's sealed world. Empty for an op that only reads and
+    /// acts in the sealed world or sends trusted input, which is most of them. A unit test pins
+    /// every op's list to an audit: changing one changes what a host holds or polices.
+    pub capabilities: &'static [Capability],
+}
+
+/// What an op reaches beyond its page's sealed world, where the crate's own reads and actions
+/// run and field values are masked at the source. These are the facts a host holds and polices
+/// ops by, instead of lists of op names, so an op added later that reaches one is held or
+/// policed from its first build rather than served unpoliced until someone lists it.
+///
+/// Each capability has one gateway in the crate, which first refuses, as `neo / internal` with
+/// nothing sent, an op whose spec does not declare the capability (`OpScope::require`). An op
+/// routed to a gateway without its declaration therefore fails on first use instead of being
+/// served unpoliced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Capability {
+    /// Runs agent-supplied script, or HTML whose scripts run, in a page's main world. There the
+    /// script reads the page's own state and every frame of its site, and no seal masks a
+    /// field. Gateway: the evaluate guard's entry, `EvaluateGuard::sweep_before`.
+    /// `page.setContent` reaches the main world without passing it, because its HTML is written
+    /// from the sealed world, so only the audit test keeps its declaration.
+    MainWorld,
+    /// Returns the page's pixels, which no seal masks: `page.screenshot`, with its element
+    /// forms, and `page.pdf`. A host refuses such an op on a private tab, and withholds pixels
+    /// taken while the tab went private. Gateway: `Playwright::capture_allowed`, which each
+    /// capture runs right before it reads pixels.
+    Capture,
+    /// Changes which tab Neo's one screen shows, a screen the owner's takeovers and the control
+    /// displays share. No op declares it yet, and so it has no gateway.
+    Screen,
+    /// Hands files from Neo's own disk, which also holds Neo's secrets, to a page whose script
+    /// can then read them. Gateway: the file action, `file_action::set_input_files`.
+    HostFiles,
 }
 
 /// Where the page an op acts on sits in its input.
@@ -66,6 +101,12 @@ impl OpSpec {
         }
     }
 
+    /// Whether the op declares `capability`.
+    #[must_use]
+    pub fn uses(&self, capability: Capability) -> bool {
+        self.capabilities.contains(&capability)
+    }
+
     /// An op that only reads.
     pub(crate) const fn read(name: &'static str, target: OpTarget, doc: &'static str) -> Self {
         Self {
@@ -75,6 +116,7 @@ impl OpSpec {
             target,
             lifetime: OpLifetime::Operation,
             sensitive_args: &[],
+            capabilities: &[],
         }
     }
 
@@ -98,6 +140,14 @@ impl OpSpec {
     pub(crate) const fn background(self) -> Self {
         Self {
             lifetime: OpLifetime::Background,
+            ..self
+        }
+    }
+
+    /// The same op, declaring what it reaches beyond its page's sealed world.
+    pub(crate) const fn using(self, capabilities: &'static [Capability]) -> Self {
+        Self {
+            capabilities,
             ..self
         }
     }

@@ -3,7 +3,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use browseros_core::BrowserSession;
+use browseros_core::{BrowserSession, PageId};
 use serde_json::Value;
 
 use crate::action::action_op;
@@ -13,6 +13,7 @@ use crate::input::input_op;
 use crate::op::{Op, OpKind};
 use crate::op_input::OpInput;
 use crate::op_scope::OpScope;
+use crate::op_spec::Capability;
 use crate::page::{PageRegistry, context_op, page_op};
 use crate::read::read_op;
 use crate::snapshot::snapshot_op;
@@ -98,6 +99,23 @@ impl Playwright {
         self.hooks.as_ref()
     }
 
+    /// The gateway of `Capability::Capture`: the one check every capture runs right before it
+    /// reads `page`'s pixels. It first refuses an op whose spec does not declare `Capture`,
+    /// because a host applies its pixel rules only to the ops that declare it; claw-sdk's rule
+    /// withholds pixels taken while the tab went private, which this one check cannot see.
+    /// Then it asks the host whether the page may be captured now, since a page can turn
+    /// private while the op waits.
+    pub(crate) fn capture_allowed(
+        &self,
+        scope: &OpScope<'_>,
+        page: PageId,
+    ) -> Result<(), PlaywrightError> {
+        scope.require(Capability::Capture)?;
+        self.hooks
+            .capture_allowed(page)
+            .map_err(PlaywrightError::from)
+    }
+
     /// This instance's epoch.
     pub(crate) fn epoch(&self) -> &Epoch {
         &self.epoch
@@ -156,7 +174,7 @@ mod tests {
     use tokio::time;
 
     use super::Playwright;
-    use crate::test_env::{TestEnv, offline_session};
+    use crate::test_env::{self, TestEnv};
     use crate::{ErrorCode, Op, PlaywrightHooks, Refusal, TypedBy};
 
     struct NoHooks;
@@ -177,7 +195,7 @@ mod tests {
     -> Result<(), Box<dyn Error>> {
         const WHOLE_WITHOUT_ARGUMENTS: [&str; 3] =
             ["context.pages", "context.newPage", "events.next"];
-        let playwright = Playwright::new(offline_session(), Arc::new(NoHooks));
+        let playwright = Playwright::new(test_env::offline_session(), Arc::new(NoHooks));
         let env = TestEnv::new();
         let ops = Op::all().filter(|op| !WHOLE_WITHOUT_ARGUMENTS.contains(&op.spec().name));
         for op in ops {
@@ -209,7 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn tests_that_a_bad_header_never_reaches_a_family() -> Result<(), Box<dyn Error>> {
-        let playwright = Playwright::new(offline_session(), Arc::new(NoHooks));
+        let playwright = Playwright::new(test_env::offline_session(), Arc::new(NoHooks));
         let env = TestEnv::new();
         let op = Op::from_name("locator.click").ok_or("locator.click is an op")?;
         let error = playwright
@@ -247,7 +265,7 @@ mod tests {
             .get("ops")
             .and_then(Value::as_object)
             .ok_or("the examples are keyed by op")?;
-        let playwright = Playwright::new(offline_session(), Arc::new(NoHooks));
+        let playwright = Playwright::new(test_env::offline_session(), Arc::new(NoHooks));
         let mut refused = BTreeSet::new();
         let mut messages = Vec::new();
         for (name, inputs) in ops {

@@ -24,6 +24,12 @@ mod fixture_server;
     reason = "the capture refusal and the click serve pages_live, which includes this too"
 )]
 mod live_run;
+#[path = "support/locator.rs"]
+#[expect(
+    dead_code,
+    reason = "element scripts here need CSS and frame hops only"
+)]
+mod locator;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -37,7 +43,8 @@ use browseros_playwright::{ErrorCode, PlaywrightError};
 use browseros_trace::ErrorOwner;
 use fixture_server::{FixtureServer, Page, nest_pages};
 use futures_util::future::BoxFuture;
-use live_run::{EnvCall, LiveRun, TestPage, TestResult, brand};
+use live_run::{EnvCall, LiveRun, TestPage, TestResult, brand, plain};
+use locator::{attr, css, enter_frame, locator};
 use serde_json::{Value, json};
 use tokio::sync::{Semaphore, broadcast, mpsc};
 use tokio::time;
@@ -48,6 +55,9 @@ static ALONE: Semaphore = Semaphore::const_new(1);
 
 /// From top, a3's field: b1, then c2, then a3 (`frames` crosses origins, `document` does not).
 const A3_FIELD: &str = "frames[1].frames[0].frames[0].document.querySelector('input')";
+
+/// From b2 (under a1), its same-origin sibling b1's field, on another session.
+const B1_FIELD: &str = "parent.parent.frames[1].document.querySelector('input')";
 
 /// `hang.html` spins its main thread forever from 1.5 s after its load event.
 const HANG_STARTS: Duration = Duration::from_millis(2_000);
@@ -84,7 +94,12 @@ where
     result
 }
 
-/// `page.evaluate(fn)` as the prelude sends it.
+/// A function script as the prelude sends it, its argument `undefined`.
+fn script(function: &str) -> Value {
+    json!({ "run": { "expression": function, "isFunction": true, "arg": r#"{"v":"undefined"}"# } })
+}
+
+/// `page.evaluate(fn)` as the prelude sends it; the result is in Playwright's in-page format.
 async fn page_evaluate(
     run: &LiveRun,
     page: &TestPage,
@@ -92,23 +107,81 @@ async fn page_evaluate(
 ) -> Result<Value, PlaywrightError> {
     run.invoke(
         "page.evaluate",
-        json!({ "page": brand(page), "expression": function, "isFunction": true }),
+        json!({ "page": brand(page), "script": script(function) }),
     )
     .await
 }
 
-/// `page.waitForFunction(fn)` as the prelude sends it.
+/// `page.waitForFunction(fn)` as the prelude sends it: the value it settled with.
 async fn wait_for_function(
     run: &LiveRun,
     page: &TestPage,
     function: &str,
 ) -> Result<Value, PlaywrightError> {
+    let waited = run
+        .invoke(
+            "page.waitForFunction",
+            json!({ "call": { "timeoutMs": 5_000 }, "page": brand(page), "script": script(function) }),
+        )
+        .await?;
+    Ok(waited.get("value").cloned().unwrap_or(Value::Null))
+}
+
+/// `selector` in the frames down `titles` from the main frame (the nested fixture's iframes
+/// carry their page's name as their title).
+fn down(page: &TestPage, titles: &[&str], selector: &str) -> Value {
+    let mut parts = Vec::new();
+    for title in titles {
+        parts.push(attr(&format!("[title=\"{title}\"s]")));
+        parts.push(enter_frame());
+    }
+    parts.push(css(selector));
+    locator(
+        page,
+        &parts,
+        &format!("{titles:?} >> locator('{selector}')"),
+    )
+}
+
+/// `locator.evaluate(fn)`, or `$eval` for an `api` ending so, as the prelude sends it; the
+/// answer as plain JSON.
+async fn element_evaluate(
+    run: &LiveRun,
+    api: &str,
+    target: &Value,
+    function: &str,
+) -> Result<Value, PlaywrightError> {
+    let no_wait = api.ends_with("$eval");
     run.invoke(
-        "page.waitForFunction",
-        json!({ "call": { "timeoutMs": 5_000 }, "page": brand(page), "expression": function,
-                "isFunction": true }),
+        "locator.evaluate",
+        json!({ "call": { "api": api, "timeoutMs": 10_000 }, "target": target,
+                "strict": if no_wait { "firstMatch" } else { "strict" }, "noWait": no_wait,
+                "script": script(function) }),
     )
     .await
+    .map(plain)
+}
+
+/// `locator.evaluateAll(fn)` on `target`; the answer as plain JSON.
+async fn evaluate_all(
+    run: &LiveRun,
+    target: &Value,
+    function: &str,
+) -> Result<Value, PlaywrightError> {
+    run.invoke(
+        "locator.evaluateAll",
+        json!({ "call": { "api": "locator.evaluateAll", "timeoutMs": 0 }, "target": target,
+                "script": script(function) }),
+    )
+    .await
+    .map(plain)
+}
+
+/// Makes the field `target` names a password holding `secret`, from its own main world.
+async fn type_password(run: &LiveRun, target: &Value, secret: &str) -> TestResult {
+    let function = format!("(el) => {{ el.type = 'password'; el.value = {secret:?}; return 1; }}");
+    element_evaluate(run, "locator.evaluate", target, &function).await?;
+    Ok(())
 }
 
 /// The host was told `secret`, so it registers it.
@@ -157,13 +230,28 @@ async fn tests_that_a_top_script_reads_a_same_site_frame_under_cross_site_frames
             let read = page_evaluate(&run, &page, &format!("() => [document.title, {A3_FIELD}.value]")).await?;
             assert_eq!(
                 read,
-                json!(["Top", "[private]"]),
+                json!({ "a": ["Top", "[private]"], "id": 1 }),
                 "page.evaluate on top reaches a3 through two cross-site frames, and a3 is swept"
             );
             reported(&run, "a3-secret-55");
             let waited =
                 wait_for_function(&run, &page, &format!("() => {A3_FIELD}.value")).await?;
             assert_eq!(waited, json!("[private]"), "page.waitForFunction");
+            run.eval(&page, "(() => { const f = document.querySelector('input'); f.type = 'password'; f.value = 'top-secret-33'; return 1; })()")
+                .await?;
+            let from_a3 = element_evaluate(
+                &run,
+                "locator.evaluate",
+                &down(&page, &["b1", "c2", "a3"], "button"),
+                "(el) => [el.textContent, top.document.querySelector('input').value]",
+            )
+            .await?;
+            assert_eq!(
+                from_a3,
+                json!(["A3 button", "[private]"]),
+                "a script in a3 reaches top, the page's own session, and it is swept"
+            );
+            reported(&run, "top-secret-33");
             Ok(())
         }
         .await;
@@ -219,7 +307,7 @@ async fn tests_that_an_oopif_under_a_same_process_frame_is_found() -> TestResult
                 page_evaluate(&run, &page, &format!("() => [frames.length, {leaf}.value]")).await?;
             assert_eq!(
                 read,
-                json!([1, "[private]"]),
+                json!({ "a": [1, "[private]"], "id": 1 }),
                 "the frame of top's site under the bridge is swept"
             );
             reported(&run, "deep-secret-88");
@@ -296,7 +384,7 @@ async fn tests_that_an_oopif_in_a_closed_shadow_root_is_found() -> TestResult {
                 page_evaluate(&run, &page, &format!("() => [frames.length, {leaf}.value]")).await?;
             assert_eq!(
                 read,
-                json!([0, "[private]"]),
+                json!({ "a": [0, "[private]"], "id": 1 }),
                 "the frame of top's site under the shadow-tree bridge is swept"
             );
             reported(&run, "shadow-secret-77");
@@ -541,6 +629,57 @@ async fn tests_that_a_lost_session_never_skips_a_same_site_frame() -> TestResult
     .await
 }
 
+/// A script in b2 reaches its same-origin sibling b1, which sits on another session: every
+/// element form sweeps it, and the host learns b1's value (fx-e `c77bb3c6e`, measured raw on
+/// r10c).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_an_oopif_script_reads_its_same_origin_sibling_masked() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let server = FixtureServer::start(nest_pages()).await?;
+    let url = server.url("127.0.0.1", "/nest/top.html");
+    on_page(LiveRun::connect().await?, &url, |run, page| async move {
+        let result = async {
+            type_password(&run, &down(&page, &["b1"], "input"), "b1-secret-77").await?;
+            let in_b2 = down(&page, &["a1", "b2"], "button");
+            let read = format!("(el) => [el.textContent, {B1_FIELD}.value]");
+            for api in ["locator.evaluate", "page.$eval"] {
+                let value = element_evaluate(&run, api, &in_b2, &read).await?;
+                assert_eq!(
+                    value,
+                    json!(["B2 button", "[private]"]),
+                    "{api}: b2's script reaches b1 on another session, and b1 is swept"
+                );
+            }
+            let all = evaluate_all(
+                &run,
+                &in_b2,
+                &format!("(els) => [els.length, {B1_FIELD}.value]"),
+            )
+            .await?;
+            assert_eq!(all, json!([1, "[private]"]), "locator.evaluateAll");
+            let handle = run
+                .invoke(
+                    "locator.elementHandle",
+                    json!({ "call": { "timeoutMs": 10_000 }, "target": in_b2, "strict": "strict" }),
+                )
+                .await?;
+            let by_handle =
+                element_evaluate(&run, "elementHandle.evaluate", &handle, &read).await?;
+            assert_eq!(
+                by_handle,
+                json!(["B2 button", "[private]"]),
+                "elementHandle.evaluate"
+            );
+            reported(&run, "b1-secret-77");
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
 /// A same-site frame that cannot be swept: another origin of the page's site, asking for an
 /// origin-keyed agent cluster, so Chromium gives it a process of its own (measured), which
 /// then spins. The page's own frame still answers.
@@ -572,13 +711,22 @@ async fn tests_that_a_hung_same_site_frame_refuses_the_script_with_nothing_sent(
                 "the page's own frame still answers"
             );
             let script = "() => { window.ran = true; return document.getElementById('p').value; }";
-            for api in ["page.evaluate", "page.waitForFunction"] {
+            let field = locator(&page, &[css("#p")], "locator('#p')");
+            for api in ["page.evaluate", "page.waitForFunction", "locator.evaluate"] {
                 run.clear_calls();
                 let started = Instant::now();
-                let refused = if api == "page.evaluate" {
-                    page_evaluate(&run, &page, script).await
-                } else {
-                    wait_for_function(&run, &page, script).await
+                let refused = match api {
+                    "page.evaluate" => page_evaluate(&run, &page, script).await,
+                    "page.waitForFunction" => wait_for_function(&run, &page, script).await,
+                    _ => {
+                        element_evaluate(
+                            &run,
+                            api,
+                            &field,
+                            "(el) => { window.ran = true; return el.value; }",
+                        )
+                        .await
+                    }
                 };
                 let took = started.elapsed();
                 let error = refused
@@ -632,7 +780,7 @@ async fn tests_that_a_hung_cross_site_frame_does_not_slow_page_evaluate() -> Tes
                 let started = Instant::now();
                 let read = page_evaluate(&run, &page, &format!("() => [frames.length, {A3_FIELD}.value]")).await?;
                 took.push(started.elapsed());
-                assert_eq!(read, json!([3, "[private]"]), "the same-site frame is still swept");
+                assert_eq!(read, json!({ "a": [3, "[private]"], "id": 1 }), "the same-site frame is still swept");
             }
             took.sort();
             let slowest = took.last().copied().unwrap_or_default();

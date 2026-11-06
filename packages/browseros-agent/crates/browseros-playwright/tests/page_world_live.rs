@@ -102,6 +102,16 @@ async fn goto(run: &LiveRun, page: &TestPage, url: &str) -> Result<Value, Playwr
     .await
 }
 
+/// A script as the prelude sends it, `arg` already in Playwright's in-page format.
+fn script(expression: &str, is_function: bool, arg: &Value) -> Value {
+    json!({ "run": { "expression": expression, "isFunction": is_function, "arg": arg.to_string() } })
+}
+
+/// Playwright's in-page form of `undefined`, the argument a script given none receives.
+fn undefined() -> Value {
+    json!({ "v": "undefined" })
+}
+
 /// `page.evaluate(fn)` as the prelude sends it.
 async fn evaluate(
     run: &LiveRun,
@@ -110,9 +120,30 @@ async fn evaluate(
 ) -> Result<Value, PlaywrightError> {
     run.invoke(
         "page.evaluate",
-        json!({ "page": brand(page), "expression": function, "isFunction": true }),
+        json!({ "page": brand(page), "script": script(function, true, &undefined()) }),
     )
     .await
+}
+
+/// `page.waitForFunction(fn)` as the prelude sends it, with `extra` fields (`polling`).
+async fn wait_for_function(
+    run: &LiveRun,
+    page: &TestPage,
+    timeout_ms: u64,
+    function: &str,
+    extra: Value,
+) -> Result<Value, PlaywrightError> {
+    let mut input = json!({ "call": { "timeoutMs": timeout_ms }, "page": brand(page),
+                            "script": script(function, true, &undefined()) });
+    if let (Some(input), Value::Object(extra)) = (input.as_object_mut(), extra) {
+        input.extend(extra);
+    }
+    run.invoke("page.waitForFunction", input).await
+}
+
+/// An error message's first line: upstream keeps the page's stack lines after it.
+fn first_line(error: &PlaywrightError) -> &str {
+    error.message().lines().next().unwrap_or_default()
 }
 
 /// Fills the page's fields from the page's own world, as a user or the page would.
@@ -143,7 +174,7 @@ async fn tests_that_evaluate_masks_a_typed_password_the_page_still_holds_raw() -
             .await?;
             assert_eq!(
                 echoed,
-                json!(["[private]", "you typed [private]", "[private]", "[private]"]),
+                json!({ "a": ["[private]", "you typed [private]", "[private]", "[private]"], "id": 1 }),
                 "the main frame's and the same-process frame's values are masked, a code as a \
                  number too"
             );
@@ -196,30 +227,28 @@ async fn tests_that_evaluate_returns_page_values_no_field_holds_untouched() -> T
             let expression = run
                 .invoke(
                     "page.evaluate",
-                    json!({ "page": brand(&page), "expression": "document.title", "isFunction": false }),
+                    json!({ "page": brand(&page), "script": script("document.title", false, &undefined()) }),
                 )
                 .await?;
             assert_eq!(expression, json!("Login"), "a string is an expression");
+            let x = json!({ "o": [{ "k": "x", "v": 21 }], "id": 1 });
             let with_arg = run
                 .invoke(
                     "page.evaluate",
-                    json!({ "page": brand(&page), "expression": "({ x }) => x * 2",
-                            "isFunction": true, "arg": { "x": 21 } }),
+                    json!({ "page": brand(&page), "script": script("({ x }) => x * 2", true, &x) }),
                 )
                 .await?;
             assert_eq!(with_arg, json!(42));
+            let null = json!({ "v": "null" });
             let null_arg = run
                 .invoke(
                     "page.evaluate",
-                    json!({ "page": brand(&page), "expression": "(a) => a === null",
-                            "isFunction": true, "arg": null }),
+                    json!({ "page": brand(&page), "script": script("(a) => a === null", true, &null) }),
                 )
                 .await?;
             assert_eq!(null_arg, json!(true), "a null argument stays null");
-            let undefined = evaluate(&run, &page, "() => undefined").await?;
-            assert_eq!(undefined, json!(null), "JSON has no undefined");
-            let shorthand = evaluate(&run, &page, "async answer() { return 7; }").await?;
-            assert_eq!(shorthand, json!(7), "a method shorthand runs, as upstream");
+            let nothing = evaluate(&run, &page, "() => undefined").await?;
+            assert_eq!(nothing, undefined(), "undefined comes back as itself");
             Ok(())
         }
         .await;
@@ -253,7 +282,15 @@ async fn tests_that_a_thrown_error_reads_as_playwrights_page_evaluate_message() 
                     .await
                     .err()
                     .ok_or("the script throws")?;
-                assert_eq!(error.message(), message);
+                assert_eq!(first_line(&error), message);
+                assert!(
+                    error
+                        .message()
+                        .lines()
+                        .skip(1)
+                        .all(|line| line.starts_with("    at ")),
+                    "the page's stack lines follow, as upstream keeps them: {error}"
+                );
                 assert_eq!(error.error_code(), Some(ErrorCode::PageError));
                 assert_eq!(error.owner(), ErrorOwner::Website);
                 assert_eq!(error.answer(), Answer::Definite, "the script ran and threw");
@@ -272,20 +309,18 @@ async fn tests_that_wait_for_function_polls_until_truthy_and_times_out() -> Test
     on_page("/login.html", |run, _server, page| async move {
         let result = async {
             type_secrets(&run, &page).await?;
-            run.eval(&page, "setTimeout(() => { window.ready = document.getElementById('pw').value; }, 300)")
-                .await?;
+            run.eval(
+                &page,
+                "setTimeout(() => { window.ready = document.getElementById('pw').value; }, 300)",
+            )
+            .await?;
             let started = Instant::now();
-            let ready = run
-                .invoke(
-                    "page.waitForFunction",
-                    json!({ "call": { "timeoutMs": 5000 }, "page": brand(&page),
-                            "expression": "() => window.ready", "isFunction": true }),
-                )
-                .await?;
+            let ready =
+                wait_for_function(&run, &page, 5000, "() => window.ready", json!({})).await?;
             assert_eq!(
                 ready,
-                json!("[private]"),
-                "the truthy result leaves the page masked"
+                json!({ "value": "[private]", "preview": "[private]" }),
+                "the truthy result and its preview leave the page masked"
             );
             assert!(
                 started.elapsed() >= Duration::from_millis(250),
@@ -293,27 +328,30 @@ async fn tests_that_wait_for_function_polls_until_truthy_and_times_out() -> Test
                 started.elapsed()
             );
 
-            let counted = run
-                .invoke(
-                    "page.waitForFunction",
-                    json!({ "call": { "timeoutMs": 5000 }, "page": brand(&page),
-                            "expression": "() => (window.polls = (window.polls || 0) + 1) >= 3 && window.polls",
-                            "isFunction": true, "polling": 20 }),
-                )
-                .await?;
-            assert_eq!(counted, json!(3), "each poll runs the function once");
+            let counted = wait_for_function(
+                &run,
+                &page,
+                5000,
+                "() => (window.polls = (window.polls || 0) + 1) >= 3 && window.polls",
+                json!({ "polling": 20 }),
+            )
+            .await?;
+            assert_eq!(
+                counted,
+                json!({ "value": 3, "preview": "3" }),
+                "each poll runs the function once"
+            );
 
             let started = Instant::now();
-            let error = run
-                .invoke(
-                    "page.waitForFunction",
-                    json!({ "call": { "timeoutMs": 500 }, "page": brand(&page),
-                            "expression": "() => window.never", "isFunction": true }),
-                )
+            let error = wait_for_function(&run, &page, 500, "() => window.never", json!({}))
                 .await
                 .err()
                 .ok_or("a function that stays falsy times out")?;
-            assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+            assert!(
+                started.elapsed() < Duration::from_secs(3),
+                "{:?}",
+                started.elapsed()
+            );
             assert_eq!(error.error_code(), Some(ErrorCode::WaitTimeout));
             assert_eq!(error.timed_out(), TimedOut::Yes);
             assert!(
@@ -323,16 +361,17 @@ async fn tests_that_wait_for_function_polls_until_truthy_and_times_out() -> Test
                 "{error}"
             );
 
-            let thrown = run
-                .invoke(
-                    "page.waitForFunction",
-                    json!({ "call": { "timeoutMs": 5000 }, "page": brand(&page),
-                            "expression": "() => { throw new Error('no'); }", "isFunction": true }),
-                )
-                .await
-                .err()
-                .ok_or("a throwing function fails the wait")?;
-            assert_eq!(thrown.message(), "page.waitForFunction: Error: no");
+            let thrown = wait_for_function(
+                &run,
+                &page,
+                5000,
+                "() => { throw new Error('no'); }",
+                json!({}),
+            )
+            .await
+            .err()
+            .ok_or("a throwing function fails the wait")?;
+            assert_eq!(first_line(&thrown), "page.waitForFunction: Error: no");
             Ok(())
         }
         .await;
@@ -372,7 +411,7 @@ async fn tests_that_main_world_scripts_are_sent_only_after_their_document_resolv
                     .invoke(
                         op,
                         json!({ "call": { "timeoutMs": 5000 }, "page": brand(&page),
-                                "expression": script, "isFunction": true }),
+                                "script": self::script(script, true, &undefined()) }),
                     )
                     .await
                     .err()

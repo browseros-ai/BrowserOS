@@ -18,8 +18,9 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The runtime import closure of packages/injected/src/injectedScript.ts (type-only imports are
 # erased by the bundler, so their files are not needed), minus highlight.ts, highlight.css and
-# consoleApi.ts, which the engine build replaces with stubs. Then urlMatch.ts for the agent
-# runtime, and the US keyboard table and macOS editing commands for the Rust keyboard port. An
+# consoleApi.ts, which the engine build replaces with stubs. Then urlMatch.ts and the protocol's
+# value serializers for the agent runtime, and the US keyboard table and macOS editing commands
+# for the Rust keyboard port. An
 # upstream import that is not on this list makes the engine build fail, so a missed file cannot
 # ship silently.
 #
@@ -56,6 +57,7 @@ FILES=(
   packages/isomorphic/yaml.ts
   packages/playwright-core/src/server/macEditingCommands.ts
   packages/playwright-core/src/server/usKeyboardLayout.ts
+  packages/protocol/src/serializers.ts
   tests/assets/counter.html
   tests/assets/deep-shadow.html
   tests/assets/dom.html

@@ -1,23 +1,48 @@
-//! Main-world scripts behind sdk-privacy's sweep (design D14), for `page.evaluate` and
-//! `page.waitForFunction`. One of the three files in core's `tests/page_js_guard.rs` ALLOWED
-//! list: the only code that sends script to a page's main world.
+//! Main-world scripts behind sdk-privacy's sweeps (design D14): `page.evaluate`,
+//! `page.waitForFunction`, and the element forms (`locator.evaluate`, `evaluateAll`,
+//! `elementHandle.evaluate`, `$eval`, `$$eval`). One of the three files in core's
+//! `tests/page_js_guard.rs` ALLOWED list: the only code that sends script to a page's main
+//! world, and so the gateway of `Capability::MainWorld`.
 //!
 //! ```text
-//!  EvaluateGuard::sweep_before   sealed `sweep` in every frame of the page in the main frame's
-//!                                site, on every session (sweep_scope), each within
-//!                                FRAME_BUDGET; one that misses it refuses with nothing sent
-//!  EvaluateGuard::run            name the main-world document, then
-//!                                OpScope::send_effect ──▶ Sent, then
-//!                                Runtime.callFunctionOn on that document ──▶ Unmasked
-//!  EvaluateGuard::finish         sweep again; mask the result, or the thrown message, with both
-//!  drop                          PlaywrightHooks::values_swept with every value either sweep found
+//!  EvaluateGuard::open    an op whose spec does not declare MainWorld is refused with nothing
+//!                         admitted, and a script the prelude refused is raised; then every
+//!                         element the script receives (its subject, its handle arguments) is
+//!                         bound in its document and handed to the seal's watch; then the first
+//!                         sweep: every frame of the page in the script frame's site, on every
+//!                         session (sweep_scope), each within FRAME_BUDGET; one that misses it
+//!                         refuses with nothing sent
+//!  EvaluateGuard::run     name the main-world document and resolve every bound element in the
+//!                         main world, then OpScope::send_effect ──▶ Sent, then
+//!                         Runtime.callFunctionOn(assets/main-world.js, userGesture)
+//!                         ──▶ Pending, which holds what the send produced
+//!  Pending::sweep         the same sweep ──▶ (EvaluateGuard, Outcome); one that misses it
+//!                         withholds the result
+//!  EvaluateGuard::finish  the answer read in Playwright's format and masked with every sweep's
+//!                         values (page_value), or the thrown text masked as a page_error
+//!  every sweep            PlaywrightHooks::values_swept with every value found so far, before
+//!                         the next send, and once more on drop when anything was sent
 //! ```
+//!
+//! Typestate is the point. `run` consumes a swept guard and returns a [`Pending`], whose one
+//! method is `sweep`, and only the swept [`EvaluateGuard`] has `finish`. What a send produced
+//! stays inside the `Pending` until its sweep hands it out, and the page's text in it is an
+//! opaque [`Answer`] that only `finish` reads. So no script goes out without a sweep since the
+//! last one, and no answer leaves without a sweep after the script that produced it. A
+//! `waitForFunction` that sweeps only before its first poll and after its last, and so returns
+//! raw a field that appeared and left mid-wait, cannot be written against it.
+//!
+//! The host learns every swept value before the next send, not only when the op ends: an alert
+//! or a download the script raises carries page text through the event stream while the op is
+//! still pending, and the host masks those events with the values it was told. A value that
+//! first appears while the script runs, and leaves in such an event before the sweep after the
+//! send, is not known yet: that is the residual.
 //!
 //! A main-world script reads the page's own, unsealed getters, so whatever it returns may hold a
 //! password the page shows. The sweeps hand Rust the raw value of every sensitive field the
 //! script could reach: those of every frame of its site, which it touches through `frames[…]`
 //! across any number of cross-site frames between them. What the script produced is an
-//! [`Unmasked`], whose only way out of the op is [`EvaluateGuard::finish`]. Results are always
+//! [`Answer`] whose only way out of the op is [`EvaluateGuard::finish`]. Results are always
 //! masked; there is no refuse mode (build-design graft 3). A frame of the site that cannot be
 //! swept fails the op closed: before the script nothing is sent, and after it the result is
 //! withheld. A frame that comes back gone is not skipped on that alone: unless the browser no
@@ -27,30 +52,42 @@
 //! The script runs on the main-world document node, never on an execution context id: context
 //! ids are per-renderer counters, and after a cross-process navigation a cached one can name a
 //! context of another world (measured, see `probe_call`). The sealed world names its document by
-//! handle, and `DOM.resolveNode` without a context id resolves that node in its main world.
+//! handle, and `DOM.resolveNode` without a context id resolves that node in its main world. The
+//! elements a script receives reach that world the same way, by backend node id, so they are
+//! objects of the document's own context, which a call on the document takes as arguments.
+//!
+//! Elements are where upstream runs them. One out of the document (a handle's node the page
+//! removed) still runs, as upstream's does: the seal holds every bound element weakly and, at
+//! every sweep from then on, sweeps the tree of each one that is out of the document then, so a
+//! field removed with it is masked (core's `seal.js`, `watch`). A handle argument is adopted
+//! only into its own document: the script frame's, on the op's page. Upstream also adopts one
+//! from a same-origin frame of the same process, through a context id Neo never names, so that
+//! case is a decided deviation with upstream's adoption error.
 
 use std::future::Future;
-use std::mem;
-use std::num::FpCategory;
 use std::time::Duration;
+use std::{mem, slice};
 
 use browseros_cdp::CdpError;
 use browseros_core::sensitive_fields::FieldValues;
-use browseros_core::{CoreError, FrameId, PageId, ProtocolSession};
+use browseros_core::{CoreError, FrameId, ProtocolSession};
 use futures_util::future;
 use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 use tokio::time::{self, Instant};
 
 use crate::op_scope::{OpScope, Sent};
+use crate::op_spec::Capability;
 use crate::page::OpPage;
 use crate::page::document_watch::{FrameFields, decode};
 use crate::page::frame_tree::frame_tree;
+use crate::page::page_value::{self, MaskedValue, PageValue, TOO_DEEP, Unreadable};
 use crate::page::sweep_scope::{self, Site};
 use crate::page::world_call::{unexpected, with_world};
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest};
-use crate::resolve::failed;
-use crate::world::{Endpoint, Place, Scan, SealedWorld};
+use crate::resolve::{self, HandleSite};
+use crate::target::{ElementTarget, PageRef};
+use crate::world::{BackendNodeId, Endpoint, FrameSeq, Place, Scan, SealedWorld, SeqLookup};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// How long one frame may take to be swept, from the start of the work that reaches it to the
@@ -60,233 +97,466 @@ use crate::{ErrorCode, Playwright, PlaywrightError};
 /// of the script's site that misses it fails the op closed.
 pub(crate) const FRAME_BUDGET: Duration = Duration::from_secs(1);
 
-/// The function every main-world script runs in: upstream's `normalizeEvaluationExpression`
-/// (a method shorthand becomes a function) and `UtilityScript.evaluate` (a function's source is
-/// called with the argument; an expression's value is the result). `eval` and `new Function` work
-/// here even under a page CSP that forbids them, because Chromium allows code generation inside
-/// a call from the inspector (measured on BrowserOS with `script-src 'self'`).
-const MAIN_WORLD_FUNCTION: &str = r"function (expression, isFunction, arg) {
-  expression = expression.trim();
-  if (isFunction) {
-    try {
-      new Function('(' + expression + ')');
-    } catch (_) {
-      expression = expression.startsWith('async ') ? 'async function ' + expression.substring(6) : 'function ' + expression;
-      try {
-        new Function('(' + expression + ')');
-      } catch (_) {
-        throw new Error('Passed function is not well-serializable!');
-      }
-    }
-  }
-  if (/^(async)?\s*function(\s|\()/.test(expression)) expression = '(' + expression + ')';
-  let result = globalThis.eval(expression);
-  if (isFunction === true || (isFunction === undefined && typeof result === 'function')) result = result(arg);
-  return result;
-}";
+/// The function every agent script runs in, built by the JS package's `scripts/build.ts` from
+/// the vendored `UtilityScript` and its serializers plus `src/main-world/index.ts`: one function
+/// expression, `(mode, isFunction, expression, argCount, ...argTexts)`. `evaluate` runs
+/// upstream's `UtilityScript.evaluate` and returns the result's serialized text; `poller` builds
+/// upstream's `waitForFunction` predicate, runs its first poll and returns it by reference. It
+/// travels with every call, so nothing of Neo stays in the page. `eval` works in it even under a
+/// page CSP that forbids it, because Chromium allows code generation inside a call from the
+/// inspector (measured on BrowserOS with `script-src 'self'`).
+const MAIN_WORLD_JS: &str = include_str!("../../assets/main-world.js");
+
+/// A poller's next poll: the predicate called again, judged in the page.
+const POLL: &str = "function () { return this(); }";
+
+/// What a poller's first poll answered, which its creating call kept.
+const FIRST_POLL: &str = "function () { return this.first; }";
+
+/// The value a poller's predicate settled with, by reference, for upstream's preview of it.
+const SETTLED: &str = "function () { return this.last; }";
+
+/// The source of the function upstream's server reads a `{fn}` back as, in its bundle
+/// (`parseEvaluationResultValue`, PW:20413), which its refusal to serialize it quotes.
+const BINDING_CALLER: &str =
+    "(...args) => globalThis[kBindingsControllerProperty].callBinding(name, ...args)";
 
 /// Names the document from the sealed world, by handle, so `DOM.describeNode` can name its node.
 const SEALED_DOCUMENT: &str = "function () { return document; }";
 
-/// A main-world script as the prelude sends it: upstream's `evaluateExpression` parameters, the
-/// argument as JSON. v1 passes JSON only, so `Date`, `RegExp`, `Map` and `undefined` inside an
-/// argument are listed deviations. No `Debug`: the argument may be a password.
-pub(crate) struct Script {
-    /// `String(pageFunction)`: a function's source, or an expression.
-    expression: String,
-    /// `typeof pageFunction === 'function'`; `None` detects it in the page, as upstream does.
-    is_function: Option<bool>,
-    /// The argument; `None` is `undefined`.
-    arg: Option<Value>,
+/// upstream's message for a handle argument from another document (`kUnableToAdoptErrorMessage`).
+pub(crate) const UNABLE_TO_ADOPT: &str = "Unable to adopt element handle from a different document";
+
+/// What upstream says of a handle argument from another page (measured, spike S-adopt): its
+/// session lookup finds no frame of the script's page for it.
+const OTHER_PAGE: &str = "Frame has been detached.";
+
+/// What upstream says of a handle argument whose document was replaced (measured, spike
+/// S-detached): describing the node of a context that is gone.
+const RETIRED_HANDLE: &str =
+    "Protocol error (DOM.describeNode): Cannot find context with specified id";
+
+/// What upstream says when the document went away under a running script, or before an
+/// element's script ran (measured, spike S-detached: no period on either path on BrowserOS).
+pub(crate) const DOCUMENT_REPLACED: &str =
+    "Execution context was destroyed, most likely because of a navigation";
+
+/// What upstream's server says of a result outside Playwright's format, which only a page that
+/// replaced the serializer's globals produces.
+const OUTSIDE_FORMAT: &str = "the page answered with a value outside Playwright's serialized \
+                              format, as a page that replaced the globals its serializer uses \
+                              would, so Neo withheld it";
+
+/// The agent's script as the prelude built it (`wire.ts` `PageScript`). No `Debug`: the
+/// argument may hold a password the agent was given.
+pub(crate) enum Script {
+    /// Ready to run: upstream's normalized expression (`normalizeEvaluationExpression`, run in
+    /// the prelude), whether it is a function, and the argument.
+    Run {
+        expression: String,
+        is_function: bool,
+        arg: ArgText,
+        /// The element handles the argument's `{h: i}` names, in order.
+        handles: Vec<ElementTarget>,
+    },
+    /// The first check upstream fails at the script's point, such as "Passed function is not
+    /// well-serializable!", or for `locator.evaluate` a client check upstream runs after the
+    /// wait. [`EvaluateGuard::open`] raises it as `<api>: <message>`, before any sweep, with
+    /// nothing sent.
+    Refused(String),
 }
 
-impl Script {
-    pub(crate) fn new(expression: String, is_function: Option<bool>, arg: Option<Value>) -> Self {
+/// What the agent's function is called with before its argument, and so where it runs.
+pub(crate) enum Subject {
+    /// `fn(arg)` in the page's main frame: `page.evaluate`, `waitForFunction`.
+    Page,
+    /// `fn(element, arg)` in the element's own frame: `locator.evaluate` once its wait found it,
+    /// `$eval`'s first match, `elementHandle.evaluate`. The element may be out of its document:
+    /// it still runs, as upstream's does, and its tree is swept.
+    Element(ElementTarget),
+    /// `fn(elements, arg)`: `evaluateAll` and `$$eval`, in the frame the matches are in, or the
+    /// query's starting frame when nothing matched (upstream's `queryArrayInMainWorld`, PW:21919,
+    /// measured). `nodes` may be empty.
+    Elements {
+        frame: TreeFrame,
+        /// The frame's document, which a handle argument must be in.
+        seq: FrameSeq,
+        nodes: Vec<BoundNode>,
+    },
+}
+
+/// An element a script receives, found in its document's sealed world: its backend node id,
+/// which the main world resolves, and its sealed-world object, which the seal watches.
+pub(crate) struct BoundNode {
+    pub(crate) backend: BackendNodeId,
+    pub(crate) sealed: String,
+}
+
+/// Playwright's in-page serialized argument as JSON text: opaque here, parsed by the page. As
+/// text it stays one string through the host's decode and the CDP request, however deep it is.
+pub(crate) struct ArgText(pub(crate) String);
+
+/// How often one op runs its script.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CallMode {
+    /// `page.evaluate`: once, its result by value.
+    Once,
+    /// `waitForFunction`: upstream's predicate, built once in the page with its argument parsed
+    /// once, then called on every poll. The user gesture goes with the call that builds it only:
+    /// upstream's later polls run from page timers.
+    Poll,
+}
+
+/// One agent script, as a leaf hands it to the gateway.
+pub(crate) struct MainWorldCall {
+    script: Script,
+    subject: Subject,
+    mode: CallMode,
+}
+
+impl MainWorldCall {
+    pub(crate) fn once(script: Script, subject: Subject) -> Self {
         Self {
-            expression,
-            is_function,
-            arg,
+            script,
+            subject,
+            mode: CallMode::Once,
         }
     }
 
-    /// The three `CallArgument`s of [`MAIN_WORLD_FUNCTION`]; `{}` is `undefined`.
-    fn arguments(&self) -> Value {
-        let given = |value: Option<Value>| {
-            value.map_or_else(|| json!({}), |value| json!({ "value": value }))
-        };
-        json!([
-            { "value": self.expression },
-            given(self.is_function.map(Value::Bool)),
-            given(self.arg.clone()),
-        ])
-    }
-}
-
-/// What one run of the script produced, before any masking. Its only way out of the op is
-/// [`EvaluateGuard::finish`]: it has no `Serialize` and no `Debug`.
-pub(crate) enum Unmasked {
-    /// The script's completion value.
-    Returned(Completion),
-    /// What it threw, as upstream prints it, without the page's stack frames.
-    Threw(String),
-}
-
-/// A completion value as `returnByValue` reports it.
-pub(crate) enum Completion {
-    Undefined,
-    /// JSON. A DOM node or a `Date` comes back as `{}`.
-    Json(Value),
-    /// `NaN`, `Infinity`, `-Infinity`, `-0` or a `BigInt` (`10n`), which JSON cannot hold.
-    Unserializable(String),
-}
-
-impl Unmasked {
-    /// Whether `waitForFunction` stops at this run: a truthy value ends it, and so does a throw.
-    pub(crate) fn ends_wait(&self) -> bool {
-        match self {
-            Self::Threw(_) => true,
-            Self::Returned(Completion::Undefined) => false,
-            Self::Returned(Completion::Json(value)) => truthy(value),
-            Self::Returned(Completion::Unserializable(text)) => {
-                !matches!(text.as_str(), "NaN" | "-0" | "0n")
-            }
+    /// `waitForFunction`, on the page's main frame.
+    pub(crate) fn poll(script: Script) -> Self {
+        Self {
+            script,
+            subject: Subject::Page,
+            mode: CallMode::Poll,
         }
     }
 }
 
-/// JavaScript's truthiness of a JSON value.
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::Number(number) => number
-            .as_f64()
-            .is_some_and(|number| number.classify() != FpCategory::Zero),
-        Value::String(text) => !text.is_empty(),
-        Value::Array(_) | Value::Object(_) => true,
-    }
-}
-
-/// How one run of the script ended.
-pub(crate) enum Ran {
-    /// It returned or threw.
-    Finished(Unmasked),
-    /// The document was gone before the script started, so nothing ran.
+/// What one send produced, handed out by the sweep after it.
+pub(crate) enum Outcome {
+    /// The script answered; only [`EvaluateGuard::finish`] reads it.
+    Answered(Answer),
+    /// A poll whose predicate was falsy: keep waiting.
+    Falsy,
+    /// The document or the poller was gone before the call, so nothing ran.
     NotRun,
     /// The document was replaced while the script ran, by a navigation it started perhaps.
     Destroyed,
 }
 
-/// One op's main-world scripts on one page. Built by the first sweep; runs the script as often
-/// as the op needs (once for `evaluate`, once per poll for `waitForFunction`); lets a result out
-/// only through [`EvaluateGuard::finish`], after the second sweep.
-///
-/// Dropping it, on every exit and on cancellation, reports the values both sweeps found through
-/// `PlaywrightHooks::values_swept` once a script was sent, so the host registers them as
-/// secrets even when no result left the op.
+/// An answer the page gave, unmasked. Opaque outside this file, with no `Serialize` and no
+/// `Debug`: it may hold a password, and [`EvaluateGuard::finish`] is the one reader of its text.
+pub(crate) struct Answer(Answered);
+
+/// What [`Answer`] holds.
+enum Answered {
+    /// `page.evaluate`'s result.
+    Returned(Unmasked),
+    /// `waitForFunction`'s truthy value, and upstream's preview of it for `toString()`.
+    Settled {
+        value: Unmasked,
+        preview: UnmaskedText,
+    },
+    /// What the page threw, as upstream's `getExceptionMessage` reads it, stack lines and all.
+    Threw(UnmaskedText),
+}
+
+/// The page's serialized value as it answered it. Its only reader is [`EvaluateGuard::finish`].
+enum Unmasked {
+    /// Playwright's format, as JSON text.
+    Text(String),
+    /// No value: the script's `undefined`, which upstream's `jsonValue` reports as none.
+    Undefined,
+    /// Something `assets/main-world.js` never returns, from a page that tampered with it.
+    Unreadable,
+}
+
+/// Page text: a thrown message or a preview. Its only reader is [`EvaluateGuard::finish`].
+struct UnmaskedText(String);
+
+/// A finished script, masked: what the leaves turn into their op's output.
+pub(crate) struct Finished {
+    /// The value in Playwright's format.
+    pub(crate) value: Value,
+    /// `waitForFunction`'s preview of it, upstream's `JSHandle.toString()`.
+    pub(crate) preview: Option<String>,
+}
+
+/// The swept state: the guard may send (`run`), and only it lets an answer out (`finish`).
+#[must_use]
 pub(crate) struct EvaluateGuard<'op> {
+    core: GuardCore<'op>,
+}
+
+/// The state after a send and before the next sweep: its one method is `sweep`, which alone
+/// hands out what the send produced. Dropping it, on an error or a cancelled op, still reports
+/// every value swept so far.
+#[must_use]
+pub(crate) struct Pending<'op> {
+    core: GuardCore<'op>,
+    outcome: Outcome,
+}
+
+/// What both states carry. One `Drop`, so the final report happens once, whichever state ends
+/// the op; every sweep reports before it too.
+struct GuardCore<'op> {
     pw: &'op Playwright,
     page: OpPage<'op>,
+    /// Where the script runs: its site is the site every sweep covers.
+    frame: TreeFrame,
+    expression: String,
+    is_function: bool,
+    arg: ArgText,
+    mode: CallMode,
+    /// What the function receives before its argument, by backend node id. Its elements and the
+    /// handles are all of `frame`'s document, which `open` checked, so one main world resolves
+    /// them all for each run, and the seal of that document watches them.
+    subject: Bound,
+    /// The argument's handles, by backend node id, in `{h: i}` order.
+    handles: Vec<BackendNodeId>,
     /// Every value a sweep found so far.
     swept: FieldValues,
-    /// The main-world document by handle, in the op's object group. Dropped when a run finds it
-    /// gone, so the next run resolves the new document's.
+    /// The frame's main-world document by handle, in the op's object group. Dropped when a run
+    /// finds it gone, so the next run names the new document's.
     document: Option<String>,
-    /// A script was sent.
+    /// `waitForFunction`'s predicate by handle, in the op's object group. Dropped with the
+    /// document, so the next run builds it again in the new one, as upstream retries its wait
+    /// across a navigation.
+    poller: Option<String>,
+    /// Something was sent to the main world.
     sent: bool,
 }
 
 impl<'op> EvaluateGuard<'op> {
-    /// Admits `page` and sweeps it before any script runs.
-    pub(crate) async fn sweep_before(
+    /// Opens the gateway: the declaration, the deferred refusal, the page, the first sweep.
+    /// This is the only way to a guard, so it checks the op's declaration first: a host serves
+    /// an op unheld unless its spec declares `MainWorld`, and such an op must not admit or sweep
+    /// anything here.
+    pub(crate) async fn open(
         pw: &'op Playwright,
         scope: &'op OpScope<'_>,
-        page: &PageId,
+        page: &PageRef,
+        call: MainWorldCall,
     ) -> Result<Self, PlaywrightError> {
-        let page = OpPage::admit(pw, scope, page).await?;
-        let mut guard = Self {
+        scope.require(Capability::MainWorld)?;
+        let (expression, is_function, arg, handles) = match call.script {
+            Script::Run {
+                expression,
+                is_function,
+                arg,
+                handles,
+            } => (expression, is_function, arg, handles),
+            Script::Refused(message) => return Err(scope.fail(ErrorCode::InvalidInput, &message)),
+        };
+        let op_page = OpPage::admit_handle(pw, scope, page).await?;
+        let binding = bind(&op_page, scope, page, call.subject, &handles).await?;
+        let mut core = GuardCore {
             pw,
-            page,
+            page: op_page,
+            frame: binding.frame,
+            expression,
+            is_function,
+            arg,
+            mode: call.mode,
+            subject: binding.subject,
+            handles: binding.handles,
             swept: FieldValues::default(),
             document: None,
+            poller: None,
             sent: false,
         };
-        guard
-            .sweep()
+        core.sweep()
             .await
             .map_err(|unswept| unswept.into_error(scope, "so the script was not run"))?;
-        Ok(guard)
+        Ok(Self { core })
     }
 
-    /// Runs `script` once in the main frame's main world. It names the main-world document
+    /// Sends the script once: one poll for `waitForFunction`. It names the main-world document
     /// first (three CDP calls on a new document), and only then re-runs the host's policies and
     /// marks the op sent, with no await before the script goes out (STYLE P6). Minted before the
     /// document, a takeover during those calls would go unseen, and a cancel there would leave
     /// the op marked sent although no script ran.
     pub(crate) async fn run(
-        &mut self,
-        scope: &OpScope<'_>,
-        script: &Script,
-    ) -> Result<Ran, PlaywrightError> {
-        let main = self.page.main_endpoint();
-        let document = if let Some(document) = &self.document {
-            document.clone()
-        } else {
-            let named = with_world(&self.page, &main, &Place::Main, |world| {
-                main_world_document(scope, world)
-            })
-            .await
-            .map_err(|failure| failed(scope, failure))?;
-            self.document = Some(named.clone());
-            named
-        };
-        let group = scope.object_group(&main.session).to_owned();
-        let sent = scope.send_effect()?;
-        self.sent = true;
-        let called = call_main_world(&main.session, &document, &group, script, &sent).await;
-        let ran = ran(called).map_err(|error| scope.core_error(&error))?;
-        if !matches!(ran, Ran::Finished(_)) {
-            self.document = None;
-        }
-        Ok(ran)
-    }
-
-    /// Sweeps again, then lets `unmasked` out with every swept value masked in it: a returned
-    /// value as the op's result, a thrown message as its `page_error`.
-    pub(crate) async fn finish(
         mut self,
         scope: &OpScope<'_>,
-        unmasked: Unmasked,
-    ) -> Result<Value, PlaywrightError> {
-        self.sweep().await.map_err(|unswept| {
-            unswept.into_error(scope, "so the result of the script, which ran, is withheld")
-        })?;
-        match unmasked {
-            Unmasked::Returned(completion) => Ok(mask_completion(&self.swept, completion)),
-            Unmasked::Threw(message) => {
-                Err(scope.fail(ErrorCode::PageError, &mask_text(&self.swept, message)))
-            }
+    ) -> Result<Pending<'op>, PlaywrightError> {
+        let core = &mut self.core;
+        let session = core.frame.endpoint.session.clone();
+        let group = scope.object_group(&session).to_owned();
+        let document = core.document(scope).await?;
+        // The elements in the main world, before the recheck: a takeover while they resolve is
+        // seen by it. A poll after the first needs none, its predicate holds its argument.
+        let objects = if core.mode == CallMode::Poll && core.poller.is_some() {
+            Some(Vec::new())
+        } else {
+            main_world_nodes(&session, &group, &core.handles, &core.subject)
+                .await
+                .map_err(|error| scope.core_error(&error))?
+        };
+        let Some(objects) = objects else {
+            core.document = None;
+            core.poller = None;
+            return Ok(Pending {
+                core: self.core,
+                outcome: Outcome::NotRun,
+            });
+        };
+        let sent = scope.send_effect()?;
+        core.sent = true;
+        let call = MainCall {
+            session: &session,
+            group: &group,
+            _sent: &sent,
+        };
+        let called = match core.mode {
+            CallMode::Once => call.evaluate(&document, core, &objects).await,
+            CallMode::Poll => core.poll(&call, &document, &objects).await,
+        };
+        let outcome = called.map_err(|error| scope.core_error(&error))?;
+        if matches!(outcome, Outcome::NotRun | Outcome::Destroyed) {
+            core.document = None;
+            core.poller = None;
         }
+        Ok(Pending {
+            core: self.core,
+            outcome,
+        })
     }
 
-    /// Sweeps every frame of the page in the main frame's site and adds what it finds, also
-    /// when a frame could not be swept, so the host still learns those values. That is wider
-    /// than the page's session: a script reaches a same-origin frame on another session through
-    /// `frames[…]` as easily as one on its own.
-    async fn sweep(&mut self) -> Result<(), Unswept> {
-        let found = sweep_site(&self.page, &self.page.main_endpoint(), &Place::Main).await;
-        self.swept = mem::take(&mut self.swept).union(found.values);
-        found.unswept.map_or(Ok(()), Err)
+    /// The answer, masked with every sweep's values: a value in Playwright's format, or a throw
+    /// as `page_error` with its stack lines, as upstream prints it. Answers are read here and
+    /// nowhere else. A value `PageValue::parse` cannot read fails closed: too deep is upstream's
+    /// own failure, and any other shape is the page's.
+    pub(crate) fn finish(
+        self,
+        scope: &OpScope<'_>,
+        answer: Answer,
+    ) -> Result<Finished, PlaywrightError> {
+        let swept = &self.core.swept;
+        match answer.0 {
+            Answered::Returned(value) => Ok(Finished {
+                value: returned(scope, masked(scope, swept, value)?)?,
+                preview: None,
+            }),
+            // A wait hands back a handle, which upstream builds without serializing its value.
+            Answered::Settled { value, preview } => Ok(Finished {
+                value: masked(scope, swept, value)?.into_json(),
+                preview: Some(page_value::mask_text(swept, preview.0)),
+            }),
+            Answered::Threw(thrown) => Err(scope.fail(
+                ErrorCode::PageError,
+                &page_value::mask_text(swept, thrown.0),
+            )),
+        }
     }
 }
 
-impl Drop for EvaluateGuard<'_> {
-    fn drop(&mut self) {
-        if self.sent && !self.swept.is_empty() {
+impl<'op> Pending<'op> {
+    /// The sweep after a send, then what the send produced. A frame that misses it withholds
+    /// that.
+    pub(crate) async fn sweep(
+        self,
+        scope: &OpScope<'_>,
+    ) -> Result<(EvaluateGuard<'op>, Outcome), PlaywrightError> {
+        let Self { mut core, outcome } = self;
+        core.sweep().await.map_err(|unswept| {
+            unswept.into_error(scope, "so the result of the script, which ran, is withheld")
+        })?;
+        Ok((EvaluateGuard { core }, outcome))
+    }
+}
+
+impl GuardCore<'_> {
+    /// Sweeps every frame of the page in the script frame's site and adds what it finds, also
+    /// when a frame could not be swept, so the host still learns those values. That is wider
+    /// than the page's session: a script reaches a same-origin frame on another session through
+    /// `frames[…]` as easily as one on its own.
+    ///
+    /// The host hears the union at once, before the next send can go out: a dialog or a
+    /// download the script raises while it runs carries page text to the host's event stream,
+    /// which the host masks with the values it was told. The host's side takes a repeated report
+    /// as a union, so a report per sweep costs it nothing new.
+    async fn sweep(&mut self) -> Result<(), Unswept> {
+        // Boxed, as every other caller of `sweep_site` boxes it: its state is large, and a
+        // `waitForFunction` holds it at every poll.
+        let found = Box::pin(sweep_site(
+            &self.page,
+            &self.frame.endpoint,
+            &self.frame.place,
+        ))
+        .await;
+        self.swept = mem::take(&mut self.swept).union(found.values);
+        self.report();
+        found.unswept.map_or(Ok(()), Err)
+    }
+
+    /// Tells the host every value swept so far (`PlaywrightHooks::values_swept`).
+    fn report(&self) {
+        if !self.swept.is_empty() {
             self.pw
                 .hooks()
                 .values_swept(self.page.id().clone(), &self.swept);
         }
+    }
+
+    /// The script frame's main-world document, named once per document.
+    async fn document(&mut self, scope: &OpScope<'_>) -> Result<String, PlaywrightError> {
+        if let Some(document) = &self.document {
+            return Ok(document.clone());
+        }
+        let named = with_world(
+            &self.page,
+            &self.frame.endpoint,
+            &self.frame.place,
+            |world| main_world_document(scope, world),
+        )
+        .await
+        .map_err(|failure| resolve::failed(scope, failure))?;
+        self.document = Some(named.clone());
+        Ok(named)
+    }
+}
+
+/// The final report, once anything was sent, whichever state ends the op: every sweep has
+/// reported already, so this only repeats the union for an op that ends between a send and its
+/// sweep (an error, a cancel).
+impl Drop for GuardCore<'_> {
+    fn drop(&mut self) {
+        if self.sent {
+            self.report();
+        }
+    }
+}
+
+/// `unmasked` in Playwright's format, masked with `swept`, or why it cannot leave.
+fn masked(
+    scope: &OpScope<'_>,
+    swept: &FieldValues,
+    unmasked: Unmasked,
+) -> Result<MaskedValue, PlaywrightError> {
+    let value = match unmasked {
+        Unmasked::Text(text) => PageValue::parse(&text),
+        Unmasked::Undefined => Ok(PageValue::undefined()),
+        Unmasked::Unreadable => Err(Unreadable::Shape),
+    };
+    match value {
+        Ok(value) => Ok(value.masked(swept)),
+        Err(Unreadable::TooDeep) => Err(scope.fail(ErrorCode::PageError, TOO_DEEP)),
+        Err(Unreadable::Shape) => Err(scope.fail(ErrorCode::PageError, OUTSIDE_FORMAT)),
+    }
+}
+
+/// A result upstream's server cannot send back: one holding a `{fn}`, which it reads as a
+/// binding's caller and then refuses to serialize, with the caller's own source in the message
+/// (measured on BrowserOS neo, spike `__pw_fn_`).
+fn returned(scope: &OpScope<'_>, value: MaskedValue) -> Result<Value, PlaywrightError> {
+    match value.binding_position() {
+        None => Ok(value.into_json()),
+        Some(at) => Err(scope.fail(
+            ErrorCode::PageError,
+            &format!("Attempting to serialize unexpected value{at}: {BINDING_CALLER}"),
+        )),
     }
 }
 
@@ -352,7 +622,7 @@ impl Unswept {
                      it again for its privacy sweep, {consequence}; try again"
                 ),
             ),
-            Self::Failed(failure) => failed(scope, failure),
+            Self::Failed(failure) => resolve::failed(scope, failure),
         }
     }
 }
@@ -715,194 +985,590 @@ async fn main_world_document(
         .ok_or_else(|| ProbeFailure::Broken("the main world returned no document".to_owned()))
 }
 
-/// Sends `script` to the main world. Never logs its params or result: either may hold a
-/// password (STYLE P4).
-async fn call_main_world(
-    session: &ProtocolSession,
-    document: &str,
-    group: &str,
-    script: &Script,
-    _sent: &Sent<'_>,
-) -> Result<Value, CoreError> {
-    session
-        .send_value(
-            "Runtime.callFunctionOn",
-            json!({
-                "objectId": document,
-                "functionDeclaration": MAIN_WORLD_FUNCTION,
-                "arguments": script.arguments(),
-                "returnByValue": true,
-                "awaitPromise": true,
-                "objectGroup": group,
-            }),
-        )
-        .await
+/// The main-world calls of one send, all on the script frame's session and in the op's object
+/// group. Each takes the send's [`Sent`]: none can go out without the host's recheck.
+struct MainCall<'a> {
+    session: &'a ProtocolSession,
+    group: &'a str,
+    _sent: &'a Sent<'a>,
 }
 
-/// `Runtime.callFunctionOn`'s result.
+/// A main-world call's reply, or what became of the script when there was none.
+enum Called<T> {
+    Value(T),
+    /// The call did not run to a value: nothing ran, the document was replaced, or the poller
+    /// threw as it was built.
+    Ended(Outcome),
+}
+
+/// What one poll answered.
+enum Polled {
+    /// The predicate was falsy.
+    Waiting,
+    /// It settled truthy: its value's serialized text.
+    Settled(Unmasked),
+    Threw(UnmaskedText),
+    /// Not what a poll answers, from a page that tampered with the poller.
+    Unreadable,
+}
+
+/// How one main-world call returns, and whether it carries a user gesture.
+#[derive(Clone, Copy)]
+enum Shape {
+    /// `page.evaluate`'s script: by value, with the user gesture upstream sends on every
+    /// evaluation (PW:36960-36975).
+    Evaluate,
+    /// Building `waitForFunction`'s predicate, which runs its first poll: the poller by
+    /// reference, with the gesture.
+    BuildPoller,
+    /// A later poll, or the first poll's answer: by value, with no gesture, as upstream's later
+    /// polls run from page timers.
+    Poll,
+    /// The settled value by reference, for upstream's preview of it.
+    Settled,
+}
+
+impl Shape {
+    const fn by_value(self) -> bool {
+        matches!(self, Self::Evaluate | Self::Poll)
+    }
+
+    const fn gesture(self) -> bool {
+        matches!(self, Self::Evaluate | Self::BuildPoller)
+    }
+}
+
+impl MainCall<'_> {
+    /// `page.evaluate`'s one call: upstream's `UtilityScript.evaluate` on the main-world document.
+    async fn evaluate(
+        &self,
+        document: &str,
+        core: &GuardCore<'_>,
+        objects: &[String],
+    ) -> Result<Outcome, CoreError> {
+        let called = self
+            .send(
+                document,
+                MAIN_WORLD_JS,
+                arguments("evaluate", core, objects),
+                Shape::Evaluate,
+            )
+            .await?;
+        let reply = match called {
+            Called::Value(reply) => reply,
+            Called::Ended(outcome) => return Ok(outcome),
+        };
+        Ok(Outcome::Answered(Answer(match reply.thrown() {
+            Some(thrown) => Answered::Threw(thrown),
+            None => Answered::Returned(reply.result.text()),
+        })))
+    }
+
+    /// Builds upstream's predicate in the page and runs its first poll: the poller by reference,
+    /// or how its first poll ended when it threw.
+    async fn build_poller(
+        &self,
+        document: &str,
+        core: &GuardCore<'_>,
+        objects: &[String],
+    ) -> Result<Called<String>, CoreError> {
+        let called = self
+            .send(
+                document,
+                MAIN_WORLD_JS,
+                arguments("poller", core, objects),
+                Shape::BuildPoller,
+            )
+            .await?;
+        let reply = match called {
+            Called::Value(reply) => reply,
+            Called::Ended(outcome) => return Ok(Called::Ended(outcome)),
+        };
+        if let Some(thrown) = reply.thrown() {
+            return Ok(Called::Ended(Outcome::Answered(Answer(Answered::Threw(
+                thrown,
+            )))));
+        }
+        Ok(match reply.result.object_id {
+            Some(poller) => Called::Value(poller),
+            None => Called::Ended(Outcome::Answered(Answer(Answered::Returned(
+                Unmasked::Unreadable,
+            )))),
+        })
+    }
+
+    /// A poll's answer: `function` called on the poller, its result read by value.
+    async fn poll(&self, poller: &str, function: &str) -> Result<Called<Polled>, CoreError> {
+        let reply = match self.send(poller, function, json!([]), Shape::Poll).await? {
+            Called::Value(reply) => reply,
+            Called::Ended(outcome) => return Ok(Called::Ended(outcome)),
+        };
+        if let Some(thrown) = reply.thrown() {
+            return Ok(Called::Value(Polled::Threw(thrown)));
+        }
+        Ok(Called::Value(match reply.result.value {
+            Some(Value::Array(answer)) => match answer.as_slice() {
+                [Value::Bool(false)] => Polled::Waiting,
+                [Value::Bool(true), Value::String(text)] => {
+                    Polled::Settled(Unmasked::Text(text.clone()))
+                }
+                [Value::Bool(true), Value::Null] => Polled::Settled(Unmasked::Undefined),
+                _ => Polled::Unreadable,
+            },
+            _ => Polled::Unreadable,
+        }))
+    }
+
+    /// The poller's settled value by reference: CDP's description of it is upstream's preview.
+    async fn settled(&self, poller: &str) -> Result<Called<RemoteObject>, CoreError> {
+        Ok(
+            match self
+                .send(poller, SETTLED, json!([]), Shape::Settled)
+                .await?
+            {
+                Called::Value(reply) => Called::Value(reply.result),
+                Called::Ended(outcome) => Called::Ended(outcome),
+            },
+        )
+    }
+
+    /// One `Runtime.callFunctionOn` into the main world, its reply decoded, or the outcome its
+    /// protocol error stands for. Never logs its params or result: either may hold a password
+    /// (STYLE P4).
+    async fn send(
+        &self,
+        object: &str,
+        function: &str,
+        arguments: Value,
+        shape: Shape,
+    ) -> Result<Called<Reply>, CoreError> {
+        let sent = self
+            .session
+            .send_value(
+                "Runtime.callFunctionOn",
+                json!({
+                    "objectId": object,
+                    "functionDeclaration": function,
+                    "arguments": arguments,
+                    "returnByValue": shape.by_value(),
+                    "awaitPromise": true,
+                    "userGesture": shape.gesture(),
+                    "objectGroup": self.group,
+                }),
+            )
+            .await;
+        match sent {
+            Ok(reply) => Ok(Called::Value(decode::<Reply>(reply)?)),
+            Err(error) => not_run(error),
+        }
+    }
+}
+
+impl GuardCore<'_> {
+    /// One poll. The first builds upstream's predicate and runs it in the same call, so the
+    /// agent's code runs right after the host's recheck on every poll; later polls call the
+    /// predicate the page kept. A settled poll reads its value again by reference, for
+    /// upstream's preview of it.
+    async fn poll(
+        &mut self,
+        call: &MainCall<'_>,
+        document: &str,
+        objects: &[String],
+    ) -> Result<Outcome, CoreError> {
+        let polled = if let Some(poller) = &self.poller {
+            call.poll(poller, POLL).await?
+        } else {
+            let poller = match call.build_poller(document, self, objects).await? {
+                Called::Value(poller) => poller,
+                Called::Ended(outcome) => return Ok(outcome),
+            };
+            let first = call.poll(&poller, FIRST_POLL).await?;
+            self.poller = Some(poller);
+            first
+        };
+        let (settled, poller) = match (polled, &self.poller) {
+            (Called::Ended(outcome), _) => return Ok(outcome),
+            (Called::Value(Polled::Waiting), _) => return Ok(Outcome::Falsy),
+            (Called::Value(Polled::Threw(thrown)), _) => {
+                return Ok(Outcome::Answered(Answer(Answered::Threw(thrown))));
+            }
+            (Called::Value(Polled::Settled(value)), Some(poller)) => (value, poller),
+            (Called::Value(Polled::Unreadable | Polled::Settled(_)), _) => {
+                return Ok(Outcome::Answered(Answer(Answered::Returned(
+                    Unmasked::Unreadable,
+                ))));
+            }
+        };
+        Ok(match call.settled(poller).await? {
+            Called::Value(object) => Outcome::Answered(Answer(Answered::Settled {
+                value: object.json_value(settled),
+                preview: UnmaskedText(object.preview()),
+            })),
+            Called::Ended(outcome) => outcome,
+        })
+    }
+}
+
+/// The main-world function's parameters for `mode`: `(mode, isFunction, expression, argCount,
+/// ...argTexts, ...handles)`, as upstream's `UtilityScript.evaluate` takes them. The texts are
+/// the subject's, when there is one, then the argument's; `objects` are the argument's handles,
+/// then the subject's elements, so the argument's `{h: i}` from the prelude names its own and
+/// the subject's text, written here, counts on from them: `{h: k}` for one element, an array of
+/// them for several (Playwright's format, its id private to that text).
+fn arguments(mode: &str, core: &GuardCore<'_>, objects: &[String]) -> Value {
+    let first = core.handles.len();
+    let subject = match &core.subject {
+        Bound::Page => None,
+        Bound::Element(_) => Some(json!({ "h": first }).to_string()),
+        Bound::Elements(nodes) => {
+            let items: Vec<Value> = (first..first + nodes.len())
+                .map(|index| json!({ "h": index }))
+                .collect();
+            Some(json!({ "a": items, "id": 1 }).to_string())
+        }
+    };
+    let texts: Vec<&str> = subject
+        .as_deref()
+        .into_iter()
+        .chain([core.arg.0.as_str()])
+        .collect();
+    let mut parameters = vec![
+        json!({ "value": mode }),
+        json!({ "value": core.is_function }),
+        json!({ "value": core.expression }),
+        json!({ "value": texts.len() }),
+    ];
+    parameters.extend(texts.into_iter().map(|text| json!({ "value": text })));
+    parameters.extend(objects.iter().map(|object| json!({ "objectId": object })));
+    Value::Array(parameters)
+}
+
+/// What a guard binds in `open`: where the script runs and the elements it receives.
+struct Binding {
+    frame: TreeFrame,
+    subject: Bound,
+    handles: Vec<BackendNodeId>,
+}
+
+/// The subject once bound, by backend node id.
+enum Bound {
+    Page,
+    Element(BackendNodeId),
+    Elements(Vec<BackendNodeId>),
+}
+
+/// Where a bound subject runs, before its handle arguments are bound against it.
+struct Placed {
+    /// The frame the script runs in.
+    frame: TreeFrame,
+    /// That frame's document, which a handle argument must be of; `None` for the page's main
+    /// frame when no handle needs it named.
+    document: Option<FrameSeq>,
+    /// The document's sealed world, when it was found on the way.
+    world: Option<SealedWorld>,
+    /// The subject, by backend node id.
+    subject: Bound,
+    /// The subject's elements as sealed-world objects, for the seal to watch.
+    watched: Vec<String>,
+}
+
+/// Binds the subject and every handle argument in the script frame's document, and hands each
+/// element to that world's seal to watch, before the first sweep. Upstream's errors, in its
+/// order: the subject first (its document gone is the navigation's message, as upstream's
+/// evaluate on a handle of a replaced document; its node gone is Neo's detached message), then
+/// each handle as upstream's adoption fails it.
+async fn bind(
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    page_ref: &PageRef,
+    subject: Subject,
+    handles: &[ElementTarget],
+) -> Result<Binding, PlaywrightError> {
+    let Placed {
+        frame,
+        document,
+        mut world,
+        subject,
+        mut watched,
+    } = place(page, scope, subject, !handles.is_empty()).await?;
+    let mut bound = Vec::with_capacity(handles.len());
+    for handle in handles {
+        if handle.page() != page_ref {
+            return Err(scope.fail(ErrorCode::InvalidInput, OTHER_PAGE));
+        }
+        let retired = |lookup| match lookup {
+            SeqLookup::Retired => scope.fail(ErrorCode::ElementDetached, RETIRED_HANDLE),
+            SeqLookup::Live { .. } | SeqLookup::Unknown => {
+                scope.fail(ErrorCode::InvalidInput, UNABLE_TO_ADOPT)
+            }
+        };
+        if let lookup @ (SeqLookup::Retired | SeqLookup::Unknown) = page.frames().by_seq(handle.seq)
+        {
+            return Err(retired(lookup));
+        }
+        // Found first: a world found gone on the way retires its seq, a replaced document.
+        let Some(site) = HandleSite::find(page, scope, handle).await? else {
+            return Err(retired(page.frames().by_seq(handle.seq)));
+        };
+        if document != Some(handle.seq) {
+            return Err(scope.fail(ErrorCode::InvalidInput, UNABLE_TO_ADOPT));
+        }
+        world.get_or_insert_with(|| site.world().clone());
+        watched.push(site.node().to_owned());
+        bound.push(handle.node);
+    }
+    if let Some(world) = world.filter(|_| !watched.is_empty()) {
+        match world.watch_trees(&watched).await {
+            // The document went with its world: nothing the script was given can run now, and
+            // `run` finds its elements gone.
+            Ok(()) | Err(ProbeFailure::Gone) => {}
+            Err(failure) => return Err(resolve::failed(scope, failure)),
+        }
+    }
+    Ok(Binding {
+        frame,
+        subject,
+        handles: bound,
+    })
+}
+
+/// The subject's frame and document, found again: a handle's document gone is the navigation's
+/// message, its node gone Neo's detached one.
+async fn place(
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    subject: Subject,
+    with_handles: bool,
+) -> Result<Placed, PlaywrightError> {
+    Ok(match subject {
+        Subject::Page => {
+            let frame = TreeFrame {
+                endpoint: page.main_endpoint(),
+                place: Place::Main,
+            };
+            // The main frame's document, named for a handle argument to be checked against.
+            let world = if with_handles {
+                Some(
+                    page.world(&frame.endpoint, frame.place.clone())
+                        .await
+                        .map_err(|failure| resolve::failed(scope, failure))?,
+                )
+            } else {
+                None
+            };
+            Placed {
+                frame,
+                document: world.as_ref().map(SealedWorld::seq),
+                world,
+                subject: Bound::Page,
+                watched: Vec::new(),
+            }
+        }
+        Subject::Element(element) => {
+            if matches!(page.frames().by_seq(element.seq), SeqLookup::Retired) {
+                return Err(scope.fail(ErrorCode::PageError, DOCUMENT_REPLACED));
+            }
+            let Some(site) = HandleSite::find(page, scope, &element).await? else {
+                // A world found gone on the way retires its seq: the document was replaced.
+                return Err(match page.frames().by_seq(element.seq) {
+                    SeqLookup::Retired => scope.fail(ErrorCode::PageError, DOCUMENT_REPLACED),
+                    SeqLookup::Live { .. } | SeqLookup::Unknown => resolve::handle_detached(scope),
+                });
+            };
+            let world = site.world().clone();
+            let frame = frame_endpoint(page, world.session(), world.frame().clone());
+            Placed {
+                frame,
+                document: Some(element.seq),
+                world: Some(world),
+                subject: Bound::Element(element.node),
+                watched: vec![site.node().to_owned()],
+            }
+        }
+        Subject::Elements { frame, seq, nodes } => {
+            let (backends, sealed): (Vec<_>, Vec<_>) = nodes
+                .into_iter()
+                .map(|node| (node.backend, node.sealed))
+                .unzip();
+            let world = if sealed.is_empty() && !with_handles {
+                None
+            } else {
+                Some(
+                    page.world(&frame.endpoint, frame.place.clone())
+                        .await
+                        .map_err(|failure| resolve::failed(scope, failure))?,
+                )
+            };
+            Placed {
+                frame,
+                document: Some(seq),
+                world,
+                subject: Bound::Elements(backends),
+                watched: sealed,
+            }
+        }
+    })
+}
+
+/// The argument's handles, then the subject's elements, resolved in the main world of their
+/// document on `session` by backend node id, in the op's object group; `None` when one is gone,
+/// so nothing runs.
+async fn main_world_nodes(
+    session: &ProtocolSession,
+    group: &str,
+    handles: &[BackendNodeId],
+    subject: &Bound,
+) -> Result<Option<Vec<String>>, CoreError> {
+    let subject: &[BackendNodeId] = match subject {
+        Bound::Page => &[],
+        Bound::Element(node) => slice::from_ref(node),
+        Bound::Elements(nodes) => nodes,
+    };
+    let resolves = handles.iter().chain(subject).map(|node| {
+        session.send::<_, Resolved>(
+            "DOM.resolveNode",
+            json!({ "backendNodeId": node, "objectGroup": group }),
+        )
+    });
+    let mut objects = Vec::with_capacity(handles.len() + subject.len());
+    for resolved in future::join_all(resolves).await {
+        match resolved {
+            Ok(Resolved {
+                object: Handle {
+                    object_id: Some(object),
+                },
+            }) => objects.push(object),
+            // No object, or a node the backend id no longer names, or a document gone: nothing
+            // ran.
+            Ok(_) | Err(CoreError::Cdp(CdpError::Protocol { .. })) => return Ok(None),
+            Err(error) if matches!(ProbeFailure::from_core(error.clone()), ProbeFailure::Gone) => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(Some(objects))
+}
+
+/// A protocol error that is an outcome of the script rather than a failure, as upstream's
+/// `rewriteError` reads them; any other error is the op's failure.
+fn not_run<T>(error: CoreError) -> Result<Called<T>, CoreError> {
+    const NOT_FOUND: [&str; 3] = [
+        "Cannot find context with specified id",
+        "Could not find object with given id",
+        "does not belong to the document",
+    ];
+    let CoreError::Cdp(CdpError::Protocol { message, .. }) = &error else {
+        return Err(error);
+    };
+    if message.contains("Execution context was destroyed") {
+        Ok(Called::Ended(Outcome::Destroyed))
+    } else if NOT_FOUND.iter().any(|gone| message.contains(gone)) {
+        Ok(Called::Ended(Outcome::NotRun))
+    } else {
+        Err(error)
+    }
+}
+
+/// `Runtime.callFunctionOn`'s reply.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Called {
+struct Reply {
     result: RemoteObject,
     #[serde(default)]
     exception_details: Option<ExceptionDetails>,
 }
 
-/// A by-value result. `null` arrives as a `value` of `null`, `undefined` as no value at all.
+impl Reply {
+    /// What the page threw, as upstream's `getExceptionMessage` reads it: the exception's
+    /// description, stack lines and all, or a thrown primitive as text.
+    fn thrown(&self) -> Option<UnmaskedText> {
+        let details = self.exception_details.as_ref()?;
+        Some(UnmaskedText(match &details.exception {
+            Some(exception) => exception
+                .description
+                .clone()
+                .unwrap_or_else(|| js_string(exception.value.as_ref())),
+            None => details.text.clone(),
+        }))
+    }
+}
+
+/// A remote object, by value or by reference. `null` arrives as a `value` of `null`, and
+/// `undefined` as no value at all.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RemoteObject {
     r#type: String,
+    #[serde(default)]
+    subtype: Option<String>,
     #[serde(default, deserialize_with = "present")]
     value: Option<Value>,
     #[serde(default)]
     unserializable_value: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    object_id: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ExceptionDetails {
     text: String,
     #[serde(default)]
-    exception: Option<Thrown>,
-}
-
-/// What the page threw, as a remote object.
-#[derive(Deserialize)]
-struct Thrown {
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default, deserialize_with = "present")]
-    value: Option<Value>,
+    exception: Option<RemoteObject>,
 }
 
 impl RemoteObject {
-    fn completion(self) -> Completion {
-        if let Some(text) = self.unserializable_value {
-            Completion::Unserializable(text)
-        } else if self.r#type == "undefined" {
-            Completion::Undefined
+    /// `assets/main-world.js`'s evaluate answer: the serialized text, or no value for
+    /// `undefined`.
+    fn text(self) -> Unmasked {
+        match (self.r#type.as_str(), self.value) {
+            ("string", Some(Value::String(text))) => Unmasked::Text(text),
+            ("undefined", None) => Unmasked::Undefined,
+            _ => Unmasked::Unreadable,
+        }
+    }
+
+    /// The value upstream's `JSHandle.jsonValue()` gives for this settled value: an object's is
+    /// the page's serialized `text`, and a primitive's is CDP's own, where a `BigInt` is lost
+    /// (`parseUnserializableValue`, PW:20628), so it reads `undefined`.
+    fn json_value(&self, text: Unmasked) -> Unmasked {
+        if self.object_id.is_none() && self.r#type == "bigint" {
+            Unmasked::Undefined
         } else {
-            Completion::Json(self.value.unwrap_or(Value::Null))
+            text
         }
     }
-}
 
-impl ExceptionDetails {
-    /// Upstream's `getExceptionMessage` without the page's stack frames: an error's
-    /// description, a thrown primitive as text, else CDP's summary.
-    fn message(self) -> String {
-        let text = match self.exception {
-            Some(Thrown {
-                description: Some(description),
-                ..
-            }) => description,
-            Some(Thrown {
-                value: Some(Value::String(text)),
-                ..
-            }) => text,
-            Some(Thrown {
-                value: Some(value), ..
-            }) => value.to_string(),
-            _ => self.text,
-        };
-        text.lines()
-            .filter(|line| !line.starts_with("    at "))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-}
-
-/// How the script's call ended, from CDP's reply.
-fn ran(called: Result<Value, CoreError>) -> Result<Ran, CoreError> {
-    let reply = match called {
-        Ok(reply) => reply,
-        Err(error) => {
-            let outcome = match &error {
-                CoreError::Cdp(CdpError::Protocol { message, .. }) => protocol_outcome(message),
-                _ => None,
+    /// upstream's preview of this value, its `JSHandle.toString()` (PW:20753, `renderPreview`
+    /// PW:36897, no `generatePreview`): `String(value)` for a primitive, CDP's description of an
+    /// object, else `JSHandle@<subtype or type>`.
+    fn preview(self) -> String {
+        if self.object_id.is_none() {
+            return match self.unserializable_value.as_deref() {
+                // `parseUnserializableValue` knows these four and nothing else.
+                Some("-0") => "0".to_owned(),
+                Some(special @ ("NaN" | "Infinity" | "-Infinity")) => special.to_owned(),
+                Some(_) => "undefined".to_owned(),
+                None => js_string(self.value.as_ref()),
             };
-            return outcome.ok_or(error);
         }
-    };
-    let called: Called = decode(reply)?;
-    Ok(Ran::Finished(match called.exception_details {
-        Some(exception) => Unmasked::Threw(exception.message()),
-        None => Unmasked::Returned(called.result.completion()),
-    }))
-}
-
-/// The CDP errors that are an outcome of the script rather than a failure, as upstream's
-/// `rewriteError` reads them.
-fn protocol_outcome(message: &str) -> Option<Ran> {
-    const NOT_FOUND: [&str; 3] = [
-        "Cannot find context with specified id",
-        "Could not find object with given id",
-        "does not belong to the document",
-    ];
-    if message.contains("Execution context was destroyed") {
-        Some(Ran::Destroyed)
-    } else if NOT_FOUND.iter().any(|gone| message.contains(gone)) {
-        Some(Ran::NotRun)
-    } else if message.contains("Object reference chain is too long")
-        || message.contains("CBOR: stack limit exceeded")
-    {
-        Some(Ran::Finished(Unmasked::Threw(
-            "Cannot serialize result: object reference chain is too long.".to_owned(),
-        )))
-    } else if message.contains("Object couldn't be returned by value") {
-        Some(Ran::Finished(Unmasked::Returned(Completion::Undefined)))
-    } else {
-        None
+        self.description
+            .filter(|description| !description.is_empty())
+            .unwrap_or_else(|| format!("JSHandle@{}", self.subtype.unwrap_or(self.r#type)))
     }
 }
 
-/// `completion` as the op's JSON result, with every swept value masked in it. JSON has no
-/// `undefined`, `NaN`, `Infinity` or `BigInt`; each becomes `null` (and `-0` becomes `0`), as
-/// `JSON.stringify` writes them in an array: a listed deviation from upstream's serializer.
-fn mask_completion(swept: &FieldValues, completion: Completion) -> Value {
-    match completion {
-        Completion::Json(mut value) => {
-            swept.mask_json(&mut value);
-            mask_numbers(swept, &mut value);
-            value
-        }
-        Completion::Unserializable(text) if text == "-0" => json!(0),
-        Completion::Undefined | Completion::Unserializable(_) => Value::Null,
-    }
-}
-
-/// `mask_json` masks strings only, but a script can return a code as a number
-/// (`Number(otp.value)`). A number whose digits hold a swept value becomes the masked string.
-fn mask_numbers(swept: &FieldValues, value: &mut Value) {
+/// `String(value)` for a primitive CDP reported by value; `undefined` for none.
+fn js_string(value: Option<&Value>) -> String {
     match value {
-        Value::Number(number) => {
-            let mut digits = Value::String(number.to_string());
-            if swept.mask_json(&mut digits) {
-                *value = digits;
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                mask_numbers(swept, item);
-            }
-        }
-        Value::Object(fields) => {
-            for field in fields.values_mut() {
-                mask_numbers(swept, field);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::String(_) => {}
-    }
-}
-
-/// Page text with every swept value masked, as `mask_json` masks a string: a long value
-/// wherever it occurs (with its newlines, unlike `mask_str`), a short one only as the whole text.
-pub(crate) fn mask_text(swept: &FieldValues, text: String) -> String {
-    let mut leaf = Value::String(text);
-    swept.mask_json(&mut leaf);
-    match leaf {
-        Value::String(text) => text,
-        other => other.to_string(),
+        None => "undefined".to_owned(),
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Number(number)) => number
+            .as_f64()
+            .map_or_else(|| number.to_string(), page_value::js_number),
+        Some(other) => other.to_string(),
     }
 }
 
@@ -915,342 +1581,4 @@ pub(crate) fn present<'de, D: Deserializer<'de>>(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::error::Error;
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
-    use browseros_core::sensitive_fields::FieldValues;
-    use browseros_core::{
-        BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, CoreError, SessionId,
-    };
-    use browseros_trace::ErrorOwner;
-    use futures_util::future::BoxFuture;
-    use serde_json::{Value, json};
-    use tokio::sync::{broadcast, mpsc};
-    use tokio::time::{self, Instant};
-
-    use super::{
-        Completion, EvaluateGuard, FRAME_BUDGET, Ran, Unmasked, mask_completion, mask_text, ran,
-    };
-    use crate::op_scope::OpScope;
-    use crate::probe::PROBE_PROTOCOL;
-    use crate::target::CallHeader;
-    use crate::test_env::TestEnv;
-    use crate::test_support::RecordingHooks;
-    use crate::{ErrorCode, Op, Playwright};
-
-    type TestResult = Result<(), Box<dyn Error>>;
-
-    fn swept() -> FieldValues {
-        FieldValues::from_sweep(&json!(["hunter2-secret", "482913", "123"]))
-    }
-
-    fn finished(reply: Value) -> Result<Unmasked, Box<dyn Error>> {
-        match ran(Ok(reply))? {
-            Ran::Finished(unmasked) => Ok(unmasked),
-            Ran::NotRun | Ran::Destroyed => Err("a reply is a finished run".into()),
-        }
-    }
-
-    fn result_of(unmasked: Unmasked) -> Result<Value, Box<dyn Error>> {
-        let Unmasked::Returned(completion) = unmasked else {
-            return Err("the script returned".into());
-        };
-        Ok(mask_completion(&swept(), completion))
-    }
-
-    #[test]
-    fn tests_that_a_result_is_json_and_what_json_cannot_hold_is_null() -> TestResult {
-        let null =
-            finished(json!({ "result": { "type": "object", "subtype": "null", "value": null } }))?;
-        assert_eq!(result_of(null)?, json!(null));
-        let undefined = finished(json!({ "result": { "type": "undefined" } }))?;
-        assert_eq!(result_of(undefined)?, json!(null), "JSON has no undefined");
-        let nan =
-            finished(json!({ "result": { "type": "number", "unserializableValue": "NaN" } }))?;
-        assert_eq!(result_of(nan)?, json!(null));
-        let zero =
-            finished(json!({ "result": { "type": "number", "unserializableValue": "-0" } }))?;
-        assert_eq!(result_of(zero)?, json!(0));
-        Ok(())
-    }
-
-    #[test]
-    fn tests_that_a_swept_value_is_masked_in_strings_keys_and_numbers() -> TestResult {
-        let echoed = finished(json!({ "result": { "type": "object", "value": {
-            "typed": "you typed hunter2-secret",
-            "hunter2-secret": true,
-            "code": 482_913,
-            "cvc": "123",
-            "price": 1234,
-            "plain": "untouched",
-        } } }))?;
-        assert_eq!(
-            result_of(echoed)?,
-            json!({
-                "typed": "you typed [private]",
-                "[private]": true,
-                "code": "[private]",
-                "cvc": "[private]",
-                "price": 1234,
-                "plain": "untouched",
-            }),
-            "a code returned as a number is as secret as the string; other numbers stay"
-        );
-        let bigint =
-            finished(json!({ "result": { "type": "bigint", "unserializableValue": "482913n" } }))?;
-        assert_eq!(
-            result_of(bigint)?,
-            json!(null),
-            "a BigInt, a code perhaps, never leaves"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn tests_that_a_thrown_message_is_upstreams_without_the_stack_and_masked() -> TestResult {
-        let error = finished(json!({
-            "result": { "type": "object", "subtype": "error" },
-            "exceptionDetails": { "text": "Uncaught", "exception": {
-                "description": "TypeError: hunter2-secret is not a function\n    at eval (eval at <anonymous> (:17:24), <anonymous>:1:7)\n    at <anonymous>:18:73" } },
-        }))?;
-        let Unmasked::Threw(message) = error else {
-            return Err("the script threw".into());
-        };
-        assert_eq!(
-            mask_text(&swept(), message),
-            "TypeError: [private] is not a function"
-        );
-        let primitive = finished(json!({
-            "result": { "type": "string" },
-            "exceptionDetails": { "text": "Uncaught", "exception": { "type": "string", "value": "plain" } },
-        }))?;
-        assert!(
-            matches!(&primitive, Unmasked::Threw(message) if message == "plain"),
-            "a thrown string prints as itself"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn tests_that_a_gone_document_is_an_outcome_and_other_errors_fail() -> TestResult {
-        let protocol = |message: &str| {
-            Err(CoreError::Cdp(CdpError::Protocol {
-                code: -32000,
-                message: message.to_owned(),
-            }))
-        };
-        assert!(matches!(
-            ran(protocol("Cannot find context with specified id"))?,
-            Ran::NotRun
-        ));
-        assert!(matches!(
-            ran(protocol("Execution context was destroyed."))?,
-            Ran::Destroyed
-        ));
-        assert!(matches!(
-            ran(protocol("Object couldn't be returned by value"))?,
-            Ran::Finished(Unmasked::Returned(Completion::Undefined))
-        ));
-        assert!(matches!(
-            ran(protocol("Object reference chain is too long"))?,
-            Ran::Finished(Unmasked::Threw(message)) if message.starts_with("Cannot serialize result")
-        ));
-        assert!(
-            ran(protocol("Internal error")).is_err(),
-            "an unknown CDP error is the op's failure"
-        );
-        Ok(())
-    }
-
-    const PAGE_TARGET: &str = "page-target";
-    const PAGE_SESSION: &str = "page-session";
-    const OOPIF: &str = "oopif-target";
-    const OOPIF_SESSION: &str = "oopif-session";
-
-    /// How long each half of reaching and sweeping the slow frame takes: its attach plus its
-    /// frame tree, then its world's install plus the sweep.
-    const HALF: Duration = Duration::from_millis(600);
-
-    /// A browser with one tab on `https://a.test/` and an out-of-process frame of the same
-    /// site whose renderer is slow: its attach, frame tree, world install and sweep take
-    /// [`HALF`] a pair. Every other command answers at once.
-    struct SlowFrame {
-        events: broadcast::Sender<CdpEvent>,
-        targeted: TargetedEvents,
-    }
-
-    impl SlowFrame {
-        fn new() -> Arc<Self> {
-            Arc::new(Self {
-                events: broadcast::channel(16).0,
-                targeted: TargetedEvents::default(),
-            })
-        }
-
-        async fn answer(&self, method: &str, params: &Value, session: Option<&SessionId>) -> Value {
-            let oopif = session.is_some_and(|session| session.as_str() == OOPIF_SESSION);
-            match method {
-                "Browser.getTabs" => json!({ "tabs": [{ "tabId": 7, "targetId": PAGE_TARGET,
-                    "windowId": 1, "url": "https://a.test/", "title": "A", "isActive": true,
-                    "isLoading": false, "loadProgress": 1.0, "isPinned": false,
-                    "isHidden": false }] }),
-                "Target.attachToTarget" => {
-                    let target = params["targetId"].as_str().unwrap_or_default();
-                    stage(target == OOPIF).await;
-                    let session = if target == OOPIF {
-                        OOPIF_SESSION
-                    } else {
-                        PAGE_SESSION
-                    };
-                    json!({ "sessionId": session })
-                }
-                "Target.getTargets" => json!({ "targetInfos": [
-                    { "targetId": PAGE_TARGET, "type": "page", "url": "https://a.test/" },
-                    { "targetId": OOPIF, "type": "iframe", "url": "https://pay.a.test/",
-                      "parentId": PAGE_TARGET },
-                ] }),
-                "Page.getFrameTree" => {
-                    stage(oopif).await;
-                    let (id, url) = if oopif {
-                        (OOPIF, "https://pay.a.test/")
-                    } else {
-                        (PAGE_TARGET, "https://a.test/")
-                    };
-                    json!({ "frameTree": { "frame": { "id": id, "loaderId": "L", "url": url,
-                        "domainAndRegistry": "a.test" } } })
-                }
-                "Page.createIsolatedWorld" => {
-                    stage(oopif).await;
-                    json!({ "executionContextId": 7 })
-                }
-                "Runtime.evaluate" => json!({ "result": { "type": "object", "objectId": "g" } }),
-                // The hidden-root scan finds no shadow root.
-                "DOM.describeNode" => json!({ "node": { "backendNodeId": 1,
-                    "nodeName": "#document", "childNodeCount": 0, "children": [] } }),
-                "Runtime.callFunctionOn" => {
-                    let request = &params["arguments"][0]["value"];
-                    if request["op"] == "sweep" {
-                        stage(oopif).await;
-                        json!({ "result": { "type": "object",
-                            "value": { "kind": "sweep", "values": [] } } })
-                    } else if params.get("arguments").is_none() {
-                        if params["functionDeclaration"]
-                            .as_str()
-                            .is_some_and(|function| function.contains("takeHost"))
-                        {
-                            // The seal reported no shadow host.
-                            json!({ "result": { "type": "object", "subtype": "null",
-                                "value": null } })
-                        } else {
-                            // The world's document, where the scan starts.
-                            json!({ "result": { "type": "object", "objectId": "d" } })
-                        }
-                    } else {
-                        json!({ "result": { "type": "object", "value": { "kind": "described",
-                            "protocol": PROBE_PROTOCOL, "seq": request["frameSeq"], "url": "" } } })
-                    }
-                }
-                _ => json!({}),
-            }
-        }
-    }
-
-    /// One stage of the slow frame, half of a [`HALF`]; nothing for any other frame.
-    async fn stage(slow: bool) {
-        if slow {
-            time::sleep(HALF / 2).await;
-        }
-    }
-
-    impl CdpConnection for SlowFrame {
-        fn send<'a>(
-            &'a self,
-            method: &'a str,
-            params: Value,
-            session: Option<&'a SessionId>,
-        ) -> BoxFuture<'a, Result<Value, CdpError>> {
-            Box::pin(async move { Ok(self.answer(method, &params, session).await) })
-        }
-
-        fn send_raw_json<'a>(
-            &'a self,
-            method: &'a str,
-            params_json: &'a str,
-            session: Option<&'a SessionId>,
-        ) -> BoxFuture<'a, Result<String, CdpError>> {
-            Box::pin(async move {
-                let params = serde_json::from_str(params_json)?;
-                let reply = self.answer(method, &params, session).await;
-                Ok(serde_json::to_string(&reply)?)
-            })
-        }
-
-        fn events(&self) -> broadcast::Receiver<CdpEvent> {
-            self.events.subscribe()
-        }
-
-        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
-            self.targeted.subscribe(method)
-        }
-
-        fn is_connected(&self) -> bool {
-            true
-        }
-
-        fn connection_epoch(&self) -> u64 {
-            1
-        }
-    }
-
-    /// Reaching the slow frame and sweeping it each fit in a budget of their own, 600 ms
-    /// against 1 s, but the frame has one budget for both: it refuses the script at 1 s
-    /// rather than passing at 1.2 s.
-    #[tokio::test(start_paused = true)]
-    async fn tests_that_a_frame_has_one_budget_from_its_attach_to_its_sweep() -> TestResult {
-        let browser = BrowserSession::new(
-            SlowFrame::new() as Arc<dyn CdpConnection>,
-            BrowserSessionHooks::default(),
-        );
-        let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks::default()));
-        let listed = browser.pages.list().await?;
-        let page = listed.first().ok_or("the tab is listed")?.page_id.clone();
-        let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
-        let op = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
-        let scope = OpScope::new(&env, op, CallHeader::default());
-        let started = Instant::now();
-        let swept = EvaluateGuard::sweep_before(&playwright, &scope, &page).await;
-        let took = started.elapsed();
-        let error = swept.err().ok_or(format!(
-            "a frame 1.2 s from its attach to its sweep passed, after {took:?}"
-        ))?;
-        assert_eq!(
-            (error.error_code(), error.owner()),
-            (Some(ErrorCode::Unsupported), ErrorOwner::Neo),
-            "{error}"
-        );
-        assert!(
-            took >= FRAME_BUDGET && took < FRAME_BUDGET + HALF / 2,
-            "refused when the frame's one budget ran out, after {took:?}"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn tests_that_waiting_ends_on_a_truthy_value_or_a_throw() {
-        let returned = |value: Value| Unmasked::Returned(Completion::Json(value)).ends_wait();
-        assert!(!returned(json!(null)) && !returned(json!(0)) && !returned(json!("")));
-        assert!(!returned(json!(false)));
-        assert!(returned(json!({})) && returned(json!([])) && returned(json!("0")));
-        assert!(returned(json!(0.5)));
-        assert!(!Unmasked::Returned(Completion::Undefined).ends_wait());
-        assert!(!Unmasked::Returned(Completion::Unserializable("NaN".to_owned())).ends_wait());
-        assert!(Unmasked::Returned(Completion::Unserializable("Infinity".to_owned())).ends_wait());
-        assert!(
-            Unmasked::Threw("Error: x".to_owned()).ends_wait(),
-            "a throw fails the wait"
-        );
-    }
-}
+mod tests;

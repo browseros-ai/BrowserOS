@@ -8,7 +8,7 @@
  * it as an unbranded object.
  */
 import { clientError, unsupportedError } from './errors'
-import type { ElementBrand, Evaluation } from './wire'
+import type { ElementBrand } from './wire'
 
 /** The defined values of `keys` in `source`. */
 export function pick<T extends object, K extends keyof T>(
@@ -71,35 +71,9 @@ export function markHandle(object: object): void {
   handles.add(object)
 }
 
-function findHandle(value: unknown, seen: Set<unknown>): boolean {
-  if (typeof value !== 'object' || value === null || seen.has(value))
-    return false
-  if (handles.has(value)) return true
-  seen.add(value)
-  for (const item of Object.values(value))
-    if (findHandle(item, seen)) return true
-  return false
-}
-
-/** A main-world call's wire form; an absent `arg` reaches the function as `undefined`. */
-export function evaluation(
-  api: string,
-  pageFunction: unknown,
-  arg: unknown,
-): Evaluation {
-  if (typeof pageFunction !== 'function' && typeof pageFunction !== 'string')
-    throw clientError(api, 'expected a function or an expression string')
-  if (findHandle(arg, new Set()))
-    throw unsupportedError(
-      api,
-      'Neo passes evaluate arguments as JSON, without handles; run the function on the element itself with locator.evaluate(fn) or elementHandle.evaluate(fn)',
-    )
-  const call: Evaluation = {
-    expression: String(pageFunction),
-    isFunction: typeof pageFunction === 'function',
-  }
-  if (arg !== undefined) call.arg = arg
-  return call
+/** One of the objects the prelude hands to scripts. */
+export function isHandle(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && handles.has(value)
 }
 
 /** `locator.setInputFiles` values as host paths. */

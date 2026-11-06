@@ -6,7 +6,11 @@
 //! - **seal:** every read from the sealed world is masked, the page's own world and its form
 //!   submission still see raw values, a page patching its own prototypes does not reach the
 //!   seal, frames are not crossed, the journal reports each typed value once, the sweep finds
-//!   values in open and watched closed shadow roots, and installing twice is harmless.
+//!   values in open and watched closed shadow roots, and installing twice is harmless;
+//! - **detached trees:** a watched element out of the document is swept with its tree, its own
+//!   open shadow root included, while it is out, and a tree too big to sweep fails the sweep;
+//!   a password the page removes is still one to the sweep after the page toggles it to text,
+//!   and a field its labels make sensitive is still sensitive out of the document.
 //!
 //! Needs a BrowserOS instance (it reads tabs through `Browser.getTabs`) with CDP on
 //! `BROWSEROS_CDP_PORT` (default 9005):
@@ -503,6 +507,416 @@ async fn exercise(
         "{body}"
     );
     Ok(())
+}
+
+/// A page that removes a password field's container, and a shadow host with a password in its
+/// own open root, keeps both alive in globals of its own world.
+const DETACHED: &str = r#"<!doctype html><body>
+<div id="box"><input id="gone" type="password"></div>
+<div id="host"></div>
+<script>
+  window.box = document.getElementById('box');
+  window.host = document.getElementById('host');
+  window.host.attachShadow({ mode: 'open' }).innerHTML = '<input id="inner" type="password">';
+  window.ready = true;
+</script></body>"#;
+
+/// The node `expression` names in the page's own world, handed to the seal's `watch` in the
+/// sealed world `context`, as the evaluate guard hands it the nodes a script receives.
+async fn watch_node(page: &ProtocolSession, context: i64, expression: &str) -> TestResult {
+    let named = page
+        .send_value("Runtime.evaluate", json!({ "expression": expression }))
+        .await?;
+    let object = named["result"]["objectId"]
+        .as_str()
+        .ok_or_else(|| format!("the page named no node: {named}"))?;
+    let described = page
+        .send_value("DOM.describeNode", json!({ "objectId": object }))
+        .await?;
+    let resolved = page
+        .send_value(
+            "DOM.resolveNode",
+            json!({ "backendNodeId": described["node"]["backendNodeId"],
+                    "executionContextId": context }),
+        )
+        .await?;
+    let sealed = resolved["object"]["objectId"]
+        .as_str()
+        .ok_or("the node did not resolve in the sealed world")?;
+    page.send_value(
+        "Runtime.callFunctionOn",
+        json!({
+            "objectId": sealed,
+            "functionDeclaration": "function () { __clawSeal.watch(this); return true; }",
+            "returnByValue": true,
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
+/// A fresh tab on the BrowserOS at `BROWSEROS_CDP_PORT`, for a test that closes it with
+/// `close_tab` whatever its result.
+async fn open_tab() -> TestResult<(Arc<CdpClient>, ProtocolSession, String)> {
+    let port = std::env::var("BROWSEROS_CDP_PORT")
+        .ok()
+        .and_then(|port| port.parse().ok())
+        .unwrap_or(9005);
+    let client = Arc::new(CdpClient::connect(ConnectOptions::new(port)).await?);
+    let root = ProtocolSession::root(client.clone());
+    let target = root
+        .send_value("Target.createTarget", json!({ "url": "about:blank" }))
+        .await?;
+    let target_id = target["targetId"]
+        .as_str()
+        .ok_or("no target id")?
+        .to_string();
+    Ok((client, root, target_id))
+}
+
+async fn close_tab(root: &ProtocolSession, target_id: &str) {
+    let _ = root
+        .send_value("Target.closeTarget", json!({ "targetId": target_id }))
+        .await;
+}
+
+/// The tab's page with `html` loaded once `window.ready` is set, and the seal installed in its
+/// main frame; returns the page and the sealed world's context id.
+async fn sealed_page(
+    client: &Arc<CdpClient>,
+    root: &ProtocolSession,
+    target_id: &str,
+    html: &str,
+) -> TestResult<(ProtocolSession, i64)> {
+    let attached = root
+        .send_value(
+            "Target.attachToTarget",
+            json!({ "targetId": target_id, "flatten": true }),
+        )
+        .await?;
+    let session_id = attached["sessionId"].as_str().ok_or("no session id")?;
+    let page = ProtocolSession::for_session(client.clone(), SessionId::from(session_id));
+    for method in ["Page.enable", "DOM.enable", "Runtime.enable"] {
+        page.send_value(method, json!({})).await?;
+    }
+    let url = format!(
+        "data:text/html;charset=utf-8,{}",
+        utf8_percent_encode(html, NON_ALPHANUMERIC)
+    );
+    page.send_value("Page.navigate", json!({ "url": url }))
+        .await?;
+    wait_until(&page, "window.ready === true").await?;
+    let tree = page.send_value("Page.getFrameTree", json!({})).await?;
+    let frame = tree["frameTree"]["frame"]["id"]
+        .as_str()
+        .ok_or("no frame")?;
+    let sealed = seal(&page, frame).await?;
+    Ok((page, sealed))
+}
+
+/// Whether a sweep's values hold `secret`.
+fn swept(values: &Value, secret: &str) -> bool {
+    values
+        .as_array()
+        .is_some_and(|values| values.iter().any(|value| value == secret))
+}
+
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
+async fn detached_trees_are_swept_while_they_live() -> TestResult {
+    let (client, root, target_id) = open_tab().await?;
+    let result = detached(&client, &root, &target_id).await;
+    close_tab(&root, &target_id).await;
+    result
+}
+
+async fn detached(client: &Arc<CdpClient>, root: &ProtocolSession, target_id: &str) -> TestResult {
+    let (page, sealed) = sealed_page(client, root, target_id, DETACHED).await?;
+    eval(
+        &page,
+        "document.getElementById('gone').value = 'PWGONE_1a1a';
+         host.shadowRoot.getElementById('inner').value = 'PWHOSTROOT_2b2b';
+         true",
+        None,
+    )
+    .await?;
+    // Watched while still in the document: its state is read at each sweep.
+    watch_node(&page, sealed, "box").await?;
+    eval(&page, "box.remove(); host.remove(); true", None).await?;
+    let unwatched = eval(&page, "__clawSeal.sensitiveValues()", Some(sealed)).await?;
+    assert!(
+        swept(&unwatched, "PWGONE_1a1a"),
+        "a node watched before its removal is swept after it: {unwatched}"
+    );
+    assert!(
+        !swept(&unwatched, "PWHOSTROOT_2b2b"),
+        "the document's sweep does not reach a removed host it was never handed"
+    );
+    watch_node(&page, sealed, "host").await?;
+    let watched = eval(&page, "__clawSeal.sensitiveValues()", Some(sealed)).await?;
+    assert!(
+        swept(&watched, "PWHOSTROOT_2b2b"),
+        "a removed host's own open root is swept once it is watched: {watched}"
+    );
+    assert_eq!(
+        eval(&page, "__clawSeal.detachedTops().length", Some(sealed)).await?,
+        json!(2)
+    );
+    watch_node(&page, sealed, "box.querySelector('#gone')").await?;
+    eval(&page, "document.body.append(box); true", None).await?;
+    assert_eq!(
+        eval(&page, "__clawSeal.detachedTops().length", Some(sealed)).await?,
+        json!(1),
+        "a tree put back is the document's again"
+    );
+    let back = eval(&page, "__clawSeal.sensitiveValues()", Some(sealed)).await?;
+    assert!(swept(&back, "PWGONE_1a1a"), "{back}");
+    eval(
+        &page,
+        "window.huge = document.createElement('div');
+         for (let i = 0; i < 50001; i++) huge.append(document.createElement('span'));
+         true",
+        None,
+    )
+    .await?;
+    watch_node(&page, sealed, "huge").await?;
+    let failed = eval(&page, "__clawSeal.sensitiveValues()", Some(sealed)).await;
+    assert!(
+        failed.is_err(),
+        "a detached tree too big to sweep fails the sweep instead of leaving fields unseen"
+    );
+    Ok(())
+}
+
+/// A page with nothing in it when the seal is installed: every field below is added later, so
+/// the install's own scan of the document never sees it.
+const EMPTY: &str = "<!doctype html><body><script>window.ready = true;</script></body>";
+
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
+async fn a_password_out_of_the_document_stays_one() -> TestResult {
+    let (client, root, target_id) = open_tab().await?;
+    let result = toggled_out_of_the_document(&client, &root, &target_id).await;
+    close_tab(&root, &target_id).await;
+    result
+}
+
+/// The page's show-password toggle on fields it removed: each one, however the seal came to know
+/// it was a password, is still one to the sweep after the page turns it into text.
+async fn toggled_out_of_the_document(
+    client: &Arc<CdpClient>,
+    root: &ProtocolSession,
+    target_id: &str,
+) -> TestResult {
+    let (page, sealed) = sealed_page(client, root, target_id, EMPTY).await?;
+    eval(
+        &page,
+        "window.form = document.createElement('form');
+         form.innerHTML = '<input id=typed type=password><input id=set type=password><input id=plain>';
+         window.early = document.createElement('input');
+         early.type = 'password';
+         document.body.append(form, early);
+         form.querySelector('#set').value = 'PWSET_2b2b';
+         form.querySelector('#plain').value = 'PLAIN_ok';
+         window.lone = document.createElement('input');
+         lone.type = 'password';
+         lone.value = 'PWLONE_5e5e';
+         window.kept = document.createElement('div');
+         document.body.append(kept);
+         true",
+        None,
+    )
+    .await?;
+    for (field, text) in [
+        ("form.querySelector('#typed')", "PWTYPED_1a1a"),
+        ("early", "PWEARLY_4d4d"),
+    ] {
+        eval(&page, &format!("{field}.focus(); true"), None).await?;
+        page.send_value("Input.insertText", json!({ "text": text }))
+            .await?;
+    }
+    // Each `eval` is a task of its own, so the removal's mutation records are delivered before
+    // the toggle that follows it.
+    eval(&page, "early.remove(); true", None).await?;
+    eval(&page, "early.type = 'text'; true", None).await?;
+    watch_node(&page, sealed, "early").await?;
+    watch_node(&page, sealed, "kept").await?;
+    eval(&page, "kept.remove(); true", None).await?;
+    eval(&page, "form.remove(); true", None).await?;
+    watch_node(&page, sealed, "form").await?;
+    watch_node(&page, sealed, "lone").await?;
+    eval(
+        &page,
+        "form.querySelector('#typed').type = 'text';
+         form.querySelector('#set').type = 'text';
+         lone.type = 'text';
+         true",
+        None,
+    )
+    .await?;
+    let toggled = eval(&page, "__clawSeal.sensitiveValues()", Some(sealed)).await?;
+    let unswept = missing(
+        &toggled,
+        &[
+            (
+                "PWEARLY_4d4d",
+                "typed in the document, removed, then toggled before anything watched it",
+            ),
+            (
+                "PWTYPED_1a1a",
+                "typed in the document, toggled once watched",
+            ),
+            ("PWSET_2b2b", "set by the page, toggled once watched"),
+            ("PWLONE_5e5e", "never in the document, toggled once watched"),
+        ],
+    );
+    assert!(unswept.is_empty(), "still passwords: {unswept:?}");
+    assert!(
+        !swept(&toggled, "PLAIN_ok"),
+        "a plain field out of the document is not swept: {toggled}"
+    );
+    eval(
+        &page,
+        "form.querySelector('#typed').value = 'PWTYPED_new_1a';
+         form.querySelector('#set').value = 'PWSET_new_2b';
+         for (const [tree, value] of [[form, 'PWADDED_3c3c'], [kept, 'PWKEPT_6f6f']]) {
+           const added = document.createElement('input');
+           added.type = 'password';
+           added.value = value;
+           tree.append(added);
+         }
+         true",
+        None,
+    )
+    .await?;
+    eval(
+        &page,
+        "for (const tree of [form, kept]) tree.lastChild.type = 'text'; true",
+        None,
+    )
+    .await?;
+    let changed = eval(&page, "__clawSeal.sensitiveValues()", Some(sealed)).await?;
+    let unswept = missing(
+        &changed,
+        &[
+            ("PWTYPED_new_1a", "a value the page sets after the toggle"),
+            ("PWSET_new_2b", "a value the page sets after the toggle"),
+            (
+                "PWADDED_3c3c",
+                "added to a tree removed before its watch, toggled before the next sweep",
+            ),
+            (
+                "PWKEPT_6f6f",
+                "added to a tree removed after its watch, toggled before the next sweep",
+            ),
+        ],
+    );
+    assert!(unswept.is_empty(), "still passwords: {unswept:?}");
+    Ok(())
+}
+
+/// Fields that only their labels make sensitive: a `for` label, a label around the field, and
+/// `aria-labelledby`, in a tree the page removes with them and in a fragment it never attached.
+const LABELLED: &str = r#"<!doctype html><body>
+<div id="box"><label for="f1">Card number</label><input id="f1"><label>Verification code
+<input id="f2"></label><span id="l3">Password</span><input id="f3" aria-labelledby="l3">
+<input id="f4"></div>
+<script>
+  window.box = document.getElementById('box');
+  window.frag = document.createDocumentFragment();
+  const inner = document.createElement('div');
+  inner.innerHTML = '<label for="g1">Card number</label><input id="g1">'
+    + '<span id="m3">Password</span><input id="g3" aria-labelledby="m3">';
+  frag.append(inner);
+  window.ready = true;
+</script></body>"#;
+
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
+async fn a_labelled_field_out_of_the_document_keeps_its_label() -> TestResult {
+    let (client, root, target_id) = open_tab().await?;
+    let result = labelled_out_of_the_document(&client, &root, &target_id).await;
+    close_tab(&root, &target_id).await;
+    result
+}
+
+async fn labelled_out_of_the_document(
+    client: &Arc<CdpClient>,
+    root: &ProtocolSession,
+    target_id: &str,
+) -> TestResult {
+    let (page, sealed) = sealed_page(client, root, target_id, LABELLED).await?;
+    eval(
+        &page,
+        "const values = { f1: '4111111111111111', f2: '551234', f3: 'PWLABEL_3c3c', f4: 'PLAIN_ok' };
+         for (const [id, value] of Object.entries(values)) box.querySelector('#' + id).value = value;
+         frag.querySelector('#g1').value = '5555555555554444';
+         frag.querySelector('#g3').value = 'PWFRAG_7d7d';
+         true",
+        None,
+    )
+    .await?;
+    let kinds = "(() => {
+        const out = {};
+        for (const el of document.querySelector('#box').querySelectorAll('input'))
+            out[el.id] = __clawSeal.kind(el);
+        return out;
+    })()";
+    let attached = eval(&page, kinds, Some(sealed)).await?;
+    assert_eq!(
+        attached,
+        json!({ "f1": "card", "f2": "one_time_code", "f3": "password", "f4": null }),
+        "the labels classify the fields in the document"
+    );
+    eval(
+        &page,
+        "window.held = document.querySelector('#box'); true",
+        Some(sealed),
+    )
+    .await?;
+    eval(&page, "box.remove(); true", None).await?;
+    let removed = eval(
+        &page,
+        &kinds.replace("document.querySelector('#box')", "held"),
+        Some(sealed),
+    )
+    .await?;
+    assert_eq!(
+        removed, attached,
+        "a field the page removes with its labels keeps its kind"
+    );
+    watch_node(&page, sealed, "box").await?;
+    watch_node(&page, sealed, "frag").await?;
+    let values = eval(&page, "__clawSeal.sensitiveValues()", Some(sealed)).await?;
+    let unswept = missing(
+        &values,
+        &[
+            ("4111111111111111", "a `for` label's card number"),
+            ("551234", "a code in the label around it"),
+            ("PWLABEL_3c3c", "a password named by aria-labelledby"),
+            ("5555555555554444", "a `for` label in a fragment"),
+            ("PWFRAG_7d7d", "aria-labelledby in a fragment"),
+        ],
+    );
+    assert!(
+        unswept.is_empty(),
+        "labelled out of the document: {unswept:?}"
+    );
+    assert!(
+        !swept(&values, "PLAIN_ok"),
+        "an unlabelled field stays plain: {values}"
+    );
+    Ok(())
+}
+
+/// Each `(secret, why)` the sweep's values do not hold, with the values, so one run names every
+/// field a sweep left out.
+fn missing<'a>(values: &Value, expected: &[(&str, &'a str)]) -> Vec<(String, &'a str)> {
+    expected
+        .iter()
+        .filter(|(secret, _)| !swept(values, secret))
+        .map(|&(secret, why)| (format!("{secret} ({values})"), why))
+        .collect()
 }
 
 /// Creates the sealed world in a frame and installs the seal; returns the context id.

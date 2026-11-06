@@ -97,22 +97,89 @@ pub(crate) async fn backend_node(
     world: &SealedWorld,
     pin: Pin,
 ) -> Result<Option<BackendNodeId>, PlaywrightError> {
-    let object = match probe::pinned_object(scope, world, pin).await {
+    Ok(pinned_node(scope, world, pin)
+        .await?
+        .map(|node| node.backend))
+}
+
+/// An element a query pinned, found again: its object in the sealed world, in the op's object
+/// group, and its CDP backend node id.
+pub(crate) struct PinnedNode {
+    pub(crate) sealed: String,
+    pub(crate) backend: BackendNodeId,
+}
+
+/// The element `pin` names in `world`; `None` when the element or the world went first.
+async fn pinned_node(
+    scope: &OpScope<'_>,
+    world: &SealedWorld,
+    pin: Pin,
+) -> Result<Option<PinnedNode>, PlaywrightError> {
+    let sealed = match probe::pinned_object(scope, world, pin).await {
         Ok(Some(object)) => object,
         Ok(None) | Err(ProbeFailure::Gone) => return Ok(None),
         Err(failure) => return Err(resolve::failed(scope, failure)),
     };
     let described = world
         .session()
-        .send::<_, Described>("DOM.describeNode", json!({ "objectId": object }))
+        .send::<_, Described>("DOM.describeNode", json!({ "objectId": sealed }))
         .await;
     match described {
-        Ok(described) => Ok(Some(described.node.backend_node_id)),
+        Ok(described) => Ok(Some(PinnedNode {
+            sealed,
+            backend: described.node.backend_node_id,
+        })),
         Err(error) => match ProbeFailure::from_core(error) {
             ProbeFailure::Gone => Ok(None),
             failure => Err(resolve::failed(scope, failure)),
         },
     }
+}
+
+/// Every match of `target` now, pinned in the world the query landed in, as upstream's
+/// `queryArrayInMainWorld` takes them for `evaluateAll` and `$$eval`: no waiting, never strict.
+/// `None` when a frame on the way is not there yet. Nothing of the matches is read: the
+/// previews the probe sends with the pins stay here. A match that leaves before it is found
+/// again fails the op, rather than hand the script fewer elements than matched.
+pub(crate) async fn every_match(
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    target: &LocatorTarget,
+) -> Result<Option<(SealedWorld, Vec<PinnedNode>)>, PlaywrightError> {
+    let resolver = Resolver::new(page, scope, target, Strictness::FirstMatch);
+    let landed = resolver
+        .attempt_at(|last, _| ProbeRequest::ReadAll {
+            target: ProbeTarget::Chunk(last),
+            read: ReadAll::Pins,
+        })
+        .await?;
+    let Some(Landed { reply, world, .. }) = landed else {
+        return Ok(None);
+    };
+    let ProbeReply::Values { count, values, .. } = reply else {
+        return Err(resolver.refused(reply));
+    };
+    let mut nodes = Vec::with_capacity(values.len());
+    for value in values {
+        let pin = value.pin().ok_or_else(|| {
+            scope.fail(
+                ErrorCode::Internal,
+                "a pins read sent a match without its pin",
+            )
+        })?;
+        let Some(node) = pinned_node(scope, &world, pin).await? else {
+            return Err(scope.fail(
+                ErrorCode::TargetClosed,
+                &format!(
+                    "{count} elements matched, but match {} left the page before the script \
+                     ran; call it again",
+                    nodes.len() + 1
+                ),
+            ));
+        };
+        nodes.push(node);
+    }
+    Ok(Some((world, nodes)))
 }
 
 /// `page.$` and `frame.$`: the first match now as a handle, or null, as upstream's

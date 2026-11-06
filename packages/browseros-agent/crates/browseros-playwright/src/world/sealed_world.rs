@@ -46,6 +46,10 @@ const TAKE_HOST: &str = "function () { const seal = globalThis.__clawSeal; \
 /// How many reported hosts one watch takes at most: the seal holds no more.
 const MAX_TAKEN: usize = 16;
 
+/// The tops of the trees the seal watches out of the document (`detachedTops`), by reference.
+const DETACHED_TOPS: &str = "function () { const seal = globalThis.__clawSeal; \
+                             return seal && seal.detachedTops ? seal.detachedTops() : []; }";
+
 /// The prefix of a watch's own object group ([`WatchHold`]); each watch takes a new number, so
 /// two at once never release each other's handles.
 const WATCH_GROUP: &str = "browseros-sdk-watch";
@@ -237,6 +241,34 @@ struct Handle {
     object_id: Option<String>,
 }
 
+/// A list the seal answered by reference, with CDP's description of it (`Array(n)`).
+#[derive(Deserialize)]
+struct Listed {
+    result: ListHandle,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListHandle {
+    #[serde(default)]
+    object_id: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+/// `Runtime.getProperties`' answer: a list's indices and their objects.
+#[derive(Deserialize)]
+struct Items {
+    result: Vec<Item>,
+}
+
+#[derive(Deserialize)]
+struct Item {
+    name: String,
+    #[serde(default)]
+    value: Option<Handle>,
+}
+
 impl SealedWorld {
     /// Creates (or finds, by name) the frame's `browseros-sdk` world and installs the seal and
     /// the engine there, or re-keys the probe already there. `candidate` is the seq for a new
@@ -411,13 +443,17 @@ impl SealedWorld {
         scan: Scan,
     ) -> Result<(), ProbeFailure> {
         let (in_document, hosts) = match scan {
+            // The trees out of the document that the seal watches (a node a main-world script
+            // was handed, then removed) are scanned as a reported host is, at every sweep: the
+            // page can attach a closed root under one at any time.
             Scan::Document => {
-                let (in_document, hosts) = future::join(
+                let (in_document, hosts, tops) = future::join3(
                     HiddenRoots::scan(&self.session, self.roots.document()),
                     self.take_hosts(group),
+                    self.detached_tops(group),
                 )
                 .await;
-                (in_document?, hosts?)
+                (in_document?, [hosts?, tops?].concat())
             }
             Scan::Reported => (HiddenRoots::default(), self.take_hosts(group).await?),
         };
@@ -458,6 +494,69 @@ impl SealedWorld {
             hosts.push(host);
         }
         Ok(hosts)
+    }
+
+    /// The top of every tree the seal watches out of the document, by handle in `group`: one
+    /// call for the list, and one more for its items when there are any.
+    async fn detached_tops(&self, group: &str) -> Result<Vec<String>, ProbeFailure> {
+        let listed: Listed = self
+            .session
+            .send(
+                "Runtime.callFunctionOn",
+                json!({ "objectId": self.global, "functionDeclaration": DETACHED_TOPS,
+                        "objectGroup": group }),
+            )
+            .await
+            .map_err(ProbeFailure::from_core)?;
+        let Some(list) = listed.result.object_id else {
+            return Err(ProbeFailure::Broken(
+                "the seal listed no detached trees".to_owned(),
+            ));
+        };
+        if listed.result.description.as_deref() == Some("Array(0)") {
+            return Ok(Vec::new());
+        }
+        let items: Items = self
+            .session
+            .send(
+                "Runtime.getProperties",
+                json!({ "objectId": list, "ownProperties": true }),
+            )
+            .await
+            .map_err(ProbeFailure::from_core)?;
+        Ok(items
+            .result
+            .into_iter()
+            .filter(|item| item.name.parse::<usize>().is_ok())
+            .filter_map(|item| item.value.and_then(|value| value.object_id))
+            .collect())
+    }
+
+    /// Hands the nodes `nodes` names (handles in this world) to the seal's `watch`, in one call:
+    /// the elements a main-world script receives, which the seal then sweeps with their tree at
+    /// every sweep they are out of the document (core's `seal.js`). `Gone` when the seal or the
+    /// world is.
+    pub(crate) async fn watch_trees(&self, nodes: &[String]) -> Result<(), ProbeFailure> {
+        let arguments: Vec<Value> = nodes
+            .iter()
+            .map(|node| json!({ "objectId": node }))
+            .collect();
+        let called = self
+            .session
+            .send::<_, Value>(
+                "Runtime.callFunctionOn",
+                json!({ "objectId": self.global, "functionDeclaration": WATCH_ROOTS,
+                        "arguments": arguments, "returnByValue": true }),
+            )
+            .await
+            .map_err(ProbeFailure::from_core)?;
+        match called.pointer("/result/value") {
+            Some(Value::Bool(true)) => Ok(()),
+            Some(Value::Bool(false)) => Err(ProbeFailure::Gone),
+            _ => Err(ProbeFailure::Broken(
+                "the seal did not take the elements to watch".to_owned(),
+            )),
+        }
     }
 
     /// Resolves each of `roots` into this world and hands them all to the seal's `watch` in one
@@ -753,8 +852,8 @@ mod tests {
 
     impl Browser {
         /// Replies to the install's commands: `evaluated` to the evaluate, `booted` as the
-        /// install function's return, then the document's handle, no host the seal reported,
-        /// and a scan that finds no shadow root.
+        /// install function's return, then the document's handle, no host the seal reported, no
+        /// tree it watches out of the document, and a scan that finds no shadow root.
         fn answering(evaluated: Value, booted: Value) -> Arc<Self> {
             let mut called = json!({ "result": { "type": "object" } });
             called["result"]["value"] = booted;
@@ -772,6 +871,11 @@ mod tests {
                 (
                     "Runtime.callFunctionOn",
                     json!({ "result": { "type": "object", "subtype": "null", "value": null } }),
+                ),
+                (
+                    "Runtime.callFunctionOn",
+                    json!({ "result": { "type": "object", "subtype": "array",
+                                        "objectId": "1.7.3", "description": "Array(0)" } }),
                 ),
                 (
                     "DOM.describeNode",

@@ -28,6 +28,10 @@ Playwright checkout is a plain `diff -r`. `sync.sh` writes `SHA256SUMS`, and the
   crate's Rust ports (`src/input/us_keyboard_layout.rs` and `src/input/mac_editing_commands.rs`,
   written by `packages/browseros-playwright-js/scripts/port-keyboard-layout.ts`). Both headers
   read "Copyright 2017 Google Inc., modifications copyright Microsoft Corporation", Apache-2.0.
+- `packages/protocol/src/serializers.ts`. The protocol's value format, which upstream's client
+  uses to serialize an `evaluate` argument (`serializeValue`) and its server uses to read it back
+  (`parseSerializedValue`) before re-serializing it for the page. Neo's prelude runs both steps
+  in QuickJS, so an argument reaches the page as upstream's does, with upstream's errors.
 - `tests/`. Upstream's own page tests at the same tag, the input of conformance tier 2: the
   `tests/page/*.spec.ts` files that `crates/browseros-playwright/tests/conformance/tier2/convert.mjs`
   lifts into case files, `tests/page/pageTest.ts` and `tests/config/utils.ts` for the helpers
@@ -51,6 +55,13 @@ a mask of whole values (`packages/browseros-playwright-js/src/probe/page-mask.ts
   functions, `suitableTextAlternatives` (its cuts at a word and a number) and `escapeClassName`
   (its CSS escapes). The build fails when either opening line is not there exactly once.
 
+The agent runtime, `assets/prelude.js`, runs Playwright's value serializers in QuickJS, which
+has no `URL`, `Buffer`, `atob` or `btoa`. The build loads `isomorphic/utilityScriptSerializers.ts`
+and `protocol/src/serializers.ts` into that bundle only with one import line in front, of Neo's
+stand-ins for those four names (`packages/browseros-playwright-js/src/prelude/vendored-globals.ts`),
+so they bind as module-scope names and the agent's realm gains no global. The page's bundles
+load both files plain.
+
 ## What is deliberately not here
 
 - `highlight.ts`, `highlight.css` and `consoleApi.ts`. They are the inspector overlay and the
@@ -62,7 +73,8 @@ a mask of whole values (`packages/browseros-playwright-js/src/probe/page-mask.ts
 - Upstream's other tests and assets, its test fixtures and its test server. Tier 2 maps the
   server's `PREFIX`, `CROSS_PROCESS_PREFIX` and `EMPTY_PAGE` onto the fixture server, and skips
   every test that needs more of it.
-- The Playwright client, server and protocol (apart from the two keyboard tables), the test runner,
+- The Playwright client, server and protocol (apart from the two keyboard tables and the value
+  serializers), the test runner,
   reporters, the trace viewer, codegen and the recorder, Playwright MCP, browser downloads, and
   every other injected script (`clock.ts`, `bindingsController.ts`, `webSocketMock.ts`,
   `storageScript.ts`, `webAuthn.ts`, `webMCP.ts`, `bidiInsertText.ts`, `coverageScript.ts`,

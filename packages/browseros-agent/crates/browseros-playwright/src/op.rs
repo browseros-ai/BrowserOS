@@ -85,7 +85,7 @@ impl Op {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{BTreeMap, HashSet};
     use std::error::Error;
 
     use browseros_trace::{Effect, JsonPointer};
@@ -94,7 +94,7 @@ mod tests {
     use crate::action::ActionOp;
     use crate::expect::ExpectOp;
     use crate::input::InputOp;
-    use crate::op_spec::{OpLifetime, OpTarget};
+    use crate::op_spec::{Capability, OpLifetime, OpTarget};
     use crate::read::ReadOp;
     use crate::snapshot::SnapshotOp;
 
@@ -175,6 +175,132 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    /// The audit of record: every op, with exactly what it reaches beyond its page's sealed
+    /// world. A host holds and polices ops by these declarations, so a new op without a row, or
+    /// a declaration changed without its row, fails here until the audit is redone on purpose.
+    ///
+    /// The ops with an empty row send selectors, values or trusted input, or read in the sealed
+    /// world. `page.goto` reaches no main world: the host refuses `javascript:`, the one scheme
+    /// that runs script in the current document. Aliases share their op's row:
+    /// `locator.screenshot` and `elementHandle.screenshot` send `page.screenshot`; `$eval`,
+    /// `frame.$eval` and `elementHandle.evaluate` send `locator.evaluate`; `$$eval` sends
+    /// `locator.evaluateAll`; the `frame` forms send the page ops.
+    #[test]
+    fn tests_that_every_op_declares_exactly_its_audited_capabilities() {
+        use Capability::{Capture, HostFiles, MainWorld};
+        const AUDITED: [(&str, &[Capability]); 75] = [
+            ("locator.click", &[]),
+            ("locator.dblclick", &[]),
+            ("locator.hover", &[]),
+            ("locator.check", &[]),
+            ("locator.uncheck", &[]),
+            ("locator.dragTo", &[]),
+            ("locator.fill", &[]),
+            ("locator.press", &[]),
+            ("locator.pressSequentially", &[]),
+            ("locator.selectOption", &[]),
+            ("locator.selectText", &[]),
+            ("locator.focus", &[]),
+            ("locator.blur", &[]),
+            ("locator.setInputFiles", &[HostFiles]),
+            ("locator.dispatchEvent", &[]),
+            ("locator.scrollIntoViewIfNeeded", &[]),
+            ("locator.textContent", &[]),
+            ("locator.innerText", &[]),
+            ("locator.innerHTML", &[]),
+            ("locator.getAttribute", &[]),
+            ("locator.inputValue", &[]),
+            ("locator.isEnabled", &[]),
+            ("locator.isDisabled", &[]),
+            ("locator.isEditable", &[]),
+            ("locator.isChecked", &[]),
+            ("locator.isVisible", &[]),
+            ("locator.isHidden", &[]),
+            ("locator.count", &[]),
+            ("locator.allTextContents", &[]),
+            ("locator.allInnerTexts", &[]),
+            ("locator.boundingBox", &[]),
+            ("locator.waitFor", &[]),
+            ("locator.elementHandle", &[]),
+            ("locator.elementHandles", &[]),
+            ("page.ariaSnapshot", &[]),
+            ("locator.ariaSnapshot", &[]),
+            ("expect.locator", &[]),
+            ("expect.page", &[]),
+            ("keyboard.down", &[]),
+            ("keyboard.up", &[]),
+            ("keyboard.press", &[]),
+            ("keyboard.type", &[]),
+            ("keyboard.insertText", &[]),
+            ("mouse.move", &[]),
+            ("mouse.down", &[]),
+            ("mouse.up", &[]),
+            ("mouse.click", &[]),
+            ("mouse.wheel", &[]),
+            ("page.goto", &[]),
+            ("page.reload", &[]),
+            ("page.goBack", &[]),
+            ("page.goForward", &[]),
+            ("page.waitForURL", &[]),
+            ("page.waitForLoadState", &[]),
+            ("page.title", &[]),
+            ("page.content", &[]),
+            ("page.setContent", &[MainWorld]),
+            ("page.close", &[]),
+            ("page.opener", &[]),
+            ("page.frames", &[]),
+            ("page.evaluate", &[MainWorld]),
+            ("locator.evaluate", &[MainWorld]),
+            ("locator.evaluateAll", &[MainWorld]),
+            ("page.waitForFunction", &[MainWorld]),
+            ("page.screenshot", &[Capture]),
+            ("page.pdf", &[Capture]),
+            ("context.pages", &[]),
+            ("context.newPage", &[]),
+            ("events.listen", &[]),
+            ("events.next", &[]),
+            ("events.wait", &[]),
+            ("dialog.accept", &[]),
+            ("dialog.dismiss", &[]),
+            ("download.path", &[]),
+            ("download.saveAs", &[]),
+        ];
+        let mut audited: BTreeMap<&str, &[Capability]> = BTreeMap::from(AUDITED);
+        let mut differ = Vec::new();
+        for spec in Op::all().map(Op::spec) {
+            let row = audited.remove(spec.name);
+            if row != Some(spec.capabilities) {
+                differ.push((spec.name, spec.capabilities, row));
+            }
+        }
+        assert!(
+            differ.is_empty(),
+            "each op declares exactly its audited row (op, declared, audited): {differ:?}"
+        );
+        assert!(
+            audited.is_empty(),
+            "an audited op that is no longer registered must leave the audit: {:?}",
+            audited.keys().collect::<Vec<_>>()
+        );
+    }
+
+    /// A read never marks itself sent, so its failure tells the host nothing changed. A
+    /// main-world script can change the page, so an op that declares `MainWorld` is a write.
+    #[test]
+    fn tests_that_every_main_world_op_is_a_write() {
+        for spec in Op::all()
+            .map(Op::spec)
+            .filter(|spec| spec.uses(Capability::MainWorld))
+        {
+            assert_eq!(
+                spec.effect,
+                Effect::Write,
+                "{}: its script can change the page",
+                spec.name
+            );
+        }
     }
 
     #[test]

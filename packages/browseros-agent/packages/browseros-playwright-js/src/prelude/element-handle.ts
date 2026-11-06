@@ -2,12 +2,19 @@
  * Playwright's ElementHandle: one element pinned in one document (`{"$neo":"element"}`), where
  * a Locator re-resolves. Its methods send the same ops as Locator's with the element as the
  * target, so Rust acts on that node or fails `element_detached` once its document is gone.
- * `$` and `$$` send a locator rooted at the handle (`root`), which Rust queries from that node.
+ * `$`, `$$`, `$eval` and `$$eval` send a locator rooted at the handle (`root`), which Rust
+ * queries from that node (`$eval` and `$$eval` adapted from b45f541b0). Its scripts run on the
+ * node through the main-world gateway, in its document or out of it, as upstream's do.
+ *
+ * `dispose()` ends the handle as upstream's ends its remote object: every later call fails
+ * "Target page, context or browser has been closed", and as another script's argument it fails
+ * the channel's check by its guid, which each handle takes at random as upstream's does.
  */
 import type { Rect } from '../probe/protocol'
 import { invoke } from './bridge'
 import { EventEmitter } from './emitter'
 import { clientError, unsupportedError } from './errors'
+import { type EvaluateOptions, fromPageValue, pageCall } from './evaluation'
 import {
   type ClickOptions,
   refusedScreenshotOption,
@@ -17,7 +24,6 @@ import type { OpName } from './ops.generated'
 import {
   CHECK_KEYS,
   DBLCLICK_KEYS,
-  evaluation,
   FILL_KEYS,
   HOVER_KEYS,
   inputFilePaths,
@@ -57,9 +63,19 @@ export function elementBrand(value: unknown): ElementBrand | null {
   return value as ElementBrand
 }
 
+/** A guid as upstream's are made: `handle@` and 32 hex digits. */
+function handleGuid(): string {
+  let digits = ''
+  for (let i = 0; i < 32; i++)
+    digits += Math.floor(Math.random() * 16).toString(16)
+  return `handle@${digits}`
+}
+
 export class ElementHandle extends EventEmitter {
   readonly _page: Page
   readonly _brand: ElementBrand
+  readonly _guid = handleGuid()
+  _disposed = false
 
   constructor(page: Page, brand: ElementBrand) {
     super()
@@ -72,7 +88,15 @@ export class ElementHandle extends EventEmitter {
     return this
   }
 
-  async dispose(): Promise<void> {}
+  async dispose(): Promise<void> {
+    this._disposed = true
+  }
+
+  /** upstream's error for a call on a handle whose object it disposed. */
+  #live(api: string): void {
+    if (this._disposed)
+      throw clientError(api, 'Target page, context or browser has been closed')
+  }
 
   override toString(): string {
     return this._brand.display
@@ -88,6 +112,7 @@ export class ElementHandle extends EventEmitter {
     timeout: number,
     args: Omit<OpInputs[Op], 'target' | 'strict'>,
   ): Promise<OpOutputs[Op]> {
+    this.#live(api)
     const input = {
       target: this._brand,
       strict: 'strict',
@@ -102,6 +127,7 @@ export class ElementHandle extends EventEmitter {
 
   /** `selector` as a locator rooted at this handle's node, as upstream's handle queries scope it. */
   #rooted(api: string, selector: string): LocatorBrand {
+    this.#live(api)
     if (typeof selector !== 'string')
       throw clientError(
         api,
@@ -371,14 +397,54 @@ export class ElementHandle extends EventEmitter {
     return this.#op('locator.boundingBox', 'elementHandle.boundingBox', 0, {})
   }
 
-  async evaluate(pageFunction: unknown, arg?: unknown): Promise<unknown> {
+  /** upstream's `JSHandle.evaluate`: its checks first, then the script on this node. */
+  async evaluate(
+    pageFunction: unknown,
+    arg?: unknown,
+    options?: EvaluateOptions,
+  ): Promise<unknown> {
     const api = 'elementHandle.evaluate'
-    return await this.#op(
+    this.#live(api)
+    const script = pageCall(api, 'handle', pageFunction, arg, options)
+    return fromPageValue(await this.#op('locator.evaluate', api, 0, { script }))
+  }
+
+  /** `pageFunction(element, arg)` on the first match under this handle's node now, or upstream's failure. */
+  async $eval(
+    selector: string,
+    pageFunction: unknown,
+    arg?: unknown,
+  ): Promise<unknown> {
+    const api = 'elementHandle.$eval'
+    const script = pageCall(api, 'query', pageFunction, arg)
+    const value = await invoke(
       'locator.evaluate',
-      api,
-      0,
-      evaluation(api, pageFunction, arg),
+      { api, timeoutMs: timeoutMs(api, 0) },
+      {
+        target: this.#rooted(api, selector),
+        strict: 'firstMatch',
+        noWait: true,
+        selector,
+        script,
+      },
     )
+    return fromPageValue(value)
+  }
+
+  /** `pageFunction(elements, arg)` on every match under this handle's node now. */
+  async $$eval(
+    selector: string,
+    pageFunction: unknown,
+    arg?: unknown,
+  ): Promise<unknown> {
+    const api = 'elementHandle.$$eval'
+    const script = pageCall(api, 'query', pageFunction, arg)
+    const value = await invoke(
+      'locator.evaluateAll',
+      { api, timeoutMs: timeoutMs(api, 0) },
+      { target: this.#rooted(api, selector), script },
+    )
+    return fromPageValue(value)
   }
 
   async screenshot(options: ScreenshotOptionsInput = {}): Promise<unknown> {

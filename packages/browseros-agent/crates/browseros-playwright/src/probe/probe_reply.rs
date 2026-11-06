@@ -292,9 +292,10 @@ pub(crate) struct SnapshotIframe {
 /// A read's value as the probe sent it. The seal masks a sensitive field's own getters, not the
 /// text around it: a `<div>` holding a prefilled `<textarea>` reads the value raw through
 /// `innerText`, and a page can copy a value typed in any frame of its site into its own text.
-/// So no read's text leaves the op without one of the two ways out: [`PageText::masked`], with
-/// the values of every sensitive field of the read frame's site (`page::SiteValues`), or
-/// [`PageText::textless`], for a read that holds no page text. It prints as `[page text]`.
+/// So no read's text leaves the op without one of the ways out: [`PageText::masked`], with the
+/// values of every sensitive field of the read frame's site (`page::SiteValues`),
+/// [`PageText::textless`], for a read that holds no page text, or [`PageText::pin`], which takes
+/// only the probe's pin and drops the text unread. It prints as `[page text]`.
 #[derive(Deserialize)]
 #[serde(transparent)]
 pub(crate) struct PageText(Value);
@@ -316,6 +317,15 @@ impl PageText {
     /// words.
     pub(crate) fn textless(self) -> Value {
         self.0
+    }
+
+    /// The pin of a `pins` value (`{pin, preview}`), its preview dropped unread: for an op that
+    /// needs the element and nothing of its text, `evaluateAll`'s matches.
+    pub(crate) fn pin(self) -> Option<Pin> {
+        let Value::Object(mut fields) = self.0 else {
+            return None;
+        };
+        serde_json::from_value(fields.remove("pin")?).ok()
     }
 
     /// The text as a sensitive field's own values, a select's selected values: what the mask

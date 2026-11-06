@@ -14,7 +14,7 @@ use crate::input::{ClickOptions, MouseButton, Typed, millis};
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
-use crate::op_spec::{OpSpec, TARGET};
+use crate::op_spec::{Capability, OpSpec, TARGET};
 use crate::page::OpPage;
 use crate::probe::{Edit, FillValue, Point, SelectOption};
 use crate::target::{Strictness, Target};
@@ -111,7 +111,8 @@ impl ActionOp {
                 "locator.setInputFiles",
                 TARGET,
                 "set a file input's files from host paths",
-            ),
+            )
+            .using(&[Capability::HostFiles]),
             Self::DispatchEvent => OpSpec::write(
                 "locator.dispatchEvent",
                 TARGET,
@@ -255,15 +256,6 @@ struct SelectTextInput {
     strict: Strictness,
     #[serde(default)]
     force: bool,
-}
-
-/// `locator.setInputFiles(paths)`: host paths, which core checks.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SetInputFilesInput {
-    target: Target,
-    strict: Strictness,
-    files: Vec<String>,
 }
 
 /// `locator.focus`, `blur` and `scrollIntoViewIfNeeded`.
@@ -494,12 +486,7 @@ async fn run(
                 .run(&keys)
                 .await?;
         }
-        ActionOp::SetInputFiles => {
-            let input: SetInputFilesInput = args.decode(scope)?;
-            let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
-            let _lease = lease(scope, &page).await?;
-            set_input_files(scope, &page, &input.target, input.strict, &input.files).await?;
-        }
+        ActionOp::SetInputFiles => set_input_files(pw, scope, args.decode(scope)?).await?,
     }
     Ok(Value::Null)
 }

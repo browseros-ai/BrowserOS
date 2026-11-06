@@ -10,6 +10,7 @@
 import type { Rect } from '../probe/protocol'
 import type { ElementHandle } from './element-handle'
 import { clientError } from './errors'
+import { type EvaluateOptions, pageCall, refuseSignal } from './evaluation'
 import type {
   ClickOptions,
   ExactOption,
@@ -561,28 +562,36 @@ export class Locator {
     return this._frame._elementHandles('locator.elementHandles', this._selector)
   }
 
-  evaluate(
+  /**
+   * upstream's `_withElement`: the wait comes first, and `JSHandle.evaluate`'s checks run on the
+   * handle it found, inside the same call, so they fail after the wait with the prefix. Neo's
+   * refusal of `signal` comes before the wait.
+   */
+  async evaluate(
     pageFunction: unknown,
     arg?: unknown,
-    options: TimeoutOption = {},
+    options?: TimeoutOption & EvaluateOptions & { signal?: unknown },
   ): Promise<unknown> {
-    return this._frame._evaluateOn(
-      'locator.evaluate',
+    const api = 'locator.evaluate'
+    refuseSignal(api, options)
+    const script = pageCall(api, 'locator', pageFunction, arg, options)
+    return await this._frame._evaluateOn(
+      api,
       this._selector,
       true,
-      pageFunction,
-      arg,
+      script,
       false,
-      options,
+      typeof options === 'object' && options !== null ? options : {},
     )
   }
 
-  evaluateAll(pageFunction: unknown, arg?: unknown): Promise<unknown> {
-    return this._frame._evaluateAll(
-      'locator.evaluateAll',
+  /** upstream's `frame.$$eval` on this locator's selector, which counts its own arguments. */
+  async evaluateAll(pageFunction: unknown, arg?: unknown): Promise<unknown> {
+    const api = 'locator.evaluateAll'
+    return await this._frame._evaluateAll(
+      api,
       this._selector,
-      pageFunction,
-      arg,
+      pageCall(api, 'query', pageFunction, arg),
     )
   }
 

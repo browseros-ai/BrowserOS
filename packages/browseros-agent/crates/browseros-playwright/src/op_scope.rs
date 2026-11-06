@@ -5,6 +5,7 @@
 //!                                            │ admit(page)    once per op, through the run's view
 //!                                            │ log(line)      Playwright's call log, mirrored to the trace
 //!                                            │ sleep, within  Rust's clock against the op's own timeout
+//!                                            │ require(cap)   at a capability's gateway: declared?
 //!                                            └ send_effect()  recheck, then mark_sent ──▶ Sent
 //!                                                             └▶ input, navigation, element edits,
 //!                                                                main-world script: each takes &Sent
@@ -36,6 +37,7 @@ use tokio::time::{self, Instant};
 
 use crate::call_log::CallLog;
 use crate::op::Op;
+use crate::op_spec::Capability;
 use crate::target::CallHeader;
 use crate::{ErrorCode, OpEnv, PlaywrightError, RunState};
 
@@ -191,6 +193,23 @@ impl<'env> OpScope<'env> {
         }
     }
 
+    /// The gateway check: refuses, as `neo / internal` with nothing sent, an op whose spec does
+    /// not declare `capability`. Each capability's gateway calls it before anything else. A
+    /// host holds and polices ops by their declarations, so an op routed to a gateway without
+    /// its declaration would otherwise be served unpoliced; here it fails on first use instead.
+    pub(crate) fn require(&self, capability: Capability) -> Result<(), PlaywrightError> {
+        if self.op.spec().uses(capability) {
+            Ok(())
+        } else {
+            Err(self.fail(
+                ErrorCode::Internal,
+                &format!(
+                    "the op reached Capability::{capability:?}, which its OpSpec does not declare"
+                ),
+            ))
+        }
+    }
+
     /// Re-runs the host's attempt-stage policies, then marks the op sent, and returns the
     /// proof every effect takes. Call it right before each attempt's effect: an action that
     /// retries its input re-checks before every attempt, because the owner can take over
@@ -339,6 +358,7 @@ mod tests {
 
     use super::{Expired, OpScope};
     use crate::op::Op;
+    use crate::op_spec::Capability;
     use crate::target::CallHeader;
     use crate::test_env::{EnvCall, TestEnv};
     use crate::{Answer, ErrorCode, Refusal, TimedOut};
@@ -421,6 +441,35 @@ mod tests {
         assert_eq!(
             error.message(),
             "locator.textContent: a read operation cannot change the page"
+        );
+        Ok(())
+    }
+
+    /// A gateway lets an op through only for the capability it declares: one declared
+    /// capability does not stand in for another, and a refusal reaches nothing on the host.
+    #[tokio::test]
+    async fn tests_that_require_passes_only_the_declared_capability() -> Result<(), Box<dyn Error>>
+    {
+        let env = TestEnv::new();
+        let scope = OpScope::new(&env, op("page.screenshot")?, CallHeader::default());
+        scope.require(Capability::Capture)?;
+        let error = scope
+            .require(Capability::MainWorld)
+            .err()
+            .ok_or("page.screenshot declares Capture, not MainWorld")?;
+        assert_eq!(
+            (error.owner(), error.code()),
+            (ErrorOwner::Neo, "internal"),
+            "a missing declaration is Neo's bug: {error}"
+        );
+        assert!(
+            error.message().starts_with("page.screenshot: ")
+                && error.message().contains("MainWorld"),
+            "the refusal names the method and the capability: {error}"
+        );
+        assert!(
+            env.calls().is_empty(),
+            "a refused gateway rechecks, marks and notes nothing"
         );
         Ok(())
     }

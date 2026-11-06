@@ -13,7 +13,10 @@
 //                            which an edit of the field leaves as it was
 //   rawLength(el)            selectText needs the real length
 //   sensitiveValues()        the sweep: Rust masks these exact values in a main-world result
-//   watch(root)              journal and sweep a closed shadow root Rust found, while it lives
+//   watch(root)              journal and sweep a closed shadow root Rust found, while it lives;
+//                            or sweep an element or fragment out of the document, and follow its
+//                            fields' types, while it lives
+//   detachedTops()           the tops of the watched trees out of the document, for Rust's scan
 //   takeHost()               a shadow host the journal reported, for Rust to scan
 //
 // The journal reports each value entered into a sensitive field through a CDP binding that was
@@ -54,7 +57,6 @@
     fragmentQueryAll: DocumentFragment.prototype.querySelectorAll,
     documentQueryAll: Document.prototype.querySelectorAll,
     closest: Element.prototype.closest,
-    getElementById: Document.prototype.getElementById,
     selectionToString: Selection.prototype.toString,
     addEventListener: EventTarget.prototype.addEventListener,
     composedPath: Event.prototype.composedPath,
@@ -72,6 +74,11 @@
     if (el instanceof HTMLTextAreaElement) return raw.textareaValue.get.call(el);
     if (el instanceof HTMLSelectElement) return raw.selectValue.get.call(el);
     return "";
+  };
+  var queryAll = function (root, selector) {
+    if (root instanceof Document) return raw.documentQueryAll.call(root, selector);
+    if (root instanceof Element) return raw.elementQueryAll.call(root, selector);
+    return raw.fragmentQueryAll.call(root, selector);
   };
 
   // ---- classification: the same table and order as field_rules.rs ----
@@ -91,15 +98,41 @@
     return parts.filter(Boolean).join(" ");
   }
 
+  // The first element of root's tree with this id. The top of a tree the page removed may be
+  // an element, which has no getElementById, and the document's would search another tree.
+  function byId(root, id) {
+    if (root.getElementById) return root.getElementById(id);
+    if (attr(root, "id") === id) return root;
+    var found = raw.elementQueryAll.call(root, "[id]");
+    for (var i = 0; i < found.length; i++) if (attr(found[i], "id") === id) return found[i];
+    return null;
+  }
+
+  // Chromium answers el.labels from the document's tree even for a field the page removed with
+  // its labels, so it finds none of them (measured); a shadow root's tree is its own wherever
+  // its host is. Out of the document the field's own tree is searched instead: every label
+  // around it, and every label whose for names it. That may be more labels than HTML's, never
+  // fewer, so the field keeps the words it had in the document.
+  function labelsOf(el) {
+    var root = el.getRootNode();
+    if (root instanceof Document || root instanceof ShadowRoot) return el.labels || [];
+    var found = [];
+    for (var up = raw.closest.call(el, "label"); up; up = up.parentElement && raw.closest.call(up.parentElement, "label")) found.push(up);
+    var id = attr(el, "id");
+    var named = id ? queryAll(root, "label") : [];
+    for (var i = 0; i < named.length; i++) if (attr(named[i], "for") === id && found.indexOf(named[i]) === -1) found.push(named[i]);
+    return found;
+  }
+
   function label(el) {
     var parts = [];
-    var labels = el.labels;
-    if (labels) for (var i = 0; i < labels.length; i++) parts.push(labelText(labels[i]));
+    var labels = labelsOf(el);
+    for (var i = 0; i < labels.length; i++) parts.push(labelText(labels[i]));
     var labelledBy = attr(el, "aria-labelledby");
     if (labelledBy) {
       var root = el.getRootNode();
       labelledBy.split(/\s+/).forEach(function (id) {
-        var node = root && root.getElementById ? root.getElementById(id) : raw.getElementById.call(document, id);
+        var node = byId(root, id);
         if (node) parts.push(labelText(node));
       });
     }
@@ -117,7 +150,8 @@
     var type = isInput(el) ? lower(attr(el, "type")) : "";
     if (isInput(el) && includes(rules.excludedTypes, type)) return null;
     if (isInput(el)) observeTypes(el.getRootNode());
-    if (isInput(el) && (includes(rules.passwordTypes, type) || wasPassword.has(el))) return "password";
+    if (isInput(el) && includes(rules.passwordTypes, type)) wasPassword.add(el);
+    if (isInput(el) && wasPassword.has(el)) return "password";
     var tokens = lower(attr(el, "autocomplete")).split(/\s+/).filter(Boolean);
     if (tokens.some(function (t) { return includes(rules.passwordTokens, t); })) return "password";
     if (tokens.some(function (t) { return includes(rules.oneTimeCodeTokens, t); })) return "one_time_code";
@@ -277,9 +311,19 @@
   });
 
   // ---- show-password toggles: once a password, always a password in this document ----
+  // An input is remembered as a password from the first time the seal sees it as one: in a root
+  // it starts to observe, when it classifies it (kind, which every sweep runs on every field with
+  // a value), or in a type change the watcher records. The page's toggle reaches the watcher
+  // only inside a root it observes, and a field the page removes leaves the document's
+  // observation: Chromium records no later toggle of it (measured). So the history must be
+  // taken before the field leaves, by kind, or the tree it leaves in must be observed itself.
+  var notePassword = function (el) {
+    if (isInput(el) && includes(rules.passwordTypes, lower(attr(el, "type")))) wasPassword.add(el);
+  };
   var notePasswords = function (root) {
-    var found = root === document ? raw.documentQueryAll.call(document, "input") : raw.fragmentQueryAll.call(root, "input");
-    for (var i = 0; i < found.length; i++) if (lower(attr(found[i], "type")) === "password") wasPassword.add(found[i]);
+    notePassword(root);
+    var found = queryAll(root, "input");
+    for (var i = 0; i < found.length; i++) notePassword(found[i]);
   };
   var typeWatcher = new MutationObserver(function (records) {
     for (var i = 0; i < records.length; i++) {
@@ -287,12 +331,16 @@
       if (lower(r.oldValue) === "password" || lower(attr(r.target, "type")) === "password") wasPassword.add(r.target);
     }
   });
-  // A MutationObserver on the document does not see changes inside shadow roots, so each root
-  // is observed on its own: at install for the roots found then, and from a field's first
-  // classification (kind) or sweep for roots that appear later.
+  // A MutationObserver on the document does not see changes inside shadow roots, nor in a tree
+  // the page removed from it, so each root is observed on its own: at install for the roots
+  // found then, and from a field's first classification (kind), a watch or a sweep for roots
+  // that appear later, the top of a tree out of the document among them (the field itself when
+  // the page removed just it). An observer holds the nodes it observes weakly, so a tree the page
+  // drops still dies (measured).
   var observedRoots = new WeakSet();
   var observeTypes = function (root) {
-    if (!root || observedRoots.has(root) || !(root === document || root instanceof ShadowRoot)) return;
+    if (!root || observedRoots.has(root)) return;
+    if (!(root instanceof Document || root instanceof DocumentFragment || root instanceof Element)) return;
     observedRoots.add(root);
     notePasswords(root);
     typeWatcher.observe(root, { subtree: true, attributes: true, attributeFilter: ["type"], attributeOldValue: true });
@@ -336,11 +384,26 @@
     lastSent.set(el, value);
     journal(raw.stringify({ kind: k, value: value }));
   };
+  // The elements and fragments Rust handed to watch(): the nodes a main-world script receives,
+  // which may be out of the document (a handle's node the page removed, or one it never
+  // attached), where the document's sweep cannot see them. Held weakly, as the closed roots are.
+  // Whether one is out of the document is read at every sweep, never at the watch: a node the
+  // page removes later is swept from then on, and one it puts back is the document's again. A
+  // tree already out at the watch has its types observed from then on, so a password the page
+  // toggles before the next sweep stays one.
+  var watchedTrees = [];
+  var heldTrees = new WeakSet();
   // A repeat watch adds the listeners again: adding one that is already there changes nothing,
   // and document.open() (sdk-playwright's setContent) removes every listener of the document
   // while this world and its seal live on.
   var watch = function (root) {
     if (!root) return;
+    if ((root instanceof Element || root instanceof DocumentFragment) && !(root instanceof ShadowRoot)) {
+      if (!heldTrees.has(root)) { heldTrees.add(root); watchedTrees.push(new WeakRef(root)); }
+      var top = root.getRootNode({ composed: true });
+      if (top !== document) observeTypes(top);
+      return;
+    }
     raw.addEventListener.call(root, "input", record, true);
     raw.addEventListener.call(root, "change", record, true);
     observeTypes(root);
@@ -358,14 +421,29 @@
     });
     return live;
   };
+  // The top of each watched tree still alive and out of the document: the root of its composed
+  // tree, which a script holding any node of it reaches. Dead ones leave the list.
+  var detachedTops = function () {
+    var tops = [];
+    watchedTrees = watchedTrees.filter(function (ref) {
+      var node = ref.deref();
+      if (!node) return false;
+      var top = node.getRootNode({ composed: true });
+      if (top !== document && tops.indexOf(top) === -1) tops.push(top);
+      return true;
+    });
+    return tops;
+  };
   watch(document);
 
-  // The document, every open shadow root under it (querySelectorAll does not pierce them), and
-  // the closed ones Rust handed to watch(). Bounded so a huge page cannot stall a sweep.
+  // The document, every open shadow root under it (querySelectorAll does not pierce them), the
+  // closed ones Rust handed to watch(), and each watched tree out of the document with the open
+  // roots under it, its top's own included. The document's walk is bounded so a huge page
+  // cannot stall a sweep. A detached tree's walk fails the sweep instead when it runs out: such
+  // a tree is reachable only through the script that received it, and a sweep that left part
+  // of it unseen would let that script read a field raw. The walk of a detached tree also
+  // observes its top, which the page may have removed or changed since the last sweep.
   var MAX_SWEEP_ELEMENTS = 50000;
-  var queryAll = function (root, selector) {
-    return root === document ? raw.documentQueryAll.call(document, selector) : raw.fragmentQueryAll.call(root, selector);
-  };
   var sweepRoots = function () {
     var roots = [document].concat(liveWatched());
     var pending = [document];
@@ -375,6 +453,21 @@
       for (var i = 0; i < all.length && visited < MAX_SWEEP_ELEMENTS; i++, visited++) {
         var open = all[i].shadowRoot;
         if (open && roots.indexOf(open) === -1) { roots.push(open); pending.push(open); observeTypes(open); }
+      }
+    }
+    var trees = detachedTops();
+    var inTrees = 0;
+    while (trees.length) {
+      var top = trees.pop();
+      if (roots.indexOf(top) === -1) roots.push(top);
+      observeTypes(top);
+      var found = queryAll(top, "*");
+      var each = top instanceof Element ? [top].concat(Array.prototype.slice.call(found)) : found;
+      inTrees += each.length;
+      if (inTrees > MAX_SWEEP_ELEMENTS) throw new Error("a detached tree a script can reach has more than " + MAX_SWEEP_ELEMENTS + " elements, too many to sweep");
+      for (var j = 0; j < each.length; j++) {
+        var shadow = each[j].shadowRoot;
+        if (shadow && roots.indexOf(shadow) === -1) { roots.push(shadow); trees.push(shadow); observeTypes(shadow); }
       }
     }
     return roots;
@@ -391,7 +484,9 @@
     sensitiveValues: function () {
       var out = [];
       sweepRoots().forEach(function (root) {
-        var found = queryAll(root, "input,textarea,select");
+        var found = Array.prototype.slice.call(queryAll(root, "input,textarea,select"));
+        // A detached tree's top may be a field itself: a removed password input.
+        if (root instanceof Element && isField(root)) found.push(root);
         for (var i = 0; i < found.length; i++) {
           var v = rawValue(found[i]);
           if (v && kind(found[i]) && out.indexOf(v) === -1) out.push(v);
@@ -400,6 +495,7 @@
       return out;
     },
     watch: watch,
+    detachedTops: detachedTops,
     /** The oldest host the journal reported and Rust has not taken yet, or null. */
     takeHost: function () { return pendingHosts.length ? pendingHosts.shift() : null; },
   };

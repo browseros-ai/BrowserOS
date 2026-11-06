@@ -1,6 +1,9 @@
 //! A live browser for the crate's own live tests: one CDP connection with a `Playwright` over
 //! it, as claw-sdk builds them, tabs it opens and closes, and hooks that record what the
-//! journal reports. Needs BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005).
+//! journal reports. Needs BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005). Also the
+//! scripted one-tab browser unit tests run an op against ([`one_tab`]); it lives here because
+//! core's `page_js_guard` reads every other non-test file as production code, and the script
+//! answers `Runtime.evaluate`.
 
 #[path = "../tests/support/fixture_server.rs"]
 pub(crate) mod fixture_server;
@@ -12,6 +15,7 @@ use std::time::Duration;
 
 use browseros_cdp::{CdpClient, ConnectOptions};
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
+use browseros_core::testing::TestConnection;
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId, ProtocolSession,
     TabId, TargetId,
@@ -215,4 +219,42 @@ impl Tab {
 /// The op live tests open their scopes with; any read op works.
 pub(crate) fn count_op() -> TestResult<Op> {
     Ok(Op::from_name("locator.count").ok_or("locator.count is an op")?)
+}
+
+/// The scripted browser [`one_tab`] builds, and its one tab.
+pub(crate) struct OneTab {
+    pub(crate) browser: Arc<BrowserSession>,
+    pub(crate) page: PageId,
+}
+
+/// A browser over `connection` with one tab, tab 7 on `https://example.test/`, scripted to
+/// answer what admitting the tab and preparing a capture send. A test scripts the capture
+/// itself.
+pub(crate) async fn one_tab(connection: &Arc<TestConnection>) -> Result<OneTab, Box<dyn Error>> {
+    connection.always(
+        "Browser.getTabs",
+        json!({ "tabs": [{ "tabId": 7, "targetId": "target-7", "windowId": 1,
+            "url": "https://example.test/", "title": "Account", "isActive": true,
+            "isLoading": false, "loadProgress": 1.0, "isPinned": false, "isHidden": false }] }),
+    )?;
+    for setup in [
+        "Page.enable",
+        "DOM.enable",
+        "Runtime.enable",
+        "Accessibility.enable",
+    ] {
+        connection.always(setup, json!({}))?;
+    }
+    connection.always("Runtime.evaluate", json!({ "result": { "value": true } }))?;
+    let cdp: Arc<dyn CdpConnection> = Arc::clone(connection) as Arc<dyn CdpConnection>;
+    let browser = BrowserSession::new(cdp, BrowserSessionHooks::default());
+    let page = browser
+        .pages
+        .list()
+        .await?
+        .first()
+        .ok_or("the tab is listed")?
+        .page_id
+        .clone();
+    Ok(OneTab { browser, page })
 }

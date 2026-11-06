@@ -524,7 +524,7 @@ describe('errors', () => {
     )
   })
 
-  it('tests that a handle passed to evaluate is refused with what to call instead', async () => {
+  it('tests that a locator passed to evaluate is refused with what to pass instead', async () => {
     const runtime = loadPrelude({ seed: SEED })
     const error = json(
       await runtime.run(
@@ -533,9 +533,59 @@ describe('errors', () => {
     ) as { message: string; code: string }
     expect(error.code).toBe('unsupported')
     expect(error.message).toStartWith(
-      'page.evaluate: Neo passes evaluate arguments as JSON',
+      'page.evaluate: Neo passes element handles as evaluate arguments, not pages',
     )
     expect(runtime.calls).toEqual([])
+  })
+
+  it('tests that an element handle passes as upstream passes one, and a disposed one fails its guid', async () => {
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: (call) =>
+        call.name === 'locator.elementHandle'
+          ? {
+              $neo: 'element',
+              page: { $neo: 'page', id: 7, tab: 1007 },
+              seq: 2,
+              node: 41,
+              display: '<b>',
+            }
+          : null,
+    })
+    const result = json(
+      await runtime.run(`
+        const handle = await page.locator('b').elementHandle()
+        await page.evaluate(([a, b]) => a === b, [handle, handle])
+        await handle.dispose()
+        let disposed
+        try { await page.evaluate((h) => h.id, { h: handle }) } catch (e) { disposed = { message: e.message, code: e.code } }
+        let called
+        try { await handle.evaluate((e) => e.id) } catch (e) { called = e.message }
+        return { disposed, called }
+      `),
+    ) as { disposed: { message: string; code: string }; called: string }
+    const sent = runtime.calls.find((call) => call.name === 'page.evaluate')
+    expect(sent?.input).toMatchObject({
+      script: {
+        run: {
+          arg: '{"a":[{"h":0},{"h":1}],"id":1}',
+          handles: [
+            { $neo: 'element', seq: 2, node: 41 },
+            { $neo: 'element', seq: 2, node: 41 },
+          ],
+        },
+      },
+    })
+    expect(result.disposed.code).toBe('invalid_input')
+    expect(result.disposed.message).toMatch(
+      /^page\.evaluate: arg\.handles\[0\]: no object with guid handle@[0-9a-f]{32}$/,
+    )
+    expect(result.called).toBe(
+      'elementHandle.evaluate: Target page, context or browser has been closed',
+    )
+    expect(
+      runtime.calls.filter((call) => call.name === 'page.evaluate'),
+    ).toHaveLength(1)
   })
 
   it('tests that screenshot options Neo cannot honor are refused, and the rest are sent flat', async () => {

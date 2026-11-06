@@ -66,6 +66,144 @@
     upstream's message without invoking.
   p: "page.goto: Target page, context or browser has been closed"
   n: "page.goto: Unknown page 2. List pages to see what is open."
+- case: element-evaluate
+  path: /returned/detachedRoot
+  kind: decided
+  reason: "held design (deviations table) and spike S-detached (measured on BrowserOS neo):
+    upstream queries the subtree of a handle whose node the page removed. Neo's probe roots a
+    query only at a node still in its document, the rule every rooted read of a handle keeps
+    (elementHandle.$, $$, and these). The handle's own script still runs out of the document,
+    swept (elementHandle.evaluate, case removed); run the query inside it instead:
+    handle.evaluate((el) => el.querySelector(selector))."
+  p:
+    returned: inside
+  n:
+    threw:
+      message: "elementHandle.$eval: Element is not attached to the DOM"
+      name: Error
+- case: element-evaluate
+  path: /returned/detachedRootAll
+  kind: decided
+  reason: "held design (deviations table) and spike S-detached (measured on BrowserOS neo):
+    upstream queries the subtree of a handle whose node the page removed. Neo's probe roots a
+    query only at a node still in its document, the rule every rooted read of a handle keeps
+    (elementHandle.$, $$, and these). The handle's own script still runs out of the document,
+    swept (elementHandle.evaluate, case removed); run the query inside it instead:
+    handle.evaluate((el) => el.querySelector(selector))."
+  p:
+    returned: 1
+  n:
+    threw:
+      message: "elementHandle.$$eval: Element is not attached to the DOM"
+      name: Error
+- case: element-evaluate
+  path: /returned/argAtCall/returned
+  kind: decided
+  reason: "M1b review 2, declined: upstream's locator.evaluate waits for its element first
+    (_withElement's waitForSelector, PW:59823) and serializes the argument only then, so a
+    change the script makes to it during the wait reaches the page (this case), and by the same
+    order a handle in it that the script disposes meanwhile fails (read from the source, not
+    measured). Neo's op carries the argument, serialized when the script calls the method. Matching upstream would take two ops per call (the wait, then the script:
+    another trace shape and another sweep) or a channel for Rust to call back into the prelude,
+    which does not exist. Only a script that changes its argument while the same call waits
+    sees the difference; pass the value the page should get."
+  p: 2
+  n: 1
+- case: element-evaluate
+  path: /returned/signal
+  kind: decided
+  reason: "held design synthesis ('exposeFunctions and signal refused', neo / unsupported until
+    the prelude refusal codes follow RC): upstream's locator.evaluate aborts its element wait on
+    an AbortSignal (_withElement hands it to waitForSelector). Neo's ops cannot be aborted from
+    the script, and its runtime has no AbortController (the case passes a stand-in object
+    there), so a signal is refused before anything is sent rather than ignored. evaluateAll
+    and the page, frame and handle forms take no signal upstream, whose channel drops the key,
+    and Neo ignores it there too. Pass timeout instead."
+  p:
+    returned: H1
+  n:
+    threw:
+      message: "locator.evaluate: an op cannot be aborted from the script in Neo; pass timeout instead"
+      name: Error
+- case: evaluate-args
+  path: /returned/sameOriginFrame
+  kind: decided
+  reason: "held design seam 3 and spike S-adopt (measured on BrowserOS neo): upstream adopts a
+    handle of a same-origin, same-process child frame into the main frame's script by
+    DOM.resolveNode with the main world's execution context id. Neo names no execution context
+    ids, because a cached one can name another world's context after a cross-process
+    navigation (measured, evaluate_guard), so it adopts a handle only into its own document
+    and answers upstream's own adoption error, which upstream gives for a cross-origin frame's
+    handle. Pass the handle to a script in its own frame instead."
+  p:
+    returned: Same
+  n:
+    threw:
+      message: "page.evaluate: Unable to adopt element handle from a different document"
+      name: Error
+- case: evaluate-args
+  path: /returned/waitHandleByReference/returned
+  kind: decided
+  reason: "held design (the JSHandle family is out of this round) and M1b review 3: upstream's
+    waitForFunction resolves to a JSHandle, a reference to the page's own object, so a script
+    that passes it hands the page that object, with every change the page made to it since.
+    Neo keeps no remote object past its op, because handles that outlive their op are the
+    JSHandle family, so its handle holds a masked copy of the value the wait settled on and
+    passes the copy. One handle named twice in one argument is still one object in the page,
+    as upstream's is (waitHandleTwice). Read the page's object again in the script instead:
+    page.evaluate(() => window.held)."
+  p: "own object: true, n: 2"
+  n: "own object: false, n: 1"
+- case: evaluate-args
+  path: /returned/waitHandleDisposed
+  kind: decided
+  reason: "held design (the JSHandle family is out of this round) and M1b review 3: upstream's
+    dispose() releases the remote object, so the channel refuses the handle by its guid
+    afterwards. Neo's waitForFunction handle is a copy with nothing to release: dispose() does
+    nothing and the copy still passes."
+  p:
+    threw:
+      message: "page.evaluate: arg.handles[0]: no object with guid handle@<guid>"
+      name: Error
+  n:
+    returned: 1
+- case: evaluate-errors
+  path: /returned/deepest
+  kind: decided
+  reason: "held design synthesis, graft 5 and spike S-depth: Rust carries a result as deep as
+    upstream's CDP limit (99 nested objects, 297 JSON levels) and refuses one deeper with
+    upstream's message. The agent's realm is QuickJS with claw-sdk's 512 KiB stack, though, and
+    claw-sdk's bootstrap revives an op's result recursively, one call per JSON level, where
+    Playwright's client is Node; the format nests three levels per object. In Runner N's debug
+    build, with claw-sdk's limits, 10 nested objects come back and 20 overflow (measured); a
+    release build's frames are smaller, so its limit is higher (unmeasured). The value is
+    refused, never cut, and an iterative revive in the bootstrap would carry it."
+  p:
+    returned: 99
+  n:
+    threw:
+      message: "page.evaluate: Maximum call stack size exceeded"
+      name: Error
+- case: evaluate-values
+  path: /returned/url/1
+  kind: decided
+  reason: "held design (deviations table): QuickJS has no URL, so a URL result reaches the agent
+    as a URL-like object with a URL's href and parts (prelude/vendored-globals.ts over
+    prelude/url.ts), not an instance of URL. String() and the fields agree with upstream's;
+    Object.prototype.toString does not."
+  p: "[object URL]"
+  n: "[object Object]"
+- case: wait-for-function
+  path: /returned/rafPolling/returned/withinFiveFrames
+  kind: decided
+  reason: "held design (deviations table, decision 21) and M1a review 3: upstream polls 'raf' from
+    requestAnimationFrame in the page, five polls in five frames. Neo polls from Rust every
+    100 ms instead. rAF never fires in Neo's agent tabs, which are background tabs (measured), and
+    the privacy design sweeps around every poll, so each poll must be a send of its own; polls
+    scheduled in the page would run between sweeps. Consequence: a condition that holds for less
+    than 100 ms can be missed, and a wait settles up to 100 ms later than upstream's."
+  p: true
+  n: false
 - case: goto-responses
   path: /returned/afterTimeout
   kind: finding
