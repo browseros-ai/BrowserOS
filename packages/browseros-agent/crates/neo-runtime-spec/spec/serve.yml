@@ -32,6 +32,8 @@ interfaces:
     - fill
     - press
     - inputValue
+    - isChecked
+    - isVisible
     - check
     - uncheck
     - selectOption
