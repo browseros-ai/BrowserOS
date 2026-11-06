@@ -59,11 +59,24 @@ fn assert_error(outcome: &RunOutcome, name: &str, category: &str, delivery: Deli
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_check_and_uncheck_toggle_a_checkbox_and_return_undefined() {
     let Some(tab) = open().await else { return };
-    let outcome = run(&tab, "const box=page.locator('#unchecked'); return [await box.check()===undefined, await box.uncheck()===undefined]").await;
+    let checked = run(
+        &tab,
+        "return await page.locator('#unchecked').check()===undefined",
+    )
+    .await;
+    let intermediate = tab.evaluate("window.__facts()").await;
+    let unchecked = run(
+        &tab,
+        "return await page.locator('#unchecked').uncheck()===undefined",
+    )
+    .await;
     let facts = tab.evaluate("window.__facts()").await;
     tab.close().await;
-    assert_ok(&outcome);
-    assert_eq!(outcome.value, Some(json!([true, true])));
+    assert_ok(&checked);
+    assert_ok(&unchecked);
+    assert_eq!(checked.value, Some(json!(true)));
+    assert_eq!(unchecked.value, Some(json!(true)));
+    assert_eq!(intermediate["checked"]["unchecked"], true);
     assert_eq!(facts["checked"]["unchecked"], false);
     let events = facts["events"].as_array().expect("events");
     assert_eq!(
@@ -74,11 +87,14 @@ async fn tests_that_check_and_uncheck_toggle_a_checkbox_and_return_undefined() {
         ["click", "input", "change", "click", "input", "change"]
     );
     assert!(
-        outcome
+        checked
             .calls
             .iter()
+            .chain(&unchecked.calls)
             .all(|call| call.delivery == Some(Delivery::Done))
     );
+    assert_eq!(checked.calls.len(), 1);
+    assert_eq!(unchecked.calls.len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -129,12 +145,14 @@ async fn tests_that_uncheck_rejects_a_checked_radio_without_input() {
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_role_checkbox_handlers_can_change_checked_state_both_ways() {
     let Some(tab) = open().await else { return };
-    let outcome = run(&tab, "const box=page.locator('#aria'); return [await box.check()===undefined, await box.uncheck()===undefined]").await;
+    let outcome = run(&tab, "return [await page.locator('#aria').check()===undefined, await page.locator('#aria-checked').uncheck()===undefined]").await;
     let facts = tab.evaluate("window.__facts()").await;
     tab.close().await;
     assert_ok(&outcome);
     assert_eq!(outcome.value, Some(json!([true, true])));
-    assert_eq!(facts["aria"], "false");
+    assert_eq!(facts["aria"], "true");
+    assert_eq!(facts["ariaChecked"], "false");
+    assert_eq!(outcome.calls.len(), 2);
     assert_eq!(
         facts["events"].as_array().expect("events").len(),
         2,
@@ -204,16 +222,41 @@ async fn tests_that_trial_leaves_the_checkbox_unchanged_without_page_clicks() {
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_set_checked_delegates_both_states_for_every_receiver() {
     let Some(tab) = open().await else { return };
-    let outcome = run(&tab, "return [await page.setChecked('#unchecked',true)===undefined, await page.mainFrame().setChecked('#unchecked',false)===undefined, await page.locator('#unchecked').setChecked(true)===undefined, await page.locator('#unchecked').setChecked(false)===undefined]").await;
+    let outcome = run(&tab, "return [await page.setChecked('#unchecked',true)===undefined, await page.mainFrame().setChecked('#unchecked',false)===undefined, await page.locator('#unchecked').setChecked(true)===undefined]").await;
     let facts = tab.evaluate("window.__facts()").await;
     tab.close().await;
     assert_ok(&outcome);
-    assert_eq!(outcome.value, Some(json!([true, true, true, true])));
-    assert_eq!(facts["checked"]["unchecked"], false);
+    assert_eq!(outcome.value, Some(json!([true, true, true])));
+    assert_eq!(facts["checked"]["unchecked"], true);
+    assert_eq!(outcome.calls.len(), 3);
     assert!(
         outcome
             .calls
             .iter()
             .all(|call| call.delivery == Some(Delivery::Done))
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_check_refinds_a_checked_replacement_without_clicking_again() {
+    let Some(tab) = open().await else { return };
+    let outcome = run(
+        &tab,
+        "return await page.locator('#replaced').check()===undefined",
+    )
+    .await;
+    let facts = tab.evaluate("window.__facts()").await;
+    tab.close().await;
+    assert_ok(&outcome);
+    assert_eq!(outcome.value, Some(json!(true)));
+    assert_eq!(facts["checked"]["replaced"], true);
+    let changes = facts["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .filter(|event| event["type"] == "change" && event["target"] == "replaced")
+        .count();
+    assert_eq!(changes, 1, "replacement must not receive another click");
+    assert_eq!(outcome.calls.len(), 1);
+    assert_eq!(outcome.calls[0].delivery, Some(Delivery::Done));
 }

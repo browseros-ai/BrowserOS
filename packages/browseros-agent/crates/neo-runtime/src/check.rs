@@ -15,6 +15,7 @@ use crate::click::{
 };
 use crate::forms::{CheckedState, FormTab};
 use crate::progress::{CallError, DeliveryCell, PlaywrightError, Progress};
+use crate::run::Delivery;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CheckOptions {
@@ -103,9 +104,16 @@ impl<T: FormTab> ElementAction<T> for CheckAction<'_> {
         element: &T::Element,
         progress: &Progress,
     ) -> Result<ActionResult<()>, Stop> {
-        let state = read_state(tab, element, progress).await?;
+        let Some(state) = read_state(tab, element, progress).await? else {
+            return Ok(ActionResult::NotConnected);
+        };
         if state.matches == self.options.checked {
             return Ok(ActionResult::Done(()));
+        }
+        // After a delivered click, a replacement is verification only. Another click could
+        // undo the state the first click requested.
+        if self.delivery.delivery() == Delivery::Done {
+            return Err(state_unchanged());
         }
         if !self.options.checked && state.is_radio == Some(true) {
             return Err(PlaywrightError::error(
@@ -128,10 +136,11 @@ impl<T: FormTab> ElementAction<T> for CheckAction<'_> {
         if self.options.click.trial {
             return Ok(ActionResult::Done(()));
         }
-        if read_state(tab, element, progress).await?.matches != self.options.checked {
-            return Err(
-                PlaywrightError::error("Clicking the checkbox did not change its state").into(),
-            );
+        let Some(state) = read_state(tab, element, progress).await? else {
+            return Ok(ActionResult::NotConnected);
+        };
+        if state.matches != self.options.checked {
+            return Err(state_unchanged());
         }
         Ok(ActionResult::Done(()))
     }
@@ -141,24 +150,20 @@ async fn read_state<T: FormTab>(
     tab: &T,
     element: &T::Element,
     progress: &Progress,
-) -> Result<CheckedState, Stop> {
-    let state = progress
-        .race(tab.checked_state(element))
-        .await?
-        .map_err(|error| match error {
-            // A detached state read is terminal, including the verification after a click;
-            // re-resolving there could repeat input that already reached the page.
-            PageError::NotConnected => not_attached(),
-            other => other.into(),
-        })?;
+) -> Result<Option<CheckedState>, Stop> {
+    let state = match progress.race(tab.checked_state(element)).await? {
+        Ok(state) => state,
+        Err(PageError::NotConnected) => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
     if state.received.as_deref() == Some("error:notconnected") {
-        return Err(not_attached());
+        return Ok(None);
     }
-    Ok(state)
+    Ok(Some(state))
 }
 
-fn not_attached() -> Stop {
-    PlaywrightError::error("Element is not attached to the DOM").into()
+fn state_unchanged() -> Stop {
+    PlaywrightError::error("Clicking the checkbox did not change its state").into()
 }
 
 #[cfg(test)]
@@ -276,7 +281,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tests_that_detached_and_wrong_element_reads_fail_before_input() {
+    async fn tests_that_detached_state_reads_refind_before_clicking() {
         for reply in [
             Ok(CheckedState {
                 matches: false,
@@ -284,27 +289,41 @@ mod tests {
                 is_radio: None,
             }),
             Err(PageError::NotConnected),
-            Err(PageError::Threw("Not a checkbox or radio button".into())),
         ] {
-            let category = if matches!(&reply, Err(PageError::Threw(_))) {
-                "checkbox"
-            } else {
-                "attached"
-            };
             let mut tab = FakeTab::ready();
-            tab.forms.checked = Step::always(TRIP, reply);
-            let progress = Progress::for_test(1000.0);
-            error_category(
-                &set_checked(&tab, &options(true), &progress).await,
-                ErrorName::Error,
-                category,
+            tab.forms.checked = Step::new(
+                TRIP,
+                [reply, Ok(state(false, false)), Ok(state(true, false))],
             );
+            let progress = Progress::for_test(1000.0);
+            assert_eq!(set_checked(&tab, &options(true), &progress).await, Ok(()));
+            assert!(tab.count("resolve") > 1);
+            assert_eq!(presses(&tab), 1);
             assert_eq!(
                 progress.delivery().expect("input").delivery(),
-                Delivery::NotSent
+                Delivery::Done
             );
-            assert_eq!(tab.count("input"), 0);
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_wrong_element_reads_fail_before_input() {
+        let mut tab = FakeTab::ready();
+        tab.forms.checked = Step::always(
+            TRIP,
+            Err(PageError::Threw("Not a checkbox or radio button".into())),
+        );
+        let progress = Progress::for_test(1000.0);
+        error_category(
+            &set_checked(&tab, &options(true), &progress).await,
+            ErrorName::Error,
+            "checkbox",
+        );
+        assert_eq!(
+            progress.delivery().expect("input").delivery(),
+            Delivery::NotSent
+        );
+        assert_eq!(tab.count("input"), 0);
     }
 
     #[tokio::test(start_paused = true)]
@@ -439,21 +458,29 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn tests_that_a_failed_final_read_never_causes_another_click() {
-        let mut tab = FakeTab::ready();
-        tab.forms.checked = Step::new(
-            TRIP,
-            [Ok(state(false, false)), Err(PageError::NotConnected)],
-        );
-        let progress = Progress::for_test(1000.0);
-        error_category(
-            &set_checked(&tab, &options(true), &progress).await,
-            ErrorName::Error,
-            "attached",
-        );
-        assert_eq!(presses(&tab), 1);
-        assert_eq!(
-            progress.delivery().expect("input").delivery(),
-            Delivery::Done
-        );
+        for checked in [true, false] {
+            let mut tab = FakeTab::ready();
+            tab.forms.checked = Step::new(
+                TRIP,
+                [
+                    Ok(state(false, false)),
+                    Err(PageError::NotConnected),
+                    Ok(state(checked, false)),
+                ],
+            );
+            let progress = Progress::for_test(1000.0);
+            let result = set_checked(&tab, &options(true), &progress).await;
+            if checked {
+                assert_eq!(result, Ok(()));
+            } else {
+                error_category(&result, ErrorName::Error, "did not change");
+            }
+            assert!(tab.count("resolve") > 1);
+            assert_eq!(presses(&tab), 1);
+            assert_eq!(
+                progress.delivery().expect("input").delivery(),
+                Delivery::Done
+            );
+        }
     }
 }

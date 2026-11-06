@@ -2,7 +2,7 @@
 //! read-only selector polling. Each mutating page call owns an input turn and delivery ticket;
 //! only a page-proven no-op permits another attempt.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use neo_runtime_spec::injected::ElementState;
 use neo_runtime_spec::serve::{FrameFillParams, FrameInputValueParams, FrameSelectOptionParams};
@@ -11,7 +11,7 @@ use crate::click::{
     self, ActionResult, ElementAction, LoopAWaits, NotReady, PageError, PressReport, Stop, Tab,
 };
 use crate::forms::{FillOutcome, FormTab, SelectOption, SelectOutcome};
-use crate::keyboard::{self, KeyboardTab};
+use crate::keyboard::{self, KeyEvent, KeyboardTab, Platform};
 use crate::progress::{CallError, DeliveryCell, InputTicket, PlaywrightError, Progress};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,7 +89,11 @@ pub(crate) async fn fill<T: FormTab + KeyboardTab>(
         options.strict,
         options.force,
         progress,
-        &FillAction { options, delivery },
+        &FillAction {
+            options,
+            delivery,
+            platform: OnceLock::new(),
+        },
     )
     .await
 }
@@ -156,6 +160,7 @@ pub(crate) async fn input_value<T: FormTab>(
 struct FillAction<'a> {
     options: &'a FillOptions,
     delivery: &'a Arc<DeliveryCell>,
+    platform: OnceLock<Platform>,
 }
 
 impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
@@ -175,6 +180,20 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
             if !options.force {
                 progress.log("  waiting for element to be visible, enabled and editable");
             }
+            let events = if options.value.is_empty() {
+                let platform = if let Some(platform) = self.platform.get() {
+                    *platform
+                } else {
+                    let platform = progress.race(tab.platform()).await??;
+                    *self.platform.get_or_init(|| platform)
+                };
+                Some(
+                    keyboard::plan_press("Delete", platform)
+                        .map_err(|error| PlaywrightError::error(error.to_string()))?,
+                )
+            } else {
+                None
+            };
             // Take the turn after every retry wait, before the page can focus/select/set a value.
             let input = progress.race(tab.input()).await?;
             progress.check()?;
@@ -194,7 +213,7 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
                 FillOutcome::NotConnected => return Ok(ActionResult::NotConnected),
                 FillOutcome::Missing(state) => log_missing(progress, state),
                 FillOutcome::NeedsInput(ticket) => {
-                    write_fill_input(tab, &options.value, input, ticket, progress).await?;
+                    write_fill_input(tab, &options.value, events, input, ticket, progress).await?;
                     return Ok(ActionResult::Done(()));
                 }
             }
@@ -207,36 +226,17 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
 async fn write_fill_input<T: KeyboardTab>(
     tab: &T,
     value: &str,
+    events: Option<Vec<KeyEvent>>,
     input: T::Input,
     ticket: InputTicket,
     progress: &Progress,
 ) -> Result<(), Stop> {
-    let prepared = async {
-        let events = if value.is_empty() {
-            let platform = progress
-                .race(tab.platform())
-                .await?
-                .map_err(mutation_error)?;
-            Some(
-                keyboard::plan_press("Delete", platform)
-                    .map_err(|error| PlaywrightError::error(error.to_string()))?,
-            )
-        } else {
-            None
-        };
-        progress.check()?;
-        Ok::<_, Stop>(events)
+    if let Err(error) = progress.check() {
+        // needsinput proves the page did not fill the value. Until a writer takes the
+        // ticket, failed preparation or cancellation proves no input was sent.
+        ticket.unsent();
+        return Err(error.into());
     }
-    .await;
-    let events = match prepared {
-        Ok(events) => events,
-        Err(error) => {
-            // needsinput proves the page did not fill the value. Until a writer takes the
-            // ticket, failed preparation or cancellation proves no input was sent.
-            ticket.unsent();
-            return Err(error);
-        }
-    };
     let report = if let Some(events) = events {
         progress
             .race(tab.write_keys(events, None, ticket, input))
@@ -438,7 +438,7 @@ mod tests {
         // This is the ticket returned by a successful needsinput page step, before typing.
         let ticket = progress.delivery().expect("input").begin().expect("fresh");
         run.end(RunEnd::Cancelled);
-        let result = write_fill_input(&tab, "one", input, ticket, &progress).await;
+        let result = write_fill_input(&tab, "one", None, input, ticket, &progress).await;
         assert!(matches!(
             result,
             Err(Stop::End(CallError::RunEnded(RunEnd::Cancelled)))
@@ -464,6 +464,53 @@ mod tests {
         assert_eq!(tab.count("insertText one"), 1, "one text insertion");
         assert_eq!(tab.count("platform"), 0, "insertText needs no key layout");
         assert_eq!(tab.count("input"), tab.count("input released"));
+        let calls = tab.calls();
+        assert!(
+            calls
+                .iter()
+                .position(|call| call == "insertText one")
+                .expect("insertText")
+                < calls
+                    .iter()
+                    .position(|call| call == "input released")
+                    .expect("released")
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_delete_reads_the_platform_once_before_any_input_turn() {
+        let mut tab = FakeTab::ready();
+        tab.forms.fill = Step::new(
+            TRIP,
+            [
+                Ok(fill_reply(missing(ElementState::Editable))),
+                Ok(fill_reply(FormFillOutcome::Status(
+                    FormFillOutcomeStatus::Needsinput,
+                ))),
+            ],
+        );
+        let mut options = fill_options();
+        options.value.clear();
+        assert_eq!(
+            fill(&tab, &options, &Progress::for_test(1000.0)).await,
+            Ok(())
+        );
+        let calls = tab.calls();
+        assert_eq!(
+            tab.count("platform"),
+            1,
+            "platform is cached across retries"
+        );
+        assert!(
+            calls
+                .iter()
+                .position(|call| call == "platform")
+                .expect("platform")
+                < calls
+                    .iter()
+                    .position(|call| call == "input")
+                    .expect("input")
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -878,8 +925,11 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn tests_that_cancelled_page_steps_keep_the_turn_and_record_the_answer() {
-        for select in [false, true] {
+        for (select, needs_keyboard) in [(false, false), (true, false), (false, true)] {
             let mut tab = FakeTab::ready();
+            if needs_keyboard {
+                needs_input(&mut tab);
+            }
             tab.forms.fill.duration = Duration::from_secs(1);
             tab.forms.select.duration = Duration::from_secs(1);
             let progress = Progress::for_test(100.0);
@@ -899,9 +949,14 @@ mod tests {
             time::sleep(Duration::from_secs(2)).await;
             assert_eq!(
                 progress.delivery().expect("input").delivery(),
-                Delivery::Done
+                if needs_keyboard {
+                    Delivery::NotSent
+                } else {
+                    Delivery::Done
+                }
             );
             assert_eq!(tab.count("input released"), 1);
+            assert_eq!(tab.count("insertText one"), 0);
         }
     }
 

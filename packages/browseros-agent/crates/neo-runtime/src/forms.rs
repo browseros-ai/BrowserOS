@@ -24,7 +24,7 @@ use crate::page::{InputPermit, PageSession, ResolvedElement};
 use crate::progress::InputTicket;
 
 /// The result of the one fill evaluation. `NeedsInput` retains the original ticket for the
-/// insertText/Delete writer; a caller that stops there leaves delivery conservatively Unknown.
+/// insertText/Delete writer. A discarded handoff proves that no keyboard input was sent.
 #[derive(Debug)]
 pub(crate) enum FillOutcome {
     Done,
@@ -96,7 +96,8 @@ impl FormTab for Arc<PageSession> {
         let page = Arc::clone(self);
         let element = element.clone();
         let value = value.to_string();
-        page_step(self, async move {
+        let (sender, receiver) = oneshot::channel();
+        self.spawn(async move {
             let _input = input;
             let result = page
                 .world()
@@ -111,8 +112,9 @@ impl FormTab for Arc<PageSession> {
                 .await;
             // Keep the group (not just the objectId) until the page has answered.
             drop(element);
-            finish_fill(result, ticket)
-        })
+            send_fill_result(sender, finish_fill(result, ticket));
+        });
+        async move { receiver.await.unwrap_or(Err(PageError::Closed)) }
     }
 
     fn select_options(
@@ -210,6 +212,16 @@ fn page_step<R: Send + 'static>(
         let _waiting = sender.send(work.await);
     });
     async move { receiver.await.unwrap_or(Err(PageError::Closed)) }
+}
+
+fn send_fill_result(
+    sender: oneshot::Sender<Result<FillOutcome, PageError>>,
+    result: Result<FillOutcome, PageError>,
+) {
+    if let Err(Ok(FillOutcome::NeedsInput(ticket))) = sender.send(result) {
+        // The caller stopped before taking the ticket, so no writer could have received it.
+        ticket.unsent();
+    }
 }
 
 fn finish_fill(
@@ -370,7 +382,7 @@ pub(crate) mod tests {
                 time::sleep(duration).await;
                 let result = finish_fill(result, ticket);
                 drop(input);
-                let _waiting = sender.send(result);
+                send_fill_result(sender, result);
             });
             async move { receiver.await.expect("fake page task") }
         }

@@ -12,6 +12,7 @@
 <input id="prevent" type="checkbox" onclick="event.preventDefault()">
 <div id="plain">Plain element</div>
 <input id="trial" type="checkbox">
+<input id="replaced" type="checkbox" onchange="const replacement=this.cloneNode(); replacement.checked=this.checked; this.replaceWith(replacement)">
 <div style="position:relative;width:100px;height:40px">
   <input id="covered" type="checkbox">
   <div id="overlay" style="position:absolute;inset:0;z-index:2"></div>
