@@ -321,6 +321,24 @@ Injected:
       returns:
         matched: FormInputValueMatch?
 
+    # `frameSelectors.ts` `queryCount`: count every match, without strictness or target marks.
+    queryCount:
+      internal: true
+      parameters:
+        selector: string
+      returns:
+        value: int
+
+    # `locator.ts` `allTextContents`: one snapshot of every match's text in document order.
+    allTextContents:
+      internal: true
+      parameters:
+        selector: string
+      returns:
+        values:
+          type: array
+          items: string
+
 # `_fill` returns a string or the first missing state, without mutating when not ready.
 FormFillOutcome:
   type: union

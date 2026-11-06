@@ -272,6 +272,13 @@ export const glue = {
       },
     }
   },
+  queryCount: (injected, { selector }) => ({
+    value: query(injected, selector, false).length,
+  }),
+
+  allTextContents: (injected, { selector }) => ({
+    values: query(injected, selector, false).map((e) => e.textContent || ''),
+  }),
 } satisfies InjectedApi<InjectedScript, Handles>
 
 // Playwright's AriaNodeJSON reaches Rust unchanged, but TypeScript lets a structurally wider

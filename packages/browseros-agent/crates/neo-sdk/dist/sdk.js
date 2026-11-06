@@ -150,6 +150,12 @@ class Locator {
   async getAttribute(name, options) {
     return await this._frame._getAttribute("locator.getAttribute", this._selector, name, { strict: true, ...options });
   }
+  async count() {
+    return await this._frame._queryCount("locator.count", this._selector);
+  }
+  async allTextContents() {
+    return await this._frame._allTextContents("locator.allTextContents", this._selector);
+  }
   async fill(value, options = {}) {
     return await this._frame._fill("locator.fill", this._selector, value, {
       strict: true,
@@ -286,6 +292,7 @@ var FRAME_GOTO_KEYS = ["url", "waitUntil", "referer"];
 var FRAME_TEXT_CONTENT_KEYS = ["selector", "strict"];
 var FRAME_INNER_TEXT_KEYS = ["selector", "strict"];
 var FRAME_GET_ATTRIBUTE_KEYS = ["selector", "strict", "name"];
+var FRAME_QUERY_COUNT_KEYS = ["selector"];
 var FRAME_ARIA_SNAPSHOT_KEYS = [
   "mode",
   "selector",
@@ -453,6 +460,28 @@ class Frame {
       ...options
     }), this._page._timeoutSettings.timeout(options ?? {}));
     return result.value === undefined ? null : result.value;
+  }
+  async _queryCount(apiName, selector) {
+    const result = await this._connection.send(apiName, this._guid, "queryCount", pickParams(FRAME_QUERY_COUNT_KEYS, { selector }), 0);
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.queryCount contract error: missing result");
+    return result.value;
+  }
+  async _allTextContents(apiName, selector) {
+    const result = await this._connection.send(apiName, this._guid, "evalOnSelectorAll", {
+      selector,
+      expression: "ee => ee.map(e => e.textContent || '')",
+      isFunction: true,
+      arg: { value: { v: "undefined" }, handles: [] }
+    }, 0);
+    const value = result?.value;
+    if (!value || typeof value !== "object" || Object.keys(value).length !== 2 || value.id !== 1 || !Array.isArray(value.a))
+      throw new Error("neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string array");
+    return value.a.map((item) => {
+      if (!item || typeof item !== "object" || Object.keys(item).length !== 1 || typeof item.s !== "string")
+        throw new Error("neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string");
+      return item.s;
+    });
   }
   async _ariaSnapshot(apiName, options) {
     const result = await this._connection.send(apiName, this._guid, "ariaSnapshot", pickParams(FRAME_ARIA_SNAPSHOT_KEYS, {
