@@ -474,9 +474,9 @@ fn new_group(page: &Arc<PageSession>, purpose: &str) -> GroupGuard {
 /// that tab. A tab has one mouse, and its document one hit-target slot that every call and every
 /// Neo run on it share (`world.rs`): a setup replaces whatever interceptor is armed, and an event
 /// is judged by whichever interceptor is armed when it lands. So two clicks whose input overlaps
-/// judge each other's events: a trial's events pass a real click's interceptor and click, and a
-/// real click's events are blocked by another click's interceptor while its own, which never
-/// saw them, reads `done`. Clicks on a tab therefore take turns ([`InputPermit`]) from their
+/// judge each other's events: one click's events are blocked by the other's interceptor while
+/// its own, which never saw them, reads `done`. Clicks on a tab therefore take turns
+/// ([`InputPermit`]) from their
 /// interceptor's setup until its stop has answered, mouse writes in between.
 ///
 /// Entries are weak: a tab's lock lives while a run on the tab, or a task still holding a turn,
@@ -1142,15 +1142,14 @@ impl Tab for Arc<PageSession> {
     fn arm(
         &self,
         element: &ResolvedElement,
-        hit_point: Option<Point>,
-        block_all: bool,
+        hit_point: Point,
         input: InputPermit,
     ) -> impl Future<Output = Result<Arming<ArmedInterceptor>, PageError>> + Send {
         let page = Arc::clone(self);
         let element = element.handle.clone();
         async move {
             let (answer, armed) = oneshot::channel();
-            let setup = arm_interceptor(Arc::clone(&page), element, hit_point, block_all, input);
+            let setup = arm_interceptor(Arc::clone(&page), element, hit_point, input);
             page.spawn(async move {
                 // Nobody may be waiting any more; the unsent answer drops here, disarming.
                 let _waiting = answer.send(setup.await);
@@ -1304,8 +1303,7 @@ impl Tab for Arc<PageSession> {
 async fn arm_interceptor(
     page: Arc<PageSession>,
     element: Handle<Element>,
-    hit_point: Option<Point>,
-    block_all: bool,
+    hit_point: Point,
     input: InputPermit,
 ) -> Result<Arming<ArmedInterceptor>, PageError> {
     let mark = page.mark();
@@ -1316,8 +1314,9 @@ async fn arm_interceptor(
             Some(group.group()),
             &InjectedSetupHitTargetInterceptorParams {
                 element,
-                hit_point,
-                block_all_events: block_all,
+                hit_point: Some(hit_point),
+                // Only Playwright's trial blocks every event, and Neo's trial sends none.
+                block_all_events: false,
             },
         )
         .await?;

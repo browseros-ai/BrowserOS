@@ -91,6 +91,10 @@ pub struct Replies {
     /// arrives, as a real page does before it answers, so holding the answer back leaves it
     /// armed with the run not knowing yet.
     pub arm: Reply,
+    /// Every press lands on another element after the hit check passed: the armed interceptor
+    /// blocks it and every later event of its click, as a real one does, and its stop names
+    /// that element.
+    pub press_lands_elsewhere: bool,
     pub title: Reply,
     pub world: Reply,
     /// A commit after the named operation starts, before its delayed answer is delivered.
@@ -197,7 +201,8 @@ impl Page {
 
 struct Interceptor {
     id: String,
-    /// `blockAllEvents`: a trial's interceptor, which stops every event.
+    /// Stops every event: armed with `blockAllEvents`, or by a press that landed elsewhere
+    /// ([`Replies::press_lands_elsewhere`]).
     blocks_all: bool,
 }
 
@@ -677,7 +682,7 @@ fn answer(
         "Runtime.callFunctionOn" => {
             let params = &command["params"];
             let when = glue_delay(params, calls, replies);
-            (call_function_on(params, calls, page), when)
+            (call_function_on(params, calls, page, replies), when)
         }
         "Runtime.getProperties" => {
             let object = command["params"]["objectId"].as_str().unwrap_or_default();
@@ -849,7 +854,12 @@ fn tab_command(
 /// glue calls on the glue object. A by-value result is the glue's JSON; a result that holds a
 /// handle is a page object whose properties `Runtime.getProperties` then lists. The interceptor
 /// glue arms and stops the page's slot.
-fn call_function_on(params: &Value, calls: &mut Calls, page: &Mutex<Page>) -> Value {
+fn call_function_on(
+    params: &Value,
+    calls: &mut Calls,
+    page: &Mutex<Page>,
+    replies: &Replies,
+) -> Value {
     if params["executionContextId"].is_i64() {
         // `attach.js` takes the key; `install.js` takes the key, the spec hash and the
         // initializer.
@@ -881,7 +891,11 @@ fn call_function_on(params: &Value, calls: &mut Calls, page: &Mutex<Page>) -> Va
             {
                 page.interceptor = None;
             }
-            json!({ "outcome": "done" })
+            if replies.press_lands_elsewhere {
+                json!({ "outcome": { "hitTargetDescription": "<div id=\"overlay\"></div>" } })
+            } else {
+                json!({ "outcome": "done" })
+            }
         }
         "resolve" => {
             let properties = if glue_params["selector"] == "#go" {
@@ -910,7 +924,8 @@ fn call_function_on(params: &Value, calls: &mut Calls, page: &Mutex<Page>) -> Va
                 let id = format!("interceptor-{}", page.next_interceptor);
                 page.interceptor = Some(Interceptor {
                     id: id.clone(),
-                    blocks_all: glue_params["blockAllEvents"] == true,
+                    blocks_all: replies.press_lands_elsewhere
+                        || glue_params["blockAllEvents"] == true,
                 });
                 id
             };

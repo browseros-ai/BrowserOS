@@ -304,7 +304,7 @@ impl Progress {
 /// ```text
 ///  NotSent ──begin()──▶ Unknown ──acked()──▶ Done ──blocked()──▶ NotSent
 ///     ▲                    │                       (verified: Neo's interceptor stopped the
-///     └──── unsent() ──────┘                        events before the page saw them)
+///     └──── unsent() ──────┘                        press at `window`)
 ///  (nothing was written)   ticket dropped: stays Unknown     AckedInput dropped: stays Done
 /// ```
 ///
@@ -368,8 +368,8 @@ impl InputTicket {
 }
 
 impl AckedInput {
-    /// Neo's hit-target interceptor stopped the events before the page's handlers saw them (a
-    /// trial, or a press that landed on another element): back to `NotSent`.
+    /// Neo's hit-target interceptor stopped a press that landed on another element, before the
+    /// page's handlers saw it (`Delivery::NotSent` says how far it got): back to `NotSent`.
     pub(crate) fn blocked(self) {
         self.0.0.store(NOT_SENT, Ordering::Release);
     }
