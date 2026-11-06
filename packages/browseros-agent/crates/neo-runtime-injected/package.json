@@ -1,0 +1,17 @@
+{
+  "name": "@browseros/neo-runtime-injected",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Playwright's injected script, vendored unchanged at 26137face, plus Neo's typed glue table. neo-runtime embeds dist/*.js and calls them in an isolated world of the run's page.",
+  "scripts": {
+    "build": "bun build.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p scripts",
+    "test": "bun scripts/sync-vendor.ts --check",
+    "sync-vendor": "bun scripts/sync-vendor.ts",
+    "test:browser": "node --test 'tests/*.test.mjs'"
+  },
+  "dependencies": {
+    "@browseros/neo-runtime-spec": "workspace:*"
+  }
+}

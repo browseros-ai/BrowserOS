@@ -122,8 +122,9 @@ out
 .nuxt
 dist
 packages/*/dist
-# neo-runtime embeds this bundle at compile time, so cargo needs it without a Bun build.
+# neo-runtime embeds these bundles at compile time, so cargo needs them without a Bun build.
 !/crates/neo-sdk/dist/
+!/crates/neo-runtime-injected/dist/
 # Agent scripts the neo end-to-end tests run, not compiled test output.
 !/crates/neo-sdk/tests/scripts/*.js
 

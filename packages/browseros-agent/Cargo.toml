@@ -1,7 +1,8 @@
 [workspace]
 members = ["crates/*", "apps/claw-server"]
-# neo-sdk is the TypeScript half of neo-runtime: a Bun package, not a crate.
-exclude = ["crates/neo-sdk"]
+# neo-sdk and neo-runtime-injected are the TypeScript halves of neo-runtime: Bun packages, not
+# crates.
+exclude = ["crates/neo-sdk", "crates/neo-runtime-injected"]
 resolver = "3"
 
 [workspace.package]

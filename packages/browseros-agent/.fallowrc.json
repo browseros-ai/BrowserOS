@@ -20,7 +20,12 @@
     "crates/neo-runtime-spec/tests/ts/glue.ts",
     "crates/neo-runtime-spec/tests/ts/negative.ts",
     "crates/neo-sdk/src/index.ts",
-    "crates/neo-sdk/build.ts"
+    "crates/neo-sdk/build.ts",
+    "crates/neo-runtime-injected/src/install.ts",
+    "crates/neo-runtime-injected/src/attach.ts",
+    "crates/neo-runtime-injected/src/call.ts",
+    "crates/neo-runtime-injected/build.ts",
+    "crates/neo-runtime-injected/scripts/sync-vendor.ts"
   ],
   "ignoreDependencies": [
     "tailwind-scrollbar-hide",
@@ -49,6 +54,7 @@
     "apps/server/src/lib/db/migrations/**",
     "packages/cdp-protocol/src/generated/**",
     "crates/neo-runtime-spec/ts/**",
+    "crates/neo-runtime-injected/vendor/**",
     ".agents/skills/**",
     ".claude/skills/**",
     "packages/agent-cursor/playground/**"

@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": [],
+    "useDefineForClassFields": true,
+    "noImplicitReturns": false,
+    "isolatedModules": true,
+    "paths": {
+      "@injected/*": ["./vendor/playwright/injected/src/*"],
+      "@isomorphic/*": ["./vendor/playwright/isomorphic/*"],
+      "@protocol/*": ["./vendor/playwright/protocol/src/*"]
+    }
+  },
+  "include": ["src/**/*", "vendor/**/*"]
+}

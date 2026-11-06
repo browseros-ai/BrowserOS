@@ -20,6 +20,8 @@
       "!crates/browseros-core/tests/data/captured",
       "!crates/browseros-core/src/assets/agent-cursor.js",
       "!crates/neo-sdk/dist",
+      "!crates/neo-runtime-injected/dist",
+      "!crates/neo-runtime-injected/vendor",
       "!crates/neo-sdk/tests/scripts",
       "!apps/server/src/lib/db/migrations"
     ]
