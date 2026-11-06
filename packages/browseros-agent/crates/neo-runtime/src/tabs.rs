@@ -129,14 +129,18 @@ impl Tabs {
         &self.0.cdp
     }
 
-    pub(crate) fn finish_close(&self, page: Arc<PageSession>) {
+    pub(crate) fn finish_close(&self, page: Arc<PageSession>, entry: Arc<PageEntry>) {
         // Page.close can acknowledge before its beforeunload dialog arrives. Keep the
         // watcher alive after the script returns so it can answer; otherwise detaching
         // strands that dialog. Bound the cleanup if the browser never completes closure.
         self.0.tasks.spawn_on(
             async move {
-                let _settled =
-                    time::timeout(Duration::from_secs(5), page.closed().cancelled()).await;
+                if time::timeout(Duration::from_secs(5), page.closed().cancelled())
+                    .await
+                    .is_ok()
+                {
+                    entry.closed_by_run();
+                }
                 drop(page);
             },
             &self.0.tokio,

@@ -66,14 +66,12 @@ pub(crate) async fn page(
             let prepared = progress.race(page.prepare()).await?;
             checked(tabs, entry, progress, prepared).await?;
             progress.check()?;
-            tabs.finish_close(Arc::clone(&page));
+            tabs.finish_close(Arc::clone(&page), Arc::clone(entry));
             match progress.race(page.send("Page.close", json!({}))).await {
-                Ok(Ok(_)) => entry.closed_by_run(),
+                Ok(Ok(_)) => {}
                 Ok(Err(error)) => debug!(%error, "running beforeunload failed"),
                 // The watcher can report closure before Page.close's acknowledgement.
-                Err(CallError::Playwright(error)) if error == PlaywrightError::target_closed() => {
-                    entry.closed_by_run();
-                }
+                Err(CallError::Playwright(error)) if error == PlaywrightError::target_closed() => {}
                 Err(error) => return Err(error),
             }
         }
