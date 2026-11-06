@@ -93,10 +93,13 @@ const cases = [
     delivery: 'done',
   },
   {
+    // Only the hash: Playwright's trial presses into an interceptor that blocks the click, and
+    // listeners the page added first still see its events. Neo's trial sends none (click_e2e.rs
+    // checks that). On both, neither button's handler runs.
     name: 'trial',
     html: page('ok.html'),
     source: `await ${SUBMIT}.click({ trial: true })\nreturn page.url()`,
-    probe: `[location.hash, ${EVENTS}]`,
+    probe: 'location.hash',
     delivery: 'notSent',
   },
   {

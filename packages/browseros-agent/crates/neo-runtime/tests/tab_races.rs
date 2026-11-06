@@ -184,6 +184,18 @@ async fn tests_that_a_listed_page_forced_click_waits_for_another_runs_trial() {
     let trial = trial.await.unwrap();
     assert_eq!(trial.status, RunStatus::Ok, "{trial:?}");
     assert_eq!(forced.value, Some(json!("clicked")), "{forced:?}");
+    let exchanges = browser.exchanges();
+    let stop = exchanges.iter().position(|exchange| {
+        exchange.command["params"]["arguments"][0]["value"] == "stopHitTargetInterceptor"
+    });
+    let press = exchanges.iter().position(|exchange| {
+        exchange.method() == "Input.dispatchMouseEvent"
+            && exchange.command["params"]["type"] == "mousePressed"
+    });
+    assert!(
+        stop.is_some() && press > stop,
+        "the forced click pressed only after the trial's stop: stop {stop:?}, press {press:?}"
+    );
     assert_eq!(
         browser.page_clicks(),
         1,
