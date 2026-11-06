@@ -36,6 +36,7 @@ const FX = {
   uploads: new Map(), // file input region id -> the text the page read from its file
   digests: new Map(), // deny-list or control input id -> promise of [{size, sha256} | {error}]
   cancelled: new Set(), // deny-list input ids that fired `cancel`: Chromium read nothing
+  popup: null, // the window window.open returned, for the agent's read along that link
 };
 
 // The copy layout's two plain fields in MAIN (leak_plan.COPY_BASE, COPY_DROP): the baseline
@@ -506,10 +507,10 @@ const ACTS = {
     el("a", { download: name, href: `/fx/${FX.slice.instance}/dl` }).click();
   },
   popup: () => {
-    window.open(`/fx/${FX.slice.instance}/popup`);
+    FX.popup = window.open(`/fx/${FX.slice.instance}/popup`);
   },
   open_popup: () => {
-    window.open(`/fx/${FX.slice.instance}/popup`);
+    FX.popup = window.open(`/fx/${FX.slice.instance}/popup`);
   },
   add_late_frame: () => {
     for (const frame of FX.slice.frames) if (frame.late) addFrame(frame);

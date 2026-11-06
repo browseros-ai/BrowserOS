@@ -494,13 +494,28 @@ class ScriptPlanTests(unittest.TestCase):
         for entry in want_of(run.code):
             with self.subTest(region=entry[0]):
                 self.assertEqual(entry[1][0], ["opener", None])
-        self.assertNotIn(P.Location.SHADOW_CLOSED, {r.location for r in run.regions})
+        locations = {r.location for r in run.regions}
+        self.assertNotIn(P.Location.SHADOW_CLOSED, locations)
+        self.assertNotIn(P.Location.POPUP, locations)
 
-    def test_a_script_page_serves_a_popup_with_nothing_of_its_own(self) -> None:
+    def test_the_popup_probe_reads_the_popup_from_its_page(self) -> None:
+        (run,) = P.plan_runs(P.SPECS[P.ChannelId.POPUP_EVALUATE], self.inst)
+        self.assertIn("return await page.evaluate(READ, WANT);", run.code)
+        self.assertEqual({r.location for r in run.regions}, {P.Location.POPUP})
+        for entry in want_of(run.code):
+            with self.subTest(region=entry[0]):
+                self.assertEqual(entry[1], [["popup", None]])
+
+    def test_a_script_popup_holds_two_fields_of_its_own_and_no_echo(self) -> None:
         self.assertIn(P.Location.POPUP, self.inst.documents())
-        self.assertEqual(self.inst.slice(P.Location.POPUP)["regions"], [])
+        popup = [p for p in self.inst.plants if p.location is P.Location.POPUP]
+        self.assertEqual([p.kind for p in popup], [P.Kind.PASSWORD, P.Kind.CC_CSC])
         self.assertEqual(
-            [p.kind for p in self.inst.plants],
+            [r.exposure for p in popup for r in self.inst.regions_of(p)],
+            [P.Exposure.FIELD, P.Exposure.FIELD],
+        )
+        self.assertEqual(
+            [p.kind for p in self.inst.plants if p not in popup],
             [
                 p.kind
                 for p in P.make_instance(P.Layout.ECHOES, seed="sp", index=2).plants
@@ -3361,6 +3376,21 @@ class ResidualTests(unittest.TestCase):
         )
         labelled = J.assign_residuals([cold, warm])
         self.assertEqual([c.residual for c in labelled], ["FX-F", None])
+
+    def test_a_script_reading_another_tab_is_new_and_a_text_read_by_design(
+        self,
+    ) -> None:
+        inst = P.make_instance(P.Layout.SCRIPT, seed="res", index=2)
+        plant = inst.plant(P.Kind.PASSWORD, P.Location.POPUP)
+        (field,) = inst.field_regions(plant)
+        hit = J.Hit(plant.id, field.id, J.Form.PLAIN, 0, "")
+        script, text = (
+            cell(obs(field, channel=channel, hit=hit))
+            for channel in (P.ChannelId.POPUP_EVALUATE, P.ChannelId.TEXT_CONTENT)
+        )
+        self.assertEqual(
+            [c.residual for c in J.assign_residuals([script, text])], [None, "BD-L2"]
+        )
 
     def test_a_cold_cross_site_echo_is_xsite_and_a_short_one_by_design(self) -> None:
         xo = self.leak(P.Kind.PASSWORD, P.Location.CROSS_SITE, P.Phase.COLD)

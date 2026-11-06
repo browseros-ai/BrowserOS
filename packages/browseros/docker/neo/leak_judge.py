@@ -2290,15 +2290,18 @@ def is_short_echo(cell: Cell) -> bool:
 
 def is_l2_only(cell: Cell) -> bool:
     """A cold leak through an exit the design masks with L2 only, or of a plant in
-    another tab or in no field (a host value before the host registered it)."""
+    another tab or in no field (a host value before the host registered it). Not a
+    main-world script's read of another tab: the guard sweeps every tab an opener link
+    connects to the script's page (sdk-playwright M3), so that one is new."""
     plant = cell.region.plant
+    other_tab = PLACES[cell.region.location].other_tab
     return (
         cell.verdict is Verdict.LEAKED
         and cell.phase is Phase.COLD
         and (
             SPECS[cell.channel].l2_only
             or plant.origin is Origin.HOST
-            or PLACES[cell.region.location].other_tab
+            or (other_tab and SPECS[cell.channel].family is not Family.AGENT_SCRIPT)
         )
     )
 

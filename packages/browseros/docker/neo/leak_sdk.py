@@ -236,7 +236,7 @@ def script(s: Session) -> None:
     """Script the agent runs in the page's main world, where no seal reaches: the guard
     sweeps the frames the op can reach before and after it and masks what it found
     (D3), so every value and echo a reader returns, in each spelling the guard covers,
-    must come back masked. Held today (script/method_unavailable).
+    must come back masked. Served since 24e461d56 (sdk-skeleton S4).
 
     Each planned run is the first touch of a page of its own. The guard registers what
     it sweeps, and a run's reply is masked with everything registered, so an earlier op
@@ -252,6 +252,13 @@ def script(s: Session) -> None:
     page = s.open(Layout.SCRIPT)
     s.popup(page)
     s.read(page, ChannelId.OPENER_EVALUATE, Phase.COLD)
+    s.close(page)
+    # The page reads its popup through the window window.open returned: the same link the
+    # other way, on a page of its own, since the guard registers what its sweep of the
+    # whole opener group finds and the first read would mask the second.
+    page = s.open(Layout.SCRIPT)
+    s.popup(page)
+    s.read(page, ChannelId.POPUP_EVALUATE, Phase.COLD)
     s.close(page)
 
 
@@ -774,14 +781,19 @@ class Session:
             self.wait_present(page)
         return page
 
-    def wait_present(self, page: Page, timeout: float = 15) -> str:
-        """Proofs until every region the page plants itself shows its value."""
+    def wait_present(
+        self, page: Page, timeout: float = 15, *, other_tabs: bool = False
+    ) -> str:
+        """Proofs until every region the page plants itself shows its value. A region in
+        a tab of its own (the popup) exists only once that tab opens, so it is waited for
+        only when `other_tabs` says the tab is open."""
         want = [
             r
             for r in page.instance.regions
             if r.plant.origin in (Origin.PAGE, Origin.HOST)
             and not r.plant.late
             and r.exposure in (Exposure.FIELD, Exposure.ECHO)
+            and (other_tabs or not PLACES[r.location].other_tab)
         ]
         deadline = time.monotonic() + timeout
         while True:
@@ -833,6 +845,7 @@ class Session:
             if time.monotonic() > deadline:
                 raise HarnessError(f"{page.instance.name}: the popup never booted")
             time.sleep(0.3)
+        self.wait_present(page, timeout, other_tabs=True)
 
     def proof(self, page: Page) -> Proof:
         assert self.oracle is not None

@@ -657,11 +657,20 @@ def _layout_plants(layout: Layout) -> list[PlantSpec]:
             for kind in SENSITIVE_KINDS
         ]
     if layout in (Layout.ECHOES, Layout.SCRIPT):
-        return [(kind, Location.MAIN, page, False) for kind in FIELD_KINDS] + [
+        plants = [(kind, Location.MAIN, page, False) for kind in FIELD_KINDS] + [
             (kind, loc, page, False)
             for loc in FRAME_MATRIX[1:]
             for kind in (Kind.PASSWORD, Kind.CC_CSC)
         ]
+        if layout is Layout.SCRIPT:
+            # The popup's own fields, set by the popup's page, for the page's read through
+            # the window window.open returned (POPUP_EVALUATE). Only the two opener probes
+            # open the popup, so no other read meets them.
+            plants += [
+                (kind, Location.POPUP, page, False)
+                for kind in (Kind.PASSWORD, Kind.CC_CSC)
+            ]
+        return plants
     if layout is Layout.FACTS:
         return [
             (Kind.PASSWORD, Location.MAIN, page, False),
@@ -706,7 +715,9 @@ def _layout_exposures(layout: Layout, plant: Plant) -> list[tuple[Exposure, Loca
     """The non-field regions of `plant` in `layout`, with where each sits."""
     main = Location.MAIN
     if layout in (Layout.ECHOES, Layout.SCRIPT) and plant.kind is not Kind.PLAIN:
-        return [(Exposure.ECHO, main)]
+        # A popup's field gets no echo: an echo in the page would change what the opener
+        # probe reads through window.opener.
+        return [] if plant.location is Location.POPUP else [(Exposure.ECHO, main)]
     if layout is Layout.FACTS:
         return [
             (Exposure.TITLE, main),
@@ -1046,6 +1057,7 @@ class ChannelId(StrEnum):
     PDF = "page.pdf"
     EVALUATE = "page.evaluate"
     OPENER_EVALUATE = "page.evaluate (popup, window.opener)"
+    POPUP_EVALUATE = "page.evaluate (page, the popup window.open returned)"
     FRAME_EVALUATE = "frame.evaluate"
     WAIT_FOR_FUNCTION = "page.waitForFunction"
     LOCATOR_EVALUATE = "locator.evaluate"
@@ -1520,7 +1532,9 @@ def spellings(region: Region) -> tuple[str, ...]:
 # walks: "frame" an iframe element by id, "child" a window's frames[i] (which a
 # cross-origin window still exposes), "shadow" an open root by its host's id, "closed" the
 # closed root through the page's own reference to it (fx.js keeps it in FX.closed). Only
-# documents of the top's origin: reading a cross-origin frame's document throws.
+# documents of the top's origin: reading a cross-origin frame's document throws. Two more
+# steps cross the opener link between tabs: "opener" from a popup to its page, "popup"
+# from the page to the window window.open returned (fx.js keeps it in FX.popup).
 MAIN_WORLD_STEPS: Mapping[Location, tuple[tuple[str, str | int | None], ...]] = {
     Location.MAIN: (),
     Location.SHADOW_OPEN: (("shadow", "host-open"),),
@@ -1561,6 +1575,7 @@ _MAIN_WORLD_READER = f"""\
     const doc = () => root || win.document;
     for (const [step, arg] of steps) {{
       if (step === 'opener') {{ win = win.opener; root = null; }}
+      else if (step === 'popup') {{ win = FX.popup; root = null; }}
       else if (step === 'frame') {{ win = doc().getElementById(arg).contentWindow; root = null; }}
       else if (step === 'child') {{ win = win.frames[arg]; root = null; }}
       else if (step === 'shadow') {{ root = doc().getElementById(arg).shadowRoot; }}
@@ -1663,6 +1678,16 @@ def opener_read(
     ]
     head = [f"const popup = {_root(instance, Location.POPUP)};"]
     return _read(head, want, _MAIN_WORLD_READER, "popup.evaluate(READ, WANT)")
+
+
+def popup_read(
+    instance: Instance, regions: Sequence[Region], location: Location | None
+) -> str:
+    """page.evaluate in the page, reading the popup it opened through the window
+    window.open returned: the other way along the same opener link, which the guard must
+    sweep too (sdk-playwright M3)."""
+    want = [[r.id, (("popup", None),), spellings(r)] for r in regions]
+    return _read([], want, _MAIN_WORLD_READER, "page.evaluate(READ, WANT)")
 
 
 def frame_read(
@@ -2310,6 +2335,17 @@ SPECS: Mapping[ChannelId, ChannelSpec] = {
             refusals=HELD,
             not_built=SCRIPT_NOT_BUILT,
             ops=frozenset({"page.evaluate", "context.pages"}),
+            by_selector=False,
+        ),
+        ChannelSpec(
+            ChannelId.POPUP_EVALUATE,
+            _S,
+            reach(fields=(Location.POPUP,)),
+            code=popup_read,
+            batch="page",
+            refusals=HELD,
+            not_built=SCRIPT_NOT_BUILT,
+            ops=frozenset({"page.evaluate"}),
             by_selector=False,
         ),
         ChannelSpec(
