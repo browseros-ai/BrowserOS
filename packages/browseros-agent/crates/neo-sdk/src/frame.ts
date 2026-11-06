@@ -22,6 +22,8 @@ import type {
   FrameFillParams,
   FrameGotoParams,
   FrameInputValueParams,
+  FrameIsCheckedParams,
+  FrameIsVisibleParams,
   FramePressParams,
   FrameSelectOptionParams,
   FrameTextContentParams,
@@ -50,6 +52,8 @@ import {
   FRAME_FILL_KEYS,
   FRAME_GOTO_KEYS,
   FRAME_INPUT_VALUE_KEYS,
+  FRAME_IS_CHECKED_KEYS,
+  FRAME_IS_VISIBLE_KEYS,
   FRAME_PRESS_KEYS,
   FRAME_SELECT_OPTION_KEYS,
   FRAME_TEXT_CONTENT_KEYS,
@@ -113,6 +117,12 @@ export type PressOptions = Omit<FramePressParams, 'selector' | 'key'> & {
   timeout?: number
 }
 export type InputValueOptions = Omit<FrameInputValueParams, 'selector'> & {
+  timeout?: number
+}
+export type IsCheckedOptions = Omit<FrameIsCheckedParams, 'selector'> & {
+  timeout?: number
+}
+export type IsVisibleOptions = Omit<FrameIsVisibleParams, 'selector'> & {
   timeout?: number
 }
 export type CheckOptions = Omit<FrameCheckParams, 'selector'> & {
@@ -338,6 +348,62 @@ export class Frame {
       throw new Error(
         'neo-sdk: Frame.inputValue contract error: missing result',
       )
+    return result.value
+  }
+
+  async isVisible(
+    selector: string,
+    options: IsVisibleOptions = {},
+  ): Promise<boolean> {
+    return await this._isVisible('frame.isVisible', selector, options)
+  }
+
+  /** Playwright's `kNoTimeout`: visibility reads once and ignores `options.timeout`. */
+  async _isVisible(
+    apiName: ApiName,
+    selector: string,
+    options: IsVisibleOptions,
+  ): Promise<boolean> {
+    const result = await this._connection.send(
+      apiName,
+      this._guid,
+      'isVisible',
+      pickParams(FRAME_IS_VISIBLE_KEYS, {
+        selector,
+        ...options,
+      }) as FrameIsVisibleParams,
+      0,
+    )
+    if (result === undefined)
+      throw new Error('neo-sdk: Frame.isVisible contract error: missing result')
+    return result.value
+  }
+
+  async isChecked(
+    selector: string,
+    options: IsCheckedOptions = {},
+  ): Promise<boolean> {
+    return await this._isChecked('frame.isChecked', selector, options)
+  }
+
+  /** Checked reads wait for the first match under the caller's action timeout. */
+  async _isChecked(
+    apiName: ApiName,
+    selector: string,
+    options: IsCheckedOptions,
+  ): Promise<boolean> {
+    const result = await this._connection.send(
+      apiName,
+      this._guid,
+      'isChecked',
+      pickParams(FRAME_IS_CHECKED_KEYS, {
+        selector,
+        ...options,
+      }) as FrameIsCheckedParams,
+      this._page._timeoutSettings.timeout(options),
+    )
+    if (result === undefined)
+      throw new Error('neo-sdk: Frame.isChecked contract error: missing result')
     return result.value
   }
 

@@ -36,7 +36,8 @@ use std::time::Duration;
 use neo_runtime_spec::serve::{
     BrowserContextCall, FrameAriaSnapshotParams, FrameCall, FrameCheckParams, FrameCheckResult,
     FrameClickParams, FrameFillParams, FrameFillResult, FrameGotoParams, FrameInputValueParams,
-    FrameInputValueResult, FramePressParams, FramePressResult, FrameSelectOptionParams,
+    FrameInputValueResult, FrameIsCheckedParams, FrameIsCheckedResult, FrameIsVisibleParams,
+    FrameIsVisibleResult, FramePressParams, FramePressResult, FrameSelectOptionParams,
     FrameSelectOptionResult, FrameTextContentParams, FrameTitleParams, FrameUncheckParams,
     FrameUncheckResult, Metadata, PageCall,
 };
@@ -61,6 +62,7 @@ use crate::progress::{
 };
 use crate::reads::{self, ReadOptions, SnapshotOptions};
 use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
+use crate::states::{self, StateOptions};
 use crate::tab_calls;
 use crate::tabs::{PageEntry, Tabs};
 
@@ -207,6 +209,8 @@ enum Route {
     FrameFill(FillOptions),
     FramePress(PressOptions),
     FrameInputValue(InputValueOptions),
+    FrameIsVisible(StateOptions),
+    FrameIsChecked(StateOptions),
     FrameSetChecked(CheckOptions),
     FrameSelectOption(SelectOptions),
 }
@@ -382,6 +386,18 @@ fn route(object: ObjectKind, method: &str, params: Option<Value>) -> Routed {
 /// stops compiling until the command is routed.
 fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
     match call {
+        FrameCall::IsVisible(params) if enters_frame(&params.selector) => {
+            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
+        }
+        FrameCall::IsVisible(params) => {
+            Ok(Route::FrameIsVisible(StateOptions::from_is_visible(params)))
+        }
+        FrameCall::IsChecked(params) if enters_frame(&params.selector) => {
+            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
+        }
+        FrameCall::IsChecked(params) => {
+            Ok(Route::FrameIsChecked(StateOptions::from_is_checked(params)))
+        }
         FrameCall::Click(params) if enters_frame(&params.selector) => {
             Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
         }
@@ -493,7 +509,7 @@ async fn serve(
     id: Value,
     reply: oneshot::Sender<String>,
 ) {
-    // Navigation and page reads need the real page's `NavigationTab` and `ReadTab`, which the
+    // Navigation and page reads need the real page's navigation/read seams, which the
     // forms tests' fake does not implement, so they are answered here; every other route goes
     // through `serve_route`.
     let result = match route {
@@ -509,6 +525,16 @@ async fn serve(
         Route::FrameAriaSnapshot(options) => reads::aria_snapshot(&page, &options, &progress)
             .await
             .and_then(|result| encode_result::<FrameAriaSnapshotParams>(&result)),
+        Route::FrameIsVisible(options) => states::is_visible(&page, &options, &progress)
+            .await
+            .and_then(|value| {
+                encode_result::<FrameIsVisibleParams>(&FrameIsVisibleResult { value })
+            }),
+        Route::FrameIsChecked(options) => states::is_checked(&page, &options, &progress)
+            .await
+            .and_then(|value| {
+                encode_result::<FrameIsCheckedParams>(&FrameIsCheckedResult { value })
+            }),
         route => serve_route(&page, route, &progress).await,
     };
     finish_reply(
@@ -582,6 +608,8 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         Route::FrameGoto(_)
         | Route::FrameTitle
         | Route::FrameTextContent(_)
+        | Route::FrameIsVisible(_)
+        | Route::FrameIsChecked(_)
         | Route::FrameAriaSnapshot(_) => Err(PlaywrightError::error(
             "neo-runtime: navigation and page reads are served by `serve`",
         )
@@ -1075,6 +1103,8 @@ mod tests {
                 Route::FrameGoto(_)
                 | Route::FrameTitle
                 | Route::FrameTextContent(_)
+                | Route::FrameIsVisible(_)
+                | Route::FrameIsChecked(_)
                 | Route::FrameAriaSnapshot(_) => panic!("a form is not a navigation or a read"),
             }
         }
@@ -1247,6 +1277,54 @@ mod tests {
                 boxes: None,
             }
         );
+    }
+
+    #[test]
+    fn tests_that_state_reads_decode_the_selector_and_strict_option_without_input() {
+        for method in ["isVisible", "isChecked"] {
+            for strict in [None, Some(false), Some(true)] {
+                let mut params = json!({ "selector": "#control" });
+                if let Some(strict) = strict {
+                    params["strict"] = json!(strict);
+                }
+                let routed = route_frame(method, params);
+                let meta = routed.meta.expect("state read metadata");
+                assert!(!meta.has(MethodFlag::Input), "state reads have no delivery");
+                let (actual_method, options) = match frame_route(routed.route).expect("state route")
+                {
+                    Route::FrameIsVisible(options) => ("isVisible", options),
+                    Route::FrameIsChecked(options) => ("isChecked", options),
+                    route => panic!("unexpected state route: {route:?}"),
+                };
+                assert_eq!(actual_method, method);
+                assert_eq!(
+                    options,
+                    StateOptions {
+                        selector: "#control".to_string(),
+                        strict: strict.unwrap_or(false),
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tests_that_state_reads_refuse_frame_selectors_and_malformed_params() {
+        for method in ["isVisible", "isChecked"] {
+            assert_eq!(
+                error_of(route_frame(
+                    method,
+                    json!({ "selector": "iframe >> internal:control=enter-frame >> #control" }),
+                )),
+                PlaywrightError::error(FRAMES_UNSUPPORTED)
+            );
+            assert!(route_frame(method, json!({ "selector": 5 })).route.is_err());
+            assert!(
+                route_frame(method, json!({ "selector": "#control", "strict": 1 }))
+                    .route
+                    .is_err()
+            );
+        }
     }
 
     #[test]

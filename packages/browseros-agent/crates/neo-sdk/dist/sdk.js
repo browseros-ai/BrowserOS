@@ -159,6 +159,18 @@ class Locator {
       ...options
     });
   }
+  async isVisible(options) {
+    return await this._frame._isVisible("locator.isVisible", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async isChecked(options) {
+    return await this._frame._isChecked("locator.isChecked", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
   async check(options = {}) {
     return await this._frame._check("locator.check", this._selector, {
       strict: true,
@@ -292,6 +304,8 @@ var FRAME_PRESS_KEYS = [
   "noWaitAfter"
 ];
 var FRAME_INPUT_VALUE_KEYS = ["selector", "strict"];
+var FRAME_IS_CHECKED_KEYS = ["selector", "strict"];
+var FRAME_IS_VISIBLE_KEYS = ["selector", "strict"];
 var FRAME_CHECK_KEYS = [
   "selector",
   "strict",
@@ -455,6 +469,30 @@ class Frame {
     }), this._page._timeoutSettings.timeout(options ?? {}));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.inputValue contract error: missing result");
+    return result.value;
+  }
+  async isVisible(selector, options = {}) {
+    return await this._isVisible("frame.isVisible", selector, options);
+  }
+  async _isVisible(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "isVisible", pickParams(FRAME_IS_VISIBLE_KEYS, {
+      selector,
+      ...options
+    }), 0);
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.isVisible contract error: missing result");
+    return result.value;
+  }
+  async isChecked(selector, options = {}) {
+    return await this._isChecked("frame.isChecked", selector, options);
+  }
+  async _isChecked(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "isChecked", pickParams(FRAME_IS_CHECKED_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options));
+    if (result === undefined)
+      throw new Error("neo-sdk: Frame.isChecked contract error: missing result");
     return result.value;
   }
   async check(selector, options = {}) {
@@ -643,6 +681,12 @@ class Page {
   }
   async inputValue(selector, options = {}) {
     return await this.#mainFrame._inputValue("page.inputValue", selector, options);
+  }
+  async isVisible(selector, options = {}) {
+    return await this.#mainFrame._isVisible("page.isVisible", selector, options);
+  }
+  async isChecked(selector, options = {}) {
+    return await this.#mainFrame._isChecked("page.isChecked", selector, options);
   }
   async check(selector, options = {}) {
     return await this.#mainFrame._check("page.check", selector, options);

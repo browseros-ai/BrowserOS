@@ -11,6 +11,8 @@ import {
   Frame,
   type GotoOptions,
   type InputValueOptions,
+  type IsCheckedOptions,
+  type IsVisibleOptions,
   type PressOptions,
   type SelectOptionOptions,
   type TextContentOptions,
@@ -201,6 +203,20 @@ export class Page {
       selector,
       options,
     )
+  }
+
+  async isVisible(
+    selector: string,
+    options: IsVisibleOptions = {},
+  ): Promise<boolean> {
+    return await this.#mainFrame._isVisible('page.isVisible', selector, options)
+  }
+
+  async isChecked(
+    selector: string,
+    options: IsCheckedOptions = {},
+  ): Promise<boolean> {
+    return await this.#mainFrame._isChecked('page.isChecked', selector, options)
   }
 
   async check(selector: string, options: CheckOptions = {}): Promise<void> {
