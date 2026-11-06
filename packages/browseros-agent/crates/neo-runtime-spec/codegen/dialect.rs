@@ -187,8 +187,8 @@ pub enum Type {
 }
 
 /// Where [`Protocol::command`] found a command.
-pub enum Lookup<'p> {
-    Declared(&'p Command),
+pub enum Lookup<'protocol> {
+    Declared(&'protocol Command),
     /// Declared by this ancestor, reached through `extends`.
     Inherited(DefId),
     Missing,
@@ -275,11 +275,11 @@ enum Kind {
 }
 
 /// A top-level definition as found by the first pass.
-struct Entry<'a> {
-    name: &'a str,
-    file: &'a DialectFile,
-    node: &'a Node,
-    body: &'a [(String, Node)],
+struct Entry<'source> {
+    name: &'source str,
+    file: &'source DialectFile,
+    node: &'source Node,
+    body: &'source [(String, Node)],
     kind: Kind,
     /// The first key of its file, whose comment is the file's header.
     first: bool,
@@ -337,9 +337,9 @@ fn definition_kind(body: &[(String, Node)], grammar: Grammar, at: &At) -> Result
 }
 
 /// Pass 2: definition bodies, now that every name resolves.
-struct Reader<'a> {
-    entries: &'a [Entry<'a>],
-    by_name: &'a HashMap<String, DefId>,
+struct Reader<'source> {
+    entries: &'source [Entry<'source>],
+    by_name: &'source HashMap<String, DefId>,
 }
 
 /// What a node being read may use and see.

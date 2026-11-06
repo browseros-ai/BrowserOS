@@ -193,16 +193,16 @@ impl Contract {
 }
 
 /// What `serve.yml` selects, with each entry's location for later errors.
-struct Selection<'p> {
-    interfaces: Vec<Implemented<'p>>,
+struct Selection<'protocol> {
+    interfaces: Vec<Implemented<'protocol>>,
     types: Vec<(DefId, At)>,
 }
 
 /// An interface Neo implements, and the commands it serves on it.
-struct Implemented<'p> {
+struct Implemented<'protocol> {
     id: DefId,
     at: At,
-    commands: Vec<(&'p Command, At)>,
+    commands: Vec<(&'protocol Command, At)>,
 }
 
 fn read_selection<'p>(protocol: &'p Protocol, serve: &Node) -> Result<Selection<'p>, SpecError> {
@@ -500,9 +500,9 @@ fn build_injected(protocol: &Protocol, id: DefId) -> Result<InjectedModule, Spec
 
 /// The interface's initializer, or the nearest ancestor's when it declares none, as Playwright
 /// validates it.
-struct Initializer<'p> {
-    props: &'p [Prop],
-    doc: &'p str,
+struct Initializer<'protocol> {
+    props: &'protocol [Prop],
+    doc: &'protocol str,
     at: At,
 }
 
@@ -642,16 +642,16 @@ impl Site {
 }
 
 /// Fills one module: lowers dialect types, hoists inline ones, and keeps names unique.
-struct Builder<'p> {
-    protocol: &'p Protocol,
+struct Builder<'protocol> {
+    protocol: &'protocol Protocol,
     side: Side,
     types: Vec<TypeDef>,
     /// Each type name in the module, with where it came from, for collision errors.
     names: HashMap<String, String>,
 }
 
-impl<'p> Builder<'p> {
-    fn new(protocol: &'p Protocol, side: Side) -> Builder<'p> {
+impl<'protocol> Builder<'protocol> {
+    fn new(protocol: &'protocol Protocol, side: Side) -> Builder<'protocol> {
         Builder {
             protocol,
             side,
