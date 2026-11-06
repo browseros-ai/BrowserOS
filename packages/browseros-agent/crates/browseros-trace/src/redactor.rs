@@ -7,7 +7,7 @@
 //! arrays and objects that run over budget end in a `{"$more": n}` marker (`"$more": n` for an
 //! object). claw-server's audit cut stored JSON mid-text instead.
 
-use crate::secret_set::{mask_json_with, mask_spans};
+use crate::secret_set::{mask_json_strings, mask_spans};
 use crate::{RedactionPolicy, SecretSet, TargetSensitivity};
 use serde_json::{Map, Value, json};
 use std::ops::Range;
@@ -236,7 +236,7 @@ impl Redactor {
     }
 
     fn mask_json(&self, value: &mut Value) {
-        mask_json_with(value, &mut |text| self.mask_str(text));
+        mask_json_strings(value, &mut |text| self.mask_str(text));
     }
 
     /// Cuts `value` to `budget` bytes of JSON, and any one string in it to `max_string`.

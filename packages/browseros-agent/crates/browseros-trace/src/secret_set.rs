@@ -311,7 +311,7 @@ impl SecretSet {
 
     /// Masks every string in `value`, keys included. Returns whether anything changed.
     pub fn mask_json(&self, value: &mut Value) -> bool {
-        mask_json_with(value, &mut |text| self.mask_str(text))
+        mask_json_strings(value, &mut |text| self.mask_str(text))
     }
 
     /// Adds to `spans` where `text` holds a value of this set: the byte ranges
@@ -325,6 +325,32 @@ impl SecretSet {
             spans.extend(matcher.find_iter(text).map(|found| found.range()));
         }
     }
+}
+
+/// Masks `text` with every set in `sets` at once, for a caller that holds more than one, such
+/// as claw-sdk's process set and a run's held values. Each set's matches are taken on the same
+/// text and their union is masked: a value two sets hold becomes one [`MASK`], and a value one
+/// set holds never leaves raw the tail of a longer or overlapping value another holds, as
+/// masking one set after the other would. The records the trace writes are masked the same way.
+/// Returns whether anything changed. No sets change nothing.
+pub fn mask_str_with(sets: &[&SecretSet], text: &mut String) -> bool {
+    let mut spans = Vec::new();
+    for set in sets {
+        set.spans(text, &mut spans);
+    }
+    match mask_spans(text, spans) {
+        Some(masked) => {
+            *text = masked;
+            true
+        }
+        None => false,
+    }
+}
+
+/// [`mask_str_with`] on every string in `value`, keys included. Returns whether anything
+/// changed.
+pub fn mask_json_with(sets: &[&SecretSet], value: &mut Value) -> bool {
+    mask_json_strings(value, &mut |text| mask_str_with(sets, text))
 }
 
 /// `text` with each run of overlapping `spans` replaced by one [`MASK`], or `None` when there
@@ -361,7 +387,7 @@ pub(crate) fn mask_spans(text: &str, mut spans: Vec<Range<usize>>) -> Option<Str
 
 /// Masks every string in `value`, keys included, with `mask`, which returns whether it changed
 /// its text. Returns whether anything changed.
-pub(crate) fn mask_json_with(
+pub(crate) fn mask_json_strings(
     value: &mut Value,
     mask: &mut impl FnMut(&mut String) -> bool,
 ) -> bool {
@@ -371,7 +397,7 @@ pub(crate) fn mask_json_with(
         Value::Array(items) => {
             let mut changed = false;
             for item in items.iter_mut() {
-                changed |= mask_json_with(item, mask);
+                changed |= mask_json_strings(item, mask);
             }
             changed
         }
@@ -382,7 +408,7 @@ pub(crate) fn mask_json_with(
                 let mut masked_key = key.clone();
                 let key_changed = mask(&mut masked_key);
                 if let Some(mut child) = map.remove(&key) {
-                    changed |= mask_json_with(&mut child, mask);
+                    changed |= mask_json_strings(&mut child, mask);
                     map.insert(masked_key, child);
                 }
                 changed |= key_changed;
@@ -616,7 +642,8 @@ fn illegal_at_file_name_ends(character: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        MASK, Registration, SecretSet, SecretSetConfig, SecretSource, SecretValue, mask_spans,
+        MASK, Registration, SecretSet, SecretSetConfig, SecretSource, SecretValue, mask_json_with,
+        mask_spans, mask_str_with,
     };
     use aho_corasick::AhoCorasick;
     use serde_json::json;
@@ -753,6 +780,63 @@ mod tests {
             Registration::Refreshed
         );
         assert_eq!(set.count(), 1);
+    }
+
+    /// A value both sets hold is masked once, as one mask: a caller masking with its own set and
+    /// another's no longer withholds a text both of them match.
+    #[test]
+    fn a_value_two_sets_hold_is_masked_once() {
+        let (process, held) = (
+            set_with(&["hunter2-swordfish"]),
+            set_with(&["hunter2-swordfish"]),
+        );
+        let mut text = "pw hunter2-swordfish ok".to_string();
+        assert!(mask_str_with(&[&process, &held], &mut text));
+        assert_eq!(text, "pw [private] ok");
+    }
+
+    /// One set holds a prefix of a longer value the other holds, or a value that overlaps it.
+    /// Masking one set after the other would leave the longer value's tail raw; the union masks
+    /// both as one run, whichever set comes first.
+    #[test]
+    fn a_prefix_or_an_overlap_across_sets_masks_the_union_with_no_raw_tail() {
+        let (short, long) = (set_with(&["swordfish"]), set_with(&["swordfish-tail-2"]));
+        let (head, tail) = (set_with(&["abc-1234"]), set_with(&["1234-xyz"]));
+        let cases = [
+            ([&short, &long], "pw swordfish-tail-2 ok"),
+            ([&long, &short], "pw swordfish-tail-2 ok"),
+            ([&head, &tail], "pw abc-1234-xyz ok"),
+            ([&tail, &head], "pw abc-1234-xyz ok"),
+        ];
+        for (sets, text) in cases {
+            let mut masked = text.to_string();
+            assert!(mask_str_with(&sets, &mut masked), "{text}");
+            assert_eq!(masked, "pw [private] ok", "{text}");
+        }
+    }
+
+    /// No sets mask nothing.
+    #[test]
+    fn masking_with_no_sets_changes_nothing() {
+        let mut text = "pw hunter2-swordfish ok".to_string();
+        assert!(!mask_str_with(&[], &mut text));
+        assert_eq!(text, "pw hunter2-swordfish ok");
+        let mut value = json!({"hunter2-swordfish": ["hunter2-swordfish"]});
+        assert!(!mask_json_with(&[], &mut value));
+        assert_eq!(value, json!({"hunter2-swordfish": ["hunter2-swordfish"]}));
+    }
+
+    /// The JSON twin masks every string, keys included, with the union of the sets.
+    #[test]
+    fn json_strings_and_keys_are_masked_with_the_union_of_the_sets() {
+        let (short, long) = (set_with(&["swordfish"]), set_with(&["swordfish-tail-2"]));
+        let mut value =
+            json!({"swordfish-tail-2": ["a swordfish-tail-2", {"k": "swordfish"}], "n": 1});
+        assert!(mask_json_with(&[&short, &long], &mut value));
+        assert_eq!(
+            value,
+            json!({"[private]": ["a [private]", {"k": "[private]"}], "n": 1})
+        );
     }
 
     /// The form spelling of `a b c d` is the other value as typed, so the matcher holds that
