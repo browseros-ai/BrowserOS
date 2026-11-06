@@ -5,5 +5,12 @@
     "lib": ["ES2023"],
     "types": ["bun"]
   },
-  "include": ["../build.ts", "./**/*"]
+  "include": [
+    "../build.ts",
+    "./**/*",
+    "../vendor/playwright/isomorphic/ariaSnapshot.ts",
+    "../vendor/playwright/isomorphic/ariaSnapshotRenderer.ts",
+    "../vendor/playwright/isomorphic/stringUtils.ts",
+    "../vendor/playwright/isomorphic/yaml.ts"
+  ]
 }

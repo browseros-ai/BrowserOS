@@ -159,7 +159,7 @@ pub(crate) struct PageSession {
     /// it, so a call on a closed tab ends with Playwright's `TargetClosedError`.
     closed: CancellationToken,
     /// The main frame's utility world, where the glue runs.
-    world: Arc<World>,
+    pub(crate) world: Arc<World>,
     /// Names this session's object groups apart.
     next_group: AtomicU64,
     /// The tab's input lock, shared with every other run of the `Runtime` on this tab

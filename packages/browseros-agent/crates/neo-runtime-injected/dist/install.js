@@ -8922,26 +8922,37 @@ function deepEquals(a, b) {
 }
 
 // src/glue.ts
-function query(injected, selector, strict, { markTargets = false } = {}) {
+function query(injected, selector, strict, { markTargets = "none" } = {}) {
   const parsed = injected.parseSelector(selector);
   const elements = injected.querySelectorAll(parsed, document);
-  if (markTargets)
+  if (markTargets === "all")
     injected.markTargetElements(new Set(elements));
+  else if (markTargets === "first" && elements.length)
+    injected.markTargetElements(new Set([elements[0]]));
+  else if (markTargets === "first")
+    injected.markTargetElements(new Set);
   injected.checkDeprecatedSelectorUsage(parsed, elements);
   if (strict && elements.length > 1)
     throw injected.strictModeViolationError(parsed, elements);
   return elements;
 }
+function wellFormed(value) {
+  if (typeof value === "string")
+    return value.toWellFormed();
+  return JSON.parse(JSON.stringify(value, (_key, item) => typeof item === "string" ? item.toWellFormed() : item));
+}
 var glue = {
   title: () => ({ value: document.title }),
   textContent: (injected, { selector, strict }) => {
-    const [element] = query(injected, selector, strict);
+    const [element] = query(injected, selector, strict, {
+      markTargets: "first"
+    });
     if (!element)
       return {};
     return {
       matched: {
-        value: element.textContent,
-        preview: injected.previewNode(element)
+        value: wellFormed(element.textContent),
+        preview: wellFormed(injected.previewNode(element))
       }
     };
   },
@@ -8951,7 +8962,7 @@ var glue = {
       return {};
     const { json, iframeRefs, iframeDepths } = injected.ariaSnapshotJSON(element, { mode, depth, boxes });
     const iframes = iframeRefs.filter((ref) => (ref in iframeDepths)).map((ref) => ({ ref, depth: iframeDepths[ref] }));
-    return { snapshot: { nodes: json, iframes } };
+    return { snapshot: { nodes: wellFormed(json), iframes } };
   },
   frameOwner: (injected, { selector, strict }) => {
     const elements = query(injected, selector, strict);
@@ -8971,7 +8982,7 @@ var glue = {
     }
   },
   resolve: (injected, { selector, strict }) => {
-    const elements = query(injected, selector, strict, { markTargets: true });
+    const elements = query(injected, selector, strict, { markTargets: "all" });
     const [element] = elements;
     return {
       element,

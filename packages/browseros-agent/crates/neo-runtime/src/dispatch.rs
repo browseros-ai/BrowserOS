@@ -48,6 +48,7 @@ use crate::page::PageSession;
 use crate::progress::{
     self, CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
 };
+use crate::reads::{self, ReadOptions, SnapshotOptions};
 use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, PageId, RunEnd};
 
 /// How long `finish` waits, after the realm is gone, for the run's calls to end so their
@@ -173,6 +174,8 @@ enum Route {
     FrameClick(ClickOptions),
     FrameGoto(GotoOptions),
     FrameTitle,
+    FrameTextContent(ReadOptions),
+    FrameAriaSnapshot(SnapshotOptions),
 }
 
 impl Dispatcher {
@@ -322,13 +325,16 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::Click(params) => ClickOptions::from_params(params).map(Route::FrameClick),
         FrameCall::Goto(params) => GotoOptions::from_params(params).map(Route::FrameGoto),
         FrameCall::Title(_) => Ok(Route::FrameTitle),
-        FrameCall::TextContent(_) => Err(not_served_yet("textContent")),
-        FrameCall::AriaSnapshot(_) => Err(not_served_yet("ariaSnapshot")),
+        FrameCall::TextContent(params) if enters_frame(&params.selector) => {
+            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
+        }
+        FrameCall::TextContent(params) => {
+            Ok(Route::FrameTextContent(ReadOptions::from_params(params)))
+        }
+        FrameCall::AriaSnapshot(params) => {
+            SnapshotOptions::from_params(params).map(Route::FrameAriaSnapshot)
+        }
     }
-}
-
-fn not_served_yet(method: &str) -> PlaywrightError {
-    PlaywrightError::error(format!("Neo does not serve Frame.{method} yet"))
 }
 
 /// One call's task: serves the route, ends the trace entry and sends the reply. A call the run
@@ -361,6 +367,20 @@ async fn serve(
                 .map(Some)
                 .map_err(|error| PlaywrightError::error(error.to_string()).into())
         }),
+        Route::FrameTextContent(options) => reads::text_content(&page, &options, &progress)
+            .await
+            .and_then(|result| {
+                serde_json::to_value(result)
+                    .map(Some)
+                    .map_err(|error| PlaywrightError::error(error.to_string()).into())
+            }),
+        Route::FrameAriaSnapshot(options) => reads::aria_snapshot(&page, &options, &progress)
+            .await
+            .and_then(|result| {
+                serde_json::to_value(result)
+                    .map(Some)
+                    .map_err(|error| PlaywrightError::error(error.to_string()).into())
+            }),
     };
     let (record, answer) = match result {
         Err(CallError::RunEnded(_)) => return,
@@ -619,6 +639,8 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
+    use neo_runtime_spec::injected::AriaSnapshotMode;
+
     use super::*;
     use crate::click_goldens;
     use crate::progress::ErrorName;
@@ -674,6 +696,108 @@ mod tests {
                 })
                 .expect("title result"),
                 json!({"id":7,"result":{"value":"Page title"}}),
+            ),
+        ] {
+            let actual: Value =
+                serde_json::from_str(&encode_reply(&json!(7), Ok(Some(&result)), None))
+                    .expect("reply");
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn text_content_and_page_snapshots_route_with_their_options_and_titles() {
+        let routed = route_frame("textContent", json!({ "selector": "li", "strict": true }));
+        assert_eq!(
+            routed.meta.and_then(|meta| meta.title),
+            Some("Get text content")
+        );
+        let Ok(Route::FrameTextContent(options)) = routed.route else {
+            panic!("textContent on the run's frame routes to Frame.textContent");
+        };
+        assert_eq!(
+            options,
+            ReadOptions {
+                selector: "li".to_string(),
+                strict: true,
+            }
+        );
+        let Ok(Route::FrameTextContent(options)) =
+            route_frame("textContent", json!({ "selector": "li" })).route
+        else {
+            panic!("page.textContent sends no strict");
+        };
+        assert!(!options.strict, "page and frame reads are not strict");
+
+        let routed = route_frame("ariaSnapshot", json!({ "mode": "ai", "depth": 3 }));
+        assert_eq!(
+            routed.meta.and_then(|meta| meta.title),
+            Some("Aria snapshot")
+        );
+        let Ok(Route::FrameAriaSnapshot(options)) = routed.route else {
+            panic!("ariaSnapshot without a selector routes to Frame.ariaSnapshot");
+        };
+        assert_eq!(
+            options,
+            SnapshotOptions {
+                mode: AriaSnapshotMode::Ai,
+                depth: Some(3),
+                boxes: None,
+            }
+        );
+    }
+
+    #[test]
+    fn reads_neo_does_not_serve_are_refused_before_any_work() {
+        assert_eq!(
+            error_of(route_frame(
+                "textContent",
+                json!({ "selector": "iframe >> internal:control=enter-frame >> li" }),
+            )),
+            PlaywrightError::error(FRAMES_UNSUPPORTED)
+        );
+        let routed = route_frame("ariaSnapshot", json!({ "selector": "#list", "mode": "ai" }));
+        assert_eq!(
+            routed.meta.and_then(|meta| meta.title),
+            Some("Aria snapshot")
+        );
+        assert_eq!(
+            error_of(routed),
+            PlaywrightError::error("Neo does not serve locator.ariaSnapshot yet")
+        );
+    }
+
+    /// Playwright's dispatcher sends `{id, result}` for every command with `returns`; the
+    /// client reads an absent `value` as `null`.
+    #[test]
+    fn reads_reply_with_their_generated_result_shapes() {
+        use neo_runtime_spec::serve::{FrameAriaSnapshotResult, FrameTextContentResult};
+
+        for (result, expected) in [
+            (
+                serde_json::to_value(FrameTextContentResult {
+                    value: Some("Apples".to_string()),
+                })
+                .expect("text result"),
+                json!({ "id": 7, "result": { "value": "Apples" } }),
+            ),
+            (
+                serde_json::to_value(FrameTextContentResult {
+                    value: Some(String::new()),
+                })
+                .expect("text result"),
+                json!({ "id": 7, "result": { "value": "" } }),
+            ),
+            (
+                serde_json::to_value(FrameTextContentResult { value: None }).expect("text"),
+                json!({ "id": 7, "result": {} }),
+            ),
+            (
+                serde_json::to_value(FrameAriaSnapshotResult {
+                    snapshot: "- button \"Go\" [ref=e2]".to_string(),
+                })
+                .expect("snapshot result"),
+                json!({ "id": 7, "result": { "snapshot": "- button \"Go\" [ref=e2]" } }),
             ),
         ] {
             let actual: Value =
