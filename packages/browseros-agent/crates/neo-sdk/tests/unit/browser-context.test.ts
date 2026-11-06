@@ -73,16 +73,14 @@ describe('BrowserContext.pages', () => {
     ])
   })
 
-  test('a page missing from a later read leaves the map: listed again, it is a new object', () => {
+  test('a page one read leaves out is the same object when a later read lists it again', () => {
     const { fake, context } = start([RUN_TAB, OTHER_TAB])
     const [, other] = context.pages()
     fake.tabs.splice(1, 1)
     expect(context.pages().includes(other)).toBe(false)
 
     fake.tabs.push(OTHER_TAB)
-    const [, again] = context.pages()
-    expect(again).not.toBe(other)
-    expect(again.url()).toBe(OTHER_TAB.url)
+    expect(context.pages()[1]).toBe(other)
   })
 
   test('once its tab is gone, a listed page still answers url() with the URL it was listed at', () => {

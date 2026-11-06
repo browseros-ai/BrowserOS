@@ -20,12 +20,13 @@ export class BrowserContext {
   readonly #guid: string
   readonly #connection: Connection
   /**
-   * By guid, every page the last `pages()` listed, plus those handed out since: the run page,
-   * `newPage` results. A page the next `pages()` does not list leaves it, as a closed page
-   * leaves Playwright's list. Dropping that rule would keep every tab the run ever saw alive
-   * in the realm; dropping the map would make each `pages()` call return new objects.
+   * By guid, every page the run was handed: the run page, every `pages()` record, every
+   * `newPage` result. An entry stays for the whole run, so a tab that one read leaves out and
+   * a later read lists again is still the same object, as in Playwright, where only a close
+   * takes a page off the list. The map grows only with the tabs one run sees. Without it, each
+   * `pages()` call would return new objects.
    */
-  #pages = new Map<string, Page>()
+  readonly #pages = new Map<string, Page>()
   readonly _timeoutSettings = new TimeoutSettings()
 
   constructor(guid: string, connection: Connection) {
@@ -33,18 +34,12 @@ export class BrowserContext {
     this.#connection = connection
   }
 
-  /** Every open tab of the context, in BrowserOS's tab order; a page seen before keeps its
-   * object. A live read, like every Neo getter. */
+  /** Every open tab of the context, in the order Rust first saw them, the run page first; a
+   * page seen before keeps its object. A live read, like every Neo getter. */
   pages(): Page[] {
-    const listed = new Map<string, Page>()
-    for (const created of get(this.#guid, 'pages')) {
-      listed.set(
-        created.guid,
-        this.#pages.get(created.guid) ?? this.#build(created),
-      )
-    }
-    this.#pages = listed
-    return [...listed.values()]
+    return get(this.#guid, 'pages').map(
+      (created) => this.#pages.get(created.guid) ?? this.#add(created),
+    )
   }
 
   /** Opens a tab on `about:blank` and resolves with its `Page` once the tab answers that URL.
@@ -76,20 +71,18 @@ export class BrowserContext {
   /** The `Page` for a guid Rust just handed out: the object a `pages()` read made while the
    * call was in flight, else one built from the page's creation record. */
   #pageFor(guid: string): Page {
-    const known = this.#pages.get(guid)
-    if (known) return known
-    const page = this.#build(get(guid, 'initializer'))
-    this.#pages.set(guid, page)
-    return page
+    return this.#pages.get(guid) ?? this.#add(get(guid, 'initializer'))
   }
 
-  #build(created: CreatedPage): Page {
-    return new Page(
+  #add(created: CreatedPage): Page {
+    const page = new Page(
       created.guid,
       created.mainFrame.guid,
       created.mainFrame.initializer.url,
       this,
       this.#connection,
     )
+    this.#pages.set(created.guid, page)
+    return page
   }
 }

@@ -40,7 +40,7 @@ export interface GetterReplies {
   /** `null` once the page is closed: every CDP source errors then. */
   url: string | null
   isClosed: boolean
-  /** On the context: its open tabs, in BrowserOS's tab order. */
+  /** On the context: its open tabs, in the order Rust first saw them, the run page first. */
   pages: CreatedPage[]
   /** On a page: its creation record, which `newPage` builds its `Page` from. */
   initializer: CreatedPage

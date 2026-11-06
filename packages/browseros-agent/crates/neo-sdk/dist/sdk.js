@@ -402,12 +402,7 @@ class BrowserContext {
     this.#connection = connection;
   }
   pages() {
-    const listed = new Map;
-    for (const created of get(this.#guid, "pages")) {
-      listed.set(created.guid, this.#pages.get(created.guid) ?? this.#build(created));
-    }
-    this.#pages = listed;
-    return [...listed.values()];
+    return get(this.#guid, "pages").map((created) => this.#pages.get(created.guid) ?? this.#add(created));
   }
   async newPage() {
     const { page } = await this.#connection.sendContext("browserContext.newPage", this.#guid, "newPage", {}, 0);
@@ -422,15 +417,12 @@ class BrowserContext {
     return page;
   }
   #pageFor(guid) {
-    const known = this.#pages.get(guid);
-    if (known)
-      return known;
-    const page = this.#build(get(guid, "initializer"));
-    this.#pages.set(guid, page);
-    return page;
+    return this.#pages.get(guid) ?? this.#add(get(guid, "initializer"));
   }
-  #build(created) {
-    return new Page(created.guid, created.mainFrame.guid, created.mainFrame.initializer.url, this, this.#connection);
+  #add(created) {
+    const page = new Page(created.guid, created.mainFrame.guid, created.mainFrame.initializer.url, this, this.#connection);
+    this.#pages.set(created.guid, page);
+    return page;
   }
 }
 
