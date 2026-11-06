@@ -18,6 +18,7 @@
 //!  a page that shows its own password field in its title as it loads, before any op sweeps it:
 //!    neither the realm nor the trace gets the field's value from the goto's page facts (ignored,
 //!    a known gap)
+//!  a selector with `:scope` inside `:has()`: its deep parsed brand reaches `$$eval` and `count`
 //! ```
 //!
 //! Like `e2e_browseros.rs`, it runs only when `CLAW_SDK_E2E_BROWSER` names a BrowserOS binary.
@@ -264,6 +265,11 @@ async fn a_read_between_two_keystrokes_shows_the_field_to_no_one_and_registers_n
 #[ignore = "known gap: page facts are recorded before any sweep of the page; see sdk-skeleton decision 35n"]
 async fn a_page_fact_recorded_before_any_sweep_holds_no_field_value() -> TestResult {
     on_browseros(|rig| Box::pin(page_fact_before_sweep(rig))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_selector_with_scope_inside_has_reaches_its_op() -> TestResult {
+    on_browseros(|rig| Box::pin(scope_inside_has(rig))).await
 }
 
 /// `drive` on a fresh BrowserOS within the test's budget, with both processes' logs on failure.
@@ -578,6 +584,69 @@ fn assert_no_fragment(secret: &str, text: &str, what: &str) -> TestResult {
             );
         }
     }
+    Ok(())
+}
+
+/// Upstream's `tests/assets/deep-shadow.html`, which Playwright 1.64.1's `:is` case loads.
+const DEEP_SHADOW: &str = r"<script>
+window.addEventListener('DOMContentLoaded', () => {
+  const outer = document.createElement('section');
+  document.body.appendChild(outer);
+  const root1 = document.createElement('div');
+  root1.setAttribute('id', 'root1');
+  outer.appendChild(root1);
+  const shadowRoot1 = root1.attachShadow({mode: 'open'});
+  const span1 = document.createElement('span');
+  span1.setAttribute('data-testid', 'foo');
+  span1.textContent = 'Hello from root1';
+  shadowRoot1.appendChild(span1);
+  const root2 = document.createElement('div');
+  shadowRoot1.appendChild(root2);
+  const shadowRoot2 = root2.attachShadow({mode: 'open'});
+  const span2 = document.createElement('span');
+  span2.setAttribute('data-testid', 'foo');
+  span2.setAttribute('id', 'target');
+  span2.textContent = 'Hello from root2';
+  shadowRoot2.appendChild(span2);
+  const root3 = document.createElement('div');
+  shadowRoot1.appendChild(root3);
+  const shadowRoot3 = root3.attachShadow({mode: 'open'});
+  const span3 = document.createElement('span');
+  span3.setAttribute('data-testid', 'foo');
+  span3.textContent = 'Hello from root3';
+  shadowRoot3.appendChild(span3);
+  const span4 = document.createElement('span');
+  span4.textContent = 'Hello from root3 #2';
+  span4.setAttribute('attr', 'value space');
+  shadowRoot3.appendChild(span4);
+});
+</script>";
+
+/// S3b, tier 2's `selectors-css` cases `should work with :is` (L389) and `:scope` (L431). A
+/// locator's brand carries its parsed selector, and `:scope` inside `:has()` parses 28 levels deep,
+/// past where the run's encoding of an op's input overflowed the realm's stack. Each call answers
+/// what Playwright 1.64.1 does, as tier 2 records it, through `$$eval` and a locator's `count`.
+async fn scope_inside_has(rig: &Rig) -> TestResult {
+    let script = format!(
+        r"
+        const settled = (call) => call().catch((error) => String(error.message).split('\n')[0]);
+        const IS_SCOPE = 'css=#root1:has(:is(:scope, #root1))';
+        await page.goto('data:text/html,' + encodeURIComponent({deep_shadow}));
+        const isScope = await settled(() => page.$$eval(IS_SCOPE, (els) => els.length));
+        const counted = await settled(() => page.locator(IS_SCOPE).count());
+        await page.goto('data:text/html,' + encodeURIComponent(
+          '<section><span id=span1><span id=inner></span></span><span id=span2></span></section>'));
+        const notHasScope = await settled(() =>
+          page.$$eval('#span1 >> span:not(:has(:scope > div))', (els) => els.map((e) => e.id)));
+        return {{ isScope, counted, notHasScope }};",
+        deep_shadow = json!(DEEP_SHADOW)
+    );
+    let reply = reply_of(rig, &script, "scope-inside-has").await?;
+    assert_eq!(
+        reply.get("value"),
+        Some(&json!({ "isScope": 1, "counted": 1, "notHasScope": ["inner"] })),
+        "the parsed selector reaches each op whole: {reply}"
+    );
     Ok(())
 }
 

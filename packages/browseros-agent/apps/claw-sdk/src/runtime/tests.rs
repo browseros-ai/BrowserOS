@@ -703,6 +703,67 @@ fn a_result_far_deeper_than_the_js_stack_revives_whole() -> Result<(), TestError
     })
 }
 
+/// S3b. An op's input is made plain JSON on the run's 512 KiB stack, where recursion overflowed
+/// past 17 nested arrays or 51 nested objects in a debug build (measured here), and a
+/// Playwright locator's parsed selector with `:scope` inside `:has()` is 28 levels deep. These go
+/// 120 levels deep, of each kind, through a real op and back. The door's JSON parse takes 127
+/// levels in all, so that, not the realm's stack, is how deep an input can go.
+#[test]
+fn an_input_far_deeper_than_the_js_stack_reaches_its_op_whole() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r#"
+            const nest = (wrap) => {
+              let value = "bottom";
+              for (let level = 0; level < 120; level++) value = wrap(value);
+              return value;
+            };
+            const walk = (value, down) => {
+              let depth = 0;
+              while (typeof value === "object") { value = down(value); depth++; }
+              return [depth, value];
+            };
+            const inObject = (value) => ({ down: value });
+            const inArray = (value) => [value];
+            const objects = await __neo.invoke("test.echo", { deep: nest(inObject) });
+            const arrays = await __neo.invoke("test.echo", { deep: nest(inArray) });
+            return {
+              objects: walk(objects.deep, (value) => value.down),
+              arrays: walk(arrays.deep, (value) => value[0]),
+            };"#;
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({ "objects": [120, "bottom"], "arrays": [120, "bottom"] }),
+            "every level reaches the op and comes back"
+        );
+        Ok(())
+    })
+}
+
+/// S3b's review. A Proxy around an array answers whatever `length` its trap chooses, and the
+/// input codec counts its items as `Array.prototype.map` did, by that length as a whole number of
+/// at least 0: a length in text counts, a fraction is cut and a negative is none. Each item it
+/// lacks is a hole, sent as null.
+#[test]
+fn a_proxy_array_has_as_many_items_as_map_would_count() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r#"
+            const answering = (length) => new Proxy([], {
+              get: (target, key) => (key === "length" ? length : target[key]),
+            });
+            const sent = async (length) =>
+              (await __neo.invoke("test.echo", { items: answering(length) })).items;
+            return { text: await sent("2"), fraction: await sent(1.5), negative: await sent(-1) };"#;
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({ "text": [null, null], "fraction": [null], "negative": [] }),
+            "the copy has the items map would have made, holes as null"
+        );
+        Ok(())
+    })
+}
+
 /// The Playwright prelude's page and element revivers make a `Page` for each tab they meet, so
 /// the order `revive` meets brands in is the order of `context.pages()`. It meets them depth
 /// first, in each object's key order, and hands each brand to its reviver whole, assigning what

@@ -124,9 +124,43 @@
     }
   }
 
+  // `beginCopy`'s answer for an object or an array: its frame is on the stack and its children
+  // come next, so what it becomes is known only once they are made plain.
+  const OPENED = Symbol('opened')
+
   // Plain data only. A handle (or a Date) serializes through its toJSON, bytes become the bytes
-  // brand, and a function, symbol, bigint, cycle or class instance is refused with its path.
-  function plain(value, path, ancestors) {
+  // brand, and a function, symbol, bigint, cycle or class instance is refused with its path. It
+  // walks with a stack of its own, as `revive` does: recursion on the run's 512 KiB stack
+  // overflowed past 17 nested arrays in a debug build, and a locator's parsed selector with
+  // `:scope` inside `:has()` nests 28 levels. It reads each value when recursion read it, depth
+  // first and in each object's key order, so a getter or a toJSON sees the same walk.
+  function plain(input) {
+    // One frame per object on the path down to the value being made plain, and those objects as a
+    // set, recursion's ancestors: a cycle is one of them met again, while two fields may share an
+    // object off the path. A set, so a deep input costs its depth and not its depth squared.
+    const frames = []
+    const ancestors = new Set()
+    let copy = beginCopy(input, frames, ancestors)
+    for (;;) {
+      const frame = frames[frames.length - 1]
+      if (copy !== OPENED) {
+        if (frame === undefined) return copy
+        keepChild(frame, copy)
+      }
+      if (hasChild(frame)) {
+        copy = beginCopy(childOf(frame), frames, ancestors)
+      } else {
+        frames.pop()
+        ancestors.delete(frame.value)
+        copy = frame.copy
+      }
+    }
+  }
+
+  // `value` made plain when nothing below it needs a walk. An object or an array gets a frame on
+  // `frames` and a place among `ancestors` instead, and the answer OPENED. Every frame counts its
+  // children in `length` and stands at the one in `index`.
+  function beginCopy(value, frames, ancestors) {
     switch (typeof value) {
       case 'string':
       case 'boolean':
@@ -137,56 +171,127 @@
       case 'function':
       case 'symbol':
         throw new CodecError(
-          `${path} is a ${typeof value}; SDK calls take plain data`,
+          `${pathOf(frames)} is a ${typeof value}; SDK calls take plain data`,
         )
     }
     if (value === null) return null
-    if (ancestors.includes(value)) {
+    if (ancestors.has(value)) {
       throw new CodecError(
-        `${path} refers back to itself; SDK calls take plain data`,
+        `${pathOf(frames)} refers back to itself; SDK calls take plain data`,
       )
     }
     if (value instanceof Uint8Array)
       return { $neo: 'bytes', base64: toBase64(value) }
-    ancestors.push(value)
-    try {
-      if (typeof value.toJSON === 'function')
-        return plain(value.toJSON(), path, ancestors)
-      if (Array.isArray(value)) {
-        return value.map((item, index) => {
-          const copy = plain(item, `${path}[${index}]`, ancestors)
-          return copy === undefined ? null : copy
-        })
+    let frame
+    if (typeof value.toJSON === 'function') {
+      // Its one child is what toJSON answers, at its own path, and it becomes that.
+      const answer = value.toJSON()
+      frame = { kind: 'json', value, answer, length: 1, index: 0 }
+    } else if (Array.isArray(value)) {
+      const length = lengthOf(value)
+      frame = {
+        kind: 'array',
+        value,
+        length,
+        index: 0,
+        copy: new Array(length),
       }
+    } else {
       const prototype = Object.getPrototypeOf(value)
       if (prototype !== Object.prototype && prototype !== null) {
         throw new CodecError(
-          `${path} is a ${className(value)}; SDK calls take plain data`,
+          `${pathOf(frames)} is a ${className(value)}; SDK calls take plain data`,
         )
       }
-      const copy = {}
-      for (const key of Object.keys(value)) {
-        const field = plain(value[key], `${path}.${key}`, ancestors)
-        if (field !== undefined) {
-          Object.defineProperty(copy, key, {
-            value: field,
+      const keys = Object.keys(value)
+      frame = {
+        kind: 'object',
+        value,
+        keys,
+        length: keys.length,
+        index: 0,
+        copy: {},
+      }
+    }
+    frames.push(frame)
+    ancestors.add(value)
+    return OPENED
+  }
+
+  // An array's length read once, as `map` read it (ToLength): a Proxy around an array may answer
+  // any value, and `new Array` would take a lone non-number as its one item, or throw on a
+  // fraction. Unary plus, not `Number`, so a bigint length throws as it did in `map`.
+  function lengthOf(array) {
+    const length = Math.trunc(+array.length)
+    return length > 0 ? Math.min(length, Number.MAX_SAFE_INTEGER) : 0
+  }
+
+  // Whether the frame has a child left to make plain. An array's hole is skipped, as `map` skips
+  // it: the copy keeps the hole, which JSON writes as null.
+  function hasChild(frame) {
+    if (frame.kind === 'array') {
+      while (frame.index < frame.length && !(frame.index in frame.value))
+        frame.index++
+    }
+    return frame.index < frame.length
+  }
+
+  // The frame's current child, read now.
+  function childOf(frame) {
+    switch (frame.kind) {
+      case 'json':
+        return frame.answer
+      case 'array':
+        return frame.value[frame.index]
+      case 'object':
+        return frame.value[frame.keys[frame.index]]
+    }
+  }
+
+  // Puts `copy`, the plain form of the frame's current child, into the frame's own copy, and
+  // moves to the next child: an array's undefined item becomes null, and an object's undefined
+  // field is left out.
+  function keepChild(frame, copy) {
+    switch (frame.kind) {
+      case 'json':
+        frame.copy = copy
+        break
+      case 'array':
+        frame.copy[frame.index] = copy === undefined ? null : copy
+        break
+      case 'object':
+        // Defined, not assigned: assigning a "__proto__" key would set the copy's prototype.
+        if (copy !== undefined) {
+          Object.defineProperty(frame.copy, frame.keys[frame.index], {
+            value: copy,
             enumerable: true,
             writable: true,
             configurable: true,
           })
         }
-      }
-      return copy
-    } finally {
-      ancestors.pop()
+        break
     }
+    frame.index++
+  }
+
+  // Where the value being made plain sits in the input, as a refusal names it: `input`, then a
+  // `.key` or `[index]` for each object or array on the way down, while a toJSON keeps its
+  // holder's path. Built only for a refusal: a path held for every level at once would cost a
+  // deep input its depth squared.
+  function pathOf(frames) {
+    let path = 'input'
+    for (const frame of frames) {
+      if (frame.kind === 'array') path += `[${frame.index}]`
+      if (frame.kind === 'object') path += `.${frame.keys[frame.index]}`
+    }
+    return path
   }
 
   // Always valid JSON. Input the codec refuses still reaches the door as the invalid brand, so
   // the call is recorded and refused there as script / invalid_input (dispatch/registry.rs).
   function encode(input) {
     try {
-      return JSON.stringify(plain(input, 'input', []) ?? {})
+      return JSON.stringify(plain(input) ?? {})
     } catch (error) {
       const reason =
         error instanceof CodecError
