@@ -24,7 +24,8 @@ import { call } from './runtime-bridge'
 /** The public methods that send a browser call, named as Playwright's client names them. */
 export type ApiName = 'locator.click' | 'page.click' | 'frame.click'
 
-type WireError = { name: string; message: string }
+/** Playwright's wire error, `{error: {name, message}}`'s inner object. */
+export type WireError = { name: string; message: string }
 
 /** Playwright's reply. Rust writes it (`dispatch.rs` `encode_reply`), and
  * `neo-runtime/tests/fixtures/replies.json` pins the shape for both sides. */
