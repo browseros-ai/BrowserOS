@@ -19,7 +19,9 @@ export class TimeoutError extends PlaywrightError {
   }
 }
 
-export class TargetClosedError extends PlaywrightError {
+/** Not exported: Playwright's public `errors` (`client/playwright.ts`) names only
+ * `TimeoutError`, and a script never sees this class's name (it reads `e.name === 'Error'`). */
+class TargetClosedError extends PlaywrightError {
   constructor(cause?: string) {
     super(cause || 'Target page, context or browser has been closed')
   }
