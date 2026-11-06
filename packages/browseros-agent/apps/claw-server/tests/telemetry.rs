@@ -2,10 +2,25 @@ use axum::{
     Router,
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
+    routing::any,
 };
-use claw_server::{AppState, build_router, config::Config};
+use claw_server::{
+    AppState,
+    analytics::{AnalyticsService, events::SERVER_STARTED},
+    build_router,
+    config::{Config, ServerMode},
+};
 use serde_json::{Value, json};
-use std::{env, path::Path, process::Command, sync::Arc, time::Duration};
+use std::{
+    env,
+    path::Path,
+    process::Command,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -22,12 +37,37 @@ fn telemetry_routes_round_trip_persist_and_honor_the_env_gate() -> anyhow::Resul
     }
 
     let root = tempfile::tempdir()?;
-    run_child(root.path(), "roundtrip", "1")?;
-    run_child(root.path(), "gate-off", "false")?;
+    // Each child configures the real app in its own process. The collector outlives them,
+    // and each child drains delivery before the parent compares its final request count.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let requests = Arc::new(AtomicUsize::new(0));
+    let (host, collector) = runtime.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let host = format!("http://{}", listener.local_addr()?);
+        let requests = requests.clone();
+        let app = Router::new().fallback(any(move || {
+            requests.fetch_add(1, Ordering::SeqCst);
+            async { StatusCode::OK }
+        }));
+        let collector = tokio::spawn(async move { axum::serve(listener, app).await });
+        Ok::<_, anyhow::Error>((host, collector))
+    })?;
+    run_child(root.path(), "roundtrip", "1", &host)?;
+    let desktop_requests = requests.load(Ordering::SeqCst);
+    assert!(
+        desktop_requests > 0,
+        "desktop delivers to the local collector"
+    );
+    run_child(root.path(), "gate-off", "false", &host)?;
+    run_child(root.path(), "hosted", "1", &host)?;
+    assert_eq!(requests.load(Ordering::SeqCst), desktop_requests);
+    collector.abort();
     Ok(())
 }
 
-fn run_child(root: &Path, case: &str, analytics_enabled: &str) -> anyhow::Result<()> {
+fn run_child(root: &Path, case: &str, analytics_enabled: &str, host: &str) -> anyhow::Result<()> {
     let output = Command::new(env::current_exe()?)
         .arg("--exact")
         .arg("telemetry_routes_round_trip_persist_and_honor_the_env_gate")
@@ -36,6 +76,7 @@ fn run_child(root: &Path, case: &str, analytics_enabled: &str) -> anyhow::Result
         .env(TEST_ROOT, root)
         .env("HOME", root)
         .env("CLAW_POSTHOG_KEY", "test-posthog-key")
+        .env("CLAW_POSTHOG_HOST", host)
         .env("CLAW_ANALYTICS_ENABLED", analytics_enabled)
         .output()?;
     if !output.status.success() {
@@ -54,13 +95,14 @@ async fn run_child_case(case: &str) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("missing telemetry test root"))?;
     match case {
         "roundtrip" => roundtrip_case(&root).await,
-        "gate-off" => gate_off_case(&root).await,
+        "gate-off" => gate_off_case(&root, ServerMode::Desktop).await,
+        "hosted" => gate_off_case(&root, ServerMode::Hosted).await,
         _ => anyhow::bail!("unknown telemetry test case {case}"),
     }
 }
 
 async fn roundtrip_case(root: &Path) -> anyhow::Result<()> {
-    let router = test_router(root).await?;
+    let (router, _) = test_router(root, ServerMode::Desktop).await?;
     let (status, initial) =
         request_json(&router, "GET", "/api/v1/settings/telemetry", None).await?;
     assert_eq!(status, StatusCode::OK);
@@ -102,7 +144,7 @@ async fn roundtrip_case(root: &Path) -> anyhow::Result<()> {
     assert_eq!(persisted["distinctId"], distinct_id);
     assert!(!root.join("installation.json").exists());
 
-    let restarted = test_router(root).await?;
+    let (restarted, analytics) = test_router(root, ServerMode::Desktop).await?;
     let (status, after_restart) =
         request_json(&restarted, "GET", "/api/v1/settings/telemetry", None).await?;
     assert_eq!(status, StatusCode::OK);
@@ -117,11 +159,14 @@ async fn roundtrip_case(root: &Path) -> anyhow::Result<()> {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(enabled["enabled"], true);
     assert_eq!(enabled["consent"], true);
+    analytics.capture(SERVER_STARTED, json!({}));
+    analytics.shutdown().await;
     Ok(())
 }
 
-async fn gate_off_case(root: &Path) -> anyhow::Result<()> {
-    let router = test_router(root).await?;
+async fn gate_off_case(root: &Path, mode: ServerMode) -> anyhow::Result<()> {
+    let (router, analytics) = test_router(root, mode).await?;
+    analytics.capture(SERVER_STARTED, json!({}));
     let (status, state) = request_json(&router, "GET", "/api/v1/settings/telemetry", None).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(state["enabled"], false);
@@ -134,10 +179,28 @@ async fn gate_off_case(root: &Path) -> anyhow::Result<()> {
         json!({ "enabled": true, "distinctId": state["distinctId"] })
     );
     assert!(!root.join("installation.json").exists());
+    let (status, unchanged) = request_json(
+        &router,
+        "PUT",
+        "/api/v1/settings/telemetry",
+        Some(json!({ "consent": true })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        unchanged, state,
+        "consent cannot override deployment policy"
+    );
+    analytics.capture(SERVER_STARTED, json!({}));
+    // Drain delivery before the parent checks its collector; no timing guess is needed.
+    analytics.shutdown().await;
     Ok(())
 }
 
-async fn test_router(root: &Path) -> anyhow::Result<Router> {
+async fn test_router(
+    root: &Path,
+    mode: ServerMode,
+) -> anyhow::Result<(Router, Arc<AnalyticsService>)> {
     let config = Arc::new(Config {
         server_port: 9200,
         cdp_port: 49337,
@@ -150,12 +213,13 @@ async fn test_router(root: &Path) -> anyhow::Result<Router> {
         replay_retention_days: 7,
         dev_mode: false,
         native: Default::default(),
-        mode: Default::default(),
+        mode,
         behavior: Default::default(),
         behavior_ignored: Vec::new(),
     });
     let state = AppState::new_with_home(config, root.join("home")).await?;
-    Ok(build_router(state))
+    let analytics = state.analytics.clone();
+    Ok((build_router(state), analytics))
 }
 
 async fn request_json(
