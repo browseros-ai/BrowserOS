@@ -14,14 +14,34 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import http from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // Playwright dims the call log in error messages whenever the environment suggests colour
 // (`COLORTERM`, `TERM=xterm-*`, inherited from the terminal even without a TTY), and reads the
 // setting when it loads. The goldens were recorded with colours off, so this must run before
 // playwright-core is imported, and tests take `chromium` from here, never from playwright-core.
 process.env.FORCE_COLOR = '0'
-export const { chromium } = await import('playwright-core')
+/**
+ * The Playwright every parity test compares against: `playwright-core` from npm (this package's
+ * devDependency), or a build of Playwright's source at the vendored commit when
+ * `NEO_PARITY_PLAYWRIGHT` names its `packages/playwright-core` directory (`npm ci && npm run build`
+ * in a checkout of its own). The two are different revisions; tests report `playwrightVersion`
+ * so every result names the one it ran against.
+ */
+const playwrightDir = process.env.NEO_PARITY_PLAYWRIGHT
+export const { chromium } = await import(
+  playwrightDir
+    ? pathToFileURL(join(playwrightDir, 'index.mjs')).href
+    : 'playwright-core'
+)
+export const playwrightVersion = JSON.parse(
+  readFileSync(
+    playwrightDir
+      ? join(playwrightDir, 'package.json')
+      : fileURLToPath(import.meta.resolve('playwright-core/package.json')),
+    'utf8',
+  ),
+).version
 
 export const browserBinary = process.env.NEO_E2E_BROWSER
 /**
