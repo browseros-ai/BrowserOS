@@ -1,14 +1,15 @@
-//! The realm's limits and conversions, and the browser-call path up to the dispatcher, through
-//! `Runtime::run`, against the fake browser in `support/fake_browser.rs`. No browser needed.
+//! The realm's limits and conversions, and the browser-call path from the SDK through the
+//! dispatcher to a click's reply and record, through `Runtime::run`, against the fake browser in
+//! `support/fake_browser.rs`. No browser needed.
 
 #[path = "support/fake_browser.rs"]
 mod fake_browser;
 
 use std::time::{Duration, Instant};
 
-use fake_browser::{FakeBrowser, PAGE, PAGE_URL, Replies, Reply, run_request};
+use fake_browser::{BUTTON, FakeBrowser, PAGE, PAGE_URL, Replies, Reply, run_request};
 use neo_runtime::{
-    CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunOutcome, RunStatus,
+    CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, RunEnd, RunOutcome, RunStatus,
 };
 use serde_json::{Value, json};
 use tokio::time;
@@ -267,14 +268,6 @@ async fn a_script_cannot_read_a_page_outside_its_run() {
     );
 }
 
-/// What every click replies until Neo serves `Frame.click`.
-fn click_not_served() -> CallResult {
-    CallResult::Error {
-        name: "Error".to_string(),
-        message: "Neo does not serve Frame.click yet".to_string(),
-    }
-}
-
 fn record(outcome: &RunOutcome, index: usize) -> &CallRecord {
     outcome
         .calls
@@ -321,55 +314,96 @@ return JSON.parse(reply)";
     );
 }
 
+/// The fake's page answers `describeSelector` with the selector itself, Playwright's own
+/// fallback when it cannot name a locator.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_click_replies_as_playwright_would_and_is_recorded() {
-    let code = "try {
-  await page.getByRole('button', { name: 'Go' }).click({ timeout: 2500, trial: undefined })
+async fn clicks_reply_as_playwright_would_and_are_recorded() {
+    let code = "await page.locator('#go').click()
+try {
+  await page.getByRole('button', { name: 'Go' }).click({ timeout: 300, trial: undefined })
 } catch (error) {
   return { name: error.name, message: error.message, log: error.log }
 }";
     let outcome = run(code, Duration::from_secs(5)).await;
 
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    let waiting = "  - waiting for internal:role=button[name=\"Go\"i]";
     assert_eq!(
         outcome.value,
         Some(json!({
-            "name": "Error",
-            "message": "locator.click: Neo does not serve Frame.click yet",
-            "log": [],
+            "name": "TimeoutError",
+            "message": format!("locator.click: Timeout 300ms exceeded.\nCall log:\n{waiting}\n"),
+            "log": [waiting],
         }))
     );
-    assert_eq!(outcome.calls.len(), 1, "{outcome:?}");
-    let call = record(&outcome, 0);
-    assert_eq!(call.guid, format!("frame@{PAGE}"));
+    assert_eq!(outcome.calls.len(), 2, "{outcome:?}");
+    let clicked = record(&outcome, 0);
+    assert_eq!(clicked.guid, format!("frame@{PAGE}"));
     assert_eq!(
-        (call.method.as_str(), call.title.as_deref()),
+        (clicked.method.as_str(), clicked.title.as_deref()),
         ("click", Some("Click"))
     );
     assert_eq!(
-        call.params,
+        (&clicked.result, clicked.delivery),
+        (&CallResult::Ok, Some(Delivery::Done))
+    );
+    assert_eq!(
+        clicked.log.first().map(String::as_str),
+        Some("  - waiting for #go")
+    );
+    assert_eq!(
+        clicked.log.get(1).map(String::as_str),
+        Some(format!("    - locator resolved to {BUTTON}").as_str())
+    );
+    assert_eq!(
+        clicked.log.last().map(String::as_str),
+        Some("    - navigations have finished")
+    );
+
+    let timed_out = record(&outcome, 1);
+    assert_eq!(
+        timed_out.params,
         json!({ "selector": "internal:role=button[name=\"Go\"i]", "strict": true }),
         "params carry Playwright's keys only: no timeout, no undefined"
     );
-    assert_eq!(call.result, click_not_served());
-    assert_eq!(call.delivery, Some(Delivery::NotSent));
+    assert_eq!(
+        timed_out.result,
+        CallResult::Error {
+            name: "TimeoutError".to_string(),
+            message: "Timeout 300ms exceeded.".to_string(),
+        }
+    );
+    assert_eq!(timed_out.delivery, Some(Delivery::NotSent));
+    assert_eq!(timed_out.log, [waiting]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_call_the_script_never_awaits_still_runs_and_leaves_its_record() {
-    let code = "page.click('#go')
+    let code = "page.click('#nothing')
 return 'returned'";
     let outcome = run(code, Duration::from_secs(5)).await;
 
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
     assert_eq!(outcome.value, Some(json!("returned")));
     assert_eq!(outcome.calls.len(), 1, "{outcome:?}");
-    assert_eq!(record(&outcome, 0).result, click_not_served());
+    let call = record(&outcome, 0);
+    assert_eq!(
+        call.result,
+        CallResult::Unfinished {
+            reason: RunEnd::Settled
+        },
+        "the click was still polling for `#nothing` when the script returned"
+    );
+    assert_eq!(call.delivery, Some(Delivery::NotSent));
+    assert_eq!(call.log, ["  - waiting for #nothing"]);
 }
 
+/// Each call times out at once on `#nothing`, so 1001 calls stay fast.
 #[tokio::test(flavor = "multi_thread")]
 async fn calls_past_the_record_cap_are_counted_not_kept() {
-    let code = "for (let call = 0; call < 1001; call++) await page.click('#go').catch(() => {})
+    let code = "for (let call = 0; call < 1001; call++) {
+  await page.click('#nothing', { timeout: 1 }).catch(() => {})
+}
 return 'done'";
     let outcome = run(code, Duration::from_secs(30)).await;
 
@@ -391,11 +425,11 @@ return 'done'";
 /// that moves them fails here.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_call_records_the_agents_line_and_column() {
-    let code = "const helper = () => page.click('#b')
-await page.click('#a').catch(() => {})
+    let code = "const helper = () => page.click('#b', { timeout: 1 })
+await page.click('#a', { timeout: 1 }).catch(() => {})
 await helper().catch(() => {})
 Error.stackTraceLimit = 0
-await page.locator('#c').click().catch(() => {})
+await page.locator('#c').click({ timeout: 1 }).catch(() => {})
 return Error.stackTraceLimit";
     let outcome = run(code, Duration::from_secs(5)).await;
 

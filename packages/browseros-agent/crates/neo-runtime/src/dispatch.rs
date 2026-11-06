@@ -12,6 +12,7 @@
 //!         ├─ Trace += CallEntry                 every message with an id leaves a record
 //!         ├─ early failure → reply now, no call log (Playwright's dispatcher does the same)
 //!         └─ run.tasks.spawn(serve)             runs while JS spins, outlives the realm
+//!              ├─ click::click(&page, &options, &progress)   prepares the tab first
 //!              └─ entry.finish(…); reply {id} | {id, error:{error:{message,name}}, log}
 //!  run end: Dispatcher::finish(reason)
 //!    record the reason → cancel `ended` → wait for the run's tasks (≤ RECORDS_WAIT) → records
@@ -32,7 +33,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use neo_runtime_spec::serve::{FrameCall, FrameClickParams, Metadata};
-use neo_runtime_spec::{CallDecodeError, MethodFlag, MethodMeta};
+use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
@@ -40,6 +41,7 @@ use tokio::time;
 use tokio_util::sync::DropGuard;
 
 use crate::bridge;
+use crate::click::{self, ClickOptions};
 use crate::page::PageSession;
 use crate::progress::{
     CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
@@ -57,8 +59,13 @@ const RECORDS_WAIT: Duration = Duration::from_secs(1);
 /// would time out without saying why.
 const FRAMES_UNSUPPORTED: &str = "Neo does not support frames yet: the selector enters a frame";
 
-/// What `Frame.click` replies until Neo serves it.
-const CLICK_NOT_SERVED: &str = "Neo does not serve Frame.click yet";
+// `serve` replies to a click with `{id}` and no `result`, which is right only while
+// Playwright's spec declares no `returns` for `Frame.click`. A spec that gives it a result stops
+// this compiling.
+const _: () = assert!(
+    <FrameClickParams as Command>::VOID_RESULT,
+    "Frame.click gained a result: reply with it in dispatch::serve",
+);
 
 /// Owns every browser call of one run. Cheap to clone: the bridge holds one, `Runtime::run`
 /// another. Call tasks hold their `Progress`, entry and the trace, never a `Dispatcher`, so the
@@ -143,13 +150,7 @@ struct Routed {
 
 /// What a message asks for. One variant per served (object, method).
 enum Route {
-    FrameClick(
-        #[cfg_attr(
-            not(test),
-            expect(dead_code, reason = "Frame.click's handler reads them")
-        )]
-        FrameClickParams,
-    ),
+    FrameClick(ClickOptions),
 }
 
 impl Dispatcher {
@@ -221,6 +222,7 @@ impl Dispatcher {
         );
         let (reply, receiver) = oneshot::channel();
         inner.run.tasks.spawn(serve(
+            Arc::clone(&inner.page),
             route,
             progress,
             entry,
@@ -285,7 +287,7 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::Click(params) if enters_frame(&params.selector) => {
             Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
         }
-        FrameCall::Click(params) => Ok(Route::FrameClick(params)),
+        FrameCall::Click(params) => ClickOptions::from_params(params).map(Route::FrameClick),
         FrameCall::Goto(_) => Err(not_served_yet("goto")),
         FrameCall::Title(_) => Err(not_served_yet("title")),
         FrameCall::TextContent(_) => Err(not_served_yet("textContent")),
@@ -299,21 +301,20 @@ fn not_served_yet(method: &str) -> PlaywrightError {
 
 /// One call's task: serves the route, ends the trace entry and sends the reply. A call the run
 /// ended leaves its entry open, so its record reads `Unfinished`, and sends nothing: nobody
-/// waits for it.
-#[expect(
-    clippy::unused_async,
-    reason = "Frame.click's handler is the first to await"
-)]
+/// waits for it. The task holds the page, so the session stays attached while it runs.
 async fn serve(
+    page: Arc<PageSession>,
     route: Route,
-    _progress: Progress,
+    progress: Progress,
     entry: Arc<CallEntry>,
     trace: Trace,
     id: Value,
     reply: oneshot::Sender<String>,
 ) {
-    let result: Result<Option<Value>, CallError> = match route {
-        Route::FrameClick(_) => Err(PlaywrightError::error(CLICK_NOT_SERVED).into()),
+    let result = match route {
+        Route::FrameClick(options) => click::click(&page, &options, &progress)
+            .await
+            .map(|()| None),
     };
     let (record, answer) = match result {
         Err(CallError::RunEnded(_)) => return,
@@ -400,15 +401,25 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_click_routes_with_its_params_and_title() {
+    fn a_frame_click_routes_with_its_options_and_title() {
         let routed = route_frame("click", json!({ "selector": "#go", "strict": true }));
         assert_eq!(routed.meta.and_then(|meta| meta.title), Some("Click"));
-        let Ok(Route::FrameClick(params)) = routed.route else {
+        let Ok(Route::FrameClick(options)) = routed.route else {
             panic!("a click on the run's frame routes to Frame.click");
         };
+        assert_eq!((options.selector.as_str(), options.strict), ("#go", true));
+    }
+
+    #[test]
+    fn a_click_option_neo_does_not_serve_is_refused_before_any_work() {
+        let routed = route_frame(
+            "click",
+            json!({ "selector": "#go", "modifiers": ["Shift"] }),
+        );
+        assert_eq!(routed.meta.and_then(|meta| meta.title), Some("Click"));
         assert_eq!(
-            (params.selector.as_str(), params.strict),
-            ("#go", Some(true))
+            error_of(routed),
+            PlaywrightError::error("Neo does not support click modifiers yet")
         );
     }
 

@@ -12,16 +12,21 @@
 //!         └─ __neo_runtime.get / .log / .call   bridge.rs: the only door from JS into Rust
 //!              ├─ getters::url / is_closed      getters.rs: one CDP call each, via browseros-cdp
 //!              └─ Dispatcher::call              dispatch.rs: route, trace entry, task, reply
-//!                   └─ Progress, Trace          progress.rs: deadlines, call log, delivery, records
+//!                   ├─ Progress, Trace          progress.rs: deadlines, call log, delivery, records
+//!                   └─ click::click             click.rs: Playwright's two retry loops (policy)
+//!                        └─ Tab for PageSession page.rs: domains, watcher, mouse writer (mechanism)
+//!                             └─ World::call    world.rs: the injected glue, one install per document
 //! ```
 //!
 //! `page.rs` owns the run's CDP session; the dispatcher and every task that writes on the
-//! session share it, so it detaches only after the last of them is done.
+//! session (call tasks, mouse writers, interceptor stops, object-group releases) share it, so it
+//! detaches only after the last of them is done.
 //!
 //! Building a locator does no I/O: neo-sdk runs Playwright's own selector code in the realm, with
 //! the test id attribute from `world.rs`, the one name the SDK and the page share.
 
 mod bridge;
+mod click;
 #[cfg(test)]
 mod click_goldens;
 mod deadline;

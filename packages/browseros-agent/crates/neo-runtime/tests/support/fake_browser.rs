@@ -1,12 +1,15 @@
 //! A stand-in for BrowserOS on a loopback WebSocket, so tests can run scripts without a real
-//! browser. It answers the CDP calls a run makes for one open tab, [`PAGE`] at [`PAGE_URL`]. A
-//! test can hold back the answers to the two calls a run may be stopped while awaiting, the
-//! attach and the navigation-history read, and can read back every command with its answer to
-//! see what a run did and what it left behind.
+//! browser. It answers the CDP calls a run makes for one open tab, [`PAGE`] at [`PAGE_URL`],
+//! including a click's: the lazy domains, the utility world and the glue's page calls (answered
+//! by glue name, as a page holding one ready button, [`BUTTON`], would answer them), quads, and
+//! mouse input. A test can hold back the answers to the calls a run may be stopped while
+//! awaiting (the attach, the navigation-history read, mouse input), and can read back every
+//! command with its answer to see what a run did and what it left behind.
 //!
 //! Test crates include this file with `#[path]`. Cargo builds only top-level `tests/*.rs` files
 //! as test crates, so it is never one on its own.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -26,6 +29,9 @@ use tokio_util::sync::CancellationToken;
 /// The fake's one open tab.
 pub const PAGE: &str = "fake-page";
 pub const PAGE_URL: &str = "https://example.test/start";
+/// The one button on the fake's page, which only the selector `#go` matches. It is always
+/// visible, enabled, stable and the hit target, so a click on it succeeds.
+pub const BUTTON: &str = "<button id=\"go\">Go</button>";
 
 /// When the fake answers one CDP method: each of the first `answers` calls after `delay`, and
 /// later calls never. On the history read, `answers: 1` lets the run's own read at start
@@ -60,6 +66,9 @@ pub struct Replies {
     pub attach: Reply,
     /// `Page.getNavigationHistory`, which backs `page.url()`.
     pub history: Reply,
+    /// `Input.dispatchMouseEvent`, counted per event: `answers: 2` acknowledges a click's move
+    /// and press and holds its release.
+    pub mouse: Reply,
 }
 
 /// One command the fake received, and its answer once the fake has sent it.
@@ -178,11 +187,29 @@ fn lock(exchanges: &Mutex<Vec<Exchange>>) -> MutexGuard<'_, Vec<Exchange>> {
         .unwrap_or_else(|error| panic!("a fake browser task panicked: {error}"))
 }
 
-/// How many times each held-back method has been called on one connection.
+/// The glue object's id in the fake's page.
+pub const GLUE: &str = "glue";
+
+/// One connection's state: how many times each held-back method has been called, and the page
+/// objects the fake handed out.
 #[derive(Default)]
 struct Calls {
     attach: usize,
     history: usize,
+    mouse: usize,
+    /// Whether `install.js` ran, so a later `attach.js` finds the glue.
+    installed: bool,
+    /// Returned page objects by id, with the own properties `Runtime.getProperties` lists.
+    objects: HashMap<String, Value>,
+    next_object: usize,
+}
+
+impl Calls {
+    /// A fresh page object id.
+    fn object(&mut self, kind: &str) -> String {
+        self.next_object += 1;
+        format!("{kind}-{}", self.next_object)
+    }
 }
 
 /// Serves one CDP connection. Answers go out through one writer task, so an answer held back
@@ -270,12 +297,119 @@ fn answer(command: &Value, replies: Replies, calls: &mut Calls) -> (Value, Optio
                 replies.history.when(call),
             )
         }
-        "Target.detachFromTarget" | "Browser.getVersion" => (json!({ "result": {} }), now),
+        "Target.detachFromTarget"
+        | "Browser.getVersion"
+        | "Page.enable"
+        | "Emulation.setFocusEmulationEnabled"
+        | "Runtime.releaseObjectGroup"
+        | "DOM.scrollIntoViewIfNeeded" => (json!({ "result": {} }), now),
+        "Page.createIsolatedWorld" => (json!({ "result": { "executionContextId": 7 } }), now),
+        "Runtime.callFunctionOn" => (call_function_on(&command["params"], calls), now),
+        "Runtime.getProperties" => {
+            let object = command["params"]["objectId"].as_str().unwrap_or_default();
+            let properties = calls
+                .objects
+                .get(object)
+                .cloned()
+                .unwrap_or_else(|| json!([]));
+            (json!({ "result": { "result": properties } }), now)
+        }
+        "DOM.getContentQuads" => (
+            json!({ "result": { "quads": [[8, 8, 65.5, 8, 65.5, 29, 8, 29]] } }),
+            now,
+        ),
+        "DOM.getBoxModel" => {
+            let quad = json!([8, 8, 65.5, 8, 65.5, 29, 8, 29]);
+            (
+                json!({ "result": { "model": {
+                    "content": quad, "padding": quad, "border": quad, "margin": quad,
+                    "width": 58, "height": 21,
+                } } }),
+                now,
+            )
+        }
+        "Input.dispatchMouseEvent" => {
+            let call = calls.mouse;
+            calls.mouse += 1;
+            (json!({ "result": {} }), replies.mouse.when(call))
+        }
         method => (
             json!({ "error": { "code": -32601, "message": format!("'{method}' wasn't found") } }),
             now,
         ),
     }
+}
+
+/// `Runtime.callFunctionOn`: neo-runtime-injected's bundle entries by execution context, and
+/// glue calls on the glue object. A by-value result is the glue's JSON; a result that holds a
+/// handle is a page object whose properties `Runtime.getProperties` then lists.
+fn call_function_on(params: &Value, calls: &mut Calls) -> Value {
+    if params["executionContextId"].is_i64() {
+        // `attach.js` takes the key; `install.js` takes the key, the spec hash and the
+        // initializer.
+        let installing = params["arguments"]
+            .as_array()
+            .is_some_and(|args| args.len() == 3);
+        calls.installed |= installing;
+        return if calls.installed {
+            json!({ "result": { "result": { "type": "object", "objectId": GLUE } } })
+        } else {
+            json!({ "result": { "result": { "type": "undefined" } } })
+        };
+    }
+    let name = params["arguments"][0]["value"].as_str().unwrap_or_default();
+    let glue_params = &params["arguments"][1]["value"];
+    let value = match name {
+        "describeSelector" => json!({ "locator": glue_params["selector"] }),
+        "checkElementStates" | "scrollIntoView" => json!({}),
+        "viewportSize" => json!({ "width": 800, "height": 600 }),
+        "getElementBorderWidth" => json!({ "left": 0, "top": 0 }),
+        "stopHitTargetInterceptor" => json!({ "outcome": "done" }),
+        "resolve" => {
+            let properties = if glue_params["selector"] == "#go" {
+                let node = calls.object("node");
+                json!([
+                    property(
+                        "element",
+                        &json!({ "type": "object", "subtype": "node", "objectId": node })
+                    ),
+                    property("count", &json!({ "type": "number", "value": 1 })),
+                    property("preview", &json!({ "type": "string", "value": BUTTON })),
+                ])
+            } else {
+                json!([
+                    property("element", &json!({ "type": "undefined" })),
+                    property("count", &json!({ "type": "number", "value": 0 })),
+                    property("preview", &json!({ "type": "undefined" })),
+                ])
+            };
+            return page_object(calls, properties);
+        }
+        "setupHitTargetInterceptor" => {
+            let interceptor = calls.object("interceptor");
+            let properties = json!([property(
+                "outcome",
+                &json!({ "type": "object", "className": "Object", "objectId": interceptor }),
+            )]);
+            return page_object(calls, properties);
+        }
+        _ => {
+            return json!({ "error": { "code": -32000, "message": format!("no glue function {name}") } });
+        }
+    };
+    json!({ "result": { "result": { "type": "object", "value": value } } })
+}
+
+/// A result object holding `properties`, as the glue's handle-holding results come back.
+fn page_object(calls: &mut Calls, properties: Value) -> Value {
+    let id = calls.object("result");
+    calls.objects.insert(id.clone(), properties);
+    json!({ "result": { "result": { "type": "object", "className": "Object", "objectId": id } } })
+}
+
+/// One own data property, as `Runtime.getProperties` describes it.
+fn property(name: &str, value: &Value) -> Value {
+    json!({ "name": name, "value": value, "configurable": true, "enumerable": true, "isOwn": true })
 }
 
 /// Records `reply` as the answer to exchange `index`, then sends it. Recording first means a

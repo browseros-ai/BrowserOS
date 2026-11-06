@@ -188,13 +188,6 @@ impl Progress {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Frame.click's handler is the first caller of a call's race, waits and log"
-    )
-)]
 impl Progress {
     /// Runs `work` until it finishes or the call must stop, whichever is first. The `biased`
     /// order is the precedence: the run's deadline or cancellation, then the run ending
@@ -255,6 +248,44 @@ impl Progress {
         let header = format!("waiting for {locator}");
         self.entry.update_log(|log| log.header = Some(header));
     }
+
+    /// `metadata.timeout` in ms as the client sent it, `0.0` for none: Playwright caps loop A's
+    /// backoff by it.
+    pub(crate) fn timeout_ms(&self) -> f64 {
+        self.timeout_ms
+    }
+
+    /// The call's delivery cell; `None` for a method the spec does not flag `input`.
+    pub(crate) fn delivery(&self) -> Option<&Arc<DeliveryCell>> {
+        self.entry.delivery.as_ref()
+    }
+}
+
+#[cfg(test)]
+impl Progress {
+    /// A progress for `click.rs`'s policy tests: an input call with Playwright's `timeout`, in
+    /// a run whose deadline is far away, on a tab that never closes.
+    pub(crate) fn for_test(timeout_ms: f64) -> Self {
+        let entry = Arc::new(CallEntry::new(CallStart {
+            call_id: 1,
+            guid: "frame@T".to_string(),
+            method: "click".to_string(),
+            title: Some("Click"),
+            params: Value::Null,
+            location: None,
+            input: true,
+        }));
+        let run = RunScope::new(
+            Deadline::new(Duration::from_hours(1), CancellationToken::new()),
+            TaskTracker::new(),
+        );
+        Self::new(entry, timeout_ms, run, CancellationToken::new())
+    }
+
+    /// The call log as a reply would carry it.
+    pub(crate) fn folded_log(&self) -> Vec<String> {
+        self.entry.folded_log()
+    }
 }
 
 /// The delivery state of one input call, shared by the call's task, the input writer and the
@@ -303,10 +334,6 @@ impl DeliveryCell {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Frame.click is the first call that writes input")
-)]
 impl DeliveryCell {
     /// Called just before an attempt hands its first input event to the writer.
     pub(crate) fn begin(self: &Arc<Self>) -> Result<InputTicket, InputAlreadySent> {
@@ -317,10 +344,6 @@ impl DeliveryCell {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Frame.click is the first call that writes input")
-)]
 impl InputTicket {
     /// The writer proved nothing was written (browseros-cdp refuses a send at a stale epoch
     /// before writing it): back to `NotSent`.
@@ -335,10 +358,6 @@ impl InputTicket {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Frame.click is the first call that writes input")
-)]
 impl AckedInput {
     /// Neo's hit-target interceptor stopped the events before the page's handlers saw them (a
     /// trial, or a press that landed on another element): back to `NotSent`.

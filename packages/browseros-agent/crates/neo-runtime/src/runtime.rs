@@ -126,7 +126,10 @@ impl Runtime {
             frame_guid: bridge::frame_guid(&page),
             url,
         };
-        let tab = Arc::new(PageSession::new(session));
+        // One tracker for the run: call tasks, and the writer, interceptor-stop and
+        // group-release tasks the page spawns, so `finish` waits for them all.
+        let tasks = TaskTracker::new();
+        let tab = Arc::new(PageSession::new(session, &page, tasks.clone()));
         let getters = Getters::new(
             self.cdp.clone(),
             page.clone(),
@@ -134,7 +137,7 @@ impl Runtime {
             deadline.clone(),
             tokio,
         );
-        let run = RunScope::new(deadline.clone(), TaskTracker::new());
+        let run = RunScope::new(deadline.clone(), tasks);
         let dispatcher = Dispatcher::new(tab, run, &page);
         let outcome = realm::run(script, getters, dispatcher.clone(), deadline).await;
         let (calls, dropped) = dispatcher.finish(run_end_of(&outcome)).await;
