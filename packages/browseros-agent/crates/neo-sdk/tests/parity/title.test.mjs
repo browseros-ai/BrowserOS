@@ -62,14 +62,14 @@ test('title returns the same string with a tiny action timeout', {
     const visible = await cdp.send(
       'Runtime.evaluate',
       {
-        expression: 'document.querySelector("button").textContent',
+        expression: 'document.querySelector("body > button").textContent',
         returnByValue: true,
       },
       sessionId,
     )
     assert.equal(
       visible.result.value,
-      await page.locator('button').textContent({ timeout: 5000 }),
+      await page.locator('body > button').textContent({ timeout: 5000 }),
     )
   } finally {
     await runCleanups(cleanups)

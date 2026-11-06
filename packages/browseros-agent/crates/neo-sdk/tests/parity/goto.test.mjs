@@ -78,14 +78,14 @@ test('goto preserves navigation and reports the Response/null difference', {
     const visible = await cdp.send(
       'Runtime.evaluate',
       {
-        expression: 'document.querySelector("button").textContent',
+        expression: 'document.querySelector("body > button").textContent',
         returnByValue: true,
       },
       sessionId,
     )
     assert.equal(
       visible.result.value,
-      await page.locator('button').textContent(),
+      await page.locator('body > button').textContent(),
     )
   } finally {
     await runCleanups(cleanups)
