@@ -315,6 +315,10 @@
       "name": "@browseros/hosted-api-rust",
       "version": "0.0.0",
     },
+    "crates/neo-runtime": {
+      "name": "@browseros/neo-runtime-rust",
+      "version": "0.0.0",
+    },
     "crates/neo-runtime-spec": {
       "name": "@browseros/neo-runtime-spec",
       "version": "0.0.0",
@@ -667,6 +671,8 @@
     "@browseros/harness-integrations-rust": ["@browseros/harness-integrations-rust@workspace:crates/harness-integrations"],
 
     "@browseros/hosted-api-rust": ["@browseros/hosted-api-rust@workspace:crates/hosted-api"],
+
+    "@browseros/neo-runtime-rust": ["@browseros/neo-runtime-rust@workspace:crates/neo-runtime"],
 
     "@browseros/neo-runtime-spec": ["@browseros/neo-runtime-spec@workspace:crates/neo-runtime-spec"],
 
