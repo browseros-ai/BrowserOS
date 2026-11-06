@@ -1,7 +1,72 @@
 //! Neo's cross-language runtime contracts, translated from Playwright's protocol YAML dialect.
 //!
-//! The call traits in this crate are sealed; the types that implement them are generated from
-//! `spec/` by the translator in `codegen/`.
+//! Two calls cross a language boundary in Neo's browser runtime. This crate types both from one
+//! source, Playwright's own protocol spec plus two Neo files, so a mismatch on either side fails
+//! a compiler:
+//!
+//! ```text
+//!  agent script (QuickJS)            neo-runtime (Rust)                    page (V8)
+//!  Playwright client ──serve──▶ FrameCall::decode, handler ──injected──▶ glue table
+//!  {method, params} JSON        typed params and result      CDP Runtime.callFunctionOn
+//! ```
+//!
+//! - [`serve`] holds the Playwright commands Neo serves (`spec/serve.yml`), with params and
+//!   result types taken unchanged from Playwright's spec (`spec/playwright/`). The call bridge
+//!   decodes a call with [`serve::FrameCall::decode`], matches on it, and answers with
+//!   [`Command::reply`], which accepts only that command's result type.
+//! - [`injected`] holds the page calls `neo-runtime` makes into `neo-runtime-injected`'s glue
+//!   table (`spec/injected.yml`). The page does no serialization work. A call returns plain
+//!   JSON ([`ValueCall`]) or one element that stays in the page ([`ElementCall`]), and the
+//!   decode here is the only validation.
+//!
+//! The same types exist in TypeScript under `ts/`, in the bun package
+//! `@browseros/neo-runtime-spec` (exports `./serve`, `./injected` and `./spec-hash`).
+//! `neo-runtime-injected`'s glue table is written as
+//! `export const glue = { ... } satisfies InjectedApi<InjectedScript>`, so it fails `tsc` when
+//! it drifts from `spec/injected.yml`.
+//!
+//! # Regenerate after a spec change
+//!
+//! The generated files (`src/serve.rs`, `src/injected.rs`, `src/spec_hash.rs` and `ts/*.ts`)
+//! are committed. Never edit them. After you change `spec/`, run this from
+//! `packages/browseros-agent`:
+//!
+//! ```text
+//! NEO_RUNTIME_SPEC_CODEGEN=1 cargo run -p neo-runtime-spec --example codegen
+//! ```
+//!
+//! A spec change without that run does not compile. `build.rs` hashes `spec/`, and this crate
+//! const-asserts that the hash equals [`SPEC_SHA256`], the hash the generated code came from.
+//! The translator is an example of this crate, so Cargo builds this library before it runs.
+//! `NEO_RUNTIME_SPEC_CODEGEN=1` builds the library empty, so the stale code cannot block the
+//! run that replaces it. `cargo test` fails while a committed file differs from what the spec
+//! generates, and adding `-- --check` to the command above reports the same without writing.
+//!
+//! # Serve another Playwright command
+//!
+//! 1. Add the command's name under its interface in `spec/serve.yml`, for example
+//!    `Frame: [goto, title, textContent, ariaSnapshot, click]`. The translator rejects a name
+//!    that Playwright's spec lacks and suggests the closest one.
+//! 2. Regenerate. `FrameCall` gains a variant, so `neo-runtime`'s exhaustive `match` fails to
+//!    compile until the command has a handler.
+//!
+//! # Add a page call
+//!
+//! 1. Add a command under `Injected.commands` in `spec/injected.yml`, with `internal: true`,
+//!    `parameters` and `returns`. The file's header lists the rules the translator enforces.
+//! 2. Regenerate. `ts/injected.ts` gains the call, so `neo-runtime-injected` fails `tsc` until
+//!    its glue table implements it.
+//!
+//! # Notes for consumers
+//!
+//! - `serde_json`'s default recursion limit fails on aria trees deeper than about 63 levels.
+//!   Decode page results with a raised limit, or cap `depth`.
+//! - `int` fields are `i64`. Decoding relies on CDP writing an integral double as a JSON
+//!   integer, `-0` included, because `serde_json` rejects a literal `-0` for an integer.
+//! - `Frame.goto` answers `response: None` until `spec/serve.yml` implements `Response`, so the
+//!   agent's client sees a `null` response.
+//! - An `Option` field decodes a JSON `null` as absent, which Playwright's validator would
+//!   reject. Encoding never writes `null`.
 
 // Cargo links this library into the translator (the `codegen` example), which has to run
 // exactly when the freshness check below fails. Regenerating sets `NEO_RUNTIME_SPEC_CODEGEN`,
