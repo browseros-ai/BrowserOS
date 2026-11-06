@@ -857,22 +857,22 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tests_that_press_stub_replies_with_a_served_error_envelope() {
+    async fn tests_that_press_is_served_with_a_void_reply() {
         let tab = FakeTab::ready();
         let progress = Progress::for_test(1000.0);
         let route = route_frame("press", forms_params("press", "input"))
             .route
             .expect("routed");
         let result = serve_route(&tab, route, &progress).await;
-        let expected = PlaywrightError::error("Neo does not serve Frame.press yet");
-        assert_eq!(result, Err(expected.clone().into()));
+        assert_eq!(result, Ok(None));
         assert_eq!(
             progress.delivery().expect("test cell").delivery(),
-            Delivery::NotSent
+            Delivery::Done
         );
-        assert_eq!(encode_reply(&json!(7), Err(&expected), Some(&progress.folded_log())),
-            json!({ "id": 7, "error": { "error": { "name": "Error", "message": expected.message } }, "log": [] }).to_string());
-        assert!(tab.calls().is_empty(), "stub handlers perform no page work");
+        assert_eq!(
+            encode_reply(&json!(7), Ok(None), Some(&progress.folded_log())),
+            json!({ "id": 7 }).to_string()
+        );
     }
 
     #[test]

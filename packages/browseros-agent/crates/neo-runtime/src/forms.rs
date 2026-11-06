@@ -3,12 +3,6 @@
 //! stops waiting. Fill/select also own their delivery ticket: an ambiguous page failure can
 //! never make a later attempt repeat input. No keyboard policy or writer lives here.
 
-// The P1 handlers are stubs. P3/P4 consume this seam without changing PageSession again.
-#![expect(
-    dead_code,
-    reason = "the forms page seam is consumed by the following implementation pieces"
-)]
-
 use std::future::Future;
 use std::sync::Arc;
 
