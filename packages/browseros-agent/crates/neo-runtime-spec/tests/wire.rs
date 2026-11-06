@@ -1,5 +1,6 @@
 //! What crosses each seam on the wire, through the generated types.
 
+use std::env;
 use std::fs;
 use std::path::Path;
 
@@ -207,8 +208,10 @@ fn spec_hash_is_stamped_in_both_languages() {
                 .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')),
         "{SPEC_SHA256}"
     );
-    let ts =
-        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("ts/spec-hash.ts")).unwrap();
+    // Read at run time, never with `env!`: worktrees share one Cargo build dir, so this binary may
+    // have been compiled in another worktree, and a compile-time path would read that one.
+    let crate_dir = env::var_os("CARGO_MANIFEST_DIR").expect("cargo test sets CARGO_MANIFEST_DIR");
+    let ts = fs::read_to_string(Path::new(&crate_dir).join("ts/spec-hash.ts")).unwrap();
     assert!(
         ts.contains(&format!("export const SPEC_SHA256 = '{SPEC_SHA256}'")),
         "{ts}"
