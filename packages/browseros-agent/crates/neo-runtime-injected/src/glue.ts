@@ -81,7 +81,7 @@ function wellFormed<T>(value: T): T {
 }
 
 export const glue = {
-  title: () => ({ value: document.title }),
+  title: () => ({ value: wellFormed(document.title) }),
 
   textContent: (injected, { selector, strict }) => {
     const [element] = query(injected, selector, strict, {

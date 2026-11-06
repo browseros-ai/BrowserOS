@@ -8942,7 +8942,7 @@ function wellFormed(value) {
   return JSON.parse(JSON.stringify(value, (_key, item) => typeof item === "string" ? item.toWellFormed() : item));
 }
 var glue = {
-  title: () => ({ value: document.title }),
+  title: () => ({ value: wellFormed(document.title) }),
   textContent: (injected, { selector, strict }) => {
     const [element] = query(injected, selector, strict, {
       markTargets: "first"

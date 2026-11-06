@@ -145,6 +145,22 @@ async fn tests_that_title_after_a_navigating_click_reads_the_new_world() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tests_that_title_replaces_a_lone_surrogate_without_hanging() {
+    let Some(tab) = open().await else { return };
+    tab.evaluate(r"document.title = 'a\uD800b'; true").await;
+    let outcome = tab
+        .start_run_within(
+            "return await page.title()".to_string(),
+            Duration::from_secs(3),
+        )
+        .await
+        .await
+        .expect("the bounded title run finishes");
+    tab.close().await;
+    assert_eq!(value(outcome), json!("a\u{fffd}b"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tests_that_clicks_after_goto_keep_their_input_turns() {
     let Some(tab) = open().await else { return };
     let result = value(run(&tab, &format!("await page.goto({:?}); await page.locator('#go').click(); return await page.title()",format!("{}/two",tab.origin))).await);
