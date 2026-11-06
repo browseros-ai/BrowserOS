@@ -413,6 +413,24 @@ mod tests {
         );
     }
 
+    /// A press whose deadline passes while it waits for the tab's input turn gives up the wait
+    /// and sends nothing.
+    #[tokio::test(start_paused = true)]
+    async fn a_press_that_times_out_waiting_for_its_turn_sends_nothing() {
+        let tab = FakeTab {
+            forms: FormSteps {
+                input_wait: Duration::from_secs(5),
+                ..FormSteps::ready()
+            },
+            ..FakeTab::ready()
+        };
+        let (result, delivery) = run(&tab, &options("a", &serde_json::json!({})), 500.0).await;
+        assert_eq!(error_name(&result), Some(ErrorName::TimeoutError));
+        assert_eq!(delivery, Delivery::NotSent);
+        assert_eq!(tab.count("focus true"), 0);
+        assert!(keys(&tab).is_empty());
+    }
+
     #[test]
     fn a_truthy_delay_sleeps_and_a_negative_one_sleeps_zero() {
         let delay = |value: serde_json::Value| {
