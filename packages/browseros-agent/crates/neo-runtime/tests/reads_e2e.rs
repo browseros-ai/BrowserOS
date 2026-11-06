@@ -1,9 +1,12 @@
-//! `textContent` and `ariaSnapshot` end to end on a real BrowserOS neo, through neo-sdk's
-//! `locator.textContent`, `page.textContent` and `page.ariaSnapshot`, and `aria-ref=eN` refs from
-//! an `ai` snapshot driving the existing `locator.click` and `locator.textContent`: in the run
-//! that took the snapshot, in a later run on the same document, and not after the document
-//! navigated away. `crates/neo-sdk/tests/parity/textContent.test.mjs` and
-//! `ariaSnapshot.test.mjs` run the same reads through live Playwright beside Neo.
+//! `textContent`, `innerText`, `getAttribute` and `ariaSnapshot` end to end on a real BrowserOS
+//! neo, through neo-sdk's `locator.textContent`, `page.textContent`, the locator, page and frame
+//! forms of `innerText` and `getAttribute` (on `crates/neo-sdk/tests/pages/element-text.html`)
+//! and `page.ariaSnapshot`, and `aria-ref=eN` refs from an `ai` snapshot driving the existing
+//! `locator.click` and `locator.textContent`: in the run that took the snapshot, in a later run
+//! on the same document, and not after the document navigated away.
+//! `crates/neo-sdk/tests/parity/textContent.test.mjs`, `innerText.test.mjs`,
+//! `getAttribute.test.mjs` and `ariaSnapshot.test.mjs` run the same reads through live
+//! Playwright beside Neo.
 //!
 //! Runs only when `NEO_E2E_BROWSER` names the browser binary (`support/browser.rs`); otherwise
 //! each test passes as a skip.
@@ -411,6 +414,141 @@ async fn tests_that_a_lone_surrogate_in_an_error_or_a_click_preview_does_not_han
         tab.evaluate("window.__clicks").await,
         1,
         "the click reached #b"
+    );
+    tab.close().await;
+}
+
+/// `crates/neo-sdk/tests/pages/element-text.html`, which `innerText.test.mjs` and
+/// `getAttribute.test.mjs` read through live Playwright too.
+const ELEMENT_TEXT: &str = include_str!("../../neo-sdk/tests/pages/element-text.html");
+
+/// A tab on `ELEMENT_TEXT`.
+async fn open_element_text() -> Option<Tab> {
+    let binary = browser::e2e_browser()?;
+    let fixture = Fixture {
+        pages: vec![("/element-text".to_string(), ELEMENT_TEXT.to_string())],
+        ..Fixture::default()
+    };
+    Some(Tab::open(binary, fixture, "/element-text").await)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_inner_text_reads_the_rendered_text_where_text_content_reads_the_markup() {
+    let Some(tab) = open_element_text().await else {
+        return;
+    };
+    let outcome = run(
+        &tab,
+        &format!(
+            "const caught = {CAUGHT};
+             return {{
+               inner: await page.locator('#mixed').innerText(),
+               text: await page.locator('#mixed').textContent(),
+               hidden: await page.locator('#hidden').innerText(),
+               firstOfTwo: await page.innerText('#list > li'),
+               viaFrame: await page.mainFrame().innerText('#list > li >> nth=1'),
+               svg: await page.locator('#label').innerText({{ timeout: 5000 }}).catch(caught),
+             }};"
+        ),
+    )
+    .await;
+    let result = value(&outcome);
+    assert_eq!(
+        result["inner"], "Hello LOUD\nnext line",
+        "uppercased, the <br> a line break, the display:none span left out"
+    );
+    assert_eq!(result["text"], "Hello loudnext line secret");
+    assert_eq!(
+        result["hidden"], "Hidden text",
+        "an element that is not rendered reads as its text content"
+    );
+    assert_eq!(
+        result["firstOfTwo"], "First",
+        "page.innerText is not strict"
+    );
+    assert_eq!(result["viaFrame"], "Second");
+    assert_eq!(
+        result["svg"],
+        kind("Error", false),
+        "an SVG element is not an HTMLElement: refused at once, not timed out"
+    );
+
+    let inner = &outcome.calls[0];
+    assert_eq!(
+        (inner.method.as_str(), &inner.result),
+        ("innerText", &CallResult::Ok)
+    );
+    assert_eq!(inner.delivery, None, "a read writes no input");
+    tab.close().await;
+}
+
+/// A missing attribute answers `null` at once: the call is not caught, so a read that waited
+/// for the attribute would time out and fail the run.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_get_attribute_reads_present_empty_and_missing_attributes() {
+    let Some(tab) = open_element_text().await else {
+        return;
+    };
+    let outcome = run(
+        &tab,
+        "const missing = await page.locator('#mixed').getAttribute('data-missing', { timeout: 1000 });
+         return {
+           missing,
+           missingType: typeof missing,
+           present: await page.locator('#mixed').getAttribute('title'),
+           empty: await page.getAttribute('#mixed', 'data-empty'),
+           hidden: await page.mainFrame().getAttribute('#hidden', 'data-state'),
+         };",
+    )
+    .await;
+    let result = value(&outcome);
+    assert_eq!(
+        (result.get("missing"), &result["missingType"]),
+        (Some(&Value::Null), &json!("object")),
+        "a missing attribute reads as null, not undefined"
+    );
+    assert_eq!(result["present"], "Mixed text");
+    assert_eq!(
+        result["empty"], "",
+        "an empty attribute reads as '', not null"
+    );
+    assert_eq!(
+        result["hidden"], "hidden",
+        "a hidden element's attribute is read"
+    );
+
+    let missing = &outcome.calls[0];
+    assert_eq!(
+        (missing.method.as_str(), &missing.result),
+        ("getAttribute", &CallResult::Ok)
+    );
+    assert_eq!(missing.delivery, None, "a read writes no input");
+    tab.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_get_attribute_and_inner_text_wait_for_elements_appended_later() {
+    let Some(tab) = open_element_text().await else {
+        return;
+    };
+    tab.evaluate(
+        "for (const [id, ms] of [['late-attribute', 600], ['late-text', 1200]]) \
+         setTimeout(() => { const p = document.createElement('p'); p.id = id; \
+         p.dataset.state = 'arrived'; p.textContent = 'Arrived'; \
+         document.body.appendChild(p); }, ms)",
+    )
+    .await;
+    let outcome = run(
+        &tab,
+        "const state = await page.getAttribute('#late-attribute', 'data-state', { timeout: 10000 });
+         const text = await page.locator('#late-text').innerText({ timeout: 10000 });
+         return { state, text };",
+    )
+    .await;
+    assert_eq!(
+        value(&outcome),
+        json!({ "state": "arrived", "text": "Arrived" }),
+        "each read waited for its element"
     );
     tab.close().await;
 }
