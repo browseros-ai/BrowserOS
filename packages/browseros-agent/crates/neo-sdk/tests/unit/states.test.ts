@@ -69,6 +69,25 @@ test('tests that checked reads honour receiver options and the default timeout',
   ])
 })
 
+test('tests that page and frame state reads accept null options', async () => {
+  const { page, messages } = fixture(false)
+  page.setDefaultTimeout(700)
+  expect(await page.isChecked('#control', null as never)).toBe(false)
+  expect(await page.mainFrame().isChecked('#control', null as never)).toBe(
+    false,
+  )
+  expect(await page.isVisible('#control', null as never)).toBe(false)
+  expect(await page.mainFrame().isVisible('#control', null as never)).toBe(
+    false,
+  )
+  expect(messages).toEqual([
+    ['page.isChecked', 'frame@T', 'isChecked', { selector: '#control' }, 700],
+    ['frame.isChecked', 'frame@T', 'isChecked', { selector: '#control' }, 700],
+    ['page.isVisible', 'frame@T', 'isVisible', { selector: '#control' }, 0],
+    ['frame.isVisible', 'frame@T', 'isVisible', { selector: '#control' }, 0],
+  ])
+})
+
 test('tests that state reads reject a missing protocol result', async () => {
   const { page, connection } = fixture()
   connection.send = async () => undefined
