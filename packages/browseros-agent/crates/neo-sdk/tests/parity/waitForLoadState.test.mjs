@@ -1,7 +1,8 @@
 // page.waitForLoadState through the pinned Playwright and through Neo, each case on fresh tabs:
 // every state of a loaded page; a page whose image answers late, which reaches commit and
-// domcontentloaded long before load (a short timeout on load times out meanwhile); and states
-// refused at once. Compared: what each call settled to (`undefined` or its error's kind,
+// domcontentloaded long before load (a short timeout on load times out meanwhile); a page whose
+// parser-blocking script answers late, which holds domcontentloaded back (a short timeout on it
+// times out meanwhile); and states refused at once. Compared: what each call settled to (`undefined` or its error's kind,
 // `waits.mjs` `settle`) and the title the page's own DOMContentLoaded and load handlers set.
 // Never wording, call logs or timing.
 //
@@ -18,7 +19,8 @@ import { withBoth } from './waits.mjs'
 
 const RESOLVED = 'undefined'
 const ERROR = { error: 'error' }
-/** `/slow` (the slow page's image) answers this late, so its load trails its commit. */
+/** `/slow` answers this late: slow-load.html's image, so its load trails its commit, and
+ * dcl-blocked.html's script, so its domcontentloaded does. */
 const SLOW_MS = 3000
 
 const cases = [
@@ -66,6 +68,28 @@ const cases = [
     },
   },
   {
+    // The script starts once the page has committed, while its parser waits for `/slow`. The
+    // title before is the document's own; DOMContentLoaded's handler renames it.
+    name: 'a page held before domcontentloaded reaches it later',
+    path: '/dcl-blocked.html',
+    loaded: false,
+    source: `const early = await settle(page.waitForLoadState('domcontentloaded', { timeout: 300 }))
+    const titleBefore = await page.title()
+    const domcontentloaded = await settle(page.waitForLoadState('domcontentloaded'))
+    return {
+      early,
+      titleBefore,
+      domcontentloaded,
+      titleAtDomContentLoaded: await page.title(),
+    }`,
+    expected: {
+      early: { error: 'timeout' },
+      titleBefore: 'committed',
+      domcontentloaded: RESOLVED,
+      titleAtDomContentLoaded: 'domcontentloaded',
+    },
+  },
+  {
     name: 'refused at once',
     path: '/loaded.html',
     source: `return {
@@ -89,11 +113,13 @@ test('page.waitForLoadState settles the same through Neo and Playwright', {
   skip,
   timeout: 300_000,
 }, async (t) => {
+  const page = (file) =>
+    readFileSync(new URL(`../pages/${file}`, import.meta.url), 'utf8')
   const pages = {
-    '/slow-load.html': readFileSync(
-      new URL('../pages/slow-load.html', import.meta.url),
-      'utf8',
-    ),
+    '/slow-load.html': page('slow-load.html'),
+    '/dcl-blocked.html': page('dcl-blocked.html'),
+    // A script for dcl-blocked.html; slow-load.html's image only needs the response to end.
+    '/slow': "document.documentElement.dataset.slow = 'answered'",
   }
   await withBoth(t, { pages, slowMs: SLOW_MS }, async (run) => {
     for (const c of cases) {
