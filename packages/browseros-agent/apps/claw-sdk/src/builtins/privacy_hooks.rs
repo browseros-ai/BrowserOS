@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use browseros_core::PageId;
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
@@ -40,15 +41,21 @@ pub(crate) struct PrivacyHooks {
 
 impl PrivacyHooks {
     /// The hooks over the process's one `Privacy`, which holds the secret set the door masks with,
-    /// and over Neo's secret files, which no upload hands a page.
+    /// and over Neo's secret files, which no upload hands a page. A typed value joins the set
+    /// once its field got no input for `typed_quiet`.
     #[must_use]
     pub(crate) fn new(
         privacy: Arc<Privacy>,
         tabs: Arc<TabRegistry>,
         recovery: Arc<FlagRecovery>,
         secret_files: SecretFiles,
+        typed_quiet: Duration,
     ) -> Self {
-        let typed = TypedValues::start(Arc::clone(privacy.secrets()), tabs.subscribe_closed());
+        let typed = TypedValues::start(
+            Arc::clone(privacy.secrets()),
+            typed_quiet,
+            tabs.subscribe_closed(),
+        );
         Self {
             privacy,
             tabs,

@@ -2,6 +2,7 @@ use std::fmt::Display;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Duration;
 
 use browseros_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
 use browseros_takeover::Xvnc;
@@ -42,6 +43,10 @@ pub(crate) struct EnvConfig {
     /// - `home`: `NEO_SCREEN`, the image's own `WxH` for Xvnc's geometry, read rather than
     ///   duplicated, else `Defaults::SCREEN`.
     pub(crate) xvnc: Xvnc,
+    /// `CLAW_TYPED_QUIET_MS`, else `Defaults::TYPED_QUIET`: how long a sensitive field waits
+    /// for its next key before the secret set learns its value. Only ever that long or longer,
+    /// up to `Defaults::TYPED_QUIET_MAX`.
+    pub(crate) typed_quiet: Duration,
 }
 
 /// Whether Chromium runs in hosted mode, where popups open as tabs Neo can drive.
@@ -113,6 +118,24 @@ impl EnvConfig {
             home: parse(&read, "NEO_SCREEN", "a screen size like 1600x1000")?
                 .unwrap_or(Defaults::SCREEN),
         };
+        let typed_quiet = match parse(&read, "CLAW_TYPED_QUIET_MS", "a number of milliseconds")? {
+            None => Defaults::TYPED_QUIET,
+            Some(millis) => {
+                let quiet = Duration::from_millis(millis);
+                if !(Defaults::TYPED_QUIET..=Defaults::TYPED_QUIET_MAX).contains(&quiet) {
+                    return Err(ConfigError::Env {
+                        name: "CLAW_TYPED_QUIET_MS",
+                        why: format!(
+                            "{quiet:?} is outside {:?} to {:?}: a shorter quiet period makes a \
+                             slow typist's prefixes secrets",
+                            Defaults::TYPED_QUIET,
+                            Defaults::TYPED_QUIET_MAX
+                        ),
+                    });
+                }
+                quiet
+            }
+        };
         Ok(Self {
             log_filter: read("CLAW_LOG").unwrap_or_else(|| Defaults::LOG_FILTER.to_owned()),
             hosted_mode,
@@ -120,6 +143,7 @@ impl EnvConfig {
             ignored_config_file: read("BROWSERCLAW_CONFIG_FILE").map(PathBuf::from),
             host_api,
             xvnc,
+            typed_quiet,
             state_dir,
             home,
             captcha_key_files: [CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV]
@@ -214,6 +238,7 @@ mod tests {
                         height: 1000
                     },
                 },
+                typed_quiet: Defaults::TYPED_QUIET,
             },
             "an image that sets nothing gets the documented defaults"
         );
@@ -428,5 +453,29 @@ mod tests {
                  given: {error:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_typed_quiet_period_only_lengthens() -> Result<(), Box<dyn Error>> {
+        assert_eq!(
+            env(&[("HOME", "/h"), ("CLAW_TYPED_QUIET_MS", "600000")])?.typed_quiet,
+            Defaults::TYPED_QUIET_MAX,
+            "the rig's long quiet period"
+        );
+        for value in ["999", "600001", "1s"] {
+            let error = env(&[("HOME", "/h"), ("CLAW_TYPED_QUIET_MS", value)]);
+            assert!(
+                matches!(
+                    &error,
+                    Err(ConfigError::Env {
+                        name: "CLAW_TYPED_QUIET_MS",
+                        ..
+                    })
+                ),
+                "{value:?} fails the start rather than registering prefixes or waiting \
+                 unbounded: {error:?}"
+            );
+        }
+        Ok(())
     }
 }

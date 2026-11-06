@@ -186,6 +186,7 @@ impl App {
             Arc::clone(&tabs),
             recovery,
             config.secret_files,
+            config.env.typed_quiet,
         ));
         let playwright = PlaywrightFacade::start(Arc::clone(&browser), Arc::clone(&hooks) as _);
 

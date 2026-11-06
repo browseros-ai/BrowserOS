@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::time::Duration;
 use std::{future, mem};
 
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
@@ -20,7 +21,8 @@ use crate::dispatch::{Held, HeldValues, HeldWatch};
 
 /// Values typed into sensitive fields, or found there by a read, that the secret set has not
 /// learned yet: the latest value of each field. The set learns a field's value once no entry
-/// came for [`Defaults::TYPED_QUIET`], or when its tab closes, and never learns its prefixes.
+/// came for the quiet period (`EnvConfig::typed_quiet`, [`Defaults::TYPED_QUIET`] unless set
+/// longer), or when its tab closes, and never learns its prefixes.
 /// This is sdk-traces decision 32, the rule the takeover's control journal follows for the
 /// owner's typing, applied to what browseros-playwright's journal and reads report.
 ///
@@ -29,7 +31,7 @@ use crate::dispatch::{Held, HeldValues, HeldWatch};
 ///  PrivacyHooks::values_swept ── sweep: a value no held or learned one covers is held beside
 ///                                       the rest, and one that such a value extends is kept as
 ///                                       superseded
-///    quiet for TYPED_QUIET ─────────────── every held value ─┬─▶ promote ─▶ SecretSet::register
+///    quiet for the quiet period ────────── every held value ─┬─▶ promote ─▶ SecretSet::register
 ///    its tab closes (TabRegistry) ──────── that tab's ───────┤   learning until it returns
 ///    more than MAX_TYPED held ──────────── the one in front ─┘
 ///    learned ─────── kept while a run that went on as it left goes, so a sweep that reports it
@@ -62,6 +64,8 @@ use crate::dispatch::{Held, HeldValues, HeldWatch};
 /// is withheld from then on, since nothing can mask it out any more.
 pub(crate) struct TypedValues {
     secrets: Arc<SecretSet>,
+    /// How long what is held waits for another entry before the set learns it.
+    quiet: Duration,
     pending: Mutex<Pending>,
     /// Wakes the timer when an entry moves its deadline, and when this is dropped.
     wake: Arc<Notify>,
@@ -196,11 +200,16 @@ struct RunWatch {
 }
 
 impl TypedValues {
-    /// Starts the timer, which registers what is held once it is quiet, and a tab's values as
-    /// soon as `closed` reports the tab gone.
-    pub(crate) fn start(secrets: Arc<SecretSet>, closed: broadcast::Receiver<TabId>) -> Arc<Self> {
+    /// Starts the timer, which registers what is held once no entry came for `quiet`, and a
+    /// tab's values as soon as `closed` reports the tab gone.
+    pub(crate) fn start(
+        secrets: Arc<SecretSet>,
+        quiet: Duration,
+        closed: broadcast::Receiver<TabId>,
+    ) -> Arc<Self> {
         let values = Arc::new(Self {
             secrets,
+            quiet,
             pending: Mutex::default(),
             wake: Arc::new(Notify::new()),
             #[cfg(test)]
@@ -221,7 +230,7 @@ impl TypedValues {
             tab,
             value: entry.value,
         };
-        self.promote(|pending, now| pending.note(typed, now).into_iter().collect());
+        self.promote(|pending, now| pending.note(typed, now, self.quiet).into_iter().collect());
         self.wake.notify_one();
     }
 
@@ -235,7 +244,7 @@ impl TypedValues {
                 value: Zeroizing::new(value.to_owned()),
             })
             .collect();
-        self.promote(|pending, now| pending.sweep(swept, now));
+        self.promote(|pending, now| pending.sweep(swept, now, self.quiet));
         self.wake.notify_one();
     }
 
@@ -449,7 +458,7 @@ impl Pending {
     /// the same page, is a backspace there, which supersedes that value. Anything else is held
     /// beside the rest. A shorter value is not taken for the same field otherwise: a security code
     /// that starts like its card number would erase a value nothing registered yet.
-    fn note(&mut self, typed: Typed, now: Instant) -> Option<Typed> {
+    fn note(&mut self, typed: Typed, now: Instant, quiet: Duration) -> Option<Typed> {
         let value = typed.value.as_str();
         let backspace = self.values.last().is_some_and(|last| {
             last.page == typed.page
@@ -473,7 +482,7 @@ impl Pending {
             }
         }
         self.values.push(typed);
-        self.quiet_until = Some(now + Defaults::TYPED_QUIET);
+        self.quiet_until = Some(now + quiet);
         (self.values.len() > Defaults::MAX_TYPED).then(|| self.values.remove(0))
     }
 
@@ -499,7 +508,7 @@ impl Pending {
     /// typed past included. A value that extends a learned one is new: the field was typed
     /// further. Once a learned value was forgotten past the cap, a value nothing covers may be
     /// its prefix, so while a run that may report one goes, it is kept as superseded too.
-    fn sweep(&mut self, swept: Vec<Typed>, now: Instant) -> Vec<Typed> {
+    fn sweep(&mut self, swept: Vec<Typed>, now: Instant, quiet: Duration) -> Vec<Typed> {
         let mut fresh = Vec::new();
         for typed in swept {
             match self.standing(&typed) {
@@ -516,7 +525,7 @@ impl Pending {
             .into_iter()
             .chain(mem::take(&mut self.values))
             .collect();
-        self.quiet_until = Some(now + Defaults::TYPED_QUIET);
+        self.quiet_until = Some(now + quiet);
         let excess = self.values.len().saturating_sub(Defaults::MAX_TYPED);
         self.values.drain(..excess).collect()
     }
@@ -787,7 +796,7 @@ mod tests {
     fn typed_values() -> (Arc<SecretSet>, Arc<TypedValues>, broadcast::Sender<TabId>) {
         let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
         let (closes, closed) = broadcast::channel(16);
-        let values = TypedValues::start(Arc::clone(&secrets), closed);
+        let values = TypedValues::start(Arc::clone(&secrets), Defaults::TYPED_QUIET, closed);
         (secrets, values, closes)
     }
 
@@ -1308,7 +1317,7 @@ mod tests {
             ..SecretSetConfig::default()
         }));
         let (_closes, closed) = broadcast::channel(16);
-        let values = TypedValues::start(Arc::clone(&secrets), closed);
+        let values = TypedValues::start(Arc::clone(&secrets), Defaults::TYPED_QUIET, closed);
         let going = run(&values);
         values.note(PageId(1), Some(TabId(1)), keystroke("hunter2"));
         let fields: Vec<String> = (0..SecretSetConfig::default().max_entries + Defaults::MAX_TYPED)

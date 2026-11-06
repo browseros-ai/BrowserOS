@@ -120,6 +120,7 @@ impl Harness {
             Arc::clone(&tabs),
             FlagRecovery::none(),
             secret_files,
+            Defaults::TYPED_QUIET,
         ));
         let playwright = PlaywrightFacade::start(Arc::clone(&link), Arc::clone(&hooks) as _);
         let mut registry = RegistryBuilder::default();
@@ -1023,6 +1024,7 @@ async fn no_tab_is_captured_until_neo_made_up_for_lost_private_flags() -> Result
         Arc::clone(&harness.tabs),
         Arc::clone(&recovery),
         SecretFiles::Named(Vec::new()),
+        Defaults::TYPED_QUIET,
     );
     assert_eq!(
         hooks

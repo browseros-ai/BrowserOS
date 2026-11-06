@@ -12,8 +12,12 @@
 //!  a local file (Neo's host token, /etc/hosts): the door refuses each goto to one, and the
 //!    page's own navigations to one (location, meta refresh, a link, an iframe, a popup, an
 //!    allowed load's redirect) read nothing local
-//!  a read between two keystrokes in a password field: the read masks the field, and only the
-//!    field's final value becomes a secret
+//!  a read between two keystrokes in a password field: the read masks the field, the host reads
+//!    none of it back from the trace outside its page facts, and once the tab closes a later run
+//!    masks the field's final value and none of its prefixes
+//!  a page that shows its own password field in its title as it loads, before any op sweeps it:
+//!    neither the realm nor the trace gets the field's value from the goto's page facts (ignored,
+//!    a known gap)
 //! ```
 //!
 //! Like `e2e_browseros.rs`, it runs only when `CLAW_SDK_E2E_BROWSER` names a BrowserOS binary.
@@ -29,12 +33,14 @@ use std::path::Path;
 use std::pin::Pin;
 use std::time::Duration;
 
-use browseros_rig::{CaptchaKey, Rig, TestResult, browser_or_skip, outcome, run};
+use browseros_rig::{
+    CaptchaKey, HOST_TOKEN, PATIENCE, Rig, TestResult, browser_or_skip, outcome, run,
+};
 use browseros_trace::RunId;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::time;
+use tokio::time::{self, Instant};
 
 /// The whole drive; see `e2e_browseros.rs` for why the budget sits inside the test.
 const TEST_BUDGET: Duration = Duration::from_secs(240);
@@ -166,30 +172,54 @@ return {
 };
 "#;
 
-/// A page that types `SECRET` into its own password field a key every 150 ms, as autofill or
-/// the owner would, too fast for the field to go quiet before the last key, and shows the field
-/// in its title. The agent reads the page while it types, then waits until the field has gone
-/// quiet. The page builds the password from character codes, so its source shows none of it.
-const READ_WHILE_TYPING: &str = r#"
-const codes = Array.from(SECRET, (char) => char.charCodeAt(0));
-const html = '<title>Sign in</title><input type="password">'
+/// A page that types a password into its own field a key at a time, as autofill or the owner
+/// would, and shows the field in its title: its first four keys as it loads, the rest when the
+/// agent clicks its button. The script gets the password as character codes (`CODES`) and the
+/// page builds it from them, so neither source shows any of it, and whatever of it a run's reply
+/// or stored records hold came from the page.
+const TYPING_PAGE: &str = r#"
+const html = '<title>Sign in</title><input type="password"><button>Type the rest</button>'
   + '<script>'
-  + 'const secret = String.fromCharCode(' + codes.join(',') + ');'
+  + 'const secret = String.fromCharCode(' + CODES.join(',') + ');'
   + 'const field = document.querySelector("input");'
   + 'let keys = 4;'
   + 'const type = () => {'
-  + '  field.value = secret.slice(0, keys);'
+  + '  field.value = secret.slice(0, keys++);'
   + '  field.dispatchEvent(new Event("input", { bubbles: true }));'
   + '  document.title = "Signing in with " + field.value;'
-  + '  if (keys++ < secret.length) setTimeout(type, 150);'
   + '};'
   + 'type();'
+  + 'document.querySelector("button").onclick = () => { while (keys <= secret.length) type(); };'
   + '</script>';
+"#;
+
+/// After [`TYPING_PAGE`]: the agent reads the page between its four keys and the rest, so the
+/// read lands between two keystrokes by construction, whatever the machine's load.
+const READ_WHILE_TYPING: &str = r"
 await page.goto('data:text/html,' + encodeURIComponent(html));
 const read = { title: await page.title(), content: await page.content() };
-await new Promise((resolve) => setTimeout(resolve, 6000));
+await page.getByRole('button', { name: 'Type the rest' }).click();
 return read;
-"#;
+";
+
+/// After [`TYPING_PAGE`]: the agent loads the page and reads nothing of it, so no op sweeps its
+/// field. It returns the title its realm holds from the goto's own reply as character codes,
+/// which no mask matches, so the reply shows exactly what reached the realm.
+const UNSWEPT_TITLE: &str = r"
+await page.goto('data:text/html,' + encodeURIComponent(html));
+return Array.from(page._title, (char) => char.charCodeAt(0));
+";
+
+/// claw-sdk's quiet period for the typing test: the longest it takes (`TYPED_QUIET_MAX`), not
+/// the real 1 s. At 1 s, a loaded machine that stalls the read for a second between two keys
+/// ends the field's typing there, and the prefix it held rightly becomes a secret, which would
+/// fail a test about what a read does, not about the clock. No key waits this long here, so the
+/// final value leaves what is held only when the test closes its tab.
+const PATIENT_TYPING: [(&str, &str); 1] = [("CLAW_TYPED_QUIET_MS", "600000")];
+
+/// Closes the task's page, the typing one: its fields can take no more input, so claw-sdk hands
+/// what they hold to the process's set.
+const CLOSE_TYPING: &str = "await page.close(); return 'closed';";
 
 /// Every prefix of `SECRET` four characters or longer (a shorter value is never a secret), and the
 /// whole password, as a later run's reply shows them.
@@ -227,17 +257,31 @@ async fn a_script_reads_no_local_file_through_any_navigation() -> TestResult {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_read_between_two_keystrokes_shows_the_field_to_no_one_and_registers_no_prefix()
 -> TestResult {
-    on_browseros(|rig| Box::pin(read_while_typing(rig))).await
+    on_browseros_with(&PATIENT_TYPING, |rig| Box::pin(read_while_typing(rig))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "known gap: page facts are recorded before any sweep of the page; see sdk-skeleton decision 35n"]
+async fn a_page_fact_recorded_before_any_sweep_holds_no_field_value() -> TestResult {
+    on_browseros(|rig| Box::pin(page_fact_before_sweep(rig))).await
 }
 
 /// `drive` on a fresh BrowserOS within the test's budget, with both processes' logs on failure.
 async fn on_browseros(
     drive: impl for<'a> FnOnce(&'a Rig) -> Pin<Box<dyn Future<Output = TestResult> + 'a>>,
 ) -> TestResult {
+    on_browseros_with(&[], drive).await
+}
+
+/// As [`on_browseros`], with `env` also set on claw-sdk.
+async fn on_browseros_with(
+    env: &[(&str, &str)],
+    drive: impl for<'a> FnOnce(&'a Rig) -> Pin<Box<dyn Future<Output = TestResult> + 'a>>,
+) -> TestResult {
     let Some(browser) = browser_or_skip() else {
         return Ok(());
     };
-    let rig = Rig::start(&browser, CaptchaKey::Absent)?;
+    let rig = Rig::start_with(&browser, CaptchaKey::Absent, env)?;
     let failure = match time::timeout(TEST_BUDGET, drive(&rig)).await {
         Ok(Ok(())) => return Ok(()),
         Ok(Err(error)) => error.to_string(),
@@ -248,18 +292,51 @@ async fn on_browseros(
 
 /// The reply of one `run`, which must have succeeded.
 async fn reply_of(rig: &Rig, code: &str, task: &str) -> Result<Value, Box<dyn Error>> {
+    Ok(run_of(rig, code, task).await?.1)
+}
+
+/// One `run`, which must have succeeded: its id and its reply.
+async fn run_of(rig: &Rig, code: &str, task: &str) -> Result<(String, Value), Box<dyn Error>> {
     rig.until_ready().await?;
     let client = rig.client().await?;
     let result = run(&client, code, &json!({ "taskId": task })).await?;
-    assert_eq!(
-        outcome(&result)?.get("status"),
-        Some(&json!("ok")),
-        "{result:?}"
-    );
+    let meta = outcome(&result)?;
+    assert_eq!(meta.get("status"), Some(&json!("ok")), "{result:?}");
+    let id = meta
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("the run has an id: {meta}"))?
+        .to_owned();
     client.cancel().await?;
-    result
+    let reply = result
         .structured_content
-        .ok_or_else(|| "a run's reply is its structured content".into())
+        .ok_or("a run's reply is its structured content")?;
+    Ok((id, reply))
+}
+
+/// Run `id` as the host reads it back from the trace store, once the run has ended: its code,
+/// its reply, and each op's input, result and page facts.
+async fn recorded(rig: &Rig, id: &str) -> Result<Value, Box<dyn Error>> {
+    let read = rig
+        .host(
+            "GET",
+            &format!("/v1/runs/{id}?wait=30"),
+            Some(HOST_TOKEN),
+            None,
+        )
+        .await?;
+    assert_eq!(read.status, 200, "{}", read.text());
+    Ok(serde_json::from_slice(&read.body)?)
+}
+
+/// `records` as text without each op's page facts (`page`, its tab's URL and title after it).
+fn without_page_facts(mut records: Value) -> String {
+    if let Some(operations) = records.get_mut("operations").and_then(Value::as_array_mut) {
+        for operation in operations.iter_mut().filter_map(Value::as_object_mut) {
+            operation.remove("page");
+        }
+    }
+    records.to_string()
 }
 
 async fn listen_first(rig: &Rig) -> TestResult {
@@ -379,17 +456,13 @@ async fn fill_and_click(rig: &Rig) -> TestResult {
 
 async fn read_while_typing(rig: &Rig) -> TestResult {
     let secret = "hunter2-correct-horse";
-    let declared = format!("const SECRET = {};\n", json!(secret));
-    let reply = reply_of(
-        rig,
-        &format!("{declared}{READ_WHILE_TYPING}"),
-        "read-while-typing",
-    )
-    .await?;
+    let task = "read-while-typing";
+    let (typing, reply) = run_of(rig, &on_typing_page(secret, READ_WHILE_TYPING), task).await?;
     let read = reply.get("value").ok_or("the script returns its read")?;
+    let masked_title = "Signing in with [private]";
     assert_eq!(
         read.get("title"),
-        Some(&json!("Signing in with [private]")),
+        Some(&json!(masked_title)),
         "the read masked the field's value where the page showed it: {read}"
     );
     let prefixes: Vec<&str> = (4..secret.len())
@@ -401,17 +474,110 @@ async fn read_while_typing(rig: &Rig) -> TestResult {
             "the read shows none of the field's value: {text}"
         );
     }
-    let later = reply_of(
-        rig,
-        &format!("{declared}{PREFIXES_LATER}"),
-        "read-while-typing",
-    )
-    .await?;
+    // Read now, while every value the page typed is still only held: the process's set has
+    // learned none of them, so a record its run did not mask itself would show one raw. Its page
+    // facts are left out: core cached the page's title before any op swept the field, and
+    // `a_page_fact_recorded_before_any_sweep_holds_no_field_value` owns that case.
+    let typing_records = without_page_facts(recorded(rig, &typing).await?);
+    assert!(
+        typing_records.contains(masked_title),
+        "the typing run's records keep the read's title, masked: {typing_records}"
+    );
+    assert_no_fragment(secret, &typing_records, "the typing run's records")?;
+
+    // The click's keys reach claw-sdk through the journal, beside the op rather than in it, so
+    // the last may land after the run ends. A later run masks the final value once it is held.
+    let declared = format!("const SECRET = {};\n", json!(secret));
+    let later_code = format!("{declared}{PREFIXES_LATER}");
+    let later_run = || reply_of(rig, &later_code, task);
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let later = later_run().await?;
+        if later.pointer("/value/whole") == Some(&json!("[private]")) {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("the field's final value never reached claw-sdk: {later}").into());
+        }
+        time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Only after the last key, so the close cannot cut the typing short. Closing the tab takes
+    // its values out of what is held and hands them to the process's set, the one way out of
+    // what is held this test reaches. The run after it shows the final value survived that
+    // handoff and no prefix was handed over with it. It cannot show the set learned the value:
+    // a value still held masks every run exactly as a learned one does, so a close that hands
+    // over nothing passes here, and typed_values' `a_closed_tab_registers_its_values_at_once`
+    // pins the handoff itself. For the same reason no ordering is needed: the registry reports
+    // the close to claw-sdk's timer asynchronously, and the value masks the next run whether it
+    // is held, learning or learned, while every prefix was superseded before that run began.
+    let (closing, closed) = run_of(rig, CLOSE_TYPING, task).await?;
+    assert_eq!(closed.get("value"), Some(&json!("closed")), "{closed}");
+    let closing_records = recorded(rig, &closing).await?.to_string();
+    assert_no_fragment(secret, &closing_records, "the closing run's records")?;
+
+    // Begun after the close and after every keystroke: no prefix was held while it went on, so
+    // one it masked could only be a secret of the process's set, and a final value it showed raw
+    // would have been dropped by the close.
+    let later = later_run().await?;
     assert_eq!(
         later.get("value"),
         Some(&json!({ "prefixes": prefixes, "whole": "[private]" })),
-        "the field's final value is a secret, and no prefix the read found is: {later}"
+        "once its tab closed, the field's final value is still masked, and no prefix of it, the \
+         one the read found included, is a secret: {later}"
     );
+    Ok(())
+}
+
+async fn page_fact_before_sweep(rig: &Rig) -> TestResult {
+    let secret = "hunter2-correct-horse";
+    let (loading, reply) =
+        run_of(rig, &on_typing_page(secret, UNSWEPT_TITLE), "unswept-title").await?;
+    let title: String = reply
+        .get("value")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("the script returns its title's codes: {reply}"))?
+        .iter()
+        .filter_map(Value::as_u64)
+        .filter_map(|code| char::from_u32(u32::try_from(code).ok()?))
+        .collect();
+    // Both, so one red run names every place the field's value reached.
+    let realm = assert_no_fragment(secret, &title, "the title the script's realm got");
+    let records = recorded(rig, &loading).await?.to_string();
+    let stored = assert_no_fragment(secret, &records, "the loading run's records");
+    match (realm, stored) {
+        (Ok(()), Ok(())) => Ok(()),
+        (realm, stored) => Err([realm.err(), stored.err()]
+            .into_iter()
+            .flatten()
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .into()),
+    }
+}
+
+/// A script that builds [`TYPING_PAGE`] for `secret`, then runs `then` on it.
+fn on_typing_page(secret: &str, then: &str) -> String {
+    let codes: Vec<u32> = secret.chars().map(u32::from).collect();
+    format!("const CODES = {};\n{TYPING_PAGE}{then}", json!(codes))
+}
+
+/// Fails if `text` holds any raw piece of `secret` a read could have shown: a prefix of four
+/// characters or more (the value a read between two keys finds), or any eight characters in a
+/// row (what a mask of only a prefix would leave of the rest).
+fn assert_no_fragment(secret: &str, text: &str, what: &str) -> TestResult {
+    let chars: Vec<char> = secret.chars().collect();
+    let prefixes = (4..=chars.len()).map(|end| chars.get(..end));
+    let windows = chars.windows(8).map(Some);
+    for fragment in prefixes.chain(windows).flatten() {
+        let fragment: String = fragment.iter().collect();
+        if text.contains(&fragment) {
+            return Err(
+                format!("{what} hold `{fragment}` of the field's value raw: {text}").into(),
+            );
+        }
+    }
     Ok(())
 }
 

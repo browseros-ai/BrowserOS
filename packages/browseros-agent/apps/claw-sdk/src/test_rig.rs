@@ -31,7 +31,7 @@ use zeroize::Zeroizing;
 use crate::app::App;
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 use crate::builtins::{PrivacyHooks, TypedValues};
-use crate::config::SecretFiles;
+use crate::config::{Defaults, SecretFiles};
 use crate::dispatch::{
     Dispatcher, ErrorCode, LeafError, Lifetime, Method, MethodSpec, OpCtx, OperationError,
     PageChange, PageTarget, RegistryBuilder, RegistryError, RunCtx, RunGuard, RunStart,
@@ -130,6 +130,7 @@ impl TestRig {
             Arc::clone(&tabs),
             FlagRecovery::none(),
             SecretFiles::Named(Vec::new()),
+            Defaults::TYPED_QUIET,
         ));
         let typed = hooks.typed();
         let gate = Arc::new(Barrier::new(2));

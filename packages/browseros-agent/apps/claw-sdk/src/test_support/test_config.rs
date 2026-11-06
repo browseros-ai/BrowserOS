@@ -40,6 +40,7 @@ pub fn test_config(state_dir: &Path) -> AppConfig {
             tcp: None,
         },
         xvnc: CLOSED_XVNC,
+        typed_quiet: Defaults::TYPED_QUIET,
     };
     AppConfig {
         secret_files: SecretFiles::locate(&env, &launch, &cwd),

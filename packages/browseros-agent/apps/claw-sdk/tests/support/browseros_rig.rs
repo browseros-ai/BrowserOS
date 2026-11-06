@@ -121,6 +121,15 @@ pub struct Rig {
 impl Rig {
     /// BrowserOS on a fresh profile, then claw-sdk pointed at its CDP port.
     pub fn start(browser: &Path, captcha: CaptchaKey) -> Result<Self, Box<dyn Error>> {
+        Self::start_with(browser, captcha, &[])
+    }
+
+    /// As [`Rig::start`], with `env` also set on claw-sdk, after the rig's own variables.
+    pub fn start_with(
+        browser: &Path,
+        captcha: CaptchaKey,
+        env: &[(&str, &str)],
+    ) -> Result<Self, Box<dyn Error>> {
         let dir = tempfile::tempdir()?;
         let cdp_port = free_port()?;
         let server_port = free_port()?;
@@ -173,6 +182,7 @@ impl Rig {
             neo.env("BROWSEROS_CAPSOLVER_API_KEY_FILE", &key_file)
                 .env("BROWSEROS_CAPSOLVER_API_URL", "http://127.0.0.1:9");
         }
+        neo.envs(env.iter().copied());
         let neo = neo
             .stdin(Stdio::null())
             .stdout(Stdio::null())
