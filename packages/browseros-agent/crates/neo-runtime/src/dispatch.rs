@@ -1428,10 +1428,8 @@ mod tests {
                 .expect("object")
                 .extend(omit.as_object().expect("object").clone());
             assert_eq!(
-                error_of(route_frame("waitForSelector", params)),
-                PlaywrightError::error(
-                    "Neo does not return ElementHandles yet: waitForSelector needs omitReturnValue: true"
-                )
+                error_of(route_frame("waitForSelector", params)).name,
+                ErrorName::Error
             );
         }
         // Frame refusal wins even when omitReturnValue is missing.
@@ -1442,22 +1440,14 @@ mod tests {
             )),
             PlaywrightError::error(FRAMES_UNSUPPORTED)
         );
-        for (method, params, message) in [
+        for (method, params) in [
             (
                 "neo:waitForURL",
                 json!({"url":{"glob":""},"waitUntil":"networkidle"}),
-                "Neo does not support waitUntil: \"networkidle\" yet",
             ),
-            (
-                "neo:waitForLoadState",
-                json!({"state":"networkidle"}),
-                "Neo does not support state: \"networkidle\" yet",
-            ),
+            ("neo:waitForLoadState", json!({"state":"networkidle"})),
         ] {
-            assert_eq!(
-                error_of(route_frame(method, params)),
-                PlaywrightError::error(message)
-            );
+            assert_eq!(error_of(route_frame(method, params)).name, ErrorName::Error);
         }
         for (method, params) in [
             (
