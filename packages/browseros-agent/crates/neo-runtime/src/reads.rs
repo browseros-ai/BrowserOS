@@ -31,6 +31,11 @@
 //! element while it stays connected, until the next snapshot or a cross-document commit. Neo
 //! serves the main frame only: an iframe's node renders as the page gave it, without the iframe's
 //! document, which is what Playwright prints when it cannot read that document.
+//!
+//! A tree nested deeper than about 60 aria levels never arrives: browseros-cdp parses every CDP
+//! reply with `serde_json`'s 128-level limit and drops one it cannot parse, so the snapshot ends at
+//! the call's timeout (on BrowserOS neo, 30 nested lists snapshot and 31 time out; GitHub, Hacker
+//! News, Wikipedia and MDN pages measured 11 to 16 levels).
 
 use std::future::Future;
 use std::sync::Arc;
