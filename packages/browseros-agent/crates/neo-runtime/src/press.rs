@@ -7,8 +7,8 @@
 //!   loop A (click.rs): pre-check, describe, resolve → element
 //!   │ the browser's platform, read once per call (ControlOrMeta, the mac editing commands)
 //!   │ log: elementHandle.press("<key>")
-//!   │ unless noWaitAfter: watch navigations
-//!   │ wait for the tab's input turn → focus (selection reset unless it already had focus)
+//!   │ wait for the tab's input turn → unless noWaitAfter: watch navigations
+//!   │ focus (selection reset unless it already had focus)
 //!   │   not connected → turn released; "element was detached from the DOM, retrying"
 //!   │ plan the keys (keyboard.rs) │ an unknown token → Error, no key sent
 //!   │ begin ticket → write_keys (detached writer) → acked: Done │ failed: the call ends, Unknown
@@ -114,9 +114,11 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for PressAction<'_> {
             *self.platform.get_or_init(|| platform)
         };
         progress.log(format!("elementHandle.press(\"{}\")", self.options.key));
-        // Subscribed before any input, so no navigation the press causes can be missed.
-        let watched = self.options.wait_after.then(|| tab.watch_navigations());
         let input = progress.race(tab.input()).await?;
+        // Subscribed once the turn is this press's and before any of its input, as click does:
+        // the barrier waits for every navigation this press's input requests, and never for one
+        // that the input it waited behind requested.
+        let watched = self.options.wait_after.then(|| tab.watch_navigations());
         match progress
             .race(tab.focus(element, true, input.clone()))
             .await??
@@ -247,8 +249,8 @@ mod tests {
                 "describe",
                 "resolve",
                 "platform",
-                "watch_navigations",
                 "input",
+                "watch_navigations",
                 "focus true",
                 "rawKeyDown Shift",
                 "keyDown A",
@@ -257,6 +259,32 @@ mod tests {
                 "input released",
                 "settle",
             ]
+        );
+    }
+
+    /// A press that waits for its turn behind other input subscribes to navigations only once
+    /// it holds the turn, so the barrier never counts the earlier input's navigations.
+    #[tokio::test(start_paused = true)]
+    async fn navigations_are_watched_only_once_the_press_holds_its_turn() {
+        let tab = FakeTab {
+            forms: FormSteps {
+                input_wait: Duration::from_millis(50),
+                ..FormSteps::ready()
+            },
+            ..FakeTab::ready()
+        };
+        let (result, delivery) = run(&tab, &options("a", &serde_json::json!({})), 1000.0).await;
+        assert_eq!((result, delivery), (Ok(()), Delivery::Done));
+        let calls = tab.calls();
+        let at = |name: &str| {
+            calls
+                .iter()
+                .position(|call| call == name)
+                .unwrap_or_else(|| panic!("{name} in {calls:?}"))
+        };
+        assert!(
+            at("input") < at("watch_navigations") && at("watch_navigations") < at("focus true"),
+            "{calls:?}"
         );
     }
 
