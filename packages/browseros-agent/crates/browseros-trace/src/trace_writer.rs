@@ -61,9 +61,9 @@ use crate::trace_store::{
     Swept,
 };
 use crate::{
-    Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationStarted, Outcome,
-    PrivacyRecord, PrivacyStore, PrivateReason, RedactionPolicy, Redactor, RunEffects, RunEnded,
-    RunId, RunStarted, RunStatus, SecretSet, Shot, ShotAnswer, ShotJob, ShotQueue,
+    Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationReached, OperationStarted,
+    Outcome, PrivacyRecord, PrivacyStore, PrivateReason, RedactionPolicy, Redactor, RunEffects,
+    RunEnded, RunId, RunStarted, RunStatus, SecretSet, Shot, ShotAnswer, ShotJob, ShotQueue,
     TargetSensitivity, TaskId, TraceError, TraceStore, Truncation,
 };
 use browseros_core::TabId;
@@ -313,6 +313,14 @@ impl TraceSink {
             return;
         }
         self.send(Event::OperationEnded(event));
+    }
+
+    /// The operation's script reached `tabs` besides its target, as a popup's main-world script
+    /// reaches its opener through `window.opener`. A takeover lock's settle is to count the
+    /// operation as a write in flight on each reached tab. Not recorded yet: the writer stores
+    /// reaches from the next commit on.
+    pub fn op_reached(&self, event: OperationReached) {
+        let _ = event;
     }
 
     /// Committed, redacted changes from now on.

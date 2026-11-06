@@ -59,8 +59,8 @@ pub use error_record::{ErrorOwner, ErrorRecord};
 pub use ids::{IdError, OperationId, RequestId, RunId, TaskId};
 pub use json_pointer::{JsonPointer, PointerError};
 pub use operation_record::{
-    Delivery, Effect, OperationEnded, OperationKind, OperationStarted, Outcome, PageState,
-    RedactionPolicy, TargetSensitivity,
+    Delivery, Effect, OperationEnded, OperationKind, OperationReached, OperationStarted, Outcome,
+    PageState, RedactionPolicy, TargetSensitivity,
 };
 pub use privacy::{
     CaptureGuard, ControlDisplay, Privacy, PrivacyError, PrivacyRecord, PrivacyStore, PrivateReason,

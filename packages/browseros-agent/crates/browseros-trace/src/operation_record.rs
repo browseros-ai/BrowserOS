@@ -1,5 +1,6 @@
 //! What the dispatcher tells the trace about one SDK operation: once when it is admitted
-//! (before policy, so refusals are recorded too) and once when it ends.
+//! (before policy, so refusals are recorded too), once when it ends, and in between whenever its
+//! script reaches a tab besides its target.
 //!
 //! The start event carries the raw input; it is redacted on the writer task, never on the
 //! dispatcher's path. Delivery arrives already derived by the dispatcher's `OperationGuard`.
@@ -203,5 +204,17 @@ pub struct OperationEnded {
     /// The writer masks the input, notes, result, error message and page with it.
     pub also_mask: Option<Arc<SecretSet>>,
     /// When it ended.
+    pub at: EpochMillis,
+}
+
+/// Tabs an operation's script can act on besides its target, as a main-world script in a popup
+/// does on its opener through `window.opener`. Tab ids only, never a value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OperationReached {
+    /// The operation, whose start was recorded before.
+    pub id: OperationId,
+    /// The tabs it reached for the first time, never its own target tab.
+    pub tabs: Vec<TabId>,
+    /// When the door saw the reach.
     pub at: EpochMillis,
 }
