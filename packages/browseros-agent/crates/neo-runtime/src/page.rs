@@ -1293,6 +1293,38 @@ async fn send_input(page: &PageSession, event: &DispatchMouseEventParams) -> Res
         .map(|_| ())
 }
 
+// Keyboard input (`keyboard.rs`) goes through these two.
+impl PageSession {
+    /// One input command on the session's own socket incarnation, its params already JSON and
+    /// written unchanged (key events keep Playwright's field order on the wire). browseros-cdp
+    /// refuses it with `ConnectionEpochChanged` before writing once the socket was replaced, so
+    /// no input goes out under a session id the new socket does not know, and a writer can
+    /// prove it wrote nothing.
+    pub(crate) async fn send_input_json(&self, method: &str, params: &str) -> Result<(), CdpError> {
+        self.session
+            .cdp
+            .send_raw_json_at_epoch(self.session.epoch, method, params, Some(&self.session.id))
+            .await
+            .map(|_| ())
+    }
+
+    /// The browser's userAgent: `Browser.getVersion`, a browser-wide command sent without the
+    /// session, as Playwright reads it once per browser (`crBrowser.ts`).
+    pub(crate) async fn user_agent(&self) -> Result<String, CdpError> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Version {
+            user_agent: String,
+        }
+        let version: Version = self
+            .session
+            .cdp
+            .send_typed("Browser.getVersion", json!({}), None)
+            .await?;
+        Ok(version.user_agent)
+    }
+}
+
 /// Playwright's exact events for a click (`input.ts` `Mouse.click`, `crInput.ts`):
 ///
 /// | type          | button   | buttons | clickCount | force |
