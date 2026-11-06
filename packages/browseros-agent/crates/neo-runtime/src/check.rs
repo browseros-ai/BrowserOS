@@ -343,7 +343,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tests_that_trial_reads_the_verdict_but_does_not_verify_or_deliver_input() {
+    async fn tests_that_trial_checks_without_pressing_verifying_or_delivering_input() {
         let mut tab = FakeTab::ready();
         tab.forms.checked = Step::new(
             TRIP,
@@ -360,7 +360,11 @@ mod tests {
             progress.delivery().expect("input").delivery(),
             Delivery::NotSent
         );
-        assert!(tab.count("verdict") > 0);
+        assert!(
+            tab.calls().iter().any(|call| call.starts_with("arm ")),
+            "the hit check ran"
+        );
+        assert_eq!(presses(&tab), 0, "a trial presses nothing");
         assert_eq!(tab.count("settle"), 0);
     }
 

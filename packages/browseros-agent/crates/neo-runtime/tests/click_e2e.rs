@@ -497,45 +497,50 @@ return 'returned'",
 /// G2: the first press lands on an overlay that appeared after the hit check. The interceptor
 /// blocks it and names the overlay, delivery goes back to `NotSent`, and the click presses again
 /// on the same element. The second press lands: the button's own handler ran once, delivery
-/// `Done`.
+/// `Done`. The same under `noWaitAfter`, which skips only the navigation wait: Playwright reads
+/// no verdict then, and resolves on the blocked press.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_verified_block_after_input_presses_again() {
-    let Some(tab) = open_page("/blocked-once.html", BLOCKED_ONCE_PAGE).await else {
-        return;
-    };
-    let outcome = run(
-        &tab,
-        "await page.getByRole('button', { name: 'Submit' }).click()
-return 'clicked'",
-    )
-    .await;
-    let clicks = tab.evaluate("window.__clicks").await;
-    tab.close().await;
+async fn tests_that_a_verified_block_presses_again_with_or_without_no_wait_after() {
+    for options in ["", "{ noWaitAfter: true }"] {
+        let Some(tab) = open_page("/blocked-once.html", BLOCKED_ONCE_PAGE).await else {
+            return;
+        };
+        let outcome = run(
+            &tab,
+            &format!(
+                "await page.getByRole('button', {{ name: 'Submit' }}).click({options})
+return 'clicked'"
+            ),
+        )
+        .await;
+        let clicks = tab.evaluate("window.__clicks").await;
+        tab.close().await;
 
-    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
-    let call = only_record(&outcome);
-    assert_eq!(
-        (&call.result, call.delivery),
-        (&CallResult::Ok, Some(Delivery::Done)),
-        "{call:#?}"
-    );
-    assert!(
-        call.log.join("\n").contains("id=\"overlay\""),
-        "the first press was caught by the overlay: {:#?}",
-        call.log
-    );
-    assert_eq!(
-        clicks,
-        json!(1),
-        "the button's handler never saw the blocked press"
-    );
+        assert_eq!(outcome.status, RunStatus::Ok, "{options}: {outcome:#?}");
+        let call = only_record(&outcome);
+        assert_eq!(
+            (&call.result, call.delivery),
+            (&CallResult::Ok, Some(Delivery::Done)),
+            "{options}: {call:#?}"
+        );
+        assert!(
+            call.log.join("\n").contains("id=\"overlay\""),
+            "{options}: the first press was caught by the overlay: {:#?}",
+            call.log
+        );
+        assert_eq!(
+            clicks,
+            json!(1),
+            "{options}: the button's handler ran once, never for the blocked press"
+        );
+    }
 }
 
-/// `trial: true` on the `ok` page: the checks, then a press whose every event the interceptor
-/// blocks. The click resolves, neither button's `onclick` runs (the hash stays empty), and
-/// delivery is `NotSent`.
+/// `trial: true` on the `ok` page: the checks, the hit check included, and no input. The click
+/// resolves, the page's listeners see no event at all, neither button's `onclick` runs (the hash
+/// stays empty), and delivery is `NotSent`.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_trial_click_delivers_nothing() {
+async fn tests_that_a_trial_click_sends_no_input() {
     let Some(tab) = open_page("/ok.html", OK_PAGE).await else {
         return;
     };
@@ -546,6 +551,7 @@ return page.url()",
     )
     .await;
     let hash = tab.evaluate("location.hash").await;
+    let events = tab.evaluate("window.__events").await;
     tab.close().await;
 
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
@@ -562,6 +568,11 @@ return page.url()",
         "{call:#?}"
     );
     assert_eq!(hash, json!(""), "the button's onclick never ran");
+    assert_eq!(
+        events,
+        json!([]),
+        "no pointer or mouse event reached the page"
+    );
 }
 
 /// The test closes the tab while a click polls for a button that never matches. The script
