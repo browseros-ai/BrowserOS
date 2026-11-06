@@ -1,0 +1,47 @@
+# Neo crates: boundaries and style
+
+Applies to every `crates/neo-*` crate and to `crates/neo-sdk`. Run `scripts/neo-check.sh` (from `packages/browseros-agent`) before you commit; it is the gate for everything below that a tool can check.
+
+## Crate map
+
+| Crate | Language | Role |
+| --- | --- | --- |
+| `neo-runtime-spec` | Rust, generated TS | Neo's cross-language contracts, translated from Playwright's protocol |
+| `neo-runtime` | Rust | Runs an agent's Playwright-style script in a QuickJS realm against one BrowserOS tab |
+| `neo-sdk` | TypeScript | The Playwright-shaped objects a script sees; `neo-runtime` embeds its `dist/sdk.js` |
+
+Dependencies point one way: `neo-sdk` is embedded by `neo-runtime`, which talks to the browser through `browseros-cdp` and may use `neo-runtime-spec`. Rust neo crates depend on those plus ordinary crates (tokio, serde, rquickjs, thiserror, tracing).
+
+`browseros-core` is never a dependency of a neo crate. Read it for patterns and copy what you need; Neo is a rebuild, and depending on it would pull the old runtime's state model back in.
+
+## Rust
+
+Google Rust style, enforced by the `[lints]` tables, `rustfmt.toml` and `clippy.toml` every Rust neo crate copies from `neo-runtime-spec`. The `[lints]` tables must stay identical across crates (`neo-check.sh` compares them); add crate-specific `clippy.toml` entries below the copied ones.
+
+Our exceptions to the guide:
+
+- Its `[chrome]` rules do not apply: async and tokio are fine, and crates use the normal Cargo layout (`src/`, `tests/`, `examples/`).
+- Panics are avoided entirely, not only for recoverable errors: a broken invariant is a `Result` too. `unwrap` and `expect` are denied outside tests. Never call `catch_unwind` or reach inside a poisoned mutex.
+- Silence a lint with `#[expect(lint, reason = "…")]`; `#[allow]` is linted.
+
+Stable rustfmt skips three of the configured rules, so apply them by hand (or format once with a nightly `cargo +nightly fmt -p <crate>` and confirm stable `cargo fmt --check` agrees):
+
+- One module per `use` statement: `use std::sync::{Arc, Mutex};`, never `use std::{fs, io::Write};`.
+- Lowercase hex literals: `0xff`, not `0xFF`.
+- Macro matchers formatted like code.
+
+Two naming rules the lints do not catch: call free functions through their module (`time::sleep`, `task::block_in_place`), and import types to use them unqualified (`Duration`, not `std::time::Duration`).
+
+## TypeScript (`neo-sdk`)
+
+The bundle runs in QuickJS, not Node or a browser: ES2023 only, no DOM or Node APIs, and evaluating it defines no globals. Getters return plain values, never promises, as in Playwright. `src/runtime-bridge.ts` is the only file that touches `__neo_runtime`. Commit `dist/sdk.js` with every `src/` change (`bun run build`).
+
+## Comments
+
+Explain what a reader cannot reconstruct from one file:
+
+- Every new module gets a `//!` (or file-level `/** */`) docstring saying its role in the run; central types get a short doc comment.
+- Comment the seams: thread and async handoffs, the realm boundary between JS and Rust, a blocking wait, cancellation and deadlines, cleanup, and permission checks.
+- Say what breaks if an invariant is removed.
+
+Keep straightforward code bare: no line-by-line narration, PR narration, stale TODOs or commented-out code.
