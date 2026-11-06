@@ -1,9 +1,9 @@
 /**
  * Playwright's `Frame` (`client/frame.ts` at 26137face), cut to a page's main frame: its guid,
- * its page, the selector builders, whose bodies are Playwright's, `goto`, `title`, `textContent`,
- * browser actions, and the waits `waitForURL` and `waitForLoadState` (with `_waitForSelector`
- * behind `locator.waitFor`). A page builds exactly one `Frame` per run, because `Locator`
- * compares frames by identity.
+ * its page, the selector builders, whose bodies are Playwright's, `goto`, `title`,
+ * `textContent`, `innerText`, `getAttribute`, browser actions, and the waits `waitForURL` and
+ * `waitForLoadState` (with `_waitForSelector` behind `locator.waitFor`). A page builds exactly
+ * one `Frame` per run, because `Locator` compares frames by identity.
  *
  * Each `_<method>` is where every public form of a browser call (`locator.textContent`,
  * `page.textContent`, `frame.textContent`) becomes a protocol message, with its caller's
@@ -20,6 +20,9 @@
  *   `networkidle`. A failed navigation does not reject `waitForURL`, which waits on to its timeout
  *   (Neo tracks no network). An unknown `waitUntil` is reported as `waitUntil`, where Playwright
  *   names it `state` when the URL already matches.
+ * - `allTextContents` sends `client/locator.ts` source text; compiled Playwright clients may
+ *   format it differently. It reads in Neo's isolated world, so page-defined `textContent`
+ *   overrides (prototype patches, custom element classes or per-instance properties) can differ.
  */
 
 import type {
@@ -28,9 +31,14 @@ import type {
   FrameCheckParams,
   FrameClickParams,
   FrameFillParams,
+  FrameGetAttributeParams,
+  FrameGetAttributeResult,
   FrameGotoParams,
+  FrameInnerTextParams,
+  FrameInnerTextResult,
   FrameInputValueParams,
   FramePressParams,
+  FrameQueryCountParams,
   FrameSelectOptionParams,
   FrameTextContentParams,
   FrameTextContentResult,
@@ -58,9 +66,12 @@ import {
   FRAME_CHECK_KEYS,
   FRAME_CLICK_KEYS,
   FRAME_FILL_KEYS,
+  FRAME_GET_ATTRIBUTE_KEYS,
   FRAME_GOTO_KEYS,
+  FRAME_INNER_TEXT_KEYS,
   FRAME_INPUT_VALUE_KEYS,
   FRAME_PRESS_KEYS,
+  FRAME_QUERY_COUNT_KEYS,
   FRAME_SELECT_OPTION_KEYS,
   FRAME_TEXT_CONTENT_KEYS,
   FRAME_UNCHECK_KEYS,
@@ -82,6 +93,19 @@ export type GotoOptions = Omit<FrameGotoParams, 'url'> & { timeout?: number }
 
 /** `textContent`'s options as a script passes them. */
 export type TextContentOptions = Omit<FrameTextContentParams, 'selector'> & {
+  timeout?: number
+}
+
+/** `innerText`'s options as a script passes them. */
+export type InnerTextOptions = Omit<FrameInnerTextParams, 'selector'> & {
+  timeout?: number
+}
+
+/** `getAttribute`'s options as a script passes them. */
+export type GetAttributeOptions = Omit<
+  FrameGetAttributeParams,
+  'selector' | 'name'
+> & {
   timeout?: number
 }
 
@@ -363,6 +387,123 @@ export class Frame {
       this._page._timeoutSettings.timeout(options),
     )) as FrameTextContentResult
     return result.value === undefined ? null : result.value
+  }
+
+  async innerText(
+    selector: string,
+    options: InnerTextOptions = {},
+  ): Promise<string> {
+    return await this._innerText('frame.innerText', selector, options)
+  }
+
+  async _innerText(
+    apiName: ApiName,
+    selector: string,
+    options: InnerTextOptions,
+  ): Promise<string> {
+    const result = (await this._connection.send(
+      apiName,
+      this._guid,
+      'innerText',
+      pickParams(FRAME_INNER_TEXT_KEYS, {
+        selector,
+        ...options,
+      }) as FrameInnerTextParams,
+      this._page._timeoutSettings.timeout(options ?? {}),
+    )) as FrameInnerTextResult
+    return result.value
+  }
+
+  async getAttribute(
+    selector: string,
+    name: string,
+    options: GetAttributeOptions = {},
+  ): Promise<string | null> {
+    return await this._getAttribute(
+      'frame.getAttribute',
+      selector,
+      name,
+      options,
+    )
+  }
+
+  async _getAttribute(
+    apiName: ApiName,
+    selector: string,
+    name: string,
+    options: GetAttributeOptions,
+  ): Promise<string | null> {
+    const result = (await this._connection.send(
+      apiName,
+      this._guid,
+      'getAttribute',
+      pickParams(FRAME_GET_ATTRIBUTE_KEYS, {
+        selector,
+        name,
+        ...options,
+      }) as FrameGetAttributeParams,
+      this._page._timeoutSettings.timeout(options ?? {}),
+    )) as FrameGetAttributeResult
+    return result.value === undefined ? null : result.value
+  }
+
+  /** Playwright's `Frame._queryCount`: a non-strict snapshot with `kNoTimeout`. */
+  async _queryCount(apiName: ApiName, selector: string): Promise<number> {
+    const result = await this._connection.send(
+      apiName,
+      this._guid,
+      'queryCount',
+      pickParams(FRAME_QUERY_COUNT_KEYS, { selector }) as FrameQueryCountParams,
+      0,
+    )
+    if (result === undefined)
+      throw new Error(
+        'neo-sdk: Frame.queryCount contract error: missing result',
+      )
+    return result.value
+  }
+
+  /** The source text Neo's SDK sends, from `client/locator.ts` at 26137face. */
+  async _allTextContents(
+    apiName: ApiName,
+    selector: string,
+  ): Promise<string[]> {
+    const result = await this._connection.send(
+      apiName,
+      this._guid,
+      'evalOnSelectorAll',
+      {
+        selector,
+        expression: "ee => ee.map(e => e.textContent || '')",
+        isFunction: true,
+        arg: { value: { v: 'undefined' }, handles: [] },
+      },
+      0,
+    )
+    // `protocol/serializers.ts` assigns id 1 to the outer array and encodes each string as {s}.
+    const value = result?.value
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      Object.keys(value).length !== 2 ||
+      value.id !== 1 ||
+      !Array.isArray(value.a)
+    )
+      throw new Error(
+        'neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string array',
+      )
+    return value.a.map((item) => {
+      if (
+        !item ||
+        typeof item !== 'object' ||
+        Object.keys(item).length !== 1 ||
+        typeof item.s !== 'string'
+      )
+        throw new Error(
+          'neo-sdk: Frame.evalOnSelectorAll contract error: expected a serialized string',
+        )
+      return item.s
+    })
   }
 
   /** Sends `Frame.ariaSnapshot` for the whole frame: no selector, as `page.ariaSnapshot`. */

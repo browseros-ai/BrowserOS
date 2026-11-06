@@ -1,0 +1,18 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Element lists</title>
+<!-- Tests select by id or class only: BrowserOS neo's takeover bar adds shadow-root buttons to
+     every page, and Playwright's CSS pierces open shadow roots. Nothing here matches .missing. -->
+<ul id="fruits">
+  <li class="fruit">Ap<b>ple</b></li>
+  <li class="fruit">  Banana
+    split  </li>
+  <li class="fruit"></li>
+  <li class="fruit" style="display:none">Cherry</li>
+  <li class="fruit">Date</li>
+</ul>
+<ol id="veg">
+  <li class="veg">Kale</li>
+  <li class="veg">Carrot</li>
+  <li class="veg">Leek</li>
+</ol>

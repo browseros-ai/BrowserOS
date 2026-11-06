@@ -23,6 +23,8 @@ const valid = {
   title: () => ({ value: document.title }),
   selectorState: () => ({}),
   textContent: () => ({}),
+  innerText: () => ({}),
+  getAttribute: () => ({}),
   ariaSnapshot: () => ({}),
   frameOwner: () => ({}),
   describeSelector: (_injected, { selector }) => ({ locator: selector }),
@@ -40,6 +42,8 @@ const valid = {
   elementState: () => ({ matches: false }),
   focusElement: () => ({ outcome: 'done' }),
   inputValue: () => ({}),
+  queryCount: () => ({ value: 0 }),
+  allTextContents: () => ({ values: [] }),
 } satisfies Api
 
 export const unknownFillOutcome = {

@@ -17,6 +17,9 @@
  *   `setChecked` API names through their delegated calls (`_wrapApiCall` in Playwright).
  * - `waitFor` sends Playwright's own `Frame.waitForSelector` through `Frame._waitForSelector`,
  *   as Playwright's goes straight to the frame's channel.
+ * - `allTextContents` sends `client/locator.ts` source text; compiled clients may format it
+ *   differently. It reads in Neo's isolated world, so page-defined `textContent` overrides
+ *   (prototype patches, custom element classes or per-instance properties) can differ.
  *
  * Frame identity is load-bearing: `has`, `hasNot`, `and`, `or` and `locator(Locator)` throw
  * unless both locators hold the same `Frame` object, which is why a page builds its main frame
@@ -42,6 +45,8 @@ import type {
   ClickOptions,
   FillOptions,
   Frame,
+  GetAttributeOptions,
+  InnerTextOptions,
   InputValueOptions,
   PressOptions,
   SelectOptionOptions,
@@ -115,6 +120,36 @@ export class Locator {
       'locator.textContent',
       this._selector,
       { strict: true, ...options },
+    )
+  }
+
+  async innerText(options?: InnerTextOptions): Promise<string> {
+    return await this._frame._innerText('locator.innerText', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async getAttribute(
+    name: string,
+    options?: GetAttributeOptions,
+  ): Promise<string | null> {
+    return await this._frame._getAttribute(
+      'locator.getAttribute',
+      this._selector,
+      name,
+      { strict: true, ...options },
+    )
+  }
+
+  async count(): Promise<number> {
+    return await this._frame._queryCount('locator.count', this._selector)
+  }
+
+  async allTextContents(): Promise<string[]> {
+    return await this._frame._allTextContents(
+      'locator.allTextContents',
+      this._selector,
     )
   }
 

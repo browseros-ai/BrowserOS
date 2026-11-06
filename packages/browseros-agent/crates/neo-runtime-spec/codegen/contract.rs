@@ -437,6 +437,9 @@ fn build_serve(protocol: &Protocol, selection: &Selection<'_>) -> Result<ServeMo
     for id in &closure.channels {
         builder.add_channel(*id)?;
     }
+    if closure.any_channel {
+        builder.add_any_channel()?;
+    }
     for id in &closure.named {
         builder.add_named(*id)?;
     }
@@ -565,6 +568,7 @@ fn initializer(protocol: &Protocol, id: DefId) -> Option<Initializer<'_>> {
 struct Closure {
     named: BTreeSet<DefId>,
     channels: BTreeSet<DefId>,
+    any_channel: bool,
 }
 
 impl Closure {
@@ -608,6 +612,7 @@ impl Closure {
             Type::Channel(id) => {
                 self.channels.insert(*id);
             }
+            Type::AnyChannel => self.any_channel = true,
             Type::Array(items) => self.ty(protocol, items),
             Type::Object(props) => self.props(protocol, props),
             Type::Union(members) => self.members(protocol, members),
@@ -618,7 +623,6 @@ impl Closure {
             | Type::Binary
             | Type::Json
             | Type::Undefined
-            | Type::AnyChannel
             | Type::Enum(_)
             | Type::Element => {}
         }
@@ -871,6 +875,25 @@ impl<'protocol> Builder<'protocol> {
         Ok(())
     }
 
+    /// Bare `Channel` has no known interface. Until Neo serves JS handles, no value can cross.
+    fn add_any_channel(&mut self) -> Result<(), SpecError> {
+        self.claim("Channel", &At::file(SERVE))?;
+        self.types.push(TypeDef {
+            name: "Channel".to_owned(),
+            doc: vec![
+                "Playwright's bare `Channel`. Neo accepts no handles in serialized arguments, so \
+                 this type has no values."
+                    .to_owned(),
+            ],
+            exported: true,
+            body: Body::Channel(Channel {
+                interface: "Channel".to_owned(),
+                implemented: false,
+            }),
+        });
+        Ok(())
+    }
+
     fn add_struct(
         &mut self,
         head: Head,
@@ -1105,9 +1128,10 @@ impl<'protocol> Builder<'protocol> {
             Type::Undefined => {
                 return Err(at.error("is `undefined`, which Neo does not support yet".to_owned()));
             }
-            Type::AnyChannel => {
+            Type::AnyChannel if page => {
                 return Err(at.error("is `Channel`, which Neo does not support yet".to_owned()));
             }
+            Type::AnyChannel => FieldType::Ref("Channel".to_owned()),
             Type::Channel(id) if page => {
                 return Err(at.error(format!(
                     "is a `{}` object; a page call crosses plain JSON and handles, never a \
