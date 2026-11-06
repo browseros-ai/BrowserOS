@@ -59,3 +59,29 @@ Each case has these fields:
 - `strict`. It throws after about 20 ms, before any input. The message embeds `Error: ` after `locator.click: ` and lists each match with an `aka` locator (`.first()`, `.nth(1)`).
 - `disabled`. Indentation in retry call logs is irregular. `waiting 20ms` sits shallower than `waiting 100ms`, and the last attempt logs its wait line once instead of `2 ×` and shifts its remaining lines one level shallower. Compare call logs byte for byte.
 - Selectors. A `getByRole` name keeps raw tab and newline characters, while `getByText` JSON-escapes them. `hasText: ''` adds nothing. A RegExp ignores `exact`. Regexes with the `u` or `v` flag skip quote and `>>` escaping.
+
+## form-goldens.json (fill, clear, press, inputValue, check, uncheck, setChecked, selectOption)
+
+Recorded by `capture-forms.mjs` (56 cases, 3 runs each, fresh page per run):
+
+```sh
+NEO_E2E_BROWSER="/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo" \
+NEO_PARITY_PLAYWRIGHT=/Users/felarof01/.llm/2026-09-22/browseros_ext/playwright-26137face/src/packages/playwright-core \
+node capture-forms.mjs     # ~30s; exits non-zero on a surviving browser process or an unexpected outcome
+```
+
+`NEO_PARITY_PLAYWRIGHT` is read as `../parity/harness.mjs` reads it. The committed file ran Playwright 1.66.0-next at 26137face (`versions.playwright` records source, path, commit and dirty flag); without the variable the npm playwright-core 1.64.1 runs, a different revision.
+
+Per case: `source` (agent code, run as an async function of `page`), `method`, `keys` (every key pressed, for neo-runtime's keyboard test), the fixture, `outcome`, `returnType`/`returnValue`, `error` (`name`, `isTimeout`, `category`, `apiName`; `firstLine` and `message` are reference only), `page` after the call (control values, `checked`, `selected`, `selection`, `activeElement`, URL, and every event the page saw, in order: `document` marks a page load, `call` the call's start), `input` (Playwright's `Input.*` sends), `elapsedMsPerRun`, `identicalAcrossRuns`.
+
+Compare behaviour: outcome, return value and type, error `name`/`category`, and the page facts. Do not compare messages, call logs or timings.
+
+Observed behaviour worth knowing:
+
+- BrowserOS neo adds its own text input (`input.nt-note`, "Note for the agent") inside a shadow root on every page. Playwright pierces it: `locator('input')` on two inputs resolves to 3 (`fill-strict`). `document.querySelectorAll` does not see it.
+- `press('Shift+Foo')` sends Shift's keyDown, throws `Unknown key: "Foo"`, and never releases Shift: the page sees `keydown Shift` with no keyup. Neo plans the whole key first and sends nothing.
+- `Shift+a` types `a` and `Shift+KeyB` types `B`: Shift only shifts a key named by its code (`press-layout` types `aB++!1 `).
+- `press('Enter')` in a GET form waits for the navigation (`/submitted?q=neo`); with `noWaitAfter` it returns on the old URL. Enter's keyup lands before the new document loads.
+- `clear()` and `fill('')` select the text, then press Delete (mac command `deleteForward`); `fill-date` sets the value in the page and sends no input.
+- `check()` on a checked box, and `check({ trial: true })`, change nothing and send no input.
+- `fill-twice` differs across runs only by a late `select` event, which Playwright's `input.select()` queues asynchronously.
