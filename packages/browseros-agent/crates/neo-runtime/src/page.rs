@@ -199,6 +199,8 @@ pub(crate) struct PageState {
     pub(crate) document: Option<String>,
     pub(crate) dom_content_loaded: bool,
     pub(crate) load: bool,
+    /// Chromium emits no load lifecycle when restoring this document from bfcache.
+    restored_from_bfcache: bool,
     /// `Page.javascriptDialogOpening` events seen; each was answered.
     pub(crate) dialogs_opened: u64,
 }
@@ -517,6 +519,8 @@ pub(crate) struct InputPermit {
 /// until its timeout), and sends one `Page.handleJavaScriptDialog {accept: false}` whose "No
 /// dialog is showing" error is ignored, so a dialog event lost to the 4096-slot ring cannot
 /// hang the run.
+/// Lost commits and lifecycle events are not reconstructed; a navigation can time out after
+/// overflow. A frame-tree resync would also need ordered lifecycle replay.
 async fn watch_events(
     mut events: broadcast::Receiver<CdpEvent>,
     cdp: CdpClient,
@@ -537,7 +541,7 @@ async fn watch_events(
                 updates.state.send_if_modified(|state| {
                     applied = apply(state, &event, &session, &main_frame);
                     if applied.new_document {
-                        // Before notifying readers: a bfcache world can still answer successfully.
+                        // Before notifying readers: no in-flight read may return old-document data.
                         updates.world.document_committed();
                     }
                     applied.changed
@@ -555,7 +559,6 @@ async fn watch_events(
             }
             Err(RecvError::Lagged(skipped)) => {
                 warn!(%session, skipped, "the run's event watcher lagged; answering any dialog");
-                updates.world.document_committed();
                 updates
                     .state
                     .send_if_modified(|state| state.pending_url.take().is_some());
@@ -600,6 +603,8 @@ struct FrameRequestedNavigation {
 #[derive(Deserialize)]
 struct FrameNavigated {
     frame: NavigatedFrame,
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -674,7 +679,7 @@ pub(crate) fn apply(
             }
         }
         "Page.frameNavigated" => {
-            if let Ok(FrameNavigated { frame }) = serde_json::from_value(params)
+            if let Ok(FrameNavigated { frame, kind }) = serde_json::from_value(params)
                 && frame.id == main_frame
             {
                 state.commits += 1;
@@ -683,6 +688,7 @@ pub(crate) fn apply(
                 state.document = frame.loader_id;
                 state.dom_content_loaded = false;
                 state.load = false;
+                state.restored_from_bfcache = kind.as_deref() == Some("BackForwardCacheRestore");
                 state.pending_url = None;
                 applied.new_document = true;
                 applied.navigation = Some(Navigation {
@@ -714,8 +720,12 @@ pub(crate) fn apply(
                 && frame_id == main_frame
             {
                 state.pending_url = None;
-                state.dom_content_loaded = true;
-                state.load = true;
+                // Playwright 26137face ignores stop-loading. Only bfcache needs this fallback:
+                // Chromium restores a loaded document without replaying its lifecycle events.
+                if state.restored_from_bfcache {
+                    state.dom_content_loaded = true;
+                    state.load = true;
+                }
                 applied.changed = true;
             }
         }
@@ -1287,9 +1297,9 @@ async fn arm_interceptor(
 ) -> Result<Arming<ArmedInterceptor>, PageError> {
     let mark = page.mark();
     let group = new_group(&page, "interceptor");
-    let armed = page
+    let (armed, current) = page
         .world
-        .call(
+        .call_retaining_reply(
             Some(group.group()),
             &InjectedSetupHitTargetInterceptorParams {
                 element,
@@ -1298,7 +1308,7 @@ async fn arm_interceptor(
             },
         )
         .await?;
-    Ok(match armed.outcome {
+    let owned = match armed.outcome {
         HitTargetSetup::Description(description) if description == "error:notconnected" => {
             Arming::NotConnected
         }
@@ -1311,7 +1321,15 @@ async fn arm_interceptor(
             stopped: false,
             input: Some(input),
         }),
-    })
+    };
+    if current {
+        Ok(owned)
+    } else {
+        // The page acted before replying. Drop the owner (and send stop) even if the caller
+        // timed out or a commit made the old element unusable; then loop A may resolve again.
+        drop(owned);
+        Ok(Arming::NotConnected)
+    }
 }
 
 /// For a barrier whose own receiver lagged: waits for the watcher to see no pending navigation.
@@ -1718,7 +1736,7 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_stopped_loading_fires_both_events_without_a_pending_navigation() {
+    fn tests_that_stopped_loading_does_not_complete_an_ordinary_document() {
         let mut state = PageState::default();
         applied(
             &mut state,
@@ -1728,8 +1746,33 @@ mod tests {
                 json!({"frameId": MAIN}),
             ),
         );
-        assert!(state.dom_content_loaded);
-        assert!(state.load);
+        assert!(!state.dom_content_loaded);
+        assert!(!state.load);
+    }
+
+    #[test]
+    fn tests_that_stopped_loading_completes_only_a_bfcache_document() {
+        let mut state = PageState::default();
+        let stopped = event(
+            "Page.frameStoppedLoading",
+            Some(SESSION),
+            json!({"frameId":MAIN}),
+        );
+        for (kind, expected) in [("BackForwardCacheRestore", true), ("Navigation", false)] {
+            applied(
+                &mut state,
+                &event(
+                    "Page.frameNavigated",
+                    Some(SESSION),
+                    json!({
+                        "frame":{"id":MAIN,"url":"https://a.test/","loaderId":kind},"type":kind
+                    }),
+                ),
+            );
+            applied(&mut state, &stopped);
+            assert_eq!(state.dom_content_loaded, expected);
+            assert_eq!(state.load, expected);
+        }
     }
 
     #[test]

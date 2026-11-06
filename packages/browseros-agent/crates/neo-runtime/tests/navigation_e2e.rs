@@ -27,6 +27,10 @@ async fn open() -> Option<Tab> {
                 pages: vec![
                     ("/one".to_string(), ONE.to_string()),
                     ("/two".to_string(), TWO.to_string()),
+                    ("/wait-commit".to_string(), "<title>Commit</title><img src='/slow-image-commit'>".to_string()),
+                    ("/wait-domcontentloaded".to_string(), "<title>DOM</title><img src='/slow-image-dom'>".to_string()),
+                    ("/wait-load".to_string(), "<title>Load</title><img src='/slow-image-load'>".to_string()),
+                    ("/stopped".to_string(), "<title>Stopped</title><img src='/slow-image-stop'><script>setTimeout(()=>window.stop(),200)</script>".to_string()),
                 ],
             },
             "/one",
@@ -63,6 +67,82 @@ async fn tests_that_goto_waits_for_each_supported_lifecycle_and_reads_the_new_ti
         );
     }
     tab.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_goto_waits_for_load_but_not_slow_subresources_at_commit_or_domcontentloaded() {
+    let Some(tab) = open().await else { return };
+    for wait in ["commit", "domcontentloaded", "load"] {
+        let outcome = run(
+            &tab,
+            &format!(
+                "return await page.goto({:?}, {{waitUntil:{wait:?},timeout:10000}})",
+                format!("{}/wait-{wait}", tab.origin),
+            ),
+        )
+        .await;
+        assert_eq!(value(outcome), Value::Null);
+        let mut state = tab.evaluate("document.readyState").await;
+        // Commit may precede HTML parsing. Wait only for the parser, while the image is held.
+        for _ in 0..50 {
+            if state != "loading" {
+                break;
+            }
+            time::sleep(Duration::from_millis(20)).await;
+            state = tab.evaluate("document.readyState").await;
+        }
+        assert_eq!(
+            state,
+            if wait == "load" {
+                "complete"
+            } else {
+                "interactive"
+            },
+            "{wait}"
+        );
+    }
+    tab.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_window_stop_without_load_leaves_goto_waiting() {
+    let Some(tab) = open().await else { return };
+    let mut events = tab.cdp.events();
+    let outcome = run(&tab, &format!(
+        "try {{ await page.goto({:?}, {{waitUntil:'load',timeout:1000}}); return 'resolved'; }} catch(e) {{ return e.name; }}",
+        format!("{}/stopped",tab.origin),
+    )).await;
+    let mut observed = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        observed.push(event);
+    }
+    tab.close().await;
+    assert_eq!(value(outcome), "TimeoutError");
+    let commit = observed
+        .iter()
+        .position(|event| {
+            event.method == "Page.frameNavigated"
+                && event.params["frame"]["url"]
+                    .as_str()
+                    .is_some_and(|url| url.ends_with("/stopped"))
+        })
+        .expect("the stopped page committed");
+    let loader = &observed[commit].params["frame"]["loaderId"];
+    let after = &observed[commit..];
+    assert!(
+        after
+            .iter()
+            .any(|event| event.method == "Page.frameStoppedLoading")
+    );
+    let lifecycle = |name: &str| {
+        after.iter().any(|event| {
+            event.method == "Page.lifecycleEvent"
+                && event.params["loaderId"] == *loader
+                && event.params["name"] == name
+        })
+    };
+    assert!(lifecycle("DOMContentLoaded"));
+    assert!(!lifecycle("load"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -194,10 +274,13 @@ async fn tests_that_history_navigation_restores_a_readable_document() {
     let Some(tab) = open().await else { return };
     let mut events = tab.cdp.events();
     let result = value(run(&tab, &format!(
-        "await page.goto({:?}); await page.goto({:?}); const before=await page.title(); await page.locator('#back').click(); return {{before,after:await page.title()}}",
-        format!("{}/one",tab.origin), format!("{}/two",tab.origin),
+        "await page.goto({:?}); const before=await page.title(); await page.locator('#back').click(); const after=await page.title(); await page.goto({:?}, {{timeout:1500}}); return {{before,after,afterHash:await page.title()}}",
+        format!("{}/two",tab.origin), format!("{}/one#restored",tab.origin),
     )).await);
-    assert_eq!(result, json!({"before":"Second","after":"First"}));
+    assert_eq!(
+        result,
+        json!({"before":"Second","after":"First","afterHash":"First"})
+    );
     let mut restored = false;
     while let Ok(event) = events.try_recv() {
         restored |= event.method == "Page.frameNavigated"

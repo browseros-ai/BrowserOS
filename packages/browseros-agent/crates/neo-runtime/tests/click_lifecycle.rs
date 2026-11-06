@@ -13,7 +13,7 @@ mod fake_browser;
 
 use std::time::{Duration, Instant};
 
-use fake_browser::{Exchange, FakeBrowser, GLUE, PAGE_URL, Replies, Reply};
+use fake_browser::{CommitDuring, Exchange, FakeBrowser, GLUE, PAGE_URL, Replies, Reply};
 use neo_runtime::{CallResult, Delivery, RunEnd, RunStatus};
 use serde_json::json;
 use tokio::time;
@@ -110,6 +110,85 @@ const ONE_INPUT_PHASE: [&str; 5] = [
     "mouse mouseReleased",
     "glue stopHitTargetInterceptor",
 ];
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_setup_spanning_a_commit_is_stopped_before_retrying() {
+    let browser = FakeBrowser::start(Replies {
+        commit_during: Some(CommitDuring::Arm),
+        arm: Reply {
+            delay: Duration::from_millis(50),
+            ..Reply::default()
+        },
+        ..Replies::default()
+    })
+    .await;
+    let outcome = browser
+        .runtime()
+        .await
+        .run(fake_browser::run_request(
+            "await page.locator('#go').click(); return 'clicked'",
+            Duration::from_secs(10),
+            CancellationToken::new(),
+        ))
+        .await;
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert_eq!(outcome.value, Some(json!("clicked")));
+    let exchanges = settle(&browser, detached).await;
+    let first_stop = exchanges
+        .iter()
+        .position(|exchange| {
+            glue_call(exchange) == Some("stopHitTargetInterceptor")
+                && exchange.command["params"]["arguments"][2]["objectId"] == "interceptor-1"
+        })
+        .expect("the first setup's answer must be owned and stopped");
+    let second_setup = exchanges
+        .iter()
+        .enumerate()
+        .filter(|(_, exchange)| glue_call(exchange) == Some("setupHitTargetInterceptor"))
+        .nth(1)
+        .map(|(index, _)| index)
+        .expect("setup retries in the new document");
+    assert!(
+        first_stop < second_setup,
+        "the old interceptor must stop before another input turn"
+    );
+    assert_eq!(browser.armed_interceptor(), None);
+    assert_eq!(browser.page_clicks(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_late_setup_spanning_a_commit_is_stopped_after_timeout() {
+    let browser = FakeBrowser::start(Replies {
+        commit_during: Some(CommitDuring::Arm),
+        arm: Reply {
+            delay: Duration::from_millis(200),
+            ..Reply::default()
+        },
+        ..Replies::default()
+    })
+    .await;
+    let outcome = browser
+        .runtime()
+        .await
+        .run(fake_browser::run_request(
+            "try { await page.locator('#go').click({timeout:50}); } catch(e) { return e.name; }",
+            Duration::from_secs(10),
+            CancellationToken::new(),
+        ))
+        .await;
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert_eq!(outcome.value, Some(json!("TimeoutError")));
+    let exchanges = settle(&browser, detached).await;
+    assert!(
+        exchanges.iter().any(|exchange| {
+            glue_call(exchange) == Some("stopHitTargetInterceptor")
+                && exchange.command["params"]["arguments"][2]["objectId"] == "interceptor-1"
+        }),
+        "the late answer must still be stopped"
+    );
+    assert_eq!(browser.armed_interceptor(), None);
+    assert_eq!(browser.page_clicks(), 0);
+}
 
 /// Whether the fake has received a hit-target interceptor's setup.
 fn armed(exchanges: &[Exchange]) -> bool {

@@ -78,6 +78,10 @@ pub struct Replies {
     /// arrives, as a real page does before it answers, so holding the answer back leaves it
     /// armed with the run not knowing yet.
     pub arm: Reply,
+    pub title: Reply,
+    pub world: Reply,
+    /// A commit after the named operation starts, before its delayed answer is delivered.
+    pub commit_during: Option<CommitDuring>,
     /// The tab closes the moment a session's first `Page.enable` arrives, and the fake does
     /// what BrowserOS does then (measured): it never answers the command in flight, reports
     /// `Target.detachedFromTarget` for the session, and answers every later command on it with
@@ -88,11 +92,23 @@ pub struct Replies {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[expect(
+    dead_code,
+    reason = "Each test binary exercises different commit boundaries"
+)]
+pub enum CommitDuring {
+    Arm,
+    Title,
+    Attach,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct NavigationScript {
     pub reply_after: Duration,
     pub commit_after: Duration,
     pub same_document: bool,
     pub stop_loading: bool,
+    pub restored_from_bfcache: bool,
 }
 
 /// One command the fake received, and its answer once the fake has sent it.
@@ -264,6 +280,9 @@ struct Calls {
     history: usize,
     mouse: usize,
     arm: usize,
+    title: usize,
+    world: usize,
+    committed: bool,
     /// Whether `install.js` ran, so a later `attach.js` finds the glue.
     installed: bool,
     /// Sessions whose tab closed under them (`Replies::closes_at_page_enable`).
@@ -349,6 +368,7 @@ async fn serve_cdp(
                 );
             }
         }
+        commit_during_call(&command, replies, &mut calls, &outgoing);
         if command["method"] == "Page.navigate"
             && let Some(script) = replies.navigation
         {
@@ -385,6 +405,31 @@ async fn serve_cdp(
     }
 }
 
+fn commit_during_call(
+    command: &Value,
+    replies: Replies,
+    calls: &mut Calls,
+    outgoing: &UnboundedSender<String>,
+) {
+    let method = command["method"].as_str().unwrap_or_default();
+    let glue = command["params"]["arguments"][0]["value"]
+        .as_str()
+        .unwrap_or_default();
+    let commit = match replies.commit_during {
+        Some(CommitDuring::Arm) => glue == "setupHitTargetInterceptor" && calls.arm == 1,
+        Some(CommitDuring::Title) => glue == "title" && calls.title == 1,
+        Some(CommitDuring::Attach) => method == "Page.createIsolatedWorld" && calls.world == 1,
+        None => false,
+    };
+    if commit && !calls.committed {
+        calls.committed = true;
+        let _ = outgoing.send(json!({
+            "sessionId":command["sessionId"], "method":"Page.frameNavigated",
+            "params":{"frame":{"id":PAGE,"loaderId":"next","url":"https://example.test/next"},"type":"Navigation"}
+        }).to_string());
+    }
+}
+
 async fn emit_navigation(
     outgoing: UnboundedSender<String>,
     session: String,
@@ -400,7 +445,7 @@ async fn emit_navigation(
     } else {
         (
             "Page.frameNavigated",
-            json!({"frame":{"id":PAGE,"loaderId":"new","url":url}}),
+            json!({"frame":{"id":PAGE,"loaderId":"new","url":url},"type":if script.restored_from_bfcache { "BackForwardCacheRestore" } else { "Navigation" }}),
         )
     };
     let _ = outgoing.send(json!({"sessionId":session,"method":method,"params":params}).to_string());
@@ -472,16 +517,17 @@ fn answer(
             }
             None => (json!({"result":{"frameId":PAGE,"loaderId":"new"}}), None),
         },
-        "Page.createIsolatedWorld" => (json!({ "result": { "executionContextId": 7 } }), now),
+        "Page.createIsolatedWorld" => {
+            let call = calls.world;
+            calls.world += 1;
+            (
+                json!({ "result": { "executionContextId": 7 } }),
+                replies.world.when(call),
+            )
+        }
         "Runtime.callFunctionOn" => {
             let params = &command["params"];
-            let when = if params["arguments"][0]["value"] == "setupHitTargetInterceptor" {
-                let call = calls.arm;
-                calls.arm += 1;
-                replies.arm.when(call)
-            } else {
-                now
-            };
+            let when = glue_delay(params, calls, replies);
             (call_function_on(params, calls, page), when)
         }
         "Runtime.getProperties" => {
@@ -519,6 +565,17 @@ fn answer(
     }
 }
 
+fn glue_delay(params: &Value, calls: &mut Calls, replies: Replies) -> Option<Duration> {
+    let (counter, reply) = match params["arguments"][0]["value"].as_str() {
+        Some("setupHitTargetInterceptor") => (&mut calls.arm, replies.arm),
+        Some("title") => (&mut calls.title, replies.title),
+        _ => return Some(Duration::ZERO),
+    };
+    let call = *counter;
+    *counter += 1;
+    reply.when(call)
+}
+
 /// `Runtime.callFunctionOn`: neo-runtime-injected's bundle entries by execution context, and
 /// glue calls on the glue object. A by-value result is the glue's JSON; a result that holds a
 /// handle is a page object whose properties `Runtime.getProperties` then lists. The interceptor
@@ -540,7 +597,7 @@ fn call_function_on(params: &Value, calls: &mut Calls, page: &Mutex<Page>) -> Va
     let name = params["arguments"][0]["value"].as_str().unwrap_or_default();
     let glue_params = &params["arguments"][1]["value"];
     let value = match name {
-        "title" => json!({"value":"Fake page"}),
+        "title" => json!({"value":if calls.committed { "After commit" } else { "Fake page" }}),
         "describeSelector" => json!({ "locator": glue_params["selector"] }),
         "checkElementStates" | "scrollIntoView" => json!({}),
         "viewportSize" => json!({ "width": 800, "height": 600 }),

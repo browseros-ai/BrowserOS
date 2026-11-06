@@ -132,6 +132,11 @@ struct Attached {
     document: u64,
 }
 
+enum StaleReply {
+    Discard,
+    Retain,
+}
+
 impl World {
     pub(crate) fn new(cdp: CdpClient, session: SessionId, frame_id: String) -> Self {
         Self {
@@ -143,8 +148,8 @@ impl World {
         }
     }
 
-    /// A commit can restore a live bfcache context. Advance synchronously before the watcher
-    /// publishes it; an attachment already in flight must discard its result as well.
+    /// Advance before publishing a commit: reads and attachments already in flight must
+    /// retry in the new document. Setup replies are retained separately for cleanup.
     pub(crate) fn document_committed(&self) {
         self.document.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut slot) = self.attached.try_lock() {
@@ -168,6 +173,28 @@ impl World {
         group: Option<&ObjectGroup>,
         params: &C,
     ) -> Result<C::Result, PageError> {
+        self.call_impl(group, params, StaleReply::Discard)
+            .await
+            .map(|(result, _)| result)
+    }
+
+    /// Decode even an answer that spans a commit. A setup can already have armed a page
+    /// resource, so its caller must own and stop it before discarding the stale answer.
+    /// The boolean says whether the answer still belongs to the current document.
+    pub(crate) async fn call_retaining_reply<C: InjectedCall>(
+        &self,
+        group: Option<&ObjectGroup>,
+        params: &C,
+    ) -> Result<(C::Result, bool), PageError> {
+        self.call_impl(group, params, StaleReply::Retain).await
+    }
+
+    async fn call_impl<C: InjectedCall>(
+        &self,
+        group: Option<&ObjectGroup>,
+        params: &C,
+        stale: StaleReply,
+    ) -> Result<(C::Result, bool), PageError> {
         let by_value = <C::Result as PageResult>::BY_VALUE;
         let group = match (by_value, group) {
             (true, _) => None,
@@ -210,7 +237,9 @@ impl World {
                 return Err(error);
             }
         };
-        if self.document.load(Ordering::SeqCst) != attached.document {
+        if matches!(stale, StaleReply::Discard)
+            && self.document.load(Ordering::SeqCst) != attached.document
+        {
             return Err(PageError::NotConnected);
         }
         let result = evaluated(reply, C::NAME)?;
@@ -236,10 +265,13 @@ impl World {
                 })?;
             <C::Result as PageResult>::from_properties(split_properties(properties.result)?)
         };
-        if self.document.load(Ordering::SeqCst) != attached.document {
+        let current = self.document.load(Ordering::SeqCst) == attached.document;
+        if !current && matches!(stale, StaleReply::Discard) {
             return Err(PageError::NotConnected);
         }
-        decoded.map_err(|error| PageError::Contract(error.to_string()))
+        decoded
+            .map(|result| (result, current))
+            .map_err(|error| PageError::Contract(error.to_string()))
     }
 
     /// The glue for the current document, attaching first when this session has none.
