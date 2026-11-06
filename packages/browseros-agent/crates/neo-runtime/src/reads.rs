@@ -24,8 +24,8 @@
 //! The seam is two traits of their own, [`SelectorTab`] and [`ReadTab`], so the reads never grow
 //! click's `Tab`; `Arc<PageSession>` implements both at the bottom of this file, over click's own
 //! `prepare` and `describe` and the main frame's utility world. [`wait_for_function_on_selector`]
-//! takes the page call as a closure, so `inputValue` also reuses the same loop. The tests drive
-//! both loops against a scripted tab under paused time.
+//! takes the page call as a closure shared by `textContent`, `innerText` and `getAttribute`.
+//! The tests drive both loops against a scripted tab under paused time.
 //!
 //! An `ai` snapshot also records its refs in the document's injected script, so a later
 //! `aria-ref=eN` selector (any run's, since the utility world is per document) resolves the
