@@ -326,9 +326,18 @@ impl Browser {
                  group signals"
             );
         }
-        let port_file = profile.path().join("DevToolsActivePort");
+        // Owned before the wait below, which panics on a browser that never opens its port: a
+        // `Browser` dropped unclosed SIGKILLs its group, while a bare `Child` dropped by the
+        // panic would leave the browser running. `port` is set once the browser publishes it.
+        let mut browser = Self {
+            child,
+            port: 0,
+            profile,
+            closed: false,
+        };
+        let port_file = browser.profile.path().join("DevToolsActivePort");
         let deadline = Instant::now() + Duration::from_secs(20);
-        let port = loop {
+        browser.port = loop {
             let port = fs::read_to_string(&port_file)
                 .ok()
                 .and_then(|text| text.lines().next()?.parse::<u16>().ok());
@@ -341,12 +350,7 @@ impl Browser {
             );
             thread::sleep(Duration::from_millis(50));
         };
-        Self {
-            child,
-            port,
-            profile,
-            closed: false,
-        }
+        browser
     }
 
     /// Closes the browser as Playwright does (`packages/utils/processLauncher.ts`
