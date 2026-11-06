@@ -154,6 +154,56 @@ export async function findPage(context, targetId) {
 }
 
 /**
+ * Opens a tab on `url` with the test's own CDP client, as a tab the user had open before a run,
+ * and returns its target id and an attached session once the tab has committed `url`.
+ */
+export async function openTab(cdp, url) {
+  const { targetId } = await cdp.send('Target.createTarget', { url })
+  const { sessionId } = await cdp.send('Target.attachToTarget', {
+    targetId,
+    flatten: true,
+  })
+  await waitForUrl(cdp, sessionId, url)
+  return { targetId, sessionId }
+}
+
+/**
+ * Runs an agent script's source on the tab `targetId` through Playwright, with Playwright's
+ * `page` and `context` in scope as neo_run puts Neo's. Settles with `{ value }` or
+ * `{ error: { name, message } }`.
+ */
+export async function runInPlaywright(context, targetId, source) {
+  const page = await findPage(context, targetId)
+  const AsyncFunction = (async () => {}).constructor
+  return await new AsyncFunction('page', 'context', source)(page, context).then(
+    (value) => ({ value }),
+    (error) => ({ error: { name: error.name, message: error.message } }),
+  )
+}
+
+/**
+ * Runs the script file at `scriptPath` on the tab `targetId` through Neo. Settles as
+ * `runInPlaywright` does, plus the run's whole `outcome`.
+ */
+export async function runInNeo(neoRun, port, targetId, scriptPath) {
+  const neo = startNeo(neoRun, port, targetId, scriptPath)
+  await neo.connected
+  const outcome = await neo.outcome
+  return outcome.status === 'ok'
+    ? { value: outcome.value, outcome }
+    : { error: outcome.error, outcome }
+}
+
+/** Calls `check` every 50 ms until it returns true, and fails once `timeoutMs` has passed. */
+export async function eventually(check, what, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs
+  while (!(await check())) {
+    assert.ok(Date.now() < deadline, `timed out waiting until ${what}`)
+    await sleep(50)
+  }
+}
+
+/**
  * Serves `pages[path]` for a path it names, and a small page titled with the path otherwise.
  * `/slow` answers after `slowMs`, so a navigation to it stays in flight before it commits.
  */

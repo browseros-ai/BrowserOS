@@ -13,6 +13,7 @@ import type {
   FrameClickParams,
   FrameGotoParams,
   FrameTextContentParams,
+  PageCloseParams,
 } from '@browseros/neo-runtime-spec/serve'
 
 /** `Frame.goto`'s params in Playwright's schema order (`spec/playwright/frame.yml`). */
@@ -76,6 +77,16 @@ type _FrameAriaSnapshotKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_ARIA_SNAPSHOT_KEYS)[number], true>,
     Required<FrameAriaSnapshotParams>
+  >
+>
+
+/** `Page.close`'s params (`spec/playwright/page.yml`). */
+export const PAGE_CLOSE_KEYS = ['reason'] as const
+
+type _PageCloseKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_CLOSE_KEYS)[number], true>,
+    Required<PageCloseParams>
   >
 >
 

@@ -1,34 +1,43 @@
-//! Runs an agent's Playwright-style script in Neo against one BrowserOS tab, with no cache:
-//! every synchronous getter such as `page.url()` is one live CDP call. Browser calls such as
-//! `locator.click()` are Playwright's own protocol messages, served here the way Playwright's
-//! server serves them, each on its own task so it outlives the realm, and each traced with its
-//! delivery state.
+//! Runs an agent's Playwright-style script from a starting BrowserOS tab. Each handed-out
+//! Page keeps its target identity; live getters read CDP. Browser calls run on owned tasks,
+//! with progress and delivery records that outlive the script's realm.
 //!
 //! ```text
-//!  Runtime::run(RunRequest)                     runtime.rs: tab check, run order, outcome
-//!    └─ realm::run                              realm.rs: fresh QuickJS, limits, host globals
-//!         ├─ neo-sdk bundle → createRun()       crates/neo-sdk: Page, Frame, Locator, BrowserContext
-//!         ├─ agent code (page, context)
-//!         └─ __neo_runtime.get / .log / .call   bridge.rs: the only door from JS into Rust
-//!              ├─ getters::url / is_closed      getters.rs: one CDP call each, via browseros-cdp
-//!              └─ Dispatcher::call              dispatch.rs: route, trace entry, task, reply
-//!                   ├─ Progress, Trace          progress.rs: deadlines, call log, delivery, records
-//!                   ├─ click::click             click.rs: Playwright's two retry loops (policy)
-//!                   ├─ navigate::goto / title   navigate.rs: commits, lifecycle, live title
-//!                   └─ reads::text_content,     reads.rs: Playwright's read loops (policy)
-//!                      reads::aria_snapshot     aria_yaml.rs: the snapshot as Playwright's YAML
-//!                        └─ PageSession         page.rs: domains, watcher, CDP, mouse writer
-//!                             └─ World::call    world.rs: the injected glue, one install per document
+//! Runtime::run                           runtime.rs: starting tab, run lifetime, outcome
+//!   ├─ Tabs::open                        tabs.rs: context scope, ordered page registry
+//!   └─ realm::run                        realm.rs: fresh QuickJS and embedded neo-sdk
+//!        └─ __neo_runtime                bridge.rs: JS/Rust boundary
+//!             ├─ get → Tabs              live pages, URL, initializer and closed state
+//!             └─ Dispatcher::call        dispatch.rs: target routing, task, trace, reply
+//!                  ├─ tab_calls          context/page lifecycle; tracked creation and cleanup
+//!                  └─ Tabs::session      one lazy session for the call's page
+//!                       ├─ click::click  click.rs: policy over the Tab seam
+//!                       ├─ navigate      navigate.rs: goto (commits, lifecycle) and live title
+//!                       ├─ reads         reads.rs: textContent and ariaSnapshot read loops;
+//!                       │                aria_yaml.rs renders the snapshot as Playwright's YAML
+//!                       └─ PageSession   page.rs: domains, watcher, document state, input
+//!                            └─ World    world.rs: per-document injected glue
 //! ```
 //!
-//! `page.rs` owns the run's CDP session; the dispatcher and every task that writes on the
-//! session (call tasks, mouse writers, interceptor stops, object-group releases) share it, so it
-//! detaches only after the last of them is done. Clicks on one tab take turns at its input, its
-//! one mouse and its document's one hit-target slot, across every run of a `Runtime`
-//! (`page.rs` `TabInputs`).
+//! The registry and session writers share each `PageSession`. Its last owner detaches the
+//! session; ordinary browser tabs survive the run. Finish shares one bounded wait across
+//! creation replies, task draining and closing-state reads. Late unkept creations close
+//! after the outcome, even when their IDs were not yet known. Input turns (`page.rs`
+//! `TabInputs`) are shared by every call and run of a `Runtime` on the same target.
 //!
-//! Building a locator does no I/O: neo-sdk runs Playwright's own selector code in the realm, with
-//! the test id attribute from `world.rs`, the one name the SDK and the page share.
+//! Locator construction does no I/O. The SDK uses Playwright's selector code, with the test
+//! id attribute shared with the page through `world.rs`.
+
+#[cfg(test)]
+extern crate self as neo_runtime;
+
+#[cfg(test)]
+#[path = "../tests/support/fake_browser.rs"]
+#[expect(
+    dead_code,
+    reason = "unit tests use the same browser fixture as integration tests"
+)]
+mod fake_browser;
 
 mod aria_yaml;
 mod bridge;
@@ -45,10 +54,12 @@ mod reads;
 mod realm;
 mod run;
 mod runtime;
+mod tab_calls;
+mod tabs;
 mod world;
 
 pub use run::{
     CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunEnd, RunError,
-    RunOutcome, RunRequest, RunStatus,
+    RunOutcome, RunPage, RunRequest, RunStatus,
 };
 pub use runtime::{Runtime, RuntimeError};
