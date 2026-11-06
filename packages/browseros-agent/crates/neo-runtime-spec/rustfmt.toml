@@ -1,0 +1,10 @@
+# Google Rust style. Stable rustfmt applies `max_width` and warns about the three nightly-only
+# keys, then skips them; apply those three by hand.
+#
+# The generated modules (src/serve.rs, src/injected.rs, src/spec_hash.rs) are mounted
+# `#[rustfmt::skip]` in src/lib.rs: the translator owns their layout, so no rustfmt version can
+# make them differ from what `--check` compares.
+max_width = 100
+imports_granularity = "Module"
+hex_literal_case = "Lower"
+format_macro_matchers = true

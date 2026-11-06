@@ -44,6 +44,7 @@
     "apps/app/public/**",
     "apps/server/src/lib/db/migrations/**",
     "packages/cdp-protocol/src/generated/**",
+    "crates/neo-runtime-spec/ts/**",
     ".agents/skills/**",
     ".claude/skills/**",
     "packages/agent-cursor/playground/**"

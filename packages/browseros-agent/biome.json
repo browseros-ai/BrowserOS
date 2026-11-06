@@ -12,6 +12,7 @@
       "!.scripts",
       "!**/*.svg",
       "!packages/claw-api/src/generated",
+      "!crates/neo-runtime-spec/ts",
       "!packages/agent-cursor/src",
       "!packages/agent-cursor/tests/fixtures/golden.json",
       "!contracts/claw-mcp/fixtures/pages",

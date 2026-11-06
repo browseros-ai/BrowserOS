@@ -1,0 +1,6 @@
+# Byte-for-byte copy of microsoft/playwright packages/protocol/spec/*.yml, with its LICENSE and
+# NOTICE. Never edit these files. To upgrade, run ../../sync-playwright.sh <playwright-checkout>,
+# the only writer of this file. The translator refuses to run when the *.yml files here no
+# longer hash to `sha256` (the framing in codegen/spec_files.rs, paths relative to spec/).
+commit: 26137face0500cacddf90c767dc1364da7262559
+sha256: 8f30c361261cfe7d870d0942a261d1a8f5871d92c4417497c0cfc687a7a36c3f

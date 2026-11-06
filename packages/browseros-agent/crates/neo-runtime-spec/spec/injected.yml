@@ -1,0 +1,300 @@
+# Rust -> page calls: what neo-runtime sends to the glue table in neo-runtime-injected, and
+# exactly what comes back. Written in Playwright's protocol dialect and loaded into the same
+# flat namespace as spec/playwright/, so these names must not collide with Playwright's.
+#
+# Rules the translator enforces for this file (codegen/contract.rs):
+# - Exactly one interface, `Injected`. Its `initializer` is the options of the page bundle's
+#   bootstrap, and each command is one glue function `(injected, params) => result`.
+# - Every command is `internal: true`, because Playwright's generator requires a title on any
+#   other command and a page call carries no metainfo. A command declares only `parameters`
+#   and `returns`.
+# - Every definition is reachable from `Injected`. No `binary` and no Playwright object
+#   references: a page call crosses plain JSON, or one element.
+# - A glue function returns every outcome neo-runtime acts on (nothing matched yet) as a value,
+#   and throws for failures that end the Playwright call (a strict mode violation, an invalid
+#   selector, an element of the wrong kind), as Playwright's page code does.
+#
+# The comment directly above a key becomes the Rust and TypeScript docs of what it generates.
+# Write it as one paragraph with no blank line before the key, and quote identifiers in
+# backticks (clippy's `doc_markdown` checks the generated Rust).
+#
+# Two extensions to Playwright's dialect, accepted only in this file (codegen/dialect.rs):
+# 1. `type: union` with `members`: a value that is exactly one of its members, told apart by
+#    JSON kind (string, boolean or object), so the members' kinds must differ. The wire carries
+#    the member's own JSON with no tag. Rust decodes it in one pass by kind; TypeScript writes
+#    `A | B`.
+# 2. `returns: Element?`: the glue function returns a DOM element that stays in the page
+#    (`returnByValue: false`), or `undefined`. Rust implements `ElementCall`; TypeScript
+#    writes `Element | undefined`.
+
+Injected:
+  type: interface
+
+  # The options neo-runtime passes to the page bundle's bootstrap, which creates the glue object
+  # in one world of one document. The bootstrap adds Neo's constants (`sdkLanguage`,
+  # `browserName`, no custom engines) and calls `new InjectedScript(window, options)`.
+  initializer:
+    # Sequence number of the frame's current document. `ai` snapshots prefix refs with
+    # `f<frameSeq>` when it is not zero, which is how an `aria-ref` names its frame.
+    frameSeq: int
+    # The attribute `getByTestId` matches: `data-testid` unless the script changes it.
+    testIdAttributeName: string
+    # Animation frames an element's box must hold still to count as stable.
+    stableRafCount: int
+    # Whether this is the utility world, where Neo resolves selectors.
+    isUtilityWorld: boolean
+
+  commands:
+
+    # Reads `document.title`, for `Frame.title`. Needs no `InjectedScript`.
+    title:
+      internal: true
+      returns:
+        value: string
+
+    # Resolves one frame chunk and reads the first match's `textContent`, for
+    # `Frame.textContent`. neo-runtime owns waiting: it polls this call with Playwright's backoff
+    # until something matches or the call's deadline passes.
+    textContent:
+      internal: true
+      parameters:
+        # One frame chunk of the selector, with no `internal:control=enter-frame` parts. The
+        # page parses it with `InjectedScript.parseSelector`.
+        selector: string
+        # Throw a strict mode violation when more than one element matches.
+        strict: boolean
+      returns:
+        # Absent while nothing matches; neo-runtime keeps polling until the deadline.
+        matched: TextMatch?
+
+    # Resolves one frame chunk and snapshots its first match with
+    # `InjectedScript.ariaSnapshotJSON`, for `Frame.ariaSnapshot`, which also records the tree
+    # for `aria-ref` lookups in this world. neo-runtime stitches each iframe's document into its
+    # `iframe` node and renders the YAML.
+    ariaSnapshot:
+      internal: true
+      parameters:
+        # One frame chunk; neo-runtime sends `body,frameset` when the caller gave no selector.
+        selector: string
+        # Playwright snapshots non-strictly without a selector and for iframe documents.
+        strict: boolean
+        mode: AriaSnapshotMode
+        # Remaining depth for this frame; neo-runtime subtracts an iframe's depth for its
+        # document.
+        depth: int?
+        # Include each node's client rect.
+        boxes: boolean?
+      returns:
+        # Absent while nothing matches. With the caller's selector that ends the call; for
+        # `body,frameset` neo-runtime keeps polling.
+        snapshot: AriaFrameSnapshot?
+
+    # Resolves one frame chunk that must match `<iframe>` or `<frame>` elements, for a selector
+    # that enters a frame. Returns the first match; neo-runtime maps it to a frame with CDP
+    # `DOM.describeNode` and resolves the next chunk there.
+    frameOwner:
+      internal: true
+      parameters:
+        # One frame chunk that must resolve to `<iframe>` or `<frame>` elements.
+        selector: string
+        # Throw a strict mode violation when more than one element matches.
+        strict: boolean
+      returns: Element?
+
+# The first matching element's text.
+TextMatch:
+  type: object
+  properties:
+    # `element.textContent`, which is never `null` for an element.
+    value: string
+    # `InjectedScript.previewNode` of the element, for the call log line
+    # `locator resolved to …`.
+    preview: string
+
+# The snapshot flavor: `ai` adds refs that `aria-ref=` selectors resolve.
+AriaSnapshotMode:
+  type: enum
+  literals:
+  - ai
+  - default
+
+# One document's tree, before neo-runtime stitches in its iframes.
+AriaFrameSnapshot:
+  type: object
+  properties:
+    # Playwright's `AriaSnapshotJSON`, unchanged.
+    nodes:
+      type: array
+      items: AriaNode
+    # The rendered `iframe` nodes in document order, with their depth in this tree. The glue
+    # joins Playwright's `iframeRefs` list and `iframeDepths` record into this list.
+    iframes:
+      type: array
+      items: AriaIframe
+
+# An `iframe` node of a snapshot.
+AriaIframe:
+  type: object
+  properties:
+    # The node's `ref`, which an `aria-ref=` selector names.
+    ref: string
+    # The node's depth in its document's tree.
+    depth: int
+
+# Playwright's `AriaNodeJSON` (`packages/isomorphic/ariaSnapshot.ts`), field for field. Its
+# literal `true` flags widen to `boolean`, which the glue's `satisfies` check accepts.
+AriaNode:
+  type: object
+  properties:
+    role: AriaRole
+    name: string?
+    checked: AriaTristate?
+    disabled: boolean?
+    expanded: boolean?
+    active: boolean?
+    invalid: AriaInvalid?
+    level: int?
+    pressed: AriaTristate?
+    selected: boolean?
+    ariaHidden: boolean?
+    ref: string?
+    cursor:
+      type: enum?
+      literals:
+      - pointer
+    box: AriaBox?
+    url: string?
+    placeholder: string?
+    text: string?
+    children:
+      type: array?
+      items: AriaChild
+
+# The element's client rect, which Playwright rounds to whole pixels. Decoding these as integers
+# relies on CDP writing an integral double as a JSON integer, `-0` included: serde rejects a
+# literal `-0` for an integer.
+AriaBox:
+  type: object
+  properties:
+    x: int
+    y: int
+    width: int
+    height: int
+
+# A child of an aria node: another node, or a run of text.
+AriaChild:
+  type: union
+  members:
+    node: AriaNode
+    text: string
+
+# A checked or pressed state. Playwright sends only `true` or `'mixed'`.
+AriaTristate:
+  type: union
+  members:
+    flag: boolean
+    mixed:
+      type: enum
+      literals:
+      - mixed
+
+# An invalid state. Playwright sends only `true`, `'grammar'` or `'spelling'`.
+AriaInvalid:
+  type: union
+  members:
+    flag: boolean
+    kind:
+      type: enum
+      literals:
+      - grammar
+      - spelling
+
+# Playwright's `AriaRole`, plus `iframe` and `text`.
+AriaRole:
+  type: enum
+  literals:
+  - alert
+  - alertdialog
+  - application
+  - article
+  - banner
+  - blockquote
+  - button
+  - caption
+  - cell
+  - checkbox
+  - code
+  - columnheader
+  - combobox
+  - complementary
+  - contentinfo
+  - definition
+  - deletion
+  - dialog
+  - directory
+  - document
+  - emphasis
+  - feed
+  - figure
+  - form
+  - generic
+  - grid
+  - gridcell
+  - group
+  - heading
+  - img
+  - insertion
+  - link
+  - list
+  - listbox
+  - listitem
+  - log
+  - main
+  - mark
+  - marquee
+  - math
+  - meter
+  - menu
+  - menubar
+  - menuitem
+  - menuitemcheckbox
+  - menuitemradio
+  - navigation
+  - none
+  - note
+  - option
+  - paragraph
+  - presentation
+  - progressbar
+  - radio
+  - radiogroup
+  - region
+  - row
+  - rowgroup
+  - rowheader
+  - scrollbar
+  - search
+  - searchbox
+  - separator
+  - slider
+  - spinbutton
+  - status
+  - strong
+  - subscript
+  - superscript
+  - switch
+  - tab
+  - table
+  - tablist
+  - tabpanel
+  - term
+  - textbox
+  - time
+  - timer
+  - toolbar
+  - tooltip
+  - tree
+  - treegrid
+  - treeitem
+  - iframe
+  - text

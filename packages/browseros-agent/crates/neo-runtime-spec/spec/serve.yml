@@ -1,0 +1,24 @@
+# The Playwright protocol commands Neo serves. Read by the translator in codegen/.
+#
+# `interfaces` keys are Playwright interfaces whose objects Neo creates; each lists the commands
+# Neo serves on that interface. Every name must exist in spec/playwright/*.yml, and an unknown
+# one fails the translator with the closest match. For each key the translator generates the
+# call enum (such as `FrameCall`) and the initializer; for each command, its params and result;
+# then every type they reference, with Playwright's exact wire shapes.
+#
+# A reference to an interface that is not a key here gets an uninhabited type, so Rust cannot
+# produce one. `Frame.goto` returns `response: Response?`; Neo creates no `Response` objects
+# yet, so its result is always `{}`, which Playwright's client reads as a navigation without a
+# response (`page.goto` resolves to `null`). To serve responses, add `Response: []` (and
+# `Request: []`, which its initializer requires) and regenerate.
+interfaces:
+  Frame:
+    - goto
+    - title
+    - textContent
+    - ariaSnapshot
+
+# Named Playwright types the call bridge needs outside any command. `Metadata` is the `metadata`
+# of every protocol call; it carries the call's timeout, which is never a command parameter.
+types:
+  - Metadata
