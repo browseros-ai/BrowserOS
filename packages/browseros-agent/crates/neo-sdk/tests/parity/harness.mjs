@@ -179,6 +179,18 @@ export async function launchBrowser(cleanups, binary) {
     // group reaches every helper.
     { stdio: 'ignore', detached: true },
   )
+  // Every group signal below goes to `-pid`. Were the browser in the test runner's group, that
+  // would kill `node --test` with it, so confirm it leads its own before anything relies on it.
+  const pgid = execFileSync('ps', ['-o', 'pgid=', '-p', String(child.pid)], {
+    encoding: 'utf8',
+  }).trim()
+  if (pgid !== String(child.pid)) {
+    child.kill('SIGKILL')
+    rmSync(profile, { recursive: true, force: true })
+    assert.fail(
+      `the browser (pid ${child.pid}) is in process group ${pgid}, not its own; refusing group signals`,
+    )
+  }
   const exited = once(child, 'exit')
   const browser = { child, exited, profile, endpoint: undefined }
   cleanups.push(() => closeBrowser(browser))
@@ -273,8 +285,14 @@ async function sendBrowserClose(endpoint) {
   return socket
 }
 
-/** SIGKILL to the browser's whole group, as Playwright's `killProcess` sends it. */
+/**
+ * SIGKILL to the browser's whole group, as Playwright's `killProcess` sends it. `launchBrowser`
+ * checked that the browser leads that group. Once the browser has exited, the group's id stays
+ * reserved only while a member is alive (POSIX never reuses the id of a live group), so the
+ * signal goes only to a group that still has members: an empty group's id may be someone else's.
+ */
 function killGroup(pid) {
+  if (processIds(['-g', String(pid)]).length === 0) return
   try {
     process.kill(-pid, 'SIGKILL')
   } catch {}

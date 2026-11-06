@@ -290,7 +290,7 @@ impl Browser {
     fn launch(binary: OsString) -> Self {
         let profile = tempfile::tempdir()
             .unwrap_or_else(|error| panic!("create a profile directory: {error}"));
-        let child = Command::new(binary)
+        let mut child = Command::new(binary)
             .arg("--headless=new")
             // Otherwise the browser starts a browseros-claw-server sidecar that outlives it.
             .arg("--disable-browseros-server")
@@ -306,6 +306,23 @@ impl Browser {
             .stderr(Stdio::null())
             .spawn()
             .unwrap_or_else(|error| panic!("launch the browser: {error}"));
+        // Every group signal below goes to `-pid`. Were the browser in the test binary's group,
+        // that would kill `cargo test` with it, so confirm it leads its own before anything
+        // relies on it.
+        let pid = child.id().to_string();
+        let group = Command::new("ps")
+            .args(["-o", "pgid=", "-p", &pid])
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .unwrap_or_default();
+        if group != pid {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "the browser (pid {pid}) is in process group {group:?}, not its own; refusing \
+                 group signals"
+            );
+        }
         let port_file = profile.path().join("DevToolsActivePort");
         let deadline = Instant::now() + Duration::from_secs(20);
         let port = loop {
@@ -442,7 +459,15 @@ impl Browser {
     }
 
     /// SIGKILL to the browser's whole group, as Playwright's `killProcess` sends it.
+    /// [`Browser::launch`] checked that the browser leads that group. Once the browser has
+    /// exited, the group's id stays reserved only while a member is alive (POSIX never reuses the
+    /// id of a live group), so the signal goes only to a group that still has members: an empty
+    /// group's id may be someone else's.
     fn kill_group(&self) {
+        let leader = self.child.id().to_string();
+        if pgrep(&["-g".as_ref(), leader.as_ref()]).is_empty() {
+            return;
+        }
         let _ = Command::new("kill")
             .args(["-KILL", "--", &format!("-{}", self.child.id())])
             .stderr(Stdio::null())
