@@ -13,9 +13,10 @@
 //!              ├─ getters::url / is_closed      getters.rs: one CDP call each, via browseros-cdp
 //!              └─ Dispatcher::call              dispatch.rs: route, trace entry, task, reply
 //!                   ├─ Progress, Trace          progress.rs: deadlines, call log, delivery, records
-//!                   └─ click::click             click.rs: Playwright's two retry loops (policy)
-//!                        └─ Tab for PageSession page.rs: domains, watcher, mouse writer (mechanism)
-//!                             └─ World::call    world.rs: the injected glue, one install per document
+//!                   ├─ click::click             click.rs: Playwright's two retry loops (policy)
+//!                   └─ navigate::goto / title    navigate.rs: commits, lifecycle, live title
+//!                        └─ PageSession          page.rs: domains, watcher, CDP, mouse writer
+//!                             └─ World::call     world.rs: the injected glue, one install per document
 //! ```
 //!
 //! `page.rs` owns the run's CDP session; the dispatcher and every task that writes on the
@@ -35,6 +36,7 @@ mod click_goldens;
 mod deadline;
 mod dispatch;
 mod getters;
+mod navigate;
 mod page;
 mod progress;
 mod realm;

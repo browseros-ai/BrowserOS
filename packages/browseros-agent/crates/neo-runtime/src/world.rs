@@ -9,6 +9,7 @@
 //!    callFunctionOn{executionContextId, ATTACH, [key]}             → glue objectId | undefined
 //!    undefined → callFunctionOn{executionContextId, INSTALL, [key, SPEC_SHA256, initializer]}
 //!  every call                    callFunctionOn{objectId: glue, CALL, [name, params, ...handles]}
+//!  main-frame document commit    → invalidate cached glue before publishing navigation
 //!  a protocol error              → PageError::NotConnected and the cache is cleared; the next
 //!    (context or object gone,       call in the new document attaches again
 //!     navigating)
@@ -30,6 +31,7 @@
 //! this file writes none.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use browseros_cdp::runtime::{
     CallFunctionOnResult, GetPropertiesResult, PropertyDescriptor, RemoteObject,
@@ -120,12 +122,14 @@ pub(crate) struct World {
     /// The glue this session found in the current document. A mutex, not a lock-free cache, so
     /// concurrent first calls attach once.
     attached: Mutex<Option<Arc<Attached>>>,
+    document: AtomicU64,
 }
 
 /// The glue as this session sees it in one document.
 struct Attached {
     /// In [`GLUE_GROUP`].
     glue: HandleId,
+    document: u64,
 }
 
 impl World {
@@ -135,6 +139,16 @@ impl World {
             session,
             frame_id,
             attached: Mutex::new(None),
+            document: AtomicU64::new(0),
+        }
+    }
+
+    /// A commit can restore a live bfcache context. Advance synchronously before the watcher
+    /// publishes it; an attachment already in flight must discard its result as well.
+    pub(crate) fn document_committed(&self) {
+        self.document.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut slot) = self.attached.try_lock() {
+            *slot = None;
         }
     }
 
@@ -196,6 +210,9 @@ impl World {
                 return Err(error);
             }
         };
+        if self.document.load(Ordering::SeqCst) != attached.document {
+            return Err(PageError::NotConnected);
+        }
         let result = evaluated(reply, C::NAME)?;
         let decoded = if by_value {
             <C::Result as PageResult>::from_value(result.value.unwrap_or(Value::Null))
@@ -219,6 +236,9 @@ impl World {
                 })?;
             <C::Result as PageResult>::from_properties(split_properties(properties.result)?)
         };
+        if self.document.load(Ordering::SeqCst) != attached.document {
+            return Err(PageError::NotConnected);
+        }
         decoded.map_err(|error| PageError::Contract(error.to_string()))
     }
 
@@ -227,6 +247,13 @@ impl World {
     /// has no type (`createIsolatedWorld`).
     async fn attached(&self) -> Result<Arc<Attached>, PageError> {
         let mut slot = self.attached.lock().await;
+        let document = self.document.load(Ordering::SeqCst);
+        if slot
+            .as_ref()
+            .is_some_and(|attached| attached.document != document)
+        {
+            *slot = None;
+        }
         if let Some(attached) = slot.as_ref() {
             return Ok(Arc::clone(attached));
         }
@@ -261,7 +288,10 @@ impl World {
                     PageError::Contract("install.js returned no glue object".to_string())
                 })?
         };
-        let attached = Arc::new(Attached { glue });
+        if self.document.load(Ordering::SeqCst) != document {
+            return Err(PageError::NotConnected);
+        }
+        let attached = Arc::new(Attached { glue, document });
         *slot = Some(Arc::clone(&attached));
         Ok(attached)
     }

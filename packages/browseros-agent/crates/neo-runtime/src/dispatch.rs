@@ -43,6 +43,7 @@ use tokio_util::sync::DropGuard;
 
 use crate::bridge;
 use crate::click::{self, ClickOptions};
+use crate::navigate::{self, GotoOptions};
 use crate::page::PageSession;
 use crate::progress::{
     self, CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
@@ -164,8 +165,14 @@ struct Routed {
 }
 
 /// What a message asks for. One variant per served (object, method).
+#[expect(
+    clippy::enum_variant_names,
+    reason = "Routes name their protocol interface and method"
+)]
 enum Route {
     FrameClick(ClickOptions),
+    FrameGoto(GotoOptions),
+    FrameTitle,
 }
 
 impl Dispatcher {
@@ -313,8 +320,8 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
             Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
         }
         FrameCall::Click(params) => ClickOptions::from_params(params).map(Route::FrameClick),
-        FrameCall::Goto(_) => Err(not_served_yet("goto")),
-        FrameCall::Title(_) => Err(not_served_yet("title")),
+        FrameCall::Goto(params) => GotoOptions::from_params(params).map(Route::FrameGoto),
+        FrameCall::Title(_) => Ok(Route::FrameTitle),
         FrameCall::TextContent(_) => Err(not_served_yet("textContent")),
         FrameCall::AriaSnapshot(_) => Err(not_served_yet("ariaSnapshot")),
     }
@@ -340,6 +347,20 @@ async fn serve(
         Route::FrameClick(options) => click::click(&page, &options, &progress)
             .await
             .map(|()| None),
+        Route::FrameGoto(options) => {
+            navigate::goto(&page, &options, &progress)
+                .await
+                .and_then(|result| {
+                    serde_json::to_value(result)
+                        .map(Some)
+                        .map_err(|error| PlaywrightError::error(error.to_string()).into())
+                })
+        }
+        Route::FrameTitle => navigate::title(&page, &progress).await.and_then(|result| {
+            serde_json::to_value(result)
+                .map(Some)
+                .map_err(|error| PlaywrightError::error(error.to_string()).into())
+        }),
     };
     let (record, answer) = match result {
         Err(CallError::RunEnded(_)) => return,
@@ -627,6 +648,42 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_navigation_and_title_are_served() {
+        for (method, params, title) in [
+            ("goto", json!({ "url": "https://example.test" }), "Navigate"),
+            ("title", json!({}), "Get page title"),
+        ] {
+            let routed = route_frame(method, params);
+            assert_eq!(routed.meta.and_then(|meta| meta.title), Some(title));
+            assert!(routed.route.is_ok(), "{method} must be served");
+        }
+    }
+
+    #[test]
+    fn tests_that_navigation_and_title_keep_their_generated_reply_shapes() {
+        use neo_runtime_spec::serve::{FrameGotoResult, FrameTitleResult};
+
+        for (result, expected) in [
+            (
+                serde_json::to_value(FrameGotoResult { response: None }).expect("goto result"),
+                json!({"id":7,"result":{}}),
+            ),
+            (
+                serde_json::to_value(FrameTitleResult {
+                    value: "Page title".to_string(),
+                })
+                .expect("title result"),
+                json!({"id":7,"result":{"value":"Page title"}}),
+            ),
+        ] {
+            let actual: Value =
+                serde_json::from_str(&encode_reply(&json!(7), Ok(Some(&result)), None))
+                    .expect("reply");
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
     fn a_click_option_neo_does_not_serve_is_refused_before_any_work() {
         let routed = route_frame(
             "click",
@@ -698,9 +755,12 @@ mod tests {
                 PlaywrightError::error("Neo does not serve Frame.dblclick"),
             ),
             (
-                route_frame("goto", json!({ "url": "https://example.test" })),
+                route_frame(
+                    "goto",
+                    json!({ "url": "https://example.test", "waitUntil": "networkidle" }),
+                ),
                 Some("Navigate"),
-                PlaywrightError::error("Neo does not serve Frame.goto yet"),
+                PlaywrightError::error("Neo does not support waitUntil: \"networkidle\" yet"),
             ),
             (
                 route(PAGE, FRAME, PAGE, "click", None),

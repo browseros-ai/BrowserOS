@@ -83,6 +83,16 @@ pub struct Replies {
     /// `Target.detachedFromTarget` for the session, and answers every later command on it with
     /// `Session with given id not found.`.
     pub closes_at_page_enable: bool,
+    /// Optional navigation script for commit/reply ordering tests.
+    pub navigation: Option<NavigationScript>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NavigationScript {
+    pub reply_after: Duration,
+    pub commit_after: Duration,
+    pub same_document: bool,
+    pub stop_loading: bool,
 }
 
 /// One command the fake received, and its answer once the fake has sent it.
@@ -330,6 +340,25 @@ async fn serve_cdp(
         } else {
             answer(&command, replies, &mut calls, &page)
         };
+        if command["method"] == "Page.setLifecycleEventsEnabled" {
+            for name in ["init", "DOMContentLoaded", "load"] {
+                let _ = outgoing.send(
+                    json!({"sessionId":session,"method":"Page.lifecycleEvent",
+                    "params":{"frameId":PAGE,"loaderId":"initial","name":name}})
+                    .to_string(),
+                );
+            }
+        }
+        if command["method"] == "Page.navigate"
+            && let Some(script) = replies.navigation
+        {
+            tasks.spawn(emit_navigation(
+                outgoing.clone(),
+                session,
+                command["params"]["url"].clone(),
+                script,
+            ));
+        }
         let Some(delay) = when else {
             continue;
         };
@@ -352,6 +381,39 @@ async fn serve_cdp(
                 time::sleep(delay).await;
                 delivery.send(reply);
             });
+        }
+    }
+}
+
+async fn emit_navigation(
+    outgoing: UnboundedSender<String>,
+    session: String,
+    url: Value,
+    script: NavigationScript,
+) {
+    time::sleep(script.commit_after).await;
+    let (method, params) = if script.same_document {
+        (
+            "Page.navigatedWithinDocument",
+            json!({"frameId":PAGE,"url":url}),
+        )
+    } else {
+        (
+            "Page.frameNavigated",
+            json!({"frame":{"id":PAGE,"loaderId":"new","url":url}}),
+        )
+    };
+    let _ = outgoing.send(json!({"sessionId":session,"method":method,"params":params}).to_string());
+    if script.stop_loading {
+        let _ = outgoing.send(json!({"sessionId":session,"method":"Page.frameStoppedLoading","params":{"frameId":PAGE}}).to_string());
+    } else {
+        for name in ["DOMContentLoaded", "load"] {
+            let loader = if script.same_document {
+                "initial"
+            } else {
+                "new"
+            };
+            let _ = outgoing.send(json!({"sessionId":session,"method":"Page.lifecycleEvent","params":{"frameId":PAGE,"loaderId":loader,"name":name}}).to_string());
         }
     }
 }
@@ -395,9 +457,21 @@ fn answer(
         "Target.detachFromTarget"
         | "Browser.getVersion"
         | "Page.enable"
+        | "Page.setLifecycleEventsEnabled"
         | "Emulation.setFocusEmulationEnabled"
         | "Runtime.releaseObjectGroup"
         | "DOM.scrollIntoViewIfNeeded" => (json!({ "result": {} }), now),
+        "Page.navigate" => match replies.navigation {
+            Some(script) => {
+                let result = if script.same_document {
+                    json!({"frameId":PAGE})
+                } else {
+                    json!({"frameId":PAGE,"loaderId":"new"})
+                };
+                (json!({"result":result}), Some(script.reply_after))
+            }
+            None => (json!({"result":{"frameId":PAGE,"loaderId":"new"}}), None),
+        },
         "Page.createIsolatedWorld" => (json!({ "result": { "executionContextId": 7 } }), now),
         "Runtime.callFunctionOn" => {
             let params = &command["params"];
@@ -466,6 +540,7 @@ fn call_function_on(params: &Value, calls: &mut Calls, page: &Mutex<Page>) -> Va
     let name = params["arguments"][0]["value"].as_str().unwrap_or_default();
     let glue_params = &params["arguments"][1]["value"];
     let value = match name {
+        "title" => json!({"value":"Fake page"}),
         "describeSelector" => json!({ "locator": glue_params["selector"] }),
         "checkElementStates" | "scrollIntoView" => json!({}),
         "viewportSize" => json!({ "width": 800, "height": 600 }),
