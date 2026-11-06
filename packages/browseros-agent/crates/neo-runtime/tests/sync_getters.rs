@@ -1,116 +1,76 @@
-//! End to end on a real BrowserOS neo: `watch-url.js` polls `page.url()` and `page.isClosed()`
-//! while this test changes the tab's URL over CDP and then closes it. The expected value is
-//! what real Playwright returns for the same script (crates/neo-sdk/tests/parity checks that).
+//! End to end on a real BrowserOS neo, with the test driving the tab over its own CDP session
+//! while a Neo run reads the same tab:
+//!
+//! - `watch-url.js` polls `page.url()` and `page.isClosed()` through a tab's lifetime. The
+//!   expected value is what real Playwright returns for the same script
+//!   (crates/neo-sdk/tests/parity checks that).
+//! - A script polls `page.url()` back to back through ten cross-document navigations, so reads
+//!   land in every commit window, where BrowserOS briefly refuses navigation history.
 //!
 //! Runs only when `NEO_E2E_BROWSER` names the browser binary, for example
 //! `/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo`; otherwise it passes as a skip.
 
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
+use std::iter;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 use std::{env, fs, io, thread};
 
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy, SessionId};
-use neo_runtime::{PageId, RunRequest, RunStatus, Runtime};
+use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 const WATCH_URL: &str = include_str!("../../neo-sdk/tests/scripts/watch-url.js");
 const STEP: Duration = Duration::from_millis(300);
+/// Long enough to sample `page.url()` many times while the navigation is in flight.
 const SLOW_RESPONSE: Duration = Duration::from_millis(2500);
+/// Short enough for `COMMITS` navigations in about three seconds.
+const COMMIT_RESPONSE: Duration = Duration::from_millis(200);
+const COMMITS: usize = 10;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn page_url_and_is_closed_match_playwright_through_a_tab_lifetime() {
-    let Some(binary) = env::var_os("NEO_E2E_BROWSER") else {
-        writeln!(
-            io::stderr(),
-            "skipped: set NEO_E2E_BROWSER to a BrowserOS neo binary"
-        )
-        .unwrap();
+    let Some(binary) = e2e_browser() else {
         return;
     };
-    let origin = serve_fixture().await;
-    let browser = Browser::launch(binary);
-    let cdp = CdpClient::connect(ConnectOptions {
-        host: Some("127.0.0.1".to_string()),
-        // The default exits the test process once the browser is gone at teardown.
-        reconnect_policy: ReconnectPolicy::KeepTrying,
-        ..ConnectOptions::new(browser.port)
-    })
-    .await
-    .unwrap();
-
-    let created = cdp
-        .send(
-            "Target.createTarget",
-            json!({ "url": format!("{origin}/a") }),
-            None,
-        )
-        .await
-        .unwrap();
-    let target_id = created["targetId"].as_str().unwrap().to_string();
-    let attached = cdp
-        .send(
-            "Target.attachToTarget",
-            json!({ "targetId": target_id, "flatten": true }),
-            None,
-        )
-        .await
-        .unwrap();
-    let driver = SessionId::from(attached["sessionId"].as_str().unwrap());
-    wait_for_url(&cdp, &driver, &format!("{origin}/a")).await;
-
-    let frame_tree = cdp
-        .send("Page.getFrameTree", json!({}), Some(&driver))
+    let tab = Tab::open(binary, SLOW_RESPONSE).await;
+    let frame_tree = tab
+        .cdp
+        .send("Page.getFrameTree", json!({}), Some(&tab.driver))
         .await
         .unwrap();
     assert_eq!(
         frame_tree["frameTree"]["frame"]["id"].as_str(),
-        Some(target_id.as_str()),
+        Some(tab.target_id.as_str()),
         "`frame@<targetId>` relies on the main frame sharing its page's target id"
     );
 
-    let runtime = Runtime::connect(cdp.clone()).await.unwrap();
-    let run = tokio::spawn({
-        let page = PageId::new(target_id.clone());
-        async move {
-            runtime
-                .run(RunRequest {
-                    code: WATCH_URL.to_string(),
-                    page,
-                    timeout: Duration::from_secs(30),
-                    cancel: CancellationToken::new(),
-                })
-                .await
-        }
-    });
-
+    let run = tab.start_run(WATCH_URL.to_string()).await;
     time::sleep(STEP).await;
-    evaluate(&cdp, &driver, "location.hash = 'done'").await;
+    tab.evaluate("location.hash = 'done'").await;
     time::sleep(STEP).await;
-    evaluate(&cdp, &driver, "history.pushState({}, '', '/pushed')").await;
+    tab.evaluate("history.pushState({}, '', '/pushed')").await;
     time::sleep(STEP).await;
-    cdp.send(
-        "Page.navigate",
-        json!({ "url": format!("{origin}/slow") }),
-        Some(&driver),
-    )
-    .await
-    .unwrap();
-    wait_for_url(&cdp, &driver, &format!("{origin}/slow")).await;
+    tab.navigate("/slow").await;
     time::sleep(STEP).await;
-    cdp.send("Target.closeTarget", json!({ "targetId": target_id }), None)
+    tab.cdp
+        .send(
+            "Target.closeTarget",
+            json!({ "targetId": tab.target_id }),
+            None,
+        )
         .await
         .unwrap();
 
     let outcome = run.await.unwrap();
-    cdp.disconnect().await;
-    drop(browser);
+    tab.close().await;
 
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
     assert_eq!(
@@ -129,19 +89,166 @@ async fn page_url_and_is_closed_match_playwright_through_a_tab_lifetime() {
     );
 }
 
-async fn evaluate(cdp: &CdpClient, session: &SessionId, expression: &str) {
-    let reply = cdp
-        .send(
-            "Runtime.evaluate",
-            json!({ "expression": expression }),
-            Some(session),
-        )
-        .await
-        .unwrap_or_else(|error| panic!("{expression}: {error}"));
-    assert!(
-        reply.get("exceptionDetails").is_none(),
-        "{expression} threw: {reply}"
+#[tokio::test(flavor = "multi_thread")]
+async fn page_url_reads_through_every_cross_document_commit() {
+    let Some(binary) = e2e_browser() else {
+        return;
+    };
+    let tab = Tab::open(binary, COMMIT_RESPONSE).await;
+    let paths: Vec<String> = iter::once("/a".to_string())
+        .chain((0..COMMITS).map(|index| format!("/slow{index}")))
+        .collect();
+    let last_path = paths.last().unwrap();
+    // No sleep between reads: each takes about a millisecond, so some land in every commit
+    // window. The time cap only keeps a broken run from spinning until the run's timeout.
+    let poll_url = format!(
+        r"const seen = [page.url()];
+const giveUpAt = Date.now() + 10000;
+while (!seen[seen.length - 1].endsWith('{last_path}') && Date.now() < giveUpAt) {{
+  const url = page.url();
+  if (url !== seen[seen.length - 1]) seen.push(url);
+}}
+return seen.map((url) => url.slice(url.indexOf('/', 'http://'.length)));"
     );
+
+    let run = tab.start_run(poll_url).await;
+    time::sleep(STEP).await;
+    for path in &paths[1..] {
+        tab.navigate(path).await;
+    }
+    let outcome = run.await.unwrap();
+    tab.close().await;
+
+    assert_eq!(
+        outcome.status,
+        RunStatus::Ok,
+        "a `page.url()` read inside a commit window must not throw: {outcome:?}"
+    );
+    assert_eq!(
+        outcome.value,
+        Some(json!(paths)),
+        "each committed URL once, in order: {outcome:?}"
+    );
+}
+
+fn e2e_browser() -> Option<OsString> {
+    let binary = env::var_os("NEO_E2E_BROWSER");
+    if binary.is_none() {
+        let _ = writeln!(
+            io::stderr(),
+            "skipped: set NEO_E2E_BROWSER to a BrowserOS neo binary"
+        );
+    }
+    binary
+}
+
+/// A tab of a fresh headless BrowserOS neo, open on `<origin>/a`. The test drives it over its
+/// own `driver` session, separate from the one a run attaches, as an outside actor would.
+struct Tab {
+    browser: Browser,
+    cdp: CdpClient,
+    origin: String,
+    target_id: String,
+    driver: SessionId,
+}
+
+impl Tab {
+    /// `slow_response` delays every `/slow…` page the fixture serves.
+    async fn open(binary: OsString, slow_response: Duration) -> Self {
+        let origin = serve_fixture(slow_response).await;
+        let browser = Browser::launch(binary);
+        let cdp = CdpClient::connect(ConnectOptions {
+            host: Some("127.0.0.1".to_string()),
+            // The default exits the test process once the browser is gone at teardown.
+            reconnect_policy: ReconnectPolicy::KeepTrying,
+            ..ConnectOptions::new(browser.port)
+        })
+        .await
+        .unwrap_or_else(|error| panic!("connect to the browser: {error}"));
+        let created = cdp
+            .send(
+                "Target.createTarget",
+                json!({ "url": format!("{origin}/a") }),
+                None,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("open a tab: {error}"));
+        let target_id = created["targetId"]
+            .as_str()
+            .unwrap_or_else(|| panic!("Target.createTarget answered {created}"))
+            .to_string();
+        let attached = cdp
+            .send(
+                "Target.attachToTarget",
+                json!({ "targetId": target_id, "flatten": true }),
+                None,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("attach the driver session: {error}"));
+        let driver = SessionId::from(
+            attached["sessionId"]
+                .as_str()
+                .unwrap_or_else(|| panic!("Target.attachToTarget answered {attached}")),
+        );
+        wait_for_url(&cdp, &driver, &format!("{origin}/a")).await;
+        Self {
+            browser,
+            cdp,
+            origin,
+            target_id,
+            driver,
+        }
+    }
+
+    /// Starts `code` as a Neo run against this tab; it reads the tab while the test drives it.
+    async fn start_run(&self, code: String) -> JoinHandle<RunOutcome> {
+        let runtime = Runtime::connect(self.cdp.clone())
+            .await
+            .unwrap_or_else(|error| panic!("Runtime::connect: {error}"));
+        let page = PageId::new(self.target_id.clone());
+        tokio::spawn(async move {
+            runtime
+                .run(RunRequest {
+                    code,
+                    page,
+                    timeout: Duration::from_secs(30),
+                    cancel: CancellationToken::new(),
+                })
+                .await
+        })
+    }
+
+    async fn evaluate(&self, expression: &str) {
+        let reply = self
+            .cdp
+            .send(
+                "Runtime.evaluate",
+                json!({ "expression": expression }),
+                Some(&self.driver),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{expression}: {error}"));
+        assert!(
+            reply.get("exceptionDetails").is_none(),
+            "{expression} threw: {reply}"
+        );
+    }
+
+    /// Navigates to `path` on the fixture's origin and returns once it has committed.
+    async fn navigate(&self, path: &str) {
+        let url = format!("{}{path}", self.origin);
+        self.cdp
+            .send("Page.navigate", json!({ "url": url }), Some(&self.driver))
+            .await
+            .unwrap_or_else(|error| panic!("navigate to {url}: {error}"));
+        wait_for_url(&self.cdp, &self.driver, &url).await;
+    }
+
+    async fn close(self) {
+        let Self { browser, cdp, .. } = self;
+        cdp.disconnect().await;
+        drop(browser);
+    }
 }
 
 /// Waits until the tab's committed URL is `url`. A read can fail for a few milliseconds while
@@ -172,9 +279,9 @@ async fn wait_for_url(cdp: &CdpClient, session: &SessionId, url: &str) {
     }
 }
 
-/// Serves an HTML page for any path; `/slow` answers after `SLOW_RESPONSE`, so a navigation
-/// to it stays in flight long enough to sample. Returns the origin.
-async fn serve_fixture() -> String {
+/// Serves an HTML page for any path. A path starting with `/slow` answers after
+/// `slow_response`, so a navigation to it stays in flight before it commits. Returns the origin.
+async fn serve_fixture(slow_response: Duration) -> String {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .unwrap_or_else(|error| panic!("bind the fixture server: {error}"));
@@ -194,8 +301,8 @@ async fn serve_fixture() -> String {
                 }
                 let head = String::from_utf8_lossy(&request);
                 let path = head.split(' ').nth(1).unwrap_or("/").to_string();
-                if path == "/slow" {
-                    time::sleep(SLOW_RESPONSE).await;
+                if path.starts_with("/slow") {
+                    time::sleep(slow_response).await;
                 }
                 let body = format!("<title>{path}</title><h1>{path}</h1>");
                 let response = format!(

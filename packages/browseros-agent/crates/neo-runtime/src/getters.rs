@@ -1,10 +1,17 @@
-//! Live reads of page state, one CDP call each and nothing cached. Each source was chosen
-//! because it matches what real Playwright returns at the same moment, including while a
-//! navigation is in flight (see `sync-getters-design.md`).
+//! Live reads of page state, nothing cached. Each source was chosen because it matches what
+//! real Playwright returns at the same moment, including while a navigation is in flight (see
+//! `sync-getters-design.md`). A read is normally one CDP call. The exception is a `url` read
+//! that lands in the few milliseconds of a cross-document commit, when BrowserOS refuses
+//! navigation history: it checks the tab is still open and retries until the new document
+//! answers.
+
+use std::time::Duration;
 
 use browseros_cdp::{CdpClient, CdpError, SessionId, browser};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::time;
+use tokio::time::Instant;
 
 use crate::run::PageId;
 
@@ -25,31 +32,53 @@ struct NavigationEntry {
     url: String,
 }
 
+/// How long `page.url()` keeps re-reading navigation history while the tab is still open. At
+/// every cross-document commit BrowserOS answers that read with "Not attached to an active
+/// page" for under 10 ms (1 to 8 ms, one to three calls), then with the new URL; measured on
+/// BrowserOS neo 155.0.8318.26 by the navigation probes in `sync-getters-design.md`. The
+/// budget is far above that window only so that a session which never recovers fails loudly
+/// instead of hanging the script.
+const HISTORY_RETRY_BUDGET: Duration = Duration::from_millis(250);
+/// Retries wait 1, 2, 4, 8, then 16 ms, so the first ones land inside the commit window.
+const MAX_RETRY_BACKOFF: Duration = Duration::from_millis(16);
+
 /// `page.url()`: the committed URL of the session's current history entry, or `None` once
 /// the tab is closed. Playwright keeps the old URL until a navigation commits, and so does
-/// navigation history; `Page.getFrameTree` and `location.href` block until the commit, and
-/// the target and tab infos already show the destination.
+/// navigation history. `Page.getFrameTree` and `location.href` block until the commit, and
+/// the target and tab infos show the destination before it, so history is the only source
+/// and nothing else stands in when it fails.
+///
+/// A failed history read means the tab closed or a navigation is committing; the tab check
+/// tells them apart without reading the error text. Closed gives `None`. Open retries within
+/// [`HISTORY_RETRY_BUDGET`] and then returns the last history error. Every caller races the
+/// whole call against the run's deadline, so the budget never outlives the run.
 pub(crate) async fn url(
     cdp: &CdpClient,
     session: &SessionId,
     page: &PageId,
 ) -> Result<Option<String>, CdpError> {
-    let history_error = match cdp
-        .send("Page.getNavigationHistory", json!({}), Some(session))
-        .await
-    {
-        Ok(reply) => return current_url(reply).map(Some),
-        Err(error) => error,
-    };
-    // Every source errors once the tab is gone; only the tab check can say that is why.
-    if is_closed(cdp, page).await? {
-        Ok(None)
-    } else {
-        Err(history_error)
+    let give_up_at = Instant::now() + HISTORY_RETRY_BUDGET;
+    let mut backoff = Duration::from_millis(1);
+    loop {
+        let history_error = match current_url(cdp, session).await {
+            Ok(url) => return Ok(Some(url)),
+            Err(error) => error,
+        };
+        if is_closed(cdp, page).await? {
+            return Ok(None);
+        }
+        if Instant::now() + backoff >= give_up_at {
+            return Err(history_error);
+        }
+        time::sleep(backoff).await;
+        backoff = (backoff * 2).min(MAX_RETRY_BACKOFF);
     }
 }
 
-fn current_url(reply: Value) -> Result<String, CdpError> {
+async fn current_url(cdp: &CdpClient, session: &SessionId) -> Result<String, CdpError> {
+    let reply = cdp
+        .send("Page.getNavigationHistory", json!({}), Some(session))
+        .await?;
     let history: NavigationHistory = serde_json::from_value(reply)?;
     let entry_count = history.entries.len();
     history
