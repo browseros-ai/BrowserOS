@@ -1,0 +1,5 @@
+<!doctype html><html><head><meta charset="utf-8"><title>covered</title><script>
+window.__events = [];
+for (const type of ['pointermove', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'])
+  addEventListener(type, e => __events.push({ type: e.type, target: e.target.id || e.target.tagName.toLowerCase(), isTrusted: e.isTrusted, clientX: e.clientX, clientY: e.clientY, button: e.button, buttons: e.buttons, detail: e.detail }), true);
+</script></head><body><button>Submit</button><div id="overlay" style="position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:10;background:rgba(0,0,0,0.3)"></div></body></html>

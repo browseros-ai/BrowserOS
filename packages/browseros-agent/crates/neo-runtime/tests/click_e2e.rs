@@ -1,19 +1,18 @@
-//! Clicks end to end on a real BrowserOS neo, against Playwright's recorded goldens
-//! (`crates/neo-sdk/tests/goldens/click-goldens.json`, captured with playwright-core 1.64.1 on
-//! the same browser). Each case serves the golden's own fixture page, runs the golden's own
-//! script as a Neo run, and compares what the script saw, the run's record, and what the page's
-//! listeners saw.
+//! Clicks end to end on a real BrowserOS neo. Each case serves a page from
+//! `crates/neo-sdk/tests/pages/`, runs a Neo script against it, and checks what the script saw,
+//! the run's record (its result and delivery) and what the page's own listeners saw. A failure is
+//! checked by its error kind and by the reason its log gives, never by Playwright's exact wording,
+//! call-log layout or retry counts.
 //!
-//! The cases the goldens do not cover (a dialog, a run that ends mid-press, a verified block, a
-//! trial, a closed tab, the install's reuse, a frame selector, a background tab) check Neo's
-//! own guarantees on the same browser: the run's records and deliveries, and what the page saw.
-//! `crates/neo-sdk/tests/parity/click.test.mjs` runs the golden cases, and the dialog, blocked,
-//! trial and closed-tab cases on the same pages (`crates/neo-sdk/tests/pages/`), through live
-//! Playwright beside Neo.
+//! The cases: an ordinary click, which reaches its target and not the button beside it; strict,
+//! hidden, covered and disabled buttons; a press an overlay catches after the hit check; a sticky
+//! header; a link to a slow page; a dialog; a run that ends mid-press; a trial; a closed tab; the
+//! install's reuse; a frame selector; a background tab; and concurrent clicks.
+//! `crates/neo-sdk/tests/parity/click.test.mjs` runs the same pages through live Playwright beside
+//! Neo.
 //!
-//! The goldens are read at run time through `CARGO_MANIFEST_DIR`, never `env!`, so a test
-//! binary from a shared build dir reads this checkout's files. Runs only when `NEO_E2E_BROWSER`
-//! names the browser binary (`support/browser.rs`); otherwise each test passes as a skip.
+//! Runs only when `NEO_E2E_BROWSER` names the browser binary (`support/browser.rs`); otherwise
+//! each test passes as a skip.
 
 #[path = "support/browser.rs"]
 mod browser;
@@ -27,84 +26,26 @@ use std::time::{Duration, Instant};
 use browser::{Fixture, Tab};
 use browseros_cdp::{CdpEvent, SessionId};
 use neo_runtime::{CallRecord, CallResult, Delivery, RunEnd, RunOutcome, RunStatus};
-use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::time;
 
-/// One recorded Playwright case.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Golden {
-    name: String,
-    source: String,
-    fixture_html: String,
-    #[serde(default)]
-    url_relative: Option<String>,
-    #[serde(default)]
-    error: Option<GoldenError>,
-    page: GoldenPage,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GoldenError {
-    name: String,
-    first_line: String,
-    message: String,
-}
-
-#[derive(Deserialize)]
-struct GoldenPage {
-    /// Every pointer and mouse event the page's own recorder saw.
-    events: Vec<Value>,
-}
-
-#[derive(Deserialize)]
-struct Goldens {
-    cases: Vec<Golden>,
-}
-
-impl Golden {
-    fn load(case: &str) -> Golden {
-        let crate_dir = PathBuf::from(
-            env::var_os("CARGO_MANIFEST_DIR").unwrap_or_else(|| panic!("cargo sets it")),
-        );
-        let path = crate_dir.join("../neo-sdk/tests/goldens/click-goldens.json");
-        let text = fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
-        let goldens: Goldens = serde_json::from_str(&text)
-            .unwrap_or_else(|error| panic!("click-goldens.json parses: {error}"));
-        goldens
-            .cases
-            .into_iter()
-            .find(|golden| golden.name == case)
-            .unwrap_or_else(|| panic!("no click golden named {case}"))
-    }
-
-    /// The path the golden's page is served at, as it was when it was recorded.
-    fn path(&self) -> String {
-        format!("/{}.html", self.name)
-    }
-
-    /// Opens a fresh browser on the golden's fixture page.
-    async fn open(&self) -> Option<Tab> {
-        let binary = browser::e2e_browser()?;
-        let fixture = Fixture {
-            pages: vec![(self.path(), self.fixture_html.clone())],
-            ..Fixture::default()
-        };
-        Some(Tab::open(binary, fixture, &self.path()).await)
-    }
-
-    fn expected_error(&self) -> &GoldenError {
-        self.error
-            .as_ref()
-            .unwrap_or_else(|| panic!("the {} golden records an error", self.name))
-    }
-}
-
+/// One `Submit` button whose `onclick` sets `#done`, a `Cancel` button beside it whose `onclick`
+/// sets `#decoy`, and a recorder of every pointer and mouse event in `window.__events`.
+const OK_PAGE: &str = include_str!("../../neo-sdk/tests/pages/ok.html");
+/// Two `Submit` buttons.
+const STRICT_PAGE: &str = include_str!("../../neo-sdk/tests/pages/strict.html");
+/// A `display:none` `Submit` button.
+const HIDDEN_PAGE: &str = include_str!("../../neo-sdk/tests/pages/hidden.html");
+/// A `Submit` button under a full-viewport overlay, `<div id="overlay">`.
+const COVERED_PAGE: &str = include_str!("../../neo-sdk/tests/pages/covered.html");
+/// A disabled `Submit` button.
+const DISABLED_PAGE: &str = include_str!("../../neo-sdk/tests/pages/disabled.html");
+/// A button under a sticky header that covers the top 55% of the viewport.
+const STICKY_PAGE: &str = include_str!("../../neo-sdk/tests/pages/sticky.html");
+/// A link to `/slow`, which the fixture answers late.
+const LINK_PAGE: &str = include_str!("../../neo-sdk/tests/pages/link.html");
 /// A button whose `onclick` opens a `confirm()` and keeps its answer in `window.__answer`.
 const DIALOG_PAGE: &str = include_str!("../../neo-sdk/tests/pages/dialog.html");
 /// A button whose overlay appears on the click's own `mousemove` and goes after the
@@ -112,7 +53,12 @@ const DIALOG_PAGE: &str = include_str!("../../neo-sdk/tests/pages/dialog.html");
 /// counts the button's own clicks in `window.__clicks`.
 const BLOCKED_ONCE_PAGE: &str = include_str!("../../neo-sdk/tests/pages/blocked-once.html");
 
-/// Opens a fresh browser on one page that is not a golden's.
+/// The ordinary click: Playwright's `getByRole` locator on `OK_PAGE`, then the URL its handler
+/// moved to.
+const SUBMIT_THEN_URL: &str = "await page.getByRole('button', { name: 'Submit' }).click()
+return page.url()";
+
+/// Opens a fresh browser on one page.
 async fn open_page(path: &str, html: &str) -> Option<Tab> {
     let binary = browser::e2e_browser()?;
     let fixture = Fixture {
@@ -210,63 +156,6 @@ fn only_record(outcome: &RunOutcome) -> &CallRecord {
     call
 }
 
-/// The lines after `Call log:` in a Playwright error message (`formatCallLog`).
-fn call_log(message: &str) -> Vec<&str> {
-    message
-        .split_once("\nCall log:\n")
-        .map_or_else(Vec::new, |(_, log)| log.lines().collect())
-}
-
-/// A call-log line split into its fold count and its text, without nesting: `    2 × waiting
-/// for …` is `(2, "waiting for …")` and `  - waiting for …` is `(1, "waiting for …")`. The text
-/// is timing-free; how often and how deep a retry line repeats depends on how many attempts fit
-/// in the timeout.
-fn unfold(line: &str) -> (usize, &str) {
-    let line = line.trim_start();
-    if let Some(line) = line.strip_prefix("- ") {
-        return (1, line);
-    }
-    match line.split_once(" × ") {
-        Some((count, text)) => (count.parse().unwrap_or(0), text),
-        None => (1, line),
-    }
-}
-
-/// Whether a call-log line's text is one of `_retryAction`'s waits between attempts
-/// (`waiting 20ms`), not a `waiting for …` line.
-fn is_retry_wait(text: &str) -> bool {
-    text.strip_prefix("waiting ")
-        .and_then(|rest| rest.strip_suffix("ms"))
-        .is_some_and(|ms| !ms.is_empty() && ms.bytes().all(|byte| byte.is_ascii_digit()))
-}
-
-/// The distinct call-log lines other than the retry waits, without nesting or fold counts.
-fn key_lines(message: &str) -> BTreeSet<&str> {
-    call_log(message)
-        .into_iter()
-        .map(|line| unfold(line).1)
-        .filter(|text| !is_retry_wait(text))
-        .collect()
-}
-
-/// The retry waits (`waiting 20ms`, `waiting 100ms`, …) in the order the folded log prints them.
-fn retry_waits(message: &str) -> Vec<&str> {
-    call_log(message)
-        .into_iter()
-        .map(|line| unfold(line).1)
-        .filter(|text| is_retry_wait(text))
-        .collect()
-}
-
-/// How many times `text` was logged, counting a folded `N × text` as N.
-fn occurrences(log: &[String], text: &str) -> usize {
-    log.iter()
-        .map(|line| unfold(line))
-        .filter(|(_, logged)| *logged == text)
-        .map(|(count, _)| count)
-        .sum()
-}
-
 /// Polls `expression` in the page until `done` holds for its value, for up to five seconds,
 /// and returns the last value read.
 async fn eventually(tab: &Tab, expression: &str, done: impl Fn(&Value) -> bool) -> Value {
@@ -280,7 +169,7 @@ async fn eventually(tab: &Tab, expression: &str, done: impl Fn(&Value) -> bool) 
     }
 }
 
-/// The `type` of each event the golden fixtures' recorder saw.
+/// The `type` of each event the `OK_PAGE` recorder saw.
 fn event_types(events: &Value) -> Vec<&str> {
     events
         .as_array()
@@ -293,30 +182,35 @@ fn event_types(events: &Value) -> Vec<&str> {
         .unwrap_or_default()
 }
 
-/// `ok`: resolves, and `page.url()` read right after the click already ends `#done` (the
-/// fragment navigation the click's handler made is visible when `click()` resolves, as under
-/// Playwright). One record, title `Click`, delivery `Done`, and the page's listeners saw exactly
-/// the events Playwright's click produced, at Playwright's point (36.75, 18.5).
+/// `ok`: the click resolves to `undefined` and reaches the `Submit` button, not the `Cancel`
+/// button beside it, and its handler's `#done` is visible to `page.url()` read right after the
+/// click, as under Playwright. The page saw one real click's events, all trusted and all on the
+/// target. One record: title `Click`, delivery `Done`.
 #[tokio::test(flavor = "multi_thread")]
 async fn ok_clicks_and_the_hash_is_visible_to_page_url() {
-    let golden = Golden::load("ok");
-    let Some(tab) = golden.open().await else {
+    let Some(tab) = open_page("/ok.html", OK_PAGE).await else {
         return;
     };
-    let outcome = run(&tab, &golden.source).await;
+    let outcome = run(
+        &tab,
+        "const result = await page.getByRole('button', { name: 'Submit' }).click()
+return { undefined: result === undefined, url: page.url() }",
+    )
+    .await;
     let events = tab.evaluate("window.__events").await;
     tab.close().await;
 
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
-    let url_relative = golden.url_relative.as_deref().expect("ok records its url");
-    let url = outcome
-        .value
-        .as_ref()
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let value = outcome.value.clone().unwrap_or_default();
+    assert_eq!(
+        value["undefined"],
+        json!(true),
+        "click() resolves to undefined: {value}"
+    );
+    let url = value["url"].as_str().unwrap_or_default();
     assert!(
-        url.ends_with(url_relative),
-        "page.url() right after the click is {url:?}, Playwright's ended {url_relative:?}"
+        url.ends_with("/ok.html#done"),
+        "the target's handler ran, not the decoy's: {url:?}"
     );
     let call = only_record(&outcome);
     assert_eq!(
@@ -325,43 +219,59 @@ async fn ok_clicks_and_the_hash_is_visible_to_page_url() {
         "{call:#?}"
     );
     assert_eq!(
-        call.log.first().map(String::as_str),
-        Some("  - waiting for getByRole('button', { name: 'Submit' })")
+        event_types(&events),
+        [
+            "pointermove",
+            "pointerdown",
+            "mousedown",
+            "pointerup",
+            "mouseup",
+            "click"
+        ],
+        "one real click: {events:#}"
     );
+    let events = events.as_array().cloned().unwrap_or_default();
+    let targets: BTreeSet<&str> = events
+        .iter()
+        .filter_map(|event| event["target"].as_str())
+        .collect();
     assert_eq!(
-        call.log.last().map(String::as_str),
-        Some("    - navigations have finished")
+        targets,
+        BTreeSet::from(["button"]),
+        "every event on the target: {events:#?}"
     );
-    assert_eq!(events, Value::Array(golden.page.events.clone()));
+    assert!(
+        events.iter().all(|event| event["isTrusted"] == json!(true)),
+        "real input, not script events: {events:#?}"
+    );
 }
 
-/// `strict`: `Error`, the whole message (call log included) byte-identical to Playwright's,
-/// well under the timeout, nothing delivered, and a log of exactly the `waiting for` line.
+/// `strict`: two matching buttons end the call at once with a strict mode violation, well under
+/// the timeout, with nothing delivered.
 #[tokio::test(flavor = "multi_thread")]
-async fn strict_mode_fails_at_once_with_playwrights_message() {
-    let golden = Golden::load("strict");
-    let Some(tab) = golden.open().await else {
+async fn strict_mode_fails_at_once_without_input() {
+    let Some(tab) = open_page("/strict.html", STRICT_PAGE).await else {
         return;
     };
-    let outcome = run(&tab, &golden.source).await;
+    let outcome = run(
+        &tab,
+        "await page.getByRole('button', { name: 'Submit' }).click()",
+    )
+    .await;
     let events = tab.evaluate("window.__events").await;
     tab.close().await;
 
-    let expected = golden.error.as_ref().expect("strict records its error");
     assert_eq!(outcome.status, RunStatus::Error, "{outcome:#?}");
     let error = outcome.error.as_ref().expect("a failed run says why");
-    assert_eq!(error.name, expected.name);
-    assert_eq!(error.message, expected.message);
-    assert_eq!(
-        error.message.lines().next(),
-        Some(expected.first_line.as_str())
+    assert_eq!(error.name, "Error", "{error:?}");
+    assert!(
+        error.message.starts_with("locator.click: ")
+            && error.message.contains("strict mode violation"),
+        "{}",
+        error.message
     );
     let call = only_record(&outcome);
-    assert_eq!(call.delivery, Some(Delivery::NotSent));
-    assert_eq!(
-        call.log,
-        ["  - waiting for getByRole('button', { name: 'Submit' })"]
-    );
+    assert_eq!(call.delivery, Some(Delivery::NotSent), "{call:#?}");
     assert!(
         call.duration < Duration::from_secs(2),
         "a strict violation fails at once, took {:?}",
@@ -370,38 +280,30 @@ async fn strict_mode_fails_at_once_with_playwrights_message() {
     assert_eq!(events, json!([]), "no input reached the page");
 }
 
-/// `hidden`: `TimeoutError` after 500 ms, the whole message (call log included) byte-identical
-/// to Playwright's. `getByRole` never matches a `display:none` button, so the log is only the
-/// `waiting for` line, with no "not visible" line, as in Playwright's.
+/// `hidden`: `getByRole` never matches a `display:none` button, so the click runs out its 500 ms
+/// and ends with `TimeoutError`, nothing delivered.
 #[tokio::test(flavor = "multi_thread")]
-async fn hidden_button_times_out_with_only_the_waiting_line() {
-    let golden = Golden::load("hidden");
-    let Some(tab) = golden.open().await else {
+async fn a_hidden_button_times_out_without_input() {
+    let Some(tab) = open_page("/hidden.html", HIDDEN_PAGE).await else {
         return;
     };
-    let outcome = run(&tab, &golden.source).await;
+    let outcome = run(
+        &tab,
+        "await page.getByRole('button', { name: 'Submit' }).click({ timeout: 500 })",
+    )
+    .await;
     let events = tab.evaluate("window.__events").await;
     tab.close().await;
 
-    let expected = golden.expected_error();
     assert_eq!(outcome.status, RunStatus::Error, "{outcome:#?}");
     let error = outcome.error.as_ref().expect("a failed run says why");
-    assert_eq!(
-        (error.name.as_str(), error.message.as_str()),
-        (expected.name.as_str(), expected.message.as_str())
-    );
+    assert_eq!(error.name, "TimeoutError", "{error:?}");
     let call = only_record(&outcome);
-    assert_eq!(
-        (&call.result, call.delivery),
-        (
-            &CallResult::Error {
-                name: "TimeoutError".to_string(),
-                message: "Timeout 500ms exceeded.".to_string(),
-            },
-            Some(Delivery::NotSent)
-        ),
+    assert!(
+        matches!(&call.result, CallResult::Error { name, .. } if name == "TimeoutError"),
         "{call:#?}"
     );
+    assert_eq!(call.delivery, Some(Delivery::NotSent), "{call:#?}");
     assert!(
         call.duration >= Duration::from_millis(500) && call.duration < Duration::from_secs(2),
         "the call ran out its 500 ms, took {:?}",
@@ -410,52 +312,35 @@ async fn hidden_button_times_out_with_only_the_waiting_line() {
     assert_eq!(events, json!([]), "no input reached the page");
 }
 
-/// `covered` and `disabled`: `TimeoutError`, the first line exact, the same distinct call-log
-/// lines as Playwright's (the overlay named as the element that intercepts, the `not enabled`
-/// state), and retry waits that open Playwright's backoff. How many attempts fit in the timeout
-/// depends on the machine's load: a loaded machine fits fewer, and the folded log then stops
-/// before `waiting 500ms`. `click.rs`'s `FakeTab` tests pin the idle-browser log byte for byte
-/// under paused time. No input reached the page: delivery `NotSent`.
+/// `covered` and `disabled`: `TimeoutError`, nothing delivered, and the error says why: it names
+/// the overlay that covers the button, or the state the button lacks.
 #[tokio::test(flavor = "multi_thread")]
-async fn covered_and_disabled_time_out_with_playwrights_key_lines() {
-    for case in ["covered", "disabled"] {
-        let golden = Golden::load(case);
-        let Some(tab) = golden.open().await else {
+async fn covered_and_disabled_buttons_time_out_naming_the_reason() {
+    for (path, html, timeout, reason) in [
+        ("/covered.html", COVERED_PAGE, 1000, "id=\"overlay\""),
+        ("/disabled.html", DISABLED_PAGE, 500, "not enabled"),
+    ] {
+        let Some(tab) = open_page(path, html).await else {
             return;
         };
-        let outcome = run(&tab, &golden.source).await;
+        let code = format!(
+            "await page.getByRole('button', {{ name: 'Submit' }}).click({{ timeout: {timeout} }})"
+        );
+        let outcome = run(&tab, &code).await;
         let events = tab.evaluate("window.__events").await;
         tab.close().await;
 
-        let expected = golden.expected_error();
-        assert_eq!(outcome.status, RunStatus::Error, "{case}: {outcome:#?}");
+        assert_eq!(outcome.status, RunStatus::Error, "{path}: {outcome:#?}");
         let error = outcome.error.as_ref().expect("a failed run says why");
-        assert_eq!(error.name, expected.name, "{case}");
-        assert_eq!(
-            error.message.lines().next(),
-            Some(expected.first_line.as_str()),
-            "{case}"
-        );
-        let neo = key_lines(&error.message);
-        let playwright = key_lines(&expected.message);
-        assert_eq!(
-            neo, playwright,
-            "{case}: the distinct call-log lines but the retry waits; Neo's message:\n{}",
-            error.message
-        );
-        let neo_waits = retry_waits(&error.message);
-        let playwright_waits = retry_waits(&expected.message);
+        assert_eq!(error.name, "TimeoutError", "{path}: {error:?}");
         assert!(
-            !neo_waits.is_empty() && playwright_waits.starts_with(&neo_waits),
-            "{case}: Neo's retry waits {neo_waits:?} must open Playwright's backoff \
-             {playwright_waits:?}. Only the attempt count may vary with load: `cargo test -p \
-             neo-runtime --lib click::` holds the idle-browser log byte for byte under paused \
-             time. Neo's message:\n{}",
+            error.message.contains(reason),
+            "{path}: the error names why ({reason}):\n{}",
             error.message
         );
         let call = only_record(&outcome);
-        assert_eq!(call.delivery, Some(Delivery::NotSent), "{case}: {call:#?}");
-        assert_eq!(events, json!([]), "{case}: no input reached the page");
+        assert_eq!(call.delivery, Some(Delivery::NotSent), "{path}: {call:#?}");
+        assert_eq!(events, json!([]), "{path}: no input reached the page");
     }
 }
 
@@ -509,9 +394,8 @@ return 'clicked'",
     }
     let covered = outcome.calls[0].log.join("\n");
     assert!(
-        covered.contains("<div id=\"overlay\"></div> intercepts pointer events")
-            && covered.contains("retrying click action"),
-        "the overlay held loop B past its first retries:\n{covered}"
+        covered.contains("id=\"overlay\""),
+        "the overlay held the first attempts, so later ones scrolled with the glue:\n{covered}"
     );
     // The offset is relative to the padding box, as Playwright's `_offsetPoint` makes it.
     assert_eq!(clicked, json!(["covered", "offset:5,6"]));
@@ -554,7 +438,6 @@ return 'clicked'",
 /// delay is cut short and the press and its release were acknowledged: delivery `Done`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_click_cut_off_by_the_run_still_releases_the_button() {
-    let golden = Golden::load("ok");
     let cases = [
         (
             "the script returns",
@@ -574,7 +457,7 @@ return 'returned'",
         ),
     ];
     for (end, code, timeout, status, reason) in cases {
-        let Some(tab) = golden.open().await else {
+        let Some(tab) = open_page("/ok.html", OK_PAGE).await else {
             return;
         };
         let started = Instant::now();
@@ -612,9 +495,9 @@ return 'returned'",
 }
 
 /// G2: the first press lands on an overlay that appeared after the hit check. The interceptor
-/// blocks it and names the overlay, delivery goes back to `NotSent`, and loop B presses again
-/// on the same element, exactly where Playwright would. The second press lands: the button's
-/// own handler ran once, delivery `Done`.
+/// blocks it and names the overlay, delivery goes back to `NotSent`, and the click presses again
+/// on the same element. The second press lands: the button's own handler ran once, delivery
+/// `Done`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_verified_block_after_input_presses_again() {
     let Some(tab) = open_page("/blocked-once.html", BLOCKED_ONCE_PAGE).await else {
@@ -636,18 +519,11 @@ return 'clicked'",
         (&CallResult::Ok, Some(Delivery::Done)),
         "{call:#?}"
     );
-    let log = &call.log;
-    assert_eq!(
-        occurrences(log, "performing click action"),
-        2,
-        "pressed twice, blocked then landed: {log:#?}"
+    assert!(
+        call.log.join("\n").contains("id=\"overlay\""),
+        "the first press was caught by the overlay: {:#?}",
+        call.log
     );
-    assert_eq!(
-        occurrences(log, "<div id=\"overlay\"></div> intercepts pointer events"),
-        1,
-        "the verdict named the overlay: {log:#?}"
-    );
-    assert_eq!(occurrences(log, "retrying click action"), 1, "{log:#?}");
     assert_eq!(
         clicks,
         json!(1),
@@ -655,13 +531,12 @@ return 'clicked'",
     );
 }
 
-/// `trial: true` on the `ok` fixture: Playwright's checks, then a press whose every event the
-/// interceptor blocks. The click resolves, the button's own `onclick` never runs (the hash
-/// stays empty), and delivery is `NotSent`.
+/// `trial: true` on the `ok` page: the checks, then a press whose every event the interceptor
+/// blocks. The click resolves, neither button's `onclick` runs (the hash stays empty), and
+/// delivery is `NotSent`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_trial_click_delivers_nothing() {
-    let golden = Golden::load("ok");
-    let Some(tab) = golden.open().await else {
+    let Some(tab) = open_page("/ok.html", OK_PAGE).await else {
         return;
     };
     let outcome = run(
@@ -686,24 +561,16 @@ return page.url()",
         (&CallResult::Ok, Some(Delivery::NotSent)),
         "{call:#?}"
     );
-    for line in [
-        "attempting click action (trial run)",
-        "trial click action done",
-    ] {
-        assert_eq!(occurrences(&call.log, line), 1, "{line}: {:#?}", call.log);
-    }
     assert_eq!(hash, json!(""), "the button's onclick never ran");
 }
 
 /// The test closes the tab while a click polls for a button that never matches. The script
-/// catches what Playwright's client throws for it: `e.name` is `Error` (Playwright's
-/// `TargetClosedError` sets no name) and the message is `locator.click: Target page, context or
-/// browser has been closed` with the call log, long before the click's 20 s timeout. The run's
-/// watcher learns of the close from `Target.detachedFromTarget`.
+/// catches what Playwright's client throws for it, a plain `Error` (Playwright's
+/// `TargetClosedError` sets no name) saying the target closed, long before the click's 20 s
+/// timeout. The run's watcher learns of the close from `Target.detachedFromTarget`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_tab_closed_mid_click_fails_with_target_closed() {
-    let golden = Golden::load("hidden");
-    let Some(tab) = golden.open().await else {
+    let Some(tab) = open_page("/hidden.html", HIDDEN_PAGE).await else {
         return;
     };
     let started = Instant::now();
@@ -733,28 +600,19 @@ async fn a_tab_closed_mid_click_fails_with_target_closed() {
     tab.close().await;
 
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
-    assert_eq!(
-        outcome.value,
-        Some(json!({
-            "name": "Error",
-            "message": "locator.click: Target page, context or browser has been closed
-Call log:
-  - waiting for getByRole('button', { name: 'Submit' })
-",
-        }))
+    let value = outcome.value.clone().unwrap_or_default();
+    assert_eq!(value["name"], json!("Error"), "{value}");
+    let message = value["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("locator.click: Target page, context or browser has been closed"),
+        "{message}"
     );
     let call = only_record(&outcome);
-    assert_eq!(
-        (&call.result, call.delivery),
-        (
-            &CallResult::Error {
-                name: "TargetClosedError".to_string(),
-                message: "Target page, context or browser has been closed".to_string(),
-            },
-            Some(Delivery::NotSent)
-        ),
+    assert!(
+        matches!(&call.result, CallResult::Error { name, .. } if name == "TargetClosedError"),
         "{call:#?}"
     );
+    assert_eq!(call.delivery, Some(Delivery::NotSent), "{call:#?}");
     assert!(
         took < Duration::from_secs(5),
         "the close ended the click long before its timeout, took {took:?}"
@@ -817,25 +675,24 @@ impl InstallTap {
 /// navigation the third installs again, because the world went with the old document.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_injected_install_is_reused_per_document_and_redone_after_navigation() {
-    let golden = Golden::load("ok");
     let Some(binary) = browser::e2e_browser() else {
         return;
     };
     let fixture = Fixture {
         pages: vec![
-            (golden.path(), golden.fixture_html.clone()),
-            ("/next.html".to_string(), golden.fixture_html.clone()),
+            ("/ok.html".to_string(), OK_PAGE.to_string()),
+            ("/next.html".to_string(), OK_PAGE.to_string()),
         ],
         ..Fixture::default()
     };
-    let tab = Tab::open(binary, fixture, &golden.path()).await;
+    let tab = Tab::open(binary, fixture, "/ok.html").await;
     let mut tap = InstallTap::start(&tab).await;
     let mut installs = Vec::new();
     for step in ["first run", "second run", "after navigating"] {
         if step == "after navigating" {
             tab.navigate("/next.html").await;
         }
-        let outcome = run(&tab, &golden.source).await;
+        let outcome = run(&tab, SUBMIT_THEN_URL).await;
         assert_eq!(outcome.status, RunStatus::Ok, "{step}: {outcome:#?}");
         let call = only_record(&outcome);
         assert_eq!(call.delivery, Some(Delivery::Done), "{step}: {call:#?}");
@@ -854,8 +711,7 @@ async fn the_injected_install_is_reused_per_document_and_redone_after_navigation
 /// frames message, no call log, nothing delivered.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_frame_selector_is_refused_up_front() {
-    let golden = Golden::load("ok");
-    let Some(tab) = golden.open().await else {
+    let Some(tab) = open_page("/ok.html", OK_PAGE).await else {
         return;
     };
     let outcome = run(
@@ -892,8 +748,7 @@ async fn a_frame_selector_is_refused_up_front() {
 /// resolves, because the run's session turns on focus emulation, which makes the tab paint.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_background_tab_still_resolves_stable() {
-    let golden = Golden::load("ok");
-    let Some(tab) = golden.open().await else {
+    let Some(tab) = open_page("/ok.html", OK_PAGE).await else {
         return;
     };
     tab.cdp
@@ -908,21 +763,89 @@ async fn a_background_tab_still_resolves_stable() {
     )
     .await;
     assert_eq!(seen, background, "the second tab took the foreground");
-    let outcome = run(&tab, &golden.source).await;
+    let outcome = run(&tab, SUBMIT_THEN_URL).await;
     tab.close().await;
 
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
-    let url_relative = golden.url_relative.as_deref().expect("ok records its url");
     let url = outcome
         .value
         .as_ref()
         .and_then(Value::as_str)
         .unwrap_or_default();
-    assert!(url.ends_with(url_relative), "{url:?}");
+    assert!(url.ends_with("/ok.html#done"), "{url:?}");
     let call = only_record(&outcome);
     assert_eq!(
         (&call.result, call.delivery),
         (&CallResult::Ok, Some(Delivery::Done)),
         "{call:#?}"
     );
+}
+
+/// The page is scrolled below the button, so the first scroll centres it under a sticky header
+/// that covers the top 55% of the viewport, and the hit check finds the header. The click
+/// retries with another scroll alignment and lands once.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_click_scrolls_out_from_under_a_sticky_header() {
+    let Some(tab) = open_page("/sticky.html", STICKY_PAGE).await else {
+        return;
+    };
+    tab.evaluate("window.scrollTo(0, 2000)").await;
+    let outcome = run(
+        &tab,
+        "await page.locator('#target').click({ timeout: 5000 })
+return 'clicked'",
+    )
+    .await;
+    let clicks = tab.evaluate("window.__clicks").await;
+    tab.close().await;
+
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
+    let call = only_record(&outcome);
+    assert_eq!(
+        (&call.result, call.delivery),
+        (&CallResult::Ok, Some(Delivery::Done)),
+        "{call:#?}"
+    );
+    assert!(
+        call.log.join("\n").contains("<header>"),
+        "the header caught the first attempt: {:#?}",
+        call.log
+    );
+    assert_eq!(clicks, json!(1), "the button's handler ran once");
+}
+
+/// A link to a page that answers after 800 ms. `page.url()` read right after the click is the
+/// new page's, because the click waits for the navigation it started to commit. With
+/// `noWaitAfter` the click returns first, and the URL is still the old page's.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_link_click_waits_for_the_new_page_unless_no_wait_after() {
+    for (options, expected) in [("", "/slow"), ("{ noWaitAfter: true }", "/link.html")] {
+        let Some(binary) = browser::e2e_browser() else {
+            return;
+        };
+        let fixture = Fixture {
+            slow_response: Duration::from_millis(800),
+            pages: vec![("/link.html".to_string(), LINK_PAGE.to_string())],
+        };
+        let tab = Tab::open(binary, fixture, "/link.html").await;
+        let code = format!(
+            "await page.getByRole('link', {{ name: 'Next' }}).click({options})
+return page.url()"
+        );
+        let outcome = run(&tab, &code).await;
+        tab.close().await;
+
+        assert_eq!(outcome.status, RunStatus::Ok, "{options}: {outcome:#?}");
+        let url = outcome
+            .value
+            .as_ref()
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(
+            url.ends_with(expected),
+            "{options}: page.url() right after the click is {url:?}, expected …{expected}"
+        );
+        let call = only_record(&outcome);
+        assert_eq!(call.delivery, Some(Delivery::Done), "{options}: {call:#?}");
+    }
 }

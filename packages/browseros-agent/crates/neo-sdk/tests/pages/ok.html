@@ -1,0 +1,5 @@
+<!doctype html><html><head><meta charset="utf-8"><title>ok</title><script>
+window.__events = [];
+for (const type of ['pointermove', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'])
+  addEventListener(type, e => __events.push({ type: e.type, target: e.target.id || e.target.tagName.toLowerCase(), isTrusted: e.isTrusted, clientX: e.clientX, clientY: e.clientY, button: e.button, buttons: e.buttons, detail: e.detail }), true);
+</script></head><body><button onclick="location.hash='done'">Submit</button><button id="decoy" onclick="location.hash='decoy'">Cancel</button></body></html>
