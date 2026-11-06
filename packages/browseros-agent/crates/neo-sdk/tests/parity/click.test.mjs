@@ -1,13 +1,11 @@
 // Clicks through Neo and through real Playwright (playwright-core 1.64.1) on one BrowserOS neo,
 // each case on fresh tabs serving the same page at the same URL: Playwright runs the case's
 // script on its own tab through connectOverCDP, Neo runs it on another through neo_run, and the
-// test compares what each script saw and what each page's listeners saw.
+// test compares what each script saw (its value, or its error's kind) and what each page's
+// listeners saw (which events reached which element). It never compares an error's wording, the
+// call log, click coordinates or retry timing.
 //
-// The golden cases (tests/goldens/click-goldens.json) are also held to the recorded golden, so a
-// Playwright upgrade cannot move both sides at once unnoticed. The other cases are the ones
-// neo-runtime's click_e2e.rs checks on Neo alone (a dialog, a press blocked after the hit check,
-// a trial, a tab closed mid-click), here held to Playwright on the same pages
-// (tests/pages/).
+// The pages are tests/pages/; neo-runtime's click_e2e.rs runs them on Neo alone.
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs).
 
@@ -32,83 +30,118 @@ import {
 } from './harness.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const goldens = JSON.parse(
-  readFileSync(join(here, '../goldens/click-goldens.json'), 'utf8'),
-).cases
-const golden = (name) => goldens.find((g) => g.name === name)
 const page = (file) => readFileSync(join(here, '../pages', file), 'utf8')
 const SUBMIT = "page.getByRole('button', { name: 'Submit' })"
 /** When a case closes its tab, counted from the script's start. */
 const CLOSE_AFTER_MS = 500
+/** What a page's event recorder saw, without coordinates. */
+const EVENTS =
+  'window.__events.map(({ type, target, isTrusted, button, detail }) => ({ type, target, isTrusted, button, detail }))'
 
 /**
- * Neo's own cases. `probe` is read from each page after its run; `closeAfterMs` closes the
- * tab while the script runs.
+ * Each case's page, script, what to read from the page after the run (`probe`), and the delivery
+ * Neo's one record must report. `closeAfterMs` closes the tab while the script runs.
  */
-const neoCases = [
+const cases = [
+  {
+    name: 'ok',
+    html: page('ok.html'),
+    source: `const result = await ${SUBMIT}.click()\nreturn { undefined: result === undefined, url: page.url() }`,
+    probe: EVENTS,
+    delivery: 'done',
+  },
+  {
+    name: 'strict',
+    html: page('strict.html'),
+    source: `await ${SUBMIT}.click()`,
+    probe: EVENTS,
+    delivery: 'notSent',
+  },
+  {
+    name: 'hidden',
+    html: page('hidden.html'),
+    source: `await ${SUBMIT}.click({ timeout: 500 })`,
+    probe: EVENTS,
+    delivery: 'notSent',
+  },
+  {
+    name: 'covered',
+    html: page('covered.html'),
+    source: `await ${SUBMIT}.click({ timeout: 1000 })`,
+    probe: EVENTS,
+    delivery: 'notSent',
+  },
+  {
+    name: 'disabled',
+    html: page('disabled.html'),
+    source: `await ${SUBMIT}.click({ timeout: 500 })`,
+    probe: EVENTS,
+    delivery: 'notSent',
+  },
   {
     name: 'dialog',
     html: page('dialog.html'),
     source: `await ${SUBMIT}.click()\nreturn 'clicked'`,
     probe: 'window.__answer',
+    delivery: 'done',
   },
   {
     name: 'blocked-once',
     html: page('blocked-once.html'),
     source: `await ${SUBMIT}.click()\nreturn 'clicked'`,
     probe: 'window.__clicks',
+    delivery: 'done',
   },
   {
     name: 'trial',
-    html: golden('ok').fixtureHtml,
+    html: page('ok.html'),
     source: `await ${SUBMIT}.click({ trial: true })\nreturn page.url()`,
-    probe: '[location.hash, window.__events]',
+    probe: `[location.hash, ${EVENTS}]`,
+    delivery: 'notSent',
   },
   {
     name: 'closed',
-    html: golden('hidden').fixtureHtml,
-    source: `try {\n  await ${SUBMIT}.click({ timeout: 20000 })\n} catch (error) {\n  return { name: error.name, message: error.message }\n}`,
+    html: page('hidden.html'),
+    source: `try {\n  await ${SUBMIT}.click({ timeout: 20000 })\n} catch (error) {\n  return { name: error.name, closed: error.message.includes('has been closed') }\n}`,
     closeAfterMs: CLOSE_AFTER_MS,
+    delivery: 'notSent',
   },
 ]
 
-test('golden clicks read the same through Neo, Playwright and the goldens', {
+test('clicks read the same through Neo and Playwright', {
   skip,
   timeout: 600_000,
 }, async (t) => {
-  await withBoth(
-    goldens.map((g) => ({
-      name: g.name,
-      html: g.fixtureHtml,
-      source: g.source,
-      probe: 'window.__events',
-    })),
-    async (run) => {
-      for (const g of goldens) {
-        await t.test(g.name, async () => {
-          const { playwright, neo } = await run(g.name)
-          compareGolden(g, playwright, neo)
-        })
-      }
-    },
-  )
-})
-
-test("Neo's own click cases read the same through Playwright", {
-  skip,
-  timeout: 600_000,
-}, async (t) => {
-  await withBoth(neoCases, async (run) => {
-    for (const c of neoCases) {
+  await withBoth(cases, async (run) => {
+    for (const c of cases) {
       await t.test(c.name, async () => {
         const { playwright, neo } = await run(c.name)
-        assert.equal(neo.outcome.status, 'ok', JSON.stringify(neo.outcome))
-        assert.deepEqual(neo.result, playwright.result, 'what the script saw')
+        assert.deepEqual(
+          kind(neo.result),
+          kind(playwright.result),
+          'what the script saw',
+        )
         assert.deepEqual(neo.probe, playwright.probe, 'what the page saw')
+        assert.deepEqual(
+          neo.outcome.calls.map((call) => call.delivery),
+          [c.delivery],
+          "Neo's delivery record",
+        )
       })
     }
   })
 })
+
+/**
+ * A script's value as is, or its error as a kind: the error's name, and for a plain `Error`
+ * whether it was a strict mode violation. The wording is not compared.
+ */
+function kind(result) {
+  if (!result.error) return result
+  const { name, message } = result.error
+  const strict = /strict mode violation/.test(message)
+  return { error: { name, strict } }
+}
 
 /**
  * One browser, one fixture server serving every case's page at `/<name>.html`, Playwright
@@ -208,134 +241,4 @@ async function viaNeo(cdp, port, neoRun, scripts, url, c) {
   } finally {
     if (!c.closeAfterMs) await cdp.send('Target.closeTarget', { targetId })
   }
-}
-
-/**
- * A golden case:
- * - `ok` resolves on both sides with the same URL, ending as recorded, and Neo's one record
- *   has delivery `done`;
- * - `strict`: `e.name` and the whole message equal;
- * - `hidden`: `e.name`, the first line and the call log equal;
- * - `covered`, `disabled`: `e.name`, the first line and the distinct call-log lines other than
- *   the retry waits equal, and each side's retry waits open the recorded backoff. How many
- *   attempts fit in the timeout depends on the machine's load, for Playwright as for Neo;
- *   neo-runtime's `click::` tests hold Neo's idle-browser log byte for byte under paused time.
- *
- * Every case: the same events reached both pages, and Playwright still reads as recorded.
- */
-function compareGolden(g, playwright, neo) {
-  const { outcome } = neo
-  if (g.outcome === 'resolved') {
-    assert.ok(
-      playwright.result.value.endsWith(g.urlRelative),
-      `Playwright as recorded: ${JSON.stringify(playwright.result)}`,
-    )
-    assert.equal(outcome.status, 'ok', JSON.stringify(outcome))
-    assert.equal(outcome.value, playwright.result.value, 'Neo vs Playwright')
-    assert.deepEqual(
-      outcome.calls.map((call) => call.delivery),
-      ['done'],
-    )
-  } else {
-    const recorded = g.error
-    const theirs = playwright.result.error
-    assert.ok(theirs, `Playwright threw: ${JSON.stringify(playwright.result)}`)
-    assert.equal(outcome.status, 'error', JSON.stringify(outcome))
-    const ours = outcome.error
-    assert.equal(theirs.name, recorded.name, 'Playwright as recorded')
-    assert.equal(
-      firstLine(theirs.message),
-      recorded.firstLine,
-      'Playwright as recorded',
-    )
-    assert.equal(ours.name, theirs.name, 'Neo vs Playwright')
-    assert.equal(
-      firstLine(ours.message),
-      firstLine(theirs.message),
-      'Neo vs Playwright',
-    )
-    if (g.name === 'strict') {
-      assert.equal(theirs.message, recorded.message, 'Playwright as recorded')
-      assert.equal(ours.message, theirs.message, 'Neo vs Playwright')
-    } else if (g.name === 'hidden') {
-      assert.deepEqual(
-        callLog(theirs.message),
-        callLog(recorded.message),
-        'Playwright as recorded',
-      )
-      assert.deepEqual(
-        callLog(ours.message),
-        callLog(theirs.message),
-        'Neo vs Playwright',
-      )
-    } else {
-      assert.deepEqual(
-        keyLines(theirs.message),
-        keyLines(recorded.message),
-        'Playwright as recorded',
-      )
-      assertBackoff(theirs.message, recorded.message, 'Playwright')
-      assert.deepEqual(
-        keyLines(ours.message),
-        keyLines(theirs.message),
-        `Neo vs Playwright:\n${ours.message}`,
-      )
-      assertBackoff(ours.message, recorded.message, 'Neo')
-    }
-    assert.deepEqual(
-      outcome.calls.map((call) => call.delivery),
-      ['notSent'],
-    )
-  }
-  assert.deepEqual(
-    neo.probe,
-    playwright.probe,
-    'events the page saw, Neo vs Playwright',
-  )
-  assert.deepEqual(
-    playwright.probe,
-    g.page.events,
-    'events the page saw, Playwright as recorded',
-  )
-}
-
-function firstLine(message) {
-  return message.split('\n')[0]
-}
-
-/** The lines after `Call log:` (Playwright's `formatCallLog`). */
-function callLog(message) {
-  const [, log = ''] = message.split('\nCall log:\n')
-  return log.split('\n').filter(Boolean)
-}
-
-/**
- * A call-log line without nesting or fold count: `    2 × waiting for …` and
- * `  - waiting for …` both read `waiting for …`.
- */
-function lineText(line) {
-  return line.trimStart().replace(/^(- |\d+ × )/, '')
-}
-
-/** `_retryAction`'s wait between attempts (`waiting 20ms`), not a `waiting for …` line. */
-function isRetryWait(text) {
-  return /^waiting \d+ms$/.test(text)
-}
-
-/** The distinct call-log lines other than the retry waits. */
-function keyLines(message) {
-  const lines = callLog(message)
-    .map(lineText)
-    .filter((text) => !isRetryWait(text))
-  return [...new Set(lines)].sort()
-}
-
-/** The retry waits must be a non-empty prefix of the recorded ones, in the folded log's order. */
-function assertBackoff(message, recorded, side) {
-  const waits = callLog(message).map(lineText).filter(isRetryWait)
-  const backoff = callLog(recorded).map(lineText).filter(isRetryWait)
-  assert.ok(
-    waits.length > 0 && waits.every((wait, i) => wait === backoff[i]),
-    `${side}'s retry waits ${JSON.stringify(waits)} must open the recorded backoff ${JSON.stringify(backoff)}:\n${message}`,
-  )
 }

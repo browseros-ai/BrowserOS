@@ -8,11 +8,9 @@
 //! does and fails the test if any of its processes outlives it; a `Tab` dropped without it, as
 //! when a test panics first, SIGKILLs the browser's process group.
 //!
-//! One test binary runs one browser at a time ([`ONE_BROWSER`]): tests compare timing-bound
-//! behaviour (retry counts, whether the first page call answers inside a 500 ms timeout) against
-//! goldens Playwright recorded on a single idle browser, so each test runs as close to that as
-//! the machine allows. The assertions do not depend on it: all 13 `click_e2e` tests passed 3
-//! rounds as 13 browsers at once, at a load average of 54.
+//! One test binary runs one browser at a time ([`ONE_BROWSER`]), so a timing-bound test (whether
+//! a click times out inside its 500 ms, whether the first page call answers in time) runs as
+//! close to an idle browser as the machine allows.
 //!
 //! Test crates include this file with `#[path]`. Cargo builds only top-level `tests/*.rs` files
 //! as test crates, so it is never one on its own.

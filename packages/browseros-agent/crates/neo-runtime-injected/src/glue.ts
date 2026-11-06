@@ -17,7 +17,7 @@
  * Every function reports the page at one instant, except `checkElementStates`, which awaits about
  * two animation frames for `stable`. None retries, waits on a selector or owns a deadline:
  * neo-runtime does. Each mirrors Playwright's page-side code in behaviour, with no extra checks,
- * because Neo's results, errors and call logs are compared with Playwright's.
+ * so a call's results and errors are the ones Playwright's page code gives.
  */
 
 import type {

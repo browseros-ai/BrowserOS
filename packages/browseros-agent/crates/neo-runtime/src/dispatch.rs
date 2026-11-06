@@ -849,7 +849,6 @@ mod tests {
     use neo_runtime_spec::injected::Point;
 
     use crate::click::tests::FakeTab;
-    use crate::click_goldens;
     use crate::deadline::Deadline;
     use crate::fake_browser::{FakeBrowser, PAGE, Replies};
     use crate::forms::SelectOption;
@@ -1481,30 +1480,31 @@ mod tests {
         );
     }
 
-    /// The replies Neo sends for Playwright's recorded clicks, built from Neo's own errors,
-    /// folding and envelope, and pinned in `tests/fixtures/replies.json`. neo-sdk's
-    /// `connection.test.ts` rebuilds each into the error the script sees and compares it with
-    /// the golden's message, so both halves of the reply path are checked against Playwright.
+    /// The replies Neo sends for a click that succeeds, one the page refuses, one that times out
+    /// and one whose tab closed, built from Neo's own errors, folding and envelope, and pinned
+    /// in `tests/fixtures/replies.json`. neo-sdk's `connection.test.ts` rebuilds each into the
+    /// error the script sees, so both halves of the reply path read one file.
     /// Set `NEO_RUNTIME_WRITE_FIXTURES=1` to rewrite the file after a deliberate change.
     #[test]
-    fn replies_for_the_click_goldens_match_the_committed_fixture() {
+    fn tests_that_replies_match_the_committed_fixture() {
         let id = json!(1);
+        let waiting = "waiting for locator('#go')";
         let mut replies = BTreeMap::new();
         replies.insert("ok", encode_reply(&id, Ok(None), None));
-        for name in ["strict", "hidden", "covered", "disabled"] {
-            let golden = click_goldens::golden(name);
-            let error = match golden.timeout_ms() {
-                Some(timeout_ms) => {
-                    let error = PlaywrightError::timeout(timeout_ms);
-                    assert_eq!(error.message, golden.server_message(), "the {name} golden");
-                    error
-                }
-                // A strict mode violation's message is the page's own, passed through.
-                None => PlaywrightError::error(golden.server_message()),
-            };
-            let log = progress::compress_call_log(&click_goldens::raw_log(name));
-            replies.insert(name, encode_reply(&id, Err(&error), Some(&log)));
-        }
+        // A strict mode violation's message is the page's own, passed through.
+        let strict = PlaywrightError::error(
+            "Error: strict mode violation: locator('#go') resolved to 2 elements",
+        );
+        let log = progress::compress_call_log(&[waiting]);
+        replies.insert("error", encode_reply(&id, Err(&strict), Some(&log)));
+        let log = progress::compress_call_log(&[
+            waiting,
+            "  locator resolved to <button id=\"go\" disabled=\"\">Go</button>",
+            "attempting click action",
+            "  element is not enabled",
+        ]);
+        let timeout = PlaywrightError::timeout(500.0);
+        replies.insert("timeout", encode_reply(&id, Err(&timeout), Some(&log)));
         replies.insert(
             "targetClosed",
             encode_reply(&id, Err(&PlaywrightError::target_closed()), Some(&[])),

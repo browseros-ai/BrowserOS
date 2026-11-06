@@ -1,0 +1,10 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>sticky</title>
+<style>body { margin: 0 } header { position: sticky; top: 0; height: 55vh; background: #ddd; z-index: 5 }</style>
+<script>
+// Scrolled below the button, the first scroll centres it under the sticky header, which covers
+// the top 55% of the viewport; a click lands only after a retry scrolls it to another edge.
+window.__clicks = 0;
+</script></head><body>
+<header>Header</header><div style="height: 200px"></div>
+<button type="button" id="target" onclick="__clicks++">Target</button><div style="height: 3000px"></div>
+</body></html>

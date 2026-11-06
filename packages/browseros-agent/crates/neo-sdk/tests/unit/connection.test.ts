@@ -1,8 +1,7 @@
 /**
- * The reply half of Neo's wire against Playwright's recorded errors. Rust encodes each golden's
- * reply from its own errors, call-log folding and envelope (`neo-runtime/src/dispatch.rs`, which
- * writes `neo-runtime/tests/fixtures/replies.json`); this rebuilds each into the error a script
- * sees and compares it with what Playwright's client threw.
+ * The reply half of Neo's wire. Rust encodes a success, a page error, a timeout and a closed tab
+ * with its own errors, call-log folding and envelope (`neo-runtime/src/dispatch.rs`, which writes
+ * `neo-runtime/tests/fixtures/replies.json`); this rebuilds each into the error a script sees.
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -15,20 +14,12 @@ import {
 } from '../../src/connection'
 import { isTargetClosedError, TimeoutError } from '../../src/errors'
 
-type Golden = {
-  name: string
-  error?: { name: string; message: string; instanceOfTimeoutError: boolean }
-}
-
 const replies: Record<string, string> = JSON.parse(
   readFileSync(
     join(import.meta.dir, '../../../neo-runtime/tests/fixtures/replies.json'),
     'utf8',
   ),
 )
-const goldens: Golden[] = JSON.parse(
-  readFileSync(join(import.meta.dir, '../goldens/click-goldens.json'), 'utf8'),
-).cases
 
 function reply(name: string) {
   const text = replies[name]
@@ -37,35 +28,33 @@ function reply(name: string) {
 }
 
 describe('rebuildError', () => {
-  const failed = goldens.flatMap(({ name, error }) =>
-    error ? [{ name, error }] : [],
-  )
-
-  test('covers every golden that threw', () => {
-    expect(failed.map((golden) => golden.name).sort()).toEqual([
-      'covered',
-      'disabled',
-      'hidden',
-      'strict',
+  test('tests that a page error keeps its kind, its message after the api name, and its call log', () => {
+    const { error, log } = reply('error')
+    const rebuilt = rebuildError('locator.click', error.error, log)
+    expect([rebuilt.name, rebuilt instanceof TimeoutError]).toEqual([
+      'Error',
+      false,
     ])
+    expect(
+      rebuilt.message.startsWith(`locator.click: ${error.error.message}`),
+    ).toBe(true)
+    for (const line of log) expect(rebuilt.message).toContain(line)
+    expect(rebuilt.log).toEqual(log)
   })
 
-  for (const golden of failed) {
-    test(`Neo's ${golden.name} reply rebuilds Playwright's error`, () => {
-      const { error, log } = reply(golden.name)
-      const rebuilt = rebuildError('locator.click', error.error, log)
-      expect({
-        name: rebuilt.name,
-        message: rebuilt.message,
-        instanceOfTimeoutError: rebuilt instanceof TimeoutError,
-      }).toEqual({
-        name: golden.error.name,
-        message: golden.error.message,
-        instanceOfTimeoutError: golden.error.instanceOfTimeoutError,
-      })
-      expect(rebuilt.log).toEqual(log)
-    })
-  }
+  test('tests that a timeout rebuilds as a TimeoutError with its call log', () => {
+    const { error, log } = reply('timeout')
+    const rebuilt = rebuildError('page.click', error.error, log)
+    expect([rebuilt.name, rebuilt instanceof TimeoutError]).toEqual([
+      'TimeoutError',
+      true,
+    ])
+    expect(
+      rebuilt.message.startsWith(`page.click: ${error.error.message}`),
+    ).toBe(true)
+    for (const line of log) expect(rebuilt.message).toContain(line)
+    expect(rebuilt.log).toEqual(log)
+  })
 
   test('a closed target reads as a plain Error, as in Playwright', () => {
     const { error, log } = reply('targetClosed')

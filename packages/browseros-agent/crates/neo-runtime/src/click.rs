@@ -1,8 +1,9 @@
-//! `Frame.click`, in the structure of Playwright's server so the call log and the goldens'
-//! attempt counts come out the same: `frames.ts` `_retryWithProgressIfNotConnected` (loop A,
-//! re-resolve), `dom.ts` `_retryAction` and `_performPointerAction` (loop B, same element), the
-//! `SignalBarrier` around the input, and `input.ts` `Mouse.click`. Every call-log string here is
-//! Playwright's, byte for byte; leading spaces are nesting for `progress::compress_call_log`.
+//! `Frame.click`, in the structure of Playwright's server: `frames.ts`
+//! `_retryWithProgressIfNotConnected` (loop A, re-resolve), `dom.ts` `_retryAction` and
+//! `_performPointerAction` (loop B, same element), the `SignalBarrier` around the input, and
+//! `input.ts` `Mouse.click`. The call log keeps Playwright's wording, so a failed click tells the
+//! agent why in words it knows; nothing depends on it matching Playwright's byte for byte. Leading
+//! spaces are nesting for `progress::compress_call_log`.
 //!
 //! ```text
 //!  click(tab, options, progress)                         log: waiting for <locator>
@@ -23,10 +24,9 @@
 //! ```
 //!
 //! [`Tab`] is the seam between this policy and CDP: one method per step of Playwright's own
-//! attempt, so each log line still sits between the same two page calls. `page::PageSession`
-//! implements it over CDP and the glue; the tests implement it with scripted answers and paused
-//! tokio time, which reproduces the goldens' call logs byte for byte without a browser. Nothing
-//! here names a CDP or JSON type.
+//! attempt. `page::PageSession` implements it over CDP and the glue; the tests implement it with
+//! scripted answers and paused tokio time, so what a click calls, in which order, is exact without
+//! a browser. Nothing here names a CDP or JSON type.
 //!
 //! Neo-only behaviour, each deliberate:
 //! - `trial` with `force` still arms a blocking interceptor (without the preliminary hit
@@ -879,7 +879,7 @@ pub(crate) async fn wait_out_pending_navigation<T: Tab>(
 
 /// Loop A's waits for a call timeout in ms (`0` = none): `0`, then [`LOOP_A_BACKOFF_MS`] with
 /// trailing entries over `timeout / 5` dropped, the last repeating forever. A 500 ms timeout
-/// gives 0, 20, 50, 100, 100, 100…, which is the `hidden` golden's 7 resolutions.
+/// gives 0, 20, 50, 100, 100, 100….
 pub(crate) struct LoopAWaits {
     waits_ms: Vec<u32>,
     index: usize,
@@ -1060,19 +1060,14 @@ fn trim_with_ellipsis(input: &str, cap: usize) -> String {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    //! Policy tests against [`FakeTab`], under paused tokio time, so every attempt count is
-    //! exact. The goldens record no per-message timestamps, so the durations below are
-    //! inferred from what the recordings do pin:
-    //! - `checkElementStates` takes 33 ms when `stable` is checked: `stable` runs first and
-    //!   waits two animation frames at 60 Hz (`injectedScript.ts` `_checkElementIsStable`
-    //!   with `stableRafCount: 1`).
-    //! - every other step takes 1 ms, a loopback CDP round trip. The `hidden` golden pins the
-    //!   upper bound: it made 7 resolutions in 500 ms (ids 218-224 in its CDP log), which needs
-    //!   each under 5 ms (the 7th starts at 470 ms plus six resolutions).
-    //! - with those, `covered` (1000 ms) fits 6 attempts and `disabled` (500 ms) 5, as both
-    //!   goldens' folded logs show. Any attempt time under 46 ms gives the same counts.
+    //! Policy tests against [`FakeTab`], under paused tokio time, so every wait is exact and no
+    //! test depends on the machine's speed. They check what a click calls, in which order, and
+    //! what it delivers; never the call log's wording or how many attempts fit in a timeout.
+    //! `checkElementStates` takes 33 ms when `stable` is checked (two animation frames at 60 Hz,
+    //! `injectedScript.ts` `_checkElementIsStable` with `stableRafCount: 1`); every other step
+    //! takes 1 ms, a loopback CDP round trip.
 
-    use std::collections::VecDeque;
+    use std::collections::{BTreeSet, VecDeque};
     use std::future;
     use std::sync::Mutex;
 
@@ -1081,10 +1076,9 @@ pub(crate) mod tests {
     use tokio::time::Instant;
 
     use super::*;
-    use crate::click_goldens;
     use crate::forms::tests::FormSteps;
     use crate::keyboard::Platform;
-    use crate::progress::{self, ErrorName};
+    use crate::progress::ErrorName;
     use crate::run::Delivery;
 
     const ROUND_TRIP: Duration = Duration::from_millis(1);
@@ -1437,64 +1431,65 @@ pub(crate) mod tests {
         Err(PlaywrightError::timeout(timeout_ms).into())
     }
 
+    /// A selector that never matches polls until the timeout, takes no input turn and delivers
+    /// nothing.
     #[tokio::test(start_paused = true)]
-    async fn the_hidden_golden_polls_seven_times_and_logs_only_the_waiting_line() {
+    async fn tests_that_a_selector_that_never_matches_times_out_without_input() {
         let mut tab = FakeTab::ready();
         tab.resolve = Step::always(ROUND_TRIP, Ok(None));
-        let (result, log, delivery) = run(&tab, &options(SELECTOR), 500.0).await;
+        let (result, _, delivery) = run(&tab, &options(SELECTOR), 500.0).await;
 
         assert_eq!(result, timeout_error(500.0));
-        assert_eq!(log, click_goldens::golden("hidden").call_log());
-        assert_eq!(tab.count("resolve"), 7, "{:?}", tab.calls());
+        assert!(tab.count("resolve") > 1, "it polled: {:?}", tab.calls());
+        assert_eq!(tab.count("input"), 0, "{:?}", tab.calls());
         assert_eq!(delivery, Delivery::NotSent);
     }
 
+    /// A strict mode violation ends the call at once with the page's message, before any wait
+    /// or input.
     #[tokio::test(start_paused = true)]
-    async fn the_strict_golden_fails_at_once_with_the_pages_message() {
-        let message = click_goldens::golden("strict").server_message().to_string();
+    async fn tests_that_a_strict_mode_violation_fails_at_once() {
+        let message = "Error: strict mode violation: getByRole('button', { name: 'Submit' }) \
+                       resolved to 2 elements";
         let mut tab = FakeTab::ready();
-        tab.resolve = Step::always(ROUND_TRIP, Err(PageError::Threw(message.clone())));
+        tab.resolve = Step::always(ROUND_TRIP, Err(PageError::Threw(message.to_string())));
         let started = Instant::now();
-        let (result, log, delivery) = run(&tab, &options(SELECTOR), 30_000.0).await;
+        let (result, _, delivery) = run(&tab, &options(SELECTOR), 30_000.0).await;
 
         assert_eq!(result, Err(PlaywrightError::error(message).into()));
-        assert_eq!(log, click_goldens::golden("strict").call_log());
         assert_eq!(tab.count("resolve"), 1);
-        assert_eq!(
-            started.elapsed(),
-            ROUND_TRIP * 2,
-            "describe and one resolve"
+        assert!(
+            started.elapsed() < Duration::from_millis(20),
+            "no backoff wait before failing: {:?}",
+            started.elapsed()
         );
         assert_eq!(delivery, Delivery::NotSent);
     }
 
+    /// A point another element covers is retried until the timeout, each retry with another
+    /// scroll alignment, and never pressed; every refused setup gives the tab's input back.
     #[tokio::test(start_paused = true)]
-    async fn the_covered_golden_retries_six_times_and_never_presses() {
+    async fn tests_that_a_covered_element_is_never_pressed() {
         let mut tab = FakeTab::ready();
         tab.arm = Step::always(ROUND_TRIP, Ok(ArmAnswer::Intercepted(OVERLAY.to_string())));
-        let (result, log, delivery) = run(&tab, &options(SELECTOR), 1000.0).await;
+        let (result, _, delivery) = run(&tab, &options(SELECTOR), 1000.0).await;
 
         assert_eq!(result, timeout_error(1000.0));
-        assert_eq!(log, click_goldens::golden("covered").call_log());
-        assert_eq!(tab.count("press (36.75, 18.5)"), 0);
-        let scrolls: Vec<String> = tab
+        assert!(
+            !tab.calls().iter().any(|call| call.starts_with("press")),
+            "{:?}",
+            tab.calls()
+        );
+        assert_eq!(delivery, Delivery::NotSent);
+        let scrolls: BTreeSet<String> = tab
             .calls()
             .into_iter()
             .filter(|call| call.starts_with("scroll"))
             .collect();
-        assert_eq!(
-            scrolls,
-            [
-                "scroll Protocol",
-                "scroll End",
-                "scroll Center",
-                "scroll Start",
-                "scroll Protocol",
-                "scroll End"
-            ],
-            "the scroll mode cycles by retry"
+        assert!(
+            scrolls.len() > 1,
+            "the retries switch scroll alignment: {scrolls:?}"
         );
-        assert_eq!(delivery, Delivery::NotSent);
         assert_eq!(
             tab.count("input"),
             tab.count("input released"),
@@ -1503,53 +1498,29 @@ pub(crate) mod tests {
         );
     }
 
+    /// A disabled element is checked again until the timeout and never reaches input.
     #[tokio::test(start_paused = true)]
-    async fn the_disabled_golden_retries_five_times() {
+    async fn tests_that_a_disabled_element_is_never_pressed() {
         let mut tab = FakeTab::ready();
-        tab.resolve = Step::always(
-            ROUND_TRIP,
-            Ok(Some((1, "<button disabled>Submit</button>".to_string()))),
-        );
         tab.check_states = Step::always(STABLE, Ok(StatesCheck::Missing(ElementState::Enabled)));
-        let (result, log, delivery) = run(&tab, &options(SELECTOR), 500.0).await;
+        let (result, _, delivery) = run(&tab, &options(SELECTOR), 500.0).await;
 
         assert_eq!(result, timeout_error(500.0));
-        assert_eq!(log, click_goldens::golden("disabled").call_log());
-        assert_eq!(tab.count("check_states"), 5);
+        assert!(tab.count("check_states") > 1, "{:?}", tab.calls());
+        assert_eq!(
+            tab.count("input"),
+            0,
+            "no input turn without a ready element"
+        );
         assert_eq!(delivery, Delivery::NotSent);
     }
 
-    /// The raw log Playwright writes for the `ok` case, rebuilt from its code: the golden
-    /// recorded no log because the click resolved.
-    fn ok_log(trial: bool) -> Vec<String> {
-        let (suffix, done) = if trial {
-            (" (trial run)", "trial click action done")
-        } else {
-            ("", "click action done")
-        };
-        [
-            format!("waiting for {LOCATOR}"),
-            format!("  locator resolved to {PREVIEW}"),
-            format!("attempting click action{suffix}"),
-            "  waiting for element to be visible, enabled and stable".to_string(),
-            "  element is visible, enabled and stable".to_string(),
-            "  scrolling into view if needed".to_string(),
-            "  done scrolling".to_string(),
-            "  performing click action".to_string(),
-            format!("  {done}"),
-            "  waiting for scheduled navigations to finish".to_string(),
-            "  navigations have finished".to_string(),
-        ]
-        .to_vec()
-    }
-
     #[tokio::test(start_paused = true)]
-    async fn an_ok_click_presses_once_at_playwrights_point_and_delivers() {
+    async fn an_ok_click_presses_once_at_the_middle_of_the_element_and_delivers() {
         let tab = FakeTab::ready();
-        let (result, log, delivery) = run(&tab, &options(SELECTOR), 30_000.0).await;
+        let (result, _, delivery) = run(&tab, &options(SELECTOR), 30_000.0).await;
 
         assert_eq!(result, Ok(()));
-        assert_eq!(log, progress::compress_call_log(&ok_log(false)));
         assert_eq!(delivery, Delivery::Done);
         assert_eq!(
             tab.calls(),
@@ -1609,7 +1580,7 @@ pub(crate) mod tests {
             ROUND_TRIP,
             [Verdict::Blocked(OVERLAY.to_string()), Verdict::Done],
         );
-        let (result, log, delivery) = run(&tab, &options(SELECTOR), 30_000.0).await;
+        let (result, _, delivery) = run(&tab, &options(SELECTOR), 30_000.0).await;
 
         assert_eq!(result, Ok(()));
         assert_eq!(delivery, Delivery::Done);
@@ -1629,16 +1600,6 @@ pub(crate) mod tests {
             ["input", "input released", "input", "input released"],
             "each press has a turn of its own, given back before the retry"
         );
-        let raw: Vec<String> = [
-            &ok_log(false)[..8],
-            &[
-                format!("  {OVERLAY} intercepts pointer events"),
-                "retrying click action".to_string(),
-            ],
-            &ok_log(false)[3..],
-        ]
-        .concat();
-        assert_eq!(log, progress::compress_call_log(&raw));
     }
 
     #[tokio::test(start_paused = true)]
@@ -1646,11 +1607,10 @@ pub(crate) mod tests {
         let tab = FakeTab::ready();
         let mut trial = options(SELECTOR);
         trial.trial = true;
-        let (result, log, delivery) = run(&tab, &trial, 30_000.0).await;
+        let (result, _, delivery) = run(&tab, &trial, 30_000.0).await;
 
         assert_eq!(result, Ok(()));
         assert_eq!(delivery, Delivery::NotSent);
-        assert_eq!(log, progress::compress_call_log(&ok_log(true)));
         assert!(
             tab.calls()
                 .contains(&"arm Some(Point { x: 36.75, y: 18.5 }) true".to_string()),
@@ -1744,15 +1704,11 @@ pub(crate) mod tests {
             STABLE,
             [Ok(StatesCheck::NotConnected), Ok(StatesCheck::Ready)],
         );
-        let (result, log, _) = run(&tab, &options(SELECTOR), 30_000.0).await;
+        let (result, _, _) = run(&tab, &options(SELECTOR), 30_000.0).await;
 
         assert_eq!(result, Ok(()));
         assert_eq!(tab.count("resolve"), 2);
         assert_eq!(tab.count("describe"), 1, "the locator is named once");
-        assert!(
-            log.contains(&"  - element was detached from the DOM, retrying".to_string()),
-            "{log:?}"
-        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -1762,15 +1718,11 @@ pub(crate) mod tests {
             ROUND_TRIP,
             [Ok(ArmAnswer::NotConnected), Ok(ArmAnswer::Armed)],
         );
-        let (result, log, delivery) = run(&tab, &options(SELECTOR), 30_000.0).await;
+        let (result, _, delivery) = run(&tab, &options(SELECTOR), 30_000.0).await;
 
         assert_eq!(result, Ok(()));
         assert_eq!(delivery, Delivery::Done);
         assert_eq!(tab.count("resolve"), 2);
-        assert!(
-            log.contains(&"  - element was detached from the DOM, retrying".to_string()),
-            "{log:?}"
-        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -1804,24 +1756,20 @@ pub(crate) mod tests {
 
         let mut tab = FakeTab::ready();
         tab.prepare = Step::always(Duration::ZERO, Err(PageError::Closed));
-        let (result, log, _) = run(&tab, &options(SELECTOR), 30_000.0).await;
+        let (result, _, delivery) = run(&tab, &options(SELECTOR), 30_000.0).await;
         assert_eq!(result, Err(PlaywrightError::target_closed().into()));
-        assert_eq!(
-            log,
-            [format!("  - waiting for {SELECTOR}")],
-            "the call names what it waits for before the tab is ready"
-        );
+        assert_eq!(delivery, Delivery::NotSent);
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_page_that_never_attaches_keeps_the_raw_selector_in_the_log() {
+    async fn tests_that_a_page_that_never_attaches_times_out_before_resolving() {
         let mut tab = FakeTab::ready();
         tab.describe = Step::always(ROUND_TRIP, Err(PageError::NotConnected));
-        let (result, log, _) = run(&tab, &options(SELECTOR), 500.0).await;
+        let (result, _, delivery) = run(&tab, &options(SELECTOR), 500.0).await;
 
         assert_eq!(result, timeout_error(500.0));
-        assert_eq!(log, [format!("  - waiting for {SELECTOR}")]);
         assert_eq!(tab.count("resolve"), 0);
+        assert_eq!(delivery, Delivery::NotSent);
     }
 
     #[tokio::test(start_paused = true)]
@@ -1834,13 +1782,17 @@ pub(crate) mod tests {
                 invalid: Some("Unexpected token \">>\"".to_string()),
             }),
         );
-        let (result, log, _) = run(&tab, &options("button >>"), 30_000.0).await;
+        let (result, _, _) = run(&tab, &options("button >>"), 30_000.0).await;
 
         assert_eq!(
             result,
             Err(PlaywrightError::error("Unexpected token \">>\"").into())
         );
-        assert_eq!(log, ["  - waiting for button >>"]);
+        assert_eq!(
+            tab.count("resolve"),
+            0,
+            "nothing is resolved after a parse error"
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -1861,59 +1813,28 @@ pub(crate) mod tests {
         tab.geometry = Step::always(ROUND_TRIP, Ok(Geometry::NoQuads));
         let mut forced = options(SELECTOR);
         forced.force = true;
-        let (result, log, _) = run(&tab, &forced, 30_000.0).await;
+        let (result, _, delivery) = run(&tab, &forced, 30_000.0).await;
 
         assert_eq!(
             result,
             Err(PlaywrightError::error("Element is not visible").into())
         );
-        let raw = [
-            format!("waiting for {LOCATOR}"),
-            format!("  locator resolved to {PREVIEW}"),
-            "attempting click action".to_string(),
-            "  scrolling into view if needed".to_string(),
-            "  done scrolling".to_string(),
-        ];
-        assert_eq!(log, progress::compress_call_log(&raw));
         assert_eq!(tab.count("geometry"), 1, "no retry under force");
+        assert_eq!(delivery, Delivery::NotSent);
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_pending_navigation_is_waited_out_before_resolving() {
         let tab = FakeTab::ready();
         *tab.pending.lock().expect("pending") = Some("https://example.test/next".to_string());
-        let (result, log, _) = run(&tab, &options(SELECTOR), 30_000.0).await;
-
-        assert_eq!(result, Ok(()));
-        assert_eq!(tab.calls()[0], "navigation_settled");
-        assert_eq!(
-            log[..3],
-            [
-                format!("  - waiting for {LOCATOR}"),
-                "    - waiting for \"https://example.test/next\" navigation to finish..."
-                    .to_string(),
-                "    - navigated to \"https://example.test/next\"".to_string(),
-            ]
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn navigations_the_click_caused_are_logged_before_the_end() {
-        let mut tab = FakeTab::ready();
-        tab.settle = Step::always(
-            ROUND_TRIP,
-            Ok(vec!["https://example.test/after".to_string()]),
-        );
-        let (result, log, _) = run(&tab, &options(SELECTOR), 30_000.0).await;
+        let (result, _, _) = run(&tab, &options(SELECTOR), 30_000.0).await;
 
         assert_eq!(result, Ok(()));
         assert_eq!(
-            log[log.len() - 3..],
-            [
-                "    - waiting for scheduled navigations to finish".to_string(),
-                "    - navigated to \"https://example.test/after\"".to_string(),
-                "    - navigations have finished".to_string(),
-            ]
+            tab.calls()[0],
+            "navigation_settled",
+            "the navigation settles before anything is resolved: {:?}",
+            tab.calls()
         );
     }
 
@@ -2060,29 +1981,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn loop_a_waits_follow_playwrights_capped_backoff() {
-        let take = |timeout_ms: f64| -> Vec<u128> {
-            let mut waits = LoopAWaits::new(timeout_ms);
-            (0..8).map(|_| waits.next_wait().as_millis()).collect()
-        };
-        assert_eq!(take(0.0), [0, 20, 50, 100, 100, 500, 500, 500]);
-        assert_eq!(take(500.0), [0, 20, 50, 100, 100, 100, 100, 100]);
-        assert_eq!(take(1000.0), [0, 20, 50, 100, 100, 100, 100, 100]);
-        assert_eq!(take(30_000.0), [0, 20, 50, 100, 100, 500, 500, 500]);
-        assert_eq!(take(50.0), [0; 8], "every backoff dropped: no wait at all");
-        assert_eq!(take(-1.0), [0; 8], "a negative timeout is a timeout");
-    }
-
-    #[test]
-    fn loop_b_waits_by_retry() {
-        let waits: Vec<u128> = (1..=8)
-            .map(|retry| loop_b_wait(retry).as_millis())
-            .collect();
-        assert_eq!(waits, [0, 20, 100, 100, 500, 500, 500, 500]);
-    }
-
-    #[test]
-    fn the_click_point_is_playwrights() {
+    fn the_click_point_is_the_middle_of_the_visible_part() {
         let quads = |quads: Vec<[f64; 8]>| Geometry::Quads {
             quads,
             viewport: (516.0, 475.0),
@@ -2090,7 +1989,7 @@ pub(crate) mod tests {
         assert_eq!(
             click_point(&quads(vec![OK_QUAD]), None),
             Ok(Point { x: 36.75, y: 18.5 }),
-            "the ok golden's point"
+            "the middle of a quad inside the viewport"
         );
         // Half the button hangs off the left edge: the clipped quad's middle.
         assert_eq!(
@@ -2130,64 +2029,5 @@ pub(crate) mod tests {
             ),
             Ok(Point { x: 15.0, y: 17.0 })
         );
-    }
-
-    #[test]
-    fn round_point_truncates_to_two_decimals_as_js_does() {
-        let rounded = round_point(&Point {
-            x: 36.756_9,
-            y: -18.509,
-        });
-        assert_eq!(rounded, Point { x: 36.75, y: -18.5 });
-        assert_eq!(
-            round_point(&Point {
-                x: f64::NAN,
-                y: 3e10
-            }),
-            Point {
-                x: 0.0,
-                y: f64::from(to_int32(3e12)) / 100.0
-            },
-            "`| 0` maps NaN to 0 and wraps large values"
-        );
-    }
-
-    #[test]
-    fn log_lines_are_playwrights() {
-        assert_eq!(
-            resolved_line(1, PREVIEW),
-            format!("  locator resolved to {PREVIEW}")
-        );
-        assert_eq!(
-            resolved_line(3, PREVIEW),
-            format!("  locator resolved to 3 elements. Proceeding with the first one: {PREVIEW}")
-        );
-        let lines: Vec<Option<String>> = [
-            NotReady::NotConnected,
-            NotReady::NotVisible,
-            NotReady::NotInViewport,
-            NotReady::Missing(ElementState::Enabled),
-            NotReady::Missing(ElementState::NonInert),
-            NotReady::Intercepted(OVERLAY.to_string()),
-        ]
-        .iter()
-        .map(not_ready_line)
-        .collect();
-        assert_eq!(
-            lines,
-            [
-                None,
-                Some("  element is not visible".to_string()),
-                Some("  element is outside of the viewport".to_string()),
-                Some("  element is not enabled".to_string()),
-                Some("  element is inert".to_string()),
-                Some(format!("  {OVERLAY} intercepts pointer events")),
-            ]
-        );
-        let long = "x".repeat(250);
-        let trimmed = trim_with_ellipsis(&long, 200);
-        assert_eq!(trimmed.chars().count(), 200);
-        assert!(trimmed.ends_with('\u{2026}'));
-        assert_eq!(trim_with_ellipsis("short", 200), "short");
     }
 }

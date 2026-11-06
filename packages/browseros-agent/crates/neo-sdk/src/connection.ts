@@ -225,7 +225,7 @@ export function rebuildError(
   return rebuilt
 }
 
-/** Playwright's `formatCallLog` with colours off, as the goldens recorded it. */
+/** Playwright's `formatCallLog` with colours off. */
 export function formatCallLog(log: string[] | undefined): string {
   if (!log?.some((line) => !!line)) return ''
   return `\nCall log:\n${log.join('\n')}\n`

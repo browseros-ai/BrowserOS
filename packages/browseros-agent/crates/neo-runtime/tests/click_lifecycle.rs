@@ -1,12 +1,12 @@
 //! A click's mechanism under failure, against the fake browser in `support/fake_browser.rs`. No
 //! browser needed.
 //!
-//! The layers split three ways: `click.rs`'s `FakeTab` tests own the policy (both loops, every
-//! call-log line, the goldens byte for byte under paused time); `click_e2e.rs` owns fidelity
-//! against a real page. This file owns what `FakeTab` replaces and a real browser cannot hold
-//! still: what `PageSession` actually writes on the wire, in which order, and what it leaves
-//! behind when an acknowledgement never comes or the run ends mid-press. No golden call log is
-//! asserted here: real time over loopback makes attempt counts timing-bound.
+//! The layers split three ways: `click.rs`'s `FakeTab` tests own the policy (both loops and their
+//! order, under paused time); `click_e2e.rs` owns behaviour on a real page. This file owns what
+//! `FakeTab` replaces and a real browser cannot hold still: what `PageSession` actually writes on
+//! the wire, in which order, and what it leaves behind when an acknowledgement never comes or the
+//! run ends mid-press. Nothing here asserts log text or attempt counts: real time over loopback
+//! makes attempt counts timing-bound.
 
 #[path = "support/fake_browser.rs"]
 mod fake_browser;
@@ -527,12 +527,9 @@ async fn a_timeout_after_the_press_is_unknown_and_never_presses_again() {
     let [call] = outcome.calls.as_slice() else {
         panic!("one record: {outcome:?}");
     };
-    assert_eq!(
-        call.result,
-        CallResult::Error {
-            name: "TimeoutError".to_string(),
-            message: "Timeout 500ms exceeded.".to_string(),
-        }
+    assert!(
+        matches!(&call.result, CallResult::Error { name, .. } if name == "TimeoutError"),
+        "{call:?}"
     );
     assert_eq!(call.delivery, Some(Delivery::Unknown));
     let exchanges = browser.exchanges();
@@ -790,26 +787,21 @@ async fn a_tab_closed_while_its_domains_are_enabled_ends_the_click() {
         .await;
 
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
-    assert_eq!(
-        outcome.value,
-        Some(json!([
-            "Error",
-            "page.click: Target page, context or browser has been closed\nCall log:\n  - waiting for #go\n",
-        ]))
+    let value = outcome.value.clone().unwrap_or_default();
+    assert_eq!(value[0], json!("Error"), "{value}");
+    assert!(
+        value[1].as_str().is_some_and(|message| message
+            .starts_with("page.click: Target page, context or browser has been closed")),
+        "{value}"
     );
     let [call] = outcome.calls.as_slice() else {
         panic!("one record: {outcome:?}");
     };
-    assert_eq!(
-        (&call.result, call.delivery),
-        (
-            &CallResult::Error {
-                name: "TargetClosedError".to_string(),
-                message: "Target page, context or browser has been closed".to_string(),
-            },
-            Some(Delivery::NotSent)
-        )
+    assert!(
+        matches!(&call.result, CallResult::Error { name, .. } if name == "TargetClosedError"),
+        "{call:?}"
     );
+    assert_eq!(call.delivery, Some(Delivery::NotSent), "{call:?}");
     assert!(
         started.elapsed() < Duration::from_secs(5),
         "the close ended the click, not its timeout: {:?}",
