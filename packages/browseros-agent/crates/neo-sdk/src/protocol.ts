@@ -13,7 +13,9 @@ import type {
   FrameCheckParams,
   FrameClickParams,
   FrameFillParams,
+  FrameGetAttributeParams,
   FrameGotoParams,
+  FrameInnerTextParams,
   FrameInputValueParams,
   FrameIsCheckedParams,
   FrameIsVisibleParams,
@@ -29,6 +31,12 @@ export const FRAME_GOTO_KEYS = ['url', 'waitUntil', 'referer'] as const
 
 /** `Frame.textContent`'s params in Playwright's schema order. */
 export const FRAME_TEXT_CONTENT_KEYS = ['selector', 'strict'] as const
+
+/** `Frame.innerText`'s params in Playwright's schema order. */
+export const FRAME_INNER_TEXT_KEYS = ['selector', 'strict'] as const
+
+/** `Frame.getAttribute`'s params in Playwright's schema order. */
+export const FRAME_GET_ATTRIBUTE_KEYS = ['selector', 'strict', 'name'] as const
 
 /** `Frame.ariaSnapshot`'s params in Playwright's schema order. */
 export const FRAME_ARIA_SNAPSHOT_KEYS = [
@@ -129,6 +137,18 @@ type _FrameTextContentKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_TEXT_CONTENT_KEYS)[number], true>,
     Required<FrameTextContentParams>
+  >
+>
+type _FrameInnerTextKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_INNER_TEXT_KEYS)[number], true>,
+    Required<FrameInnerTextParams>
+  >
+>
+type _FrameGetAttributeKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_GET_ATTRIBUTE_KEYS)[number], true>,
+    Required<FrameGetAttributeParams>
   >
 >
 type _FrameAriaSnapshotKeysMatchSpec = Assert<

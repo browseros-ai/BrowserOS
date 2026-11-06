@@ -35,11 +35,11 @@ use std::time::Duration;
 
 use neo_runtime_spec::serve::{
     BrowserContextCall, FrameAriaSnapshotParams, FrameCall, FrameCheckParams, FrameCheckResult,
-    FrameClickParams, FrameFillParams, FrameFillResult, FrameGotoParams, FrameInputValueParams,
-    FrameInputValueResult, FrameIsCheckedParams, FrameIsCheckedResult, FrameIsVisibleParams,
-    FrameIsVisibleResult, FramePressParams, FramePressResult, FrameSelectOptionParams,
-    FrameSelectOptionResult, FrameTextContentParams, FrameTitleParams, FrameUncheckParams,
-    FrameUncheckResult, Metadata, PageCall,
+    FrameClickParams, FrameFillParams, FrameFillResult, FrameGetAttributeParams, FrameGotoParams,
+    FrameInnerTextParams, FrameInputValueParams, FrameInputValueResult, FrameIsCheckedParams,
+    FrameIsCheckedResult, FrameIsVisibleParams, FrameIsVisibleResult, FramePressParams,
+    FramePressResult, FrameSelectOptionParams, FrameSelectOptionResult, FrameTextContentParams,
+    FrameTitleParams, FrameUncheckParams, FrameUncheckResult, Metadata, PageCall,
 };
 use neo_runtime_spec::{CallDecodeError, Command, MethodFlag, MethodMeta};
 use serde::Deserialize;
@@ -60,7 +60,7 @@ use crate::press::{self, PressOptions};
 use crate::progress::{
     self, CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
 };
-use crate::reads::{self, ReadOptions, SnapshotOptions};
+use crate::reads::{self, AttributeOptions, ReadOptions, SnapshotOptions};
 use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
 use crate::states::{self, StateOptions};
 use crate::tab_calls;
@@ -205,6 +205,8 @@ enum Route {
     FrameGoto(GotoOptions),
     FrameTitle,
     FrameTextContent(ReadOptions),
+    FrameInnerText(ReadOptions),
+    FrameGetAttribute(AttributeOptions),
     FrameAriaSnapshot(SnapshotOptions),
     FrameFill(FillOptions),
     FramePress(PressOptions),
@@ -410,6 +412,18 @@ fn route_frame_call(call: FrameCall) -> Result<Route, PlaywrightError> {
         FrameCall::TextContent(params) => {
             Ok(Route::FrameTextContent(ReadOptions::from_params(params)))
         }
+        FrameCall::InnerText(params) if enters_frame(&params.selector) => {
+            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
+        }
+        FrameCall::InnerText(params) => {
+            Ok(Route::FrameInnerText(ReadOptions::from_inner_text(params)))
+        }
+        FrameCall::GetAttribute(params) if enters_frame(&params.selector) => {
+            Err(PlaywrightError::error(FRAMES_UNSUPPORTED))
+        }
+        FrameCall::GetAttribute(params) => Ok(Route::FrameGetAttribute(
+            AttributeOptions::from_params(params),
+        )),
         FrameCall::AriaSnapshot(params) => {
             SnapshotOptions::from_params(params).map(Route::FrameAriaSnapshot)
         }
@@ -522,6 +536,12 @@ async fn serve(
         Route::FrameTextContent(options) => reads::text_content(&page, &options, &progress)
             .await
             .and_then(|result| encode_result::<FrameTextContentParams>(&result)),
+        Route::FrameInnerText(options) => reads::inner_text(&page, &options, &progress)
+            .await
+            .and_then(|result| encode_result::<FrameInnerTextParams>(&result)),
+        Route::FrameGetAttribute(options) => reads::get_attribute(&page, &options, &progress)
+            .await
+            .and_then(|result| encode_result::<FrameGetAttributeParams>(&result)),
         Route::FrameAriaSnapshot(options) => reads::aria_snapshot(&page, &options, &progress)
             .await
             .and_then(|result| encode_result::<FrameAriaSnapshotParams>(&result)),
@@ -608,6 +628,8 @@ async fn serve_route<T: FormTab + KeyboardTab>(
         Route::FrameGoto(_)
         | Route::FrameTitle
         | Route::FrameTextContent(_)
+        | Route::FrameInnerText(_)
+        | Route::FrameGetAttribute(_)
         | Route::FrameIsVisible(_)
         | Route::FrameIsChecked(_)
         | Route::FrameAriaSnapshot(_) => Err(PlaywrightError::error(
@@ -1103,6 +1125,8 @@ mod tests {
                 Route::FrameGoto(_)
                 | Route::FrameTitle
                 | Route::FrameTextContent(_)
+                | Route::FrameInnerText(_)
+                | Route::FrameGetAttribute(_)
                 | Route::FrameIsVisible(_)
                 | Route::FrameIsChecked(_)
                 | Route::FrameAriaSnapshot(_) => panic!("a form is not a navigation or a read"),
@@ -1277,6 +1301,91 @@ mod tests {
                 boxes: None,
             }
         );
+    }
+
+    #[test]
+    fn tests_that_inner_text_and_get_attribute_route_without_input_flags() {
+        for strict in [None, Some(true), Some(false)] {
+            for method in ["innerText", "getAttribute"] {
+                let mut params = json!({ "selector": "li" });
+                if method == "getAttribute" {
+                    params["name"] = json!("data-kind");
+                }
+                if let Some(strict) = strict {
+                    params["strict"] = json!(strict);
+                }
+                let routed = route_frame(method, params);
+                let meta = routed.meta.expect("served read metadata");
+                assert!(!meta.has(MethodFlag::Input), "{method} is a read");
+                match frame_route(routed.route).expect("read route") {
+                    Route::FrameInnerText(options) => assert_eq!(
+                        options,
+                        ReadOptions {
+                            selector: "li".to_string(),
+                            strict: strict.unwrap_or(false),
+                        }
+                    ),
+                    Route::FrameGetAttribute(options) => assert_eq!(
+                        options,
+                        AttributeOptions {
+                            selector: "li".to_string(),
+                            strict: strict.unwrap_or(false),
+                            name: "data-kind".to_string(),
+                        }
+                    ),
+                    other => panic!("expected a text read, got {other:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tests_that_text_reads_refuse_frame_selectors_before_any_work() {
+        for method in ["innerText", "getAttribute"] {
+            for selector in [
+                "iframe >> internal:control=enter-frame >> li",
+                "internal:control=any-frame >> li",
+                "li >> internal:has=\"iframe >> internal:control=enter-frame >> b\"",
+            ] {
+                let routed = route_frame(method, json!({ "selector": selector, "name": "title" }));
+                assert_eq!(error_of(routed), PlaywrightError::error(FRAMES_UNSUPPORTED));
+            }
+        }
+    }
+
+    #[test]
+    fn tests_that_text_reads_keep_empty_and_missing_wire_values_distinct() {
+        use neo_runtime_spec::serve::{FrameGetAttributeResult, FrameInnerTextResult};
+        for (result, expected) in [
+            (
+                encode_result::<FrameInnerTextParams>(&FrameInnerTextResult {
+                    value: String::new(),
+                }),
+                json!({ "id": 7, "result": { "value": "" } }),
+            ),
+            (
+                encode_result::<FrameGetAttributeParams>(&FrameGetAttributeResult {
+                    value: Some(String::new()),
+                }),
+                json!({ "id": 7, "result": { "value": "" } }),
+            ),
+            (
+                encode_result::<FrameGetAttributeParams>(&FrameGetAttributeResult {
+                    value: Some("fruit".to_string()),
+                }),
+                json!({ "id": 7, "result": { "value": "fruit" } }),
+            ),
+            (
+                encode_result::<FrameGetAttributeParams>(&FrameGetAttributeResult { value: None }),
+                json!({ "id": 7, "result": {} }),
+            ),
+        ] {
+            let result = result.expect("typed result").expect("reads have a result");
+            let reply: Value =
+                serde_json::from_str(&encode_reply(&json!(7), Ok(Some(&result)), None))
+                    .expect("reply");
+            assert_eq!(reply, expected);
+        }
     }
 
     #[test]

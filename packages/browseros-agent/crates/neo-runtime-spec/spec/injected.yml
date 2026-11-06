@@ -81,6 +81,26 @@ Injected:
         # Absent while nothing matches; neo-runtime keeps polling until the deadline.
         matched: TextMatch?
 
+    # `frames.ts` `innerText`: resolve and mark the first match, refuse an element outside the
+    # XHTML namespace, read its `innerText`.
+    innerText:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+      returns:
+        matched: TextMatch?
+
+    # `frames.ts` `getAttribute`: resolve and mark the first match, read one attribute.
+    getAttribute:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+        name: string
+      returns:
+        matched: AttributeMatch?
+
     # Resolves one frame chunk without marking matches and reads visibility, for
     # `Frame.isVisible`. No match is `false`; neo-runtime never polls this call.
     isVisible:
@@ -442,10 +462,18 @@ CheckedStateMatch:
 TextMatch:
   type: object
   properties:
-    # `element.textContent`, which is never `null` for an element.
+    # `textContent` or `innerText` of the element, never `null` for an element.
     value: string
     # `InjectedScript.previewNode` of the element, for the call log line
     # `locator resolved to …`.
+    preview: string
+
+# The first matching element's attribute and preview.
+AttributeMatch:
+  type: object
+  properties:
+    # `element.getAttribute(name)`: absent when the element has no such attribute, '' when empty.
+    value: string?
     preview: string
 
 # The snapshot flavor: `ai` adds refs that `aria-ref=` selectors resolve.

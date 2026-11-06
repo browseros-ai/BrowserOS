@@ -40,6 +40,8 @@ import type {
   ClickOptions,
   FillOptions,
   Frame,
+  GetAttributeOptions,
+  InnerTextOptions,
   InputValueOptions,
   IsCheckedOptions,
   IsVisibleOptions,
@@ -113,6 +115,25 @@ export class Locator {
     return await this._frame._textContent(
       'locator.textContent',
       this._selector,
+      { strict: true, ...options },
+    )
+  }
+
+  async innerText(options?: InnerTextOptions): Promise<string> {
+    return await this._frame._innerText('locator.innerText', this._selector, {
+      strict: true,
+      ...options,
+    })
+  }
+
+  async getAttribute(
+    name: string,
+    options?: GetAttributeOptions,
+  ): Promise<string | null> {
+    return await this._frame._getAttribute(
+      'locator.getAttribute',
+      this._selector,
+      name,
       { strict: true, ...options },
     )
   }

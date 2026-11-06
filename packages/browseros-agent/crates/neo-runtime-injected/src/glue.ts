@@ -80,6 +80,35 @@ export const glue = {
     }
   },
 
+  innerText: (injected, { selector, strict }) => {
+    const [element] = query(injected, selector, strict, {
+      markTargets: 'first',
+    })
+    if (!element) return {}
+    if (element.namespaceURI !== 'http://www.w3.org/1999/xhtml')
+      throw injected.createStacklessError('Node is not an HTMLElement')
+    return {
+      matched: {
+        value: (element as HTMLElement).innerText,
+        preview: injected.previewNode(element),
+      },
+    }
+  },
+
+  getAttribute: (injected, { selector, strict, name }) => {
+    const [element] = query(injected, selector, strict, {
+      markTargets: 'first',
+    })
+    if (!element) return {}
+    const value = element.getAttribute(name)
+    return {
+      matched: {
+        ...(value === null ? {} : { value }),
+        preview: injected.previewNode(element),
+      },
+    }
+  },
+
   isVisible: (injected, { selector, strict }) => {
     const [element] = query(injected, selector, strict)
     return {

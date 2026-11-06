@@ -1,8 +1,8 @@
 /**
  * Playwright's `Frame` (`client/frame.ts` at 26137face), cut to a page's main frame: its guid,
- * its page, the selector builders, whose bodies are Playwright's, `goto`, `title`, `textContent`
- * and browser actions. A page builds exactly one `Frame` per run, because `Locator` compares
- * frames by identity.
+ * its page, the selector builders, whose bodies are Playwright's, `goto`, `title`,
+ * `textContent`, `innerText`, `getAttribute` and browser actions. A page builds exactly one
+ * `Frame` per run, because `Locator` compares frames by identity.
  *
  * Each `_<method>` is where every public form of a browser call (`locator.textContent`,
  * `page.textContent`, `frame.textContent`) becomes a protocol message, with its caller's
@@ -20,7 +20,11 @@ import type {
   FrameCheckParams,
   FrameClickParams,
   FrameFillParams,
+  FrameGetAttributeParams,
+  FrameGetAttributeResult,
   FrameGotoParams,
+  FrameInnerTextParams,
+  FrameInnerTextResult,
   FrameInputValueParams,
   FrameIsCheckedParams,
   FrameIsVisibleParams,
@@ -50,7 +54,9 @@ import {
   FRAME_CHECK_KEYS,
   FRAME_CLICK_KEYS,
   FRAME_FILL_KEYS,
+  FRAME_GET_ATTRIBUTE_KEYS,
   FRAME_GOTO_KEYS,
+  FRAME_INNER_TEXT_KEYS,
   FRAME_INPUT_VALUE_KEYS,
   FRAME_IS_CHECKED_KEYS,
   FRAME_IS_VISIBLE_KEYS,
@@ -75,6 +81,19 @@ export type GotoOptions = Omit<FrameGotoParams, 'url'> & { timeout?: number }
 
 /** `textContent`'s options as a script passes them. */
 export type TextContentOptions = Omit<FrameTextContentParams, 'selector'> & {
+  timeout?: number
+}
+
+/** `innerText`'s options as a script passes them. */
+export type InnerTextOptions = Omit<FrameInnerTextParams, 'selector'> & {
+  timeout?: number
+}
+
+/** `getAttribute`'s options as a script passes them. */
+export type GetAttributeOptions = Omit<
+  FrameGetAttributeParams,
+  'selector' | 'name'
+> & {
   timeout?: number
 }
 
@@ -220,6 +239,64 @@ export class Frame {
       }) as FrameTextContentParams,
       this._page._timeoutSettings.timeout(options),
     )) as FrameTextContentResult
+    return result.value === undefined ? null : result.value
+  }
+
+  async innerText(
+    selector: string,
+    options: InnerTextOptions = {},
+  ): Promise<string> {
+    return await this._innerText('frame.innerText', selector, options)
+  }
+
+  async _innerText(
+    apiName: ApiName,
+    selector: string,
+    options: InnerTextOptions,
+  ): Promise<string> {
+    const result = (await this._connection.send(
+      apiName,
+      this._guid,
+      'innerText',
+      pickParams(FRAME_INNER_TEXT_KEYS, {
+        selector,
+        ...options,
+      }) as FrameInnerTextParams,
+      this._page._timeoutSettings.timeout(options ?? {}),
+    )) as FrameInnerTextResult
+    return result.value
+  }
+
+  async getAttribute(
+    selector: string,
+    name: string,
+    options: GetAttributeOptions = {},
+  ): Promise<string | null> {
+    return await this._getAttribute(
+      'frame.getAttribute',
+      selector,
+      name,
+      options,
+    )
+  }
+
+  async _getAttribute(
+    apiName: ApiName,
+    selector: string,
+    name: string,
+    options: GetAttributeOptions,
+  ): Promise<string | null> {
+    const result = (await this._connection.send(
+      apiName,
+      this._guid,
+      'getAttribute',
+      pickParams(FRAME_GET_ATTRIBUTE_KEYS, {
+        selector,
+        name,
+        ...options,
+      }) as FrameGetAttributeParams,
+      this._page._timeoutSettings.timeout(options ?? {}),
+    )) as FrameGetAttributeResult
     return result.value === undefined ? null : result.value
   }
 
