@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Element text</title>
+<style>.shout { text-transform: uppercase; }</style>
+</head>
+<body>
+<main id="content">
+<p id="mixed" title="Mixed text" data-empty="">Hello <span class="shout">loud</span><br>next line<span style="display:none"> secret</span></p>
+<div id="hidden" style="display:none" data-state="hidden">Hidden text</div>
+<ul id="list"><li>First</li><li>Second</li></ul>
+<svg id="chart" width="120" height="24" role="img" aria-label="Chart"><text id="label" x="0" y="16">Chart label</text></svg>
+</main>
+<script>
+// A read leaves the page as it loaded: the same markup, and focus where it was.
+const content = document.getElementById('content')
+const loaded = content.outerHTML
+window.__facts = () => ({
+  unchanged: content.outerHTML === loaded,
+  focused: document.activeElement.tagName.toLowerCase(),
+})
+</script>
+</body>
+</html>
