@@ -2,7 +2,7 @@
 // fixture: the default, ai and depth-limited snapshots as returned strings, an ai ref clicked and
 // read through page.locator('aria-ref=…'), the click's effect in the page (the button's confirm()
 // was answered, as both dismiss a dialog nobody listens for), and an invalid mode rejected,
-// compared by error name only.
+// compared by kind only (the error's name), never the wording.
 import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -23,7 +23,11 @@ import {
 } from './harness.mjs'
 
 const source = `
-  const rejected = (e) => ({ rejected: true, name: e.name })
+  const rejected = (e) => ({
+    rejected: true,
+    name: e.name,
+    strict: /strict mode violation/.test(e.message),
+  })
   const plain = await page.ariaSnapshot()
   const ai = await page.ariaSnapshot({ mode: 'ai' })
   const shallow = await page.ariaSnapshot({ mode: 'ai', depth: 1 })
@@ -95,7 +99,7 @@ test('ariaSnapshot returns the same YAML and its refs click and read', {
       type: 'string',
       ref: 'e2',
       refText: 'Submit',
-      invalidMode: { rejected: true, name: 'Error' },
+      invalidMode: { rejected: true, name: 'Error', strict: false },
     })
     assert.equal(
       referenceAnswer,

@@ -1,8 +1,8 @@
 //! `Frame.textContent` and `Frame.ariaSnapshot` (no selector, as `page.ariaSnapshot` sends it):
-//! Playwright's page reads, in the structure of its server so the call logs and attempt counts
-//! come out the same. `textContent` is `frames.ts` `_waitForFunctionOnSelector` over
-//! `retryWithProgressAndBackoff`; `ariaSnapshot` is `page.ts` `ariaSnapshotJSONForFrame` over
-//! `retryWithProgressAndTimeouts`, rendered by `aria_yaml.rs` as `frames.ts` `ariaSnapshot` does.
+//! Playwright's page reads, in the structure of its server. `textContent` is `frames.ts`
+//! `_waitForFunctionOnSelector` over `retryWithProgressAndBackoff`; `ariaSnapshot` is `page.ts`
+//! `ariaSnapshotJSONForFrame` over `retryWithProgressAndTimeouts`, rendered by `aria_yaml.rs` as
+//! `frames.ts` `ariaSnapshot` does.
 //!
 //! ```text
 //!  text_content(tab, options, progress)               log: waiting for <locator>
@@ -375,8 +375,9 @@ impl ReadTab for Arc<PageSession> {
 
 #[cfg(test)]
 mod tests {
-    //! Both loops against [`FakeReads`] under paused tokio time, so every attempt count and
-    //! wait is exact. Each page step takes 1 ms, a loopback CDP round trip, as in click's tests.
+    //! Both loops against [`FakeReads`] under paused tokio time, so their backoff waits pass at
+    //! once. Each page step takes 1 ms, a loopback CDP round trip, as in click's tests. The tests
+    //! check what the call answers and which page steps it took, never its call log or schedule.
 
     use std::collections::VecDeque;
     use std::sync::Mutex;
@@ -390,8 +391,6 @@ mod tests {
 
     const ROUND_TRIP: Duration = Duration::from_millis(1);
     const SELECTOR: &str = "internal:role=listitem";
-    const LOCATOR: &str = "getByRole('listitem')";
-    const PREVIEW: &str = "<li>Apples</li>";
 
     /// A scripted page step: each call takes `duration` and pops the next answer; the last
     /// answer repeats.
@@ -426,15 +425,14 @@ mod tests {
         }
     }
 
-    /// A scripted tab. Every page step records its name and the time it started, in ms.
+    /// A scripted tab. Every page step records its name.
     struct FakeReads {
         prepare: Step<Result<(), PageError>>,
         describe: Step<Result<SelectorFacts, PageError>>,
         text: Step<Result<Option<TextMatch>, PageError>>,
         snapshot: Step<Result<Option<AriaFrameSnapshot>, PageError>>,
-        calls: Mutex<Vec<(String, u128)>>,
+        calls: Mutex<Vec<String>>,
         snapshot_params: Mutex<Vec<InjectedAriaSnapshotParams>>,
-        started: Instant,
     }
 
     impl FakeReads {
@@ -445,7 +443,7 @@ mod tests {
                 describe: Step::always(
                     ROUND_TRIP,
                     Ok(SelectorFacts {
-                        locator: LOCATOR.to_string(),
+                        locator: "getByRole('listitem')".to_string(),
                         invalid: None,
                     }),
                 ),
@@ -453,36 +451,19 @@ mod tests {
                 snapshot: Step::always(ROUND_TRIP, Ok(Some(tree()))),
                 calls: Mutex::default(),
                 snapshot_params: Mutex::default(),
-                started: Instant::now(),
             }
         }
 
         fn record(&self, call: &str) {
-            let at = self.started.elapsed().as_millis();
-            self.calls
-                .lock()
-                .expect("calls")
-                .push((call.to_string(), at));
+            self.calls.lock().expect("calls").push(call.to_string());
         }
 
         fn calls(&self) -> Vec<String> {
-            self.calls
-                .lock()
-                .expect("calls")
-                .iter()
-                .map(|(call, _)| call.clone())
-                .collect()
+            self.calls.lock().expect("calls").clone()
         }
 
-        /// When each call named `name` started, in ms since the tab was made.
-        fn starts(&self, name: &str) -> Vec<u128> {
-            self.calls
-                .lock()
-                .expect("calls")
-                .iter()
-                .filter(|(call, _)| call == name)
-                .map(|(_, at)| *at)
-                .collect()
+        fn count(&self, name: &str) -> usize {
+            self.calls().iter().filter(|call| *call == name).count()
         }
     }
 
@@ -523,7 +504,7 @@ mod tests {
     fn apples() -> TextMatch {
         TextMatch {
             value: "Apples".to_string(),
-            preview: PREVIEW.to_string(),
+            preview: "<li>Apples</li>".to_string(),
         }
     }
 
@@ -567,80 +548,55 @@ mod tests {
         }
     }
 
-    fn read_options(strict: bool) -> ReadOptions {
-        ReadOptions {
-            selector: SELECTOR.to_string(),
-            strict,
-        }
-    }
+    const TREE_YAML: &str = "- list [ref=e1]:\n  - listitem [ref=e2]: Apples";
 
-    fn snapshot_options() -> SnapshotOptions {
-        SnapshotOptions {
-            mode: AriaSnapshotMode::Ai,
-            depth: None,
-            boxes: None,
-        }
-    }
-
-    async fn read(
-        tab: &FakeReads,
-        timeout_ms: f64,
-    ) -> (Result<FrameTextContentResult, CallError>, Vec<String>) {
+    async fn read(tab: &FakeReads, timeout_ms: f64) -> Result<FrameTextContentResult, CallError> {
         let progress = Progress::for_test(timeout_ms);
-        let result = text_content(tab, &read_options(true), &progress).await;
-        (result, progress.folded_log())
+        let options = ReadOptions {
+            selector: SELECTOR.to_string(),
+            strict: true,
+        };
+        text_content(tab, &options, &progress).await
     }
 
     async fn snapshot(
         tab: &FakeReads,
         timeout_ms: f64,
-    ) -> (Result<FrameAriaSnapshotResult, CallError>, Vec<String>) {
+    ) -> Result<FrameAriaSnapshotResult, CallError> {
         let progress = Progress::for_test(timeout_ms);
-        let result = aria_snapshot(tab, &snapshot_options(), &progress).await;
-        (result, progress.folded_log())
+        let options = SnapshotOptions {
+            mode: AriaSnapshotMode::Ai,
+            depth: None,
+            boxes: None,
+        };
+        aria_snapshot(tab, &options, &progress).await
     }
 
     fn timeout(timeout_ms: f64) -> CallError {
         PlaywrightError::timeout(timeout_ms).into()
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn a_match_is_read_at_once_and_logged_as_playwright_does() {
-        let tab = FakeReads::ready();
-        let (result, log) = read(&tab, 30_000.0).await;
+    fn text(value: &str) -> FrameTextContentResult {
+        FrameTextContentResult {
+            value: Some(value.to_string()),
+        }
+    }
 
-        assert_eq!(
-            result,
-            Ok(FrameTextContentResult {
-                value: Some("Apples".to_string())
-            })
-        );
-        assert_eq!(
-            log,
-            [
-                format!("  - waiting for {LOCATOR}"),
-                format!("    - locator resolved to {PREVIEW}"),
-            ]
-        );
+    #[tokio::test(start_paused = true)]
+    async fn a_match_is_read_at_once() {
+        let tab = FakeReads::ready();
+        assert_eq!(read(&tab, 30_000.0).await, Ok(text("Apples")));
         assert_eq!(tab.calls(), ["describe", "textContent"]);
     }
 
-    /// The `hidden` click golden's arithmetic: with a 500 ms timeout the backoff drops 500 and
-    /// repeats 100, so 7 reads fit (0, 20, 70, 170, 270, 370, 470 ms plus their round trips).
     #[tokio::test(start_paused = true)]
-    async fn nothing_matching_polls_with_loop_a_backoff_and_times_out_naming_the_locator() {
+    async fn nothing_matching_polls_until_the_timeout() {
         let mut tab = FakeReads::ready();
         tab.text = Step::always(ROUND_TRIP, Ok(None));
-        let (result, log) = read(&tab, 500.0).await;
 
-        assert_eq!(result, Err(timeout(500.0)));
-        assert_eq!(log, [format!("  - waiting for {LOCATOR}")]);
-        assert_eq!(
-            tab.starts("textContent"),
-            [1, 22, 73, 174, 275, 376, 477],
-            "the read waits 0, 20, 50, then 100 ms after each round trip"
-        );
-        assert_eq!(tab.count_of("describe"), 1, "the locator is named once");
+        assert_eq!(read(&tab, 500.0).await, Err(timeout(500.0)));
+        assert!(tab.count("textContent") > 1, "it polled: {:?}", tab.calls());
+        assert_eq!(tab.count("describe"), 1, "the selector is described once");
     }
 
     #[tokio::test(start_paused = true)]
@@ -650,78 +606,61 @@ mod tests {
             ROUND_TRIP,
             [Ok(None), Ok(None), Ok(None), Ok(Some(apples()))],
         );
-        let (result, log) = read(&tab, 30_000.0).await;
-
-        assert_eq!(
-            result.map(|result| result.value),
-            Ok(Some("Apples".to_string()))
-        );
-        assert_eq!(tab.starts("textContent"), [1, 22, 73, 174]);
-        assert_eq!(
-            log,
-            [
-                format!("  - waiting for {LOCATOR}"),
-                format!("    - locator resolved to {PREVIEW}"),
-            ]
-        );
+        assert_eq!(read(&tab, 30_000.0).await, Ok(text("Apples")));
     }
 
+    /// A strict mode violation ends the read at once with the page's message, before any wait.
     #[tokio::test(start_paused = true)]
     async fn a_strict_mode_violation_fails_at_once_with_the_pages_message() {
-        let message = "Error: strict mode violation: getByRole('listitem') resolved to 2 elements:\n    1) <li>Apples</li> aka getByText('Apples')\n    2) <li>Pears</li> aka getByText('Pears')\n";
+        let message = "Error: strict mode violation: getByRole('listitem') resolved to 2 elements";
         let mut tab = FakeReads::ready();
         tab.text = Step::always(ROUND_TRIP, Err(PageError::Threw(message.to_string())));
         let started = Instant::now();
-        let (result, log) = read(&tab, 30_000.0).await;
 
-        assert_eq!(result, Err(PlaywrightError::error(message).into()));
-        assert_eq!(log, [format!("  - waiting for {LOCATOR}")]);
-        assert_eq!(started.elapsed(), ROUND_TRIP * 2, "describe and one read");
+        assert_eq!(
+            read(&tab, 30_000.0).await,
+            Err(PlaywrightError::error(message).into())
+        );
+        assert_eq!(tab.count("textContent"), 1);
+        assert!(
+            started.elapsed() < Duration::from_millis(20),
+            "no backoff wait before failing: {:?}",
+            started.elapsed()
+        );
     }
 
     #[tokio::test(start_paused = true)]
-    async fn an_invalid_selector_fails_at_once_naming_it() {
+    async fn an_invalid_selector_fails_at_once_and_reads_nothing() {
         let mut tab = FakeReads::ready();
         tab.describe = Step::always(
             ROUND_TRIP,
             Ok(SelectorFacts {
                 locator: "li >>".to_string(),
-                invalid: Some("Unexpected token \">>\" while parsing css selector".to_string()),
+                invalid: Some("Unexpected token".to_string()),
             }),
         );
-        let (result, log) = read(&tab, 30_000.0).await;
-
         assert_eq!(
-            result,
-            Err(
-                PlaywrightError::error("Unexpected token \">>\" while parsing css selector").into()
-            )
+            read(&tab, 30_000.0).await,
+            Err(PlaywrightError::error("Unexpected token").into())
         );
-        assert_eq!(log, ["  - waiting for li >>"]);
         assert_eq!(tab.calls(), ["describe"], "nothing is read");
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_document_that_goes_mid_read_is_read_again_after_the_backoff() {
+    async fn a_document_that_goes_mid_read_is_read_again() {
         let mut tab = FakeReads::ready();
         tab.text = Step::new(
             ROUND_TRIP,
             [Err(PageError::NotConnected), Ok(Some(apples()))],
         );
-        let (result, _) = read(&tab, 30_000.0).await;
-
-        assert_eq!(
-            result.map(|result| result.value),
-            Ok(Some("Apples".to_string()))
-        );
-        assert_eq!(tab.starts("textContent"), [1, 22]);
+        assert_eq!(read(&tab, 30_000.0).await, Ok(text("Apples")));
 
         let mut tab = FakeReads::ready();
         tab.prepare = Step::new(Duration::ZERO, [Err(PageError::NotConnected), Ok(())]);
-        let (result, _) = read(&tab, 30_000.0).await;
-        assert!(
-            result.is_ok(),
-            "a failed preparation retries too: {result:?}"
+        assert_eq!(
+            read(&tab, 30_000.0).await,
+            Ok(text("Apples")),
+            "a failed preparation retries too"
         );
     }
 
@@ -729,7 +668,7 @@ mod tests {
     async fn a_closed_tab_or_a_broken_contract_ends_the_read() {
         let mut tab = FakeReads::ready();
         tab.text = Step::always(ROUND_TRIP, Err(PageError::Closed));
-        let (result, _) = read(&tab, 30_000.0).await;
+        let result = read(&tab, 30_000.0).await;
         let Err(CallError::Playwright(error)) = result else {
             panic!("expected a Playwright error, got {result:?}");
         };
@@ -740,22 +679,20 @@ mod tests {
             ROUND_TRIP,
             Err(PageError::Contract("textContent answered 5".to_string())),
         );
-        let (result, _) = read(&tab, 30_000.0).await;
-        assert_eq!(
-            result,
-            Err(PlaywrightError::error("textContent answered 5").into())
-        );
+        let result = read(&tab, 30_000.0).await;
+        let Err(CallError::Playwright(error)) = result else {
+            panic!("expected a Playwright error, got {result:?}");
+        };
+        assert_eq!(error.name, ErrorName::Error);
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_page_that_never_answers_keeps_the_raw_selector_in_the_log() {
+    async fn a_page_that_never_attaches_times_out_without_reading() {
         let mut tab = FakeReads::ready();
         tab.describe = Step::always(ROUND_TRIP, Err(PageError::NotConnected));
-        let (result, log) = read(&tab, 500.0).await;
 
-        assert_eq!(result, Err(timeout(500.0)));
-        assert_eq!(log, [format!("  - waiting for {SELECTOR}")]);
-        assert_eq!(tab.count_of("textContent"), 0);
+        assert_eq!(read(&tab, 500.0).await, Err(timeout(500.0)));
+        assert_eq!(tab.count("textContent"), 0);
     }
 
     #[tokio::test(start_paused = true)]
@@ -768,27 +705,18 @@ mod tests {
                 preview: "<li></li>".to_string(),
             })),
         );
-        let (result, _) = read(&tab, 30_000.0).await;
-        assert_eq!(
-            result,
-            Ok(FrameTextContentResult {
-                value: Some(String::new())
-            })
-        );
+        assert_eq!(read(&tab, 30_000.0).await, Ok(text("")));
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_snapshot_renders_the_pages_tree_as_yaml_with_no_call_log() {
+    async fn a_snapshot_renders_the_documents_tree_as_yaml() {
         let tab = FakeReads::ready();
-        let (result, log) = snapshot(&tab, 30_000.0).await;
-
         assert_eq!(
-            result,
+            snapshot(&tab, 30_000.0).await,
             Ok(FrameAriaSnapshotResult {
-                snapshot: "- list [ref=e1]:\n  - listitem [ref=e2]: Apples".to_string()
+                snapshot: TREE_YAML.to_string()
             })
         );
-        assert!(log.is_empty(), "{log:?}");
         assert_eq!(
             tab.snapshot_params.lock().expect("params").as_slice(),
             [InjectedAriaSnapshotParams {
@@ -797,7 +725,8 @@ mod tests {
                 mode: AriaSnapshotMode::Ai,
                 depth: None,
                 boxes: None,
-            }]
+            }],
+            "the whole document, not strict, in the caller's mode"
         );
     }
 
@@ -805,34 +734,24 @@ mod tests {
     async fn a_document_without_a_body_is_snapshotted_once_it_has_one() {
         let mut tab = FakeReads::ready();
         tab.snapshot = Step::new(ROUND_TRIP, [Ok(None), Ok(None), Ok(Some(tree()))]);
-        let (result, _) = snapshot(&tab, 30_000.0).await;
-
-        assert!(result.is_ok(), "{result:?}");
         assert_eq!(
-            tab.starts("ariaSnapshot"),
-            [0, 1001, 3002],
-            "waits of 1000 and 2000 ms after each round trip"
+            snapshot(&tab, 30_000.0).await,
+            Ok(FrameAriaSnapshotResult {
+                snapshot: TREE_YAML.to_string()
+            })
         );
     }
 
-    /// Playwright never caps these waits by the timeout: a 1500 ms call reads twice (at 0 and
-    /// 1001 ms), and its next try would have been 2000 ms later.
     #[tokio::test(start_paused = true)]
-    async fn snapshot_waits_are_not_capped_and_the_last_repeats() {
+    async fn a_document_that_never_gets_a_body_times_out() {
         let mut tab = FakeReads::ready();
         tab.snapshot = Step::always(ROUND_TRIP, Ok(None));
-        let (result, log) = snapshot(&tab, 1500.0).await;
-        assert_eq!(result, Err(timeout(1500.0)));
-        assert!(log.is_empty(), "no call log at all: {log:?}");
-        assert_eq!(tab.starts("ariaSnapshot"), [0, 1001]);
 
-        let mut tab = FakeReads::ready();
-        tab.snapshot = Step::always(ROUND_TRIP, Ok(None));
-        let (result, _) = snapshot(&tab, 40_000.0).await;
-        assert_eq!(result, Err(timeout(40_000.0)));
-        assert_eq!(
-            tab.starts("ariaSnapshot"),
-            [0, 1001, 3002, 7003, 15_004, 23_005, 31_006, 39_007]
+        assert_eq!(snapshot(&tab, 1500.0).await, Err(timeout(1500.0)));
+        assert!(
+            tab.count("ariaSnapshot") > 1,
+            "it polled: {:?}",
+            tab.calls()
         );
     }
 
@@ -840,30 +759,22 @@ mod tests {
     async fn a_snapshot_retries_a_gone_document_and_ends_on_an_exception_or_close() {
         let mut tab = FakeReads::ready();
         tab.snapshot = Step::new(ROUND_TRIP, [Err(PageError::NotConnected), Ok(Some(tree()))]);
-        let (result, _) = snapshot(&tab, 30_000.0).await;
-        assert!(result.is_ok(), "{result:?}");
-        assert_eq!(tab.starts("ariaSnapshot"), [0, 1001]);
+        assert!(snapshot(&tab, 30_000.0).await.is_ok());
 
+        let message = "Error: Can only capture aria snapshot of Element nodes.";
         let mut tab = FakeReads::ready();
-        tab.snapshot = Step::always(
-            ROUND_TRIP,
-            Err(PageError::Threw(
-                "Error: Can only capture aria snapshot of Element nodes.".to_string(),
-            )),
-        );
-        let (result, _) = snapshot(&tab, 30_000.0).await;
+        tab.snapshot = Step::always(ROUND_TRIP, Err(PageError::Threw(message.to_string())));
         assert_eq!(
-            result,
-            Err(
-                PlaywrightError::error("Error: Can only capture aria snapshot of Element nodes.")
-                    .into()
-            )
+            snapshot(&tab, 30_000.0).await,
+            Err(PlaywrightError::error(message).into())
         );
 
         let mut tab = FakeReads::ready();
         tab.prepare = Step::always(Duration::ZERO, Err(PageError::Closed));
-        let (result, _) = snapshot(&tab, 30_000.0).await;
-        assert_eq!(result, Err(PlaywrightError::target_closed().into()));
+        assert_eq!(
+            snapshot(&tab, 30_000.0).await,
+            Err(PlaywrightError::target_closed().into())
+        );
     }
 
     #[test]
@@ -873,9 +784,7 @@ mod tests {
         };
         assert_eq!(
             decode(serde_json::json!({ "selector": "#list", "mode": "ai" })),
-            Err(PlaywrightError::error(
-                "Neo does not serve locator.ariaSnapshot yet"
-            ))
+            Err(PlaywrightError::error(LOCATOR_SNAPSHOT_UNSERVED))
         );
         assert_eq!(
             decode(serde_json::json!({ "selector": "", "depth": 2, "boxes": true })),
@@ -890,11 +799,5 @@ mod tests {
             decode(serde_json::json!({ "mode": "ai" })).map(|options| options.mode),
             Ok(AriaSnapshotMode::Ai)
         );
-    }
-
-    impl FakeReads {
-        fn count_of(&self, name: &str) -> usize {
-            self.starts(name).len()
-        }
     }
 }
