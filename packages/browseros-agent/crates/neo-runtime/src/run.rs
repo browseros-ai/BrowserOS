@@ -93,7 +93,9 @@ impl RunError {
 /// and up to 1 MiB of records (params plus call log). Past either cap, `calls_dropped` counts
 /// the rest and keeps the least safe delivery among them, so a host deciding whether a run may
 /// be repeated never misses a write. The caps exist for the reason `logs` has one: records live
-/// in Rust, outside the realm's memory limit.
+/// in Rust, outside the realm's memory limit. For the same reason a run may have at most 64
+/// browser calls, holding at most 8 MiB of requests, unfinished at once; a call past either
+/// cap fails at once with an `Error` naming it, and is recorded like any other.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunOutcome {

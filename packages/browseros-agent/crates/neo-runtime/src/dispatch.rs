@@ -11,6 +11,7 @@
 //!         ├─ route: guid → frame, FrameCall::decode, frame selectors
 //!         ├─ Trace += CallEntry                 every message with an id leaves a record
 //!         ├─ early failure → reply now, no call log (Playwright's dispatcher does the same)
+//!         ├─ admit against the in-flight caps   past them → an early failure too
 //!         └─ run.tasks.spawn(serve)             runs while JS spins, outlives the realm
 //!              ├─ click::click(&page, &options, &progress)   prepares the tab first
 //!              └─ entry.finish(…); reply {id} | {id, error:{error:{message,name}}, log}
@@ -27,8 +28,8 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -53,6 +54,18 @@ use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, PageId, Run
 /// its record reads `Unfinished`. The wait adds to the run's wall time only when a call is
 /// still in flight at the end.
 const RECORDS_WAIT: Duration = Duration::from_secs(1);
+
+/// The most browser calls one run may have unfinished at once. Each holds its params, its call
+/// log and a task in Rust, outside the realm's memory limit, and a script can start calls without
+/// awaiting them, so without a cap one run could hold any amount of the server's memory.
+/// Playwright has no such cap; a script that awaits its calls, or a `Promise.all` over a page's
+/// worth of locators, stays far below it.
+const MAX_CALLS_IN_FLIGHT: usize = 64;
+
+/// The most request bytes (each call's message as the SDK sent it) one run's unfinished calls
+/// may total, for the same reason: a few calls with huge selectors would otherwise hold several
+/// copies of each outside the realm.
+const MAX_REQUEST_BYTES_IN_FLIGHT: usize = 8 * 1024 * 1024;
 
 /// Neo's message for a selector that enters a frame. Playwright has none: Neo serves the main
 /// frame only, and without this check the injected engine would match nothing there and the call
@@ -81,6 +94,8 @@ struct Inner {
     frame_guid: String,
     run: RunScope,
     trace: Trace,
+    /// What the run's unfinished calls hold, bounded at admission.
+    in_flight: Arc<InFlight>,
     next_call_id: AtomicU64,
     /// Cancels `run.ended` when the last `Dispatcher` drops. A reason `finish` recorded first
     /// wins; otherwise calls read [`RunEnd::Cancelled`].
@@ -162,6 +177,7 @@ impl Dispatcher {
             _ending: run.ended.clone().drop_guard(),
             run,
             trace: Trace::default(),
+            in_flight: Arc::default(),
             next_call_id: AtomicU64::new(1),
         }))
     }
@@ -206,8 +222,12 @@ impl Dispatcher {
             input: meta.is_some_and(|meta| meta.has(MethodFlag::Input)),
         }));
         inner.trace.push(Arc::clone(&entry));
-        let route = match route {
-            Ok(route) => route,
+        let admitted = route.and_then(|route| {
+            let admitted = inner.in_flight.admit(message.len())?;
+            Ok((route, admitted))
+        });
+        let (route, admitted) = match admitted {
+            Ok(admitted) => admitted,
             Err(error) => {
                 entry.finish(error.to_result());
                 inner.trace.finished(&entry);
@@ -221,7 +241,7 @@ impl Dispatcher {
             inner.page.closed(),
         );
         let (reply, receiver) = oneshot::channel();
-        inner.run.tasks.spawn(serve(
+        let served = serve(
             Arc::clone(&inner.page),
             route,
             progress,
@@ -229,7 +249,12 @@ impl Dispatcher {
             inner.trace.clone(),
             id,
             reply,
-        ));
+        );
+        inner.run.tasks.spawn(async move {
+            // The call's share of the in-flight caps, given back however the task ends.
+            let _admitted = admitted;
+            served.await;
+        });
         PendingReply(PendingInner::Waiting(receiver))
     }
 
@@ -327,6 +352,66 @@ async fn serve(
     // The script may have stopped waiting (the realm is gone); the record already holds the
     // outcome.
     let _sent = reply.send(encode_reply(&id, answer, Some(&log)));
+}
+
+/// What a run's unfinished calls hold now, against [`MAX_CALLS_IN_FLIGHT`] and
+/// [`MAX_REQUEST_BYTES_IN_FLIGHT`]: admitted in `Dispatcher::call`, given back from whichever
+/// thread ends the call's task.
+#[derive(Default)]
+struct InFlight(Mutex<Load>);
+
+#[derive(Default)]
+struct Load {
+    calls: usize,
+    bytes: usize,
+}
+
+/// One admitted call's share of [`InFlight`], given back when it drops: when the call's task
+/// ends, whether it replied, the run ended under it, or the runtime dropped it.
+struct Admitted {
+    in_flight: Arc<InFlight>,
+    bytes: usize,
+}
+
+impl InFlight {
+    /// Takes a share for a call whose message is `bytes` long, or refuses it with the cap it
+    /// would pass. Neo-only, so the message names Neo: Playwright's server has no such cap.
+    fn admit(self: &Arc<Self>, bytes: usize) -> Result<Admitted, PlaywrightError> {
+        let Ok(mut load) = self.0.lock() else {
+            return Err(PlaywrightError::error(
+                "neo-runtime: the run's in-flight calls cannot be counted",
+            ));
+        };
+        if load.calls >= MAX_CALLS_IN_FLIGHT {
+            return Err(PlaywrightError::error(format!(
+                "neo-runtime: a run may have at most {MAX_CALLS_IN_FLIGHT} browser calls in \
+                 flight; await one before starting another"
+            )));
+        }
+        if load.bytes.saturating_add(bytes) > MAX_REQUEST_BYTES_IN_FLIGHT {
+            return Err(PlaywrightError::error(format!(
+                "neo-runtime: a run's browser calls in flight may hold at most \
+                 {MAX_REQUEST_BYTES_IN_FLIGHT} bytes of requests; this one is {bytes} bytes and \
+                 {} are held",
+                load.bytes
+            )));
+        }
+        load.calls += 1;
+        load.bytes += bytes;
+        Ok(Admitted {
+            in_flight: Arc::clone(self),
+            bytes,
+        })
+    }
+}
+
+impl Drop for Admitted {
+    fn drop(&mut self) {
+        if let Ok(mut load) = self.in_flight.0.lock() {
+            load.calls -= 1;
+            load.bytes -= self.bytes;
+        }
+    }
 }
 
 /// Playwright's selector engines whose body is a nested selector, as a JSON string
@@ -645,6 +730,46 @@ mod tests {
                 .message
                 .starts_with("invalid params for Frame.click: "),
             "{error:?}"
+        );
+    }
+
+    #[test]
+    fn calls_past_the_in_flight_caps_are_refused_until_one_ends() {
+        let in_flight = Arc::new(InFlight::default());
+        let mut admitted: Vec<Admitted> = (0..MAX_CALLS_IN_FLIGHT)
+            .map(|_| in_flight.admit(100).expect("under the call cap"))
+            .collect();
+        assert_eq!(
+            in_flight.admit(100).err(),
+            Some(PlaywrightError::error(
+                "neo-runtime: a run may have at most 64 browser calls in flight; await one before \
+                 starting another"
+            ))
+        );
+        admitted.pop();
+        assert!(
+            in_flight.admit(100).is_ok(),
+            "an ended call gives its share back"
+        );
+        drop(admitted);
+
+        let five = in_flight.admit(5 << 20).expect("5 MiB of 8");
+        assert_eq!(
+            in_flight.admit(4 << 20).err(),
+            Some(PlaywrightError::error(
+                "neo-runtime: a run's browser calls in flight may hold at most 8388608 bytes of \
+                 requests; this one is 4194304 bytes and 5242880 are held"
+            ))
+        );
+        let three = in_flight.admit(3 << 20).expect("exactly 8 MiB");
+        drop((five, three));
+        assert!(
+            in_flight.admit(MAX_REQUEST_BYTES_IN_FLIGHT + 1).is_err(),
+            "one request alone past the cap"
+        );
+        assert!(
+            in_flight.admit(MAX_REQUEST_BYTES_IN_FLIGHT).is_ok(),
+            "every share was given back"
         );
     }
 

@@ -391,8 +391,9 @@ const MAX_CALL_LOG_LINES: usize = 1000;
 /// The most call records a run keeps: the first calls to arrive.
 const MAX_CALL_RECORDS: usize = 1000;
 
-/// The most record bytes (params plus folded log) a run keeps. A record is charged when its
-/// call finishes, or at [`Trace::take`] for one still running, because only then is its log
+/// The most record bytes (params plus folded log) a run keeps. A record's params are charged
+/// when its call arrives, so a record that would not fit is never held; its log is charged when
+/// the call finishes, or at [`Trace::take`] for one still running, because only then is it
 /// final.
 const MAX_TRACE_BYTES: usize = 1024 * 1024;
 
@@ -403,6 +404,8 @@ pub(crate) struct CallEntry {
     method: String,
     title: Option<&'static str>,
     params: Value,
+    /// `params` as JSON text, in bytes: what keeping the record costs before any log.
+    params_bytes: usize,
     location: Option<CallLocation>,
     started_at: SystemTime,
     started: Instant,
@@ -458,6 +461,7 @@ impl CallEntry {
             guid,
             method,
             title,
+            params_bytes: params.to_string().len(),
             params,
             location,
             started_at: SystemTime::now(),
@@ -531,14 +535,12 @@ impl CallEntry {
         }
     }
 
-    /// What a kept record costs against [`MAX_TRACE_BYTES`]: its params as JSON plus its
-    /// folded log.
-    fn record_bytes(&self) -> usize {
-        let log: usize = match self.end.get() {
+    /// What a kept record's log costs against [`MAX_TRACE_BYTES`], on top of its params.
+    fn log_bytes(&self) -> usize {
+        match self.end.get() {
             Some(end) => end.log.iter().map(String::len).sum(),
             None => self.folded_log().iter().map(String::len).sum(),
-        };
-        self.params.to_string().len() + log
+        }
     }
 }
 
@@ -563,16 +565,21 @@ impl CallLog {
 /// Every call of one run. The dispatcher appends; the run reads once, after `finish`'s wait.
 ///
 /// Memory stays bounded: at most [`MAX_CALL_RECORDS`] entries are held, each entry's log is
-/// capped by [`MAX_CALL_LOG_LINES`], and kept records total at most [`MAX_TRACE_BYTES`]. A call
-/// past a cap still runs and replies; only its record is not kept. Its delivery cell is kept (a
-/// few bytes), so [`DroppedCalls::delivery`] still reports the least safe delivery among the
-/// dropped calls and dropping a record never hides a write.
+/// capped by [`MAX_CALL_LOG_LINES`], and kept records total at most [`MAX_TRACE_BYTES`], params
+/// charged as a call arrives and logs as it finishes. A call past a cap still runs and replies;
+/// only its record is not kept. While anything can still change its delivery cell (its call
+/// task or its input writer), the cell is kept, a few bytes; once nothing can, its delivery is
+/// folded into one running worst. So [`DroppedCalls::delivery`] still reports the least safe
+/// delivery among the dropped calls, and dropping a record never hides a write.
+///
+/// Calls that are kept but unfinished hold logs not yet charged; the dispatcher's in-flight cap
+/// bounds how many there are.
 #[derive(Clone, Default)]
 pub(crate) struct Trace(Arc<Mutex<TraceInner>>);
 
 #[derive(Default)]
 struct TraceInner {
-    /// In arrival order, each with whether its bytes were charged.
+    /// In arrival order, each with whether its log was charged (its params always are).
     kept: Vec<(Arc<CallEntry>, bool)>,
     kept_bytes: usize,
     /// Calls ever admitted, kept or not, so the record cap keeps the first calls.
@@ -581,25 +588,31 @@ struct TraceInner {
     /// so the kept records stay the run's first ones.
     full: bool,
     dropped_count: u64,
-    dropped_cells: Vec<Arc<DeliveryCell>>,
+    /// The least safe final delivery among dropped calls whose cells nothing else holds.
+    dropped_worst: Option<Delivery>,
+    /// Cells of dropped calls that a call task or an input writer still holds.
+    dropped_live: Vec<Arc<DeliveryCell>>,
 }
 
 impl Trace {
-    /// Registers a call that just arrived: kept while the caps allow, otherwise counted.
+    /// Registers a call that just arrived: kept, its params charged, while the caps allow;
+    /// otherwise counted.
     pub(crate) fn push(&self, entry: Arc<CallEntry>) {
         let Ok(mut trace) = self.0.lock() else {
             return;
         };
         trace.arrived += 1;
-        if trace.full || trace.arrived > MAX_CALL_RECORDS {
+        let fits = trace.kept_bytes + entry.params_bytes <= MAX_TRACE_BYTES;
+        if trace.full || trace.arrived > MAX_CALL_RECORDS || !fits {
+            trace.full |= !fits;
             trace.drop_entry(&entry);
         } else {
+            trace.kept_bytes += entry.params_bytes;
             trace.kept.push((entry, false));
         }
     }
 
-    /// Charges a kept call's record bytes when it finishes. Called right after
-    /// [`CallEntry::finish`].
+    /// Charges a kept call's log when it finishes. Called right after [`CallEntry::finish`].
     pub(crate) fn finished(&self, entry: &Arc<CallEntry>) {
         let Ok(mut trace) = self.0.lock() else {
             return;
@@ -641,33 +654,59 @@ impl Trace {
                 "browser call"
             );
         }
+        let live = trace.dropped_live.iter().map(|cell| cell.delivery());
         let dropped = (trace.dropped_count > 0).then(|| DroppedCalls {
             count: trace.dropped_count,
-            delivery: trace.dropped_cells.iter().map(|cell| cell.delivery()).max(),
+            delivery: live.chain(trace.dropped_worst).max(),
         });
         (records, dropped)
+    }
+
+    /// How many dropped calls' cells the trace still holds.
+    #[cfg(test)]
+    fn dropped_cells_held(&self) -> usize {
+        self.0.lock().map_or(0, |trace| trace.dropped_live.len())
     }
 }
 
 impl TraceInner {
-    /// Charges `kept[index]`'s bytes. Returns whether it stays kept; past the budget it moves
-    /// to the dropped count and every later call is dropped too.
+    /// Charges `kept[index]`'s log. Returns whether it stays kept: a record admitted before the
+    /// budget ran out keeps its place while its log fits. Past the budget it moves to the
+    /// dropped count, its params' charge is returned, and every later call is dropped too.
     fn charge(&mut self, index: usize) -> bool {
-        let bytes = self.kept[index].0.record_bytes();
-        if !self.full && self.kept_bytes + bytes <= MAX_TRACE_BYTES {
+        let bytes = self.kept[index].0.log_bytes();
+        if self.kept_bytes + bytes <= MAX_TRACE_BYTES {
             self.kept_bytes += bytes;
             self.kept[index].1 = true;
             return true;
         }
         self.full = true;
         let (entry, _) = self.kept.remove(index);
+        self.kept_bytes -= entry.params_bytes;
         self.drop_entry(&entry);
         false
     }
 
+    /// Counts a dropped call and keeps only its delivery cell. Cells already held that nothing
+    /// else holds any more are folded into `dropped_worst` first: a cell moves only through its
+    /// entry, an [`InputTicket`] or an [`AckedInput`], each of which holds it, so once the
+    /// trace's `Arc` is the last one the cell's delivery is final. That keeps `dropped_live` to the dropped calls still
+    /// running, however many calls a run drops.
     fn drop_entry(&mut self, entry: &CallEntry) {
         self.dropped_count += 1;
-        self.dropped_cells.extend(entry.delivery.clone());
+        let Some(cell) = entry.delivery.clone() else {
+            return;
+        };
+        let mut worst = self.dropped_worst;
+        self.dropped_live.retain(|held| {
+            let others = Arc::strong_count(held) > 1;
+            if !others {
+                worst = worst.max(Some(held.delivery()));
+            }
+            others
+        });
+        self.dropped_worst = worst;
+        self.dropped_live.push(cell);
     }
 }
 
@@ -760,12 +799,16 @@ mod tests {
     use crate::click_goldens;
 
     fn entry(call_id: u64, input: bool) -> Arc<CallEntry> {
+        entry_with_params(call_id, input, serde_json::json!({ "selector": "#go" }))
+    }
+
+    fn entry_with_params(call_id: u64, input: bool, params: Value) -> Arc<CallEntry> {
         Arc::new(CallEntry::new(CallStart {
             call_id,
             guid: "frame@T".to_string(),
             method: "click".to_string(),
             title: Some("Click"),
-            params: serde_json::json!({ "selector": "#go" }),
+            params,
             location: None,
             input,
         }))
@@ -1030,6 +1073,64 @@ mod tests {
             Some(DroppedCalls {
                 count: 3,
                 delivery: None,
+            })
+        );
+    }
+
+    /// A record whose params alone would pass the byte budget is never held, not even while its
+    /// call runs: the trace keeps no `Arc` to it from the moment it arrives.
+    #[test]
+    fn params_past_the_byte_budget_are_not_held_while_the_call_runs() {
+        let trace = Trace::default();
+        let selector = "x".repeat(600 * 1024);
+        let first = entry_with_params(1, true, serde_json::json!({ "selector": selector }));
+        let second = entry_with_params(2, true, serde_json::json!({ "selector": selector }));
+        trace.push(Arc::clone(&first));
+        trace.push(Arc::clone(&second));
+
+        assert_eq!(Arc::strong_count(&first), 2, "the first record is kept");
+        assert_eq!(
+            Arc::strong_count(&second),
+            1,
+            "a second 600 KiB of params does not fit in 1 MiB"
+        );
+        let late = entry(3, false);
+        trace.push(Arc::clone(&late));
+        assert_eq!(Arc::strong_count(&late), 1, "and nothing after it is kept");
+        let (records, dropped) = trace.take(RunEnd::Settled);
+        let kept: Vec<u64> = records.iter().map(|record| record.call_id).collect();
+        assert_eq!(kept, [1]);
+        assert_eq!(dropped.map(|dropped| dropped.count), Some(2));
+    }
+
+    /// Thousands of dropped calls that have ended leave one delivery behind, not one cell each,
+    /// and an `Unknown` among them still decides the summary.
+    #[test]
+    fn dropped_calls_that_ended_fold_into_one_worst_delivery() {
+        let trace = Trace::default();
+        for call_id in 1..=6000 {
+            let entry = entry(call_id, true);
+            trace.push(Arc::clone(&entry));
+            if call_id == 1001 {
+                let cell = entry.delivery.as_ref().expect("an input call");
+                drop(cell.begin().expect("fresh"));
+            }
+            entry.finish(CallResult::Ok);
+            trace.finished(&entry);
+        }
+
+        assert_eq!(
+            trace.dropped_cells_held(),
+            1,
+            "only the newest dropped call's cell, held when it arrived"
+        );
+        let (records, dropped) = trace.take(RunEnd::Settled);
+        assert_eq!(records.len(), 1000);
+        assert_eq!(
+            dropped,
+            Some(DroppedCalls {
+                count: 5000,
+                delivery: Some(Delivery::Unknown),
             })
         );
     }

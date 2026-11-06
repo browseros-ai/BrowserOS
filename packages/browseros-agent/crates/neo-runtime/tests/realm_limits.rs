@@ -427,6 +427,41 @@ return 'done'";
     );
 }
 
+/// 64 clicks the script never awaits poll a selector that never matches, so all stay in flight.
+/// The 65th fails at once with Neo's message and leaves its record; the 64 run until the run
+/// ends them.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_past_the_in_flight_cap_fails_at_once() {
+    let code = "for (let call = 0; call < 64; call++) page.click('#nothing', { timeout: 0 }).catch(() => {})
+try { await page.click('#go') } catch (error) { return error.message }";
+    let outcome = run(code, Duration::from_secs(10)).await;
+
+    let refusal = "neo-runtime: a run may have at most 64 browser calls in flight; await one \
+                   before starting another";
+    assert_eq!(outcome.status, RunStatus::Ok, "{:?}", outcome.error);
+    assert_eq!(outcome.value, Some(json!(format!("page.click: {refusal}"))));
+    assert_eq!(outcome.calls.len(), 65);
+    let refused = record(&outcome, 64);
+    assert_eq!(
+        (&refused.result, refused.delivery),
+        (
+            &CallResult::Error {
+                name: "Error".to_string(),
+                message: refusal.to_string(),
+            },
+            Some(Delivery::NotSent)
+        )
+    );
+    assert!(
+        outcome.calls[..64].iter().all(|call| call.result
+            == CallResult::Unfinished {
+                reason: RunEnd::Settled
+            }),
+        "{:?}",
+        outcome.calls[0].result
+    );
+}
+
 /// The realm builds the agent's code with the `AsyncFunction` constructor, which QuickJS names
 /// `<input>` and reports two lines low; neo-sdk finds the innermost `<input>` frame and
 /// subtracts realm.rs's `AGENT_LINE_OFFSET`. This pins both facts (probe P4): a QuickJS upgrade
