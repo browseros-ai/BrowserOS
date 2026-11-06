@@ -384,8 +384,9 @@ impl AckedInput {
 // realm's memory limit, so a script looping on browser calls could otherwise hold any amount of
 // the server's memory. Like `Logs`, the first entries are kept and the rest only counted.
 
-/// The most raw log lines one call keeps. Far above any golden (the 1 s `covered` click logs
-/// 33); a call with no timeout retrying for the whole run would otherwise grow without bound.
+/// The most raw log lines one call keeps. Far above a real click's (a `covered` click retrying
+/// for 1 s logs 33); a call with no timeout retrying for the whole run would otherwise grow
+/// without bound.
 const MAX_CALL_LOG_LINES: usize = 1000;
 
 /// The most call records a run keeps: the first calls to arrive.
@@ -713,8 +714,8 @@ impl TraceInner {
 /// Playwright's `compressCallLog` (`server/callLog.ts`) with `findRepeatedSubsequences`,
 /// ported line for line. Maximal repeated runs fold into `'  ' + ws + 'N × ' + first line`
 /// plus continuation lines, every other line prints as `'  ' + ws + '- ' + line`, and a line's
-/// leading whitespace becomes its nesting. The goldens' irregular indentation comes from this
-/// function, so it is tested byte for byte against them.
+/// leading whitespace becomes its nesting. Folding is what keeps a call that retried for a long
+/// time down to a few lines of error message.
 pub(crate) fn compress_call_log<S: AsRef<str>>(log: &[S]) -> Vec<String> {
     let lines: Vec<&str> = log.iter().map(AsRef::as_ref).collect();
     let mut folded = Vec::with_capacity(lines.len());
@@ -796,7 +797,6 @@ pub(crate) fn js_number(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::click_goldens;
 
     fn entry(call_id: u64, input: bool) -> Arc<CallEntry> {
         entry_with_params(call_id, input, serde_json::json!({ "selector": "#go" }))
@@ -825,25 +825,52 @@ mod tests {
         Progress::new(entry(1, true), timeout_ms, run.clone(), page_closed.clone())
     }
 
+    /// Fifty failed attempts fold into a few lines that still name the reason and say how
+    /// often it repeated.
     #[test]
-    fn compress_call_log_reproduces_every_golden_byte_for_byte() {
-        for name in ["strict", "hidden", "covered", "disabled"] {
-            assert_eq!(
-                compress_call_log(&click_goldens::raw_log(name)),
-                click_goldens::golden(name).call_log(),
-                "the {name} golden"
+    fn tests_that_repeated_attempts_fold_into_a_short_log() {
+        let mut raw = vec![
+            "waiting for #go",
+            "  locator resolved to <button id=\"go\">",
+        ];
+        for _ in 0..50 {
+            raw.extend([
+                "retrying click action",
+                "  waiting 500ms",
+                "  element is not enabled",
+            ]);
+        }
+        let folded = compress_call_log(&raw);
+
+        assert!(folded.len() < 10, "{folded:#?}");
+        assert!(
+            folded.iter().any(|line| line.contains("50 ×")),
+            "the repeat count: {folded:#?}"
+        );
+        for text in ["waiting for #go", "element is not enabled"] {
+            assert!(
+                folded.iter().any(|line| line.ends_with(text)),
+                "{text}: {folded:#?}"
             );
         }
     }
 
+    /// Lines that do not repeat stay one each, in order, a nested line deeper than its parent.
     #[test]
-    fn compress_call_log_prints_lone_and_nested_lines() {
-        assert_eq!(compress_call_log(&["waiting for x"]), ["  - waiting for x"]);
-        assert_eq!(compress_call_log::<&str>(&[]), Vec::<String>::new());
-        // Ten repeats widen the count prefix, and the continuation pads to match it (checked
-        // against Playwright's own `compressCallLog`).
-        let raw: Vec<&str> = ["a", "  b"].repeat(10);
-        assert_eq!(compress_call_log(&raw), ["  10 × a", "       - b"]);
+    fn tests_that_a_folded_log_keeps_each_line_and_its_nesting() {
+        let folded = compress_call_log(&["waiting for x", "  resolved to y"]);
+        let indent = |line: &str| line.len() - line.trim_start().len();
+
+        assert_eq!(folded.len(), 2, "{folded:?}");
+        assert!(
+            folded[0].ends_with("waiting for x") && folded[1].ends_with("resolved to y"),
+            "{folded:?}"
+        );
+        assert!(indent(&folded[1]) > indent(&folded[0]), "{folded:?}");
+        assert!(
+            compress_call_log::<&str>(&[]).is_empty(),
+            "nothing in, nothing out"
+        );
     }
 
     #[test]

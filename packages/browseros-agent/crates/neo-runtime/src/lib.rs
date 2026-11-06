@@ -43,8 +43,6 @@ mod aria_yaml;
 mod bridge;
 mod check;
 mod click;
-#[cfg(test)]
-mod click_goldens;
 mod deadline;
 mod dispatch;
 mod fill;

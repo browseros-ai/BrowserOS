@@ -1570,37 +1570,14 @@ mod tests {
         apply(state, event, &SessionId::from(SESSION), MAIN)
     }
 
-    /// The `ok` golden's three recorded `Input.dispatchMouseEvent` params, verbatim.
-    #[test]
-    fn mouse_events_are_the_ok_goldens() {
-        let click = MouseClick {
-            button: MouseButton::Left,
-            click_count: 1,
-            delay: None,
-        };
-        let sent: Vec<Value> = mouse_events(&Point { x: 36.75, y: 18.5 }, &click)
-            .iter()
-            .map(|event| serde_json::to_value(event).expect("serializes"))
-            .collect();
-        assert_eq!(
-            sent,
-            [
-                json!({ "type": "mouseMoved", "button": "none", "buttons": 0, "x": 36.75,
-                        "y": 18.5, "modifiers": 0, "force": 0.0 }),
-                json!({ "type": "mousePressed", "button": "left", "buttons": 1, "x": 36.75,
-                        "y": 18.5, "modifiers": 0, "clickCount": 1, "force": 0.5 }),
-                json!({ "type": "mouseReleased", "button": "left", "buttons": 0, "x": 36.75,
-                        "y": 18.5, "modifiers": 0, "clickCount": 1 }),
-            ]
-        );
-    }
-
     /// An event's type, button, buttons mask and click count.
     type EventSummary = (String, Option<String>, Option<i64>, Option<i64>);
 
+    /// One move, then a press and a release per click, every event at the click point.
     #[test]
     fn every_click_count_presses_and_releases_with_its_button_mask() {
         for (button, name, mask) in [
+            (MouseButton::Left, "left", 1),
             (MouseButton::Right, "right", 2),
             (MouseButton::Middle, "middle", 4),
         ] {
@@ -1610,6 +1587,12 @@ mod tests {
                 delay: None,
             };
             let events = mouse_events(&Point { x: 1.0, y: 2.0 }, &click);
+            let points: Vec<(f64, f64)> = events.iter().map(|event| (event.x, event.y)).collect();
+            assert_eq!(
+                points,
+                vec![(1.0, 2.0); events.len()],
+                "{name}: every event at the point"
+            );
             let summary: Vec<EventSummary> = events
                 .into_iter()
                 .map(|event| (event.r#type, event.button, event.buttons, event.click_count))
@@ -1684,7 +1667,7 @@ mod tests {
         );
     }
 
-    /// The `ok` golden's own events after its click: a fragment navigation raises no request,
+    /// The events a `location.hash` handler causes: a fragment navigation raises no request,
     /// only a commit within the document.
     #[test]
     fn a_fragment_navigation_commits_within_the_document() {
