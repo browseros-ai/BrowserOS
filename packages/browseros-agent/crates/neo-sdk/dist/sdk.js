@@ -232,6 +232,57 @@ class Locator {
       ...options
     });
   }
+  async fill(value, options = {}) {
+    return await this._frame._fill("locator.fill", this._selector, value, {
+      strict: true,
+      ...options
+    });
+  }
+  async press(key, options = {}) {
+    return await this._frame._press("locator.press", this._selector, key, {
+      strict: true,
+      ...options
+    });
+  }
+  async inputValue(options = {}) {
+    return await this._frame._inputValue("locator.inputValue", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async check(options = {}) {
+    return await this._frame._check("locator.check", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async uncheck(options = {}) {
+    return await this._frame._uncheck("locator.uncheck", this._selector, {
+      strict: true,
+      ...options
+    });
+  }
+  async selectOption(values, options = {}) {
+    return await this._frame._selectOption("locator.selectOption", this._selector, values, { strict: true, ...options });
+  }
+  async clear(options = {}) {
+    return await this._frame._fill("locator.clear", this._selector, "", {
+      strict: true,
+      ...options
+    });
+  }
+  async setChecked(checked, options = {}) {
+    if (checked)
+      await this._frame._check("locator.setChecked", this._selector, {
+        strict: true,
+        ...options
+      });
+    else
+      await this._frame._uncheck("locator.setChecked", this._selector, {
+        strict: true,
+        ...options
+      });
+  }
   locator(selectorOrLocator, options) {
     if (isString(selectorOrLocator))
       return new Locator(this._frame, this._selector + " >> " + selectorOrLocator, options);
@@ -315,6 +366,38 @@ var FRAME_CLICK_KEYS = [
   "trial",
   "steps"
 ];
+var FRAME_FILL_KEYS = ["selector", "strict", "value", "force"];
+var FRAME_PRESS_KEYS = [
+  "selector",
+  "strict",
+  "key",
+  "delay",
+  "noWaitAfter"
+];
+var FRAME_INPUT_VALUE_KEYS = ["selector", "strict"];
+var FRAME_CHECK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "position",
+  "trial"
+];
+var FRAME_UNCHECK_KEYS = [
+  "selector",
+  "strict",
+  "force",
+  "scroll",
+  "position",
+  "trial"
+];
+var FRAME_SELECT_OPTION_KEYS = [
+  "selector",
+  "strict",
+  "elements",
+  "options",
+  "force"
+];
 function pickParams(keys, options) {
   const params = {};
   for (const key of keys) {
@@ -323,6 +406,25 @@ function pickParams(keys, options) {
       params[key] = value;
   }
   return params;
+}
+
+// src/select-option.ts
+function convertSelectOptionValues(values) {
+  if (values === null)
+    return {};
+  if (!Array.isArray(values))
+    values = [values];
+  if (!values.length)
+    return {};
+  for (let i = 0;i < values.length; i++) {
+    if (values[i] === null)
+      throw new Error(`options[${i}]: expected object, got null`);
+  }
+  if (isString(values[0]))
+    return {
+      options: values.map((valueOrLabel) => ({ valueOrLabel }))
+    };
+  return { options: values };
 }
 
 // src/frame.ts
@@ -346,6 +448,71 @@ class Frame {
       selector,
       ...options
     }), this._page._timeoutSettings.timeout(options));
+  }
+  async fill(selector, value, options = {}) {
+    return await this._fill("frame.fill", selector, value, options);
+  }
+  async _fill(apiName, selector, value, options) {
+    await this._connection.send(apiName, this._guid, "fill", pickParams(FRAME_FILL_KEYS, {
+      selector,
+      value,
+      ...options
+    }), this._page._timeoutSettings.timeout(options));
+  }
+  async press(selector, key, options = {}) {
+    return await this._press("frame.press", selector, key, options);
+  }
+  async _press(apiName, selector, key, options) {
+    await this._connection.send(apiName, this._guid, "press", pickParams(FRAME_PRESS_KEYS, {
+      selector,
+      key,
+      ...options
+    }), this._page._timeoutSettings.timeout(options));
+  }
+  async inputValue(selector, options = {}) {
+    return await this._inputValue("frame.inputValue", selector, options);
+  }
+  async _inputValue(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "inputValue", pickParams(FRAME_INPUT_VALUE_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options));
+    return result.value;
+  }
+  async check(selector, options = {}) {
+    return await this._check("frame.check", selector, options);
+  }
+  async _check(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "check", pickParams(FRAME_CHECK_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options));
+  }
+  async uncheck(selector, options = {}) {
+    return await this._uncheck("frame.uncheck", selector, options);
+  }
+  async _uncheck(apiName, selector, options) {
+    await this._connection.send(apiName, this._guid, "uncheck", pickParams(FRAME_UNCHECK_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options));
+  }
+  async selectOption(selector, values, options = {}) {
+    return await this._selectOption("frame.selectOption", selector, values, options);
+  }
+  async _selectOption(apiName, selector, values, options) {
+    const result = await this._connection.send(apiName, this._guid, "selectOption", pickParams(FRAME_SELECT_OPTION_KEYS, {
+      selector,
+      ...convertSelectOptionValues(values),
+      ...options
+    }), this._page._timeoutSettings.timeout(options));
+    return result.values;
+  }
+  async setChecked(selector, checked, options = {}) {
+    if (checked)
+      await this._check("frame.setChecked", selector, options);
+    else
+      await this._uncheck("frame.setChecked", selector, options);
   }
   locator(selector, options) {
     return new Locator(this, selector, options);
@@ -407,6 +574,30 @@ class Page {
   }
   async click(selector, options = {}) {
     return await this.#mainFrame._click("page.click", selector, options);
+  }
+  async fill(selector, value, options = {}) {
+    return await this.#mainFrame._fill("page.fill", selector, value, options);
+  }
+  async press(selector, key, options = {}) {
+    return await this.#mainFrame._press("page.press", selector, key, options);
+  }
+  async inputValue(selector, options = {}) {
+    return await this.#mainFrame._inputValue("page.inputValue", selector, options);
+  }
+  async check(selector, options = {}) {
+    return await this.#mainFrame._check("page.check", selector, options);
+  }
+  async uncheck(selector, options = {}) {
+    return await this.#mainFrame._uncheck("page.uncheck", selector, options);
+  }
+  async selectOption(selector, values, options = {}) {
+    return await this.#mainFrame._selectOption("page.selectOption", selector, values, options);
+  }
+  async setChecked(selector, checked, options = {}) {
+    if (checked)
+      await this.#mainFrame._check("page.setChecked", selector, options);
+    else
+      await this.#mainFrame._uncheck("page.setChecked", selector, options);
   }
   locator(selector, options) {
     return this.mainFrame().locator(selector, options);

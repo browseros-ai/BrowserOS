@@ -22,7 +22,32 @@ import { type PlaywrightError, parseError } from './errors'
 import { call } from './runtime-bridge'
 
 /** The public methods that send a browser call, named as Playwright's client names them. */
-export type ApiName = 'locator.click' | 'page.click' | 'frame.click'
+export type ApiName =
+  | 'locator.click'
+  | 'locator.fill'
+  | 'locator.press'
+  | 'locator.inputValue'
+  | 'locator.check'
+  | 'locator.uncheck'
+  | 'locator.setChecked'
+  | 'locator.selectOption'
+  | 'locator.clear'
+  | 'page.click'
+  | 'page.fill'
+  | 'page.press'
+  | 'page.inputValue'
+  | 'page.check'
+  | 'page.uncheck'
+  | 'page.setChecked'
+  | 'page.selectOption'
+  | 'frame.click'
+  | 'frame.fill'
+  | 'frame.press'
+  | 'frame.inputValue'
+  | 'frame.check'
+  | 'frame.uncheck'
+  | 'frame.setChecked'
+  | 'frame.selectOption'
 
 /** Playwright's wire error, `{error: {name, message}}`'s inner object. */
 export type WireError = { name: string; message: string }
