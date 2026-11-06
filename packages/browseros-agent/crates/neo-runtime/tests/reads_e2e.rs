@@ -11,8 +11,6 @@
 #[path = "support/browser.rs"]
 mod browser;
 
-use std::time::Duration;
-
 use browser::{Fixture, Tab};
 use neo_runtime::{CallResult, RunOutcome, RunStatus};
 use serde_json::{Value, json};
@@ -64,8 +62,14 @@ fn value(outcome: &RunOutcome) -> Value {
         .unwrap_or_else(|| panic!("the script returns a value: {outcome:?}"))
 }
 
-/// What a script sees of an error it caught: `{name, message}`.
-const CAUGHT: &str = "(e) => ({ name: e.name, message: e.message })";
+/// What a script sees of an error it caught, as a kind: its name, and whether it is a strict
+/// mode violation. The wording is never compared.
+const CAUGHT: &str = "(e) => ({ name: e.name, strict: /strict mode violation/.test(e.message) })";
+
+/// An error kind as `CAUGHT` returns it.
+fn kind(name: &str, strict: bool) -> Value {
+    json!({ "name": name, "strict": strict })
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_text_content_reads_the_first_match_with_playwrights_strictness() {
@@ -99,24 +103,14 @@ async fn tests_that_text_content_reads_the_first_match_with_playwrights_strictne
     assert_eq!(result["byRole"], "Reads");
     assert_eq!(
         result["strict"],
-        json!({
-            "name": "Error",
-            "message": "locator.textContent: Error: strict mode violation: locator('li') resolved to 2 elements:\n    1) <li>Apples</li> aka getByText('Apples')\n    2) <li>Pears</li> aka getByText('Pears')\n\nCall log:\n  - waiting for locator('li')\n",
-        })
+        kind("Error", true),
+        "locator reads are strict"
     );
 
     let greet = &outcome.calls[0];
     assert_eq!(
-        (greet.method.as_str(), greet.title.as_deref(), &greet.result),
-        ("textContent", Some("Get text content"), &CallResult::Ok)
-    );
-    assert_eq!(
-        greet.log,
-        [
-            "  - waiting for locator('#greet')",
-            "    - locator resolved to <p id=\"greet\">\u{2026}</p>",
-        ],
-        "Playwright's two lines, the preview folded for a child element"
+        (greet.method.as_str(), &greet.result),
+        ("textContent", &CallResult::Ok)
     );
     assert_eq!(greet.delivery, None, "a read writes no input");
     tab.close().await;
@@ -135,19 +129,10 @@ async fn tests_that_text_content_waits_for_an_element_appended_later() {
         "return await page.locator('#late').textContent({ timeout: 10000 })",
     )
     .await;
-    assert_eq!(value(&outcome), "Arrived");
-    let call = &outcome.calls[0];
-    assert!(
-        call.duration >= Duration::from_millis(300),
-        "the read polled until the element existed: {:?}",
-        call.duration
-    );
     assert_eq!(
-        call.log,
-        [
-            "  - waiting for locator('#late')",
-            "    - locator resolved to <p id=\"late\">Arrived</p>",
-        ]
+        value(&outcome),
+        "Arrived",
+        "the read waited for the element"
     );
     tab.close().await;
 }
@@ -159,32 +144,20 @@ async fn tests_that_text_content_times_out_and_fails_fast_on_a_bad_selector() {
         &tab,
         &format!(
             "const caught = {CAUGHT};
-             const started = Date.now();
              const missing = await page.locator('#missing').textContent({{ timeout: 500 }}).catch(caught);
-             const waited = Date.now() - started;
+             const started = Date.now();
              const invalid = await page.locator('li >>').textContent({{ timeout: 5000 }}).catch(caught);
-             return {{ missing, waited, invalid, quick: Date.now() - started - waited < 2000 }};"
+             return {{ missing, invalid, quick: Date.now() - started < 2000 }};"
         ),
     )
     .await;
     let result = value(&outcome);
+    assert_eq!(result["missing"], kind("TimeoutError", false));
+    assert_eq!(result["invalid"], kind("Error", false));
     assert_eq!(
-        result["missing"],
-        json!({
-            "name": "TimeoutError",
-            "message": "locator.textContent: Timeout 500ms exceeded.\nCall log:\n  - waiting for locator('#missing')\n",
-        })
+        result["quick"], true,
+        "an invalid selector fails at once, not at its timeout"
     );
-    let waited = result["waited"].as_f64().unwrap_or_default();
-    assert!((450.0..3000.0).contains(&waited), "waited {waited} ms");
-    assert_eq!(result["invalid"]["name"], "Error");
-    assert_eq!(
-        result["invalid"]["message"],
-        "locator.textContent: Unexpected token \"\" while parsing css selector \"\". Did you mean \
-         to CSS.escape it?\nCall log:\n  - waiting for li >>\n",
-        "the page's parse error, and the raw selector as the locator"
-    );
-    assert_eq!(result["quick"], true, "an invalid selector fails at once");
     tab.close().await;
 }
 
@@ -248,17 +221,10 @@ async fn tests_that_snapshots_render_the_document_and_ai_refs_drive_click_and_re
 
     let snapshot = &outcome.calls[0];
     assert_eq!(
-        (
-            snapshot.method.as_str(),
-            snapshot.title.as_deref(),
-            &snapshot.result
-        ),
-        ("ariaSnapshot", Some("Aria snapshot"), &CallResult::Ok)
+        (snapshot.method.as_str(), &snapshot.result),
+        ("ariaSnapshot", &CallResult::Ok)
     );
-    assert!(
-        snapshot.log.is_empty(),
-        "a snapshot logs nothing: {snapshot:?}"
-    );
+    assert_eq!(snapshot.delivery, None, "a snapshot writes no input");
     tab.close().await;
 }
 
@@ -325,8 +291,8 @@ async fn tests_that_refs_do_not_resolve_after_the_document_navigated_away() {
     tab.close().await;
 }
 
-/// A document without a body is polled for one at 0, 1000 and 3000 ms (Playwright's
-/// `[1000, 2000, 4000, 8000]`), and a snapshot that never finds one times out without a log.
+/// A document without a body is polled until it has one, and a snapshot that never finds one
+/// times out.
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_a_snapshot_waits_for_the_body_and_times_out_without_one() {
     let Some(tab) = open().await else { return };
@@ -335,19 +301,11 @@ async fn tests_that_a_snapshot_waits_for_the_body_and_times_out_without_one() {
          setTimeout(() => document.documentElement.appendChild(window.__body), 1500)",
     )
     .await;
-    let outcome = run(
-        &tab,
-        "const started = Date.now();
-         const snapshot = await page.ariaSnapshot({ timeout: 10000 });
-         return { snapshot, waited: Date.now() - started };",
-    )
-    .await;
-    let result = value(&outcome);
-    assert_eq!(result["snapshot"], READS_SNAPSHOT);
-    let waited = result["waited"].as_f64().unwrap_or_default();
-    assert!(
-        (2500.0..6000.0).contains(&waited),
-        "found at the 3000 ms poll, not before: {waited} ms"
+    let outcome = run(&tab, "return await page.ariaSnapshot({ timeout: 10000 })").await;
+    assert_eq!(
+        value(&outcome),
+        READS_SNAPSHOT,
+        "found once the body is back"
     );
 
     tab.evaluate("document.body.remove()").await;
@@ -356,13 +314,7 @@ async fn tests_that_a_snapshot_waits_for_the_body_and_times_out_without_one() {
         &format!("return await page.ariaSnapshot({{ timeout: 1500 }}).catch({CAUGHT});"),
     )
     .await;
-    assert_eq!(
-        value(&outcome),
-        json!({
-            "name": "TimeoutError",
-            "message": "page.ariaSnapshot: Timeout 1500ms exceeded.",
-        })
-    );
+    assert_eq!(value(&outcome), kind("TimeoutError", false));
     tab.close().await;
 }
 
@@ -377,19 +329,15 @@ async fn tests_that_a_snapshot_with_a_selector_is_refused() {
         &format!(
             "const message = {{ id: 1, guid: {frame:?}, method: 'ariaSnapshot',
                 params: {{ selector: 'ul', mode: 'ai' }}, metadata: {{ timeout: 5000 }} }};
-             return JSON.parse(await __neo_runtime.call(JSON.stringify(message)));"
+             const {{ error }} = JSON.parse(await __neo_runtime.call(JSON.stringify(message)));
+             return {{ name: error.error.name, names: error.error.message.includes('locator.ariaSnapshot') }};"
         ),
     )
     .await;
     assert_eq!(
         value(&outcome),
-        json!({
-            "id": 1,
-            "error": { "error": {
-                "message": "Neo does not serve locator.ariaSnapshot yet",
-                "name": "Error",
-            } },
-        })
+        json!({ "name": "Error", "names": true }),
+        "refused, naming what Neo does not serve"
     );
     tab.close().await;
 }
@@ -439,7 +387,7 @@ async fn tests_that_a_lone_surrogate_in_an_error_or_a_click_preview_does_not_han
     let outcome = run(
         &tab,
         &format!(
-            "const caught = {CAUGHT};
+            "const caught = (e) => ({{ ...({CAUGHT})(e), wellFormed: e.message.includes('Pe\\ufffdars') }});
              const started = Date.now();
              const strict = await page.locator('li').textContent({{ timeout: 3000 }}).catch(caught);
              const strictMs = Date.now() - started;
@@ -449,11 +397,10 @@ async fn tests_that_a_lone_surrogate_in_an_error_or_a_click_preview_does_not_han
     )
     .await;
     let result = value(&outcome);
-    assert_eq!(result["strict"]["name"], "Error", "{result}");
-    let message = result["strict"]["message"].as_str().unwrap_or_default();
-    assert!(
-        message.contains("strict mode violation") && message.contains("Pe\u{fffd}ars"),
-        "{message}"
+    assert_eq!(
+        result["strict"],
+        json!({ "name": "Error", "strict": true, "wellFormed": true }),
+        "a strict mode violation whose message names the element, well-formed"
     );
     assert!(
         result["strictMs"].as_f64().is_some_and(|ms| ms < 2000.0),

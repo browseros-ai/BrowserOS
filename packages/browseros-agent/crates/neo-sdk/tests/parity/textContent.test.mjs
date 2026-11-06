@@ -1,7 +1,8 @@
 // textContent through the Playwright reference and through Neo, on fresh pages of the dialog
 // fixture: the values and their types (a strict locator read, a non-strict page read whose first
-// match is empty), what the read saw in the DOM, and three rejections compared by error name only
-// (a strict mode violation, a timeout, a selector that is not a string).
+// match is empty), what the read saw in the DOM, and three rejections compared by kind only, the
+// error's name and whether it is a strict mode violation (a strict mode violation, a timeout, a
+// selector that is not a string); never the wording.
 //
 // `body > button`, not `button`: BrowserOS neo's takeover bar (claw-app's takeover content
 // script, an open shadow root anchored to the body at document_idle) adds three buttons to every
@@ -26,7 +27,11 @@ import {
 } from './harness.mjs'
 
 const source = `
-  const rejected = (e) => ({ rejected: true, name: e.name })
+  const rejected = (e) => ({
+    rejected: true,
+    name: e.name,
+    strict: /strict mode violation/.test(e.message),
+  })
   const button = await page.locator('body > button').textContent()
   const first = await page.textContent('head > *')
   return {
@@ -83,9 +88,9 @@ test('textContent returns the same values and rejects the same calls', {
       buttonType: 'string',
       first: '',
       firstType: 'string',
-      strict: { rejected: true, name: 'Error' },
-      missing: { rejected: true, name: 'TimeoutError' },
-      notAString: { rejected: true, name: 'Error' },
+      strict: { rejected: true, name: 'Error', strict: true },
+      missing: { rejected: true, name: 'TimeoutError', strict: false },
+      notAString: { rejected: true, name: 'Error', strict: false },
     })
     assert.equal(outcome.status, 'ok', JSON.stringify(outcome))
     assert.deepEqual(outcome.value, reference, 'Neo vs Playwright')
