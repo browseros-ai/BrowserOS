@@ -5,7 +5,9 @@
 //!  first use in a document ── Page.createIsolatedWorld {worldName: SEALED_WORLD}
 //!                          └─ Runtime.evaluate(seal_source()) in that context, before any engine
 //!  typing in a sensitive field ── Runtime.bindingCalled {name: JOURNAL_BINDING, payload}
-//!                                  └─ JournalEntry::parse → sdk-traces' Privacy (secret set)
+//!                                  ├─ JournalEntry::parse → sdk-traces' Privacy (secret set)
+//!                                  └─ takeover's journal: JournalEntry::parse_with_trust →
+//!                                     the secret set, as the owner's value only if trusted
 //!  typing in an unwatched closed root ── Runtime.bindingCalled {payload: HIDDEN_ROOT_REPORT}
 //!                                  └─ sdk-playwright: __clawSeal.takeHost(), scan, watch, sweep
 //!  main-world evaluate ── Runtime.evaluate("__clawSeal.sensitiveValues()") before and after
@@ -97,6 +99,28 @@ impl JournalEntry {
         let value = Zeroizing::new(value);
         (!value.is_empty()).then_some(Self { kind, value })
     }
+
+    /// [`Self::parse`], and whether the browser dispatched the event the entry came from
+    /// (`event.isTrusted` in `seal.js`): a key, a paste or an IME commit, but also an edit a
+    /// page's script made with `document.execCommand` (measured on Chromium 156). An event a
+    /// page's script dispatched itself is untrusted.
+    ///
+    /// Anything but `"trusted": true`, a payload without the field included, reads as
+    /// untrusted. The trust is read apart from the entry, so every entry `parse` keeps is kept
+    /// here too, and an odd trust never drops a value the journal must mask.
+    #[must_use]
+    pub fn parse_with_trust(payload: &str) -> Option<(Self, bool)> {
+        let entry = Self::parse(payload)?;
+        let trusted = serde_json::from_str::<Trust>(payload).is_ok_and(|trust| trust.trusted);
+        Some((entry, trusted))
+    }
+}
+
+/// The trust half of a journal payload, for [`JournalEntry::parse_with_trust`].
+#[derive(Deserialize)]
+struct Trust {
+    #[serde(default)]
+    trusted: bool,
 }
 
 #[cfg(test)]
@@ -162,5 +186,75 @@ mod tests {
         assert!(JournalEntry::parse(r#"{"kind":"card","value":""}"#).is_none());
         assert!(JournalEntry::parse(r#"{"kind":"pin","value":"1234"}"#).is_none());
         assert!(JournalEntry::parse("not json").is_none());
+    }
+
+    /// One entry with each `trusted` a payload may hold: `true` and `false`, as `seal.js` sends
+    /// them, none, and a value that is no boolean.
+    const BY_TRUST: [(&str, bool); 4] = [
+        (
+            r#"{"kind":"password","value":"hunter2pass","trusted":true}"#,
+            true,
+        ),
+        (
+            r#"{"kind":"password","value":"hunter2pass","trusted":false}"#,
+            false,
+        ),
+        (r#"{"kind":"password","value":"hunter2pass"}"#, false),
+        (
+            r#"{"kind":"password","value":"hunter2pass","trusted":"true"}"#,
+            false,
+        ),
+    ];
+
+    #[test]
+    fn the_seal_reports_each_entry_with_its_events_trust_as_rust_reads_it() {
+        assert_eq!(
+            super::SEAL_TEMPLATE
+                .matches(
+                    "journal(raw.stringify({ kind: k, value: value, trusted: event.isTrusted }))"
+                )
+                .count(),
+            1,
+            "seal.js sends each entry as this exact object"
+        );
+        assert!(
+            JournalEntry::parse_with_trust(BY_TRUST[0].0).is_some_and(|(_, trusted)| trusted),
+            "Rust reads the key seal.js sends"
+        );
+    }
+
+    #[test]
+    fn an_entry_is_trusted_only_when_its_payload_says_true() {
+        for (payload, trusted) in BY_TRUST {
+            let Some((entry, read)) = JournalEntry::parse_with_trust(payload) else {
+                panic!("{payload} did not parse");
+            };
+            assert_eq!(entry.kind, SensitiveKind::Password, "{payload}");
+            assert_eq!(entry.value.as_str(), "hunter2pass", "{payload}");
+            assert_eq!(read, trusted, "{payload}");
+        }
+        for malformed in [
+            r#"{"kind":"card","value":"","trusted":true}"#,
+            r#"{"kind":"pin","value":"1234","trusted":true}"#,
+            "not json",
+        ] {
+            assert!(
+                JournalEntry::parse_with_trust(malformed).is_none(),
+                "{malformed}"
+            );
+        }
+    }
+
+    /// sdk-playwright's journal reads entries with `parse`. The page's own scripts enter values
+    /// there too, so dropping an untrusted entry would unmask its value.
+    #[test]
+    fn parse_keeps_an_entry_whatever_its_trust() {
+        for (payload, _) in BY_TRUST {
+            assert!(
+                JournalEntry::parse(payload)
+                    .is_some_and(|entry| entry.value.as_str() == "hunter2pass"),
+                "{payload}"
+            );
+        }
     }
 }

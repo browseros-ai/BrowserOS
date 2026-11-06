@@ -4,8 +4,9 @@
 //! replaces zuzu's one-second poll, which lost a value when the page navigated within that second.
 //!
 //! sdk-privacy's seal carries the journal: in the sealed world, a capture-phase listener sends
-//! `{kind, value}` through the `JOURNAL_BINDING` binding when a sensitive field gets input. This
-//! module arms it during control and feeds the secret set:
+//! `{kind, value, trusted}` through the `JOURNAL_BINDING` binding when a sensitive field gets
+//! input, `trusted` being the event's `isTrusted`. This module arms it during control and feeds
+//! the secret set:
 //!
 //! ```text
 //!  Journal::arm(tabs) ─ subscribe first ─▶ ArmedJournal: its listener, and the listener's worker
@@ -15,8 +16,9 @@
 //!      Page.addScriptToEvaluateOnNewDocument {seal_source(), SEALED_WORLD, runImmediately}
 //!    then sealed_frames' seal: closed shadow roots watched, any frame the script missed sealed
 //!  listener, from its own binding-call channel:
-//!            Runtime.bindingCalled on an armed session ─▶ JournalEntry::parse ─▶ Pending
-//!            Pending ─ a second with no entry, disarm or drop ─▶ SecretSet
+//!            Runtime.bindingCalled on an armed session ─▶ JournalEntry::parse_with_trust
+//!              ─▶ Pending ─ a second with no entry, disarm or drop ─▶ SecretSet: the owner's
+//!                 value if a trusted event entered it, else a page value
 //!  listener, from the connection's broadcast:
 //!            Target.attachedToTarget, an iframe ─▶ worker: armed the same way, if its parent is
 //!            a lag ─▶ worker: every armed tab swept
@@ -73,6 +75,18 @@
 //! captures its pixels; the sealed world masks the field in every read; and a takeover's tab is
 //! locked to the agent.
 //!
+//! **Only what a trusted event entered is the owner's (sdk-traces decision 53).** A full set
+//! never drops or refuses an owner value, and lets owner values pass its cap, because people
+//! type at human speed. A page's script can raise `input` events on its own fields at any rate,
+//! and those events are untrusted. So a value the owner's keys left in a field registers as the
+//! owner's, and one that only a page's own events entered registers as a page value. A page
+//! value is masked like the rest, but a flood of them pushes out only the page's earlier values
+//! and never grows the set past its cap. A value entered both ways is the owner's.
+//!
+//! `isTrusted` misses one path. The browser itself dispatches the `input` of a page's
+//! `document.execCommand` edit, as a trusted event (measured on Chromium 156), so a page can
+//! still register owner values that way.
+//!
 //! The binding stays at disarm (see [`ArmedJournal::disarm`]). Values are never logged: not a
 //! value, not a length, not a payload.
 
@@ -82,7 +96,7 @@ use crate::{BrowserTabs, PartError, sweep};
 use browseros_cdp::CdpEvent;
 use browseros_core::sensitive_fields::{JOURNAL_BINDING, JournalEntry, SEALED_WORLD, seal_source};
 use browseros_core::{CoreError, ProtocolSession, SessionId, TabId};
-use browseros_trace::{SecretSet, SecretSource, SecretValue};
+use browseros_trace::{Registration, SecretSet, SecretSource, SecretValue};
 use serde_json::json;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -273,11 +287,11 @@ impl Armed {
         if !armed || event.params["name"] != JOURNAL_BINDING {
             return;
         }
-        if let Some(entry) = event.params["payload"]
+        if let Some((entry, trusted)) = event.params["payload"]
             .as_str()
-            .and_then(JournalEntry::parse)
+            .and_then(JournalEntry::parse_with_trust)
         {
-            pending.note(entry.value);
+            pending.note(entry.value, trusted);
         }
     }
 
@@ -442,8 +456,8 @@ async fn quiet(until: Option<Instant>) {
     }
 }
 
-/// What the owner typed into sensitive fields that is not registered yet: the latest value of
-/// each field. Only the listener holds it.
+/// What was entered into sensitive fields during control and is not registered yet: the latest
+/// value of each field. Only the listener holds it.
 ///
 /// The seal reports a value, not the field it came from, so fields are told apart by how one
 /// value follows another. A value that extends a held one, or repeats it, is that field typed
@@ -455,10 +469,21 @@ async fn quiet(until: Option<Instant>) {
 /// registered yet.
 struct Pending {
     secrets: Arc<SecretSet>,
-    /// The value typed last is last. Each is zeroed when dropped.
-    values: Vec<Zeroizing<String>>,
+    /// The value typed last is last.
+    values: Vec<Held>,
     /// When `values` is registered, unless another entry comes first.
     quiet_until: Option<Instant>,
+    /// Page values the set refused since the last registration, logged with the next.
+    refused: usize,
+}
+
+/// One field's latest value, held until it is registered.
+struct Held {
+    /// Zeroed when dropped.
+    value: Zeroizing<String>,
+    /// Whether a trusted event entered this value. If so it registers as the owner's, else as a
+    /// page value.
+    trusted: bool,
 }
 
 impl Pending {
@@ -467,32 +492,65 @@ impl Pending {
             secrets,
             values: Vec::new(),
             quiet_until: None,
+            refused: 0,
         }
     }
 
-    /// Takes one entry: the whole value of a field that got input.
-    fn note(&mut self, value: Zeroizing<String>) {
+    /// Takes one entry: the whole value of a field that got input, and whether the browser
+    /// dispatched its event.
+    fn note(&mut self, value: Zeroizing<String>, trusted: bool) {
+        // An untrusted entry never replaces a trusted one, as a backspace here or as a longer
+        // value below. A page's script could otherwise push out what the owner typed with a
+        // synthetic event one character shorter or longer, and the owner's value would be
+        // registered nowhere.
         let backspace = self.values.last().is_some_and(|last| {
-            last.strip_prefix(value.as_str())
-                .is_some_and(|removed| removed.chars().count() == 1)
+            (trusted || !last.trusted)
+                && last
+                    .value
+                    .strip_prefix(value.as_str())
+                    .is_some_and(|removed| removed.chars().count() == 1)
         });
         if backspace {
             self.values.pop();
         }
-        self.values.retain(|held| !value.starts_with(held.as_str()));
-        self.values.push(value);
+        // A repeat of a value the owner typed stays the owner's, as the set keeps the higher
+        // source of a value registered twice. That ownership only labels the value kept: what
+        // this entry may replace is decided by its own event's trust, so a page's replay of one
+        // owner value clears none of the owner's others.
+        let owned = trusted
+            || self
+                .values
+                .iter()
+                .any(|held| held.trusted && held.value.as_str() == value.as_str());
+        self.values.retain(|held| {
+            held.value.as_str() != value.as_str()
+                && !(value.starts_with(held.value.as_str()) && (trusted || !held.trusted))
+        });
+        self.values.push(Held {
+            value,
+            trusted: owned,
+        });
         if self.values.len() > MAX_JOURNAL_PENDING {
             let oldest = self.values.remove(0);
-            register_value(&self.secrets, oldest);
+            self.refused += usize::from(register_value(&self.secrets, oldest));
         }
         self.quiet_until = Some(Instant::now() + JOURNAL_QUIET);
     }
 
     /// Registers every held value with the set's full TTL. A value the set already holds keeps
-    /// the later of its two expiries, so registering it again never shortens it.
+    /// the later of its two expiries, so registering it again never shortens it. Refusals are
+    /// counted and logged here, once, so a page that floods a full set floods no log.
     fn register(&mut self) {
-        for value in self.values.drain(..) {
-            register_value(&self.secrets, value);
+        for held in self.values.drain(..) {
+            self.refused += usize::from(register_value(&self.secrets, held));
+        }
+        if self.refused > 0 {
+            tracing::error!(
+                refused = self.refused,
+                "the secret set is full of values it never drops, so values the journal took \
+                 from a page's own input events are masked nowhere"
+            );
+            self.refused = 0;
         }
         self.quiet_until = None;
     }
@@ -506,13 +564,24 @@ impl Drop for Pending {
     }
 }
 
-/// Registers `value` as the owner's for the set's full TTL, moving its buffer into the secret,
-/// which zeroes it when dropped. A full set never drops or refuses an owner's value (sdk-traces
-/// decision 53), so only a value too short to mask goes unregistered.
-fn register_value(secrets: &SecretSet, mut value: Zeroizing<String>) {
-    let _registration = secrets.register_from(
-        SecretValue::new(std::mem::take(&mut *value)),
+/// Registers a held value for the set's full TTL, moving its buffer into the secret, which
+/// zeroes it when dropped. Returns whether the set refused it.
+///
+/// A value a trusted event entered is the owner's, which a full set never drops or refuses
+/// (sdk-traces decision 53), so only one too short to mask goes unregistered. Any other value
+/// came from a page's own input events and is a page value. A full set pushes out the page
+/// value that expires first to keep it, and refuses it when every value it holds is protected.
+/// A refused value is masked nowhere, as the sweep's are.
+fn register_value(secrets: &SecretSet, mut held: Held) -> bool {
+    let source = if held.trusted {
+        SecretSource::Owner
+    } else {
+        SecretSource::Page
+    };
+    let registration = secrets.register_from(
+        SecretValue::new(std::mem::take(&mut *held.value)),
         None,
-        SecretSource::Owner,
+        source,
     );
+    registration == Registration::Full
 }

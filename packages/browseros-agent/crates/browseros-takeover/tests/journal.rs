@@ -8,7 +8,7 @@ use browseros_core::testing::{TestCall, TestConnection, cdp_pending};
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TabId};
 use browseros_takeover::{BrowserTabs, Journal, PartError};
-use browseros_trace::{SecretSet, SecretSetConfig, SecretValue};
+use browseros_trace::{SecretSet, SecretSetConfig, SecretSource, SecretValue};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
@@ -123,14 +123,28 @@ impl Harness {
             .ok_or_else(|| "the page was never walked".into())
     }
 
-    /// What the seal's binding sends when a sensitive field gets input: its whole value.
-    fn type_into(&self, session: &SessionId, binding: &str, value: &str) {
-        let payload = json!({ "kind": "password", "value": value }).to_string();
+    /// What the seal's binding sends when a sensitive field gets input: its whole value, and
+    /// whether the browser dispatched the event (`isTrusted`).
+    fn input(&self, session: &SessionId, binding: &str, value: &str, trusted: bool) {
+        let payload = json!({ "kind": "password", "value": value, "trusted": trusted }).to_string();
         self.connection.emit(
             "Runtime.bindingCalled",
             json!({ "name": binding, "payload": payload, "executionContextId": 11 }),
             Some(session.clone()),
         );
+    }
+
+    /// The owner's keys put `value` in a sensitive field: a trusted event.
+    fn type_into(&self, session: &SessionId, binding: &str, value: &str) {
+        self.input(session, binding, value, true);
+    }
+
+    /// A page's script puts each of `values` in a sensitive field and dispatches `input` itself:
+    /// an untrusted event each.
+    fn script_enters(&self, session: &SessionId, values: &[&str]) {
+        for value in values {
+            self.input(session, JOURNAL_BINDING, value, false);
+        }
     }
 
     /// `values`, one input event each.
@@ -429,7 +443,7 @@ async fn past_64_held_values_the_oldest_is_registered_at_once() -> TestResult {
     let values = (0..=64)
         .map(|i| format!("field-{i:02}"))
         .collect::<Vec<_>>();
-    h.send(
+    h.script_enters(
         &page,
         &values.iter().map(String::as_str).collect::<Vec<_>>(),
     );
@@ -466,6 +480,162 @@ async fn what_the_owner_typed_outlasts_a_flood_of_page_values() -> TestResult {
     assert!(
         h.masks("OWNERTYPED_9k2x"),
         "the page's values pushed the owner's out"
+    );
+    armed.disarm().await;
+    Ok(())
+}
+
+/// Decision 53 lets owner values pass the set's cap because people type at human speed. A
+/// page's script can raise `input` events at any rate, so what it enters is a page value.
+#[tokio::test(start_paused = true)]
+async fn what_a_page_script_entered_is_a_page_value_and_what_the_owner_typed_is_the_owners()
+-> TestResult {
+    let h = harness(&["page-script"])?;
+    let armed = h.journal.arm(&[TabId(3)]).await;
+    let page = h.page_session()?;
+
+    h.script_enters(&page, &["SCRIPTSET_7q2w"]);
+    tokio::time::sleep(QUIET * 2).await;
+    assert_eq!(h.masked("SCRIPTSET_7q2w"), "[private]");
+    assert_eq!(
+        (
+            h.secrets.count_from(SecretSource::Owner),
+            h.secrets.count_from(SecretSource::Page)
+        ),
+        (0, 1),
+        "the script's value is the page's (owner, page)"
+    );
+
+    h.type_keys(&page, "OWNERTYPED_3m8v");
+    tokio::time::sleep(QUIET * 2).await;
+    assert_eq!(h.masked("OWNERTYPED_3m8v"), "[private]");
+    assert_eq!(
+        (
+            h.secrets.count_from(SecretSource::Owner),
+            h.secrets.count_from(SecretSource::Page)
+        ),
+        (1, 1),
+        "what the owner typed is the owner's (owner, page)"
+    );
+    armed.disarm().await;
+    Ok(())
+}
+
+/// A page's script cannot push out what the owner typed. An untrusted entry never replaces a
+/// trusted one the journal holds, neither as a longer value nor as one a character shorter,
+/// which the journal would otherwise read as a backspace.
+#[tokio::test(start_paused = true)]
+async fn a_page_script_never_displaces_what_the_owner_typed() -> TestResult {
+    let h = harness(&["page-script"])?;
+    let armed = h.journal.arm(&[TabId(3)]).await;
+    let page = h.page_session()?;
+
+    h.type_keys(&page, "OWNERLONG_4k");
+    h.script_enters(&page, &["OWNERLONG_4kx"]);
+    h.type_keys(&page, "OWNERDEL_7q");
+    h.script_enters(&page, &["OWNERDEL_7"]);
+    tokio::time::sleep(QUIET * 2).await;
+    assert_eq!(
+        h.masked("OWNERLONG_4k OWNERDEL_7q"),
+        "[private] [private]",
+        "what the owner typed is masked whole"
+    );
+    let counts = (
+        h.secrets.count_from(SecretSource::Owner),
+        h.secrets.count_from(SecretSource::Page),
+    );
+    assert_eq!(counts, (2, 2), "(owner, page)");
+    armed.disarm().await;
+    Ok(())
+}
+
+/// A page's script replaying the owner's longer value does not clear the owner's shorter one.
+/// The replay is a repeat of a trusted value, so it is the owner's, but its own event is
+/// untrusted, so it displaces nothing the owner typed.
+#[tokio::test(start_paused = true)]
+async fn a_page_scripts_replay_of_one_owner_value_keeps_the_others() -> TestResult {
+    let h = harness(&["page-script"])?;
+    let armed = h.journal.arm(&[TabId(3)]).await;
+    let page = h.page_session()?;
+
+    h.type_into(&page, JOURNAL_BINDING, "OWNERPASS_EXT9");
+    h.type_into(&page, JOURNAL_BINDING, "OWNERPASS");
+    h.script_enters(&page, &["OWNERPASS_EXT9"]);
+    tokio::time::sleep(QUIET * 2).await;
+    assert_eq!(
+        h.masked("OWNERPASS and OWNERPASS_EXT9"),
+        "[private] and [private]",
+        "both of the owner's values are masked"
+    );
+    assert_eq!(
+        h.secrets.count_from(SecretSource::Owner),
+        2,
+        "both are the owner's"
+    );
+    armed.disarm().await;
+    Ok(())
+}
+
+/// A value entered both ways, such as one the owner typed that a page's script then copies into
+/// another field, is the owner's, whichever came first.
+#[tokio::test(start_paused = true)]
+async fn a_value_both_the_owner_and_a_page_script_entered_stays_the_owners() -> TestResult {
+    let h = harness(&["page-script"])?;
+    let armed = h.journal.arm(&[TabId(3)]).await;
+    let page = h.page_session()?;
+
+    h.type_into(&page, JOURNAL_BINDING, "TYPEDFIRST_5k1p");
+    h.script_enters(&page, &["TYPEDFIRST_5k1p", "SCRIPTFIRST_8d3r"]);
+    h.type_into(&page, JOURNAL_BINDING, "SCRIPTFIRST_8d3r");
+    tokio::time::sleep(QUIET * 2).await;
+    assert_eq!(
+        h.masked("TYPEDFIRST_5k1p SCRIPTFIRST_8d3r"),
+        "[private] [private]"
+    );
+    assert_eq!(
+        (
+            h.secrets.count_from(SecretSource::Owner),
+            h.secrets.count_from(SecretSource::Page)
+        ),
+        (2, 0),
+        "(owner, page)"
+    );
+    armed.disarm().await;
+    Ok(())
+}
+
+/// The gap sdk-traces decision 53 found. A page that floods `input` events during control fills
+/// only the page tier, which never passes the set's cap.
+#[tokio::test(start_paused = true)]
+async fn a_page_flooding_input_events_grows_no_owner_value_and_the_set_no_further_than_its_cap()
+-> TestResult {
+    let h = harness_with(
+        &["page-script"],
+        SecretSetConfig {
+            max_entries: 4,
+            ..SecretSetConfig::default()
+        },
+    )?;
+    let armed = h.journal.arm(&[TabId(3)]).await;
+    let page = h.page_session()?;
+
+    h.type_keys(&page, "OWNERTYPED_6w4n");
+    h.registered("OWNERTYPED_6w4n").await?;
+    let flood = (0..100)
+        .map(|i| format!("PAGEFLOOD_{i:03}"))
+        .collect::<Vec<_>>();
+    h.script_enters(&page, &flood.iter().map(String::as_str).collect::<Vec<_>>());
+    tokio::time::sleep(QUIET * 2).await;
+    assert_eq!(
+        h.secrets.count_from(SecretSource::Owner),
+        1,
+        "the flood registered owner values"
+    );
+    assert_eq!(h.secrets.count(), 4, "the set grew past its cap");
+    assert_eq!(
+        h.masked("OWNERTYPED_6w4n PAGEFLOOD_099 PAGEFLOOD_000"),
+        "[private] [private] PAGEFLOOD_000",
+        "the owner's value and the newest page value stay masked, and the oldest page value went"
     );
     armed.disarm().await;
     Ok(())

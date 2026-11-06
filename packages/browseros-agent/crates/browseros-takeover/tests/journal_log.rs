@@ -8,7 +8,7 @@ use browseros_core::testing::{TestConnection, cdp_error};
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, TabId};
 use browseros_takeover::{BrowserTabs, Journal};
-use browseros_trace::{SecretSet, SecretSetConfig};
+use browseros_trace::{Registration, SecretSet, SecretSetConfig, SecretSource, SecretValue};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -111,7 +111,19 @@ async fn no_value_reaches_the_log() -> Result<(), BoxError> {
             .finish(),
     );
     let connection = browser()?;
-    let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
+    // Full of a value nothing may push out, so the page's value below is refused, and logged.
+    let secrets = Arc::new(SecretSet::new(SecretSetConfig {
+        max_entries: 1,
+        ..SecretSetConfig::default()
+    }));
+    assert_eq!(
+        secrets.register_from(
+            SecretValue::new("HOSTHELD_6c1d".into()),
+            None,
+            SecretSource::Host
+        ),
+        Registration::Registered
+    );
     let tabs = BrowserTabs::new(
         BrowserSession::new(connection.clone(), BrowserSessionHooks::default()),
         Arc::new(Viewports::default()),
@@ -125,19 +137,25 @@ async fn no_value_reaches_the_log() -> Result<(), BoxError> {
         .find(|call| call.method == "Page.getFrameTree")
         .and_then(|call| call.session)
         .ok_or("the page was never walked")?;
+    let enter = |value: &str, trusted: bool| {
+        let payload = json!({ "kind": "password", "value": value, "trusted": trusted });
+        connection.emit(
+            "Runtime.bindingCalled",
+            json!({ "name": JOURNAL_BINDING, "payload": payload.to_string() }),
+            Some(page.clone()),
+        );
+    };
     let type_keys = |value: &str| {
         for (start, key) in value.char_indices() {
-            let payload = json!({ "kind": "password", "value": &value[..start + key.len_utf8()] });
-            connection.emit(
-                "Runtime.bindingCalled",
-                json!({ "name": JOURNAL_BINDING, "payload": payload.to_string() }),
-                Some(page.clone()),
-            );
+            enter(&value[..start + key.len_utf8()], true);
         }
     };
 
     let values = ["QUIETVAL_4e2a", "LAGGEDVAL_8b3f", "DISARMVAL_1f9c"];
     type_keys(values[0]);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let refused = "SYNTHVAL_5d7e";
+    enter(refused, false);
     tokio::time::sleep(Duration::from_secs(2)).await;
     type_keys(values[1]);
     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -149,12 +167,19 @@ async fn no_value_reaches_the_log() -> Result<(), BoxError> {
     armed.disarm().await;
 
     let text = log.text()?;
-    for line in ["fell behind", "catch-up sweep failed", "was not removed"] {
+    for line in [
+        "fell behind",
+        "catch-up sweep failed",
+        "was not removed",
+        "masked nowhere refused=1",
+    ] {
         assert!(text.contains(line), "the journal logged \"{line}\": {text}");
     }
     for value in values {
         let mut masked = value.to_owned();
         assert!(secrets.mask_str(&mut masked), "{value} was registered");
+    }
+    for value in values.into_iter().chain([refused]) {
         for end in 4..=value.len() {
             assert!(
                 !text.contains(&value[..end]),

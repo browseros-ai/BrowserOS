@@ -380,9 +380,15 @@
     if (!k) return reportHost(event, el);
     if (!journal) return;
     var value = rawValue(el);
-    if (!value || lastSent.get(el) === value) return;
-    lastSent.set(el, value);
-    journal(raw.stringify({ kind: k, value: value }));
+    // The same value again is sent only when its event is trusted and the last was not: a value
+    // the page reported first, that the owner then pastes or types over, becomes the owner's.
+    var sent = lastSent.get(el);
+    if (!value || (sent && sent.value === value && (sent.trusted || !event.isTrusted))) return;
+    lastSent.set(el, { value: value, trusted: event.isTrusted });
+    // trusted is event.isTrusted: false when a page's script dispatched the event itself, true
+    // when the browser did (a page's execCommand edits included). Takeover's journal registers
+    // an untrusted entry as a page value (JournalEntry::parse_with_trust in seal.rs).
+    journal(raw.stringify({ kind: k, value: value, trusted: event.isTrusted }));
   };
   // The elements and fragments Rust handed to watch(): the nodes a main-world script receives,
   // which may be out of the document (a handle's node the page removed, or one it never

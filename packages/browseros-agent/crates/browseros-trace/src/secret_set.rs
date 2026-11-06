@@ -283,6 +283,20 @@ impl SecretSet {
             .len()
     }
 
+    /// How many values are masked from `source`, for reports and checks, such as which tier a
+    /// flood grew. Each value counts once, under the source the set keeps for it: the
+    /// highest-ranked that registered it ([`SecretSet::register_from`]).
+    #[must_use]
+    pub fn count_from(&self, source: SecretSource) -> usize {
+        self.inner
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entries
+            .iter()
+            .filter(|entry| entry.source == source)
+            .count()
+    }
+
     /// Replaces every secret in `text` with `[private]`. Returns whether anything changed.
     pub fn mask_str(&self, text: &mut String) -> bool {
         let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
@@ -1085,6 +1099,43 @@ mod tests {
             assert_eq!(masked(&set, value), MASK, "the flood pushed {value} out");
         }
         assert_eq!(set.count(), 4);
+    }
+
+    #[test]
+    fn count_from_counts_each_value_once_under_its_highest_source() {
+        let set = capped(16);
+        hold(
+            &set,
+            &PROTECTED,
+            "one value from the host, the owner and the agent",
+        );
+        let values = [
+            ("page-then-owner", [SecretSource::Page, SecretSource::Owner]),
+            ("owner-then-page", [SecretSource::Owner, SecretSource::Page]),
+        ];
+        for (value, [first, again]) in values {
+            assert_eq!(
+                set.register_from(SecretValue::new(value.into()), None, first),
+                Registration::Registered
+            );
+            assert_eq!(
+                set.register_from(SecretValue::new(value.into()), None, again),
+                Registration::Refreshed
+            );
+        }
+        flood(&set, 2);
+        let sources = [
+            SecretSource::Host,
+            SecretSource::Owner,
+            SecretSource::Agent,
+            SecretSource::Page,
+        ];
+        assert_eq!(
+            sources.map(|source| set.count_from(source)),
+            [1, 3, 1, 2],
+            "host, owner, agent and page values"
+        );
+        assert_eq!(set.count(), 7, "a value registered twice counts once");
     }
 
     /// Values in the order they are registered: a repeat of an early value, one too short to

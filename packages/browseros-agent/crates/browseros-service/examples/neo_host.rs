@@ -28,7 +28,8 @@
 //!   `POST /surface/journal {"tabs": [..]}` arms it (`{"millis"}`: how long arming took),
 //!   `DELETE /surface/journal` disarms it, `POST /surface/runs <json>` records a run with that
 //!   result (`{"runId"}`, committed when it answers) so a mask can be read back from
-//!   `/v1/runs/{id}`, and `GET /surface/secrets` counts the secret set (`{"count"}`).
+//!   `/v1/runs/{id}`, and `GET /surface/secrets` counts the secret set, in all and by source
+//!   (`{"count", "host", "owner", "agent", "page"}`).
 //!   `POST /surface/paint-run {"tab": N, "colors": [[r, g, b], ..], "busyMs": n}` records one
 //!   run of real writes on tab N, each repainting the page in its color with its number in
 //!   large type. A write waits for the screenshot of the one before, so no picture can show a
@@ -71,8 +72,8 @@ use browseros_takeover::{
 use browseros_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, PageState, Privacy, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
-    SecretSet, SecretSetConfig, ShotRead, TargetSensitivity, TaskId, TraceSink, TraceStore,
-    WriterConfig, screenshot_queue, spawn_writer,
+    SecretSet, SecretSetConfig, SecretSource, ShotRead, TargetSensitivity, TaskId, TraceSink,
+    TraceStore, WriterConfig, screenshot_queue, spawn_writer,
 };
 use serde_json::{Value, json};
 use std::convert::Infallible;
@@ -293,8 +294,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 /// The test-only calls `--surface-calls` serves: the control journal as the display and the
-/// takeover flow will arm it, a run whose result the writer masks, the secret set's size, and a
-/// run of real writes for the camera.
+/// takeover flow will arm it, a run whose result the writer masks, the secret set's size by
+/// source, and a run of real writes for the camera.
 #[derive(Clone)]
 struct SurfaceCalls {
     journal: Journal,
@@ -387,7 +388,14 @@ impl SurfaceCalls {
     }
 
     async fn count(State(calls): State<Self>) -> SurfaceReply {
-        Ok(Json(json!({ "count": calls.secrets.count() })))
+        let secrets = &calls.secrets;
+        Ok(Json(json!({
+            "count": secrets.count(),
+            "host": secrets.count_from(SecretSource::Host),
+            "owner": secrets.count_from(SecretSource::Owner),
+            "agent": secrets.count_from(SecretSource::Agent),
+            "page": secrets.count_from(SecretSource::Page),
+        })))
     }
 
     /// Whether the owner holds the screen, as the app's door asks before a move.
