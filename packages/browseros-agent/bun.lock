@@ -315,9 +315,20 @@
       "name": "@browseros/hosted-api-rust",
       "version": "0.0.0",
     },
+    "crates/neo-runtime": {
+      "name": "@browseros/neo-runtime-rust",
+      "version": "0.0.0",
+    },
     "crates/neo-runtime-spec": {
       "name": "@browseros/neo-runtime-spec",
       "version": "0.0.0",
+    },
+    "crates/neo-sdk": {
+      "name": "@browseros/neo-sdk",
+      "version": "0.0.0",
+      "devDependencies": {
+        "playwright-core": "1.64.1",
+      },
     },
     "packages/acpx-ai-provider": {
       "name": "@browseros/acpx-ai-provider",
@@ -668,7 +679,11 @@
 
     "@browseros/hosted-api-rust": ["@browseros/hosted-api-rust@workspace:crates/hosted-api"],
 
+    "@browseros/neo-runtime-rust": ["@browseros/neo-runtime-rust@workspace:crates/neo-runtime"],
+
     "@browseros/neo-runtime-spec": ["@browseros/neo-runtime-spec@workspace:crates/neo-runtime-spec"],
+
+    "@browseros/neo-sdk": ["@browseros/neo-sdk@workspace:crates/neo-sdk"],
 
     "@browseros/onboarding-video": ["@browseros/onboarding-video@workspace:packages/onboarding-video"],
 
@@ -3303,6 +3318,8 @@
     "pkce-challenge": ["pkce-challenge@5.0.1", "", {}, "sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ=="],
 
     "pkg-types": ["pkg-types@2.3.1", "", { "dependencies": { "confbox": "^0.2.4", "exsolve": "^1.0.8", "pathe": "^2.0.3" } }, "sha512-y+ichcgc2LrADuhLNAx8DFjVfgz91pRxfZdI3UDhxHvcVEZsenLO+7XaU5vOp0u/7V/wZ+plyuQxtrDlZJ+yeg=="],
+
+    "playwright-core": ["playwright-core@1.64.1", "", { "bin": { "playwright-core": "cli.js" } }, "sha512-BC4s8y6SEVA6Q1rSxZTto8hI1KUI3xXlHGZgvGqP4IqPdI/a6FX9H29IDNz7vKo9l21b6LfYosScPL6M3xxyDQ=="],
 
     "pluralize": ["pluralize@8.0.0", "", {}, "sha512-Nc3IT5yHzflTfbjgqWcCPpo7DaKy4FnpB0l/zCAW0Tc7jxAiuqSxHasntB3D7887LSrA93kDJ9IXovxJYxyLCA=="],
 

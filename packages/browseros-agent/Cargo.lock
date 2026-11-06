@@ -1843,6 +1843,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "neo-runtime"
+version = "0.1.0"
+dependencies = [
+ "browseros-cdp",
+ "clap",
+ "futures-util",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "neo-runtime-spec"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,9 @@
+{
+  "name": "@browseros/neo-runtime-rust",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint:rust": "cargo fmt --package neo-runtime -- --check && cargo clippy --package neo-runtime --all-targets --locked -- -D warnings",
+    "test:rust": "cargo test --package neo-runtime --locked"
+  }
+}
