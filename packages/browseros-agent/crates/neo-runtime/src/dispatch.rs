@@ -586,21 +586,14 @@ async fn serve(
                     })
                 })
         }
+        // Neo extensions answer an empty result.
         Route::FrameWaitForUrl(options) => waits::wait_for_url(&page, &options, &progress)
             .await
-            .and_then(|()| {
-                encode_result::<FrameWaitForSelectorParams>(&FrameWaitForSelectorResult {
-                    element: None,
-                })
-            }),
+            .map(|()| Some(json!({}))),
         Route::FrameWaitForLoadState(options) => {
             waits::wait_for_load_state(&page, &options, &progress)
                 .await
-                .and_then(|()| {
-                    encode_result::<FrameWaitForSelectorParams>(&FrameWaitForSelectorResult {
-                        element: None,
-                    })
-                })
+                .map(|()| Some(json!({})))
         }
         route => serve_route(&page, route, &progress).await,
     };
