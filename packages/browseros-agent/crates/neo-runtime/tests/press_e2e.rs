@@ -8,6 +8,13 @@
 //!
 //! Neo's one deliberate difference is checked as such: for a key with an unknown token Neo
 //! sends no key at all, where Playwright pressed the tokens before it and left them held.
+//!
+//! The replay's forms submit to a path the fixture server holds for [`SUBMISSION_IN_FLIGHT`]
+//! (the harness answers `/slow…` paths late); paths are compared as recorded. With the
+//! capture's prompt `/submitted`, what `page.url()` reads right after a `noWaitAfter` press
+//! was a race, which a loaded machine lost: the submission committed first. Held in flight, the
+//! old URL is what a press that does not wait must return, and a press that waits returns only
+//! once the new one has committed.
 
 #[path = "support/browser.rs"]
 mod browser;
@@ -55,6 +62,28 @@ fn text<'a>(value: &'a Value, field: &str) -> &'a str {
     value[field]
         .as_str()
         .unwrap_or_else(|| panic!("{field} is a string in {value}"))
+}
+
+/// Where the capture's forms submit, and where the replay's do instead.
+const SUBMITTED: &str = "/submitted";
+const SLOW_SUBMITTED: &str = "/slow-submitted";
+
+/// How long the fixture server holds a submission: far longer than a press takes to answer and
+/// `page.url()` to read, however loaded the machine.
+const SUBMISSION_IN_FLIGHT: Duration = Duration::from_secs(2);
+
+/// A recorded path as the replay serves it.
+fn served(path: &str) -> String {
+    path.strip_prefix(SUBMITTED).map_or_else(
+        || path.to_string(),
+        |rest| format!("{SLOW_SUBMITTED}{rest}"),
+    )
+}
+
+/// A replayed path as the capture recorded it.
+fn as_recorded(path: &str) -> String {
+    path.strip_prefix(SLOW_SUBMITTED)
+        .map_or_else(|| path.to_string(), |rest| format!("{SUBMITTED}{rest}"))
 }
 
 /// The page the capture's forms submit to: the fixtures' recorder on an empty body.
@@ -128,7 +157,7 @@ fn key_events(events: &Value) -> Vec<Value> {
 /// The facts both sides are compared on: fields, focus, the URL's path, and key events.
 fn observed(facts: &Value) -> Value {
     json!({
-        "path": facts["path"],
+        "path": as_recorded(facts["path"].as_str().unwrap_or_default()),
         "activeElement": facts["activeElement"],
         "controls": facts["controls"],
         "keyEvents": key_events(&facts["events"]),
@@ -216,7 +245,7 @@ fn outcome_mismatches(name: &str, case: &Value, outcome: &RunOutcome, origin: &s
         }
         let value = outcome.value.clone().unwrap_or(Value::Null);
         let value = match value.as_str() {
-            Some(url) => json!(url.strip_prefix(origin).unwrap_or(url)),
+            Some(url) => json!(as_recorded(url.strip_prefix(origin).unwrap_or(url))),
             None => value,
         };
         let recorded = case
@@ -265,14 +294,16 @@ async fn every_recorded_press_case_has_playwrights_outcome_and_page_effect() {
     let mut pages = Vec::new();
     for case in &cases {
         let html = text(case, "fixtureHtml");
-        pages.push((format!("/{}.html", text(case, "name")), html.to_string()));
-        pages.push(("/submitted?q=neo".to_string(), submitted_page(html)));
+        let action = format!("action=\"{SUBMITTED}\"");
+        let replayed = html.replace(&action, &format!("action=\"{SLOW_SUBMITTED}\""));
+        pages.push((format!("/{}.html", text(case, "name")), replayed));
+        pages.push((served("/submitted?q=neo"), submitted_page(html)));
     }
     let tab = Tab::open(
         binary,
         Fixture {
             pages,
-            ..Fixture::default()
+            slow_response: SUBMISSION_IN_FLIGHT,
         },
         "/blank",
     )
@@ -285,7 +316,7 @@ async fn every_recorded_press_case_has_playwrights_outcome_and_page_effect() {
         tab.evaluate("window.__record({ type: 'call' })").await;
         let outcome = run(&tab, text(case, "source")).await;
         let expected = recorded(case);
-        let facts = facts_at(&tab, expected["path"].as_str().expect("a path")).await;
+        let facts = facts_at(&tab, &served(expected["path"].as_str().expect("a path"))).await;
         let actual = observed(&facts);
         if actual != expected {
             mismatches.push(format!(
