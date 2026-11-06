@@ -157,7 +157,8 @@ pub struct OperationStarted {
     pub id: OperationId,
     /// The operation it runs inside: a wrap's method, a defined method, a host call.
     pub parent: Option<OperationId>,
-    /// The method name, e.g. `locator.click` or `zuzu.auth.fill`.
+    /// The method name as called, e.g. `locator.click` or `zuzu.auth.fill`. A script can call
+    /// any name, so the writer masks it, with `also_mask` too, as it stores the start.
     pub name: String,
     /// Its place in the tree.
     pub kind: OperationKind,
@@ -171,9 +172,9 @@ pub struct OperationStarted {
     /// Which input fields to redact.
     pub policy: Arc<RedactionPolicy>,
     /// Values the process set does not mask yet that this record must not keep: what claw-sdk
-    /// still holds unregistered (sdk-traces decision 32). The writer masks the stored input with
-    /// it after the process set, and the operation's end record with it too. It registers
-    /// nothing from it. `None` masks with the process set alone.
+    /// still holds unregistered (sdk-traces decision 32). The writer masks the name, the stored
+    /// input and the operation's end record with it, together with the process set. It
+    /// registers nothing from it. `None` masks with the process set alone.
     pub also_mask: Option<Arc<SecretSet>>,
     /// When it was admitted.
     pub at: EpochMillis,

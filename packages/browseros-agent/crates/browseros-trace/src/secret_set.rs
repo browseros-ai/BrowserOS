@@ -11,12 +11,15 @@
 //!
 //! Each value is matched in its plain, JSON-escaped and percent-encoded forms, with one
 //! Aho-Corasick automaton rebuilt on every change. Changes are rare (one per fill); masks run on
-//! every result.
+//! every result. A set a record carries (sdk-traces decision 43) is made whole for each record,
+//! so it is built at once with [`SecretSet::with_values`], in one build over all its values
+//! rather than one per value.
 
 use aho_corasick::{AhoCorasick, MatchKind};
 use browseros_core::sensitive_fields;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fmt;
 use std::ops::Range;
 use std::sync::{PoisonError, RwLock};
@@ -135,6 +138,32 @@ impl SecretSet {
         Self {
             config,
             inner: RwLock::new(Inner::default()),
+        }
+    }
+
+    /// A set masking `values` from now on, built at once, for a record's or a run's own set such
+    /// as the values claw-sdk still holds as it sends a record. It equals [`SecretSet::new`] then
+    /// [`SecretSet::register`] of each value in order with no TTL (too short ones refused, a
+    /// repeat kept once, the oldest dropped past `max_entries`), but builds the matcher once,
+    /// where each `register` rebuilds it over every value it holds.
+    #[must_use]
+    pub fn with_values(
+        config: SecretSetConfig,
+        values: impl IntoIterator<Item = SecretValue>,
+    ) -> Self {
+        let values: Vec<SecretValue> = values
+            .into_iter()
+            .filter(|value| value.as_str().chars().count() >= config.min_length)
+            .collect();
+        let kept = kept_as_registered(&values, config.max_entries);
+        let mut inner = Inner {
+            entries: in_registration_order(values, &kept, Instant::now() + config.retention),
+            matcher: None,
+        };
+        rebuild(&mut inner, config.min_length);
+        Self {
+            config,
+            inner: RwLock::new(inner),
         }
     }
 
@@ -293,12 +322,54 @@ pub(crate) fn mask_json_with(
     }
 }
 
+/// Which of `values`, in registration order, registering them one by one with no TTL keeps. A
+/// repeat moves its expiry to the later one, and past the cap the first to expire goes, so
+/// walking from the newest, each value is kept where it was last registered until the cap is
+/// full. `register` keeps the value it is given even when the cap is 0.
+fn kept_as_registered(values: &[SecretValue], max_entries: usize) -> Vec<bool> {
+    let mut kept = vec![false; values.len()];
+    let mut seen = HashSet::new();
+    let mut room = max_entries.max(1);
+    for (index, value) in values.iter().enumerate().rev() {
+        if room == 0 {
+            break;
+        }
+        if seen.insert(value.as_str()) {
+            kept[index] = true;
+            room -= 1;
+        }
+    }
+    kept
+}
+
+/// The `kept` values as entries, each expiring a nanosecond after the one registered before it
+/// (the first at `first_expiry`), as values registered one by one do. A later `register` past
+/// the cap drops the first to expire, so the set then loses its values oldest first, however
+/// many evictions follow; with one expiry for all, its `swap_remove` would scramble that order.
+fn in_registration_order(
+    values: Vec<SecretValue>,
+    kept: &[bool],
+    first_expiry: Instant,
+) -> Vec<Entry> {
+    let mut expires_at = first_expiry;
+    let mut entries = Vec::new();
+    for (value, _) in values.into_iter().zip(kept).filter(|(_, kept)| **kept) {
+        entries.push(Entry { value, expires_at });
+        expires_at += Duration::from_nanos(1);
+    }
+    entries
+}
+
 /// Rebuilds the automaton over every form of every value. Leftmost-longest, so a value that
 /// contains another is masked whole.
 fn rebuild(inner: &mut Inner, min_length: usize) {
     let mut patterns = Vec::with_capacity(inner.entries.len() * 3);
     for entry in &inner.entries {
         let plain = entry.value.as_str();
+        // A value's spellings are compared with its own only. Two values may share one, which
+        // the matcher takes twice, and comparing with every value's would make a build quadratic
+        // in the values.
+        let first = patterns.len();
         patterns.push(Zeroizing::new(plain.to_string()));
         if let Ok(quoted) = serde_json::to_string(plain) {
             let escaped = quoted
@@ -314,7 +385,7 @@ fn rebuild(inner: &mut Inner, min_length: usize) {
             .to_string()
             .replace("%20", "+");
         for encoded in [component, form] {
-            if encoded != plain && !patterns.iter().any(|known| **known == encoded) {
+            if encoded != plain && !patterns[first..].iter().any(|known| **known == encoded) {
                 patterns.push(Zeroizing::new(encoded));
             }
         }
@@ -323,14 +394,14 @@ fn rebuild(inner: &mut Inner, min_length: usize) {
         // attributes, `"` as entities. L1 masks these spellings only for a value still in a
         // field, so for one only the host or an earlier field knows, L2 is the last layer.
         for escaped in sensitive_fields::html_spellings(plain) {
-            if *escaped != plain && !patterns.iter().any(|known| **known == *escaped) {
+            if *escaped != plain && !patterns[first..].iter().any(|known| **known == *escaped) {
                 patterns.push(escaped);
             }
         }
         // A download's name (`suggestedFilename()`, the records and the trace) spells the value
         // as Chromium sanitizes a file name, so a value in a name would match nothing above.
         for spelled in file_name_spellings(plain, min_length) {
-            if !patterns.iter().any(|known| **known == *spelled) {
+            if !patterns[first..].iter().any(|known| **known == *spelled) {
                 patterns.push(spelled);
             }
         }
@@ -433,8 +504,10 @@ fn illegal_at_file_name_ends(character: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Registration, SecretSet, SecretSetConfig, SecretValue, mask_spans};
+    use super::{MASK, Registration, SecretSet, SecretSetConfig, SecretValue, mask_spans};
+    use aho_corasick::AhoCorasick;
     use serde_json::json;
+    use std::sync::PoisonError;
     use std::time::{Duration, Instant};
 
     fn set_with(values: &[&str]) -> SecretSet {
@@ -565,6 +638,19 @@ mod tests {
         assert_eq!(set.count(), 1);
     }
 
+    /// The form spelling of `a b c d` is the other value as typed, so the matcher holds that
+    /// pattern twice, whichever value comes first.
+    #[test]
+    fn values_that_share_a_spelling_are_each_masked() {
+        for values in [["a b c d", "a+b+c+d"], ["a+b+c+d", "a b c d"]] {
+            assert_eq!(
+                masked(&set_with(&values), "q=a+b+c+d&r=a b c d"),
+                "q=[private]&r=[private]",
+                "{values:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_longest_overlapping_value_wins() {
         let set = set_with(&["4242", "4242424242424242"]);
@@ -649,6 +735,232 @@ mod tests {
         assert_eq!(set.count(), 2);
         assert_eq!(masked(&set, "first-value"), "first-value");
         assert_eq!(masked(&set, "third-value"), "[private]");
+    }
+
+    /// Values in the order they are registered: a repeat of an early value, one too short to
+    /// keep, one inside another, two whose JSON, percent, HTML and file-name spellings differ,
+    /// and two more than a set of 5 keeps.
+    const IN_ORDER: [&str; 9] = [
+        "dropped-first-1",
+        "hunter22",
+        "abc",
+        "dropped-second-2",
+        "4242",
+        "p@ss w\"rd",
+        "hunter22",
+        "4242424242424242",
+        "a&b<c>d\u{a0}x",
+    ];
+
+    /// Texts holding each value of [`IN_ORDER`], as typed and in each spelling a mask looks for.
+    const HOLDING: [&str; 16] = [
+        "dropped-first-1",
+        "dropped-second-2",
+        "abc",
+        "pin 4242 ok",
+        "card 4242424242424242",
+        "typed hunter22 here",
+        "typed p@ss w\"rd here",
+        r#"{"v":"p@ss w\"rd"}"#,
+        "https://x.example/?q=p%40ss%20w%22rd&x=1",
+        "q=p%40ss+w%22rd",
+        "<i data-v=\"p@ss w&quot;rd\"></i>",
+        "report-p@ss w_rd.pdf",
+        "a&b<c>d\u{a0}x",
+        "<p>a&amp;b&lt;c&gt;d&nbsp;x</p>",
+        "u=a%26b%3Cc%3Ed%C2%A0x",
+        "a&b_c_d\u{a0}x.pdf",
+    ];
+
+    fn registered_in_order(config: SecretSetConfig) -> SecretSet {
+        let set = SecretSet::new(config);
+        for value in IN_ORDER {
+            set.register(SecretValue::new(value.to_string()), None);
+        }
+        set
+    }
+
+    fn built_at_once(config: SecretSetConfig) -> SecretSet {
+        SecretSet::with_values(
+            config,
+            IN_ORDER.map(|value| SecretValue::new(value.to_string())),
+        )
+    }
+
+    /// Both sets have the same values, and mask every text that holds one, and a JSON document,
+    /// alike.
+    fn assert_masks_alike(at_once: &SecretSet, one_by_one: &SecretSet, max_entries: usize) {
+        assert_eq!(at_once.count(), one_by_one.count(), "max {max_entries}");
+        let everything = HOLDING.join(" | ");
+        for text in HOLDING.into_iter().chain([everything.as_str()]) {
+            let (by_once, by_one) = (masked(at_once, text), masked(one_by_one, text));
+            assert_eq!(by_once, by_one, "max {max_entries}: {text}");
+        }
+        let document = json!({
+            "p@ss w\"rd": ["hunter22", "pin 4242 ok", "dropped-first-1"],
+            "a&amp;b&lt;c&gt;d&nbsp;x": {"dropped-second-2": "card 4242424242424242"},
+        });
+        let (mut by_one, mut by_once) = (document.clone(), document);
+        let changed = (
+            at_once.mask_json(&mut by_once),
+            one_by_one.mask_json(&mut by_one),
+        );
+        assert_eq!(changed.0, changed.1, "max {max_entries}");
+        assert_eq!(by_once, by_one, "max {max_entries}");
+    }
+
+    #[test]
+    fn a_set_built_at_once_masks_what_registering_its_values_in_order_masks() {
+        for max_entries in [0, 1, 5, SecretSetConfig::default().max_entries] {
+            let config = SecretSetConfig {
+                max_entries,
+                ..SecretSetConfig::default()
+            };
+            let one_by_one = registered_in_order(config);
+            assert_masks_alike(&built_at_once(config), &one_by_one, max_entries);
+        }
+    }
+
+    /// Past a cap of 5, the values registered last are kept, a repeat counting from its last
+    /// registration, and a value too short is never kept.
+    #[test]
+    fn a_set_built_at_once_keeps_the_values_registered_last() {
+        let five = built_at_once(SecretSetConfig {
+            max_entries: 5,
+            ..SecretSetConfig::default()
+        });
+        assert_eq!(five.count(), 5);
+        assert_eq!(
+            masked(&five, "dropped-first-1 dropped-second-2"),
+            "dropped-first-1 dropped-second-2",
+            "the two registered first went"
+        );
+        assert_eq!(
+            masked(&five, "typed hunter22 here"),
+            "typed [private] here",
+            "a repeat counts from its last registration, so it outlived both"
+        );
+        assert_eq!(masked(&five, "abc"), "abc", "too short to keep");
+        assert_eq!(
+            masked(&five, "card 4242424242424242 pin 4242"),
+            "card [private] pin [private]"
+        );
+    }
+
+    /// A set built at once drops its oldest value first when later registrations pass the cap,
+    /// as a set registered one by one does, however many evictions follow.
+    #[test]
+    fn a_set_built_at_once_drops_its_oldest_first_as_more_values_come() {
+        let config = SecretSetConfig {
+            max_entries: 3,
+            ..SecretSetConfig::default()
+        };
+        let first = ["alpha-1", "bravo-2", "charlie-3"].map(|v| SecretValue::new(v.into()));
+        let at_once = SecretSet::with_values(config, first);
+        for later in ["delta-4", "echo-5"] {
+            at_once.register(SecretValue::new(later.into()), None);
+        }
+        assert_eq!(
+            masked(&at_once, "alpha-1 bravo-2 charlie-3 delta-4 echo-5"),
+            "alpha-1 bravo-2 [private] [private] [private]",
+            "the two oldest went, in the order they came"
+        );
+    }
+
+    /// `count` distinct values of 16 to 32 characters, shaped like passwords and tokens. They are
+    /// letters and digits, with about one character in ten a punctuation mark that a URL, JSON,
+    /// HTML or a file name spells otherwise. The seed is fixed, so every run builds the same
+    /// values.
+    fn token_like(count: usize) -> Vec<String> {
+        const PLAIN: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        const PUNCTUATION: &[u8] = b"!@#$%^&*-_.~+=?/";
+        let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+        // xorshift64*
+        let mut below = move |bound: usize| {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            usize::try_from(state.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 32).unwrap_or(0) % bound
+        };
+        (0..count)
+            .map(|_| {
+                (0..16 + below(17))
+                    .map(|_| {
+                        let pool = if below(10) == 0 { PUNCTUATION } else { PLAIN };
+                        char::from(pool[below(pool.len())])
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Median and range of `times`.
+    fn spread(times: &mut [Duration]) -> String {
+        times.sort_unstable();
+        let (Some(fastest), Some(slowest)) = (times.first(), times.last()) else {
+            return "no runs".to_string();
+        };
+        format!(
+            "median {:?}, range {fastest:?} to {slowest:?}",
+            times[times.len() / 2]
+        )
+    }
+
+    /// What a set of `count` values costs to build, registered one by one and built at once,
+    /// alternating so warmup and drift favour neither. Each `register` rebuilds the matcher over
+    /// every value the set holds, so one by one is `count` builds. Outside the timed part, each
+    /// run's set must hold every value and mask each one whole. The times are wall time, so on a
+    /// busy machine run it under `/usr/bin/time -l` and compare user time with real. In release:
+    /// `cargo test -p browseros-trace --release --lib build_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measurement, not a check: it prints build times and takes minutes"]
+    #[expect(clippy::print_stdout, reason = "the measurement is what it prints")]
+    fn build_cost() {
+        const RUNS: usize = 5;
+        let config = SecretSetConfig::default();
+        for count in [256, 4096] {
+            let values = token_like(count);
+            let text = values.join(" ");
+            let all_masked = vec![MASK; count].join(" ");
+            let fresh = || -> Vec<SecretValue> {
+                values
+                    .iter()
+                    .map(|value| SecretValue::new(value.clone()))
+                    .collect()
+            };
+            let (mut one_by_one, mut at_once) = (Vec::new(), Vec::new());
+            let mut patterns = 0;
+            for _ in 0..RUNS {
+                let values = fresh();
+                let began = Instant::now();
+                let set = SecretSet::new(config);
+                for value in values {
+                    set.register(value, None);
+                }
+                one_by_one.push(began.elapsed());
+                assert_eq!(set.count(), count, "every value is distinct and kept");
+                assert_eq!(masked(&set, &text), all_masked);
+
+                let values = fresh();
+                let began = Instant::now();
+                let set = SecretSet::with_values(config, values);
+                at_once.push(began.elapsed());
+                assert_eq!(set.count(), count, "every value is distinct and kept");
+                assert_eq!(masked(&set, &text), all_masked);
+                patterns = set
+                    .inner
+                    .read()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .matcher
+                    .as_ref()
+                    .map_or(0, AhoCorasick::patterns_len);
+            }
+            println!(
+                "{count} values ({patterns} patterns), {RUNS} runs each:\n  one by one: {}\n  at once:    {}",
+                spread(&mut one_by_one),
+                spread(&mut at_once)
+            );
+        }
     }
 
     /// Each set's spans on one text, masked together.

@@ -2306,3 +2306,61 @@ async fn a_start_keeps_its_input_and_host_data_off_disk_until_its_end_masks_them
     }
     Ok(())
 }
+
+/// The name of operation `call` of task `task`, as each read of the store gives it: the
+/// operation's row, its run's operations, and the trace's tail.
+async fn names_read(
+    h: &Harness,
+    call: OperationId,
+    task_name: &str,
+) -> Result<[String; 3], Box<dyn std::error::Error + Send + Sync>> {
+    let row = h.store.operation(call).await?.ok_or("no operation")?;
+    let run = h.store.run(call.run).await?.ok_or("no run")?;
+    let query = TailQuery {
+        task_id: Some(task(task_name)),
+        tab: None,
+        tail: 10,
+    };
+    let tail = h.store.trace_tail(query).await?;
+    let only = |names: Vec<&str>| names.join(",");
+    Ok([
+        row.name,
+        only(run.operations.iter().map(|op| op.name.as_str()).collect()),
+        only(tail.operations.iter().map(|op| op.name.as_str()).collect()),
+    ])
+}
+
+/// A script can call any name, and an unknown method is recorded under the name it was called
+/// by, which may hold a value its run still holds or one the process set knows. A running
+/// operation is listed by its name, so the name is stored as the operation starts, masked with
+/// what the start knows.
+#[tokio::test]
+async fn an_operations_name_is_masked_with_what_its_start_knows_before_it_is_stored()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let h = harness(WriterConfig::default()).await;
+    let known = "known-4Rt-apikey";
+    let _registration = h
+        .secrets
+        .register(SecretValue::new(known.to_string()), None);
+    let run = start_in(&h.sink, Some("checkout"), 0);
+    let call = OperationId::new(run, 1);
+    let name = format!("vault.{HELD}.{known}");
+    h.sink.op_started(OperationStarted {
+        also_mask: Some(also_mask(&[HELD])),
+        ..started(simple(call, &name, Effect::Write))
+    });
+    flushed(&h).await;
+
+    let masked = "vault.[private].[private]".to_string();
+    assert_eq!(
+        names_read(&h, call, "checkout").await?,
+        [masked.clone(), masked.clone(), masked],
+        "the operation's row (/v1/operations, /v1/events), its run while it runs, the trace"
+    );
+    for file in store_files(&h)? {
+        assert!(!holds(&file, HELD), "the file keeps the held value");
+        assert!(!holds(&file, known), "the file keeps the registered value");
+    }
+    assert_eq!(h.secrets.count(), 1, "the start's set registers nothing");
+    Ok(())
+}

@@ -27,7 +27,7 @@ pub struct RedactionLimits {
     pub result: usize,
     /// A run's code.
     pub code: usize,
-    /// Messages, URLs and titles.
+    /// Messages, URLs, titles and operation names.
     pub text: usize,
     /// A run's host data. D14 lets a host send up to 4 KiB, and it is kept whole up to this
     /// size: no string inside it is cut on its own, so the host reads back what it sent.
@@ -154,7 +154,7 @@ impl Redactor {
         self.bound(value, self.limits.host_data, self.limits.host_data)
     }
 
-    /// A message, URL or title: masked and clipped.
+    /// A message, URL, title or operation name: masked and clipped.
     #[must_use]
     pub fn text(&self, text: &str) -> String {
         let mut text = text.to_string();

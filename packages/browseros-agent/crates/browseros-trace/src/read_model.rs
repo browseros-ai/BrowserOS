@@ -20,7 +20,7 @@ pub struct OperationRow {
     pub parent: Option<OperationId>,
     /// The tab it targeted, when it had one.
     pub tab: Option<TabId>,
-    /// The method name.
+    /// The method name: masked, clipped.
     pub name: String,
     /// Its place in the tree.
     pub kind: OperationKind,

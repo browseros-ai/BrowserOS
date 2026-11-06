@@ -36,7 +36,8 @@
 //! reads the store as each batch commits) comes from these rows, so masking them as they are
 //! written covers all of them. An operation's end is masked with its own set and its start's,
 //! and a run's code with the start's and the end's: a value held at either moment may be in
-//! the text, grown or shrunk at the other.
+//! the text, grown or shrunk at the other. An operation's name is the one text stored at its
+//! start, so it gets the start's sets alone.
 //!
 //! Screenshots: the writer decides and accounts, and the camera only takes pictures. This task
 //! is the one that sees each operation's start (effect, tab) and end (outcome, error owner) in
@@ -770,12 +771,21 @@ impl Writer {
             )
             .await?;
         }
+        // A script can call any name, so an unknown method's name may hold a secret. A running
+        // operation is listed by its name, so the row is written now and only the start's sets
+        // reach it. Masking it again at the end would mean rewriting the row, which leaves the
+        // raw name in the WAL page the rewrite replaced (decision 51). A value only the end's set
+        // knows stays in the name.
+        let name = self
+            .redactor
+            .also_masking(&event.also_mask)
+            .text(&event.name);
         trace_store::insert_operation(
             tx,
             OperationStartRow {
                 id: event.id,
                 parent: event.parent,
-                name: &event.name,
+                name: &name,
                 kind: event.kind,
                 effect: event.effect,
                 tab: event.tab,
