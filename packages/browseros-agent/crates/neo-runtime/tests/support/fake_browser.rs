@@ -201,17 +201,22 @@ impl FakeBrowser {
         }
     }
 
-    pub async fn runtime(&self) -> Runtime {
-        let cdp = CdpClient::connect(ConnectOptions {
+    pub async fn cdp(&self) -> CdpClient {
+        CdpClient::connect(ConnectOptions {
             host: Some("127.0.0.1".to_string()),
             reconnect_policy: ReconnectPolicy::KeepTrying,
             ..ConnectOptions::new(self.port)
         })
         .await
-        .unwrap_or_else(|error| panic!("connect to the fake browser: {error}"));
-        Runtime::connect(cdp).await.unwrap_or_else(|error| {
-            panic!("the fake browser reports closed tabs as BrowserOS does: {error}")
-        })
+        .unwrap_or_else(|error| panic!("connect to the fake browser: {error}"))
+    }
+
+    pub async fn runtime(&self) -> Runtime {
+        Runtime::connect(self.cdp().await)
+            .await
+            .unwrap_or_else(|error| {
+                panic!("the fake browser reports closed tabs as BrowserOS does: {error}")
+            })
     }
 
     /// Every command received so far, in order, each with its answer if the fake sent one.

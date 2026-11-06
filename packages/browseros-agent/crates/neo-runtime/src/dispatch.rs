@@ -371,23 +371,31 @@ async fn serve_call(
         (ObjectCall::Page(call), Some(page)) => {
             tab_calls::page(&tabs, &page, call, &progress).await
         }
-        (ObjectCall::Frame(route), Some(page)) => match progress.race(tabs.session(&page)).await {
-            Ok(Ok(page)) => {
-                serve(
-                    page,
-                    route,
-                    progress,
-                    reply.entry,
-                    reply.trace,
-                    reply.id,
-                    reply.reply,
-                )
-                .await;
-                return;
+        (ObjectCall::Frame(route), Some(page)) => {
+            let session = match page.attached_session() {
+                Some(session) => Ok(session),
+                None => match progress.race(tabs.session(&page)).await {
+                    Ok(result) => result.map_err(CallError::from),
+                    Err(error) => Err(error),
+                },
+            };
+            match session {
+                Ok(page) => {
+                    serve(
+                        page,
+                        route,
+                        progress,
+                        reply.entry,
+                        reply.trace,
+                        reply.id,
+                        reply.reply,
+                    )
+                    .await;
+                    return;
+                }
+                Err(error) => Err(error),
             }
-            Ok(Err(error)) => Err(error.into()),
-            Err(error) => Err(error),
-        },
+        }
         _ => Err(PlaywrightError::target_closed().into()),
     };
     finish_reply(result, reply);
@@ -687,7 +695,78 @@ mod tests {
 
     use super::*;
     use crate::click_goldens;
+    use crate::deadline::Deadline;
+    use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+    use crate::page::TabInputs;
     use crate::progress::ErrorName;
+    use crate::run::PageId;
+    use tokio::runtime::Handle;
+    use tokio_util::task::TaskTracker;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tests_that_an_attached_frame_call_starts_when_first_polled_after_run_end() {
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let tasks = TaskTracker::new();
+        let deadline = Deadline::new(Duration::from_secs(5), CancellationToken::new());
+        let run = RunScope::new(deadline, tasks.clone());
+        let (tabs, _) = Tabs::open(
+            browser.cdp().await,
+            Handle::current(),
+            TabInputs::default(),
+            tasks,
+            &PageId::new(PAGE.to_string()),
+        )
+        .await
+        .unwrap();
+        let page = tabs.resolve(&format!("frame@{PAGE}")).unwrap();
+        let entry = Arc::new(CallEntry::new(CallStart {
+            call_id: 1,
+            guid: format!("frame@{PAGE}"),
+            method: "click".to_string(),
+            title: Some("Click"),
+            params: json!({"selector":"#nothing"}),
+            location: None,
+            input: true,
+        }));
+        let trace = Trace::default();
+        trace.push(Arc::clone(&entry));
+        let progress = Progress::new(Arc::clone(&entry), 0.0, run.clone(), page.closed.clone());
+        let route = route_frame("click", json!({"selector":"#nothing"}))
+            .route
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        let (reply, _receiver) = oneshot::channel();
+        // This future is deliberately not polled until the run has ended. No scheduler
+        // interleaving can let the call start early and hide the regression.
+        let call = serve_call(
+            tabs,
+            Some(page),
+            route,
+            progress,
+            CallReply {
+                entry,
+                trace: trace.clone(),
+                id: json!(1),
+                reply,
+            },
+        );
+        run.end(RunEnd::Settled);
+        call.await;
+        let (records, _) = trace.take(RunEnd::Settled);
+        assert!(
+            records[0]
+                .log
+                .iter()
+                .any(|line| line.contains("waiting for #nothing")),
+            "attached call never entered click policy: {records:?}"
+        );
+        assert_eq!(
+            records[0].result,
+            CallResult::Unfinished {
+                reason: RunEnd::Settled
+            },
+            "the ended run still cancels the click"
+        );
+    }
 
     fn route_frame(method: &str, params: Value) -> Routed {
         route(ObjectKind::Frame, method, Some(params))

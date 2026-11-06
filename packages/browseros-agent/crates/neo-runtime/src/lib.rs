@@ -27,6 +27,17 @@
 //! Building a locator does no I/O: neo-sdk runs Playwright's own selector code in the realm, with
 //! the test id attribute from `world.rs`, the one name the SDK and the page share.
 
+#[cfg(test)]
+extern crate self as neo_runtime;
+
+#[cfg(test)]
+#[path = "../tests/support/fake_browser.rs"]
+#[expect(
+    dead_code,
+    reason = "unit tests use the same browser fixture as integration tests"
+)]
+mod fake_browser;
+
 mod bridge;
 mod click;
 #[cfg(test)]
