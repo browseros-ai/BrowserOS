@@ -1,0 +1,5521 @@
+{
+  "source": "vendor/playwright/isomorphic/ariaSnapshotRenderer.ts and yaml.ts at Playwright 26137face",
+  "snapshots": [
+    {
+      "name": "empty snapshot",
+      "nodes": [],
+      "yaml": ""
+    },
+    {
+      "name": "one leaf",
+      "nodes": [
+        {
+          "role": "button",
+          "name": "Submit"
+        }
+      ],
+      "yaml": "- button \"Submit\""
+    },
+    {
+      "name": "a leaf without a name",
+      "nodes": [
+        {
+          "role": "separator"
+        }
+      ],
+      "yaml": "- separator"
+    },
+    {
+      "name": "an empty name is no name",
+      "nodes": [
+        {
+          "role": "button",
+          "name": ""
+        }
+      ],
+      "yaml": "- button"
+    },
+    {
+      "name": "top-level text",
+      "nodes": [
+        {
+          "role": "text",
+          "text": "hello world"
+        }
+      ],
+      "yaml": "- text: hello world"
+    },
+    {
+      "name": "top-level text, empty",
+      "nodes": [
+        {
+          "role": "text",
+          "text": ""
+        }
+      ],
+      "yaml": "- text: \"\""
+    },
+    {
+      "name": "top-level text, absent",
+      "nodes": [
+        {
+          "role": "text"
+        }
+      ],
+      "yaml": "- text: \"\""
+    },
+    {
+      "name": "a text role ignores its name",
+      "nodes": [
+        {
+          "role": "text",
+          "name": "n",
+          "text": "t"
+        }
+      ],
+      "yaml": "- text: t"
+    },
+    {
+      "name": "leaf with text",
+      "nodes": [
+        {
+          "role": "paragraph",
+          "text": "Hello"
+        }
+      ],
+      "yaml": "- paragraph: Hello"
+    },
+    {
+      "name": "leaf with empty text",
+      "nodes": [
+        {
+          "role": "paragraph",
+          "text": ""
+        }
+      ],
+      "yaml": "- paragraph: \"\""
+    },
+    {
+      "name": "leaf with text and a name",
+      "nodes": [
+        {
+          "role": "heading",
+          "name": "Title",
+          "level": 1,
+          "text": "Title text"
+        }
+      ],
+      "yaml": "- heading \"Title\" [level=1]: Title text"
+    },
+    {
+      "name": "text wins over children",
+      "nodes": [
+        {
+          "role": "paragraph",
+          "text": "x",
+          "children": [
+            {
+              "role": "button",
+              "name": "hidden"
+            }
+          ]
+        }
+      ],
+      "yaml": "- paragraph: x"
+    },
+    {
+      "name": "empty children is a leaf",
+      "nodes": [
+        {
+          "role": "list",
+          "children": []
+        }
+      ],
+      "yaml": "- list"
+    },
+    {
+      "name": "an empty string child",
+      "nodes": [
+        {
+          "role": "listitem",
+          "children": [""]
+        }
+      ],
+      "yaml": "- listitem:\n  - text: \"\""
+    },
+    {
+      "name": "string and node children",
+      "nodes": [
+        {
+          "role": "paragraph",
+          "children": [
+            "Read the ",
+            {
+              "role": "link",
+              "name": "docs",
+              "url": "/docs"
+            },
+            " first."
+          ]
+        }
+      ],
+      "yaml": "- paragraph:\n  - text: \"Read the \"\n  - link \"docs\":\n    - /url: /docs\n  - text: \" first.\""
+    },
+    {
+      "name": "url prop",
+      "nodes": [
+        {
+          "role": "link",
+          "name": "Home",
+          "url": "https://a.test/"
+        }
+      ],
+      "yaml": "- link \"Home\":\n  - /url: https://a.test/"
+    },
+    {
+      "name": "empty url prop",
+      "nodes": [
+        {
+          "role": "link",
+          "name": "Home",
+          "url": ""
+        }
+      ],
+      "yaml": "- link \"Home\":\n  - /url: \"\""
+    },
+    {
+      "name": "url prop with text",
+      "nodes": [
+        {
+          "role": "link",
+          "name": "Home",
+          "url": "/",
+          "text": "Go home"
+        }
+      ],
+      "yaml": "- link \"Home\":\n  - /url: /\n  - text: Go home"
+    },
+    {
+      "name": "url prop with children",
+      "nodes": [
+        {
+          "role": "link",
+          "name": "Card",
+          "url": "/card?id=1&x=2",
+          "children": [
+            {
+              "role": "img",
+              "name": "Photo"
+            },
+            "caption"
+          ]
+        }
+      ],
+      "yaml": "- link \"Card\":\n  - /url: /card?id=1&x=2\n  - img \"Photo\"\n  - text: caption"
+    },
+    {
+      "name": "placeholder prop",
+      "nodes": [
+        {
+          "role": "textbox",
+          "name": "Email",
+          "placeholder": "you@example.com"
+        }
+      ],
+      "yaml": "- textbox \"Email\":\n  - /placeholder: you@example.com"
+    },
+    {
+      "name": "url and placeholder props",
+      "nodes": [
+        {
+          "role": "textbox",
+          "url": "x: y",
+          "placeholder": "- dash",
+          "text": "t"
+        }
+      ],
+      "yaml": "- textbox:\n  - /url: \"x: y\"\n  - /placeholder: \"- dash\"\n  - text: t"
+    },
+    {
+      "name": "props that need quotes",
+      "nodes": [
+        {
+          "role": "link",
+          "name": "a",
+          "url": "https://a.test/#frag ment",
+          "placeholder": "123"
+        }
+      ],
+      "yaml": "- link \"a\":\n  - /url: https://a.test/#frag ment\n  - /placeholder: \"123\""
+    },
+    {
+      "name": "checked",
+      "nodes": [
+        {
+          "role": "checkbox",
+          "name": "a",
+          "checked": true
+        },
+        {
+          "role": "checkbox",
+          "name": "b",
+          "checked": "mixed"
+        },
+        {
+          "role": "checkbox",
+          "name": "c",
+          "checked": false
+        }
+      ],
+      "yaml": "- checkbox \"a\" [checked]\n- checkbox \"b\" [checked=mixed]\n- checkbox \"c\""
+    },
+    {
+      "name": "disabled, expanded, active",
+      "nodes": [
+        {
+          "role": "button",
+          "name": "a",
+          "disabled": true
+        },
+        {
+          "role": "button",
+          "name": "b",
+          "disabled": false
+        },
+        {
+          "role": "combobox",
+          "name": "c",
+          "expanded": true
+        },
+        {
+          "role": "combobox",
+          "name": "d",
+          "expanded": false
+        },
+        {
+          "role": "textbox",
+          "name": "e",
+          "active": true
+        },
+        {
+          "role": "textbox",
+          "name": "f",
+          "active": false
+        }
+      ],
+      "yaml": "- button \"a\" [disabled]\n- button \"b\"\n- combobox \"c\" [expanded]\n- combobox \"d\"\n- textbox \"e\" [active]\n- textbox \"f\""
+    },
+    {
+      "name": "invalid",
+      "nodes": [
+        {
+          "role": "textbox",
+          "name": "a",
+          "invalid": true
+        },
+        {
+          "role": "textbox",
+          "name": "b",
+          "invalid": "grammar"
+        },
+        {
+          "role": "textbox",
+          "name": "c",
+          "invalid": "spelling"
+        },
+        {
+          "role": "textbox",
+          "name": "d",
+          "invalid": false
+        }
+      ],
+      "yaml": "- textbox \"a\" [invalid]\n- textbox \"b\" [invalid=grammar]\n- textbox \"c\" [invalid=spelling]\n- textbox \"d\""
+    },
+    {
+      "name": "levels",
+      "nodes": [
+        {
+          "role": "heading",
+          "name": "a",
+          "level": 1
+        },
+        {
+          "role": "heading",
+          "name": "b",
+          "level": 6
+        },
+        {
+          "role": "heading",
+          "name": "c",
+          "level": 0
+        },
+        {
+          "role": "treeitem",
+          "name": "d",
+          "level": 42
+        },
+        {
+          "role": "treeitem",
+          "name": "e",
+          "level": -1
+        }
+      ],
+      "yaml": "- heading \"a\" [level=1]\n- heading \"b\" [level=6]\n- heading \"c\"\n- treeitem \"d\" [level=42]\n- treeitem \"e\" [level=-1]"
+    },
+    {
+      "name": "pressed and selected",
+      "nodes": [
+        {
+          "role": "button",
+          "name": "a",
+          "pressed": true
+        },
+        {
+          "role": "button",
+          "name": "b",
+          "pressed": "mixed"
+        },
+        {
+          "role": "button",
+          "name": "c",
+          "pressed": false
+        },
+        {
+          "role": "tab",
+          "name": "d",
+          "selected": true
+        },
+        {
+          "role": "tab",
+          "name": "e",
+          "selected": false
+        }
+      ],
+      "yaml": "- button \"a\" [pressed]\n- button \"b\" [pressed=mixed]\n- button \"c\"\n- tab \"d\" [selected]\n- tab \"e\""
+    },
+    {
+      "name": "aria-hidden",
+      "nodes": [
+        {
+          "role": "generic",
+          "ariaHidden": true,
+          "text": "hidden"
+        },
+        {
+          "role": "generic",
+          "ariaHidden": false,
+          "text": "shown"
+        }
+      ],
+      "yaml": "- generic [aria-hidden]: hidden\n- generic: shown"
+    },
+    {
+      "name": "refs and cursors",
+      "nodes": [
+        {
+          "role": "button",
+          "name": "a",
+          "ref": "e1"
+        },
+        {
+          "role": "button",
+          "name": "b",
+          "ref": "e2",
+          "cursor": "pointer"
+        },
+        {
+          "role": "button",
+          "name": "c",
+          "cursor": "pointer"
+        },
+        {
+          "role": "button",
+          "name": "d",
+          "ref": "",
+          "cursor": "pointer"
+        },
+        {
+          "role": "button",
+          "name": "e",
+          "ref": "f12e345"
+        }
+      ],
+      "yaml": "- button \"a\" [ref=e1]\n- button \"b\" [ref=e2] [cursor=pointer]\n- button \"c\"\n- button \"d\"\n- button \"e\" [ref=f12e345]"
+    },
+    {
+      "name": "boxes",
+      "nodes": [
+        {
+          "role": "button",
+          "name": "a",
+          "box": {
+            "x": 8,
+            "y": 16,
+            "width": 100,
+            "height": 20
+          }
+        },
+        {
+          "role": "button",
+          "name": "b",
+          "box": {
+            "x": -5,
+            "y": 0,
+            "width": 0,
+            "height": 0
+          }
+        },
+        {
+          "role": "button",
+          "name": "c",
+          "ref": "e3",
+          "cursor": "pointer",
+          "box": {
+            "x": 1,
+            "y": 2,
+            "width": 3,
+            "height": 4
+          }
+        }
+      ],
+      "yaml": "- button \"a\" [box=8,16,100,20]\n- button \"b\" [box=-5,0,0,0]\n- button \"c\" [ref=e3] [cursor=pointer] [box=1,2,3,4]"
+    },
+    {
+      "name": "every flag, in Playwright order",
+      "nodes": [
+        {
+          "role": "treeitem",
+          "name": "All",
+          "checked": "mixed",
+          "disabled": true,
+          "expanded": true,
+          "active": true,
+          "invalid": "spelling",
+          "level": 3,
+          "pressed": "mixed",
+          "selected": true,
+          "ariaHidden": true,
+          "ref": "e9",
+          "cursor": "pointer",
+          "box": {
+            "x": 0,
+            "y": 1,
+            "width": 2,
+            "height": 3
+          },
+          "url": "u",
+          "placeholder": "p",
+          "text": "txt"
+        }
+      ],
+      "yaml": "- treeitem \"All\" [checked=mixed] [disabled] [expanded] [active] [invalid=spelling] [level=3] [pressed=mixed] [selected] [aria-hidden] [ref=e9] [cursor=pointer] [box=0,1,2,3]:\n  - /url: u\n  - /placeholder: p\n  - text: txt"
+    },
+    {
+      "name": "iframe nodes render as they are",
+      "nodes": [
+        {
+          "role": "iframe",
+          "ref": "e4"
+        },
+        {
+          "role": "iframe",
+          "ref": "e5",
+          "cursor": "pointer",
+          "text": "fallback"
+        },
+        {
+          "role": "iframe"
+        }
+      ],
+      "yaml": "- iframe [ref=e4]\n- iframe [ref=e5] [cursor=pointer]: fallback\n- iframe"
+    },
+    {
+      "name": "nested lists",
+      "nodes": [
+        {
+          "role": "list",
+          "children": [
+            {
+              "role": "listitem",
+              "children": [
+                "One",
+                {
+                  "role": "list",
+                  "children": [
+                    {
+                      "role": "listitem",
+                      "text": "One.a"
+                    },
+                    {
+                      "role": "listitem",
+                      "children": [
+                        {
+                          "role": "link",
+                          "name": "One.b",
+                          "url": "/b",
+                          "ref": "e7"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "role": "listitem",
+              "text": "Two"
+            }
+          ]
+        }
+      ],
+      "yaml": "- list:\n  - listitem:\n    - text: One\n    - list:\n      - listitem: One.a\n      - listitem:\n        - link \"One.b\" [ref=e7]:\n          - /url: /b\n  - listitem: Two"
+    },
+    {
+      "name": "several top-level nodes",
+      "nodes": [
+        {
+          "role": "banner",
+          "children": [
+            {
+              "role": "heading",
+              "name": "Site",
+              "level": 1
+            }
+          ]
+        },
+        {
+          "role": "main",
+          "children": [
+            {
+              "role": "paragraph",
+              "text": "Body"
+            }
+          ]
+        },
+        {
+          "role": "contentinfo",
+          "text": "© 2026"
+        }
+      ],
+      "yaml": "- banner:\n  - heading \"Site\" [level=1]\n- main:\n  - paragraph: Body\n- contentinfo: © 2026"
+    },
+    {
+      "name": "a form, as an ai snapshot prints it",
+      "nodes": [
+        {
+          "role": "generic",
+          "ref": "e1",
+          "children": [
+            {
+              "role": "heading",
+              "name": "Sign in",
+              "level": 2,
+              "ref": "e2"
+            },
+            {
+              "role": "textbox",
+              "name": "Email",
+              "ref": "e3",
+              "placeholder": "you@example.com",
+              "active": true
+            },
+            {
+              "role": "textbox",
+              "name": "Password",
+              "ref": "e4"
+            },
+            {
+              "role": "checkbox",
+              "name": "Remember me",
+              "checked": true,
+              "ref": "e5"
+            },
+            {
+              "role": "button",
+              "name": "Sign in",
+              "ref": "e6",
+              "cursor": "pointer"
+            },
+            {
+              "role": "link",
+              "name": "Forgot password?",
+              "ref": "e7",
+              "cursor": "pointer",
+              "url": "/reset"
+            }
+          ]
+        }
+      ],
+      "yaml": "- generic [ref=e1]:\n  - heading \"Sign in\" [level=2] [ref=e2]\n  - textbox \"Email\" [active] [ref=e3]:\n    - /placeholder: you@example.com\n  - textbox \"Password\" [ref=e4]\n  - checkbox \"Remember me\" [checked] [ref=e5]\n  - button \"Sign in\" [ref=e6] [cursor=pointer]\n  - link \"Forgot password?\" [ref=e7] [cursor=pointer]:\n    - /url: /reset"
+    },
+    {
+      "name": "a table",
+      "nodes": [
+        {
+          "role": "table",
+          "children": [
+            {
+              "role": "rowgroup",
+              "children": [
+                {
+                  "role": "row",
+                  "name": "Name Qty",
+                  "children": [
+                    {
+                      "role": "columnheader",
+                      "name": "Name"
+                    },
+                    {
+                      "role": "columnheader",
+                      "name": "Qty"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "role": "rowgroup",
+              "children": [
+                {
+                  "role": "row",
+                  "name": "Apples 3",
+                  "children": [
+                    {
+                      "role": "cell",
+                      "name": "Apples"
+                    },
+                    {
+                      "role": "cell",
+                      "name": "3"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "yaml": "- table:\n  - rowgroup:\n    - row \"Name Qty\":\n      - columnheader \"Name\"\n      - columnheader \"Qty\"\n  - rowgroup:\n    - row \"Apples 3\":\n      - cell \"Apples\"\n      - cell \"3\""
+    },
+    {
+      "name": "deep nesting",
+      "nodes": [
+        {
+          "role": "group",
+          "name": "level 1",
+          "children": [
+            {
+              "role": "group",
+              "name": "level 2",
+              "children": [
+                {
+                  "role": "group",
+                  "name": "level 3",
+                  "children": [
+                    {
+                      "role": "group",
+                      "name": "level 4",
+                      "children": [
+                        {
+                          "role": "group",
+                          "name": "level 5",
+                          "children": [
+                            {
+                              "role": "group",
+                              "name": "level 6",
+                              "children": [
+                                {
+                                  "role": "group",
+                                  "name": "level 7",
+                                  "children": [
+                                    {
+                                      "role": "group",
+                                      "name": "level 8",
+                                      "children": [
+                                        {
+                                          "role": "group",
+                                          "name": "level 9",
+                                          "children": [
+                                            {
+                                              "role": "group",
+                                              "name": "level 10",
+                                              "children": [
+                                                {
+                                                  "role": "group",
+                                                  "name": "level 11",
+                                                  "children": [
+                                                    {
+                                                      "role": "group",
+                                                      "name": "level 12",
+                                                      "children": [
+                                                        {
+                                                          "role": "button",
+                                                          "name": "Deepest",
+                                                          "ref": "e99"
+                                                        },
+                                                        "after 12"
+                                                      ]
+                                                    },
+                                                    "after 11"
+                                                  ]
+                                                },
+                                                "after 10"
+                                              ]
+                                            },
+                                            "after 9"
+                                          ]
+                                        },
+                                        "after 8"
+                                      ]
+                                    },
+                                    "after 7"
+                                  ]
+                                },
+                                "after 6"
+                              ]
+                            },
+                            "after 5"
+                          ]
+                        },
+                        "after 4"
+                      ]
+                    },
+                    "after 3"
+                  ]
+                },
+                "after 2"
+              ]
+            },
+            "after 1"
+          ]
+        }
+      ],
+      "yaml": "- group \"level 1\":\n  - group \"level 2\":\n    - group \"level 3\":\n      - group \"level 4\":\n        - group \"level 5\":\n          - group \"level 6\":\n            - group \"level 7\":\n              - group \"level 8\":\n                - group \"level 9\":\n                  - group \"level 10\":\n                    - group \"level 11\":\n                      - group \"level 12\":\n                        - button \"Deepest\" [ref=e99]\n                        - text: after 12\n                      - text: after 11\n                    - text: after 10\n                  - text: after 9\n                - text: after 8\n              - text: after 7\n            - text: after 6\n          - text: after 5\n        - text: after 4\n      - text: after 3\n    - text: after 2\n  - text: after 1"
+    },
+    {
+      "name": "keys that need single quotes",
+      "nodes": [
+        {
+          "role": "button",
+          "name": ""
+        },
+        {
+          "role": "button",
+          "name": " "
+        },
+        {
+          "role": "button",
+          "name": "  "
+        },
+        {
+          "role": "button",
+          "name": "a"
+        },
+        {
+          "role": "button",
+          "name": "a "
+        },
+        {
+          "role": "button",
+          "name": " a"
+        },
+        {
+          "role": "button",
+          "name": "\ta"
+        },
+        {
+          "role": "button",
+          "name": "a\t"
+        },
+        {
+          "role": "button",
+          "name": "\na"
+        },
+        {
+          "role": "button",
+          "name": "a\n"
+        },
+        {
+          "role": "button",
+          "name": "\u000ba"
+        },
+        {
+          "role": "button",
+          "name": "a\f"
+        },
+        {
+          "role": "button",
+          "name": "\ra"
+        },
+        {
+          "role": "button",
+          "name": " a"
+        },
+        {
+          "role": "button",
+          "name": "a "
+        },
+        {
+          "role": "button",
+          "name": " a"
+        },
+        {
+          "role": "button",
+          "name": " a"
+        },
+        {
+          "role": "button",
+          "name": "a "
+        },
+        {
+          "role": "button",
+          "name": " a"
+        },
+        {
+          "role": "button",
+          "name": " a"
+        },
+        {
+          "role": "button",
+          "name": "a "
+        },
+        {
+          "role": "button",
+          "name": " a"
+        },
+        {
+          "role": "button",
+          "name": " a"
+        },
+        {
+          "role": "button",
+          "name": "　a"
+        },
+        {
+          "role": "button",
+          "name": "﻿a"
+        },
+        {
+          "role": "button",
+          "name": "a﻿"
+        },
+        {
+          "role": "button",
+          "name": "a"
+        },
+        {
+          "role": "button",
+          "name": "᠎a"
+        },
+        {
+          "role": "button",
+          "name": "a᠎"
+        },
+        {
+          "role": "button",
+          "name": "​a"
+        },
+        {
+          "role": "button",
+          "name": "a​"
+        },
+        {
+          "role": "button",
+          "name": "a\u0000b"
+        },
+        {
+          "role": "button",
+          "name": "a\u0001b"
+        },
+        {
+          "role": "button",
+          "name": "a\u0007b"
+        },
+        {
+          "role": "button",
+          "name": "a\bb"
+        },
+        {
+          "role": "button",
+          "name": "a\tb"
+        },
+        {
+          "role": "button",
+          "name": "a\u000bb"
+        },
+        {
+          "role": "button",
+          "name": "a\fb"
+        },
+        {
+          "role": "button",
+          "name": "a\u000eb"
+        },
+        {
+          "role": "button",
+          "name": "a\u001bb"
+        },
+        {
+          "role": "button",
+          "name": "a\u001fb"
+        },
+        {
+          "role": "button",
+          "name": "ab"
+        },
+        {
+          "role": "button",
+          "name": "ab"
+        },
+        {
+          "role": "button",
+          "name": "ab"
+        },
+        {
+          "role": "button",
+          "name": "ab"
+        },
+        {
+          "role": "button",
+          "name": "a b"
+        },
+        {
+          "role": "button",
+          "name": "a¡b"
+        },
+        {
+          "role": "button",
+          "name": "\u0000"
+        },
+        {
+          "role": "button",
+          "name": ""
+        },
+        {
+          "role": "button",
+          "name": "-"
+        },
+        {
+          "role": "button",
+          "name": "-a"
+        },
+        {
+          "role": "button",
+          "name": "- a"
+        },
+        {
+          "role": "button",
+          "name": "--"
+        },
+        {
+          "role": "button",
+          "name": "a-"
+        },
+        {
+          "role": "button",
+          "name": "a - b"
+        },
+        {
+          "role": "button",
+          "name": "−a"
+        },
+        {
+          "role": "button",
+          "name": "+a"
+        },
+        {
+          "role": "button",
+          "name": ":"
+        },
+        {
+          "role": "button",
+          "name": "a:"
+        },
+        {
+          "role": "button",
+          "name": "a: b"
+        },
+        {
+          "role": "button",
+          "name": "a:b"
+        },
+        {
+          "role": "button",
+          "name": "a:\tb"
+        },
+        {
+          "role": "button",
+          "name": "a: b"
+        },
+        {
+          "role": "button",
+          "name": "a:　b"
+        },
+        {
+          "role": "button",
+          "name": "a::"
+        },
+        {
+          "role": "button",
+          "name": "http://a.test/x"
+        },
+        {
+          "role": "button",
+          "name": "a:​b"
+        },
+        {
+          "role": "button",
+          "name": "a\n"
+        },
+        {
+          "role": "button",
+          "name": "a\nb"
+        },
+        {
+          "role": "button",
+          "name": "key: value"
+        },
+        {
+          "role": "button",
+          "name": "#"
+        },
+        {
+          "role": "button",
+          "name": "#a"
+        },
+        {
+          "role": "button",
+          "name": "# a"
+        },
+        {
+          "role": "button",
+          "name": "a#"
+        },
+        {
+          "role": "button",
+          "name": "a#b"
+        },
+        {
+          "role": "button",
+          "name": "a #"
+        },
+        {
+          "role": "button",
+          "name": "a #b"
+        },
+        {
+          "role": "button",
+          "name": "a\t#b"
+        },
+        {
+          "role": "button",
+          "name": "a #b"
+        },
+        {
+          "role": "button",
+          "name": "a #b"
+        },
+        {
+          "role": "button",
+          "name": "C#"
+        },
+        {
+          "role": "button",
+          "name": "a\rb"
+        },
+        {
+          "role": "button",
+          "name": "a\r\nb"
+        },
+        {
+          "role": "button",
+          "name": "&a"
+        },
+        {
+          "role": "button",
+          "name": "a&"
+        },
+        {
+          "role": "button",
+          "name": "*a"
+        },
+        {
+          "role": "button",
+          "name": "a*"
+        },
+        {
+          "role": "button",
+          "name": "]a"
+        },
+        {
+          "role": "button",
+          "name": "a]"
+        },
+        {
+          "role": "button",
+          "name": ",a"
+        },
+        {
+          "role": "button",
+          "name": "a,"
+        },
+        {
+          "role": "button",
+          "name": "?a"
+        },
+        {
+          "role": "button",
+          "name": "a?"
+        },
+        {
+          "role": "button",
+          "name": "!a"
+        },
+        {
+          "role": "button",
+          "name": "a!"
+        },
+        {
+          "role": "button",
+          "name": ">a"
+        },
+        {
+          "role": "button",
+          "name": "a>"
+        },
+        {
+          "role": "button",
+          "name": "|a"
+        },
+        {
+          "role": "button",
+          "name": "a|"
+        },
+        {
+          "role": "button",
+          "name": "@a"
+        },
+        {
+          "role": "button",
+          "name": "a@b.c"
+        },
+        {
+          "role": "button",
+          "name": "\"a"
+        },
+        {
+          "role": "button",
+          "name": "a\""
+        },
+        {
+          "role": "button",
+          "name": "'a"
+        },
+        {
+          "role": "button",
+          "name": "a'"
+        },
+        {
+          "role": "button",
+          "name": "%a"
+        },
+        {
+          "role": "button",
+          "name": "a%"
+        },
+        {
+          "role": "button",
+          "name": "\""
+        },
+        {
+          "role": "button",
+          "name": "'"
+        },
+        {
+          "role": "button",
+          "name": "\"\""
+        },
+        {
+          "role": "button",
+          "name": "''"
+        },
+        {
+          "role": "button",
+          "name": "{"
+        },
+        {
+          "role": "button",
+          "name": "a{b"
+        },
+        {
+          "role": "button",
+          "name": "a}b"
+        },
+        {
+          "role": "button",
+          "name": "}"
+        },
+        {
+          "role": "button",
+          "name": "`"
+        },
+        {
+          "role": "button",
+          "name": "a`b"
+        },
+        {
+          "role": "button",
+          "name": "["
+        },
+        {
+          "role": "button",
+          "name": "[a]"
+        },
+        {
+          "role": "button",
+          "name": "a[b]"
+        },
+        {
+          "role": "button",
+          "name": "a]b"
+        },
+        {
+          "role": "button",
+          "name": "0"
+        },
+        {
+          "role": "button",
+          "name": "1"
+        },
+        {
+          "role": "button",
+          "name": "42"
+        },
+        {
+          "role": "button",
+          "name": "007"
+        },
+        {
+          "role": "button",
+          "name": "00"
+        },
+        {
+          "role": "button",
+          "name": "+1"
+        },
+        {
+          "role": "button",
+          "name": "+0"
+        },
+        {
+          "role": "button",
+          "name": "1.5"
+        },
+        {
+          "role": "button",
+          "name": ".5"
+        },
+        {
+          "role": "button",
+          "name": "5."
+        },
+        {
+          "role": "button",
+          "name": "0.0"
+        },
+        {
+          "role": "button",
+          "name": "1e3"
+        },
+        {
+          "role": "button",
+          "name": "1E3"
+        },
+        {
+          "role": "button",
+          "name": "1e+3"
+        },
+        {
+          "role": "button",
+          "name": "1e-3"
+        },
+        {
+          "role": "button",
+          "name": "1.e3"
+        },
+        {
+          "role": "button",
+          "name": "0e0"
+        },
+        {
+          "role": "button",
+          "name": "1e1000"
+        },
+        {
+          "role": "button",
+          "name": "5e-324"
+        },
+        {
+          "role": "button",
+          "name": "9007199254740993"
+        },
+        {
+          "role": "button",
+          "name": "0x1f"
+        },
+        {
+          "role": "button",
+          "name": "0X1F"
+        },
+        {
+          "role": "button",
+          "name": "0xff"
+        },
+        {
+          "role": "button",
+          "name": "0b101"
+        },
+        {
+          "role": "button",
+          "name": "0B1"
+        },
+        {
+          "role": "button",
+          "name": "0o17"
+        },
+        {
+          "role": "button",
+          "name": "0O7"
+        },
+        {
+          "role": "button",
+          "name": "Infinity"
+        },
+        {
+          "role": "button",
+          "name": "+Infinity"
+        },
+        {
+          "role": "button",
+          "name": "1e"
+        },
+        {
+          "role": "button",
+          "name": "1e+"
+        },
+        {
+          "role": "button",
+          "name": "e3"
+        },
+        {
+          "role": "button",
+          "name": ".e3"
+        },
+        {
+          "role": "button",
+          "name": "."
+        },
+        {
+          "role": "button",
+          "name": "+"
+        },
+        {
+          "role": "button",
+          "name": "+.5"
+        },
+        {
+          "role": "button",
+          "name": "0x"
+        },
+        {
+          "role": "button",
+          "name": "0xg"
+        },
+        {
+          "role": "button",
+          "name": "0x_1"
+        },
+        {
+          "role": "button",
+          "name": "+0x1"
+        },
+        {
+          "role": "button",
+          "name": "0b"
+        },
+        {
+          "role": "button",
+          "name": "0b2"
+        },
+        {
+          "role": "button",
+          "name": "0o"
+        },
+        {
+          "role": "button",
+          "name": "0o8"
+        },
+        {
+          "role": "button",
+          "name": "00x1"
+        },
+        {
+          "role": "button",
+          "name": "1_000"
+        },
+        {
+          "role": "button",
+          "name": "1,000"
+        },
+        {
+          "role": "button",
+          "name": "1.2.3"
+        },
+        {
+          "role": "button",
+          "name": "12n"
+        },
+        {
+          "role": "button",
+          "name": "NaN"
+        },
+        {
+          "role": "button",
+          "name": "nan"
+        },
+        {
+          "role": "button",
+          "name": "infinity"
+        },
+        {
+          "role": "button",
+          "name": "INFINITY"
+        },
+        {
+          "role": "button",
+          "name": "Inf"
+        },
+        {
+          "role": "button",
+          "name": "١٢٣"
+        },
+        {
+          "role": "button",
+          "name": "１２３"
+        },
+        {
+          "role": "button",
+          "name": "y"
+        },
+        {
+          "role": "button",
+          "name": "Y"
+        },
+        {
+          "role": "button",
+          "name": "n"
+        },
+        {
+          "role": "button",
+          "name": "N"
+        },
+        {
+          "role": "button",
+          "name": "yes"
+        },
+        {
+          "role": "button",
+          "name": "Yes"
+        },
+        {
+          "role": "button",
+          "name": "YES"
+        },
+        {
+          "role": "button",
+          "name": "no"
+        },
+        {
+          "role": "button",
+          "name": "No"
+        },
+        {
+          "role": "button",
+          "name": "true"
+        },
+        {
+          "role": "button",
+          "name": "True"
+        },
+        {
+          "role": "button",
+          "name": "TRUE"
+        },
+        {
+          "role": "button",
+          "name": "tRuE"
+        },
+        {
+          "role": "button",
+          "name": "false"
+        },
+        {
+          "role": "button",
+          "name": "False"
+        },
+        {
+          "role": "button",
+          "name": "on"
+        },
+        {
+          "role": "button",
+          "name": "On"
+        },
+        {
+          "role": "button",
+          "name": "ON"
+        },
+        {
+          "role": "button",
+          "name": "off"
+        },
+        {
+          "role": "button",
+          "name": "Off"
+        },
+        {
+          "role": "button",
+          "name": "null"
+        },
+        {
+          "role": "button",
+          "name": "Null"
+        },
+        {
+          "role": "button",
+          "name": "NULL"
+        },
+        {
+          "role": "button",
+          "name": "~"
+        },
+        {
+          "role": "button",
+          "name": "~a"
+        },
+        {
+          "role": "button",
+          "name": "nil"
+        },
+        {
+          "role": "button",
+          "name": "none"
+        },
+        {
+          "role": "button",
+          "name": "yess"
+        },
+        {
+          "role": "button",
+          "name": "nul"
+        },
+        {
+          "role": "button",
+          "name": "ｙｅｓ"
+        },
+        {
+          "role": "button",
+          "name": ".inf"
+        },
+        {
+          "role": "button",
+          "name": ".Inf"
+        },
+        {
+          "role": "button",
+          "name": ".INF"
+        },
+        {
+          "role": "button",
+          "name": "-.inf"
+        },
+        {
+          "role": "button",
+          "name": "+.inf"
+        },
+        {
+          "role": "button",
+          "name": "+.INF"
+        },
+        {
+          "role": "button",
+          "name": ".nan"
+        },
+        {
+          "role": "button",
+          "name": ".NaN"
+        },
+        {
+          "role": "button",
+          "name": ".NAN"
+        },
+        {
+          "role": "button",
+          "name": "+.nan"
+        },
+        {
+          "role": "button",
+          "name": "..inf"
+        },
+        {
+          "role": "button",
+          "name": ".infinity"
+        },
+        {
+          "role": "button",
+          "name": ".in"
+        },
+        {
+          "role": "button",
+          "name": "inf"
+        },
+        {
+          "role": "button",
+          "name": "a\\b"
+        },
+        {
+          "role": "button",
+          "name": "\\"
+        },
+        {
+          "role": "button",
+          "name": "a\\nb"
+        },
+        {
+          "role": "button",
+          "name": "it's"
+        },
+        {
+          "role": "button",
+          "name": "say \"hi\""
+        },
+        {
+          "role": "button",
+          "name": "say \"hi\": now"
+        },
+        {
+          "role": "button",
+          "name": "it's: here"
+        },
+        {
+          "role": "button",
+          "name": "- \"quoted\" \\ and \u0001"
+        },
+        {
+          "role": "button",
+          "name": "\b\f\n\r\t"
+        },
+        {
+          "role": "button",
+          "name": "héllo"
+        },
+        {
+          "role": "button",
+          "name": "日本語"
+        },
+        {
+          "role": "button",
+          "name": "😀"
+        },
+        {
+          "role": "button",
+          "name": "a😀b"
+        },
+        {
+          "role": "button",
+          "name": "😀: x"
+        },
+        {
+          "role": "button",
+          "name": "é"
+        },
+        {
+          "role": "button",
+          "name": "ß"
+        },
+        {
+          "role": "button",
+          "name": "K"
+        },
+        {
+          "role": "button",
+          "name": "İ"
+        },
+        {
+          "role": "button",
+          "name": "􏿿"
+        },
+        {
+          "role": "button",
+          "name": "­"
+        },
+        {
+          "role": "button",
+          "name": "</script>"
+        },
+        {
+          "role": "button",
+          "name": "Submit"
+        },
+        {
+          "role": "button",
+          "name": "Sign in to your account"
+        }
+      ],
+      "yaml": "- button\n- button \" \"\n- button \"  \"\n- button \"a\"\n- button \"a \"\n- button \" a\"\n- button \"\\ta\"\n- button \"a\\t\"\n- button \"\\na\"\n- button \"a\\n\"\n- button \"\\u000ba\"\n- button \"a\\f\"\n- button \"\\ra\"\n- button \" a\"\n- button \"a \"\n- button \" a\"\n- button \" a\"\n- button \"a \"\n- button \" a\"\n- button \" a\"\n- button \"a \"\n- button \" a\"\n- button \" a\"\n- button \"　a\"\n- button \"﻿a\"\n- button \"a﻿\"\n- 'button \"a\"'\n- button \"᠎a\"\n- button \"a᠎\"\n- button \"​a\"\n- button \"a​\"\n- button \"a\\u0000b\"\n- button \"a\\u0001b\"\n- button \"a\\u0007b\"\n- button \"a\\bb\"\n- button \"a\\tb\"\n- button \"a\\u000bb\"\n- button \"a\\fb\"\n- button \"a\\u000eb\"\n- button \"a\\u001bb\"\n- button \"a\\u001fb\"\n- 'button \"ab\"'\n- 'button \"ab\"'\n- 'button \"ab\"'\n- 'button \"ab\"'\n- button \"a b\"\n- button \"a¡b\"\n- button \"\\u0000\"\n- 'button \"\"'\n- button \"-\"\n- button \"-a\"\n- button \"- a\"\n- button \"--\"\n- button \"a-\"\n- button \"a - b\"\n- button \"−a\"\n- button \"+a\"\n- button \":\"\n- button \"a:\"\n- 'button \"a: b\"'\n- button \"a:b\"\n- button \"a:\\tb\"\n- 'button \"a: b\"'\n- 'button \"a:　b\"'\n- button \"a::\"\n- button \"http://a.test/x\"\n- button \"a:​b\"\n- button \"a\\n\"\n- button \"a\\nb\"\n- 'button \"key: value\"'\n- button \"#\"\n- button \"#a\"\n- button \"# a\"\n- button \"a#\"\n- button \"a#b\"\n- 'button \"a #\"'\n- 'button \"a #b\"'\n- button \"a\\t#b\"\n- 'button \"a #b\"'\n- 'button \"a #b\"'\n- button \"C#\"\n- button \"a\\rb\"\n- button \"a\\r\\nb\"\n- button \"&a\"\n- button \"a&\"\n- button \"*a\"\n- button \"a*\"\n- button \"]a\"\n- button \"a]\"\n- button \",a\"\n- button \"a,\"\n- button \"?a\"\n- button \"a?\"\n- button \"!a\"\n- button \"a!\"\n- button \">a\"\n- button \"a>\"\n- button \"|a\"\n- button \"a|\"\n- button \"@a\"\n- button \"a@b.c\"\n- button \"\\\"a\"\n- button \"a\\\"\"\n- button \"'a\"\n- button \"a'\"\n- button \"%a\"\n- button \"a%\"\n- button \"\\\"\"\n- button \"'\"\n- button \"\\\"\\\"\"\n- button \"''\"\n- 'button \"{\"'\n- 'button \"a{b\"'\n- 'button \"a}b\"'\n- 'button \"}\"'\n- 'button \"`\"'\n- 'button \"a`b\"'\n- button \"[\"\n- button \"[a]\"\n- button \"a[b]\"\n- button \"a]b\"\n- button \"0\"\n- button \"1\"\n- button \"42\"\n- button \"007\"\n- button \"00\"\n- button \"+1\"\n- button \"+0\"\n- button \"1.5\"\n- button \".5\"\n- button \"5.\"\n- button \"0.0\"\n- button \"1e3\"\n- button \"1E3\"\n- button \"1e+3\"\n- button \"1e-3\"\n- button \"1.e3\"\n- button \"0e0\"\n- button \"1e1000\"\n- button \"5e-324\"\n- button \"9007199254740993\"\n- button \"0x1f\"\n- button \"0X1F\"\n- button \"0xff\"\n- button \"0b101\"\n- button \"0B1\"\n- button \"0o17\"\n- button \"0O7\"\n- button \"Infinity\"\n- button \"+Infinity\"\n- button \"1e\"\n- button \"1e+\"\n- button \"e3\"\n- button \".e3\"\n- button \".\"\n- button \"+\"\n- button \"+.5\"\n- button \"0x\"\n- button \"0xg\"\n- button \"0x_1\"\n- button \"+0x1\"\n- button \"0b\"\n- button \"0b2\"\n- button \"0o\"\n- button \"0o8\"\n- button \"00x1\"\n- button \"1_000\"\n- button \"1,000\"\n- button \"1.2.3\"\n- button \"12n\"\n- button \"NaN\"\n- button \"nan\"\n- button \"infinity\"\n- button \"INFINITY\"\n- button \"Inf\"\n- button \"١٢٣\"\n- button \"１２３\"\n- button \"y\"\n- button \"Y\"\n- button \"n\"\n- button \"N\"\n- button \"yes\"\n- button \"Yes\"\n- button \"YES\"\n- button \"no\"\n- button \"No\"\n- button \"true\"\n- button \"True\"\n- button \"TRUE\"\n- button \"tRuE\"\n- button \"false\"\n- button \"False\"\n- button \"on\"\n- button \"On\"\n- button \"ON\"\n- button \"off\"\n- button \"Off\"\n- button \"null\"\n- button \"Null\"\n- button \"NULL\"\n- button \"~\"\n- button \"~a\"\n- button \"nil\"\n- button \"none\"\n- button \"yess\"\n- button \"nul\"\n- button \"ｙｅｓ\"\n- button \".inf\"\n- button \".Inf\"\n- button \".INF\"\n- button \"-.inf\"\n- button \"+.inf\"\n- button \"+.INF\"\n- button \".nan\"\n- button \".NaN\"\n- button \".NAN\"\n- button \"+.nan\"\n- button \"..inf\"\n- button \".infinity\"\n- button \".in\"\n- button \"inf\"\n- button \"a\\\\b\"\n- button \"\\\\\"\n- button \"a\\\\nb\"\n- button \"it's\"\n- button \"say \\\"hi\\\"\"\n- 'button \"say \\\"hi\\\": now\"'\n- 'button \"it''s: here\"'\n- button \"- \\\"quoted\\\" \\\\ and \\u0001\"\n- button \"\\b\\f\\n\\r\\t\"\n- button \"héllo\"\n- button \"日本語\"\n- button \"😀\"\n- button \"a😀b\"\n- 'button \"😀: x\"'\n- button \"é\"\n- button \"ß\"\n- button \"K\"\n- button \"İ\"\n- button \"􏿿\"\n- button \"­\"\n- button \"</script>\"\n- button \"Submit\"\n- button \"Sign in to your account\""
+    },
+    {
+      "name": "texts that need double quotes",
+      "nodes": [
+        {
+          "role": "list",
+          "children": [
+            {
+              "role": "listitem",
+              "text": ""
+            },
+            {
+              "role": "listitem",
+              "text": " "
+            },
+            {
+              "role": "listitem",
+              "text": "  "
+            },
+            {
+              "role": "listitem",
+              "text": "a"
+            },
+            {
+              "role": "listitem",
+              "text": "a "
+            },
+            {
+              "role": "listitem",
+              "text": " a"
+            },
+            {
+              "role": "listitem",
+              "text": "\ta"
+            },
+            {
+              "role": "listitem",
+              "text": "a\t"
+            },
+            {
+              "role": "listitem",
+              "text": "\na"
+            },
+            {
+              "role": "listitem",
+              "text": "a\n"
+            },
+            {
+              "role": "listitem",
+              "text": "\u000ba"
+            },
+            {
+              "role": "listitem",
+              "text": "a\f"
+            },
+            {
+              "role": "listitem",
+              "text": "\ra"
+            },
+            {
+              "role": "listitem",
+              "text": " a"
+            },
+            {
+              "role": "listitem",
+              "text": "a "
+            },
+            {
+              "role": "listitem",
+              "text": " a"
+            },
+            {
+              "role": "listitem",
+              "text": " a"
+            },
+            {
+              "role": "listitem",
+              "text": "a "
+            },
+            {
+              "role": "listitem",
+              "text": " a"
+            },
+            {
+              "role": "listitem",
+              "text": " a"
+            },
+            {
+              "role": "listitem",
+              "text": "a "
+            },
+            {
+              "role": "listitem",
+              "text": " a"
+            },
+            {
+              "role": "listitem",
+              "text": " a"
+            },
+            {
+              "role": "listitem",
+              "text": "　a"
+            },
+            {
+              "role": "listitem",
+              "text": "﻿a"
+            },
+            {
+              "role": "listitem",
+              "text": "a﻿"
+            },
+            {
+              "role": "listitem",
+              "text": "a"
+            },
+            {
+              "role": "listitem",
+              "text": "᠎a"
+            },
+            {
+              "role": "listitem",
+              "text": "a᠎"
+            },
+            {
+              "role": "listitem",
+              "text": "​a"
+            },
+            {
+              "role": "listitem",
+              "text": "a​"
+            },
+            {
+              "role": "listitem",
+              "text": "a\u0000b"
+            },
+            {
+              "role": "listitem",
+              "text": "a\u0001b"
+            },
+            {
+              "role": "listitem",
+              "text": "a\u0007b"
+            },
+            {
+              "role": "listitem",
+              "text": "a\bb"
+            },
+            {
+              "role": "listitem",
+              "text": "a\tb"
+            },
+            {
+              "role": "listitem",
+              "text": "a\u000bb"
+            },
+            {
+              "role": "listitem",
+              "text": "a\fb"
+            },
+            {
+              "role": "listitem",
+              "text": "a\u000eb"
+            },
+            {
+              "role": "listitem",
+              "text": "a\u001bb"
+            },
+            {
+              "role": "listitem",
+              "text": "a\u001fb"
+            },
+            {
+              "role": "listitem",
+              "text": "ab"
+            },
+            {
+              "role": "listitem",
+              "text": "ab"
+            },
+            {
+              "role": "listitem",
+              "text": "ab"
+            },
+            {
+              "role": "listitem",
+              "text": "ab"
+            },
+            {
+              "role": "listitem",
+              "text": "a b"
+            },
+            {
+              "role": "listitem",
+              "text": "a¡b"
+            },
+            {
+              "role": "listitem",
+              "text": "\u0000"
+            },
+            {
+              "role": "listitem",
+              "text": ""
+            },
+            {
+              "role": "listitem",
+              "text": "-"
+            },
+            {
+              "role": "listitem",
+              "text": "-a"
+            },
+            {
+              "role": "listitem",
+              "text": "- a"
+            },
+            {
+              "role": "listitem",
+              "text": "--"
+            },
+            {
+              "role": "listitem",
+              "text": "a-"
+            },
+            {
+              "role": "listitem",
+              "text": "a - b"
+            },
+            {
+              "role": "listitem",
+              "text": "−a"
+            },
+            {
+              "role": "listitem",
+              "text": "+a"
+            },
+            {
+              "role": "listitem",
+              "text": ":"
+            },
+            {
+              "role": "listitem",
+              "text": "a:"
+            },
+            {
+              "role": "listitem",
+              "text": "a: b"
+            },
+            {
+              "role": "listitem",
+              "text": "a:b"
+            },
+            {
+              "role": "listitem",
+              "text": "a:\tb"
+            },
+            {
+              "role": "listitem",
+              "text": "a: b"
+            },
+            {
+              "role": "listitem",
+              "text": "a:　b"
+            },
+            {
+              "role": "listitem",
+              "text": "a::"
+            },
+            {
+              "role": "listitem",
+              "text": "http://a.test/x"
+            },
+            {
+              "role": "listitem",
+              "text": "a:​b"
+            },
+            {
+              "role": "listitem",
+              "text": "a\n"
+            },
+            {
+              "role": "listitem",
+              "text": "a\nb"
+            },
+            {
+              "role": "listitem",
+              "text": "key: value"
+            },
+            {
+              "role": "listitem",
+              "text": "#"
+            },
+            {
+              "role": "listitem",
+              "text": "#a"
+            },
+            {
+              "role": "listitem",
+              "text": "# a"
+            },
+            {
+              "role": "listitem",
+              "text": "a#"
+            },
+            {
+              "role": "listitem",
+              "text": "a#b"
+            },
+            {
+              "role": "listitem",
+              "text": "a #"
+            },
+            {
+              "role": "listitem",
+              "text": "a #b"
+            },
+            {
+              "role": "listitem",
+              "text": "a\t#b"
+            },
+            {
+              "role": "listitem",
+              "text": "a #b"
+            },
+            {
+              "role": "listitem",
+              "text": "a #b"
+            },
+            {
+              "role": "listitem",
+              "text": "C#"
+            },
+            {
+              "role": "listitem",
+              "text": "a\rb"
+            },
+            {
+              "role": "listitem",
+              "text": "a\r\nb"
+            },
+            {
+              "role": "listitem",
+              "text": "&a"
+            },
+            {
+              "role": "listitem",
+              "text": "a&"
+            },
+            {
+              "role": "listitem",
+              "text": "*a"
+            },
+            {
+              "role": "listitem",
+              "text": "a*"
+            },
+            {
+              "role": "listitem",
+              "text": "]a"
+            },
+            {
+              "role": "listitem",
+              "text": "a]"
+            },
+            {
+              "role": "listitem",
+              "text": ",a"
+            },
+            {
+              "role": "listitem",
+              "text": "a,"
+            },
+            {
+              "role": "listitem",
+              "text": "?a"
+            },
+            {
+              "role": "listitem",
+              "text": "a?"
+            },
+            {
+              "role": "listitem",
+              "text": "!a"
+            },
+            {
+              "role": "listitem",
+              "text": "a!"
+            },
+            {
+              "role": "listitem",
+              "text": ">a"
+            },
+            {
+              "role": "listitem",
+              "text": "a>"
+            },
+            {
+              "role": "listitem",
+              "text": "|a"
+            },
+            {
+              "role": "listitem",
+              "text": "a|"
+            },
+            {
+              "role": "listitem",
+              "text": "@a"
+            },
+            {
+              "role": "listitem",
+              "text": "a@b.c"
+            },
+            {
+              "role": "listitem",
+              "text": "\"a"
+            },
+            {
+              "role": "listitem",
+              "text": "a\""
+            },
+            {
+              "role": "listitem",
+              "text": "'a"
+            },
+            {
+              "role": "listitem",
+              "text": "a'"
+            },
+            {
+              "role": "listitem",
+              "text": "%a"
+            },
+            {
+              "role": "listitem",
+              "text": "a%"
+            },
+            {
+              "role": "listitem",
+              "text": "\""
+            },
+            {
+              "role": "listitem",
+              "text": "'"
+            },
+            {
+              "role": "listitem",
+              "text": "\"\""
+            },
+            {
+              "role": "listitem",
+              "text": "''"
+            },
+            {
+              "role": "listitem",
+              "text": "{"
+            },
+            {
+              "role": "listitem",
+              "text": "a{b"
+            },
+            {
+              "role": "listitem",
+              "text": "a}b"
+            },
+            {
+              "role": "listitem",
+              "text": "}"
+            },
+            {
+              "role": "listitem",
+              "text": "`"
+            },
+            {
+              "role": "listitem",
+              "text": "a`b"
+            },
+            {
+              "role": "listitem",
+              "text": "["
+            },
+            {
+              "role": "listitem",
+              "text": "[a]"
+            },
+            {
+              "role": "listitem",
+              "text": "a[b]"
+            },
+            {
+              "role": "listitem",
+              "text": "a]b"
+            },
+            {
+              "role": "listitem",
+              "text": "0"
+            },
+            {
+              "role": "listitem",
+              "text": "1"
+            },
+            {
+              "role": "listitem",
+              "text": "42"
+            },
+            {
+              "role": "listitem",
+              "text": "007"
+            },
+            {
+              "role": "listitem",
+              "text": "00"
+            },
+            {
+              "role": "listitem",
+              "text": "+1"
+            },
+            {
+              "role": "listitem",
+              "text": "+0"
+            },
+            {
+              "role": "listitem",
+              "text": "1.5"
+            },
+            {
+              "role": "listitem",
+              "text": ".5"
+            },
+            {
+              "role": "listitem",
+              "text": "5."
+            },
+            {
+              "role": "listitem",
+              "text": "0.0"
+            },
+            {
+              "role": "listitem",
+              "text": "1e3"
+            },
+            {
+              "role": "listitem",
+              "text": "1E3"
+            },
+            {
+              "role": "listitem",
+              "text": "1e+3"
+            },
+            {
+              "role": "listitem",
+              "text": "1e-3"
+            },
+            {
+              "role": "listitem",
+              "text": "1.e3"
+            },
+            {
+              "role": "listitem",
+              "text": "0e0"
+            },
+            {
+              "role": "listitem",
+              "text": "1e1000"
+            },
+            {
+              "role": "listitem",
+              "text": "5e-324"
+            },
+            {
+              "role": "listitem",
+              "text": "9007199254740993"
+            },
+            {
+              "role": "listitem",
+              "text": "0x1f"
+            },
+            {
+              "role": "listitem",
+              "text": "0X1F"
+            },
+            {
+              "role": "listitem",
+              "text": "0xff"
+            },
+            {
+              "role": "listitem",
+              "text": "0b101"
+            },
+            {
+              "role": "listitem",
+              "text": "0B1"
+            },
+            {
+              "role": "listitem",
+              "text": "0o17"
+            },
+            {
+              "role": "listitem",
+              "text": "0O7"
+            },
+            {
+              "role": "listitem",
+              "text": "Infinity"
+            },
+            {
+              "role": "listitem",
+              "text": "+Infinity"
+            },
+            {
+              "role": "listitem",
+              "text": "1e"
+            },
+            {
+              "role": "listitem",
+              "text": "1e+"
+            },
+            {
+              "role": "listitem",
+              "text": "e3"
+            },
+            {
+              "role": "listitem",
+              "text": ".e3"
+            },
+            {
+              "role": "listitem",
+              "text": "."
+            },
+            {
+              "role": "listitem",
+              "text": "+"
+            },
+            {
+              "role": "listitem",
+              "text": "+.5"
+            },
+            {
+              "role": "listitem",
+              "text": "0x"
+            },
+            {
+              "role": "listitem",
+              "text": "0xg"
+            },
+            {
+              "role": "listitem",
+              "text": "0x_1"
+            },
+            {
+              "role": "listitem",
+              "text": "+0x1"
+            },
+            {
+              "role": "listitem",
+              "text": "0b"
+            },
+            {
+              "role": "listitem",
+              "text": "0b2"
+            },
+            {
+              "role": "listitem",
+              "text": "0o"
+            },
+            {
+              "role": "listitem",
+              "text": "0o8"
+            },
+            {
+              "role": "listitem",
+              "text": "00x1"
+            },
+            {
+              "role": "listitem",
+              "text": "1_000"
+            },
+            {
+              "role": "listitem",
+              "text": "1,000"
+            },
+            {
+              "role": "listitem",
+              "text": "1.2.3"
+            },
+            {
+              "role": "listitem",
+              "text": "12n"
+            },
+            {
+              "role": "listitem",
+              "text": "NaN"
+            },
+            {
+              "role": "listitem",
+              "text": "nan"
+            },
+            {
+              "role": "listitem",
+              "text": "infinity"
+            },
+            {
+              "role": "listitem",
+              "text": "INFINITY"
+            },
+            {
+              "role": "listitem",
+              "text": "Inf"
+            },
+            {
+              "role": "listitem",
+              "text": "١٢٣"
+            },
+            {
+              "role": "listitem",
+              "text": "１２３"
+            },
+            {
+              "role": "listitem",
+              "text": "y"
+            },
+            {
+              "role": "listitem",
+              "text": "Y"
+            },
+            {
+              "role": "listitem",
+              "text": "n"
+            },
+            {
+              "role": "listitem",
+              "text": "N"
+            },
+            {
+              "role": "listitem",
+              "text": "yes"
+            },
+            {
+              "role": "listitem",
+              "text": "Yes"
+            },
+            {
+              "role": "listitem",
+              "text": "YES"
+            },
+            {
+              "role": "listitem",
+              "text": "no"
+            },
+            {
+              "role": "listitem",
+              "text": "No"
+            },
+            {
+              "role": "listitem",
+              "text": "true"
+            },
+            {
+              "role": "listitem",
+              "text": "True"
+            },
+            {
+              "role": "listitem",
+              "text": "TRUE"
+            },
+            {
+              "role": "listitem",
+              "text": "tRuE"
+            },
+            {
+              "role": "listitem",
+              "text": "false"
+            },
+            {
+              "role": "listitem",
+              "text": "False"
+            },
+            {
+              "role": "listitem",
+              "text": "on"
+            },
+            {
+              "role": "listitem",
+              "text": "On"
+            },
+            {
+              "role": "listitem",
+              "text": "ON"
+            },
+            {
+              "role": "listitem",
+              "text": "off"
+            },
+            {
+              "role": "listitem",
+              "text": "Off"
+            },
+            {
+              "role": "listitem",
+              "text": "null"
+            },
+            {
+              "role": "listitem",
+              "text": "Null"
+            },
+            {
+              "role": "listitem",
+              "text": "NULL"
+            },
+            {
+              "role": "listitem",
+              "text": "~"
+            },
+            {
+              "role": "listitem",
+              "text": "~a"
+            },
+            {
+              "role": "listitem",
+              "text": "nil"
+            },
+            {
+              "role": "listitem",
+              "text": "none"
+            },
+            {
+              "role": "listitem",
+              "text": "yess"
+            },
+            {
+              "role": "listitem",
+              "text": "nul"
+            },
+            {
+              "role": "listitem",
+              "text": "ｙｅｓ"
+            },
+            {
+              "role": "listitem",
+              "text": ".inf"
+            },
+            {
+              "role": "listitem",
+              "text": ".Inf"
+            },
+            {
+              "role": "listitem",
+              "text": ".INF"
+            },
+            {
+              "role": "listitem",
+              "text": "-.inf"
+            },
+            {
+              "role": "listitem",
+              "text": "+.inf"
+            },
+            {
+              "role": "listitem",
+              "text": "+.INF"
+            },
+            {
+              "role": "listitem",
+              "text": ".nan"
+            },
+            {
+              "role": "listitem",
+              "text": ".NaN"
+            },
+            {
+              "role": "listitem",
+              "text": ".NAN"
+            },
+            {
+              "role": "listitem",
+              "text": "+.nan"
+            },
+            {
+              "role": "listitem",
+              "text": "..inf"
+            },
+            {
+              "role": "listitem",
+              "text": ".infinity"
+            },
+            {
+              "role": "listitem",
+              "text": ".in"
+            },
+            {
+              "role": "listitem",
+              "text": "inf"
+            },
+            {
+              "role": "listitem",
+              "text": "a\\b"
+            },
+            {
+              "role": "listitem",
+              "text": "\\"
+            },
+            {
+              "role": "listitem",
+              "text": "a\\nb"
+            },
+            {
+              "role": "listitem",
+              "text": "it's"
+            },
+            {
+              "role": "listitem",
+              "text": "say \"hi\""
+            },
+            {
+              "role": "listitem",
+              "text": "say \"hi\": now"
+            },
+            {
+              "role": "listitem",
+              "text": "it's: here"
+            },
+            {
+              "role": "listitem",
+              "text": "- \"quoted\" \\ and \u0001"
+            },
+            {
+              "role": "listitem",
+              "text": "\b\f\n\r\t"
+            },
+            {
+              "role": "listitem",
+              "text": "héllo"
+            },
+            {
+              "role": "listitem",
+              "text": "日本語"
+            },
+            {
+              "role": "listitem",
+              "text": "😀"
+            },
+            {
+              "role": "listitem",
+              "text": "a😀b"
+            },
+            {
+              "role": "listitem",
+              "text": "😀: x"
+            },
+            {
+              "role": "listitem",
+              "text": "é"
+            },
+            {
+              "role": "listitem",
+              "text": "ß"
+            },
+            {
+              "role": "listitem",
+              "text": "K"
+            },
+            {
+              "role": "listitem",
+              "text": "İ"
+            },
+            {
+              "role": "listitem",
+              "text": "􏿿"
+            },
+            {
+              "role": "listitem",
+              "text": "­"
+            },
+            {
+              "role": "listitem",
+              "text": "</script>"
+            },
+            {
+              "role": "listitem",
+              "text": "Submit"
+            },
+            {
+              "role": "listitem",
+              "text": "Sign in to your account"
+            }
+          ]
+        }
+      ],
+      "yaml": "- list:\n  - listitem: \"\"\n  - listitem: \" \"\n  - listitem: \"  \"\n  - listitem: a\n  - listitem: \"a \"\n  - listitem: \" a\"\n  - listitem: \"\\ta\"\n  - listitem: \"a\\t\"\n  - listitem: \"\\na\"\n  - listitem: \"a\\n\"\n  - listitem: \"\\x0ba\"\n  - listitem: \"a\\f\"\n  - listitem: \"\\ra\"\n  - listitem: \" a\"\n  - listitem: \"a \"\n  - listitem: \" a\"\n  - listitem: \" a\"\n  - listitem: \"a \"\n  - listitem: \" a\"\n  - listitem: \" a\"\n  - listitem: \"a \"\n  - listitem: \" a\"\n  - listitem: \" a\"\n  - listitem: \"　a\"\n  - listitem: \"﻿a\"\n  - listitem: \"a﻿\"\n  - listitem: \"\\x85a\"\n  - listitem: ᠎a\n  - listitem: a᠎\n  - listitem: ​a\n  - listitem: a​\n  - listitem: \"a\\x00b\"\n  - listitem: \"a\\x01b\"\n  - listitem: \"a\\x07b\"\n  - listitem: \"a\\bb\"\n  - listitem: a\tb\n  - listitem: \"a\\x0bb\"\n  - listitem: \"a\\fb\"\n  - listitem: \"a\\x0eb\"\n  - listitem: \"a\\x1bb\"\n  - listitem: \"a\\x1fb\"\n  - listitem: \"a\\x7fb\"\n  - listitem: \"a\\x80b\"\n  - listitem: \"a\\x85b\"\n  - listitem: \"a\\x9fb\"\n  - listitem: a b\n  - listitem: a¡b\n  - listitem: \"\\x00\"\n  - listitem: \"\\x7f\"\n  - listitem: \"-\"\n  - listitem: \"-a\"\n  - listitem: \"- a\"\n  - listitem: \"--\"\n  - listitem: a-\n  - listitem: a - b\n  - listitem: −a\n  - listitem: +a\n  - listitem: \":\"\n  - listitem: \"a:\"\n  - listitem: \"a: b\"\n  - listitem: a:b\n  - listitem: \"a:\\tb\"\n  - listitem: \"a: b\"\n  - listitem: \"a:　b\"\n  - listitem: \"a::\"\n  - listitem: http://a.test/x\n  - listitem: a:​b\n  - listitem: \"a\\n\"\n  - listitem: \"a\\nb\"\n  - listitem: \"key: value\"\n  - listitem: \"#\"\n  - listitem: \"#a\"\n  - listitem: \"# a\"\n  - listitem: a#\n  - listitem: a#b\n  - listitem: \"a #\"\n  - listitem: \"a #b\"\n  - listitem: \"a\\t#b\"\n  - listitem: \"a #b\"\n  - listitem: \"a #b\"\n  - listitem: C#\n  - listitem: \"a\\rb\"\n  - listitem: \"a\\r\\nb\"\n  - listitem: \"&a\"\n  - listitem: a&\n  - listitem: \"*a\"\n  - listitem: a*\n  - listitem: \"]a\"\n  - listitem: a]\n  - listitem: \",a\"\n  - listitem: a,\n  - listitem: \"?a\"\n  - listitem: a?\n  - listitem: \"!a\"\n  - listitem: a!\n  - listitem: \">a\"\n  - listitem: a>\n  - listitem: \"|a\"\n  - listitem: a|\n  - listitem: \"@a\"\n  - listitem: a@b.c\n  - listitem: \"\\\"a\"\n  - listitem: a\"\n  - listitem: \"'a\"\n  - listitem: a'\n  - listitem: \"%a\"\n  - listitem: a%\n  - listitem: \"\\\"\"\n  - listitem: \"'\"\n  - listitem: \"\\\"\\\"\"\n  - listitem: \"''\"\n  - listitem: \"{\"\n  - listitem: \"a{b\"\n  - listitem: \"a}b\"\n  - listitem: \"}\"\n  - listitem: \"`\"\n  - listitem: \"a`b\"\n  - listitem: \"[\"\n  - listitem: \"[a]\"\n  - listitem: a[b]\n  - listitem: a]b\n  - listitem: \"0\"\n  - listitem: \"1\"\n  - listitem: \"42\"\n  - listitem: \"007\"\n  - listitem: \"00\"\n  - listitem: \"+1\"\n  - listitem: \"+0\"\n  - listitem: \"1.5\"\n  - listitem: \".5\"\n  - listitem: \"5.\"\n  - listitem: \"0.0\"\n  - listitem: \"1e3\"\n  - listitem: \"1E3\"\n  - listitem: \"1e+3\"\n  - listitem: \"1e-3\"\n  - listitem: \"1.e3\"\n  - listitem: \"0e0\"\n  - listitem: \"1e1000\"\n  - listitem: \"5e-324\"\n  - listitem: \"9007199254740993\"\n  - listitem: \"0x1f\"\n  - listitem: \"0X1F\"\n  - listitem: \"0xff\"\n  - listitem: \"0b101\"\n  - listitem: \"0B1\"\n  - listitem: \"0o17\"\n  - listitem: \"0O7\"\n  - listitem: \"Infinity\"\n  - listitem: \"+Infinity\"\n  - listitem: 1e\n  - listitem: 1e+\n  - listitem: e3\n  - listitem: .e3\n  - listitem: .\n  - listitem: +\n  - listitem: \"+.5\"\n  - listitem: 0x\n  - listitem: 0xg\n  - listitem: 0x_1\n  - listitem: +0x1\n  - listitem: 0b\n  - listitem: 0b2\n  - listitem: 0o\n  - listitem: 0o8\n  - listitem: 00x1\n  - listitem: 1_000\n  - listitem: 1,000\n  - listitem: 1.2.3\n  - listitem: 12n\n  - listitem: NaN\n  - listitem: nan\n  - listitem: infinity\n  - listitem: INFINITY\n  - listitem: Inf\n  - listitem: ١٢٣\n  - listitem: １２３\n  - listitem: \"y\"\n  - listitem: \"Y\"\n  - listitem: \"n\"\n  - listitem: \"N\"\n  - listitem: \"yes\"\n  - listitem: \"Yes\"\n  - listitem: \"YES\"\n  - listitem: \"no\"\n  - listitem: \"No\"\n  - listitem: \"true\"\n  - listitem: \"True\"\n  - listitem: \"TRUE\"\n  - listitem: \"tRuE\"\n  - listitem: \"false\"\n  - listitem: \"False\"\n  - listitem: \"on\"\n  - listitem: \"On\"\n  - listitem: \"ON\"\n  - listitem: \"off\"\n  - listitem: \"Off\"\n  - listitem: \"null\"\n  - listitem: \"Null\"\n  - listitem: \"NULL\"\n  - listitem: \"~\"\n  - listitem: ~a\n  - listitem: nil\n  - listitem: none\n  - listitem: yess\n  - listitem: nul\n  - listitem: ｙｅｓ\n  - listitem: \".inf\"\n  - listitem: \".Inf\"\n  - listitem: \".INF\"\n  - listitem: \"-.inf\"\n  - listitem: \"+.inf\"\n  - listitem: \"+.INF\"\n  - listitem: \".nan\"\n  - listitem: \".NaN\"\n  - listitem: \".NAN\"\n  - listitem: \"+.nan\"\n  - listitem: ..inf\n  - listitem: .infinity\n  - listitem: .in\n  - listitem: inf\n  - listitem: a\\b\n  - listitem: \\\n  - listitem: a\\nb\n  - listitem: it's\n  - listitem: say \"hi\"\n  - listitem: \"say \\\"hi\\\": now\"\n  - listitem: \"it's: here\"\n  - listitem: \"- \\\"quoted\\\" \\\\ and \\x01\"\n  - listitem: \"\\b\\f\\n\\r\\t\"\n  - listitem: héllo\n  - listitem: 日本語\n  - listitem: 😀\n  - listitem: a😀b\n  - listitem: \"😀: x\"\n  - listitem: é\n  - listitem: ß\n  - listitem: K\n  - listitem: İ\n  - listitem: 􏿿\n  - listitem: ­\n  - listitem: </script>\n  - listitem: Submit\n  - listitem: Sign in to your account"
+    },
+    {
+      "name": "string children that need quotes",
+      "nodes": [
+        {
+          "role": "paragraph",
+          "children": [
+            "",
+            " ",
+            "  ",
+            "a",
+            "a ",
+            " a",
+            "\ta",
+            "a\t",
+            "\na",
+            "a\n",
+            "\u000ba",
+            "a\f",
+            "\ra",
+            " a",
+            "a ",
+            " a",
+            " a",
+            "a ",
+            " a",
+            " a",
+            "a ",
+            " a",
+            " a",
+            "　a",
+            "﻿a",
+            "a﻿",
+            "a",
+            "᠎a",
+            "a᠎",
+            "​a",
+            "a​",
+            "a\u0000b",
+            "a\u0001b",
+            "a\u0007b",
+            "a\bb",
+            "a\tb",
+            "a\u000bb",
+            "a\fb",
+            "a\u000eb",
+            "a\u001bb",
+            "a\u001fb",
+            "ab",
+            "ab",
+            "ab",
+            "ab",
+            "a b",
+            "a¡b",
+            "\u0000",
+            "",
+            "-",
+            "-a",
+            "- a",
+            "--",
+            "a-",
+            "a - b",
+            "−a",
+            "+a",
+            ":",
+            "a:",
+            "a: b",
+            "a:b",
+            "a:\tb",
+            "a: b",
+            "a:　b",
+            "a::",
+            "http://a.test/x",
+            "a:​b",
+            "a\n",
+            "a\nb",
+            "key: value",
+            "#",
+            "#a",
+            "# a",
+            "a#",
+            "a#b",
+            "a #",
+            "a #b",
+            "a\t#b",
+            "a #b",
+            "a #b",
+            "C#",
+            "a\rb",
+            "a\r\nb",
+            "&a",
+            "a&",
+            "*a",
+            "a*",
+            "]a",
+            "a]",
+            ",a",
+            "a,",
+            "?a",
+            "a?",
+            "!a",
+            "a!",
+            ">a",
+            "a>",
+            "|a",
+            "a|",
+            "@a",
+            "a@b.c",
+            "\"a",
+            "a\"",
+            "'a",
+            "a'",
+            "%a",
+            "a%",
+            "\"",
+            "'",
+            "\"\"",
+            "''",
+            "{",
+            "a{b",
+            "a}b",
+            "}",
+            "`",
+            "a`b",
+            "[",
+            "[a]",
+            "a[b]",
+            "a]b",
+            "0",
+            "1",
+            "42",
+            "007",
+            "00",
+            "+1",
+            "+0",
+            "1.5",
+            ".5",
+            "5.",
+            "0.0",
+            "1e3",
+            "1E3",
+            "1e+3",
+            "1e-3",
+            "1.e3",
+            "0e0",
+            "1e1000",
+            "5e-324",
+            "9007199254740993",
+            "0x1f",
+            "0X1F",
+            "0xff",
+            "0b101",
+            "0B1",
+            "0o17",
+            "0O7",
+            "Infinity",
+            "+Infinity",
+            "1e",
+            "1e+",
+            "e3",
+            ".e3",
+            ".",
+            "+",
+            "+.5",
+            "0x",
+            "0xg",
+            "0x_1",
+            "+0x1",
+            "0b",
+            "0b2",
+            "0o",
+            "0o8",
+            "00x1",
+            "1_000",
+            "1,000",
+            "1.2.3",
+            "12n",
+            "NaN",
+            "nan",
+            "infinity",
+            "INFINITY",
+            "Inf",
+            "١٢٣",
+            "１２３",
+            "y",
+            "Y",
+            "n",
+            "N",
+            "yes",
+            "Yes",
+            "YES",
+            "no",
+            "No",
+            "true",
+            "True",
+            "TRUE",
+            "tRuE",
+            "false",
+            "False",
+            "on",
+            "On",
+            "ON",
+            "off",
+            "Off",
+            "null",
+            "Null",
+            "NULL",
+            "~",
+            "~a",
+            "nil",
+            "none",
+            "yess",
+            "nul",
+            "ｙｅｓ",
+            ".inf",
+            ".Inf",
+            ".INF",
+            "-.inf",
+            "+.inf",
+            "+.INF",
+            ".nan",
+            ".NaN",
+            ".NAN",
+            "+.nan",
+            "..inf",
+            ".infinity",
+            ".in",
+            "inf",
+            "a\\b",
+            "\\",
+            "a\\nb",
+            "it's",
+            "say \"hi\"",
+            "say \"hi\": now",
+            "it's: here",
+            "- \"quoted\" \\ and \u0001",
+            "\b\f\n\r\t",
+            "héllo",
+            "日本語",
+            "😀",
+            "a😀b",
+            "😀: x",
+            "é",
+            "ß",
+            "K",
+            "İ",
+            "􏿿",
+            "­",
+            "</script>",
+            "Submit",
+            "Sign in to your account"
+          ]
+        }
+      ],
+      "yaml": "- paragraph:\n  - text: \"\"\n  - text: \" \"\n  - text: \"  \"\n  - text: a\n  - text: \"a \"\n  - text: \" a\"\n  - text: \"\\ta\"\n  - text: \"a\\t\"\n  - text: \"\\na\"\n  - text: \"a\\n\"\n  - text: \"\\x0ba\"\n  - text: \"a\\f\"\n  - text: \"\\ra\"\n  - text: \" a\"\n  - text: \"a \"\n  - text: \" a\"\n  - text: \" a\"\n  - text: \"a \"\n  - text: \" a\"\n  - text: \" a\"\n  - text: \"a \"\n  - text: \" a\"\n  - text: \" a\"\n  - text: \"　a\"\n  - text: \"﻿a\"\n  - text: \"a﻿\"\n  - text: \"\\x85a\"\n  - text: ᠎a\n  - text: a᠎\n  - text: ​a\n  - text: a​\n  - text: \"a\\x00b\"\n  - text: \"a\\x01b\"\n  - text: \"a\\x07b\"\n  - text: \"a\\bb\"\n  - text: a\tb\n  - text: \"a\\x0bb\"\n  - text: \"a\\fb\"\n  - text: \"a\\x0eb\"\n  - text: \"a\\x1bb\"\n  - text: \"a\\x1fb\"\n  - text: \"a\\x7fb\"\n  - text: \"a\\x80b\"\n  - text: \"a\\x85b\"\n  - text: \"a\\x9fb\"\n  - text: a b\n  - text: a¡b\n  - text: \"\\x00\"\n  - text: \"\\x7f\"\n  - text: \"-\"\n  - text: \"-a\"\n  - text: \"- a\"\n  - text: \"--\"\n  - text: a-\n  - text: a - b\n  - text: −a\n  - text: +a\n  - text: \":\"\n  - text: \"a:\"\n  - text: \"a: b\"\n  - text: a:b\n  - text: \"a:\\tb\"\n  - text: \"a: b\"\n  - text: \"a:　b\"\n  - text: \"a::\"\n  - text: http://a.test/x\n  - text: a:​b\n  - text: \"a\\n\"\n  - text: \"a\\nb\"\n  - text: \"key: value\"\n  - text: \"#\"\n  - text: \"#a\"\n  - text: \"# a\"\n  - text: a#\n  - text: a#b\n  - text: \"a #\"\n  - text: \"a #b\"\n  - text: \"a\\t#b\"\n  - text: \"a #b\"\n  - text: \"a #b\"\n  - text: C#\n  - text: \"a\\rb\"\n  - text: \"a\\r\\nb\"\n  - text: \"&a\"\n  - text: a&\n  - text: \"*a\"\n  - text: a*\n  - text: \"]a\"\n  - text: a]\n  - text: \",a\"\n  - text: a,\n  - text: \"?a\"\n  - text: a?\n  - text: \"!a\"\n  - text: a!\n  - text: \">a\"\n  - text: a>\n  - text: \"|a\"\n  - text: a|\n  - text: \"@a\"\n  - text: a@b.c\n  - text: \"\\\"a\"\n  - text: a\"\n  - text: \"'a\"\n  - text: a'\n  - text: \"%a\"\n  - text: a%\n  - text: \"\\\"\"\n  - text: \"'\"\n  - text: \"\\\"\\\"\"\n  - text: \"''\"\n  - text: \"{\"\n  - text: \"a{b\"\n  - text: \"a}b\"\n  - text: \"}\"\n  - text: \"`\"\n  - text: \"a`b\"\n  - text: \"[\"\n  - text: \"[a]\"\n  - text: a[b]\n  - text: a]b\n  - text: \"0\"\n  - text: \"1\"\n  - text: \"42\"\n  - text: \"007\"\n  - text: \"00\"\n  - text: \"+1\"\n  - text: \"+0\"\n  - text: \"1.5\"\n  - text: \".5\"\n  - text: \"5.\"\n  - text: \"0.0\"\n  - text: \"1e3\"\n  - text: \"1E3\"\n  - text: \"1e+3\"\n  - text: \"1e-3\"\n  - text: \"1.e3\"\n  - text: \"0e0\"\n  - text: \"1e1000\"\n  - text: \"5e-324\"\n  - text: \"9007199254740993\"\n  - text: \"0x1f\"\n  - text: \"0X1F\"\n  - text: \"0xff\"\n  - text: \"0b101\"\n  - text: \"0B1\"\n  - text: \"0o17\"\n  - text: \"0O7\"\n  - text: \"Infinity\"\n  - text: \"+Infinity\"\n  - text: 1e\n  - text: 1e+\n  - text: e3\n  - text: .e3\n  - text: .\n  - text: +\n  - text: \"+.5\"\n  - text: 0x\n  - text: 0xg\n  - text: 0x_1\n  - text: +0x1\n  - text: 0b\n  - text: 0b2\n  - text: 0o\n  - text: 0o8\n  - text: 00x1\n  - text: 1_000\n  - text: 1,000\n  - text: 1.2.3\n  - text: 12n\n  - text: NaN\n  - text: nan\n  - text: infinity\n  - text: INFINITY\n  - text: Inf\n  - text: ١٢٣\n  - text: １２３\n  - text: \"y\"\n  - text: \"Y\"\n  - text: \"n\"\n  - text: \"N\"\n  - text: \"yes\"\n  - text: \"Yes\"\n  - text: \"YES\"\n  - text: \"no\"\n  - text: \"No\"\n  - text: \"true\"\n  - text: \"True\"\n  - text: \"TRUE\"\n  - text: \"tRuE\"\n  - text: \"false\"\n  - text: \"False\"\n  - text: \"on\"\n  - text: \"On\"\n  - text: \"ON\"\n  - text: \"off\"\n  - text: \"Off\"\n  - text: \"null\"\n  - text: \"Null\"\n  - text: \"NULL\"\n  - text: \"~\"\n  - text: ~a\n  - text: nil\n  - text: none\n  - text: yess\n  - text: nul\n  - text: ｙｅｓ\n  - text: \".inf\"\n  - text: \".Inf\"\n  - text: \".INF\"\n  - text: \"-.inf\"\n  - text: \"+.inf\"\n  - text: \"+.INF\"\n  - text: \".nan\"\n  - text: \".NaN\"\n  - text: \".NAN\"\n  - text: \"+.nan\"\n  - text: ..inf\n  - text: .infinity\n  - text: .in\n  - text: inf\n  - text: a\\b\n  - text: \\\n  - text: a\\nb\n  - text: it's\n  - text: say \"hi\"\n  - text: \"say \\\"hi\\\": now\"\n  - text: \"it's: here\"\n  - text: \"- \\\"quoted\\\" \\\\ and \\x01\"\n  - text: \"\\b\\f\\n\\r\\t\"\n  - text: héllo\n  - text: 日本語\n  - text: 😀\n  - text: a😀b\n  - text: \"😀: x\"\n  - text: é\n  - text: ß\n  - text: K\n  - text: İ\n  - text: 􏿿\n  - text: ­\n  - text: </script>\n  - text: Submit\n  - text: Sign in to your account"
+    },
+    {
+      "name": "props over every string",
+      "nodes": [
+        {
+          "role": "list",
+          "children": [
+            {
+              "role": "link",
+              "name": "x",
+              "url": ""
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": " "
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "  "
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a "
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": " a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "\ta"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\t"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "\na"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\n"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "\u000ba"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\f"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "\ra"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": " a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a "
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": " a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": " a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a "
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": " a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": " a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a "
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": " a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": " a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "　a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "﻿a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a﻿"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "᠎a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a᠎"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "​a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a​"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\u0000b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\u0001b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\u0007b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\bb"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\tb"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\u000bb"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\fb"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\u000eb"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\u001bb"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\u001fb"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "ab"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "ab"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "ab"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "ab"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a¡b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "\u0000"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": ""
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "-"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "-a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "- a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "--"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a-"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a - b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "−a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "+a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": ":"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a:"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a: b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a:b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a:\tb"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a: b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a:　b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a::"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "http://a.test/x"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a:​b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\n"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\nb"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "key: value"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "#"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "#a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "# a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a#"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a#b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a #"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a #b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\t#b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a #b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a #b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "C#"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\rb"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\r\nb"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "&a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a&"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "*a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a*"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "]a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a]"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": ",a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a,"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "?a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a?"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "!a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a!"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": ">a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a>"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "|a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a|"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "@a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a@b.c"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "\"a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\""
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "'a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a'"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "%a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a%"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "\""
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "'"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "\"\""
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "''"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "{"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a{b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a}b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "}"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "`"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a`b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "["
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "[a]"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a[b]"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a]b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "1"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "42"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "007"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "00"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "+1"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "+0"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "1.5"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": ".5"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "5."
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0.0"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "1e3"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "1E3"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "1e+3"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "1e-3"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "1.e3"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0e0"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "1e1000"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "5e-324"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "9007199254740993"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0x1f"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0X1F"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0xff"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0b101"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0B1"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0o17"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0O7"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "Infinity"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "+Infinity"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "1e"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "1e+"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "e3"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": ".e3"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "."
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "+"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "+.5"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0x"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0xg"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0x_1"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "+0x1"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0b2"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0o"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "0o8"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "00x1"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "1_000"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "1,000"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "1.2.3"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "12n"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "NaN"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "nan"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "infinity"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "INFINITY"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "Inf"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "١٢٣"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "１２３"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "y"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "Y"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "n"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "N"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "yes"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "Yes"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "YES"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "no"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "No"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "true"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "True"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "TRUE"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "tRuE"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "false"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "False"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "on"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "On"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "ON"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "off"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "Off"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "null"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "Null"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "NULL"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "~"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "~a"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "nil"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "none"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "yess"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "nul"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "ｙｅｓ"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": ".inf"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": ".Inf"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": ".INF"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "-.inf"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "+.inf"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "+.INF"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": ".nan"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": ".NaN"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": ".NAN"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "+.nan"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "..inf"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": ".infinity"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": ".in"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "inf"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\\b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "\\"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a\\nb"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "it's"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "say \"hi\""
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "say \"hi\": now"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "it's: here"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "- \"quoted\" \\ and \u0001"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "\b\f\n\r\t"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "héllo"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "日本語"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "😀"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "a😀b"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "😀: x"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "é"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "ß"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "K"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "İ"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "􏿿"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "­"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "</script>"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "Submit"
+            },
+            {
+              "role": "link",
+              "name": "x",
+              "url": "Sign in to your account"
+            }
+          ]
+        }
+      ],
+      "yaml": "- list:\n  - link \"x\":\n    - /url: \"\"\n  - link \"x\":\n    - /url: \" \"\n  - link \"x\":\n    - /url: \"  \"\n  - link \"x\":\n    - /url: a\n  - link \"x\":\n    - /url: \"a \"\n  - link \"x\":\n    - /url: \" a\"\n  - link \"x\":\n    - /url: \"\\ta\"\n  - link \"x\":\n    - /url: \"a\\t\"\n  - link \"x\":\n    - /url: \"\\na\"\n  - link \"x\":\n    - /url: \"a\\n\"\n  - link \"x\":\n    - /url: \"\\x0ba\"\n  - link \"x\":\n    - /url: \"a\\f\"\n  - link \"x\":\n    - /url: \"\\ra\"\n  - link \"x\":\n    - /url: \" a\"\n  - link \"x\":\n    - /url: \"a \"\n  - link \"x\":\n    - /url: \" a\"\n  - link \"x\":\n    - /url: \" a\"\n  - link \"x\":\n    - /url: \"a \"\n  - link \"x\":\n    - /url: \" a\"\n  - link \"x\":\n    - /url: \" a\"\n  - link \"x\":\n    - /url: \"a \"\n  - link \"x\":\n    - /url: \" a\"\n  - link \"x\":\n    - /url: \" a\"\n  - link \"x\":\n    - /url: \"　a\"\n  - link \"x\":\n    - /url: \"﻿a\"\n  - link \"x\":\n    - /url: \"a﻿\"\n  - link \"x\":\n    - /url: \"\\x85a\"\n  - link \"x\":\n    - /url: ᠎a\n  - link \"x\":\n    - /url: a᠎\n  - link \"x\":\n    - /url: ​a\n  - link \"x\":\n    - /url: a​\n  - link \"x\":\n    - /url: \"a\\x00b\"\n  - link \"x\":\n    - /url: \"a\\x01b\"\n  - link \"x\":\n    - /url: \"a\\x07b\"\n  - link \"x\":\n    - /url: \"a\\bb\"\n  - link \"x\":\n    - /url: a\tb\n  - link \"x\":\n    - /url: \"a\\x0bb\"\n  - link \"x\":\n    - /url: \"a\\fb\"\n  - link \"x\":\n    - /url: \"a\\x0eb\"\n  - link \"x\":\n    - /url: \"a\\x1bb\"\n  - link \"x\":\n    - /url: \"a\\x1fb\"\n  - link \"x\":\n    - /url: \"a\\x7fb\"\n  - link \"x\":\n    - /url: \"a\\x80b\"\n  - link \"x\":\n    - /url: \"a\\x85b\"\n  - link \"x\":\n    - /url: \"a\\x9fb\"\n  - link \"x\":\n    - /url: a b\n  - link \"x\":\n    - /url: a¡b\n  - link \"x\":\n    - /url: \"\\x00\"\n  - link \"x\":\n    - /url: \"\\x7f\"\n  - link \"x\":\n    - /url: \"-\"\n  - link \"x\":\n    - /url: \"-a\"\n  - link \"x\":\n    - /url: \"- a\"\n  - link \"x\":\n    - /url: \"--\"\n  - link \"x\":\n    - /url: a-\n  - link \"x\":\n    - /url: a - b\n  - link \"x\":\n    - /url: −a\n  - link \"x\":\n    - /url: +a\n  - link \"x\":\n    - /url: \":\"\n  - link \"x\":\n    - /url: \"a:\"\n  - link \"x\":\n    - /url: \"a: b\"\n  - link \"x\":\n    - /url: a:b\n  - link \"x\":\n    - /url: \"a:\\tb\"\n  - link \"x\":\n    - /url: \"a: b\"\n  - link \"x\":\n    - /url: \"a:　b\"\n  - link \"x\":\n    - /url: \"a::\"\n  - link \"x\":\n    - /url: http://a.test/x\n  - link \"x\":\n    - /url: a:​b\n  - link \"x\":\n    - /url: \"a\\n\"\n  - link \"x\":\n    - /url: \"a\\nb\"\n  - link \"x\":\n    - /url: \"key: value\"\n  - link \"x\":\n    - /url: \"#\"\n  - link \"x\":\n    - /url: \"#a\"\n  - link \"x\":\n    - /url: \"# a\"\n  - link \"x\":\n    - /url: a#\n  - link \"x\":\n    - /url: a#b\n  - link \"x\":\n    - /url: \"a #\"\n  - link \"x\":\n    - /url: \"a #b\"\n  - link \"x\":\n    - /url: \"a\\t#b\"\n  - link \"x\":\n    - /url: \"a #b\"\n  - link \"x\":\n    - /url: \"a #b\"\n  - link \"x\":\n    - /url: C#\n  - link \"x\":\n    - /url: \"a\\rb\"\n  - link \"x\":\n    - /url: \"a\\r\\nb\"\n  - link \"x\":\n    - /url: \"&a\"\n  - link \"x\":\n    - /url: a&\n  - link \"x\":\n    - /url: \"*a\"\n  - link \"x\":\n    - /url: a*\n  - link \"x\":\n    - /url: \"]a\"\n  - link \"x\":\n    - /url: a]\n  - link \"x\":\n    - /url: \",a\"\n  - link \"x\":\n    - /url: a,\n  - link \"x\":\n    - /url: \"?a\"\n  - link \"x\":\n    - /url: a?\n  - link \"x\":\n    - /url: \"!a\"\n  - link \"x\":\n    - /url: a!\n  - link \"x\":\n    - /url: \">a\"\n  - link \"x\":\n    - /url: a>\n  - link \"x\":\n    - /url: \"|a\"\n  - link \"x\":\n    - /url: a|\n  - link \"x\":\n    - /url: \"@a\"\n  - link \"x\":\n    - /url: a@b.c\n  - link \"x\":\n    - /url: \"\\\"a\"\n  - link \"x\":\n    - /url: a\"\n  - link \"x\":\n    - /url: \"'a\"\n  - link \"x\":\n    - /url: a'\n  - link \"x\":\n    - /url: \"%a\"\n  - link \"x\":\n    - /url: a%\n  - link \"x\":\n    - /url: \"\\\"\"\n  - link \"x\":\n    - /url: \"'\"\n  - link \"x\":\n    - /url: \"\\\"\\\"\"\n  - link \"x\":\n    - /url: \"''\"\n  - link \"x\":\n    - /url: \"{\"\n  - link \"x\":\n    - /url: \"a{b\"\n  - link \"x\":\n    - /url: \"a}b\"\n  - link \"x\":\n    - /url: \"}\"\n  - link \"x\":\n    - /url: \"`\"\n  - link \"x\":\n    - /url: \"a`b\"\n  - link \"x\":\n    - /url: \"[\"\n  - link \"x\":\n    - /url: \"[a]\"\n  - link \"x\":\n    - /url: a[b]\n  - link \"x\":\n    - /url: a]b\n  - link \"x\":\n    - /url: \"0\"\n  - link \"x\":\n    - /url: \"1\"\n  - link \"x\":\n    - /url: \"42\"\n  - link \"x\":\n    - /url: \"007\"\n  - link \"x\":\n    - /url: \"00\"\n  - link \"x\":\n    - /url: \"+1\"\n  - link \"x\":\n    - /url: \"+0\"\n  - link \"x\":\n    - /url: \"1.5\"\n  - link \"x\":\n    - /url: \".5\"\n  - link \"x\":\n    - /url: \"5.\"\n  - link \"x\":\n    - /url: \"0.0\"\n  - link \"x\":\n    - /url: \"1e3\"\n  - link \"x\":\n    - /url: \"1E3\"\n  - link \"x\":\n    - /url: \"1e+3\"\n  - link \"x\":\n    - /url: \"1e-3\"\n  - link \"x\":\n    - /url: \"1.e3\"\n  - link \"x\":\n    - /url: \"0e0\"\n  - link \"x\":\n    - /url: \"1e1000\"\n  - link \"x\":\n    - /url: \"5e-324\"\n  - link \"x\":\n    - /url: \"9007199254740993\"\n  - link \"x\":\n    - /url: \"0x1f\"\n  - link \"x\":\n    - /url: \"0X1F\"\n  - link \"x\":\n    - /url: \"0xff\"\n  - link \"x\":\n    - /url: \"0b101\"\n  - link \"x\":\n    - /url: \"0B1\"\n  - link \"x\":\n    - /url: \"0o17\"\n  - link \"x\":\n    - /url: \"0O7\"\n  - link \"x\":\n    - /url: \"Infinity\"\n  - link \"x\":\n    - /url: \"+Infinity\"\n  - link \"x\":\n    - /url: 1e\n  - link \"x\":\n    - /url: 1e+\n  - link \"x\":\n    - /url: e3\n  - link \"x\":\n    - /url: .e3\n  - link \"x\":\n    - /url: .\n  - link \"x\":\n    - /url: +\n  - link \"x\":\n    - /url: \"+.5\"\n  - link \"x\":\n    - /url: 0x\n  - link \"x\":\n    - /url: 0xg\n  - link \"x\":\n    - /url: 0x_1\n  - link \"x\":\n    - /url: +0x1\n  - link \"x\":\n    - /url: 0b\n  - link \"x\":\n    - /url: 0b2\n  - link \"x\":\n    - /url: 0o\n  - link \"x\":\n    - /url: 0o8\n  - link \"x\":\n    - /url: 00x1\n  - link \"x\":\n    - /url: 1_000\n  - link \"x\":\n    - /url: 1,000\n  - link \"x\":\n    - /url: 1.2.3\n  - link \"x\":\n    - /url: 12n\n  - link \"x\":\n    - /url: NaN\n  - link \"x\":\n    - /url: nan\n  - link \"x\":\n    - /url: infinity\n  - link \"x\":\n    - /url: INFINITY\n  - link \"x\":\n    - /url: Inf\n  - link \"x\":\n    - /url: ١٢٣\n  - link \"x\":\n    - /url: １２３\n  - link \"x\":\n    - /url: \"y\"\n  - link \"x\":\n    - /url: \"Y\"\n  - link \"x\":\n    - /url: \"n\"\n  - link \"x\":\n    - /url: \"N\"\n  - link \"x\":\n    - /url: \"yes\"\n  - link \"x\":\n    - /url: \"Yes\"\n  - link \"x\":\n    - /url: \"YES\"\n  - link \"x\":\n    - /url: \"no\"\n  - link \"x\":\n    - /url: \"No\"\n  - link \"x\":\n    - /url: \"true\"\n  - link \"x\":\n    - /url: \"True\"\n  - link \"x\":\n    - /url: \"TRUE\"\n  - link \"x\":\n    - /url: \"tRuE\"\n  - link \"x\":\n    - /url: \"false\"\n  - link \"x\":\n    - /url: \"False\"\n  - link \"x\":\n    - /url: \"on\"\n  - link \"x\":\n    - /url: \"On\"\n  - link \"x\":\n    - /url: \"ON\"\n  - link \"x\":\n    - /url: \"off\"\n  - link \"x\":\n    - /url: \"Off\"\n  - link \"x\":\n    - /url: \"null\"\n  - link \"x\":\n    - /url: \"Null\"\n  - link \"x\":\n    - /url: \"NULL\"\n  - link \"x\":\n    - /url: \"~\"\n  - link \"x\":\n    - /url: ~a\n  - link \"x\":\n    - /url: nil\n  - link \"x\":\n    - /url: none\n  - link \"x\":\n    - /url: yess\n  - link \"x\":\n    - /url: nul\n  - link \"x\":\n    - /url: ｙｅｓ\n  - link \"x\":\n    - /url: \".inf\"\n  - link \"x\":\n    - /url: \".Inf\"\n  - link \"x\":\n    - /url: \".INF\"\n  - link \"x\":\n    - /url: \"-.inf\"\n  - link \"x\":\n    - /url: \"+.inf\"\n  - link \"x\":\n    - /url: \"+.INF\"\n  - link \"x\":\n    - /url: \".nan\"\n  - link \"x\":\n    - /url: \".NaN\"\n  - link \"x\":\n    - /url: \".NAN\"\n  - link \"x\":\n    - /url: \"+.nan\"\n  - link \"x\":\n    - /url: ..inf\n  - link \"x\":\n    - /url: .infinity\n  - link \"x\":\n    - /url: .in\n  - link \"x\":\n    - /url: inf\n  - link \"x\":\n    - /url: a\\b\n  - link \"x\":\n    - /url: \\\n  - link \"x\":\n    - /url: a\\nb\n  - link \"x\":\n    - /url: it's\n  - link \"x\":\n    - /url: say \"hi\"\n  - link \"x\":\n    - /url: \"say \\\"hi\\\": now\"\n  - link \"x\":\n    - /url: \"it's: here\"\n  - link \"x\":\n    - /url: \"- \\\"quoted\\\" \\\\ and \\x01\"\n  - link \"x\":\n    - /url: \"\\b\\f\\n\\r\\t\"\n  - link \"x\":\n    - /url: héllo\n  - link \"x\":\n    - /url: 日本語\n  - link \"x\":\n    - /url: 😀\n  - link \"x\":\n    - /url: a😀b\n  - link \"x\":\n    - /url: \"😀: x\"\n  - link \"x\":\n    - /url: é\n  - link \"x\":\n    - /url: ß\n  - link \"x\":\n    - /url: K\n  - link \"x\":\n    - /url: İ\n  - link \"x\":\n    - /url: 􏿿\n  - link \"x\":\n    - /url: ­\n  - link \"x\":\n    - /url: </script>\n  - link \"x\":\n    - /url: Submit\n  - link \"x\":\n    - /url: Sign in to your account"
+    },
+    {
+      "name": "names around the 900-unit limit",
+      "nodes": [
+        {
+          "role": "button",
+          "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "role": "button",
+          "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "role": "button",
+          "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "role": "button",
+          "name": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+        },
+        {
+          "role": "button",
+          "name": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+        },
+        {
+          "role": "button",
+          "name": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+        },
+        {
+          "role": "button",
+          "name": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+        },
+        {
+          "role": "button",
+          "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "yaml": "- button \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n- button \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n- button\n- button \"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\"\n- button\n- button \"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\"\n- button\n- button"
+    },
+    {
+      "name": "long texts are never cut",
+      "nodes": [
+        {
+          "role": "paragraph",
+          "text": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word end"
+        }
+      ],
+      "yaml": "- paragraph: word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word end"
+    }
+  ],
+  "strings": [
+    {
+      "input": "",
+      "key": "''",
+      "value": "\"\""
+    },
+    {
+      "input": " ",
+      "key": "' '",
+      "value": "\" \""
+    },
+    {
+      "input": "  ",
+      "key": "'  '",
+      "value": "\"  \""
+    },
+    {
+      "input": "a",
+      "key": "a",
+      "value": "a"
+    },
+    {
+      "input": "a ",
+      "key": "'a '",
+      "value": "\"a \""
+    },
+    {
+      "input": " a",
+      "key": "' a'",
+      "value": "\" a\""
+    },
+    {
+      "input": "\ta",
+      "key": "'\ta'",
+      "value": "\"\\ta\""
+    },
+    {
+      "input": "a\t",
+      "key": "'a\t'",
+      "value": "\"a\\t\""
+    },
+    {
+      "input": "\na",
+      "key": "'\na'",
+      "value": "\"\\na\""
+    },
+    {
+      "input": "a\n",
+      "key": "'a\n'",
+      "value": "\"a\\n\""
+    },
+    {
+      "input": "\u000ba",
+      "key": "'\u000ba'",
+      "value": "\"\\x0ba\""
+    },
+    {
+      "input": "a\f",
+      "key": "'a\f'",
+      "value": "\"a\\f\""
+    },
+    {
+      "input": "\ra",
+      "key": "'\ra'",
+      "value": "\"\\ra\""
+    },
+    {
+      "input": " a",
+      "key": "' a'",
+      "value": "\" a\""
+    },
+    {
+      "input": "a ",
+      "key": "'a '",
+      "value": "\"a \""
+    },
+    {
+      "input": " a",
+      "key": "' a'",
+      "value": "\" a\""
+    },
+    {
+      "input": " a",
+      "key": "' a'",
+      "value": "\" a\""
+    },
+    {
+      "input": "a ",
+      "key": "'a '",
+      "value": "\"a \""
+    },
+    {
+      "input": " a",
+      "key": "' a'",
+      "value": "\" a\""
+    },
+    {
+      "input": " a",
+      "key": "' a'",
+      "value": "\" a\""
+    },
+    {
+      "input": "a ",
+      "key": "'a '",
+      "value": "\"a \""
+    },
+    {
+      "input": " a",
+      "key": "' a'",
+      "value": "\" a\""
+    },
+    {
+      "input": " a",
+      "key": "' a'",
+      "value": "\" a\""
+    },
+    {
+      "input": "　a",
+      "key": "'　a'",
+      "value": "\"　a\""
+    },
+    {
+      "input": "﻿a",
+      "key": "'﻿a'",
+      "value": "\"﻿a\""
+    },
+    {
+      "input": "a﻿",
+      "key": "'a﻿'",
+      "value": "\"a﻿\""
+    },
+    {
+      "input": "a",
+      "key": "'a'",
+      "value": "\"\\x85a\""
+    },
+    {
+      "input": "᠎a",
+      "key": "᠎a",
+      "value": "᠎a"
+    },
+    {
+      "input": "a᠎",
+      "key": "a᠎",
+      "value": "a᠎"
+    },
+    {
+      "input": "​a",
+      "key": "​a",
+      "value": "​a"
+    },
+    {
+      "input": "a​",
+      "key": "a​",
+      "value": "a​"
+    },
+    {
+      "input": "a\u0000b",
+      "key": "'a\u0000b'",
+      "value": "\"a\\x00b\""
+    },
+    {
+      "input": "a\u0001b",
+      "key": "'a\u0001b'",
+      "value": "\"a\\x01b\""
+    },
+    {
+      "input": "a\u0007b",
+      "key": "'a\u0007b'",
+      "value": "\"a\\x07b\""
+    },
+    {
+      "input": "a\bb",
+      "key": "'a\bb'",
+      "value": "\"a\\bb\""
+    },
+    {
+      "input": "a\tb",
+      "key": "a\tb",
+      "value": "a\tb"
+    },
+    {
+      "input": "a\u000bb",
+      "key": "'a\u000bb'",
+      "value": "\"a\\x0bb\""
+    },
+    {
+      "input": "a\fb",
+      "key": "'a\fb'",
+      "value": "\"a\\fb\""
+    },
+    {
+      "input": "a\u000eb",
+      "key": "'a\u000eb'",
+      "value": "\"a\\x0eb\""
+    },
+    {
+      "input": "a\u001bb",
+      "key": "'a\u001bb'",
+      "value": "\"a\\x1bb\""
+    },
+    {
+      "input": "a\u001fb",
+      "key": "'a\u001fb'",
+      "value": "\"a\\x1fb\""
+    },
+    {
+      "input": "ab",
+      "key": "'ab'",
+      "value": "\"a\\x7fb\""
+    },
+    {
+      "input": "ab",
+      "key": "'ab'",
+      "value": "\"a\\x80b\""
+    },
+    {
+      "input": "ab",
+      "key": "'ab'",
+      "value": "\"a\\x85b\""
+    },
+    {
+      "input": "ab",
+      "key": "'ab'",
+      "value": "\"a\\x9fb\""
+    },
+    {
+      "input": "a b",
+      "key": "a b",
+      "value": "a b"
+    },
+    {
+      "input": "a¡b",
+      "key": "a¡b",
+      "value": "a¡b"
+    },
+    {
+      "input": "\u0000",
+      "key": "'\u0000'",
+      "value": "\"\\x00\""
+    },
+    {
+      "input": "",
+      "key": "''",
+      "value": "\"\\x7f\""
+    },
+    {
+      "input": "-",
+      "key": "'-'",
+      "value": "\"-\""
+    },
+    {
+      "input": "-a",
+      "key": "'-a'",
+      "value": "\"-a\""
+    },
+    {
+      "input": "- a",
+      "key": "'- a'",
+      "value": "\"- a\""
+    },
+    {
+      "input": "--",
+      "key": "'--'",
+      "value": "\"--\""
+    },
+    {
+      "input": "a-",
+      "key": "a-",
+      "value": "a-"
+    },
+    {
+      "input": "a - b",
+      "key": "a - b",
+      "value": "a - b"
+    },
+    {
+      "input": "−a",
+      "key": "−a",
+      "value": "−a"
+    },
+    {
+      "input": "+a",
+      "key": "+a",
+      "value": "+a"
+    },
+    {
+      "input": ":",
+      "key": "':'",
+      "value": "\":\""
+    },
+    {
+      "input": "a:",
+      "key": "'a:'",
+      "value": "\"a:\""
+    },
+    {
+      "input": "a: b",
+      "key": "'a: b'",
+      "value": "\"a: b\""
+    },
+    {
+      "input": "a:b",
+      "key": "a:b",
+      "value": "a:b"
+    },
+    {
+      "input": "a:\tb",
+      "key": "'a:\tb'",
+      "value": "\"a:\\tb\""
+    },
+    {
+      "input": "a: b",
+      "key": "'a: b'",
+      "value": "\"a: b\""
+    },
+    {
+      "input": "a:　b",
+      "key": "'a:　b'",
+      "value": "\"a:　b\""
+    },
+    {
+      "input": "a::",
+      "key": "'a::'",
+      "value": "\"a::\""
+    },
+    {
+      "input": "http://a.test/x",
+      "key": "http://a.test/x",
+      "value": "http://a.test/x"
+    },
+    {
+      "input": "a:​b",
+      "key": "a:​b",
+      "value": "a:​b"
+    },
+    {
+      "input": "a\n",
+      "key": "'a\n'",
+      "value": "\"a\\n\""
+    },
+    {
+      "input": "a\nb",
+      "key": "'a\nb'",
+      "value": "\"a\\nb\""
+    },
+    {
+      "input": "key: value",
+      "key": "'key: value'",
+      "value": "\"key: value\""
+    },
+    {
+      "input": "#",
+      "key": "'#'",
+      "value": "\"#\""
+    },
+    {
+      "input": "#a",
+      "key": "'#a'",
+      "value": "\"#a\""
+    },
+    {
+      "input": "# a",
+      "key": "'# a'",
+      "value": "\"# a\""
+    },
+    {
+      "input": "a#",
+      "key": "a#",
+      "value": "a#"
+    },
+    {
+      "input": "a#b",
+      "key": "a#b",
+      "value": "a#b"
+    },
+    {
+      "input": "a #",
+      "key": "'a #'",
+      "value": "\"a #\""
+    },
+    {
+      "input": "a #b",
+      "key": "'a #b'",
+      "value": "\"a #b\""
+    },
+    {
+      "input": "a\t#b",
+      "key": "'a\t#b'",
+      "value": "\"a\\t#b\""
+    },
+    {
+      "input": "a #b",
+      "key": "'a #b'",
+      "value": "\"a #b\""
+    },
+    {
+      "input": "a #b",
+      "key": "'a #b'",
+      "value": "\"a #b\""
+    },
+    {
+      "input": "C#",
+      "key": "C#",
+      "value": "C#"
+    },
+    {
+      "input": "a\rb",
+      "key": "'a\rb'",
+      "value": "\"a\\rb\""
+    },
+    {
+      "input": "a\r\nb",
+      "key": "'a\r\nb'",
+      "value": "\"a\\r\\nb\""
+    },
+    {
+      "input": "&a",
+      "key": "'&a'",
+      "value": "\"&a\""
+    },
+    {
+      "input": "a&",
+      "key": "a&",
+      "value": "a&"
+    },
+    {
+      "input": "*a",
+      "key": "'*a'",
+      "value": "\"*a\""
+    },
+    {
+      "input": "a*",
+      "key": "a*",
+      "value": "a*"
+    },
+    {
+      "input": "]a",
+      "key": "']a'",
+      "value": "\"]a\""
+    },
+    {
+      "input": "a]",
+      "key": "a]",
+      "value": "a]"
+    },
+    {
+      "input": ",a",
+      "key": "',a'",
+      "value": "\",a\""
+    },
+    {
+      "input": "a,",
+      "key": "a,",
+      "value": "a,"
+    },
+    {
+      "input": "?a",
+      "key": "'?a'",
+      "value": "\"?a\""
+    },
+    {
+      "input": "a?",
+      "key": "a?",
+      "value": "a?"
+    },
+    {
+      "input": "!a",
+      "key": "'!a'",
+      "value": "\"!a\""
+    },
+    {
+      "input": "a!",
+      "key": "a!",
+      "value": "a!"
+    },
+    {
+      "input": ">a",
+      "key": "'>a'",
+      "value": "\">a\""
+    },
+    {
+      "input": "a>",
+      "key": "a>",
+      "value": "a>"
+    },
+    {
+      "input": "|a",
+      "key": "'|a'",
+      "value": "\"|a\""
+    },
+    {
+      "input": "a|",
+      "key": "a|",
+      "value": "a|"
+    },
+    {
+      "input": "@a",
+      "key": "'@a'",
+      "value": "\"@a\""
+    },
+    {
+      "input": "a@b.c",
+      "key": "a@b.c",
+      "value": "a@b.c"
+    },
+    {
+      "input": "\"a",
+      "key": "'\"a'",
+      "value": "\"\\\"a\""
+    },
+    {
+      "input": "a\"",
+      "key": "a\"",
+      "value": "a\""
+    },
+    {
+      "input": "'a",
+      "key": "'''a'",
+      "value": "\"'a\""
+    },
+    {
+      "input": "a'",
+      "key": "a'",
+      "value": "a'"
+    },
+    {
+      "input": "%a",
+      "key": "'%a'",
+      "value": "\"%a\""
+    },
+    {
+      "input": "a%",
+      "key": "a%",
+      "value": "a%"
+    },
+    {
+      "input": "\"",
+      "key": "'\"'",
+      "value": "\"\\\"\""
+    },
+    {
+      "input": "'",
+      "key": "''''",
+      "value": "\"'\""
+    },
+    {
+      "input": "\"\"",
+      "key": "'\"\"'",
+      "value": "\"\\\"\\\"\""
+    },
+    {
+      "input": "''",
+      "key": "''''''",
+      "value": "\"''\""
+    },
+    {
+      "input": "{",
+      "key": "'{'",
+      "value": "\"{\""
+    },
+    {
+      "input": "a{b",
+      "key": "'a{b'",
+      "value": "\"a{b\""
+    },
+    {
+      "input": "a}b",
+      "key": "'a}b'",
+      "value": "\"a}b\""
+    },
+    {
+      "input": "}",
+      "key": "'}'",
+      "value": "\"}\""
+    },
+    {
+      "input": "`",
+      "key": "'`'",
+      "value": "\"`\""
+    },
+    {
+      "input": "a`b",
+      "key": "'a`b'",
+      "value": "\"a`b\""
+    },
+    {
+      "input": "[",
+      "key": "'['",
+      "value": "\"[\""
+    },
+    {
+      "input": "[a]",
+      "key": "'[a]'",
+      "value": "\"[a]\""
+    },
+    {
+      "input": "a[b]",
+      "key": "a[b]",
+      "value": "a[b]"
+    },
+    {
+      "input": "a]b",
+      "key": "a]b",
+      "value": "a]b"
+    },
+    {
+      "input": "0",
+      "key": "'0'",
+      "value": "\"0\""
+    },
+    {
+      "input": "1",
+      "key": "'1'",
+      "value": "\"1\""
+    },
+    {
+      "input": "42",
+      "key": "'42'",
+      "value": "\"42\""
+    },
+    {
+      "input": "007",
+      "key": "'007'",
+      "value": "\"007\""
+    },
+    {
+      "input": "00",
+      "key": "'00'",
+      "value": "\"00\""
+    },
+    {
+      "input": "+1",
+      "key": "'+1'",
+      "value": "\"+1\""
+    },
+    {
+      "input": "+0",
+      "key": "'+0'",
+      "value": "\"+0\""
+    },
+    {
+      "input": "1.5",
+      "key": "'1.5'",
+      "value": "\"1.5\""
+    },
+    {
+      "input": ".5",
+      "key": "'.5'",
+      "value": "\".5\""
+    },
+    {
+      "input": "5.",
+      "key": "'5.'",
+      "value": "\"5.\""
+    },
+    {
+      "input": "0.0",
+      "key": "'0.0'",
+      "value": "\"0.0\""
+    },
+    {
+      "input": "1e3",
+      "key": "'1e3'",
+      "value": "\"1e3\""
+    },
+    {
+      "input": "1E3",
+      "key": "'1E3'",
+      "value": "\"1E3\""
+    },
+    {
+      "input": "1e+3",
+      "key": "'1e+3'",
+      "value": "\"1e+3\""
+    },
+    {
+      "input": "1e-3",
+      "key": "'1e-3'",
+      "value": "\"1e-3\""
+    },
+    {
+      "input": "1.e3",
+      "key": "'1.e3'",
+      "value": "\"1.e3\""
+    },
+    {
+      "input": "0e0",
+      "key": "'0e0'",
+      "value": "\"0e0\""
+    },
+    {
+      "input": "1e1000",
+      "key": "'1e1000'",
+      "value": "\"1e1000\""
+    },
+    {
+      "input": "5e-324",
+      "key": "'5e-324'",
+      "value": "\"5e-324\""
+    },
+    {
+      "input": "9007199254740993",
+      "key": "'9007199254740993'",
+      "value": "\"9007199254740993\""
+    },
+    {
+      "input": "0x1f",
+      "key": "'0x1f'",
+      "value": "\"0x1f\""
+    },
+    {
+      "input": "0X1F",
+      "key": "'0X1F'",
+      "value": "\"0X1F\""
+    },
+    {
+      "input": "0xff",
+      "key": "'0xff'",
+      "value": "\"0xff\""
+    },
+    {
+      "input": "0b101",
+      "key": "'0b101'",
+      "value": "\"0b101\""
+    },
+    {
+      "input": "0B1",
+      "key": "'0B1'",
+      "value": "\"0B1\""
+    },
+    {
+      "input": "0o17",
+      "key": "'0o17'",
+      "value": "\"0o17\""
+    },
+    {
+      "input": "0O7",
+      "key": "'0O7'",
+      "value": "\"0O7\""
+    },
+    {
+      "input": "Infinity",
+      "key": "'Infinity'",
+      "value": "\"Infinity\""
+    },
+    {
+      "input": "+Infinity",
+      "key": "'+Infinity'",
+      "value": "\"+Infinity\""
+    },
+    {
+      "input": "1e",
+      "key": "1e",
+      "value": "1e"
+    },
+    {
+      "input": "1e+",
+      "key": "1e+",
+      "value": "1e+"
+    },
+    {
+      "input": "e3",
+      "key": "e3",
+      "value": "e3"
+    },
+    {
+      "input": ".e3",
+      "key": ".e3",
+      "value": ".e3"
+    },
+    {
+      "input": ".",
+      "key": ".",
+      "value": "."
+    },
+    {
+      "input": "+",
+      "key": "+",
+      "value": "+"
+    },
+    {
+      "input": "+.5",
+      "key": "'+.5'",
+      "value": "\"+.5\""
+    },
+    {
+      "input": "0x",
+      "key": "0x",
+      "value": "0x"
+    },
+    {
+      "input": "0xg",
+      "key": "0xg",
+      "value": "0xg"
+    },
+    {
+      "input": "0x_1",
+      "key": "0x_1",
+      "value": "0x_1"
+    },
+    {
+      "input": "+0x1",
+      "key": "+0x1",
+      "value": "+0x1"
+    },
+    {
+      "input": "0b",
+      "key": "0b",
+      "value": "0b"
+    },
+    {
+      "input": "0b2",
+      "key": "0b2",
+      "value": "0b2"
+    },
+    {
+      "input": "0o",
+      "key": "0o",
+      "value": "0o"
+    },
+    {
+      "input": "0o8",
+      "key": "0o8",
+      "value": "0o8"
+    },
+    {
+      "input": "00x1",
+      "key": "00x1",
+      "value": "00x1"
+    },
+    {
+      "input": "1_000",
+      "key": "1_000",
+      "value": "1_000"
+    },
+    {
+      "input": "1,000",
+      "key": "1,000",
+      "value": "1,000"
+    },
+    {
+      "input": "1.2.3",
+      "key": "1.2.3",
+      "value": "1.2.3"
+    },
+    {
+      "input": "12n",
+      "key": "12n",
+      "value": "12n"
+    },
+    {
+      "input": "NaN",
+      "key": "NaN",
+      "value": "NaN"
+    },
+    {
+      "input": "nan",
+      "key": "nan",
+      "value": "nan"
+    },
+    {
+      "input": "infinity",
+      "key": "infinity",
+      "value": "infinity"
+    },
+    {
+      "input": "INFINITY",
+      "key": "INFINITY",
+      "value": "INFINITY"
+    },
+    {
+      "input": "Inf",
+      "key": "Inf",
+      "value": "Inf"
+    },
+    {
+      "input": "١٢٣",
+      "key": "١٢٣",
+      "value": "١٢٣"
+    },
+    {
+      "input": "１２３",
+      "key": "１２３",
+      "value": "１２３"
+    },
+    {
+      "input": "y",
+      "key": "'y'",
+      "value": "\"y\""
+    },
+    {
+      "input": "Y",
+      "key": "'Y'",
+      "value": "\"Y\""
+    },
+    {
+      "input": "n",
+      "key": "'n'",
+      "value": "\"n\""
+    },
+    {
+      "input": "N",
+      "key": "'N'",
+      "value": "\"N\""
+    },
+    {
+      "input": "yes",
+      "key": "'yes'",
+      "value": "\"yes\""
+    },
+    {
+      "input": "Yes",
+      "key": "'Yes'",
+      "value": "\"Yes\""
+    },
+    {
+      "input": "YES",
+      "key": "'YES'",
+      "value": "\"YES\""
+    },
+    {
+      "input": "no",
+      "key": "'no'",
+      "value": "\"no\""
+    },
+    {
+      "input": "No",
+      "key": "'No'",
+      "value": "\"No\""
+    },
+    {
+      "input": "true",
+      "key": "'true'",
+      "value": "\"true\""
+    },
+    {
+      "input": "True",
+      "key": "'True'",
+      "value": "\"True\""
+    },
+    {
+      "input": "TRUE",
+      "key": "'TRUE'",
+      "value": "\"TRUE\""
+    },
+    {
+      "input": "tRuE",
+      "key": "'tRuE'",
+      "value": "\"tRuE\""
+    },
+    {
+      "input": "false",
+      "key": "'false'",
+      "value": "\"false\""
+    },
+    {
+      "input": "False",
+      "key": "'False'",
+      "value": "\"False\""
+    },
+    {
+      "input": "on",
+      "key": "'on'",
+      "value": "\"on\""
+    },
+    {
+      "input": "On",
+      "key": "'On'",
+      "value": "\"On\""
+    },
+    {
+      "input": "ON",
+      "key": "'ON'",
+      "value": "\"ON\""
+    },
+    {
+      "input": "off",
+      "key": "'off'",
+      "value": "\"off\""
+    },
+    {
+      "input": "Off",
+      "key": "'Off'",
+      "value": "\"Off\""
+    },
+    {
+      "input": "null",
+      "key": "'null'",
+      "value": "\"null\""
+    },
+    {
+      "input": "Null",
+      "key": "'Null'",
+      "value": "\"Null\""
+    },
+    {
+      "input": "NULL",
+      "key": "'NULL'",
+      "value": "\"NULL\""
+    },
+    {
+      "input": "~",
+      "key": "'~'",
+      "value": "\"~\""
+    },
+    {
+      "input": "~a",
+      "key": "~a",
+      "value": "~a"
+    },
+    {
+      "input": "nil",
+      "key": "nil",
+      "value": "nil"
+    },
+    {
+      "input": "none",
+      "key": "none",
+      "value": "none"
+    },
+    {
+      "input": "yess",
+      "key": "yess",
+      "value": "yess"
+    },
+    {
+      "input": "nul",
+      "key": "nul",
+      "value": "nul"
+    },
+    {
+      "input": "ｙｅｓ",
+      "key": "ｙｅｓ",
+      "value": "ｙｅｓ"
+    },
+    {
+      "input": ".inf",
+      "key": "'.inf'",
+      "value": "\".inf\""
+    },
+    {
+      "input": ".Inf",
+      "key": "'.Inf'",
+      "value": "\".Inf\""
+    },
+    {
+      "input": ".INF",
+      "key": "'.INF'",
+      "value": "\".INF\""
+    },
+    {
+      "input": "-.inf",
+      "key": "'-.inf'",
+      "value": "\"-.inf\""
+    },
+    {
+      "input": "+.inf",
+      "key": "'+.inf'",
+      "value": "\"+.inf\""
+    },
+    {
+      "input": "+.INF",
+      "key": "'+.INF'",
+      "value": "\"+.INF\""
+    },
+    {
+      "input": ".nan",
+      "key": "'.nan'",
+      "value": "\".nan\""
+    },
+    {
+      "input": ".NaN",
+      "key": "'.NaN'",
+      "value": "\".NaN\""
+    },
+    {
+      "input": ".NAN",
+      "key": "'.NAN'",
+      "value": "\".NAN\""
+    },
+    {
+      "input": "+.nan",
+      "key": "'+.nan'",
+      "value": "\"+.nan\""
+    },
+    {
+      "input": "..inf",
+      "key": "..inf",
+      "value": "..inf"
+    },
+    {
+      "input": ".infinity",
+      "key": ".infinity",
+      "value": ".infinity"
+    },
+    {
+      "input": ".in",
+      "key": ".in",
+      "value": ".in"
+    },
+    {
+      "input": "inf",
+      "key": "inf",
+      "value": "inf"
+    },
+    {
+      "input": "a\\b",
+      "key": "a\\b",
+      "value": "a\\b"
+    },
+    {
+      "input": "\\",
+      "key": "\\",
+      "value": "\\"
+    },
+    {
+      "input": "a\\nb",
+      "key": "a\\nb",
+      "value": "a\\nb"
+    },
+    {
+      "input": "it's",
+      "key": "it's",
+      "value": "it's"
+    },
+    {
+      "input": "say \"hi\"",
+      "key": "say \"hi\"",
+      "value": "say \"hi\""
+    },
+    {
+      "input": "say \"hi\": now",
+      "key": "'say \"hi\": now'",
+      "value": "\"say \\\"hi\\\": now\""
+    },
+    {
+      "input": "it's: here",
+      "key": "'it''s: here'",
+      "value": "\"it's: here\""
+    },
+    {
+      "input": "- \"quoted\" \\ and \u0001",
+      "key": "'- \"quoted\" \\ and \u0001'",
+      "value": "\"- \\\"quoted\\\" \\\\ and \\x01\""
+    },
+    {
+      "input": "\b\f\n\r\t",
+      "key": "'\b\f\n\r\t'",
+      "value": "\"\\b\\f\\n\\r\\t\""
+    },
+    {
+      "input": "héllo",
+      "key": "héllo",
+      "value": "héllo"
+    },
+    {
+      "input": "日本語",
+      "key": "日本語",
+      "value": "日本語"
+    },
+    {
+      "input": "😀",
+      "key": "😀",
+      "value": "😀"
+    },
+    {
+      "input": "a😀b",
+      "key": "a😀b",
+      "value": "a😀b"
+    },
+    {
+      "input": "😀: x",
+      "key": "'😀: x'",
+      "value": "\"😀: x\""
+    },
+    {
+      "input": "é",
+      "key": "é",
+      "value": "é"
+    },
+    {
+      "input": "ß",
+      "key": "ß",
+      "value": "ß"
+    },
+    {
+      "input": "K",
+      "key": "K",
+      "value": "K"
+    },
+    {
+      "input": "İ",
+      "key": "İ",
+      "value": "İ"
+    },
+    {
+      "input": "􏿿",
+      "key": "􏿿",
+      "value": "􏿿"
+    },
+    {
+      "input": "­",
+      "key": "­",
+      "value": "­"
+    },
+    {
+      "input": "</script>",
+      "key": "</script>",
+      "value": "</script>"
+    },
+    {
+      "input": "Submit",
+      "key": "Submit",
+      "value": "Submit"
+    },
+    {
+      "input": "Sign in to your account",
+      "key": "Sign in to your account",
+      "value": "Sign in to your account"
+    }
+  ]
+}

@@ -27,6 +27,7 @@
 //! Building a locator does no I/O: neo-sdk runs Playwright's own selector code in the realm, with
 //! the test id attribute from `world.rs`, the one name the SDK and the page share.
 
+mod aria_yaml;
 mod bridge;
 mod click;
 #[cfg(test)]

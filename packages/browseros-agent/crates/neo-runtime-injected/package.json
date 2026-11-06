@@ -7,7 +7,7 @@
   "scripts": {
     "build": "bun build.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p scripts",
-    "test": "bun scripts/sync-vendor.ts --check",
+    "test": "bun scripts/sync-vendor.ts --check && bun scripts/aria-yaml-goldens.ts --check",
     "sync-vendor": "bun scripts/sync-vendor.ts",
     "test:browser": "node --test 'tests/*.test.mjs'"
   },
