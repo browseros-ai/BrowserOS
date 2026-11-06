@@ -129,14 +129,18 @@ impl Tabs {
         &self.0.cdp
     }
 
-    pub(crate) fn finish_close(&self, page: Arc<PageSession>) {
+    pub(crate) fn finish_close(&self, page: Arc<PageSession>, entry: Arc<PageEntry>) {
         // Page.close can acknowledge before its beforeunload dialog arrives. Keep the
         // watcher alive after the script returns so it can answer; otherwise detaching
         // strands that dialog. Bound the cleanup if the browser never completes closure.
         self.0.tasks.spawn_on(
             async move {
-                let _settled =
-                    time::timeout(Duration::from_secs(5), page.closed().cancelled()).await;
+                if time::timeout(Duration::from_secs(5), page.closed().cancelled())
+                    .await
+                    .is_ok()
+                {
+                    entry.closed_by_run();
+                }
                 drop(page);
             },
             &self.0.tokio,
@@ -330,6 +334,12 @@ impl Tabs {
 }
 
 impl PageEntry {
+    /// An attached frame can enter its handler without a cancellation point. The handler
+    /// records its start before checking progress, even if the run already ended.
+    pub(crate) fn attached_session(&self) -> Option<Arc<PageSession>> {
+        self.session.get().map(Arc::clone)
+    }
+
     pub(crate) fn closed_by_run(&self) {
         self.closed_by_run.store(true, Ordering::Release);
     }

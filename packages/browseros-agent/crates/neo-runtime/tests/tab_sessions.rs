@@ -223,6 +223,57 @@ async fn tests_that_new_pages_wait_for_the_initial_blank_document() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tests_that_new_page_accepts_a_committed_navigation() {
+    let browser = FakeBrowser::start(Replies {
+        new_page_url: Some("https://example.test/redirected"),
+        ..Replies::default()
+    })
+    .await;
+    let outcome = browser
+        .runtime()
+        .await
+        .run(fake_browser::run_request(
+            "const created = await context.newPage(); return created.url();",
+            Duration::from_millis(500),
+            CancellationToken::new(),
+        ))
+        .await;
+    assert_eq!(
+        outcome.status,
+        RunStatus::Ok,
+        "newPage waited for a URL it can no longer reach: {outcome:?}"
+    );
+    assert_eq!(
+        outcome.value,
+        Some(json!("https://example.test/redirected"))
+    );
+    detached(&browser, 2).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_beforeunload_ack_does_not_claim_the_tab_closed() {
+    // The fake acknowledges Page.close but keeps the tab open.
+    let browser = FakeBrowser::start(Replies::default()).await;
+    let outcome = run(&browser, "const created = await context.newPage(); await created.close({runBeforeUnload:true}); return created.isClosed();").await;
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert_eq!(
+        outcome.value,
+        Some(json!(false)),
+        "the browser still has the tab"
+    );
+    assert!(
+        !outcome
+            .pages
+            .iter()
+            .find(|page| page.created)
+            .unwrap()
+            .closed,
+        "an acknowledgement is not a closure: {outcome:?}"
+    );
+    detached(&browser, 2).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tests_that_dropping_a_multi_page_run_detaches_every_session() {
     let browser = FakeBrowser::start(Replies::default()).await;
     let runtime = browser.runtime().await;
@@ -382,6 +433,15 @@ async fn tests_that_run_before_unload_keeps_its_watcher_after_the_script_returns
             .iter()
             .any(|tab| tab["targetId"] == "new-page-1"),
         "the watcher must survive until the delayed beforeunload completes"
+    );
+    assert!(
+        outcome
+            .pages
+            .iter()
+            .find(|page| page.id == "new-page-1")
+            .unwrap()
+            .closed,
+        "an observed closure is reported: {outcome:?}"
     );
     detached(&browser, 3).await;
 }
