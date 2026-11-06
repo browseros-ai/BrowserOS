@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Checked state actions</title>
+<input id="unchecked" type="checkbox">
+<input id="checked" type="checkbox" checked>
+<input id="checked-frame" type="checkbox" checked>
+<input id="checked-locator" type="checkbox" checked>
+<input id="radio" type="radio" name="group">
+<input id="radio-checked" type="radio" name="group" checked>
+<div id="aria" role="checkbox" aria-checked="false" onclick="this.setAttribute('aria-checked', this.getAttribute('aria-checked') !== 'true')">ARIA checkbox</div>
+<div id="aria-checked" role="checkbox" aria-checked="true" onclick="this.setAttribute('aria-checked', this.getAttribute('aria-checked') !== 'true')">ARIA checked</div>
+<input id="prevent" type="checkbox" onclick="event.preventDefault()">
+<div id="plain">Plain element</div>
+<input id="trial" type="checkbox">
+<div style="position:relative;width:100px;height:40px">
+  <input id="covered" type="checkbox">
+  <div id="overlay" style="position:absolute;inset:0;z-index:2"></div>
+</div>
+<script>
+window.__events = []
+for (const type of ['click', 'input', 'change']) {
+  document.addEventListener(type, event => {
+    window.__events.push({ type, target: event.target.id, checked: event.target.checked ?? null })
+  }, true)
+}
+window.__facts = () => ({
+  checked: Object.fromEntries([...document.querySelectorAll('input')].map(e => [e.id, e.checked])),
+  aria: document.querySelector('#aria').getAttribute('aria-checked'),
+  ariaChecked: document.querySelector('#aria-checked').getAttribute('aria-checked'),
+  events: window.__events,
+})
+</script>
