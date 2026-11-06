@@ -1,6 +1,7 @@
 //! A run's ordered page registry and lazy CDP sessions. Handing out a page registers its
 //! identity; attaching it owns a session until the run and its last writer have let go.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -10,10 +11,11 @@ use neo_runtime_spec::serve::{FrameChannel, FrameInitializer, PageInitializer};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::runtime::Handle;
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, oneshot};
 use tokio::time;
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
+use tracing::debug;
 
 use crate::bridge;
 use crate::getters;
@@ -30,6 +32,7 @@ struct Inner {
     tokio: Handle,
     inputs: TabInputs,
     tasks: TaskTracker,
+    creations: TaskTracker,
     scope: Scope,
     run_page: PageId,
     pages: Mutex<Vec<Arc<PageEntry>>>,
@@ -39,8 +42,9 @@ struct Inner {
 /// getters, and the eventual session watcher all observe the same close.
 pub(crate) struct PageEntry {
     pub(crate) id: PageId,
-    created: bool,
+    created: AtomicBool,
     closed_by_run: AtomicBool,
+    close_requested: AtomicBool,
     pub(crate) closed: CancellationToken,
     session: OnceCell<Arc<PageSession>>,
 }
@@ -71,6 +75,31 @@ struct TabReply {
 #[derive(Deserialize)]
 struct TabsReply {
     tabs: Vec<TabInfo>,
+}
+
+#[derive(Deserialize)]
+struct WindowReply {
+    window: CreatedWindow,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatedWindow {
+    window_id: i64,
+}
+
+/// A pending newPage transaction. Dropping it wakes the creation task, which closes the
+/// new tab unless the handler has committed a successful result with `keep`.
+pub(crate) struct NewPage {
+    pub(crate) entry: Arc<PageEntry>,
+    accepted: Arc<AtomicBool>,
+    _finished: DropGuard,
+}
+
+impl NewPage {
+    pub(crate) fn keep(self) {
+        self.accepted.store(true, Ordering::Release);
+    }
 }
 
 /// The initializer records that the SDK turns into stable Page and main Frame objects.
@@ -104,6 +133,7 @@ impl Tabs {
             tokio,
             inputs,
             tasks,
+            creations: TaskTracker::new(),
             scope: Scope {
                 context: info.live_browser_context_id,
                 window: info.window_id,
@@ -165,12 +195,16 @@ impl Tabs {
             PlaywrightError::error("neo-runtime: the run's pages cannot be registered")
         })?;
         if let Some(entry) = pages.iter().find(|entry| entry.id == id) {
+            if created {
+                entry.created.store(true, Ordering::Release);
+            }
             return Ok(Arc::clone(entry));
         }
         let entry = Arc::new(PageEntry {
             id,
-            created,
+            created: AtomicBool::new(created),
             closed_by_run: AtomicBool::new(false),
+            close_requested: AtomicBool::new(false),
             closed: CancellationToken::new(),
             session: OnceCell::new(),
         });
@@ -255,6 +289,9 @@ impl Tabs {
             .map_err(|error| cdp_error(&error))?;
         if closed {
             entry.closed.cancel();
+            if entry.close_requested.load(Ordering::Acquire) {
+                entry.closed_by_run();
+            }
         }
         Ok(closed)
     }
@@ -274,12 +311,22 @@ impl Tabs {
     }
 
     pub(crate) async fn pages(&self) -> Result<Vec<CreatedPage>, PlaywrightError> {
-        let mut pages = Vec::new();
+        let mut live = HashMap::new();
         for info in self.infos().await? {
-            let entry = self.register(PageId::new(info.target_id), false)?;
-            pages.push(created_page(&entry, info.url, false));
+            self.register(PageId::new(info.target_id.clone()), false)?;
+            live.insert(info.target_id, info.url);
         }
-        Ok(pages)
+        let pages =
+            self.0.pages.lock().map_err(|_| {
+                PlaywrightError::error("neo-runtime: the run's pages cannot be read")
+            })?;
+        Ok(pages
+            .iter()
+            .filter_map(|entry| {
+                live.remove(entry.id.as_str())
+                    .map(|url| created_page(entry, url, false))
+            })
+            .collect())
     }
 
     pub(crate) async fn initializer(
@@ -291,7 +338,44 @@ impl Tabs {
         Ok(created_page(entry, url.unwrap_or_default(), closed))
     }
 
-    pub(crate) async fn create(&self) -> Result<Arc<PageEntry>, PlaywrightError> {
+    pub(crate) async fn create(&self) -> Result<NewPage, PlaywrightError> {
+        let (reply, receiver) = oneshot::channel();
+        let finished = CancellationToken::new();
+        let guard = finished.clone().drop_guard();
+        let accepted = Arc::new(AtomicBool::new(false));
+        let kept = Arc::clone(&accepted);
+        let tabs = self.clone();
+        // The browser owns the write once it receives createTab. This task reads and
+        // registers its answer even after the waiting call is cancelled. The lease keeps
+        // the task alive through readiness, and releases it to cleanup on every failure.
+        let work = async move {
+            match tabs.create_registered().await {
+                Ok(entry) => {
+                    let _sent = reply.send(Ok(Arc::clone(&entry)));
+                    finished.cancelled().await;
+                    if !kept.load(Ordering::Acquire) {
+                        tabs.close_failed_creation(&entry).await;
+                    }
+                }
+                Err(error) => {
+                    let _sent = reply.send(Err(error));
+                }
+            }
+        };
+        self.0
+            .tasks
+            .spawn_on(self.0.creations.track_future(work), &self.0.tokio);
+        let entry = receiver
+            .await
+            .map_err(|error| PlaywrightError::error(format!("creating a page: {error}")))??;
+        Ok(NewPage {
+            entry,
+            accepted,
+            _finished: guard,
+        })
+    }
+
+    async fn create_registered(&self) -> Result<Arc<PageEntry>, PlaywrightError> {
         let mut params = json!({ "url": "about:blank", "background": true });
         let run_tab = tab_info(&self.0.cdp, &self.0.run_page).await?;
         let window = match run_tab {
@@ -301,7 +385,25 @@ impl Tabs {
         if let Some(window) = window {
             params["windowId"] = json!(window);
         } else if let Some(context) = &self.0.scope.context {
-            params["browserContextId"] = json!(context);
+            // BrowserOS's context-routed windows are shown inactive. createTab alone
+            // requires a surviving normal window, so recreate one after the last closes.
+            let window: WindowReply = self
+                .0
+                .cdp
+                .send_typed(
+                    "Browser.createWindow",
+                    json!({"browserContextId":context,"url":"about:blank"}),
+                    None,
+                )
+                .await
+                .map_err(|error| cdp_error(&error))?;
+            let info = self
+                .infos()
+                .await?
+                .into_iter()
+                .find(|info| info.window_id == Some(window.window.window_id))
+                .ok_or_else(|| PlaywrightError::error("the new window has no initial tab"))?;
+            return self.register(PageId::new(info.target_id), true);
         } else {
             // A context with no surviving window and no routable identity cannot safely
             // create a tab: omitting both would let BrowserOS choose another profile.
@@ -316,6 +418,56 @@ impl Tabs {
         self.register(PageId::new(reply.tab.target_id), true)
     }
 
+    async fn close_failed_creation(&self, entry: &PageEntry) {
+        entry.request_close();
+        let cleanup = async {
+            let _closed = self
+                .0
+                .cdp
+                .send(
+                    "Target.closeTarget",
+                    json!({"targetId":entry.id.as_str()}),
+                    None,
+                )
+                .await;
+            loop {
+                if self.is_closed(entry).await? {
+                    return Ok::<(), PlaywrightError>(());
+                }
+                time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+        if !matches!(
+            time::timeout(Duration::from_secs(5), cleanup).await,
+            Ok(Ok(()))
+        ) {
+            debug!(
+                target = entry.id.as_str(),
+                "failed newPage cleanup did not confirm closure"
+            );
+        }
+    }
+
+    /// Creation replies identify writes that already reached the browser. Read them before
+    /// taking the outcome, even beyond the ordinary one-second call drain (CDP is bounded).
+    pub(crate) async fn finish_creations(&self) {
+        self.0.creations.close();
+        self.0.creations.wait().await;
+    }
+
+    pub(crate) async fn refresh_closing(&self) {
+        let pages = self
+            .0
+            .pages
+            .lock()
+            .map_or_else(|_| Vec::new(), |pages| pages.clone());
+        for page in pages {
+            if page.close_requested.load(Ordering::Acquire) {
+                let _checked = time::timeout(Duration::from_secs(1), self.is_closed(&page)).await;
+            }
+        }
+    }
+
     pub(crate) fn outcome(&self) -> Vec<RunPage> {
         self.0.pages.lock().map_or_else(
             |_| Vec::new(),
@@ -324,7 +476,7 @@ impl Tabs {
                     .iter()
                     .map(|entry| RunPage {
                         id: entry.id.as_str().to_string(),
-                        created: entry.created,
+                        created: entry.created.load(Ordering::Acquire),
                         closed: entry.closed_by_run.load(Ordering::Acquire),
                     })
                     .collect()
@@ -334,6 +486,9 @@ impl Tabs {
 }
 
 impl PageEntry {
+    pub(crate) fn request_close(&self) {
+        self.close_requested.store(true, Ordering::Release);
+    }
     /// An attached frame can enter its handler without a cancellation point. The handler
     /// records its start before checking progress, even if the run already ended.
     pub(crate) fn attached_session(&self) -> Option<Arc<PageSession>> {
@@ -342,6 +497,7 @@ impl PageEntry {
 
     pub(crate) fn closed_by_run(&self) {
         self.closed_by_run.store(true, Ordering::Release);
+        self.close_requested.store(false, Ordering::Release);
     }
 }
 

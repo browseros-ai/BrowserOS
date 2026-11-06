@@ -22,13 +22,14 @@ pub(crate) async fn context(
 ) -> Result<Option<Value>, CallError> {
     match call {
         BrowserContextCall::NewPage(_) => {
-            let entry = progress.race(tabs.create()).await??;
+            let created = progress.race(tabs.create()).await??;
+            let entry = &created.entry;
             // Playwright 26137face server/browserContext.ts:575-595 waits for initialization
             // before returning a page. Its committed history ensures a main frame here.
             let mut backoff = Duration::from_millis(1);
             loop {
                 let url = progress
-                    .race(tabs.url(&entry))
+                    .race(tabs.url(entry))
                     .await??
                     .ok_or_else(PlaywrightError::target_closed)?;
                 if !url.is_empty() {
@@ -44,9 +45,10 @@ pub(crate) async fn context(
                     guid: bridge::page_guid(&entry.id),
                 },
             };
-            serde_json::to_value(result)
-                .map(Some)
-                .map_err(|error| PlaywrightError::error(error.to_string()).into())
+            let value = serde_json::to_value(result)
+                .map_err(|error| PlaywrightError::error(error.to_string()))?;
+            created.keep();
+            Ok(Some(value))
         }
     }
 }
@@ -66,6 +68,7 @@ pub(crate) async fn page(
             let prepared = progress.race(page.prepare()).await?;
             checked(tabs, entry, progress, prepared).await?;
             progress.check()?;
+            entry.request_close();
             tabs.finish_close(Arc::clone(&page), Arc::clone(entry));
             match progress.race(page.send("Page.close", json!({}))).await {
                 Ok(Ok(_)) => {}
@@ -129,6 +132,7 @@ async fn close(tabs: &Tabs, entry: &PageEntry, progress: &Progress) -> Result<()
     if progress.race(tabs.is_closed(entry)).await?? {
         return Ok(());
     }
+    entry.request_close();
     let closed = progress
         .race(tabs.cdp().send(
             "Target.closeTarget",
