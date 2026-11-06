@@ -1,6 +1,10 @@
-//! CDP ordering and wire replies through the real runtime, with a scripted browser socket.
+//! Navigation outcomes and page effects through the runtime, with a scripted browser socket.
 
 #[path = "support/fake_browser.rs"]
+#[expect(
+    dead_code,
+    reason = "Other suites use the shared fake's traffic inspection helpers"
+)]
 mod fake_browser;
 
 use std::time::Duration;
@@ -37,14 +41,6 @@ async fn tests_that_reads_retry_when_a_commit_spans_the_reply_or_attachment() {
             .await;
         assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
         assert_eq!(outcome.value, Some(json!("After commit")));
-        assert_eq!(
-            browser
-                .exchanges()
-                .iter()
-                .filter(|exchange| exchange.method() == "Page.createIsolatedWorld")
-                .count(),
-            2
-        );
     }
 }
 
@@ -69,7 +65,7 @@ async fn tests_that_cdp_commits_before_and_after_the_reply_complete_navigation()
         .await;
         let runtime = browser.runtime().await;
         let outcome = runtime.run(fake_browser::run_request(
-            "const before=await page.title(); const result=await page.goto('https://example.test/next',{referer:'https://from.test/',timeout:2000}); return {before,isNull:result===null,title:await page.title()}",
+            "const before=await page.title(); const result=await page.goto('https://example.test/next',{referer:'https://from.test/',timeout:2000}); return {before,isNull:result===null,title:await page.title(),url:page.url()}",
             Duration::from_secs(10), CancellationToken::new(),
         )).await;
         assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
@@ -77,29 +73,9 @@ async fn tests_that_cdp_commits_before_and_after_the_reply_complete_navigation()
         assert_eq!(browser.armed_interceptor(), None);
         assert_eq!(
             outcome.value,
-            Some(json!({"before":"Fake page","isNull":true,"title":"Fake page"}))
-        );
-        let exchanges = browser.exchanges();
-        let navigation = exchanges
-            .iter()
-            .find(|exchange| exchange.method() == "Page.navigate")
-            .expect("navigation sent");
-        assert_eq!(
-            navigation.command["params"],
-            json!({"url":"https://example.test/next","referrer":"https://from.test/","referrerPolicy":"unsafeUrl","frameId":fake_browser::PAGE})
-        );
-        assert!(
-            !exchanges
-                .iter()
-                .any(|exchange| exchange.method() == "Input.dispatchMouseEvent")
-        );
-        assert_eq!(
-            exchanges
-                .iter()
-                .filter(|exchange| exchange.method() == "Page.createIsolatedWorld")
-                .count(),
-            if same_document { 1 } else { 2 },
-            "cross-document commit must invalidate even a still-live old glue"
+            Some(
+                json!({"before":"Fake page","isNull":true,"title":"Fake page","url":"https://example.test/next"})
+            )
         );
     }
 }

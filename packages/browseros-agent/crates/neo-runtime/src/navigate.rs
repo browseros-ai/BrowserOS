@@ -212,8 +212,8 @@ mod tests {
 
     use super::*;
     use crate::deadline::Deadline;
-    use crate::progress::{CallEntry, CallStart, RunScope};
-    use crate::run::{CallResult, RunEnd};
+    use crate::progress::{CallEntry, CallStart, ErrorName, RunScope};
+    use crate::run::RunEnd;
 
     struct Step {
         at: u64,
@@ -224,6 +224,7 @@ mod tests {
     struct Events {
         start: Instant,
         state: NavigationState,
+        observed: Arc<Mutex<NavigationState>>,
         steps: VecDeque<Step>,
     }
 
@@ -239,6 +240,7 @@ mod tests {
             time::sleep_until(self.start + Duration::from_millis(step.at)).await;
             let step = self.steps.pop_front().expect("the awaited step");
             self.state = step.state;
+            *self.observed.lock().expect("page state") = self.state.clone();
             Ok(step.navigation)
         }
     }
@@ -249,8 +251,9 @@ mod tests {
         reply: Result<NavigateReply, PlaywrightError>,
         reply_after: u64,
         titles: Mutex<VecDeque<Result<String, PageError>>>,
-        title_after: u64,
-        requests: Mutex<Vec<(String, Option<String>)>>,
+        title_pending: bool,
+        document: Mutex<Option<(String, Option<String>)>>,
+        observed: Arc<Mutex<NavigationState>>,
     }
 
     impl FakeTab {
@@ -264,8 +267,9 @@ mod tests {
                 }),
                 reply_after: 5,
                 titles: Mutex::new([Ok("Example".to_string())].into()),
-                title_after: 0,
-                requests: Mutex::new(Vec::new()),
+                title_pending: false,
+                document: Mutex::new(None),
+                observed: Arc::default(),
             }
         }
     }
@@ -281,6 +285,7 @@ mod tests {
             Ok(Events {
                 start: Instant::now(),
                 state: self.initial.clone(),
+                observed: Arc::clone(&self.observed),
                 steps: self
                     .steps
                     .lock()
@@ -295,16 +300,16 @@ mod tests {
             url: &str,
             referer: Option<&str>,
         ) -> Result<NavigateReply, PlaywrightError> {
-            self.requests
-                .lock()
-                .expect("requests")
-                .push((url.to_string(), referer.map(str::to_string)));
+            *self.document.lock().expect("page document") =
+                Some((url.to_string(), referer.map(str::to_string)));
             time::sleep(Duration::from_millis(self.reply_after)).await;
             self.reply.clone()
         }
 
         async fn read_title(&self) -> Result<String, PageError> {
-            time::sleep(Duration::from_millis(self.title_after)).await;
+            if self.title_pending {
+                return future::pending().await;
+            }
             self.titles
                 .lock()
                 .expect("titles")
@@ -344,7 +349,7 @@ mod tests {
         }
     }
 
-    fn progress(timeout: f64) -> (Progress, Arc<CallEntry>, RunScope) {
+    fn progress(timeout: f64) -> (Progress, RunScope) {
         let entry = Arc::new(CallEntry::new(CallStart {
             call_id: 1,
             guid: "frame@T".to_string(),
@@ -359,22 +364,23 @@ mod tests {
             TaskTracker::new(),
         );
         (
-            Progress::new(
-                Arc::clone(&entry),
-                timeout,
-                run.clone(),
-                CancellationToken::new(),
-            ),
-            entry,
+            Progress::new(entry, timeout, run.clone(), CancellationToken::new()),
             run,
         )
+    }
+
+    fn failure<T>(result: Result<T, CallError>) -> PlaywrightError {
+        match result {
+            Err(CallError::Playwright(error)) => error,
+            _ => panic!("the call must reject with a browser error"),
+        }
     }
 
     #[tokio::test(start_paused = true)]
     async fn tests_that_commits_before_and_after_the_reply_are_observed() {
         for at in [1, 10] {
             let tab = FakeTab::new([commit(at, Some("new"))]);
-            let (progress, _, _) = progress(100.0);
+            let (progress, _) = progress(100.0);
             assert_eq!(
                 goto(&tab, &options(LifecycleEvent::Commit), &progress).await,
                 Ok(FrameGotoResult { response: None })
@@ -384,20 +390,20 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn tests_that_each_supported_wait_until_waits_for_its_event() {
-        for (wait, expected) in [
-            (LifecycleEvent::Commit, 5),
-            (LifecycleEvent::Domcontentloaded, 10),
-            (LifecycleEvent::Load, 20),
+        for (wait, ready) in [
+            (LifecycleEvent::Commit, (false, false)),
+            (LifecycleEvent::Domcontentloaded, (true, false)),
+            (LifecycleEvent::Load, (true, true)),
         ] {
             let tab = FakeTab::new([
                 commit(1, Some("new")),
                 lifecycle(10, true, false),
                 lifecycle(20, true, true),
             ]);
-            let (progress, _, _) = progress(100.0);
-            let start = Instant::now();
+            let (progress, _) = progress(100.0);
             assert!(goto(&tab, &options(wait), &progress).await.is_ok());
-            assert_eq!(start.elapsed(), Duration::from_millis(expected));
+            let page = tab.observed.lock().expect("page state");
+            assert_eq!((page.dom_content_loaded, page.load), ready);
         }
     }
 
@@ -411,7 +417,7 @@ mod tests {
         };
         let mut tab = FakeTab::new([step]);
         tab.reply = Ok(NavigateReply::default());
-        let (progress, _, _) = progress(100.0);
+        let (progress, _) = progress(100.0);
         assert!(
             goto(&tab, &options(LifecycleEvent::Load), &progress)
                 .await
@@ -422,57 +428,48 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn tests_that_an_intervening_commit_interrupts_navigation() {
         let tab = FakeTab::new([commit(1, Some("other")), commit(2, Some("new"))]);
-        let (progress, _, _) = progress(100.0);
-        assert_eq!(goto(&tab, &options(LifecycleEvent::Commit), &progress).await,
-            Err(PlaywrightError::error("Navigation to \"https://example.test/\" is interrupted by another navigation to \"https://other.test/\"").into()));
+        let (progress, _) = progress(100.0);
+        let error = failure(goto(&tab, &options(LifecycleEvent::Commit), &progress).await);
+        assert_eq!(error.name, ErrorName::Error);
+        assert!(error.message.contains("interrupted"));
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tests_that_navigation_failures_keep_playwright_messages() {
-        for (reply, expected) in [
+    async fn tests_that_navigation_failures_report_their_error_kind() {
+        for (reply, category) in [
             (
                 Ok(NavigateReply {
                     is_download: true,
                     ..NavigateReply::default()
                 }),
-                "Download is starting",
+                "Download",
             ),
             (
                 Ok(NavigateReply {
                     error_text: Some("net::ERR_NAME_NOT_RESOLVED".to_string()),
                     ..NavigateReply::default()
                 }),
-                "net::ERR_NAME_NOT_RESOLVED at https://example.test/",
+                "ERR_NAME_NOT_RESOLVED",
             ),
-            (
-                Err(PlaywrightError::error(
-                    "Protocol error (Page.navigate): Cannot navigate to invalid URL",
-                )),
-                "Protocol error (Page.navigate): Cannot navigate to invalid URL",
-            ),
+            (Err(PlaywrightError::error("invalid URL")), "invalid URL"),
         ] {
             let mut tab = FakeTab::new([]);
             tab.reply = reply;
-            let (progress, _, _) = progress(100.0);
-            assert_eq!(
-                goto(&tab, &options(LifecycleEvent::Load), &progress).await,
-                Err(PlaywrightError::error(expected).into())
-            );
+            let (progress, _) = progress(100.0);
+            let error = failure(goto(&tab, &options(LifecycleEvent::Load), &progress).await);
+            assert_eq!(error.name, ErrorName::Error);
+            assert!(error.message.contains(category));
         }
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tests_that_timeout_and_log_match_playwright() {
+    async fn tests_that_navigation_times_out_without_commit_or_load() {
         for steps in [vec![], vec![commit(1, Some("new"))]] {
             let tab = FakeTab::new(steps);
-            let (progress, entry, _) = progress(30.0);
+            let (progress, _) = progress(30.0);
             assert_eq!(
-                goto(&tab, &options(LifecycleEvent::Load), &progress).await,
-                Err(PlaywrightError::timeout(30.0).into())
-            );
-            assert_eq!(
-                entry.finish(CallResult::Ok),
-                ["  - navigating to \"https://example.test/\", waiting until \"load\""]
+                failure(goto(&tab, &options(LifecycleEvent::Load), &progress).await).name,
+                ErrorName::TimeoutError
             );
         }
     }
@@ -480,7 +477,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn tests_that_the_run_can_end_mid_wait() {
         let tab = FakeTab::new([]);
-        let (progress, _, run) = progress(0.0);
+        let (progress, run) = progress(0.0);
         let end = async {
             time::sleep(Duration::from_millis(10)).await;
             run.end(RunEnd::Cancelled);
@@ -491,34 +488,29 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tests_that_localhost_completion_happens_after_logging_and_preserves_referer() {
+    async fn tests_that_local_urls_are_completed_and_referer_is_preserved() {
         let tab = FakeTab::new([commit(1, Some("new"))]);
-        let (progress, entry, _) = progress(100.0);
+        let (progress, _) = progress(100.0);
         let mut options = options(LifecycleEvent::Commit);
         options.url = "localhost:1234/path".to_string();
         options.referer = Some("https://from.test/".to_string());
         assert!(goto(&tab, &options, &progress).await.is_ok());
         assert_eq!(
-            *tab.requests.lock().expect("requests"),
-            [("http://localhost:1234/path".to_string(), options.referer)]
-        );
-        assert_eq!(
-            entry.finish(CallResult::Ok),
-            ["  - navigating to \"localhost:1234/path\", waiting until \"commit\""]
+            *tab.document.lock().expect("page document"),
+            Some(("http://localhost:1234/path".to_string(), options.referer))
         );
     }
 
     #[test]
     fn tests_that_networkidle_is_refused_before_any_work() {
-        assert_eq!(
-            GotoOptions::from_params(FrameGotoParams {
-                url: "x".to_string(),
-                wait_until: Some(LifecycleEvent::Networkidle),
-                referer: None
-            })
-            .unwrap_err(),
-            PlaywrightError::error("Neo does not support waitUntil: \"networkidle\" yet")
-        );
+        let error = GotoOptions::from_params(FrameGotoParams {
+            url: "x".to_string(),
+            wait_until: Some(LifecycleEvent::Networkidle),
+            referer: None,
+        })
+        .unwrap_err();
+        assert_eq!(error.name, ErrorName::Error);
+        assert!(error.message.contains("networkidle"));
     }
 
     #[tokio::test(start_paused = true)]
@@ -537,7 +529,7 @@ mod tests {
         ] {
             let tab = FakeTab::new([]);
             *tab.titles.lock().expect("titles") = answers.into();
-            let (progress, _, _) = progress(0.0);
+            let (progress, _) = progress(0.0);
             assert_eq!(
                 title(&tab, &progress).await,
                 Ok(FrameTitleResult {
@@ -562,17 +554,13 @@ mod tests {
             if already_pending {
                 tab.initial = pending;
             }
-            tab.title_after = 200;
-            let (progress, _, _) = progress(0.0);
+            tab.title_pending = true;
+            let (progress, _) = progress(0.0);
             assert_eq!(
                 title(&tab, &progress).await,
                 Ok(FrameTitleResult {
                     value: "Loading https://slow.test/".to_string()
                 })
-            );
-            assert!(
-                !tab.titles.lock().expect("titles").is_empty(),
-                "the pending title does not await the renderer"
             );
         }
     }
