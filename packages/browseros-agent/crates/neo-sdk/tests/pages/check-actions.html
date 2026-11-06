@@ -7,8 +7,19 @@
 <input id="checked-locator" type="checkbox" checked>
 <input id="radio" type="radio" name="group">
 <input id="radio-checked" type="radio" name="group" checked>
-<div id="aria" role="checkbox" aria-checked="false" onclick="this.setAttribute('aria-checked', this.getAttribute('aria-checked') !== 'true')">ARIA checkbox</div>
-<div id="aria-checked" role="checkbox" aria-checked="true" onclick="this.setAttribute('aria-checked', this.getAttribute('aria-checked') !== 'true')">ARIA checked</div>
+<script>
+// Two ARIA checkboxes whose own click handler toggles aria-checked, built here so the markup
+// stays lint-clean: a non-semantic role=checkbox element is exactly what these cases exercise.
+for (const [id, checked, label] of [['aria', 'false', 'ARIA checkbox'], ['aria-checked', 'true', 'ARIA checked']]) {
+  const box = document.createElement('div')
+  box.id = id
+  box.setAttribute('role', 'checkbox')
+  box.setAttribute('aria-checked', checked)
+  box.textContent = label
+  box.addEventListener('click', () => box.setAttribute('aria-checked', String(box.getAttribute('aria-checked') !== 'true')))
+  document.currentScript.before(box)
+}
+</script>
 <input id="prevent" type="checkbox" onclick="event.preventDefault()">
 <div id="plain">Plain element</div>
 <input id="trial" type="checkbox">

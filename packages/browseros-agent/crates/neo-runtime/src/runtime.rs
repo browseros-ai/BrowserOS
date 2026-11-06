@@ -1,33 +1,33 @@
-//! The entry point: owns the browser connection and runs one script per call against one tab.
+//! The entry point: owns the browser connection and runs each script from its requested tab.
 //!
 //! A run's order, after the tab check and the attach:
 //!
 //! ```text
-//!  Session ─▶ Arc<PageSession> ─▶ Dispatcher ─┬─▶ realm::run(…, dispatcher)   the deadline decides, as before
+//!  Tabs ─▶ PageEntry ─▶ Arc<PageSession> ─┬─▶ realm::run(…, dispatcher)   the deadline decides, as before
 //!                                             ├─▶ dispatcher.finish(reason)  cancel calls, wait ≤ 1 s, records
 //!                                             └─▶ last Arc drops ─▶ Session::drop ─▶ detach in background
 //! ```
 //!
-//! No step here detaches anything; ownership does (`page.rs`). The dispatcher holds the page,
-//! so the session detaches once the realm and the dispatcher are gone, also when a caller drops
-//! the run's future.
-
-use std::sync::Arc;
+//! No step here detaches anything; ownership does (`page.rs`). The registry holds each page,
+//! so sessions detach once the realm, dispatcher and their writers are gone, also when a
+//! caller drops the run's future. Browser tabs themselves survive the run.
 
 use browseros_cdp::{CdpClient, CdpError, browser};
 use serde_json::Value;
 use tokio::runtime::{Handle, RuntimeFlavor};
 use tokio_util::task::TaskTracker;
 
+use crate::bridge;
 use crate::bridge::Getters;
 use crate::deadline::Deadline;
 use crate::dispatch::Dispatcher;
 use crate::getters::CLOSED_TAB_MESSAGE;
-use crate::page::{PageSession, Session, TabInputs};
-use crate::progress::RunScope;
+use crate::page::TabInputs;
+use crate::progress::{ErrorName, RunScope};
+use crate::realm;
 use crate::realm::Script;
-use crate::run::{PageId, RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
-use crate::{bridge, getters, realm};
+use crate::run::{RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
+use crate::tabs::Tabs;
 
 /// A target id no tab can have, used to see how the browser reports a missing tab.
 const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
@@ -114,15 +114,23 @@ impl Runtime {
             }
         };
 
+        let tasks = TaskTracker::new();
         let opened = tokio::select! {
             stop = deadline.reached() => {
                 return RunOutcome::stopped(stop, deadline.timeout(), Vec::new());
             }
-            opened = self.open(&page, &tokio) => opened,
+            opened = Tabs::open(self.cdp.clone(), tokio.clone(), self.inputs.clone(), tasks.clone(), &page) => opened,
         };
-        let (session, url) = match opened {
+        let (tabs, url) = match opened {
             Ok(opened) => opened,
-            Err(error) => return RunOutcome::failed(error, Vec::new()),
+            Err(error) => {
+                let error = if error.name == ErrorName::TargetClosedError {
+                    RunError::target_closed()
+                } else {
+                    RunError::new(error.name.as_str(), error.message)
+                };
+                return RunOutcome::failed(error, Vec::new());
+            }
         };
 
         let script = Script {
@@ -133,55 +141,15 @@ impl Runtime {
         };
         // One tracker for the run: call tasks, and the writer, interceptor-stop and
         // group-release tasks the page spawns, so `finish` waits for them all.
-        let tasks = TaskTracker::new();
-        let input = self.inputs.lock_for(&page).await;
-        let tab = Arc::new(PageSession::new(session, &page, tasks.clone(), input));
-        let getters = Getters::new(
-            self.cdp.clone(),
-            page.clone(),
-            tab.session_id().clone(),
-            deadline.clone(),
-            tokio,
-        );
+        let getters = Getters::new(tabs.clone(), deadline.clone(), tokio);
         let run = RunScope::new(deadline.clone(), tasks);
-        let dispatcher = Dispatcher::new(tab, run, &page);
+        let dispatcher = Dispatcher::new(tabs.clone(), run);
         let outcome = realm::run(script, getters, dispatcher.clone(), deadline).await;
         let (calls, dropped) = dispatcher.finish(run_end_of(&outcome)).await;
-        outcome.with_calls(calls, dropped)
+        outcome
+            .with_calls(calls, dropped)
+            .with_pages(tabs.outcome())
     }
-
-    /// Confirms the tab is open, attaches the run's session to it and reads its URL.
-    async fn open(&self, page: &PageId, tokio: &Handle) -> Result<(Session, String), RunError> {
-        if getters::is_closed(&self.cdp, page)
-            .await
-            .map_err(|error| cdp_error(&error))?
-        {
-            return Err(RunError::target_closed());
-        }
-        // The attach runs as its own task so that its answer is read even when the run stops
-        // first and drops this future. The browser creates the session either way; awaiting
-        // the send here would throw that answer away with the future and leak the session.
-        // When nobody awaits the task any more, tokio drops its output, the `Session`, and
-        // dropping it detaches.
-        let session = tokio
-            .spawn(Session::attach(
-                self.cdp.clone(),
-                page.clone(),
-                tokio.clone(),
-            ))
-            .await
-            .map_err(|error| RunError::new("Error", format!("attaching to the tab: {error}")))?
-            .map_err(|error| cdp_error(&error))?;
-        match getters::url(&self.cdp, &session.id, page).await {
-            Ok(Some(url)) => Ok((session, url)),
-            Ok(None) => Err(RunError::target_closed()),
-            Err(error) => Err(cdp_error(&error)),
-        }
-    }
-}
-
-fn cdp_error(error: &CdpError) -> RunError {
-    RunError::new("Error", error.to_string())
 }
 
 /// Why the run ended, for calls still running then. The realm reports `Timeout` or `Cancelled`

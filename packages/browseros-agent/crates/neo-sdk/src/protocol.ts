@@ -16,6 +16,7 @@ import type {
   FramePressParams,
   FrameSelectOptionParams,
   FrameUncheckParams,
+  PageCloseParams,
 } from '@browseros/neo-runtime-spec/serve'
 
 /** `Frame.click`'s params in Playwright's schema order (`spec/playwright/frame.yml`). */
@@ -128,6 +129,16 @@ type _FrameSelectOptionKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_SELECT_OPTION_KEYS)[number], true>,
     Required<FrameSelectOptionParams>
+  >
+>
+
+/** `Page.close`'s params (`spec/playwright/page.yml`). */
+export const PAGE_CLOSE_KEYS = ['reason'] as const
+
+type _PageCloseKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof PAGE_CLOSE_KEYS)[number], true>,
+    Required<PageCloseParams>
   >
 >
 

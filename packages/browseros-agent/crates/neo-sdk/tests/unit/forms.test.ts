@@ -78,7 +78,7 @@ test('tests that missing inputValue and selectOption results are contract errors
     'page@T',
     'frame@T',
     '',
-    new BrowserContext(),
+    new BrowserContext('browser-context@T', connection),
     connection,
   )
   await expect(page.mainFrame().inputValue('input')).rejects.toThrow(
@@ -100,7 +100,7 @@ test('tests that invalid select fields reject before sending anything', async ()
     'page@T',
     'frame@T',
     '',
-    new BrowserContext(),
+    new BrowserContext('browser-context@T', connection),
     connection,
   )
   for (const value of [
@@ -137,7 +137,7 @@ test('tests that Page and Frame forms accept null options with the default timeo
     'page@T',
     'frame@T',
     '',
-    new BrowserContext(),
+    new BrowserContext('browser-context@T', connection),
     connection,
   )
   page.setDefaultTimeout(123)
@@ -169,7 +169,7 @@ test('tests that forms send the outer API name, strictness and timeout and unwra
     'page@T',
     'frame@T',
     '',
-    new BrowserContext(),
+    new BrowserContext('browser-context@T', connection),
     connection,
   )
   page.setDefaultTimeout(123)

@@ -1,6 +1,8 @@
+import type { PageCloseParams } from '@browseros/neo-runtime-spec/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
 import type { BrowserContext } from './browser-context'
 import type { Connection } from './connection'
+import { isTargetClosedError } from './errors'
 import {
   type CheckOptions,
   type ClickOptions,
@@ -12,13 +14,15 @@ import {
   type UncheckOptions,
 } from './frame'
 import type { Locator, LocatorOptions } from './locator'
+import { PAGE_CLOSE_KEYS, pickParams } from './protocol'
 import { get } from './runtime-bridge'
 import type { SelectOptionValues } from './select-option'
 import { TimeoutSettings } from './timeout-settings'
 
 /**
- * Playwright's `Page`, backed by live reads from the tab this run is attached to. Its selector
- * builders and browser actions forward to the main frame, as Playwright's do (`client/page.ts`).
+ * Playwright's `Page`, backed by live reads from its own tab, which its guid names. Its
+ * selector builders and browser actions forward to the main frame, as Playwright's do
+ * (`client/page.ts`). Only the run's `BrowserContext` builds one, once per guid.
  *
  * Known limitation: once the tab is closed, `url()` returns the last URL this object returned,
  * not the last URL the tab committed. Navigate `/a` to `/final`, close the tab before the
@@ -29,16 +33,20 @@ import { TimeoutSettings } from './timeout-settings'
 export class Page {
   readonly #guid: string
   /**
-   * The only state the SDK keeps. Playwright still answers `url()` after the page closes,
-   * with the last URL, while every CDP source errors; seeded with the URL at run start.
+   * The only tab state a `Page` keeps. Playwright still answers `url()` after the page closes,
+   * with the last URL, while every CDP source errors; seeded with the tab's URL in the record
+   * the run was handed (`RunInit.url` for the run page).
    */
   #lastUrl: string
   readonly #context: BrowserContext
+  readonly #connection: Connection
   /** Built once: `Locator` throws `… must belong to the same frame.` when two locators hold
    * different `Frame` objects, so `mainFrame()` must always return this one. */
   readonly #mainFrame: Frame
   readonly _timeoutSettings: TimeoutSettings
 
+  /** `guid` and `mainFrameGuid` come from one record Rust minted (`page@T`, `frame@T`), so a
+   * page's calls and its frame's calls reach the same tab. */
   constructor(
     guid: string,
     mainFrameGuid: string,
@@ -49,6 +57,7 @@ export class Page {
     this.#guid = guid
     this.#lastUrl = url
     this.#context = context
+    this.#connection = connection
     this._timeoutSettings = new TimeoutSettings(context._timeoutSettings)
     this.#mainFrame = new Frame(mainFrameGuid, this, connection)
   }
@@ -57,6 +66,54 @@ export class Page {
     const url = get(this.#guid, 'url')
     if (url !== null) this.#lastUrl = url
     return this.#lastUrl
+  }
+
+  /** Makes this the active tab of its window. */
+  async bringToFront(): Promise<void> {
+    await this.#connection.sendPage(
+      'page.bringToFront',
+      this.#guid,
+      'bringToFront',
+      {},
+      0,
+    )
+  }
+
+  /**
+   * Playwright's client `close`. By default it closes the tab and resolves once the tab is
+   * gone, so `isClosed()` is then true; closing a closed page resolves. `runBeforeUnload` asks
+   * the page to close itself instead, which runs its `beforeunload` handlers and resolves
+   * without waiting for the close; on a closed page it throws. Both calls have no timeout.
+   *
+   * Playwright also records `reason` and that `close` was called, for its event waiters and
+   * route handlers. Neo has neither: the reason goes to Rust.
+   */
+  async close(
+    options: { runBeforeUnload?: boolean; reason?: string } = {},
+  ): Promise<void> {
+    try {
+      if (options.runBeforeUnload)
+        await this.#connection.sendPage(
+          'page.close',
+          this.#guid,
+          'runBeforeUnload',
+          {},
+          0,
+        )
+      else
+        await this.#connection.sendPage(
+          'page.close',
+          this.#guid,
+          'close',
+          pickParams(PAGE_CLOSE_KEYS, {
+            reason: options.reason,
+          }) as PageCloseParams,
+          0,
+        )
+    } catch (error) {
+      if (isTargetClosedError(error) && !options.runBeforeUnload) return
+      throw error
+    }
   }
 
   isClosed(): boolean {
