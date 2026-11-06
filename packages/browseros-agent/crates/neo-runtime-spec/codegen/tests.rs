@@ -318,6 +318,39 @@ fn a_required_reference_to_an_unimplemented_interface_names_the_fix() {
 }
 
 #[test]
+fn tests_that_bare_channels_are_uninhabited_on_the_wire_and_rejected_in_page_calls() {
+    let playwright = PLAYWRIGHT.replace(
+        "        value: string\n",
+        "        value: string\n        handles:\n          type: array\n          items: Channel\n",
+    );
+    let outputs = generate_from(&[
+        ("playwright/a.yml", &playwright),
+        ("serve.yml", SERVE),
+        ("injected.yml", INJECTED),
+    ])
+    .unwrap_or_else(|error| panic!("{error}"));
+    assert!(
+        rendered(&outputs, "src/serve.rs").contains("pub enum Channel {}"),
+        "bare channels have no Rust values"
+    );
+    assert!(
+        rendered(&outputs, "src/serve.rs").contains("pub handles: Vec<Channel>"),
+        "empty handle arrays remain constructible"
+    );
+    assert!(
+        rendered(&outputs, "ts/serve.ts").contains("export type Channel = never"),
+        "bare channels have no TypeScript values"
+    );
+
+    let injected = INJECTED.replace(
+        "        value: string\n",
+        "        value: string\n        handles:\n          type: array\n          items: Channel\n",
+    );
+    let error = rejection("injected.yml", &injected);
+    assert!(error.contains("is `Channel`"), "{error}");
+}
+
+#[test]
 fn an_unknown_construct_is_rejected() {
     let key = PLAYWRIGHT.replace(
         "      title: Reload\n",

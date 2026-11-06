@@ -18,6 +18,7 @@ import type {
   FrameInnerTextParams,
   FrameInputValueParams,
   FramePressParams,
+  FrameQueryCountParams,
   FrameSelectOptionParams,
   FrameTextContentParams,
   FrameUncheckParams,
@@ -35,6 +36,9 @@ export const FRAME_INNER_TEXT_KEYS = ['selector', 'strict'] as const
 
 /** `Frame.getAttribute`'s params in Playwright's schema order. */
 export const FRAME_GET_ATTRIBUTE_KEYS = ['selector', 'strict', 'name'] as const
+
+/** `Frame.queryCount`'s params in Playwright's schema order. */
+export const FRAME_QUERY_COUNT_KEYS = ['selector'] as const
 
 /** `Frame.ariaSnapshot`'s params in Playwright's schema order. */
 export const FRAME_ARIA_SNAPSHOT_KEYS = [
@@ -147,6 +151,13 @@ type _FrameAriaSnapshotKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_ARIA_SNAPSHOT_KEYS)[number], true>,
     Required<FrameAriaSnapshotParams>
+  >
+>
+
+type _FrameQueryCountKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_QUERY_COUNT_KEYS)[number], true>,
+    Required<FrameQueryCountParams>
   >
 >
 

@@ -41,6 +41,8 @@ const valid = {
   elementState: () => ({ matches: false }),
   focusElement: () => ({ outcome: 'done' }),
   inputValue: () => ({}),
+  queryCount: () => ({ value: 0 }),
+  allTextContents: () => ({ values: [] }),
 } satisfies Api
 
 export const unknownFillOutcome = {

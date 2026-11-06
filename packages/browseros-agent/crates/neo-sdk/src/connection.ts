@@ -60,6 +60,8 @@ export type ApiName =
   | 'page.getAttribute'
   | 'frame.getAttribute'
   | 'locator.getAttribute'
+  | 'locator.count'
+  | 'locator.allTextContents'
   | 'page.ariaSnapshot'
   | 'frame.fill'
   | 'frame.press'

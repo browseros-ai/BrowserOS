@@ -6,3 +6,5 @@ disallowed-methods = [
 # The crate denies `unwrap_used` and `expect_used`; tests may still assert with them.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+# Identifiers in Playwright's verbatim protocol documentation.
+doc-valid-idents = ["BigInt", "SerializedArgument", ".."]
