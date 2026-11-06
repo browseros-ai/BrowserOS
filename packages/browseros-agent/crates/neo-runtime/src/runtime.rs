@@ -23,7 +23,7 @@ use crate::bridge::Getters;
 use crate::deadline::Deadline;
 use crate::dispatch::Dispatcher;
 use crate::getters::CLOSED_TAB_MESSAGE;
-use crate::page::{PageSession, Session};
+use crate::page::{PageSession, Session, TabInputs};
 use crate::progress::RunScope;
 use crate::realm::Script;
 use crate::run::{PageId, RunEnd, RunError, RunOutcome, RunRequest, RunStatus};
@@ -34,10 +34,12 @@ const PROBE_TARGET_ID: &str = "neo-runtime-connect-probe";
 
 /// Runs agent scripts against tabs of one BrowserOS browser. Runs are independent: each gets
 /// its own CDP session and its own QuickJS realm, so one `Runtime` serves any number of
-/// concurrent runs.
+/// concurrent runs. Runs on one tab share only its input: their clicks take turns at it, from
+/// interceptor setup to stop (`page.rs` `TabInputs`). Clones share those turns too.
 #[derive(Clone)]
 pub struct Runtime {
     cdp: CdpClient,
+    inputs: TabInputs,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -73,7 +75,10 @@ impl Runtime {
             .await;
         match probe {
             Err(CdpError::Protocol { message, .. }) if message.contains(CLOSED_TAB_MESSAGE) => {
-                Ok(Self { cdp })
+                Ok(Self {
+                    cdp,
+                    inputs: TabInputs::default(),
+                })
             }
             Err(CdpError::Protocol { message, .. }) => {
                 Err(RuntimeError::UnsupportedBrowser(message))
@@ -129,7 +134,8 @@ impl Runtime {
         // One tracker for the run: call tasks, and the writer, interceptor-stop and
         // group-release tasks the page spawns, so `finish` waits for them all.
         let tasks = TaskTracker::new();
-        let tab = Arc::new(PageSession::new(session, &page, tasks.clone()));
+        let input = self.inputs.lock_for(&page).await;
+        let tab = Arc::new(PageSession::new(session, &page, tasks.clone(), input));
         let getters = Getters::new(
             self.cdp.clone(),
             page.clone(),

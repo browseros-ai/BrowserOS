@@ -129,6 +129,80 @@ async fn run(tab: &Tab, code: &str) -> RunOutcome {
         .unwrap_or_else(|error| panic!("the run's task: {error}"))
 }
 
+/// On a real page, overlapping trials cannot add input to the ordinary clicks beside them.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_concurrent_trials_do_not_click_a_real_page() {
+    let html = r#"<!doctype html><html><body>
+<button id="go" onclick="window.__clicks++">Go</button>
+<script>window.__clicks = 0</script>
+</body></html>"#;
+    let Some(tab) = open_page("/concurrent-clicks.html", html).await else {
+        return;
+    };
+    let outcome = run(
+        &tab,
+        "for (let i = 0; i < 10; i++) {
+  await Promise.all([
+    page.locator('#go').click({ trial: true, delay: 20 }),
+    page.locator('#go').click({ delay: 20 }),
+  ])
+}",
+    )
+    .await;
+    let clicks = tab.evaluate("window.__clicks").await;
+    tab.close().await;
+
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert_eq!(
+        clicks,
+        json!(10),
+        "only the ten real clicks may reach the page"
+    );
+}
+
+/// Two ordinary clicks in flight, each on its own button, both land, and each record says so.
+/// Neither click's events may be judged by the other's hit-target interceptor: one that is
+/// blocks the click while its own interceptor, which never saw an event, reads `done`.
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_clicks_on_two_buttons_each_reach_their_button() {
+    let html = r#"<!doctype html><html><body>
+<button id="a" onclick="window.__a++">A</button>
+<button id="b" onclick="window.__b++">B</button>
+<script>window.__a = 0; window.__b = 0</script>
+</body></html>"#;
+    let Some(tab) = open_page("/two-buttons.html", html).await else {
+        return;
+    };
+    let outcome = run(
+        &tab,
+        "for (let i = 0; i < 10; i++) {
+  await Promise.all([page.locator('#a').click(), page.locator('#b').click()])
+}",
+    )
+    .await;
+    let clicks = tab.evaluate("[window.__a, window.__b]").await;
+    tab.close().await;
+
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    assert_eq!(
+        clicks,
+        json!([10, 10]),
+        "every click reached its own button"
+    );
+    let ends: BTreeSet<_> = outcome
+        .calls
+        .iter()
+        .map(|call| (format!("{:?}", call.result), call.delivery))
+        .collect();
+    assert_eq!(
+        ends,
+        BTreeSet::from([("Ok".to_string(), Some(Delivery::Done))]),
+        "{:#?}",
+        outcome.calls
+    );
+    assert_eq!(outcome.calls.len(), 20);
+}
+
 fn only_record(outcome: &RunOutcome) -> &CallRecord {
     let [call] = outcome.calls.as_slice() else {
         panic!("one browser call: {outcome:#?}");

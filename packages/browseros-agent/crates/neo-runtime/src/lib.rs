@@ -20,7 +20,9 @@
 //!
 //! `page.rs` owns the run's CDP session; the dispatcher and every task that writes on the
 //! session (call tasks, mouse writers, interceptor stops, object-group releases) share it, so it
-//! detaches only after the last of them is done.
+//! detaches only after the last of them is done. Clicks on one tab take turns at its input, its
+//! one mouse and its document's one hit-target slot, across every run of a `Runtime`
+//! (`page.rs` `TabInputs`).
 //!
 //! Building a locator does no I/O: neo-sdk runs Playwright's own selector code in the realm, with
 //! the test id attribute from `world.rs`, the one name the SDK and the page share.

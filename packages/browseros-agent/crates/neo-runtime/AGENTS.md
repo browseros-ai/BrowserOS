@@ -10,6 +10,7 @@ Runs one agent script in a fresh QuickJS realm against one BrowserOS tab, and re
 - `src/realm.rs` embeds `../neo-sdk/dist/sdk.js`; change the SDK in `neo-sdk`, rebuild it, and commit the bundle.
 
 - `src/click.rs` is `Frame.click`'s policy (Playwright's two retry loops, every call-log line) over the `Tab` seam; `src/page.rs` implements the seam over CDP, and `src/world.rs` calls the injected glue. Click policy is tested against a scripted `FakeTab` under paused time (the goldens' logs byte for byte); the mechanism against `tests/support/fake_browser.rs` (`tests/click_lifecycle.rs`).
+- A tab has one mouse and one hit-target slot, shared by every call and run on it. Input to a tab takes a turn (`Tab::input`, `src/page.rs` `TabInputs`, per `Runtime` and tab) from the interceptor's setup until its stop has answered, mouse writes included; never wait for an element while holding one.
 
 Checks, from `packages/browseros-agent`: `scripts/neo-check.sh`. The end-to-end tests need a browser and skip without one:
 

@@ -13,10 +13,11 @@
 //!   │ resolve(selector, strict) → element? │ throws strict violation → Error, at once
 //!   │ loop B  waits 0,0,20,100,100,500… on the same element (uncapped)
 //!   │ │ unless force: the navigation pre-check again
-//!   │ │ states → scroll (mode = retry % 4) → geometry → point → arm the hit-target interceptor
+//!   │ │ states → scroll (mode = retry % 4) → geometry → point
+//!   │ │ wait for the tab's input turn → arm the hit-target interceptor
 //!   │ │   not ready (not visible, outside viewport, missing state, intercepted) → log, retry B
 //!   │ │   not connected → "element was detached from the DOM, retrying", next loop A
-//!   │ └ input: begin ticket → press (detached writer) → verdict → navigation barrier
+//!   │ └ input: begin ticket → press (detached writer) → verdict, turn over → navigation barrier
 //!   │     a verified block (verdict names another element) → ticket back to NotSent, retry B
 //!   │     anything else after the press is success or a terminal error, never a retry
 //! ```
@@ -34,6 +35,9 @@
 //!   Playwright's loop A would retry it and might press again.
 //! - `modifiers`, `steps` other than 1 and a `clickCount` above [`MAX_CLICK_COUNT`] are refused
 //!   before any work, with no call log.
+//! - Clicks on one tab take turns at its input ([`Tab::input`]), across every run of the
+//!   `Runtime`. Playwright lets a second click's setup replace the first one's interceptor
+//!   (`setupHitTargetInterceptor`'s own comment), so overlapping clicks judge each other's events.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -67,8 +71,14 @@ pub(crate) trait Tab: Send + Sync {
     /// task until a waiting caller takes it, the attempt until it presses, the writer until
     /// the last mouse event is acknowledged ([`Tab::press`]), then the attempt again for the
     /// verdict. Whichever owner goes away drops it, so a stop never lands before input it was
-    /// armed to judge, and a trial's blocking interceptor sees every event of the trial.
+    /// armed to judge, and a trial's blocking interceptor sees every event of the trial. It holds
+    /// a copy of its click's input turn until the stop has answered.
     type Armed: Send;
+    /// A turn at the tab's input ([`Tab::input`]). Copies go to everything that operates the
+    /// click's input: the interceptor's setup and the interceptor it arms, and the writer. The
+    /// next click's turn starts only once the last copy drops, so a call that stops early never
+    /// frees the tab under its own writer or its interceptor's stop.
+    type Input: Clone + Send + Sync;
     /// Navigation requests recorded from the moment [`Tab::watch_navigations`] returns.
     type Navigations: Send;
 
@@ -116,15 +126,25 @@ pub(crate) trait Tab: Send + Sync {
         position: Option<&Point>,
     ) -> impl Future<Output = Result<Geometry, PageError>> + Send;
 
+    /// Waits for a turn at the tab's input: its one mouse and its document's one hit-target
+    /// slot, which every call and every run on the tab share. Without turns, one click's setup
+    /// replaces another's armed interceptor, and their events are judged by the wrong one. An
+    /// attempt waits only after every wait for its element, so a click waiting for content never
+    /// holds up the click that would produce it. Turns go in arrival order; a wait dropped before
+    /// its turn holds nothing.
+    fn input(&self) -> impl Future<Output = Self::Input> + Send;
+
     /// `setupHitTargetInterceptor(element, 'mouse', hit_point, block_all)`. The page installs
     /// the interceptor before it answers, so once the setup is sent its answer is always read,
     /// on a task of its own: a caller that stopped waiting leaves an `Armed` nobody takes,
-    /// which disarms as it drops. A future dropped before its first poll sends nothing.
+    /// which disarms as it drops. A future dropped before its first poll sends nothing. `input`
+    /// is held until the answer, and an armed interceptor keeps it until its stop has answered.
     fn arm(
         &self,
         element: &Self::Element,
         hit_point: Option<Point>,
         block_all: bool,
+        input: Self::Input,
     ) -> impl Future<Output = Result<Arming<Self::Armed>, PageError>> + Send;
 
     /// Starts writing the click's mouse events on a detached writer task *before it returns*,
@@ -138,13 +158,16 @@ pub(crate) trait Tab: Send + Sync {
     /// The armed interceptor moves into the writer too, and comes back with the report once
     /// every event is acknowledged. A caller that stopped waiting never gets it back, and the
     /// writer drops it only then: disarming any earlier would let the release, and the page's
-    /// `click`, through unblocked, which for a trial is a real click.
+    /// `click`, through unblocked, which for a trial is a real click. The writer holds `input`
+    /// until its last event is answered, which under `force`, with nothing armed, is all that
+    /// keeps the next click from pressing at once.
     fn press(
         &self,
         point: Point,
         click: MouseClick,
         ticket: InputTicket,
         armed: Option<Self::Armed>,
+        input: Self::Input,
     ) -> impl Future<Output = (PressReport, Option<Self::Armed>)> + Send;
 
     /// Disarms `armed` and reports what it saw: `stopHitTargetInterceptor`, raced against a
@@ -622,20 +645,25 @@ async fn attempt<T: Tab>(
         Err(reason) => return Ok(Attempt::NotReady(reason)),
     };
 
-    let arming = if options.force {
+    if options.force {
         progress.log("  forcing action");
+    }
+    // The input phase runs from here, after every wait for the element, to the verdict. Inside
+    // it the preliminary hit check, the press and the stop all see this click's own interceptor.
+    let input = progress.race(tab.input()).await?;
+    let arming = match (options.force, options.trial) {
+        (true, false) => None,
         // Neo-only: a forced trial still blocks its events, so a trial never clicks.
-        if options.trial {
-            Some(progress.race(tab.arm(element, None, true)).await??)
-        } else {
-            None
-        }
-    } else {
-        Some(
+        (true, true) => Some(
             progress
-                .race(tab.arm(element, Some(point.clone()), options.trial))
+                .race(tab.arm(element, None, true, input.clone()))
                 .await??,
-        )
+        ),
+        (false, trial) => Some(
+            progress
+                .race(tab.arm(element, Some(point.clone()), trial, input.clone()))
+                .await??,
+        ),
     };
     let armed = match arming {
         None => None,
@@ -645,7 +673,7 @@ async fn attempt<T: Tab>(
             return Ok(Attempt::NotReady(NotReady::Intercepted(target)));
         }
     };
-    act(tab, point, armed, options, progress, delivery).await
+    act(tab, point, armed, input, options, progress, delivery).await
 }
 
 /// Input and everything after it, inside Playwright's `waitForSignalsCreatedBy`.
@@ -656,11 +684,14 @@ async fn attempt<T: Tab>(
 /// `NotSent` so loop B may press again, exactly when Playwright would. Every other way out of
 /// here after the press ends the call: no code path retries a press the page may have seen.
 /// The armed interceptor rides in the writer with the ticket, so it is still armed when the
-/// last release lands however this returns, the call stopping mid-press included.
+/// last release lands however this returns, the call stopping mid-press included. `input`, the
+/// click's turn at the tab, goes with the verdict; the writer and the interceptor hold their own
+/// copies until they are done.
 async fn act<T: Tab>(
     tab: &T,
     point: Point,
     armed: Option<T::Armed>,
+    input: T::Input,
     options: &ClickOptions,
     progress: &Progress,
     delivery: &Arc<DeliveryCell>,
@@ -676,7 +707,7 @@ async fn act<T: Tab>(
     };
     progress.log("  performing click action");
     let (report, armed) = progress
-        .race(tab.press(point, options.mouse, ticket, armed))
+        .race(tab.press(point, options.mouse, ticket, armed, input.clone()))
         .await?;
     let acked = match report {
         PressReport::Acked(acked) => acked,
@@ -703,6 +734,9 @@ async fn act<T: Tab>(
             None
         }
     };
+    // Not held through the navigation barrier, which only waits: an interceptor not yet stopped
+    // keeps its own copy until it is.
+    drop(input);
     if blocked.is_some() || options.trial {
         acked.blocked();
     } else {
@@ -1025,12 +1059,38 @@ mod tests {
         Intercepted(String),
     }
 
-    /// A dropped armed interceptor, so tests see every path disarm.
-    struct FakeArmed(Arc<Mutex<Vec<String>>>);
+    /// A dropped armed interceptor, so tests see every path disarm. It holds a copy of its
+    /// click's input turn, as the real one does until its stop has answered.
+    struct FakeArmed {
+        calls: Arc<Mutex<Vec<String>>>,
+        _input: FakeInput,
+    }
 
     impl Drop for FakeArmed {
         fn drop(&mut self) {
-            self.0.lock().expect("calls").push("disarmed".to_string());
+            self.calls
+                .lock()
+                .expect("calls")
+                .push("disarmed".to_string());
+        }
+    }
+
+    /// A turn at the fake tab's input, shared by its copies like the real one. The tab records
+    /// `input` when it grants a turn and `input released` when the turn's last copy drops, so
+    /// tests see where each input phase starts and ends.
+    #[derive(Clone)]
+    struct FakeInput {
+        _turn: Arc<FakeTurn>,
+    }
+
+    struct FakeTurn(Arc<Mutex<Vec<String>>>);
+
+    impl Drop for FakeTurn {
+        fn drop(&mut self) {
+            self.0
+                .lock()
+                .expect("calls")
+                .push("input released".to_string());
         }
     }
 
@@ -1098,6 +1158,7 @@ mod tests {
     impl Tab for FakeTab {
         type Element = u32;
         type Armed = FakeArmed;
+        type Input = FakeInput;
         type Navigations = ();
 
         async fn prepare(&self) -> Result<(), PageError> {
@@ -1155,15 +1216,27 @@ mod tests {
             self.geometry.answer().await
         }
 
+        /// Granted at once: one call per test never waits for a turn.
+        async fn input(&self) -> FakeInput {
+            self.record("input");
+            FakeInput {
+                _turn: Arc::new(FakeTurn(Arc::clone(&self.calls))),
+            }
+        }
+
         async fn arm(
             &self,
             _element: &u32,
             hit_point: Option<Point>,
             block_all: bool,
+            input: FakeInput,
         ) -> Result<Arming<FakeArmed>, PageError> {
             self.record(format!("arm {hit_point:?} {block_all}"));
             Ok(match self.arm.answer().await? {
-                ArmAnswer::Armed => Arming::Armed(FakeArmed(Arc::clone(&self.calls))),
+                ArmAnswer::Armed => Arming::Armed(FakeArmed {
+                    calls: Arc::clone(&self.calls),
+                    _input: input,
+                }),
                 ArmAnswer::NotConnected => Arming::NotConnected,
                 ArmAnswer::Intercepted(target) => Arming::Intercepted(target),
             })
@@ -1175,6 +1248,7 @@ mod tests {
             _click: MouseClick,
             ticket: InputTicket,
             armed: Option<FakeArmed>,
+            input: FakeInput,
         ) -> impl Future<Output = (PressReport, Option<FakeArmed>)> + Send {
             self.record(format!("press ({}, {})", point.x, point.y));
             let writes = self.press.next();
@@ -1200,6 +1274,8 @@ mod tests {
                         }
                     }
                 };
+                // Done writing: the writer's copy of the turn goes, as the real writer's does.
+                drop(input);
                 let _waiting = report.send((outcome, armed));
             });
             async move {
@@ -1326,6 +1402,12 @@ mod tests {
             "the scroll mode cycles by retry"
         );
         assert_eq!(delivery, Delivery::NotSent);
+        assert_eq!(
+            tab.count("input"),
+            tab.count("input released"),
+            "an intercepted setup gives its turn back at once: {:?}",
+            tab.calls()
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -1384,12 +1466,44 @@ mod tests {
                 "check_states",
                 "scroll Protocol",
                 "geometry",
+                "input",
                 "arm Some(Point { x: 36.75, y: 18.5 }) false",
                 "watch_navigations",
                 "press (36.75, 18.5)",
                 "released",
                 "verdict",
                 "disarmed",
+                "input released",
+                "settle",
+            ],
+            "the turn at the tab's input starts after every wait for the element and ends with \
+             the verdict, before the navigation barrier"
+        );
+    }
+
+    /// Under `force` nothing is armed, so the writer's copy is what holds the turn while it
+    /// presses; the turn ends before the navigation barrier.
+    #[tokio::test(start_paused = true)]
+    async fn a_forced_click_holds_the_tab_input_while_it_presses() {
+        let tab = FakeTab::ready();
+        let mut forced = options(SELECTOR);
+        forced.force = true;
+        let (result, _, delivery) = run(&tab, &forced, 30_000.0).await;
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(delivery, Delivery::Done);
+        assert_eq!(
+            tab.calls(),
+            [
+                "describe",
+                "resolve",
+                "scroll Protocol",
+                "geometry",
+                "input",
+                "watch_navigations",
+                "press (36.75, 18.5)",
+                "released",
+                "input released",
                 "settle",
             ]
         );
@@ -1411,6 +1525,16 @@ mod tests {
             tab.count("settle"),
             2,
             "Playwright's barrier runs after a blocked press too"
+        );
+        let turns: Vec<String> = tab
+            .calls()
+            .into_iter()
+            .filter(|call| call.starts_with("input"))
+            .collect();
+        assert_eq!(
+            turns,
+            ["input", "input released", "input", "input released"],
+            "each press has a turn of its own, given back before the retry"
         );
         let raw: Vec<String> = [
             &ok_log(false)[..8],
@@ -1500,6 +1624,12 @@ mod tests {
             "the writer still holds the interceptor: {:?}",
             tab.calls()
         );
+        assert!(
+            !tab.calls().contains(&"input released".to_string()),
+            "the stopped call let go of its copy only; the writer still holds the tab's input: \
+             {:?}",
+            tab.calls()
+        );
         time::sleep(Duration::from_secs(2)).await;
         assert_eq!(
             cell.delivery(),
@@ -1508,9 +1638,9 @@ mod tests {
         );
         let calls = tab.calls();
         assert_eq!(
-            calls[calls.len() - 2..],
-            ["released", "disarmed"],
-            "disarmed only once the last event was answered"
+            calls[calls.len() - 3..],
+            ["released", "disarmed", "input released"],
+            "disarmed, and the tab's input given back, only once the last event was answered"
         );
     }
 

@@ -1,8 +1,8 @@
 //! The run's tab as the server side of a browser call sees it (Playwright's `server/page.ts`
 //! with `chromium/crPage.ts` and `crInput.ts`, cut to what click needs): the run's CDP session,
 //! the domains a browser call needs, one watcher task that answers dialogs and tracks
-//! navigations, the mouse writer, and the `click::Tab` implementation over all of it and the
-//! utility world (`world.rs`).
+//! navigations, the tab's input turns ([`TabInputs`]), the mouse writer, and the `click::Tab`
+//! implementation over all of it and the utility world (`world.rs`).
 //!
 //! This file is mechanism; `click.rs` is policy. Nothing here writes a call-log line or decides
 //! a retry, and nothing in `click.rs` names a CDP type.
@@ -16,7 +16,8 @@
 //! the page alive forever): it holds a CDP client, the session id and a token cancelled when the
 //! page drops. A task stuck past the run (a renderer frozen by a dialog the watcher missed) keeps
 //! the session attached until its own CDP request times out (browseros-cdp's 60 s), then lets
-//! go.
+//! go. A turn at the tab's input ([`InputPermit`]) is held the same way: by every task that
+//! still operates a click's input, so it frees only once the last of them is done.
 //!
 //! Domains, enabled by [`PageSession::prepare`] on the run's first browser call only, so a
 //! getter-only run keeps its single live CDP call per getter:
@@ -32,10 +33,11 @@
 //! - Not `Runtime.enable` (worlds are found by name, `world.rs`) and not `DOM.enable` (quads,
 //!   box models and scrolls by `objectId` need none, probe P2).
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::iter;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use browseros_cdp::input::DispatchMouseEventParams;
@@ -53,7 +55,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
-use tokio::sync::{OnceCell, broadcast, oneshot, watch};
+use tokio::sync::{Mutex, OnceCell, OwnedMutexGuard, broadcast, oneshot, watch};
 use tokio::time;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
@@ -156,6 +158,9 @@ pub(crate) struct PageSession {
     world: World,
     /// Names this session's object groups apart.
     next_group: AtomicU64,
+    /// The tab's input lock, shared with every other run of the `Runtime` on this tab
+    /// ([`TabInputs`]). [`Tab::input`] waits for a turn at it.
+    input: Arc<Mutex<()>>,
 }
 
 /// The watcher's published state, and the guard that stops it when the page drops.
@@ -208,7 +213,13 @@ pub(crate) struct Applied {
 }
 
 impl PageSession {
-    pub(crate) fn new(session: Session, page: &PageId, tasks: TaskTracker) -> Self {
+    /// `input` is the tab's lock from the `Runtime`'s [`TabInputs`].
+    pub(crate) fn new(
+        session: Session,
+        page: &PageId,
+        tasks: TaskTracker,
+        input: Arc<Mutex<()>>,
+    ) -> Self {
         let world = World::new(
             session.cdp.clone(),
             session.id.clone(),
@@ -222,6 +233,7 @@ impl PageSession {
             closed: CancellationToken::new(),
             world,
             next_group: AtomicU64::new(1),
+            input,
         }
     }
 
@@ -335,6 +347,52 @@ fn new_group(page: &Arc<PageSession>, purpose: &str) -> GroupGuard {
         page: Arc::clone(page),
         group: ObjectGroup(format!("neo-{purpose}-{index}")),
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The tab's input, one click at a time.
+// ---------------------------------------------------------------------------------------------
+
+/// One `Runtime`'s input locks, one per tab, each shared by every run the `Runtime` makes on
+/// that tab. A tab has one mouse, and its document one hit-target slot that every call and every
+/// Neo run on it share (`world.rs`): a setup replaces whatever interceptor is armed, and an event
+/// is judged by whichever interceptor is armed when it lands. So two clicks whose input overlaps
+/// judge each other's events: a trial's events pass a real click's interceptor and click, and a
+/// real click's events are blocked by another click's interceptor while its own, which never
+/// saw them, reads `done`. Clicks on a tab therefore take turns ([`InputPermit`]) from their
+/// interceptor's setup until its stop has answered, mouse writes in between.
+///
+/// Entries are weak: a tab's lock lives while a run on the tab, or a task still holding a turn,
+/// does. Runs of another `Runtime`, and other CDP clients, are not coordinated.
+#[derive(Clone, Default)]
+pub(crate) struct TabInputs(Arc<Mutex<HashMap<PageId, Weak<Mutex<()>>>>>);
+
+impl TabInputs {
+    /// The input lock of `page`, the one every live run on it shares.
+    pub(crate) async fn lock_for(&self, page: &PageId) -> Arc<Mutex<()>> {
+        let mut locks = self.0.lock().await;
+        if let Some(lock) = locks.get(page).and_then(Weak::upgrade) {
+            return lock;
+        }
+        // Tabs whose runs and turns are all gone go too, so the map holds only live tabs.
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        let lock = Arc::default();
+        locks.insert(page.clone(), Arc::downgrade(&lock));
+        lock
+    }
+}
+
+/// A turn at a tab's input ([`TabInputs`]). Cheap to clone, and held the way the session is:
+/// every party that operates a click's input holds a copy, and the tab's input is free for the
+/// next click once the last copy drops. The click holds one from before its interceptor's setup
+/// to its verdict; the setup's task until the page answers; the armed interceptor until its
+/// stop has answered, `Drop`'s stop included; the mouse writer until its last event is answered.
+/// So a call that stops early lets go of its own copy only, and the next click on the tab never
+/// replaces an interceptor whose events may still land, nor presses into one still armed.
+#[derive(Clone)]
+pub(crate) struct InputPermit {
+    /// Held, never read: dropping the last copy unlocks the tab's input.
+    _turn: Arc<OwnedMutexGuard<()>>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -596,11 +654,16 @@ pub(crate) struct ArmedInterceptor {
     mark: PageMark,
     /// Set once `stopHitTargetInterceptor` has answered, so `Drop` does not send it again.
     stopped: bool,
+    /// The click's turn at the tab's input, held until the stop has answered: until then the
+    /// slot may still hold this interceptor, and a forced click, which arms nothing of its own,
+    /// would press into it.
+    input: Option<InputPermit>,
 }
 
 impl Drop for ArmedInterceptor {
     fn drop(&mut self) {
         let group = self.group.take();
+        let input = self.input.take();
         if self.stopped {
             return;
         }
@@ -619,6 +682,9 @@ impl Drop for ArmedInterceptor {
             if let Err(error) = stopped {
                 debug!(?error, "disarming a hit-target interceptor failed");
             }
+            // The slot no longer holds it (or its document is gone), so the next click may
+            // take its turn.
+            drop(input);
             drop(group);
         });
     }
@@ -668,6 +734,7 @@ impl Barrier {
 impl Tab for Arc<PageSession> {
     type Element = ResolvedElement;
     type Armed = ArmedInterceptor;
+    type Input = InputPermit;
     type Navigations = NavigationWatch;
 
     async fn prepare(&self) -> Result<(), PageError> {
@@ -869,22 +936,32 @@ impl Tab for Arc<PageSession> {
         })
     }
 
+    /// A turn at the tab's input lock, granted in arrival order. tokio's lock is cancel-safe: a
+    /// wait dropped before its turn holds nothing.
+    async fn input(&self) -> InputPermit {
+        InputPermit {
+            _turn: Arc::new(Arc::clone(&self.input).lock_owned().await),
+        }
+    }
+
     /// [`arm_interceptor`] on the run's tracker, spawned on the first poll, and a wait for its
     /// answer. The page installs the interceptor before it answers, so the answer must be read
     /// even when the call stops first: then nobody takes the `ArmedInterceptor`, and dropping it
     /// in the task sends the stop. Spawning on the first poll, not eagerly, means a race that
-    /// had already lost never sends the setup at all.
+    /// had already lost never sends the setup at all. The task holds `input` until the answer,
+    /// and an armed interceptor keeps it until its stop has answered.
     fn arm(
         &self,
         element: &ResolvedElement,
         hit_point: Option<Point>,
         block_all: bool,
+        input: InputPermit,
     ) -> impl Future<Output = Result<Arming<ArmedInterceptor>, PageError>> + Send {
         let page = Arc::clone(self);
         let element = element.handle.clone();
         async move {
             let (answer, armed) = oneshot::channel();
-            let setup = arm_interceptor(Arc::clone(&page), element, hit_point, block_all);
+            let setup = arm_interceptor(Arc::clone(&page), element, hit_point, block_all, input);
             page.spawn(async move {
                 // Nobody may be waiting any more; the unsent answer drops here, disarming.
                 let _waiting = answer.send(setup.await);
@@ -899,19 +976,22 @@ impl Tab for Arc<PageSession> {
     /// (the call stopped) cuts any remaining `delay` short, and the writer still sends the
     /// release and marks the ticket. The interceptor stays in the writer's task until the last
     /// event is acknowledged; if nobody waits for the report then, it drops there and disarms,
-    /// after the page has handled the release.
+    /// after the page has handled the release. The writer's copy of `input` goes once the last
+    /// event is answered.
     fn press(
         &self,
         point: Point,
         click: MouseClick,
         ticket: InputTicket,
         armed: Option<ArmedInterceptor>,
+        input: InputPermit,
     ) -> impl Future<Output = (PressReport, Option<ArmedInterceptor>)> + Send {
         let cut_short = CancellationToken::new();
         let (report, receiver) = oneshot::channel();
         let writer = write_mouse(Arc::clone(self), point, click, ticket, cut_short.clone());
         self.spawn(async move {
             let written = writer.await;
+            drop(input);
             // Nobody may be waiting any more; the ticket already holds the outcome, and the
             // unsent interceptor drops here, disarming.
             let _waiting = report.send((written, armed));
@@ -1030,13 +1110,14 @@ impl Tab for Arc<PageSession> {
 
 /// `setupHitTargetInterceptor` into a fresh group: `error:notconnected` is `NotConnected`, any
 /// other description `Intercepted`, the handle `Armed` with the counters taken just before the
-/// setup was sent. Runs on the run's tracker ([`Tab::arm`] for `Arc<PageSession>`), so it reads
-/// the answer to the end whoever still waits for it.
+/// setup was sent and the click's `input` turn. Runs on the run's tracker ([`Tab::arm`] for
+/// `Arc<PageSession>`), so it reads the answer to the end whoever still waits for it.
 async fn arm_interceptor(
     page: Arc<PageSession>,
     element: Handle<Element>,
     hit_point: Option<Point>,
     block_all: bool,
+    input: InputPermit,
 ) -> Result<Arming<ArmedInterceptor>, PageError> {
     let mark = page.mark();
     let group = new_group(&page, "interceptor");
@@ -1062,6 +1143,7 @@ async fn arm_interceptor(
             page,
             mark,
             stopped: false,
+            input: Some(input),
         }),
     })
 }
