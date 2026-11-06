@@ -16,12 +16,17 @@
 //! The values never leave this function: it returns counts, and it logs no value and no length.
 //! A value shorter than 4 characters is not registered, since it would mask ordinary text; the
 //! sealed world still masks it in place.
+//!
+//! What a sweep reads, the page put there, so it registers as page values (sdk-traces decision
+//! 53): a page that reports more than the set holds pushes out only its own earlier values. A
+//! set full of values it never drops refuses them instead. A refused value is masked nowhere, so
+//! the sweep counts it, and logs an error, for its caller to report.
 
 use crate::sealed_frames::{SealedFrame, seal_tab, sealed_world, within_budget};
 use crate::{BrowserTabs, PartError};
 use browseros_core::sensitive_fields::FieldValues;
 use browseros_core::{CoreError, TabId};
-use browseros_trace::{Registration, SecretSet, SecretValue};
+use browseros_trace::{Registration, SecretSet, SecretSource, SecretValue};
 use serde_json::Value;
 
 /// What one sweep did, in counts. The values themselves are never handed out.
@@ -29,6 +34,9 @@ use serde_json::Value;
 pub struct Swept {
     /// Distinct values the secret set masks because of this sweep, new or refreshed.
     pub registered: usize,
+    /// Distinct values the secret set refused because it was full of values a page's value may
+    /// not push out. They are masked nowhere.
+    pub refused: usize,
     /// Frames whose fields were read.
     pub frames: usize,
 }
@@ -65,13 +73,28 @@ pub async fn sweep(
             "no frame of the tab could be read".into(),
         )));
     }
-    let registered = values
-        .registrable()
-        .filter(|value| {
-            secrets.register(SecretValue::new((*value).to_owned()), None) != Registration::TooShort
-        })
-        .count();
-    Ok(Swept { registered, frames })
+    let mut swept = Swept {
+        registered: 0,
+        refused: 0,
+        frames,
+    };
+    for value in values.registrable() {
+        let value = SecretValue::new(value.to_owned());
+        match secrets.register_from(value, None, SecretSource::Page) {
+            Registration::Registered | Registration::Refreshed => swept.registered += 1,
+            Registration::Full => swept.refused += 1,
+            Registration::TooShort => {}
+        }
+    }
+    if swept.refused > 0 {
+        tracing::error!(
+            tab = tab.0,
+            refused = swept.refused,
+            "the secret set is full of values it never drops, so values the sweep read are \
+             masked nowhere"
+        );
+    }
+    Ok(swept)
 }
 
 /// The raw values of the frame's sensitive fields, as the seal reports them to Neo alone.

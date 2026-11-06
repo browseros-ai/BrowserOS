@@ -216,6 +216,7 @@ async fn every_frame_is_sealed_after_the_binding_and_closed_roots_are_watched_in
         swept,
         Swept {
             registered: 0,
+            refused: 0,
             frames: 2
         }
     );
@@ -283,6 +284,7 @@ async fn the_sweep_registers_each_distinct_value_long_enough_to_mask_and_counts_
         swept,
         Swept {
             registered: 2,
+            refused: 0,
             frames: 2
         }
     );
@@ -299,6 +301,7 @@ async fn the_sweep_registers_each_distinct_value_long_enough_to_mask_and_counts_
         again,
         Swept {
             registered: 1,
+            refused: 0,
             frames: 2
         },
         "a value already masked is refreshed, and counted"
@@ -330,6 +333,7 @@ async fn a_frame_that_fails_is_skipped_and_the_rest_are_read() -> TestResult {
         swept,
         Swept {
             registered: 1,
+            refused: 0,
             frames: 1
         }
     );
@@ -369,6 +373,7 @@ async fn a_frame_that_never_answers_is_skipped_after_its_budget() -> TestResult 
         swept,
         Swept {
             registered: 1,
+            refused: 0,
             frames: 1
         }
     );
@@ -426,6 +431,7 @@ async fn an_out_of_process_frame_is_sealed_and_read_on_its_own_session() -> Test
         swept,
         Swept {
             registered: 2,
+            refused: 0,
             frames: 2
         }
     );

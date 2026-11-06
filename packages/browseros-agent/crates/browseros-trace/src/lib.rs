@@ -73,7 +73,7 @@ pub use redactor::{Bounded, RedactionLimits, Redactor, Truncation};
 pub use run_record::{RunEffects, RunEnded, RunStarted, RunStatus};
 pub use salvage::{Loss, Recovery, Salvage};
 pub use screenshot_queue::{Shot, ShotAnswer, ShotJob, ShotJobs, ShotQueue, screenshot_queue};
-pub use secret_set::{Registration, SecretSet, SecretSetConfig, SecretValue};
+pub use secret_set::{Registration, SecretSet, SecretSetConfig, SecretSource, SecretValue};
 pub use trace_error::TraceError;
 pub use trace_store::{RetentionPolicy, Swept, TraceStore};
 pub use trace_writer::{TraceRecordEvent, TraceSink, WriterConfig, spawn_writer};

@@ -1,11 +1,14 @@
 //! Tab privacy and secret registration through the routes.
 
 use crate::support::{
-    Op, Start, TestResult, end_run, harness, harness_with, op_ended, op_started, start_run,
+    Op, Start, TestResult, end_run, harness, harness_with, harness_with_secrets, op_ended,
+    op_started, start_run,
 };
 use axum::http::StatusCode;
 use browseros_core::TabId;
-use browseros_trace::{Delivery, Effect, OperationId, PrivacyRecord, PrivacyStore, TraceError};
+use browseros_trace::{
+    Delivery, Effect, OperationId, PrivacyRecord, PrivacyStore, SecretSetConfig, TraceError,
+};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -125,6 +128,38 @@ async fn a_registered_secret_is_masked_in_what_the_store_keeps() -> TestResult {
         json!({"title": "Hi [private]"})
     );
     assert!(!stored.body.to_string().contains(secret));
+    Ok(())
+}
+
+/// sdk-traces decision 53: a page can put any number of values in its fields, so a sweep that
+/// reads more than the secret set holds must not unmask what the host registered.
+#[tokio::test]
+async fn a_host_secret_outlasts_a_flood_of_swept_page_values() -> TestResult {
+    let h = harness_with_secrets(SecretSetConfig {
+        max_entries: 8,
+        ..SecretSetConfig::default()
+    })
+    .await?;
+    let secret = "hunter2-swordfish";
+    let registered = h
+        .post("/v1/secrets", &json!({"value": secret}).to_string())
+        .await?;
+    assert_eq!(registered.status, StatusCode::NO_CONTENT);
+    h.browser.open_tab(7);
+    let flood = (0..10)
+        .map(|i| format!("PAGEFLOOD_{i:02}"))
+        .collect::<Vec<_>>();
+    h.browser
+        .type_into_fields(&flood.iter().map(String::as_str).collect::<Vec<_>>());
+    let swept = h.post("/v1/tabs/7/sweep", "").await?;
+    assert_eq!(swept.status, StatusCode::OK, "{}", swept.body);
+    assert_eq!(swept.body["registered"], 10);
+
+    let run = start_run(&h.sink, Start::default());
+    end_run(&h.sink, run, Some(json!(format!("token {secret}"))));
+    h.flushed().await?;
+    let stored = h.get(&format!("/v1/runs/{run}")).await?;
+    assert_eq!(stored.body["result"], "token [private]");
     Ok(())
 }
 

@@ -9,6 +9,14 @@
 //! masks every run, because all runs share one browser and any run can read any tab. A value
 //! expires by its TTL, never with a tab or a task.
 //!
+//! The set holds `max_entries` values, and each keeps its [`SecretSource`], which decides what a
+//! full set drops for it (sdk-traces decision 53). A page decides what its fields hold, so its
+//! sweeps can report any number of values, and an agent can be talked into filling any number.
+//! So a page value pushes out only page values, oldest first, and an agent value only page
+//! values; with none to push out, either is refused ([`Registration::Full`]) and its caller must
+//! withhold what could hold it. Host and owner values come at a rate people bound: they push out
+//! a page value when there is one, and are otherwise kept past the cap, never refused.
+//!
 //! Each value is matched in its plain, JSON-escaped and percent-encoded forms, with one
 //! Aho-Corasick automaton rebuilt on every change. Changes are rare (one per fill); masks run on
 //! every result. A set a record carries (sdk-traces decision 43) is made whole for each record,
@@ -78,7 +86,8 @@ pub struct SecretSetConfig {
     pub min_length: usize,
     /// How long a value is masked when its registration names no TTL: 24 h by default.
     pub retention: Duration,
-    /// The most values kept; registering past it drops the one that expires first.
+    /// The most values kept, but for host and owner values, which may pass it. What a full set
+    /// drops, or refuses, is [`SecretSet::register_from`]'s.
     pub max_entries: usize,
 }
 
@@ -92,6 +101,32 @@ impl Default for SecretSetConfig {
     }
 }
 
+/// Who registered a value. It decides what a full set drops for the value, and whether the set
+/// may refuse it ([`SecretSet::register_from`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SecretSource {
+    /// The host, through `POST /v1/secrets`.
+    Host,
+    /// The owner, typing into a sensitive field while they control a tab: the control journal.
+    Owner,
+    /// The agent, typing or filling.
+    Agent,
+    /// A page, as a sweep read its fields.
+    Page,
+}
+
+impl SecretSource {
+    /// Host and owner values outrank agent values, which outrank page values. A value
+    /// registered again keeps the higher of its sources.
+    fn rank(self) -> u8 {
+        match self {
+            Self::Page => 0,
+            Self::Agent => 1,
+            Self::Host | Self::Owner => 2,
+        }
+    }
+}
+
 /// What a registration did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Registration {
@@ -101,11 +136,17 @@ pub enum Registration {
     Refreshed,
     /// Shorter than `min_length` characters: not kept.
     TooShort,
+    /// Not kept: the set is full and holds nothing a value from this source may push out. Only
+    /// agent and page values are refused. The value is masked nowhere, so its caller must
+    /// withhold whatever could hold it.
+    Full,
 }
 
 struct Entry {
     value: SecretValue,
     expires_at: Instant,
+    /// The highest-ranked source that registered the value.
+    source: SecretSource,
 }
 
 #[derive(Default)]
@@ -143,9 +184,9 @@ impl SecretSet {
 
     /// A set masking `values` from now on, built at once, for a record's or a run's own set such
     /// as the values claw-sdk still holds as it sends a record. It equals [`SecretSet::new`] then
-    /// [`SecretSet::register`] of each value in order with no TTL (too short ones refused, a
-    /// repeat kept once, the oldest dropped past `max_entries`), but builds the matcher once,
-    /// where each `register` rebuilds it over every value it holds.
+    /// registering each value in order as a page value with no TTL ([`SecretSet::register`]):
+    /// too short ones refused, a repeat kept once, the oldest dropped past `max_entries`. But it
+    /// builds the matcher once, where each registration rebuilds it over every value it holds.
     #[must_use]
     pub fn with_values(
         config: SecretSetConfig,
@@ -168,11 +209,24 @@ impl SecretSet {
     }
 
     /// Masks `value` from now on, until `ttl` passes, or the configured retention when `None`.
-    pub fn register(&self, value: SecretValue, ttl: Option<Duration>) -> Registration {
+    ///
+    /// In a full set, a value whose time has passed goes first, whatever its source, then the
+    /// page value that expires first. With neither, a host or owner value is kept past
+    /// `max_entries`, and an agent or page value is refused with [`Registration::Full`]. A
+    /// refusal changes nothing, so a flood of refused values costs no matcher build. A value
+    /// registered again keeps the later expiry and the higher-ranked source.
+    #[must_use = "a refused value is masked nowhere, so its caller must withhold what could hold it"]
+    pub fn register_from(
+        &self,
+        value: SecretValue,
+        ttl: Option<Duration>,
+        source: SecretSource,
+    ) -> Registration {
         if value.as_str().chars().count() < self.config.min_length {
             return Registration::TooShort;
         }
-        let expires_at = Instant::now() + ttl.unwrap_or(self.config.retention);
+        let now = Instant::now();
+        let expires_at = now + ttl.unwrap_or(self.config.retention);
         let mut inner = self.inner.write().unwrap_or_else(PoisonError::into_inner);
         if let Some(entry) = inner
             .entries
@@ -180,22 +234,31 @@ impl SecretSet {
             .find(|entry| entry.value.as_str() == value.as_str())
         {
             entry.expires_at = entry.expires_at.max(expires_at);
+            if source.rank() > entry.source.rank() {
+                entry.source = source;
+            }
             return Registration::Refreshed;
         }
-        if inner.entries.len() >= self.config.max_entries {
-            let first_to_expire = inner
-                .entries
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, entry)| entry.expires_at)
-                .map(|(index, _)| index);
-            if let Some(index) = first_to_expire {
+        match room(&inner.entries, source, self.config.max_entries, now) {
+            Room::Add => {}
+            Room::Replace(index) => {
                 inner.entries.swap_remove(index);
             }
+            Room::Refuse => return Registration::Full,
         }
-        inner.entries.push(Entry { value, expires_at });
+        inner.entries.push(Entry {
+            value,
+            expires_at,
+            source,
+        });
         rebuild(&mut inner, self.config.min_length);
         Registration::Registered
+    }
+
+    /// [`SecretSet::register_from`] for a page value. Callers should name the source instead:
+    /// this shorthand goes once claw-sdk labels its calls (sdk-traces decision 53).
+    pub fn register(&self, value: SecretValue, ttl: Option<Duration>) -> Registration {
+        self.register_from(value, ttl, SecretSource::Page)
     }
 
     /// Drops values whose time has passed. The writer calls this on its retention tick.
@@ -322,14 +385,49 @@ pub(crate) fn mask_json_with(
     }
 }
 
-/// Which of `values`, in registration order, registering them one by one with no TTL keeps. A
-/// repeat moves its expiry to the later one, and past the cap the first to expire goes, so
-/// walking from the newest, each value is kept where it was last registered until the cap is
-/// full. `register` keeps the value it is given even when the cap is 0.
+/// Where a new value goes in a set: what [`room`] decides.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Room {
+    /// Beside the others: the set is under its cap, or nothing may go and the value is a
+    /// host's or the owner's, which passes the cap.
+    Add,
+    /// In place of the entry at this index.
+    Replace(usize),
+    /// Nowhere: nothing may go, and the value is an agent's or a page's.
+    Refuse,
+}
+
+/// Where a value from `source` goes in a set holding `entries`, the one place a full set
+/// chooses what to drop (sdk-traces decision 53). A value whose time has passed may go for any
+/// value, and so may a page value; the one that expires first goes, which is an expired value
+/// when there is one, as nothing live expires before it. No live host, owner or agent value is
+/// ever dropped for another value, so a flood can push out only page values.
+fn room(entries: &[Entry], source: SecretSource, max_entries: usize, now: Instant) -> Room {
+    if entries.len() < max_entries {
+        return Room::Add;
+    }
+    let goes_first = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.expires_at <= now || entry.source == SecretSource::Page)
+        .min_by_key(|(_, entry)| entry.expires_at)
+        .map(|(index, _)| index);
+    match (goes_first, source) {
+        (Some(index), _) => Room::Replace(index),
+        (None, SecretSource::Host | SecretSource::Owner) => Room::Add,
+        (None, SecretSource::Agent | SecretSource::Page) => Room::Refuse,
+    }
+}
+
+/// Which of `values`, in registration order, registering them one by one as page values with
+/// no TTL keeps. A repeat moves its expiry to the later one, and past the cap the page value
+/// that expires first goes, so walking from the newest, each value is kept where it was last
+/// registered until the cap is full. A cap of 0 keeps none: a page value finds nothing to push
+/// out, and is refused.
 fn kept_as_registered(values: &[SecretValue], max_entries: usize) -> Vec<bool> {
     let mut kept = vec![false; values.len()];
     let mut seen = HashSet::new();
-    let mut room = max_entries.max(1);
+    let mut room = max_entries;
     for (index, value) in values.iter().enumerate().rev() {
         if room == 0 {
             break;
@@ -342,10 +440,11 @@ fn kept_as_registered(values: &[SecretValue], max_entries: usize) -> Vec<bool> {
     kept
 }
 
-/// The `kept` values as entries, each expiring a nanosecond after the one registered before it
-/// (the first at `first_expiry`), as values registered one by one do. A later `register` past
-/// the cap drops the first to expire, so the set then loses its values oldest first, however
-/// many evictions follow; with one expiry for all, its `swap_remove` would scramble that order.
+/// The `kept` values as page entries, each expiring a nanosecond after the one registered
+/// before it (the first at `first_expiry`), as values registered one by one do. A later
+/// registration past the cap drops the page value that expires first, so the set then loses
+/// its values oldest first, however many evictions follow; with one expiry for all, its
+/// `swap_remove` would scramble that order.
 fn in_registration_order(
     values: Vec<SecretValue>,
     kept: &[bool],
@@ -354,7 +453,11 @@ fn in_registration_order(
     let mut expires_at = first_expiry;
     let mut entries = Vec::new();
     for (value, _) in values.into_iter().zip(kept).filter(|(_, kept)| **kept) {
-        entries.push(Entry { value, expires_at });
+        entries.push(Entry {
+            value,
+            expires_at,
+            source: SecretSource::Page,
+        });
         expires_at += Duration::from_nanos(1);
     }
     entries
@@ -504,7 +607,9 @@ fn illegal_at_file_name_ends(character: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{MASK, Registration, SecretSet, SecretSetConfig, SecretValue, mask_spans};
+    use super::{
+        MASK, Registration, SecretSet, SecretSetConfig, SecretSource, SecretValue, mask_spans,
+    };
     use aho_corasick::AhoCorasick;
     use serde_json::json;
     use std::sync::PoisonError;
@@ -735,6 +840,251 @@ mod tests {
         assert_eq!(set.count(), 2);
         assert_eq!(masked(&set, "first-value"), "first-value");
         assert_eq!(masked(&set, "third-value"), "[private]");
+    }
+
+    /// sdk-traces decision 53: a page reports as many values as its DOM holds, so a flood of
+    /// page values past the cap must not unmask what the host registered, the owner typed or
+    /// the agent filled. The page values go oldest first.
+    #[test]
+    fn host_owner_and_agent_values_outlast_a_flood_of_page_values() {
+        let set = capped(16);
+        hold(&set, &PROTECTED, "the protected values");
+        let flood = flood(&set, 20);
+        for (value, ..) in PROTECTED {
+            assert_masked(&set, value, true, "the flood pushed it out");
+        }
+        assert_eq!(set.count(), 16);
+        let first_kept = flood.len() - (16 - PROTECTED.len());
+        for (index, value) in flood.iter().enumerate() {
+            assert_masked(
+                &set,
+                value,
+                index >= first_kept,
+                "the oldest page values go first",
+            );
+        }
+    }
+
+    /// One value each from the host, the owner and the agent, with no TTL.
+    const PROTECTED: [(&str, SecretSource, Option<u64>); 3] = [
+        ("host-secret-1", SecretSource::Host, None),
+        ("owner-typed-2", SecretSource::Owner, None),
+        ("agent-filled-3", SecretSource::Agent, None),
+    ];
+
+    /// Registers `count` page values, oldest first, and returns them.
+    fn flood(set: &SecretSet, count: usize) -> Vec<String> {
+        let values: Vec<String> = (0..count).map(|i| format!("page-flood-{i:02}")).collect();
+        for value in &values {
+            let registration = set.register(SecretValue::new(value.clone()), None);
+            assert_eq!(registration, Registration::Registered, "{value}");
+        }
+        values
+    }
+
+    /// A TTL already over, so the value's time has passed by the next registration.
+    const PASSED: Option<u64> = Some(0);
+    const MINUTE: Option<u64> = Some(60);
+    /// The set's retention, a day.
+    const DAY: Option<u64> = None;
+
+    /// One registration into a full set.
+    struct FullSet {
+        what: &'static str,
+        max_entries: usize,
+        /// Registered first, in order: each value, its source and its TTL in seconds.
+        held: &'static [(&'static str, SecretSource, Option<u64>)],
+        new: (&'static str, SecretSource),
+        registration: Registration,
+        /// What is masked afterwards, of the values held and the new one. No other is.
+        masked: &'static [&'static str],
+    }
+
+    const FULL_SETS: &[FullSet] = &[
+        FullSet {
+            what: "a page value pushes out the page value that expires first, not a host value",
+            max_entries: 3,
+            held: &[
+                ("page-older-1", SecretSource::Page, DAY),
+                ("host-minute-2", SecretSource::Host, MINUTE),
+                ("page-newer-3", SecretSource::Page, DAY),
+            ],
+            new: ("page-new-4", SecretSource::Page),
+            registration: Registration::Registered,
+            masked: &["host-minute-2", "page-newer-3", "page-new-4"],
+        },
+        FullSet {
+            what: "a page value is refused when every value is protected",
+            max_entries: 3,
+            held: &[
+                ("host-held-1", SecretSource::Host, MINUTE),
+                ("owner-held-2", SecretSource::Owner, MINUTE),
+                ("agent-held-3", SecretSource::Agent, MINUTE),
+            ],
+            new: ("page-new-4", SecretSource::Page),
+            registration: Registration::Full,
+            masked: &["host-held-1", "owner-held-2", "agent-held-3"],
+        },
+        FullSet {
+            what: "an agent value pushes out a page value, not an agent value",
+            max_entries: 2,
+            held: &[
+                ("agent-minute-1", SecretSource::Agent, MINUTE),
+                ("page-held-2", SecretSource::Page, DAY),
+            ],
+            new: ("agent-new-3", SecretSource::Agent),
+            registration: Registration::Registered,
+            masked: &["agent-minute-1", "agent-new-3"],
+        },
+        FullSet {
+            what: "an agent value is refused when every value is protected",
+            max_entries: 2,
+            held: &[
+                ("agent-held-1", SecretSource::Agent, DAY),
+                ("owner-held-2", SecretSource::Owner, DAY),
+            ],
+            new: ("agent-new-3", SecretSource::Agent),
+            registration: Registration::Full,
+            masked: &["agent-held-1", "owner-held-2"],
+        },
+        FullSet {
+            what: "a host value pushes out a page value when there is one",
+            max_entries: 2,
+            held: &[
+                ("agent-minute-1", SecretSource::Agent, MINUTE),
+                ("page-held-2", SecretSource::Page, DAY),
+            ],
+            new: ("host-new-3", SecretSource::Host),
+            registration: Registration::Registered,
+            masked: &["agent-minute-1", "host-new-3"],
+        },
+        FullSet {
+            what: "a host value is kept past the cap when no value may go",
+            max_entries: 2,
+            held: &[
+                ("agent-held-1", SecretSource::Agent, DAY),
+                ("owner-held-2", SecretSource::Owner, DAY),
+            ],
+            new: ("host-new-3", SecretSource::Host),
+            registration: Registration::Registered,
+            masked: &["agent-held-1", "owner-held-2", "host-new-3"],
+        },
+        FullSet {
+            what: "an owner value is kept past the cap when no value may go",
+            max_entries: 2,
+            held: &[
+                ("host-held-1", SecretSource::Host, DAY),
+                ("agent-held-2", SecretSource::Agent, DAY),
+            ],
+            new: ("owner-new-3", SecretSource::Owner),
+            registration: Registration::Registered,
+            masked: &["host-held-1", "agent-held-2", "owner-new-3"],
+        },
+        FullSet {
+            what: "a page value is refused from a set host and owner values took past the cap",
+            max_entries: 1,
+            held: &[
+                ("host-held-1", SecretSource::Host, DAY),
+                ("owner-held-2", SecretSource::Owner, DAY),
+            ],
+            new: ("page-new-3", SecretSource::Page),
+            registration: Registration::Full,
+            masked: &["host-held-1", "owner-held-2"],
+        },
+        FullSet {
+            what: "a value whose time has passed goes before a page value, whatever its source",
+            max_entries: 2,
+            held: &[
+                ("agent-passed-1", SecretSource::Agent, PASSED),
+                ("page-held-2", SecretSource::Page, DAY),
+            ],
+            new: ("page-new-3", SecretSource::Page),
+            registration: Registration::Registered,
+            masked: &["page-held-2", "page-new-3"],
+        },
+        FullSet {
+            what: "a host value whose time has passed makes room for an agent value",
+            max_entries: 2,
+            held: &[
+                ("host-passed-1", SecretSource::Host, PASSED),
+                ("owner-held-2", SecretSource::Owner, DAY),
+            ],
+            new: ("agent-new-3", SecretSource::Agent),
+            registration: Registration::Registered,
+            masked: &["owner-held-2", "agent-new-3"],
+        },
+    ];
+
+    #[test]
+    fn a_full_set_drops_and_refuses_values_by_their_source() {
+        for case in FULL_SETS {
+            let set = capped(case.max_entries);
+            hold(&set, case.held, case.what);
+            let (new, source) = case.new;
+            let registration = set.register_from(SecretValue::new(new.into()), None, source);
+            assert_eq!(registration, case.registration, "{}", case.what);
+            for value in case.held.iter().map(|(value, ..)| *value).chain([new]) {
+                assert_masked(&set, value, case.masked.contains(&value), case.what);
+            }
+            assert_eq!(set.count(), case.masked.len(), "{}", case.what);
+        }
+    }
+
+    /// An empty set that keeps at most `max_entries` values.
+    fn capped(max_entries: usize) -> SecretSet {
+        SecretSet::new(SecretSetConfig {
+            max_entries,
+            ..SecretSetConfig::default()
+        })
+    }
+
+    /// Registers each value from its source, with its TTL in seconds, and checks it was added.
+    fn hold(set: &SecretSet, values: &[(&str, SecretSource, Option<u64>)], what: &str) {
+        for &(value, source, ttl) in values {
+            let ttl = ttl.map(Duration::from_secs);
+            let registration = set.register_from(SecretValue::new(value.into()), ttl, source);
+            assert_eq!(registration, Registration::Registered, "{what}: {value}");
+        }
+    }
+
+    /// Checks that `value` reads as `[private]` in `set` when `is_masked`, and as itself when not.
+    fn assert_masked(set: &SecretSet, value: &str, is_masked: bool, what: &str) {
+        let expected = if is_masked { MASK } else { value };
+        assert_eq!(masked(set, value), expected, "{what}: {value}");
+    }
+
+    /// A value keeps the highest-ranked source that registered it: a page value the host
+    /// registers again is the host's, and a host value a sweep reads again stays the host's.
+    #[test]
+    fn a_value_registered_again_keeps_its_highest_source_through_a_flood() {
+        let set = SecretSet::new(SecretSetConfig {
+            max_entries: 4,
+            ..SecretSetConfig::default()
+        });
+        let values = [
+            ("page-then-host", [SecretSource::Page, SecretSource::Host]),
+            ("host-then-page", [SecretSource::Host, SecretSource::Page]),
+        ];
+        for (value, [first, again]) in values {
+            assert_eq!(
+                set.register_from(SecretValue::new(value.into()), None, first),
+                Registration::Registered
+            );
+            assert_eq!(
+                set.register_from(SecretValue::new(value.into()), None, again),
+                Registration::Refreshed
+            );
+        }
+        for i in 0..8 {
+            assert_eq!(
+                set.register(SecretValue::new(format!("page-flood-{i}")), None),
+                Registration::Registered
+            );
+        }
+        for (value, _) in values {
+            assert_eq!(masked(&set, value), MASK, "the flood pushed {value} out");
+        }
+        assert_eq!(set.count(), 4);
     }
 
     /// Values in the order they are registered: a repeat of an early value, one too short to

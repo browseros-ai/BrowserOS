@@ -480,7 +480,15 @@ impl Takeovers {
             let browser = self.browser.clone();
             let secrets = Arc::clone(self.privacy.secrets());
             give_back_step(budget, id, "sweeping its tab", async move {
-                sweep(&browser, &secrets, tab).await.map(drop)
+                let swept = sweep(&browser, &secrets, tab).await?;
+                tracing::info!(
+                    takeover = %id,
+                    tab = tab.0,
+                    registered = swept.registered,
+                    refused = swept.refused,
+                    "a takeover swept its tab as it gave it back"
+                );
+                Ok(())
             })
             .await;
         }

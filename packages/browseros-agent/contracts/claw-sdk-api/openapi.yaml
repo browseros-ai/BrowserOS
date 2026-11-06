@@ -607,12 +607,14 @@ paths:
       description: |
         One pass over every frame of the tab: each value in a password, card or code field is
         added to the known secrets list, masked everywhere for the next 24 hours. The final catch
-        for what the owner typed; values are never returned.
+        for what the owner typed; values are never returned. The page put these values there, so
+        when the list is full they push out only values earlier sweeps read; a list full of values
+        it never drops (the host's, the owner's, the agent's) refuses them instead.
       parameters:
         - $ref: '#/components/parameters/TabId'
       responses:
         '200':
-          description: How many values were added.
+          description: How many values were added, and how many the list refused.
           content:
             application/json:
               schema:
@@ -1322,12 +1324,18 @@ components:
           type: boolean
     SweepResult:
       type: object
-      required: [registered]
+      required: [registered, refused]
       properties:
         registered:
           type: integer
           format: int32
           description: Values added to the known secrets list; the values are never returned.
+        refused:
+          type: integer
+          format: int32
+          description: |
+            Values the known secrets list refused, being full of values it never drops. They are
+            masked nowhere, and Neo logs the sweep as an error; the values are never returned.
     TakeoverRequest:
       type: object
       required: [tabId]

@@ -119,6 +119,19 @@ impl ApiError {
         Self::new(StatusCode::UNAUTHORIZED, ErrorCode::Unauthorized, message)
     }
 
+    /// 500 `internal_error`: a failure inside Neo. `cause` is logged, and the host gets only a
+    /// generic message.
+    pub(crate) fn internal(cause: impl Into<String>) -> Self {
+        Self {
+            cause: Some(cause.into()),
+            ..Self::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ErrorCode::InternalError,
+                "internal error",
+            )
+        }
+    }
+
     /// The contract's error for a status no handler described, such as axum's own 405 or a
     /// body over its size limit. `None` for a status that is not an error.
     pub(crate) fn for_status(status: StatusCode) -> Option<Self> {
@@ -140,14 +153,7 @@ impl ApiError {
 /// which the store also reports as `Corrupt`, is refused by `query` before the store sees it.
 impl From<TraceError> for ApiError {
     fn from(error: TraceError) -> Self {
-        Self {
-            cause: Some(error.to_string()),
-            ..Self::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                ErrorCode::InternalError,
-                "internal error",
-            )
-        }
+        Self::internal(error.to_string())
     }
 }
 

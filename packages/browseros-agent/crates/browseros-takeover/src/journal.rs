@@ -82,7 +82,7 @@ use crate::{BrowserTabs, PartError, sweep};
 use browseros_cdp::CdpEvent;
 use browseros_core::sensitive_fields::{JOURNAL_BINDING, JournalEntry, SEALED_WORLD, seal_source};
 use browseros_core::{CoreError, ProtocolSession, SessionId, TabId};
-use browseros_trace::{SecretSet, SecretValue};
+use browseros_trace::{SecretSet, SecretSource, SecretValue};
 use serde_json::json;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -506,8 +506,13 @@ impl Drop for Pending {
     }
 }
 
-/// Registers `value` for the set's full TTL, moving its buffer into the secret, which zeroes it
-/// when dropped.
+/// Registers `value` as the owner's for the set's full TTL, moving its buffer into the secret,
+/// which zeroes it when dropped. A full set never drops or refuses an owner's value (sdk-traces
+/// decision 53), so only a value too short to mask goes unregistered.
 fn register_value(secrets: &SecretSet, mut value: Zeroizing<String>) {
-    secrets.register(SecretValue::new(std::mem::take(&mut *value)), None);
+    let _registration = secrets.register_from(
+        SecretValue::new(std::mem::take(&mut *value)),
+        None,
+        SecretSource::Owner,
+    );
 }

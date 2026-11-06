@@ -529,6 +529,7 @@ impl Displays {
 
     /// The end of a control display that took input. Every open tab is swept at once, within
     /// 5 s. A tab that cannot be swept is logged; what the others hold is registered either way.
+    /// The summary counts what the secret set refused, which is masked nowhere.
     async fn sweep_open_tabs(&self) {
         let secrets = self.privacy.secrets();
         let swept = tokio::time::timeout(CLOSE_SWEEP, async {
@@ -550,10 +551,13 @@ impl Displays {
                 tracing::warn!(%error, "a control display's close sweep could not list the tabs");
             }
             Ok(Ok(swept)) => {
-                let mut registered = 0;
+                let (mut registered, mut refused) = (0, 0);
                 for (tab, result) in &swept {
                     match result {
-                        Ok(tab_swept) => registered += tab_swept.registered,
+                        Ok(tab_swept) => {
+                            registered += tab_swept.registered;
+                            refused += tab_swept.refused;
+                        }
                         Err(error) => tracing::warn!(
                             tab = tab.0,
                             %error,
@@ -564,6 +568,7 @@ impl Displays {
                 tracing::info!(
                     tabs = swept.len(),
                     registered,
+                    refused,
                     "a control display that took input swept every open tab at its end"
                 );
             }

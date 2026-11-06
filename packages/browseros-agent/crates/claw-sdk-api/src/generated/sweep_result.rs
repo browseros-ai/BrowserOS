@@ -16,10 +16,16 @@ pub struct SweepResult {
     /// Values added to the known secrets list; the values are never returned.
     #[serde(rename = "registered")]
     pub registered: i32,
+    /// Values the known secrets list refused, being full of values it never drops. They are masked nowhere, and Neo logs the sweep as an error; the values are never returned.
+    #[serde(rename = "refused")]
+    pub refused: i32,
 }
 
 impl SweepResult {
-    pub fn new(registered: i32) -> SweepResult {
-        SweepResult { registered }
+    pub fn new(registered: i32, refused: i32) -> SweepResult {
+        SweepResult {
+            registered,
+            refused,
+        }
     }
 }

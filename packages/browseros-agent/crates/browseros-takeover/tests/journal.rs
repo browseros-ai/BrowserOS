@@ -8,7 +8,7 @@ use browseros_core::testing::{TestCall, TestConnection, cdp_pending};
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TabId};
 use browseros_takeover::{BrowserTabs, Journal, PartError};
-use browseros_trace::{SecretSet, SecretSetConfig};
+use browseros_trace::{SecretSet, SecretSetConfig, SecretValue};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
@@ -87,12 +87,17 @@ struct Harness {
 }
 
 fn harness(scripts: &[&str]) -> Result<Harness, BoxError> {
+    harness_with(scripts, SecretSetConfig::default())
+}
+
+/// [`harness`] over a secret set with `limits`.
+fn harness_with(scripts: &[&str], limits: SecretSetConfig) -> Result<Harness, BoxError> {
     let connection = browser(scripts)?;
     let tabs = BrowserTabs::new(
         BrowserSession::new(connection.clone(), BrowserSessionHooks::default()),
         Arc::new(Viewports::default()),
     );
-    let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
+    let secrets = Arc::new(SecretSet::new(limits));
     Ok(Harness {
         connection,
         journal: Journal::new(tabs, Arc::clone(&secrets)),
@@ -433,6 +438,35 @@ async fn past_64_held_values_the_oldest_is_registered_at_once() -> TestResult {
     assert_eq!(h.secrets.count(), 1);
     tokio::time::sleep(QUIET * 2).await;
     assert_eq!(h.secrets.count(), 65);
+    armed.disarm().await;
+    Ok(())
+}
+
+/// sdk-traces decision 53: what the owner typed stays masked however many values a page's
+/// sweeps report after it, past the secret set's cap.
+#[tokio::test(start_paused = true)]
+async fn what_the_owner_typed_outlasts_a_flood_of_page_values() -> TestResult {
+    let h = harness_with(
+        &["page-script"],
+        SecretSetConfig {
+            max_entries: 4,
+            ..SecretSetConfig::default()
+        },
+    )?;
+    let armed = h.journal.arm(&[TabId(3)]).await;
+    let page = h.page_session()?;
+
+    h.type_keys(&page, "OWNERTYPED_9k2x");
+    h.registered("OWNERTYPED_9k2x").await?;
+    for i in 0..8 {
+        let _registration = h
+            .secrets
+            .register(SecretValue::new(format!("page-flood-{i}")), None);
+    }
+    assert!(
+        h.masks("OWNERTYPED_9k2x"),
+        "the page's values pushed the owner's out"
+    );
     armed.disarm().await;
     Ok(())
 }

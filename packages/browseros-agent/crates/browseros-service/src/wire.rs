@@ -257,9 +257,11 @@ pub(crate) fn lock(lock: &Lock) -> api::Lock {
     }
 }
 
-/// What a sweep added to the known secrets list: a count, never the values.
+/// What a sweep added to the known secrets list, and what the list refused: counts, never the
+/// values.
 pub(crate) fn sweep_result(swept: Swept) -> api::SweepResult {
-    api::SweepResult::new(i32::try_from(swept.registered).unwrap_or(i32::MAX))
+    let count = |values: usize| i32::try_from(values).unwrap_or(i32::MAX);
+    api::SweepResult::new(count(swept.registered), count(swept.refused))
 }
 
 /// `lock.state`: the lock as it stands, at the moment it was taken or ended.
