@@ -149,7 +149,8 @@ function formatStates(node: AXNode): string[] {
     const v = prop.value.value
     switch (prop.name) {
       case 'checked':
-        if (v === true) states.push('checked')
+        if (v === true || v === 'true') states.push('checked')
+        else if (v === false || v === 'false') states.push('unchecked')
         else if (v === 'mixed') states.push('indeterminate')
         break
       case 'disabled':

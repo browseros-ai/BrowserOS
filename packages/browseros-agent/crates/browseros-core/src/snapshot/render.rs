@@ -540,12 +540,19 @@ fn format_states(node: &AxNode) -> Vec<String> {
     for prop in node.properties.as_deref().unwrap_or(&[]) {
         let value = prop.value.value.as_ref();
         match prop.name.as_str() {
-            "checked" => {
-                if value == Some(&Value::Bool(true)) {
+            "checked" => match value {
+                Some(Value::Bool(true)) => states.push("checked".to_string()),
+                Some(Value::String(value)) if value == "true" => {
                     states.push("checked".to_string());
-                } else if value == Some(&Value::String("mixed".to_string())) {
+                }
+                Some(Value::Bool(false)) => states.push("unchecked".to_string()),
+                Some(Value::String(value)) if value == "false" => {
+                    states.push("unchecked".to_string());
+                }
+                Some(Value::String(value)) if value == "mixed" => {
                     states.push("indeterminate".to_string());
                 }
+                _ => {}
             }
             "disabled" if value == Some(&Value::Bool(true)) => {
                 states.push("disabled".to_string());
@@ -696,6 +703,51 @@ mod tests {
                 "  - heading \"Results\" [level=1]",
                 "  - button \"Load more\" [disabled] [ref=e2]",
                 "  - textbox \"Search\" [ref=e3]: \"abc\"",
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
+    fn checked_states_accept_boolean_and_string_tristate_values() {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2", "3", "4", "5", "6"]),
+            ax("2", "checkbox", &[]),
+            ax("3", "checkbox", &[]),
+            ax("4", "checkbox", &[]),
+            ax("5", "checkbox", &[]),
+            ax("6", "checkbox", &[]),
+        ];
+        for (index, (label, value_type, value)) in [
+            ("String checked", "tristate", json!("true")),
+            ("String unchecked", "tristate", json!("false")),
+            ("Mixed", "tristate", json!("mixed")),
+            ("Boolean checked", "boolean", json!(true)),
+            ("Boolean unchecked", "boolean", json!(false)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let node = &mut nodes[index + 1];
+            node.name = Some(name(label));
+            node.properties = Some(vec![AxProperty {
+                name: "checked".to_string(),
+                value: AxValue {
+                    value_type: value_type.to_string(),
+                    value: Some(value),
+                    sources: None,
+                },
+            }]);
+        }
+
+        assert_eq!(
+            render(&nodes, &mut RefMap::new()),
+            [
+                "- checkbox \"String checked\" [checked]",
+                "- checkbox \"String unchecked\" [unchecked]",
+                "- checkbox \"Mixed\" [indeterminate]",
+                "- checkbox \"Boolean checked\" [checked]",
+                "- checkbox \"Boolean unchecked\" [unchecked]",
             ]
             .join("\n")
         );
