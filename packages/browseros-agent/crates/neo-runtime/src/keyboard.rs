@@ -1892,8 +1892,7 @@ mod tests {
     impl KeyboardTab for FakeTab {
         async fn platform(&self) -> Result<Platform, PageError> {
             self.record("platform");
-            time::sleep(ROUND_TRIP).await;
-            Ok(Platform::Mac)
+            self.platform.answer().await
         }
 
         fn write_keys(

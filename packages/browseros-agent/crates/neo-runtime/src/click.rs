@@ -1082,6 +1082,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::click_goldens;
     use crate::forms::tests::FormSteps;
+    use crate::keyboard::Platform;
     use crate::progress::{self, ErrorName};
     use crate::run::Delivery;
 
@@ -1181,6 +1182,7 @@ pub(crate) mod tests {
     /// A scripted tab. Every page step records its name in `calls`.
     pub(crate) struct FakeTab {
         pub(crate) forms: FormSteps,
+        pub(crate) platform: Step<Result<Platform, PageError>>,
         /// Instant, like every preparation after the run's first.
         pub(crate) prepare: Step<Result<(), PageError>>,
         pub(crate) describe: Step<Result<SelectorFacts, PageError>>,
@@ -1201,6 +1203,7 @@ pub(crate) mod tests {
         pub(crate) fn ready() -> Self {
             Self {
                 forms: FormSteps::ready(),
+                platform: Step::always(ROUND_TRIP, Ok(Platform::Mac)),
                 prepare: Step::always(Duration::ZERO, Ok(())),
                 describe: Step::always(
                     ROUND_TRIP,

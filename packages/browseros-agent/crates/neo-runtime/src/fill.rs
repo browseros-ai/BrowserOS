@@ -12,7 +12,7 @@ use crate::click::{
 };
 use crate::forms::{FillOutcome, FormTab, SelectOption, SelectOutcome};
 use crate::keyboard::{self, KeyboardTab};
-use crate::progress::{CallError, DeliveryCell, PlaywrightError, Progress};
+use crate::progress::{CallError, DeliveryCell, InputTicket, PlaywrightError, Progress};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FillOptions {
@@ -194,43 +194,69 @@ impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
                 FillOutcome::NotConnected => return Ok(ActionResult::NotConnected),
                 FillOutcome::Missing(state) => log_missing(progress, state),
                 FillOutcome::NeedsInput(ticket) => {
-                    // The page focused and selected the target under this same turn. Move its
-                    // original ticket into the detached writer, which retains delivery truth
-                    // and the turn even when this call stops awaiting its answer.
-                    let report = if options.value.is_empty() {
-                        let platform = progress
-                            .race(tab.platform())
-                            .await?
-                            .map_err(mutation_error)?;
-                        let events = keyboard::plan_press("Delete", platform)
-                            .map_err(|error| PlaywrightError::error(error.to_string()))?;
-                        progress.check()?;
-                        progress
-                            .race(tab.write_keys(events, None, ticket, input))
-                            .await?
-                    } else {
-                        progress.check()?;
-                        progress
-                            .race(tab.insert_text(&options.value, ticket, input))
-                            .await?
-                    };
-                    match report {
-                        PressReport::Acked(acked) => acked.delivered(),
-                        PressReport::NothingWritten | PressReport::Failed { closed: true, .. } => {
-                            return Err(PlaywrightError::target_closed().into());
-                        }
-                        PressReport::Failed {
-                            closed: false,
-                            message,
-                        } => {
-                            return Err(PlaywrightError::error(message).into());
-                        }
-                    }
+                    write_fill_input(tab, &options.value, input, ticket, progress).await?;
                     return Ok(ActionResult::Done(()));
                 }
             }
         }
     }
+}
+
+/// The page has focused and selected the target under this turn. The original ticket moves
+/// into the detached writer, which retains delivery truth even if this call stops waiting.
+async fn write_fill_input<T: KeyboardTab>(
+    tab: &T,
+    value: &str,
+    input: T::Input,
+    ticket: InputTicket,
+    progress: &Progress,
+) -> Result<(), Stop> {
+    let prepared = async {
+        let events = if value.is_empty() {
+            let platform = progress
+                .race(tab.platform())
+                .await?
+                .map_err(mutation_error)?;
+            Some(
+                keyboard::plan_press("Delete", platform)
+                    .map_err(|error| PlaywrightError::error(error.to_string()))?,
+            )
+        } else {
+            None
+        };
+        progress.check()?;
+        Ok::<_, Stop>(events)
+    }
+    .await;
+    let events = match prepared {
+        Ok(events) => events,
+        Err(error) => {
+            // needsinput proves the page did not fill the value. Until a writer takes the
+            // ticket, failed preparation or cancellation proves no input was sent.
+            ticket.unsent();
+            return Err(error);
+        }
+    };
+    let report = if let Some(events) = events {
+        progress
+            .race(tab.write_keys(events, None, ticket, input))
+            .await?
+    } else {
+        progress.race(tab.insert_text(value, ticket, input)).await?
+    };
+    match report {
+        PressReport::Acked(acked) => acked.delivered(),
+        PressReport::NothingWritten | PressReport::Failed { closed: true, .. } => {
+            return Err(PlaywrightError::target_closed().into());
+        }
+        PressReport::Failed {
+            closed: false,
+            message,
+        } => {
+            return Err(PlaywrightError::error(message).into());
+        }
+    }
+    Ok(())
 }
 
 struct SelectAction<'a> {
@@ -377,6 +403,52 @@ mod tests {
                 FormFillOutcomeStatus::Needsinput,
             ))),
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_stopping_fill_during_platform_lookup_records_no_input() {
+        let mut tab = FakeTab::ready();
+        needs_input(&mut tab);
+        tab.platform.duration = Duration::from_secs(10);
+        let mut options = fill_options();
+        options.value.clear();
+        let progress = Progress::for_test(100.0);
+        is_error(
+            &fill(&tab, &options, &progress).await,
+            ErrorName::TimeoutError,
+        );
+        assert!(tab.count("platform") > 0);
+        assert_eq!(
+            progress.delivery().expect("input").delivery(),
+            Delivery::NotSent
+        );
+        assert!(
+            !tab.calls()
+                .iter()
+                .any(|call| call.starts_with("insertText ") || call.contains("Delete"))
+        );
+        assert_eq!(tab.count("input"), tab.count("input released"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_stopping_fill_at_the_writer_check_records_no_input() {
+        let tab = FakeTab::ready();
+        let (progress, run) = scoped_progress(true, 1000.0, Duration::from_secs(30));
+        let input = tab.input().await;
+        // This is the ticket returned by a successful needsinput page step, before typing.
+        let ticket = progress.delivery().expect("input").begin().expect("fresh");
+        run.end(RunEnd::Cancelled);
+        let result = write_fill_input(&tab, "one", input, ticket, &progress).await;
+        assert!(matches!(
+            result,
+            Err(Stop::End(CallError::RunEnded(RunEnd::Cancelled)))
+        ));
+        assert_eq!(
+            progress.delivery().expect("input").delivery(),
+            Delivery::NotSent
+        );
+        assert_eq!(tab.count("insertText one"), 0);
+        assert_eq!(tab.count("input"), tab.count("input released"));
     }
 
     #[tokio::test(start_paused = true)]
