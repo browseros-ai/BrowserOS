@@ -1,12 +1,15 @@
 // context.newPage() through Neo and through real Playwright on one BrowserOS neo. Each engine runs
 // tests/scripts/newPage.js on a fresh /run.html: two new pages, distinct objects on about:blank,
-// each with its own main frame, listed after the existing pages in creation order. The test then
-// reads the tabs over its own CDP client: two new about:blank tabs in the run tab's window.
+// each with its own main frame, listed after the existing pages in creation order. The script
+// then drives them, clicking `second`, bringing it to the front and closing `first`, and opens
+// a third page. The test reads the tabs over its own CDP client: `first` gone, `second` and
+// `third` open on about:blank in the run tab's window. For Neo it also checks that each call
+// went to the tab of the page it went through, by the guids in RunOutcome.calls and the tab ids
+// in RunOutcome.pages.
 //
-// One difference is intended and asserted: Playwright opens a new page in front, so the second
-// new tab ends up active; Neo opens it in the background, so the run's tab stays active.
-// Neo's RunOutcome.pages names both new tabs as created by the run, which is how a host learns
-// their ids.
+// One difference is intended and asserted: Playwright opens a new page in front, so `third`
+// ends up active; Neo opens it in the background, so `second`, brought to the front, stays
+// active.
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs).
 
@@ -42,6 +45,9 @@ const expected = {
   crossFrameThrows: true,
   appendedInOrder: true,
   othersKept: true,
+  voidResults: [true, true, true],
+  firstIsClosed: true,
+  listedAtEnd: [false, true, true],
 }
 
 test(`context.newPage() opens the same tabs through Neo and Playwright ${playwrightVersion}`, {
@@ -84,17 +90,34 @@ test(`context.newPage() opens the same tabs through Neo and Playwright ${playwri
           ['about:blank', true],
           ['about:blank', true],
         ],
-        `${side}: two new about:blank tabs in the run tab's window`,
+        `${side}: second and third open on about:blank in the run tab's window`,
       )
     }
-    assert.equal(viaPlaywright.active, 'second new tab', 'Playwright: in front')
-    assert.equal(viaNeo.active, 'run tab', 'Neo: in the background')
+    assert.equal(viaPlaywright.active, 'third', 'Playwright: newPage in front')
+    assert.equal(viaNeo.active, 'second', 'Neo: newPage in the background')
+
+    const { pages, calls } = viaNeo.result.outcome
+    const [first, second, third] = pages.filter(({ created }) => created)
     assert.deepEqual(
-      viaNeo.result.outcome.pages
-        .filter(({ created }) => created)
-        .map(({ id, closed }) => [id, closed]),
-      viaNeo.opened.map(({ targetId }) => [targetId, false]),
-      'RunOutcome.pages names the new tabs',
+      [first, second, third].map(({ id, closed }) => [id, closed]),
+      [
+        [first.id, true],
+        [viaNeo.opened[0].targetId, false],
+        [viaNeo.opened[1].targetId, false],
+      ],
+      'RunOutcome.pages: first closed, second and third the open new tabs',
+    )
+    assert.deepEqual(
+      calls.map(({ method, guid }) => `${method} ${guid}`),
+      [
+        'newPage context@default',
+        'newPage context@default',
+        `click frame@${second.id}`,
+        `bringToFront page@${second.id}`,
+        `close page@${first.id}`,
+        'newPage context@default',
+      ],
+      'each call went to the tab of the page it went through',
     )
   } finally {
     await runCleanups(cleanups)
@@ -102,8 +125,8 @@ test(`context.newPage() opens the same tabs through Neo and Playwright ${playwri
 })
 
 /**
- * One engine's turn on a fresh /run.html: runs the script on it, then reads the tabs it opened,
- * in tab order, and which tab is active, and closes them all.
+ * One engine's turn on a fresh /run.html: runs the script on it, then reads the new tabs still
+ * open, in tab order (`second`, `third`), and which tab is active, and closes them all.
  */
 async function half(cdp, origin, run) {
   const runTab = await openTab(cdp, `${origin}/run.html`)
@@ -122,7 +145,7 @@ async function half(cdp, origin, run) {
   const active =
     activeTab === runTab.targetId
       ? 'run tab'
-      : (['first new tab', 'second new tab'][
+      : (['second', 'third'][
           opened.findIndex(({ targetId }) => targetId === activeTab)
         ] ?? 'another tab')
   for (const { targetId } of [...opened, runTab])

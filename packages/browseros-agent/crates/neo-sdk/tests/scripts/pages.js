@@ -1,6 +1,7 @@
 // pages.test.mjs opened /other.html, then this run's /run.html (tests/pages/tab.html), and
 // drives the browser in step with this script: once both buttons below count a click, it opens
-// /opened.html; once that one counts a click, it closes it.
+// /opened.html; once the run tab counts its second click, sent only after the click on
+// /opened.html resolved, it closes /opened.html.
 const path = (p) => p.url().replace(/^https?:\/\/[^/]+/, '');
 const until = async (check) => {
   const deadline = Date.now() + 15000;
@@ -20,6 +21,7 @@ let opened;
 await until(() => (opened = context.pages().find((p) => path(p) === '/opened.html')));
 const withOpened = context.pages();
 await opened.click('#count');
+await page.click('#count');
 await until(() => !context.pages().includes(opened));
 const after = context.pages();
 
