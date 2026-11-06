@@ -1,4 +1,7 @@
-import type { PageCloseParams } from '@browseros/neo-runtime-spec/serve'
+import type {
+  LifecycleEvent,
+  PageCloseParams,
+} from '@browseros/neo-runtime-spec/serve'
 import type { ByRoleOptions } from '../vendor/playwright/isomorphic/locatorUtils'
 import type { BrowserContext } from './browser-context'
 import type { Connection } from './connection'
@@ -15,6 +18,9 @@ import {
   type SelectOptionOptions,
   type TextContentOptions,
   type UncheckOptions,
+  type URLMatch,
+  type WaitForLoadStateOptions,
+  type WaitForURLOptions,
 } from './frame'
 import type { Locator, LocatorOptions } from './locator'
 import { PAGE_CLOSE_KEYS, pickParams } from './protocol'
@@ -24,9 +30,10 @@ import { TimeoutSettings } from './timeout-settings'
 
 /**
  * Playwright's `Page`, backed by live reads from its own tab, which its guid names. Its
- * selector builders, `goto`, `title`, `textContent` and browser actions forward to the main
- * frame, as Playwright's do (`client/page.ts`); `ariaSnapshot` snapshots the main frame's
- * document. Only the run's `BrowserContext` builds one, once per guid.
+ * selector builders, `goto`, `title`, `textContent`, browser actions, `waitForURL` and
+ * `waitForLoadState` forward to the main frame, as Playwright's do (`client/page.ts`);
+ * `ariaSnapshot` snapshots the main frame's document. Only the run's `BrowserContext` builds
+ * one, once per guid.
  *
  * Known limitation: once the tab is closed, `url()` returns the last URL this object returned,
  * not the last URL the tab committed. Navigate `/a` to `/final`, close the tab before the
@@ -147,6 +154,30 @@ export class Page {
 
   async title(): Promise<string> {
     return await this.#mainFrame._title('page.title')
+  }
+
+  /**
+   * The main frame's {@link Frame.waitForURL}: waits until the page's URL matches `url` (a glob
+   * string or a `RegExp`; a predicate function throws), then until `waitUntil` (default `load`;
+   * `networkidle` throws) fired, and resolves `undefined`.
+   */
+  async waitForURL(url: URLMatch, options?: WaitForURLOptions): Promise<void> {
+    return await this.#mainFrame._waitForURL('page.waitForURL', url, options)
+  }
+
+  /**
+   * The main frame's {@link Frame.waitForLoadState}: waits until `state` (default `load`;
+   * `networkidle` throws) fired for the current or next document, and resolves `undefined`.
+   */
+  async waitForLoadState(
+    state?: LifecycleEvent,
+    options?: WaitForLoadStateOptions,
+  ): Promise<void> {
+    return await this.#mainFrame._waitForLoadState(
+      'page.waitForLoadState',
+      state,
+      options,
+    )
   }
 
   /** Not strict, as Playwright's `page.textContent`, which forwards to the main frame. */
