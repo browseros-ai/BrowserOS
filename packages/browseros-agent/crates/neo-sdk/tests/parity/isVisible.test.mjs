@@ -1,6 +1,8 @@
-// isVisible reads once on Page, Frame and Locator: no waiting, no timeout, the first match unless
-// strict. `#appears` is shown 500 ms after the `#later` click, with `#late` inserted in the same
-// task; textContent waits for `#late`, so the read after it sees `#appears` shown.
+// isVisible reads once on Page, Frame and Locator: no waiting, the first match unless strict.
+// It takes no timeout, so `{ timeout: -1 }`, a deadline already past, must not fire; a selector
+// that cannot parse (`'['`) must reject, not read `false`. `#appears` is shown 500 ms after the
+// `#later` click, with `#late` inserted in the same task; textContent waits for `#late`, so the
+// read after it sees `#appears` shown.
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
@@ -16,9 +18,9 @@ test('isVisible returns booleans at once and rejects ambiguous or invalid target
       'utf8',
     ),
     source: `
-      const values = [await page.locator('#visible').isVisible(), await page.isVisible('#display-none'),
-        await page.mainFrame().isVisible('#visibility-hidden'), await page.locator('#zero-size').isVisible(),
-        await page.isVisible('#missing'), await page.isVisible('#visible', { timeout: 1 }),
+      const values = [await page.locator('#visible').isVisible(), await page.isVisible('#display-none', null),
+        await page.mainFrame().isVisible('#visibility-hidden', null), await page.locator('#zero-size').isVisible(),
+        await page.isVisible('#missing'), await page.isVisible('#visible', { timeout: -1 }),
         await page.isVisible('.dup')]
       await page.click('#later')
       const atOnce = await page.isVisible('#appears')
@@ -29,12 +31,11 @@ test('isVisible returns booleans at once and rejects ambiguous or invalid target
       let strict = 'resolved'
       try { await page.locator('.dup').isVisible() } catch (error) { strict = errorCategory(error) }
       let invalid = 'resolved'
-      try { await page.isVisible(123) } catch (error) { invalid = errorCategory(error) }
+      try { await page.isVisible('[') } catch (error) { invalid = errorCategory(error) }
       return { values, atOnce, later, types: all.map(v => typeof v), strict, invalid }
     `,
     probe: 'window.__facts()',
   })
-  // Playwright sends isVisible without a timeout, so `{ timeout: 1 }` must not fire.
   assert.deepEqual(outcome.value, {
     values: [true, false, false, false, false, true, true],
     atOnce: false,

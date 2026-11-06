@@ -16,7 +16,7 @@ test('isChecked returns booleans, waits for a match and rejects wrong or ambiguo
       'utf8',
     ),
     source: `
-      const values = [await page.isChecked('#unchecked'), await page.mainFrame().isChecked('#radio'),
+      const values = [await page.isChecked('#unchecked', null), await page.mainFrame().isChecked('#radio', null),
         await page.locator('#label').isChecked(), await page.locator('#aria-true').isChecked(),
         await page.isChecked('#aria-mixed')]
       await page.click('#later')
