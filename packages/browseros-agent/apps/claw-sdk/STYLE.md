@@ -8,7 +8,7 @@ plus the project rules below. Tools check most of it, and `check.sh` runs them a
 | `Cargo.toml` `[lints]` | panics on input, docs on exported items, imports, `#[expect]` with a reason, clippy pedantic |
 | `clippy.toml` | no tokio lock across an await, no direct core `PageJs` script, no blocking sleep, path depth |
 | `check.sh` | Google's rustfmt options, forbidden dependencies, the CI toolchain |
-| `tests/style_boundaries.rs` | P1, P2 (entry points), P4 (derives), G7, D2 (presence), lint-table drift |
+| `tests/style_boundaries.rs` | P1, P2 (entry points, the door's dependencies), P4 (derives), G7, D2 (presence), lint-table drift |
 
 This file is what review checks. Each rule has an id for review comments ("P3").
 
@@ -34,12 +34,22 @@ calls another method's `call`, and the types enforce it, because only the door m
 `OpCtx<M>` that `call` takes. Nor does it drive the browser outside its own op. `mcp/`, `http/`
 and `runtime/` never name a browser crate.
 
+The door depends on nothing behind it. `dispatch/` runs methods only as `Method` and rules only as
+`Policy`, and never names `builtins/` or `host/`. Those register into the `Registry` and depend on
+the door, never the other way round. A door that named a built-in could reach it around its own
+registry.
+
 ```rust
 // Bad: a second path around policy, delivery and the trace (and a type error: `Title::call`
 // takes an `&OpCtx<Title>`, which only the door can mint)
 let title = Title.call(op, TitleInput { page }).await?;
 // Good
 let title = op.invoke("page.title", json!({ "page": page })).await?;
+
+// Bad, in dispatch/: the door names a built-in
+use crate::builtins::solve_captcha::SolveCaptcha;
+// Good, in builtins/: the built-in names the door and registers into it
+use crate::dispatch::{Method, MethodSpec, RegistryBuilder};
 ```
 
 ### P3. No code returns a form field's value to the agent
