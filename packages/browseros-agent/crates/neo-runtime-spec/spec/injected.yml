@@ -66,6 +66,17 @@ Injected:
       returns:
         value: string
 
+    # Probes the first match for `Frame.waitForSelector`, without marking elements or waiting.
+    # Rust owns the retry loop and deadline.
+    selectorState:
+      internal: true
+      parameters:
+        selector: string
+        strict: boolean
+      returns:
+        # Absent when nothing matches; hidden and detached waits succeed in that case.
+        matched: SelectorMatch?
+
     # Resolves one frame chunk and reads the first match's `textContent`, for
     # `Frame.textContent`. neo-runtime owns waiting: it polls this call with Playwright's backoff
     # until something matches or the call's deadline passes.
@@ -406,6 +417,14 @@ HitTargetBlocked:
   type: object
   properties:
     hitTargetDescription: string
+
+# The first selector match's visibility and preview, with the total match count for the log.
+SelectorMatch:
+  type: object
+  properties:
+    count: int
+    visible: boolean
+    preview: string
 
 # The first matching element's text.
 TextMatch:
