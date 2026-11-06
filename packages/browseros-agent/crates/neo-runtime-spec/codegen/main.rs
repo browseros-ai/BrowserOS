@@ -225,8 +225,8 @@ fn report(outcome: Result<Outcome, Error>) -> ExitCode {
             mode: Mode::Write,
             drift,
         }) => {
-            for line in drift.lines() {
-                eprintln!("updated {line}");
+            for line in drift.lines(Mode::Write) {
+                eprintln!("{line}");
             }
             ExitCode::SUCCESS
         }
@@ -234,8 +234,8 @@ fn report(outcome: Result<Outcome, Error>) -> ExitCode {
             mode: Mode::Check,
             drift,
         }) => {
-            for line in drift.lines() {
-                eprintln!("stale {line}");
+            for line in drift.lines(Mode::Check) {
+                eprintln!("{line}");
             }
             eprintln!("run `{REGENERATE}` in packages/browseros-agent");
             ExitCode::FAILURE

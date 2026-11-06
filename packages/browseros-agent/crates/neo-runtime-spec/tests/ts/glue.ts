@@ -97,12 +97,12 @@ export const bundle = {
 // Playwright's AriaNodeJSON reaches Rust unchanged, but TypeScript lets a structurally wider
 // value through. Pinning the key sets makes a Playwright upgrade that adds a field fail here,
 // rather than in Rust's decode at run time.
-type SameKeys<A, B> = [keyof A] extends [keyof B]
+export type SameKeys<A, B> = [keyof A] extends [keyof B]
   ? [keyof B] extends [keyof A]
     ? true
     : false
   : false
-type Assert<T extends true> = T
+export type Assert<T extends true> = T
 export type AriaNodeMatchesPlaywright = Assert<SameKeys<AriaNodeJSON, AriaNode>>
 export type AriaRolesCoverPlaywright = Assert<
   AriaNodeJSON['role'] extends AriaRole ? true : false

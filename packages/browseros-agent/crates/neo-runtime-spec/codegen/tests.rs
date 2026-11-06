@@ -25,7 +25,7 @@ fn committed_output_matches_spec() {
         Ok(Outcome::Translated { drift, .. }) => assert!(
             drift.is_empty(),
             "generated files are stale: {:?}; run `{REGENERATE}`",
-            drift.lines()
+            drift.lines(Mode::Check)
         ),
         Ok(Outcome::Pinned { .. }) => panic!("check mode never pins"),
         Err(error) => panic!("{error}"),

@@ -76,18 +76,28 @@ impl Drift {
         self.missing.is_empty() && self.changed.is_empty() && self.unexpected.is_empty()
     }
 
-    /// One line per differing file.
-    pub fn lines(&self) -> Vec<String> {
-        let missing = self.missing.iter().map(|path| format!("{path}: missing"));
-        let changed = self
-            .changed
-            .iter()
-            .map(|(path, line)| format!("{path}: differs from line {line}"));
-        let unexpected = self
-            .unexpected
-            .iter()
-            .map(|path| format!("{path}: generated, but no longer rendered"));
-        missing.chain(changed).chain(unexpected).collect()
+    /// One line per differing file, saying what `mode` found or did about it.
+    pub fn lines(&self, mode: Mode) -> Vec<String> {
+        let mut lines = Vec::new();
+        for path in &self.missing {
+            lines.push(match mode {
+                Mode::Write => format!("wrote {path}"),
+                Mode::Check => format!("missing {path}"),
+            });
+        }
+        for (path, line) in &self.changed {
+            lines.push(match mode {
+                Mode::Write => format!("rewrote {path} from line {line}"),
+                Mode::Check => format!("stale {path}: differs from line {line}"),
+            });
+        }
+        for path in &self.unexpected {
+            lines.push(match mode {
+                Mode::Write => format!("deleted {path}, which is generated but no longer rendered"),
+                Mode::Check => format!("stale {path}: generated, but no longer rendered"),
+            });
+        }
+        lines
     }
 }
 
