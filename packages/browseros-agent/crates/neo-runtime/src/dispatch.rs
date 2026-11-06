@@ -80,9 +80,10 @@ const MAX_REQUEST_BYTES_IN_FLIGHT: usize = 8 * 1024 * 1024;
 /// Neo's message for a selector that enters a frame. Playwright has none: Neo serves the main
 /// frame only, and without this check the injected engine would match nothing there and the call
 /// would time out without saying why.
-const ELEMENTS_UNSUPPORTED: &str = "Neo does not support ElementHandle values in selectOption yet";
-
 const FRAMES_UNSUPPORTED: &str = "Neo does not support frames yet: the selector enters a frame";
+
+/// Neo has no `ElementHandle` objects to pass as `selectOption` values.
+const ELEMENTS_UNSUPPORTED: &str = "Neo does not support ElementHandle values in selectOption yet";
 
 // `serve` replies to a click with `{id}` and no `result`, which is right only while
 // Playwright's spec declares no `returns` for `Frame.click`. A spec that gives it a result stops
@@ -1113,12 +1114,6 @@ mod tests {
             "targetClosed",
             encode_reply(&id, Err(&PlaywrightError::target_closed()), Some(&[])),
         );
-        for method in FORMS {
-            replies.insert(
-                method,
-                encode_reply(&id, Err(&not_served_yet(method)), Some(&[])),
-            );
-        }
         let value =
             encode_result::<FrameInputValueParams>(&FrameInputValueResult { value: "x".into() })
                 .expect("value encodes");

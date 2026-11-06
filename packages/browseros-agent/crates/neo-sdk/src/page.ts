@@ -18,7 +18,7 @@ import { TimeoutSettings } from './timeout-settings'
 
 /**
  * Playwright's `Page`, backed by live reads from the tab this run is attached to. Its selector
- * builders and `click` forward to the main frame, as Playwright's do (`client/page.ts`).
+ * builders and browser actions forward to the main frame, as Playwright's do (`client/page.ts`).
  *
  * Known limitation: once the tab is closed, `url()` returns the last URL this object returned,
  * not the last URL the tab committed. Navigate `/a` to `/final`, close the tab before the
