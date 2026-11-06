@@ -4,7 +4,10 @@ use super::{
     events::{self, EventDefinition},
     state::{AnalyticsState, TelemetryState, load_or_create_state, persist_state, state_path},
 };
-use crate::error::{AppError, AppResult};
+use crate::{
+    config::ServerMode,
+    error::{AppError, AppResult},
+};
 use posthog_rs::{Client, ClientOptionsBuilder, Event};
 use serde_json::Value;
 use std::{
@@ -42,15 +45,14 @@ struct AnalyticsConfig {
 }
 
 impl AnalyticsConfig {
-    fn from_env() -> Self {
+    fn from_env(mode: ServerMode) -> Self {
         let runtime_project_key = env::var("CLAW_POSTHOG_KEY").ok();
         let runtime_host = env::var("CLAW_POSTHOG_HOST").ok();
         let project_key = configured_value(runtime_project_key.as_deref(), BUILD_POSTHOG_KEY);
         let host = configured_value(runtime_host.as_deref(), BUILD_POSTHOG_HOST)
             .unwrap_or_else(|| DEFAULT_POSTHOG_HOST.to_string());
-        let environment_enabled = env::var("CLAW_ANALYTICS_ENABLED").ok().is_none_or(|value| {
-            !matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false")
-        });
+        let environment_enabled =
+            delivery_allowed(mode, env::var("CLAW_ANALYTICS_ENABLED").ok().as_deref());
         Self {
             project_key,
             host,
@@ -61,6 +63,16 @@ impl AnalyticsConfig {
     fn is_configured(&self) -> bool {
         self.project_key.is_some() && self.environment_enabled
     }
+}
+
+/// A hosted server is infrastructure, not someone's install, so it sends no product analytics,
+/// whatever `CLAW_ANALYTICS_ENABLED` says: a launcher that filters the environment must not
+/// turn them back on by dropping the variable.
+fn delivery_allowed(mode: ServerMode, analytics_enabled: Option<&str>) -> bool {
+    !mode.is_hosted()
+        && analytics_enabled.is_none_or(|value| {
+            !matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false")
+        })
 }
 
 /**
@@ -98,8 +110,8 @@ pub struct AnalyticsService {
 }
 
 impl AnalyticsService {
-    pub async fn new(browserclaw_dir: impl AsRef<Path>) -> AppResult<Self> {
-        Self::new_with_config(browserclaw_dir.as_ref(), AnalyticsConfig::from_env()).await
+    pub async fn new(browserclaw_dir: impl AsRef<Path>, mode: ServerMode) -> AppResult<Self> {
+        Self::new_with_config(browserclaw_dir.as_ref(), AnalyticsConfig::from_env(mode)).await
     }
 
     async fn new_with_config(browserclaw_dir: &Path, config: AnalyticsConfig) -> AppResult<Self> {
@@ -841,6 +853,55 @@ mod tests {
                     .is_err()
             );
             service.shutdown().await;
+            endpoint.abort();
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hosted_mode_gates_aliases_and_events_whatever_the_environment_says()
+    -> anyhow::Result<()> {
+        let canonical = "2e087632-1f4e-4ee7-b8bb-cf8ad53e91a8";
+        for (mode, analytics_enabled, delivers) in [
+            (ServerMode::Hosted, None, false),
+            (ServerMode::Hosted, Some("1"), false),
+            (ServerMode::Desktop, None, true),
+        ] {
+            // Consent and a pending alias pair, so a server allowed to report sends at once.
+            let directory = tempdir()?;
+            seed_installation(directory.path(), "31eca9ca-566d-4373-8a1c-2f29b32dbed1").await?;
+            tokio::fs::write(
+                state_path(directory.path()),
+                json!({"distinctId": canonical, "enabled": true}).to_string(),
+            )
+            .await?;
+            let (host, mut requests, endpoint) = local_endpoint().await?;
+            let config = AnalyticsConfig {
+                environment_enabled: delivery_allowed(mode, analytics_enabled),
+                ..test_config(host, true)
+            };
+            let service = AnalyticsService::new_with_config(directory.path(), config).await?;
+            let state = service.set_consent(true).await?;
+            assert_eq!((state.enabled, state.consent), (delivers, true), "{mode:?}");
+
+            if delivers {
+                let alias = tokio::time::timeout(Duration::from_secs(3), requests.recv())
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("missing alias request"))?;
+                assert_eq!(alias["batch"][0]["event"], "$create_alias");
+            }
+            service.capture(SERVER_STARTED, json!({}));
+            if delivers {
+                let event = tokio::time::timeout(Duration::from_secs(3), requests.recv())
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("missing product event"))?;
+                assert_eq!(event["batch"][0]["event"], SERVER_STARTED.name());
+            }
+            service.shutdown().await;
+            assert!(
+                requests.try_recv().is_err(),
+                "{mode:?} sent an extra request"
+            );
             endpoint.abort();
         }
         Ok(())

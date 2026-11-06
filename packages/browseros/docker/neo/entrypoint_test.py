@@ -26,8 +26,14 @@ def run_bash(script: str) -> subprocess.CompletedProcess:
     )
 
 
+# Bash before 4.4 (macOS's /bin/bash) calls an empty array unbound under set -u.
+BASH_EXPANDS_EMPTY_ARRAYS = subprocess.run(
+    ["bash", "-c", 'set -u; flags=(); : "${flags[@]}"'], capture_output=True,
+).returncode == 0
+
+
 class StartNeoTest(unittest.TestCase):
-    def launch(self, neo_args: str) -> tuple[list[str], list[str]]:
+    def launch(self, neo_args: str, hosted_mode: str = "1") -> tuple[list[str], list[str]]:
         """start_neo's calls in order, and the browser's argv, with the image's defaults."""
         with tempfile.TemporaryDirectory() as directory:
             calls, argv = Path(directory) / "calls", Path(directory) / "argv"
@@ -40,6 +46,7 @@ class StartNeoTest(unittest.TestCase):
                 "gpu_flags=(--ignore-gpu-blocklist --disable-gpu-compositing)\n"
                 "PROFILE=/data/profile CDP_PORT=9110 SERVER_PORT=9210\n"
                 "HIDDEN_BROWSEROS_FEATURES=NewTabPage\n"
+                f"BROWSERCLAW_HOSTED_MODE={hosted_mode}\n"
                 f"NEO_ARGS='{neo_args}'\n"
                 + shell_function("start_neo")
                 + "start_neo\nwait\n"
@@ -63,6 +70,17 @@ class StartNeoTest(unittest.TestCase):
         calls, _ = self.launch("")
 
         self.assertEqual(calls, ["forget_zoom_levels", "spawn_as_neo"])
+
+    def test_hosted_mode_turns_off_browser_metrics(self):
+        _, argv = self.launch("")
+
+        self.assertIn("--disable-browseros-metrics", argv)
+
+    @unittest.skipUnless(BASH_EXPANDS_EMPTY_ARRAYS, "needs bash 4.4+, as the image has")
+    def test_desktop_mode_keeps_browser_metrics(self):
+        _, argv = self.launch("", hosted_mode="0")
+
+        self.assertNotIn("--disable-browseros-metrics", argv)
 
 
 class OutputDirectoryTest(unittest.TestCase):

@@ -3,7 +3,10 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
-use claw_server::{AppState, build_router, config::Config};
+use claw_server::{
+    AppState, build_router,
+    config::{Config, ServerMode},
+};
 use serde_json::{Value, json};
 use std::{env, path::Path, process::Command, sync::Arc, time::Duration};
 use tower::ServiceExt;
@@ -22,22 +25,28 @@ fn telemetry_routes_round_trip_persist_and_honor_the_env_gate() -> anyhow::Resul
     }
 
     let root = tempfile::tempdir()?;
-    run_child(root.path(), "roundtrip", "1")?;
-    run_child(root.path(), "gate-off", "false")?;
+    run_child(root.path(), "roundtrip", Some("1"))?;
+    run_child(root.path(), "gate-off", Some("false"))?;
+    // A launcher that filters the environment (`env -i`) drops the variable entirely.
+    run_child(root.path(), "hosted", None)?;
     Ok(())
 }
 
-fn run_child(root: &Path, case: &str, analytics_enabled: &str) -> anyhow::Result<()> {
-    let output = Command::new(env::current_exe()?)
+fn run_child(root: &Path, case: &str, analytics_enabled: Option<&str>) -> anyhow::Result<()> {
+    let mut child = Command::new(env::current_exe()?);
+    child
         .arg("--exact")
         .arg("telemetry_routes_round_trip_persist_and_honor_the_env_gate")
         .arg("--nocapture")
         .env(TEST_CASE, case)
         .env(TEST_ROOT, root)
         .env("HOME", root)
-        .env("CLAW_POSTHOG_KEY", "test-posthog-key")
-        .env("CLAW_ANALYTICS_ENABLED", analytics_enabled)
-        .output()?;
+        .env("CLAW_POSTHOG_KEY", "test-posthog-key");
+    match analytics_enabled {
+        Some(value) => child.env("CLAW_ANALYTICS_ENABLED", value),
+        None => child.env_remove("CLAW_ANALYTICS_ENABLED"),
+    };
+    let output = child.output()?;
     if !output.status.success() {
         anyhow::bail!(
             "telemetry child {case} failed\nstdout:\n{}\nstderr:\n{}",
@@ -55,12 +64,13 @@ async fn run_child_case(case: &str) -> anyhow::Result<()> {
     match case {
         "roundtrip" => roundtrip_case(&root).await,
         "gate-off" => gate_off_case(&root).await,
+        "hosted" => hosted_case(&root).await,
         _ => anyhow::bail!("unknown telemetry test case {case}"),
     }
 }
 
 async fn roundtrip_case(root: &Path) -> anyhow::Result<()> {
-    let router = test_router(root).await?;
+    let router = test_router(root, ServerMode::Desktop).await?;
     let (status, initial) =
         request_json(&router, "GET", "/api/v1/settings/telemetry", None).await?;
     assert_eq!(status, StatusCode::OK);
@@ -102,7 +112,7 @@ async fn roundtrip_case(root: &Path) -> anyhow::Result<()> {
     assert_eq!(persisted["distinctId"], distinct_id);
     assert!(!root.join("installation.json").exists());
 
-    let restarted = test_router(root).await?;
+    let restarted = test_router(root, ServerMode::Desktop).await?;
     let (status, after_restart) =
         request_json(&restarted, "GET", "/api/v1/settings/telemetry", None).await?;
     assert_eq!(status, StatusCode::OK);
@@ -121,7 +131,7 @@ async fn roundtrip_case(root: &Path) -> anyhow::Result<()> {
 }
 
 async fn gate_off_case(root: &Path) -> anyhow::Result<()> {
-    let router = test_router(root).await?;
+    let router = test_router(root, ServerMode::Desktop).await?;
     let (status, state) = request_json(&router, "GET", "/api/v1/settings/telemetry", None).await?;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(state["enabled"], false);
@@ -137,7 +147,25 @@ async fn gate_off_case(root: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn test_router(root: &Path) -> anyhow::Result<Router> {
+async fn hosted_case(root: &Path) -> anyhow::Result<()> {
+    let router = test_router(root, ServerMode::Hosted).await?;
+    let (status, state) = request_json(&router, "GET", "/api/v1/settings/telemetry", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(state["enabled"], false);
+    assert_eq!(state["consent"], true);
+    let (status, opted_in) = request_json(
+        &router,
+        "PUT",
+        "/api/v1/settings/telemetry",
+        Some(json!({ "consent": true })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(opted_in["enabled"], false);
+    Ok(())
+}
+
+async fn test_router(root: &Path, mode: ServerMode) -> anyhow::Result<Router> {
     let config = Arc::new(Config {
         server_port: 9200,
         cdp_port: 49337,
@@ -150,7 +178,7 @@ async fn test_router(root: &Path) -> anyhow::Result<Router> {
         replay_retention_days: 7,
         dev_mode: false,
         native: Default::default(),
-        mode: Default::default(),
+        mode,
         behavior: Default::default(),
         behavior_ignored: Vec::new(),
     });

@@ -93,8 +93,11 @@ Chromium's password saving (`PasswordManagerEnabled`), leak checks
 login your backend supplies with `credentials fill` and a username and password, as they fill
 cards with `payment_cards`. `credentials add` fails with `operation_not_allowed`; logins
 already in the profile still fill.
-`BROWSERCLAW_HOSTED_MODE=0` restores the desktop tools and the save prompts, and hides
-`solve_captcha`.
+Hosted mode sends no product analytics: the server's are off even without
+`CLAW_ANALYTICS_ENABLED=0`, and Neo starts the browser with `--disable-browseros-metrics`
+(browsers without that switch ignore it and still send their own usage metrics).
+`BROWSERCLAW_HOSTED_MODE=0` restores the desktop tools, the save prompts and the browser's
+usage metrics, and hides `solve_captcha`.
 Only exact `0` and `1` are accepted. After changing the flag, run
 `docker compose up -d --wait` to recreate the container with its new environment.
 With `docker run`, recreate it with the new flag and the existing data volume.
