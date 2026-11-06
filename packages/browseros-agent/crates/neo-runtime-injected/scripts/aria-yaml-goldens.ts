@@ -648,7 +648,7 @@ const snapshots: [string, AriaNodeJSON[]][] = [
   ],
   [
     'long texts are never cut',
-    [{ role: 'paragraph', text: repeat('word ', 300) + 'end' }],
+    [{ role: 'paragraph', text: `${repeat('word ', 300)}end` }],
   ],
 ]
 
@@ -681,11 +681,13 @@ const corpus = {
 
 const text = `${JSON.stringify(corpus, null, 2)}\n`
 if (process.argv.includes('--check')) {
-  let committed = ''
+  // Compared as parsed JSON: the repo's formatter rewrites the committed file's layout, never
+  // its values.
+  let committed: unknown
   try {
-    committed = readFileSync(out, 'utf8')
+    committed = JSON.parse(readFileSync(out, 'utf8'))
   } catch {}
-  if (committed !== text) {
+  if (JSON.stringify(committed) !== JSON.stringify(corpus)) {
     console.error(
       `${out} is stale: run \`bun scripts/aria-yaml-goldens.ts\` in crates/neo-runtime-injected`,
     )

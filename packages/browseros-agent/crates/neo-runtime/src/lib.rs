@@ -14,9 +14,11 @@
 //!              └─ Dispatcher::call              dispatch.rs: route, trace entry, task, reply
 //!                   ├─ Progress, Trace          progress.rs: deadlines, call log, delivery, records
 //!                   ├─ click::click             click.rs: Playwright's two retry loops (policy)
-//!                   └─ navigate::goto / title    navigate.rs: commits, lifecycle, live title
-//!                        └─ PageSession          page.rs: domains, watcher, CDP, mouse writer
-//!                             └─ World::call     world.rs: the injected glue, one install per document
+//!                   ├─ navigate::goto / title   navigate.rs: commits, lifecycle, live title
+//!                   └─ reads::text_content,     reads.rs: Playwright's read loops (policy)
+//!                      reads::aria_snapshot     aria_yaml.rs: the snapshot as Playwright's YAML
+//!                        └─ PageSession         page.rs: domains, watcher, CDP, mouse writer
+//!                             └─ World::call    world.rs: the injected glue, one install per document
 //! ```
 //!
 //! `page.rs` owns the run's CDP session; the dispatcher and every task that writes on the
@@ -39,6 +41,7 @@ mod getters;
 mod navigate;
 mod page;
 mod progress;
+mod reads;
 mod realm;
 mod run;
 mod runtime;

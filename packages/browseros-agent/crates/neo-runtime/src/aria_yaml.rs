@@ -100,7 +100,7 @@ pub(crate) fn render(snapshot: &[AriaNode]) -> Result<String, RenderError> {
             (None, true) if !has_children => lines.push(key),
             // A leaf with only its text, which wins over any children.
             (Some(text), true) => {
-                lines.push(format!("{key}: {}", yaml_escape_value_if_needed(text)))
+                lines.push(format!("{key}: {}", yaml_escape_value_if_needed(text)));
             }
             _ => {
                 lines.push(format!("{key}:"));
@@ -176,7 +176,9 @@ fn key(node: &AriaNode) -> Result<String, RenderError> {
         _ => {}
     }
     if let Some(level) = node.level.filter(|level| *level != 0) {
-        key.push_str(&format!(" [level={level}]"));
+        key.push_str(" [level=");
+        key.push_str(&level.to_string());
+        key.push(']');
     }
     match node.pressed {
         Some(AriaTristate::Mixed(_)) => key.push_str(" [pressed=mixed]"),
@@ -194,16 +196,18 @@ fn key(node: &AriaNode) -> Result<String, RenderError> {
         .as_deref()
         .filter(|reference| !reference.is_empty())
     {
-        key.push_str(&format!(" [ref={reference}]"));
+        key.push_str(" [ref=");
+        key.push_str(reference);
+        key.push(']');
         if node.cursor == Some(AriaNodeCursor::Pointer) {
             key.push_str(" [cursor=pointer]");
         }
     }
     if let Some(rect) = &node.r#box {
-        key.push_str(&format!(
-            " [box={},{},{},{}]",
-            rect.x, rect.y, rect.width, rect.height
-        ));
+        let sides = [rect.x, rect.y, rect.width, rect.height].map(|side| side.to_string());
+        key.push_str(" [box=");
+        key.push_str(&sides.join(","));
+        key.push(']');
     }
     Ok(key)
 }

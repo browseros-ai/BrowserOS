@@ -797,13 +797,13 @@ async fn wait_out_pending_navigation<T: Tab>(tab: &T, progress: &Progress) -> Re
 /// Loop A's waits for a call timeout in ms (`0` = none): `0`, then [`LOOP_A_BACKOFF_MS`] with
 /// trailing entries over `timeout / 5` dropped, the last repeating forever. A 500 ms timeout
 /// gives 0, 20, 50, 100, 100, 100…, which is the `hidden` golden's 7 resolutions.
-struct LoopAWaits {
+pub(crate) struct LoopAWaits {
     waits_ms: Vec<u32>,
     index: usize,
 }
 
 impl LoopAWaits {
-    fn new(timeout_ms: f64) -> Self {
+    pub(crate) fn new(timeout_ms: f64) -> Self {
         let mut backoff = LOOP_A_BACKOFF_MS.to_vec();
         // Playwright's `if (progress.timeout)`: a negative timeout caps too, dropping every entry.
         if timeout_ms != 0.0 {
@@ -819,7 +819,7 @@ impl LoopAWaits {
         Self { waits_ms, index: 0 }
     }
 
-    fn next_wait(&mut self) -> Duration {
+    pub(crate) fn next_wait(&mut self) -> Duration {
         let last = self.waits_ms.len() - 1;
         let wait = self.waits_ms[self.index.min(last)];
         self.index += 1;
