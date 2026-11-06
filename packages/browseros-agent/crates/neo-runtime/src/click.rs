@@ -29,8 +29,9 @@
 //! a browser. Nothing here names a CDP or JSON type.
 //!
 //! Neo-only behaviour, each deliberate:
-//! - `trial` with `force` still arms a blocking interceptor (without the preliminary hit
-//!   check); Playwright arms none under `force` and so delivers a real click on a trial.
+//! - `trial` ends at its checks, the hit check included, and sends no input. Playwright presses
+//!   into an interceptor that blocks every event, which listeners the page added to `window`
+//!   first still see, and under `force` it arms none and delivers a real click.
 //! - The verdict is read after every press. Playwright skips it under `noWaitAfter`, and so
 //!   reports a press its interceptor blocked as a click; here `noWaitAfter` skips only the
 //!   navigation barrier.
@@ -74,8 +75,7 @@ pub(crate) trait Tab: Send + Sync {
     /// task until a waiting caller takes it, the attempt until it presses, the writer until
     /// the last mouse event is acknowledged ([`Tab::press`]), then the attempt again for the
     /// verdict. Whichever owner goes away drops it, so a stop never lands before input it was
-    /// armed to judge, and a trial's blocking interceptor sees every event of the trial. It holds
-    /// a copy of its click's input turn until the stop has answered.
+    /// armed to judge. It holds a copy of its click's input turn until the stop has answered.
     type Armed: Send;
     /// A turn at the tab's input ([`Tab::input`]). Copies go to everything that operates the
     /// click's input: the interceptor's setup and the interceptor it arms, and the writer. The
@@ -137,16 +137,16 @@ pub(crate) trait Tab: Send + Sync {
     /// its turn holds nothing.
     fn input(&self) -> impl Future<Output = Self::Input> + Send;
 
-    /// `setupHitTargetInterceptor(element, 'mouse', hit_point, block_all)`. The page installs
-    /// the interceptor before it answers, so once the setup is sent its answer is always read,
-    /// on a task of its own: a caller that stopped waiting leaves an `Armed` nobody takes,
-    /// which disarms as it drops. A future dropped before its first poll sends nothing. `input`
-    /// is held until the answer, and an armed interceptor keeps it until its stop has answered.
+    /// `setupHitTargetInterceptor(element, 'mouse', hit_point, false)`: the hit check at
+    /// `hit_point`, then the interceptor armed for the coming press. The page installs the
+    /// interceptor before it answers, so once the setup is sent its answer is always read, on a
+    /// task of its own: a caller that stopped waiting leaves an `Armed` nobody takes, which
+    /// disarms as it drops. A future dropped before its first poll sends nothing. `input` is
+    /// held until the answer, and an armed interceptor keeps it until its stop has answered.
     fn arm(
         &self,
         element: &Self::Element,
-        hit_point: Option<Point>,
-        block_all: bool,
+        hit_point: Point,
         input: Self::Input,
     ) -> impl Future<Output = Result<Arming<Self::Armed>, PageError>> + Send;
 
@@ -160,10 +160,10 @@ pub(crate) trait Tab: Send + Sync {
     ///
     /// The armed interceptor moves into the writer too, and comes back with the report once
     /// every event is acknowledged. A caller that stopped waiting never gets it back, and the
-    /// writer drops it only then: disarming any earlier would let the release, and the page's
-    /// `click`, through unblocked, which for a trial is a real click. The writer holds `input`
-    /// until its last event is answered, which under `force`, with nothing armed, is all that
-    /// keeps the next click from pressing at once.
+    /// writer drops it only then: disarming any earlier would let the release of a press it
+    /// blocked, and the page's `click`, through to whatever is under the pointer. The writer
+    /// holds `input` until its last event is answered, which under `force`, with nothing armed,
+    /// is all that keeps the next click from pressing at once.
     fn press(
         &self,
         point: Point,
@@ -725,28 +725,27 @@ async fn attempt<T: Tab>(
     // The input phase runs from here, after every wait for the element, to the verdict. Inside
     // it the preliminary hit check, the press and the stop all see this click's own interceptor.
     let input = progress.race(tab.input()).await?;
-    let arming = match (options.force, options.trial) {
-        (true, false) => None,
-        // Neo-only: a forced trial still blocks its events, so a trial never clicks.
-        (true, true) => Some(
-            progress
-                .race(tab.arm(element, None, true, input.clone()))
-                .await??,
-        ),
-        (false, trial) => Some(
-            progress
-                .race(tab.arm(element, Some(point.clone()), trial, input.clone()))
-                .await??,
-        ),
-    };
-    let armed = match arming {
-        None => None,
-        Some(Arming::Armed(armed)) => Some(armed),
-        Some(Arming::NotConnected) => return Ok(Attempt::NotReady(NotReady::NotConnected)),
-        Some(Arming::Intercepted(target)) => {
-            return Ok(Attempt::NotReady(NotReady::Intercepted(target)));
+    let armed = if options.force {
+        None
+    } else {
+        match progress
+            .race(tab.arm(element, point.clone(), input.clone()))
+            .await??
+        {
+            Arming::Armed(armed) => Some(armed),
+            Arming::NotConnected => return Ok(Attempt::NotReady(NotReady::NotConnected)),
+            Arming::Intercepted(target) => {
+                return Ok(Attempt::NotReady(NotReady::Intercepted(target)));
+            }
         }
     };
+    if options.trial {
+        // Neo-only: a trial ends at its checks and sends no input. Dropping the interceptor
+        // disarms it, and the tab's input comes back once that stop has answered.
+        drop(armed);
+        progress.log("  trial click action done");
+        return Ok(Attempt::Done);
+    }
     act(
         tab, point, armed, input, options, wait_after, progress, delivery,
     )
@@ -757,8 +756,8 @@ async fn attempt<T: Tab>(
 ///
 /// Delivery follows the cell's typestate (`progress.rs`): the ticket is taken right before the
 /// press and moves into the writer; an acknowledged press is `Done` unless the interceptor
-/// verifiably blocked it (a trial, or a verdict naming another element), which puts it back to
-/// `NotSent` so loop B may press again, exactly when Playwright would. Every other way out of
+/// verifiably blocked it (its verdict names another element), which puts it back to `NotSent`
+/// so loop B may press again, exactly when Playwright would. Every other way out of
 /// here after the press ends the call: no code path retries a press the page may have seen.
 /// The armed interceptor rides in the writer with the ticket, so it is still armed when the
 /// last release lands however this returns, the call stopping mid-press included. `input`, the
@@ -816,15 +815,14 @@ async fn act<T: Tab>(
     // Not held through the navigation barrier, which only waits: an interceptor not yet stopped
     // keeps its own copy until it is.
     drop(input);
-    if blocked.is_some() || options.trial {
+    if blocked.is_some() {
         acked.blocked();
     } else {
         acked.delivered();
     }
 
     if blocked.is_none() {
-        let trial = if options.trial { "trial " } else { "" };
-        progress.log(format!("  {trial}click action done"));
+        progress.log("  click action done");
         progress.log("  waiting for scheduled navigations to finish");
     }
     // Playwright's barrier runs after its action returns, blocked or not.
@@ -1313,11 +1311,10 @@ pub(crate) mod tests {
         async fn arm(
             &self,
             _element: &u32,
-            hit_point: Option<Point>,
-            block_all: bool,
+            hit_point: Point,
             input: FakeInput,
         ) -> Result<Arming<FakeArmed>, PageError> {
-            self.record(format!("arm {hit_point:?} {block_all}"));
+            self.record(format!("arm {hit_point:?}"));
             Ok(match self.arm.answer().await? {
                 ArmAnswer::Armed => Arming::Armed(FakeArmed {
                     calls: Arc::clone(&self.calls),
@@ -1530,7 +1527,7 @@ pub(crate) mod tests {
                 "scroll Protocol",
                 "geometry",
                 "input",
-                "arm Some(Point { x: 36.75, y: 18.5 }) false",
+                "arm Point { x: 36.75, y: 18.5 }",
                 "watch_navigations",
                 "press (36.75, 18.5)",
                 "released",
@@ -1625,8 +1622,9 @@ pub(crate) mod tests {
         assert_eq!(tab.count("settle"), 0, "no navigation barrier");
     }
 
+    /// A trial runs every check a click runs, the hit check included, and sends no input.
     #[tokio::test(start_paused = true)]
-    async fn a_trial_presses_into_a_blocking_interceptor_and_delivers_nothing() {
+    async fn tests_that_a_trial_checks_the_hit_target_and_sends_no_input() {
         let tab = FakeTab::ready();
         let mut trial = options(SELECTOR);
         trial.trial = true;
@@ -1634,16 +1632,26 @@ pub(crate) mod tests {
 
         assert_eq!(result, Ok(()));
         assert_eq!(delivery, Delivery::NotSent);
+        let calls = tab.calls();
         assert!(
-            tab.calls()
-                .contains(&"arm Some(Point { x: 36.75, y: 18.5 }) true".to_string()),
-            "{:?}",
-            tab.calls()
+            calls.iter().any(|call| call.starts_with("arm ")),
+            "the hit check ran: {calls:?}"
+        );
+        assert!(
+            !calls.iter().any(|call| call.starts_with("press")),
+            "a trial presses nothing: {calls:?}"
+        );
+        assert_eq!(
+            calls.last().map(String::as_str),
+            Some("input released"),
+            "{calls:?}"
         );
     }
 
+    /// Under `force` a trial has nothing left to check: no interceptor and no input. Playwright's
+    /// forced trial arms nothing and delivers a real click.
     #[tokio::test(start_paused = true)]
-    async fn a_forced_trial_still_arms_a_blocking_interceptor() {
+    async fn tests_that_a_forced_trial_sends_no_input() {
         let tab = FakeTab::ready();
         let mut forced = options(SELECTOR);
         forced.trial = true;
@@ -1652,7 +1660,13 @@ pub(crate) mod tests {
 
         assert_eq!(result, Ok(()));
         assert_eq!(delivery, Delivery::NotSent);
-        assert!(tab.calls().contains(&"arm None true".to_string()));
+        let calls = tab.calls();
+        assert!(
+            !calls
+                .iter()
+                .any(|call| call.starts_with("arm ") || call.starts_with("press")),
+            "{calls:?}"
+        );
         assert_eq!(tab.count("check_states"), 0, "force skips the state checks");
     }
 

@@ -196,6 +196,16 @@ async fn tests_that_a_late_setup_spanning_a_commit_is_stopped_after_timeout() {
     assert_eq!(browser.page_clicks(), 0);
 }
 
+/// A forced click waiting out another run's trial on the wire: the trial's setup and stop, then
+/// the forced click's mouse events. The trial sends no mouse event.
+const FORCED_AFTER_A_TRIAL: [&str; 5] = [
+    "glue setupHitTargetInterceptor",
+    "glue stopHitTargetInterceptor",
+    "mouse mouseMoved",
+    "mouse mousePressed",
+    "mouse mouseReleased",
+];
+
 /// Whether the fake has received a hit-target interceptor's setup.
 fn armed(exchanges: &[Exchange]) -> bool {
     exchanges
@@ -246,7 +256,8 @@ fn assert_released_before_detach(exchanges: &[Exchange]) {
 }
 
 /// Delaying both setup replies makes the two clicks overlap while the browser still owns
-/// only one hit-target interceptor. A trial must never add a click to the real click beside it.
+/// only one hit-target interceptor. A trial presses nothing, so it never adds a click to the
+/// real click beside it.
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_concurrent_trial_and_real_click_deliver_only_one_click() {
     let browser = FakeBrowser::start(Replies {
@@ -269,6 +280,13 @@ async fn tests_that_concurrent_trial_and_real_click_deliver_only_one_click() {
 
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
     assert_eq!(outcome.calls.len(), 2, "both calls are recorded");
+    let exchanges = browser.exchanges();
+    assert_eq!(
+        mouse(&exchanges, "mousePressed").len(),
+        1,
+        "the trial pressed nothing: {:?}",
+        trail(&exchanges)
+    );
     assert_eq!(
         browser.page_clicks(),
         1,
@@ -302,6 +320,13 @@ async fn tests_that_concurrent_runs_keep_trial_clicks_out_of_the_page() {
 
     assert_eq!(trial.status, RunStatus::Ok, "{trial:?}");
     assert_eq!(real.status, RunStatus::Ok, "{real:?}");
+    let exchanges = browser.exchanges();
+    assert_eq!(
+        mouse(&exchanges, "mousePressed").len(),
+        1,
+        "the trial pressed nothing: {:?}",
+        trail(&exchanges)
+    );
     assert_eq!(
         browser.page_clicks(),
         1,
@@ -353,7 +378,7 @@ async fn concurrent_clicks_take_turns_from_setup_to_stop() {
 /// A forced click arms nothing of its own, so it presses into whatever interceptor is armed.
 /// A second run's forced click on the tab waits for the first run's trial to be stopped, then
 /// reaches the page. The trial's setup answer is held 500 ms, so without turns the forced
-/// click presses while the trial's interceptor, which blocks every event, is armed.
+/// click presses while the trial's interceptor is armed.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_forced_click_in_another_run_waits_for_the_armed_trial() {
     let browser = FakeBrowser::start(Replies {
@@ -395,6 +420,12 @@ async fn a_forced_click_in_another_run_waits_for_the_armed_trial() {
     assert_eq!(trial.status, RunStatus::Ok, "{trial:?}");
     assert_eq!(forced.value, Some(json!("clicked")), "{forced:?}");
     let exchanges = browser.exchanges();
+    assert_eq!(
+        input_steps(&exchanges),
+        FORCED_AFTER_A_TRIAL,
+        "{:?}",
+        trail(&exchanges)
+    );
     assert_eq!(
         browser.page_clicks(),
         1,
@@ -452,6 +483,12 @@ async fn a_cancelled_trial_keeps_the_tab_input_until_its_interceptor_is_stopped(
     assert_eq!(forced.value, Some(json!("clicked")), "{forced:?}");
     let exchanges = settle(&browser, detached).await;
     assert_eq!(
+        input_steps(&exchanges),
+        FORCED_AFTER_A_TRIAL,
+        "{:?}",
+        trail(&exchanges)
+    );
+    assert_eq!(
         browser.page_clicks(),
         1,
         "the forced click waited for the late interceptor's stop: {:?}",
@@ -460,12 +497,12 @@ async fn a_cancelled_trial_keeps_the_tab_input_until_its_interceptor_is_stopped(
     assert_eq!(browser.armed_interceptor(), None, "{:?}", trail(&exchanges));
 }
 
-/// A trial whose call times out mid-press leaves its writer to release the button 200 ms later.
-/// The run's next click waits for that release and for the trial's interceptor to be stopped
-/// before it sets up its own, which does not block: set up any earlier, it would let the
-/// trial's late release through to the page's handlers.
+/// A click whose call times out mid-press leaves its writer to release the button 200 ms later.
+/// The run's next click waits for that release and for the first click's interceptor to be
+/// stopped before it sets up its own: one whole input phase, then the other. Set up any
+/// earlier, it would replace an interceptor whose click had not finished.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_trial_cut_short_mid_press_keeps_the_tab_input_until_its_release_lands() {
+async fn tests_that_a_click_cut_short_mid_press_keeps_the_tab_input_until_its_release_lands() {
     let browser = FakeBrowser::start(Replies {
         mouse: Reply {
             delay: Duration::from_millis(200),
@@ -478,11 +515,11 @@ async fn a_trial_cut_short_mid_press_keeps_the_tab_input_until_its_release_lands
         .runtime()
         .await
         .run(fake_browser::run_request(
-            "const trial = page.click('#go', { trial: true, delay: 5000, timeout: 700 })
+            "const first = page.click('#go', { delay: 5000, timeout: 700 })
   .catch((error) => error.name)
 await new Promise((resolve) => setTimeout(resolve, 800))
 await page.click('#go')
-return await trial",
+return await first",
             Duration::from_secs(10),
             CancellationToken::new(),
         ))
@@ -491,9 +528,9 @@ return await trial",
     assert_eq!(outcome.value, Some(json!("TimeoutError")), "{outcome:?}");
     let exchanges = settle(&browser, detached).await;
     assert_eq!(
-        browser.page_clicks(),
-        1,
-        "only the second, real click reached the page: {:?}",
+        input_steps(&exchanges),
+        ONE_INPUT_PHASE.repeat(2),
+        "the second click set up only once the first had released and stopped: {:?}",
         trail(&exchanges)
     );
     assert_eq!(browser.armed_interceptor(), None, "{:?}", trail(&exchanges));
@@ -609,18 +646,20 @@ async fn a_dropped_run_still_releases_the_button_before_the_session_detaches() {
     assert_released_before_detach(&settle(&browser, detached).await);
 }
 
-/// A trial whose deadline fires while the writer sleeps out its `delay` between press and
-/// release. The writer cuts the delay short and releases, and the trial's interceptor, which
-/// blocks every event, is still armed when the release lands, so the page's handlers see no
-/// click. Every mouse event is answered 200 ms late, so a stop sent as soon as the call stopped
-/// would land well before the release.
+/// A press that lands on another element after the hit check passed, cut off by its deadline
+/// while the writer sleeps out its `delay` before the release. The interceptor blocked the
+/// press and blocks the rest of its click; the writer cuts the delay short and releases, and
+/// the interceptor is still armed when the release lands, so the page's handlers see no click.
+/// Every mouse event is answered 200 ms late, so a stop sent as soon as the call stopped would
+/// land well before the release.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_trial_cut_short_mid_press_still_delivers_no_click() {
+async fn tests_that_a_blocked_press_cut_short_never_reaches_the_page() {
     let browser = FakeBrowser::start(Replies {
         mouse: Reply {
             delay: Duration::from_millis(200),
             ..Reply::default()
         },
+        press_lands_elsewhere: true,
         ..Replies::default()
     })
     .await;
@@ -628,7 +667,7 @@ async fn a_trial_cut_short_mid_press_still_delivers_no_click() {
         .runtime()
         .await
         .run(fake_browser::run_request(
-            "try { await page.click('#go', { trial: true, delay: 5000, timeout: 700 }) } catch (error) { return error.name }",
+            "try { await page.click('#go', { delay: 5000, timeout: 700 }) } catch (error) { return error.name }",
             Duration::from_secs(10),
             CancellationToken::new(),
         ))
@@ -645,7 +684,7 @@ async fn a_trial_cut_short_mid_press_still_delivers_no_click() {
     assert_eq!(
         browser.page_clicks(),
         0,
-        "the trial reached the page's handlers: {:?}",
+        "the blocked press reached the page's handlers: {:?}",
         trail(&exchanges)
     );
     assert_eq!(

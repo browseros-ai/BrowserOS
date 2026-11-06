@@ -536,11 +536,11 @@ return 'clicked'"
     }
 }
 
-/// `trial: true` on the `ok` page: the checks, then a press whose every event the interceptor
-/// blocks. The click resolves, neither button's `onclick` runs (the hash stays empty), and
-/// delivery is `NotSent`.
+/// `trial: true` on the `ok` page: the checks, the hit check included, and no input. The click
+/// resolves, the page's listeners see no event at all, neither button's `onclick` runs (the hash
+/// stays empty), and delivery is `NotSent`.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_trial_click_delivers_nothing() {
+async fn tests_that_a_trial_click_sends_no_input() {
     let Some(tab) = open_page("/ok.html", OK_PAGE).await else {
         return;
     };
@@ -551,6 +551,7 @@ return page.url()",
     )
     .await;
     let hash = tab.evaluate("location.hash").await;
+    let events = tab.evaluate("window.__events").await;
     tab.close().await;
 
     assert_eq!(outcome.status, RunStatus::Ok, "{outcome:#?}");
@@ -567,6 +568,11 @@ return page.url()",
         "{call:#?}"
     );
     assert_eq!(hash, json!(""), "the button's onclick never ran");
+    assert_eq!(
+        events,
+        json!([]),
+        "no pointer or mouse event reached the page"
+    );
 }
 
 /// The test closes the tab while a click polls for a button that never matches. The script
