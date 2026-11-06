@@ -60,6 +60,10 @@ export class BrowserContext {
     this._timeoutSettings.setDefaultTimeout(timeout)
   }
 
+  setDefaultNavigationTimeout(timeout: number | undefined): void {
+    this._timeoutSettings.setDefaultNavigationTimeout(timeout)
+  }
+
   /** `createRun`'s: registers the run's page before the script starts, so the first `pages()`
    * returns it instead of a second object for the same tab. */
   _addRunPage(guid: string, mainFrameGuid: string, url: string): Page {

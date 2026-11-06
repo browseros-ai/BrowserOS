@@ -91,11 +91,37 @@ pub struct Replies {
     /// arrives, as a real page does before it answers, so holding the answer back leaves it
     /// armed with the run not knowing yet.
     pub arm: Reply,
+    pub title: Reply,
+    pub world: Reply,
+    /// A commit after the named operation starts, before its delayed answer is delivered.
+    pub commit_during: Option<CommitDuring>,
     /// The tab closes the moment a session's first `Page.enable` arrives, and the fake does
     /// what BrowserOS does then (measured): it never answers the command in flight, reports
     /// `Target.detachedFromTarget` for the session, and answers every later command on it with
     /// `Session with given id not found.`.
     pub closes_at_page_enable: bool,
+    /// Optional navigation script for commit/reply ordering tests.
+    pub navigation: Option<NavigationScript>,
+}
+
+#[derive(Debug, Clone, Copy)]
+#[expect(
+    dead_code,
+    reason = "Each test binary exercises different commit boundaries"
+)]
+pub enum CommitDuring {
+    Arm,
+    Title,
+    Attach,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NavigationScript {
+    pub reply_after: Duration,
+    pub commit_after: Duration,
+    pub same_document: bool,
+    pub stop_loading: bool,
+    pub restored_from_bfcache: bool,
 }
 
 /// One command the fake received, and its answer once the fake has sent it.
@@ -176,6 +202,10 @@ struct Interceptor {
 }
 
 impl FakeBrowser {
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "the fake owns its replies and copies them into every connection it serves"
+    )]
     pub async fn start(replies: Replies) -> Self {
         let exchanges = Arc::new(Mutex::new(Vec::new()));
         let page = Arc::new(Mutex::new(Page::default()));
@@ -310,6 +340,11 @@ struct Calls {
     new_page_history: usize,
     mouse: usize,
     arm: usize,
+    title: usize,
+    world: usize,
+    committed: bool,
+    /// Which document the current utility world belongs to, for stale-read behavior tests.
+    world_document: bool,
     /// Whether `install.js` ran, so a later `attach.js` finds the glue.
     installed: bool,
     /// Sessions whose tab closed under them (`Replies::closes_at_page_enable`).
@@ -329,6 +364,10 @@ impl Calls {
 
 /// Serves one CDP connection. Answers go out through one writer task, so an answer held back
 /// for a while never delays the ones after it.
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "each connection's task owns its copy of the fake's replies"
+)]
 async fn serve_cdp(
     stream: TcpStream,
     replies: Replies,
@@ -395,8 +434,9 @@ async fn serve_cdp(
             let _ = outgoing.send(detached.to_string());
             (Value::Null, None)
         } else {
-            answer(&command, replies, &mut calls, &page)
+            answer(&command, &replies, &mut calls, &page)
         };
+        navigation_events(&command, &replies, &mut calls, &outgoing, &page, &mut tasks);
         let Some(delay) = when else {
             continue;
         };
@@ -419,6 +459,109 @@ async fn serve_cdp(
                 time::sleep(delay).await;
                 delivery.send(reply);
             });
+        }
+    }
+}
+
+/// The navigation fakes' events for `command`: the lifecycle replay `setLifecycleEventsEnabled`
+/// triggers, a commit injected during a scripted call, and a scripted navigation's events.
+fn navigation_events(
+    command: &Value,
+    replies: &Replies,
+    calls: &mut Calls,
+    outgoing: &UnboundedSender<String>,
+    page: &Arc<Mutex<Page>>,
+    tasks: &mut JoinSet<()>,
+) {
+    let session = command["sessionId"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    if command["method"] == "Page.setLifecycleEventsEnabled" {
+        for name in ["init", "DOMContentLoaded", "load"] {
+            let _ = outgoing.send(
+                json!({"sessionId":session,"method":"Page.lifecycleEvent",
+                "params":{"frameId":PAGE,"loaderId":"initial","name":name}})
+                .to_string(),
+            );
+        }
+    }
+    commit_during_call(command, replies, calls, outgoing);
+    if command["method"] == "Page.navigate"
+        && let Some(script) = replies.navigation
+    {
+        tasks.spawn(emit_navigation(
+            outgoing.clone(),
+            session,
+            command["params"]["url"].clone(),
+            script,
+            Arc::clone(page),
+        ));
+    }
+}
+
+fn commit_during_call(
+    command: &Value,
+    replies: &Replies,
+    calls: &mut Calls,
+    outgoing: &UnboundedSender<String>,
+) {
+    let method = command["method"].as_str().unwrap_or_default();
+    let glue = command["params"]["arguments"][0]["value"]
+        .as_str()
+        .unwrap_or_default();
+    let commit = match replies.commit_during {
+        Some(CommitDuring::Arm) => glue == "setupHitTargetInterceptor" && calls.arm == 1,
+        Some(CommitDuring::Title) => glue == "title" && calls.title == 1,
+        Some(CommitDuring::Attach) => method == "Page.createIsolatedWorld" && calls.world == 1,
+        None => false,
+    };
+    if commit && !calls.committed {
+        calls.committed = true;
+        let _ = outgoing.send(json!({
+            "sessionId":command["sessionId"], "method":"Page.frameNavigated",
+            "params":{"frame":{"id":PAGE,"loaderId":"next","url":"https://example.test/next"},"type":"Navigation"}
+        }).to_string());
+    }
+}
+
+async fn emit_navigation(
+    outgoing: UnboundedSender<String>,
+    session: String,
+    url: Value,
+    script: NavigationScript,
+    page: Arc<Mutex<Page>>,
+) {
+    time::sleep(script.commit_after).await;
+    if let Some(tab) = lock(&page)
+        .tabs
+        .iter_mut()
+        .find(|tab| tab["targetId"] == PAGE)
+    {
+        tab["url"] = url.clone();
+    }
+    let (method, params) = if script.same_document {
+        (
+            "Page.navigatedWithinDocument",
+            json!({"frameId":PAGE,"url":url}),
+        )
+    } else {
+        (
+            "Page.frameNavigated",
+            json!({"frame":{"id":PAGE,"loaderId":"new","url":url},"type":if script.restored_from_bfcache { "BackForwardCacheRestore" } else { "Navigation" }}),
+        )
+    };
+    let _ = outgoing.send(json!({"sessionId":session,"method":method,"params":params}).to_string());
+    if script.stop_loading {
+        let _ = outgoing.send(json!({"sessionId":session,"method":"Page.frameStoppedLoading","params":{"frameId":PAGE}}).to_string());
+    } else {
+        for name in ["DOMContentLoaded", "load"] {
+            let loader = if script.same_document {
+                "initial"
+            } else {
+                "new"
+            };
+            let _ = outgoing.send(json!({"sessionId":session,"method":"Page.lifecycleEvent","params":{"frameId":PAGE,"loaderId":loader,"name":name}}).to_string());
         }
     }
 }
@@ -466,7 +609,7 @@ fn bring_to_front(command: &Value, calls: &Calls, page: &Mutex<Page>) -> Value {
 /// The fake's answer to `command`, and when to send it.
 fn answer(
     command: &Value,
-    replies: Replies,
+    replies: &Replies,
     calls: &mut Calls,
     page: &Mutex<Page>,
 ) -> (Value, Option<Duration>) {
@@ -507,19 +650,33 @@ fn answer(
         "Browser.getVersion"
         | "Page.close"
         | "Page.enable"
+        | "Page.setLifecycleEventsEnabled"
         | "Emulation.setFocusEmulationEnabled"
         | "Runtime.releaseObjectGroup"
         | "DOM.scrollIntoViewIfNeeded" => (json!({ "result": {} }), now),
-        "Page.createIsolatedWorld" => (json!({ "result": { "executionContextId": 7 } }), now),
+        "Page.navigate" => match replies.navigation {
+            Some(script) => {
+                let result = if script.same_document {
+                    json!({"frameId":PAGE})
+                } else {
+                    json!({"frameId":PAGE,"loaderId":"new"})
+                };
+                (json!({"result":result}), Some(script.reply_after))
+            }
+            None => (json!({"result":{"frameId":PAGE,"loaderId":"new"}}), None),
+        },
+        "Page.createIsolatedWorld" => {
+            let call = calls.world;
+            calls.world += 1;
+            calls.world_document = calls.committed;
+            (
+                json!({ "result": { "executionContextId": 7 } }),
+                replies.world.when(call),
+            )
+        }
         "Runtime.callFunctionOn" => {
             let params = &command["params"];
-            let when = if params["arguments"][0]["value"] == "setupHitTargetInterceptor" {
-                let call = calls.arm;
-                calls.arm += 1;
-                replies.arm.when(call)
-            } else {
-                now
-            };
+            let when = glue_delay(params, calls, replies);
             (call_function_on(params, calls, page), when)
         }
         "Runtime.getProperties" => {
@@ -557,10 +714,21 @@ fn answer(
     }
 }
 
+fn glue_delay(params: &Value, calls: &mut Calls, replies: &Replies) -> Option<Duration> {
+    let (counter, reply) = match params["arguments"][0]["value"].as_str() {
+        Some("setupHitTargetInterceptor") => (&mut calls.arm, replies.arm),
+        Some("title") => (&mut calls.title, replies.title),
+        _ => return Some(Duration::ZERO),
+    };
+    let call = *counter;
+    *counter += 1;
+    reply.when(call)
+}
+
 /// A new target's initial history can lag its tab-strip record.
 fn navigation_history(
     command: &Value,
-    replies: Replies,
+    replies: &Replies,
     calls: &mut Calls,
     page: &Mutex<Page>,
 ) -> (Value, Option<Duration>) {
@@ -591,7 +759,7 @@ fn navigation_history(
 /// Tab-strip commands share one browser state across all sessions and connections.
 fn tab_command(
     command: &Value,
-    replies: Replies,
+    replies: &Replies,
     page: &Mutex<Page>,
 ) -> Option<(Value, Option<Duration>)> {
     let now = Some(Duration::ZERO);
@@ -698,6 +866,7 @@ fn call_function_on(params: &Value, calls: &mut Calls, page: &Mutex<Page>) -> Va
     let name = params["arguments"][0]["value"].as_str().unwrap_or_default();
     let glue_params = &params["arguments"][1]["value"];
     let value = match name {
+        "title" => json!({"value":if calls.world_document { "After commit" } else { "Fake page" }}),
         "describeSelector" => json!({ "locator": glue_params["selector"] }),
         "checkElementStates" | "scrollIntoView" => json!({}),
         "viewportSize" => json!({ "width": 800, "height": 600 }),

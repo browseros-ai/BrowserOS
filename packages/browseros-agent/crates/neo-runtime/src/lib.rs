@@ -11,9 +11,12 @@
 //!             └─ Dispatcher::call        dispatch.rs: target routing, task, trace, reply
 //!                  ├─ tab_calls          context/page lifecycle; tracked creation and cleanup
 //!                  └─ Tabs::session      one lazy session for the call's page
-//!                       └─ click::click  click.rs: policy over the Tab seam
-//!                            └─ PageSession  page.rs: domains, watcher, input
-//!                                 └─ World   world.rs: per-document injected glue
+//!                       ├─ click::click  click.rs: policy over the Tab seam
+//!                       ├─ navigate      navigate.rs: goto (commits, lifecycle) and live title
+//!                       ├─ reads         reads.rs: textContent and ariaSnapshot read loops;
+//!                       │                aria_yaml.rs renders the snapshot as Playwright's YAML
+//!                       └─ PageSession   page.rs: domains, watcher, document state, input
+//!                            └─ World    world.rs: per-document injected glue
 //! ```
 //!
 //! The registry and session writers share each `PageSession`. Its last owner detaches the
@@ -36,6 +39,7 @@ extern crate self as neo_runtime;
 )]
 mod fake_browser;
 
+mod aria_yaml;
 mod bridge;
 mod check;
 mod click;
@@ -47,9 +51,11 @@ mod fill;
 mod forms;
 mod getters;
 mod keyboard;
+mod navigate;
 mod page;
 mod press;
 mod progress;
+mod reads;
 mod realm;
 mod run;
 mod runtime;

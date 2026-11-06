@@ -4,13 +4,16 @@ import type { BrowserContext } from './browser-context'
 import type { Connection } from './connection'
 import { isTargetClosedError } from './errors'
 import {
+  type AriaSnapshotOptions,
   type CheckOptions,
   type ClickOptions,
   type FillOptions,
   Frame,
+  type GotoOptions,
   type InputValueOptions,
   type PressOptions,
   type SelectOptionOptions,
+  type TextContentOptions,
   type UncheckOptions,
 } from './frame'
 import type { Locator, LocatorOptions } from './locator'
@@ -21,8 +24,9 @@ import { TimeoutSettings } from './timeout-settings'
 
 /**
  * Playwright's `Page`, backed by live reads from its own tab, which its guid names. Its
- * selector builders and browser actions forward to the main frame, as Playwright's do
- * (`client/page.ts`). Only the run's `BrowserContext` builds one, once per guid.
+ * selector builders, `goto`, `title`, `textContent` and browser actions forward to the main
+ * frame, as Playwright's do (`client/page.ts`); `ariaSnapshot` snapshots the main frame's
+ * document. Only the run's `BrowserContext` builds one, once per guid.
  *
  * Known limitation: once the tab is closed, `url()` returns the last URL this object returned,
  * not the last URL the tab committed. Navigate `/a` to `/final`, close the tab before the
@@ -130,6 +134,41 @@ export class Page {
 
   setDefaultTimeout(timeout: number): void {
     this._timeoutSettings.setDefaultTimeout(timeout)
+  }
+
+  setDefaultNavigationTimeout(timeout: number): void {
+    this._timeoutSettings.setDefaultNavigationTimeout(timeout)
+  }
+
+  /** Resolves `null`: Neo creates no `Response` objects yet. */
+  async goto(url: string, options: GotoOptions = {}): Promise<null> {
+    return await this.#mainFrame._goto('page.goto', url, options)
+  }
+
+  async title(): Promise<string> {
+    return await this.#mainFrame._title('page.title')
+  }
+
+  /** Not strict, as Playwright's `page.textContent`, which forwards to the main frame. */
+  async textContent(
+    selector: string,
+    options: TextContentOptions = {},
+  ): Promise<string | null> {
+    return await this.#mainFrame._textContent(
+      'page.textContent',
+      selector,
+      options,
+    )
+  }
+
+  /**
+   * The main frame's accessibility tree as Playwright's YAML. With `mode: 'ai'`, nodes carry
+   * `[ref=eN]` refs that `page.locator('aria-ref=eN')` resolves in this document until the next
+   * snapshot or navigation. Iframes appear as nodes without their content: Neo serves the main
+   * frame only.
+   */
+  async ariaSnapshot(options: AriaSnapshotOptions = {}): Promise<string> {
+    return await this.#mainFrame._ariaSnapshot('page.ariaSnapshot', options)
   }
 
   /** Not strict, as Playwright's `page.click`, which forwards to the main frame. */

@@ -23,6 +23,7 @@ import {
   type InjectedScriptOptions,
 } from '../vendor/playwright/injected/src/injectedScript'
 import { glue } from './glue'
+import { wellFormedCall } from './well-formed'
 import { WORLD_KEY } from './world-key'
 
 /** A glue function as `install` binds it, whatever its declared params and handles. */
@@ -80,12 +81,14 @@ export default function install(
   }
   const injected = new InjectedScript(window, options)
   // Every glue function accepts this shape: `never` params take any declared params, and the
-  // handles CDP passes after them arrive in the declared order.
+  // handles CDP passes after them arrive in the declared order. Each answers well-formed
+  // (`well-formed.ts`), so no page text can make its CDP reply unreadable.
   const table: Record<string, GlueFunction> = glue
   const object = Object.fromEntries(
     Object.entries(table).map(([name, fn]) => [
       name,
-      (params: never, ...handles: never[]) => fn(injected, params, ...handles),
+      (params: never, ...handles: never[]) =>
+        wellFormedCall(() => fn(injected, params, ...handles)),
     ]),
   ) as GlueObject
   store[key] = object

@@ -9,15 +9,32 @@
  */
 
 import type {
+  FrameAriaSnapshotParams,
   FrameCheckParams,
   FrameClickParams,
   FrameFillParams,
+  FrameGotoParams,
   FrameInputValueParams,
   FramePressParams,
   FrameSelectOptionParams,
+  FrameTextContentParams,
   FrameUncheckParams,
   PageCloseParams,
 } from '@browseros/neo-runtime-spec/serve'
+
+/** `Frame.goto`'s params in Playwright's schema order (`spec/playwright/frame.yml`). */
+export const FRAME_GOTO_KEYS = ['url', 'waitUntil', 'referer'] as const
+
+/** `Frame.textContent`'s params in Playwright's schema order. */
+export const FRAME_TEXT_CONTENT_KEYS = ['selector', 'strict'] as const
+
+/** `Frame.ariaSnapshot`'s params in Playwright's schema order. */
+export const FRAME_ARIA_SNAPSHOT_KEYS = [
+  'mode',
+  'selector',
+  'depth',
+  'boxes',
+] as const
 
 /** `Frame.click`'s params in Playwright's schema order (`spec/playwright/frame.yml`). */
 export const FRAME_CLICK_KEYS = [
@@ -79,9 +96,9 @@ export const FRAME_SELECT_OPTION_KEYS = [
   'force',
 ] as const
 
-// A type cannot carry key order, so the order is a list, and the build fails when the list and
-// the generated `FrameClickParams` disagree on the key set in either direction. The alias is
-// never used; declaring it is the check.
+// A type cannot carry key order, so the order is a list, and the build fails when a list and
+// its generated params type disagree on the key set in either direction. The aliases are never
+// used; declaring them is the check.
 type SameKeys<A, B> = [keyof A] extends [keyof B]
   ? [keyof B] extends [keyof A]
     ? true
@@ -92,6 +109,24 @@ type _FrameClickKeysMatchSpec = Assert<
   SameKeys<
     Record<(typeof FRAME_CLICK_KEYS)[number], true>,
     Required<FrameClickParams>
+  >
+>
+type _FrameGotoKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_GOTO_KEYS)[number], true>,
+    Required<FrameGotoParams>
+  >
+>
+type _FrameTextContentKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_TEXT_CONTENT_KEYS)[number], true>,
+    Required<FrameTextContentParams>
+  >
+>
+type _FrameAriaSnapshotKeysMatchSpec = Assert<
+  SameKeys<
+    Record<(typeof FRAME_ARIA_SNAPSHOT_KEYS)[number], true>,
+    Required<FrameAriaSnapshotParams>
   >
 >
 

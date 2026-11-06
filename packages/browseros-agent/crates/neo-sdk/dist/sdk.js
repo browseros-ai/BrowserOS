@@ -138,6 +138,9 @@ class Locator {
       ...options
     });
   }
+  async textContent(options) {
+    return await this._frame._textContent("locator.textContent", this._selector, { strict: true, ...options });
+  }
   async fill(value, options = {}) {
     return await this._frame._fill("locator.fill", this._selector, value, {
       strict: true,
@@ -258,6 +261,14 @@ function setTestIdAttribute(attributeName) {
 }
 
 // src/protocol.ts
+var FRAME_GOTO_KEYS = ["url", "waitUntil", "referer"];
+var FRAME_TEXT_CONTENT_KEYS = ["selector", "strict"];
+var FRAME_ARIA_SNAPSHOT_KEYS = [
+  "mode",
+  "selector",
+  "depth",
+  "boxes"
+];
 var FRAME_CLICK_KEYS = [
   "selector",
   "strict",
@@ -342,6 +353,20 @@ function convertSelectOptionValues(values) {
 }
 
 // src/frame.ts
+var LIFECYCLE_EVENTS = new Set([
+  "load",
+  "domcontentloaded",
+  "networkidle",
+  "commit"
+]);
+function verifyLoadState(name, waitUntil) {
+  if (waitUntil === "networkidle0")
+    waitUntil = "networkidle";
+  if (!LIFECYCLE_EVENTS.has(waitUntil))
+    throw new Error(`${name}: expected one of (load|domcontentloaded|networkidle|commit)`);
+  return waitUntil;
+}
+
 class Frame {
   _guid;
   _page;
@@ -353,6 +378,43 @@ class Frame {
   }
   page() {
     return this._page;
+  }
+  async goto(url, options = {}) {
+    return await this._goto("frame.goto", url, options);
+  }
+  async _goto(apiName, url, options) {
+    const waitUntil = verifyLoadState("waitUntil", options.waitUntil === undefined ? "load" : options.waitUntil);
+    await this._connection.send(apiName, this._guid, "goto", pickParams(FRAME_GOTO_KEYS, {
+      url,
+      ...options,
+      waitUntil
+    }), this._page._timeoutSettings.navigationTimeout(options));
+    return null;
+  }
+  async title() {
+    return await this._title("frame.title");
+  }
+  async _title(apiName) {
+    const result = await this._connection.send(apiName, this._guid, "title", {}, 0);
+    return result.value;
+  }
+  async textContent(selector, options = {}) {
+    return await this._textContent("frame.textContent", selector, options);
+  }
+  async _textContent(apiName, selector, options) {
+    const result = await this._connection.send(apiName, this._guid, "textContent", pickParams(FRAME_TEXT_CONTENT_KEYS, {
+      selector,
+      ...options
+    }), this._page._timeoutSettings.timeout(options));
+    return result.value === undefined ? null : result.value;
+  }
+  async _ariaSnapshot(apiName, options) {
+    const result = await this._connection.send(apiName, this._guid, "ariaSnapshot", pickParams(FRAME_ARIA_SNAPSHOT_KEYS, {
+      mode: options.mode,
+      depth: options.depth,
+      boxes: options.boxes
+    }), this._page._timeoutSettings.timeout(options));
+    return result.snapshot;
   }
   async click(selector, options = {}) {
     return await this._click("frame.click", selector, options);
@@ -472,11 +534,15 @@ var DEFAULT_PLAYWRIGHT_TIMEOUT = 30000;
 class TimeoutSettings {
   #parent;
   #defaultTimeout;
+  #defaultNavigationTimeout;
   constructor(parent) {
     this.#parent = parent;
   }
   setDefaultTimeout(timeout) {
     this.#defaultTimeout = timeout;
+  }
+  setDefaultNavigationTimeout(timeout) {
+    this.#defaultNavigationTimeout = timeout;
   }
   timeout(options) {
     if (typeof options.timeout === "number")
@@ -485,6 +551,17 @@ class TimeoutSettings {
       return this.#defaultTimeout;
     if (this.#parent)
       return this.#parent.timeout(options);
+    return DEFAULT_PLAYWRIGHT_TIMEOUT;
+  }
+  navigationTimeout(options) {
+    if (typeof options.timeout === "number")
+      return options.timeout;
+    if (this.#defaultNavigationTimeout !== undefined)
+      return this.#defaultNavigationTimeout;
+    if (this.#defaultTimeout !== undefined)
+      return this.#defaultTimeout;
+    if (this.#parent)
+      return this.#parent.navigationTimeout(options);
     return DEFAULT_PLAYWRIGHT_TIMEOUT;
   }
 }
@@ -539,6 +616,21 @@ class Page {
   }
   setDefaultTimeout(timeout) {
     this._timeoutSettings.setDefaultTimeout(timeout);
+  }
+  setDefaultNavigationTimeout(timeout) {
+    this._timeoutSettings.setDefaultNavigationTimeout(timeout);
+  }
+  async goto(url, options = {}) {
+    return await this.#mainFrame._goto("page.goto", url, options);
+  }
+  async title() {
+    return await this.#mainFrame._title("page.title");
+  }
+  async textContent(selector, options = {}) {
+    return await this.#mainFrame._textContent("page.textContent", selector, options);
+  }
+  async ariaSnapshot(options = {}) {
+    return await this.#mainFrame._ariaSnapshot("page.ariaSnapshot", options);
   }
   async click(selector, options = {}) {
     return await this.#mainFrame._click("page.click", selector, options);
@@ -612,6 +704,9 @@ class BrowserContext {
   }
   setDefaultTimeout(timeout) {
     this._timeoutSettings.setDefaultTimeout(timeout);
+  }
+  setDefaultNavigationTimeout(timeout) {
+    this._timeoutSettings.setDefaultNavigationTimeout(timeout);
   }
   _addRunPage(guid, mainFrameGuid, url) {
     const page = new Page(guid, mainFrameGuid, url, this, this.#connection);
