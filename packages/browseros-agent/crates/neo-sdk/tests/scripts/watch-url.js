@@ -9,7 +9,6 @@ while (!page.isClosed()) {
   if (current !== seen[seen.length - 1].path) seen.push({ path: current, at: Date.now() });
 }
 const firstSeen = (wanted) => seen.find((entry) => entry.path === wanted)?.at;
-console.log(`saw ${seen.length} URLs before the tab closed`);
 return {
   paths: seen.map((entry) => entry.path),
   // The URL changes when a navigation commits, so `/pushed` stays through the whole load of

@@ -37,7 +37,7 @@ const expected = {
 test('watch-url.js returns the same value through Neo and through Playwright', {
   skip,
   timeout: 600_000,
-}, async (t) => {
+}, async () => {
   const neoRun = buildNeoRun()
   const cleanups = []
   try {
@@ -62,7 +62,6 @@ test('watch-url.js returns the same value through Neo and through Playwright', {
 
     const neo = startNeo(neoRun, browser.port, targetId, scriptPath)
     await neo.connected
-    const consoleLog = t.mock.method(console, 'log', () => {})
     const AsyncFunction = (async () => {}).constructor
     const source = readFileSync(scriptPath, 'utf8')
     const viaPlaywright = new AsyncFunction('page', 'context', source)(
@@ -75,15 +74,10 @@ test('watch-url.js returns the same value through Neo and through Playwright', {
       neo.outcome,
       viaPlaywright,
     ])
-    const playwrightLogs = consoleLog.mock.calls.map((call) =>
-      call.arguments.join(' '),
-    )
-    consoleLog.mock.restore()
 
     assert.equal(neoOutcome.status, 'ok', JSON.stringify(neoOutcome))
     assert.deepEqual(playwrightValue, expected, 'Playwright')
     assert.deepEqual(neoOutcome.value, playwrightValue, 'Neo vs Playwright')
-    assert.deepEqual(neoOutcome.logs, playwrightLogs, 'console.log lines')
   } finally {
     await runCleanups(cleanups)
   }

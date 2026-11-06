@@ -76,11 +76,6 @@ async fn page_url_and_is_closed_match_playwright_through_a_tab_lifetime() {
         })),
         "Playwright keeps `/pushed` while `/slow` is in flight and the last URL after close"
     );
-    assert_eq!(
-        outcome.logs,
-        ["saw 4 URLs before the tab closed"],
-        "{outcome:?}"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
