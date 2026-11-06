@@ -27,6 +27,13 @@ class TargetClosedError extends PlaywrightError {
   }
 }
 
+/** Playwright's `isTargetClosedError`: whether a call failed because its page was already
+ * closed. It tests the class, as Playwright's does: the `name` reads `'Error'` and the message
+ * may carry a close reason, so neither tells this error apart. */
+export function isTargetClosedError(error: unknown): boolean {
+  return error instanceof TargetClosedError
+}
+
 /** Playwright's `parseError`: the class by wire `name`; any other name is copied onto a
  * `PlaywrightError`. */
 export function parseError(error: {

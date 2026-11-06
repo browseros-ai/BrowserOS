@@ -1,9 +1,10 @@
 /**
  * The client half of Playwright's wire inside the realm (Playwright's `client/connection.ts`
  * and `channelOwner.ts` `_wrapApiCall` at 26137face, cut to what a run needs). Every browser
- * call goes through {@link Connection.send}: it captures the caller's location synchronously,
- * builds Playwright's `{id, guid, method, params, metadata}`, hands it to `runtime-bridge.ts`,
- * and turns the reply into a value or a Playwright-shaped error.
+ * call goes through a `Connection` method typed by the interface its guid names (`send` for a
+ * `Frame`, `sendPage`, `sendContext`): it captures the caller's location synchronously, builds
+ * Playwright's `{id, guid, method, params, metadata}`, hands it to `runtime-bridge.ts`, and
+ * turns the reply into a value or a Playwright-shaped error.
  *
  * ```text
  *  locator.click() → frame._click('locator.click', …) → send(): location, message
@@ -17,12 +18,23 @@
  * name only the function. It never goes on the wire: Playwright's `Metadata` has no such field.
  */
 
-import type { FrameCommands, Metadata } from '@browseros/neo-runtime-spec/serve'
+import type {
+  BrowserContextCommands,
+  FrameCommands,
+  Metadata,
+  PageCommands,
+} from '@browseros/neo-runtime-spec/serve'
 import { type PlaywrightError, parseError } from './errors'
 import { call } from './runtime-bridge'
 
 /** The public methods that send a browser call, named as Playwright's client names them. */
-export type ApiName = 'locator.click' | 'page.click' | 'frame.click'
+export type ApiName =
+  | 'locator.click'
+  | 'page.click'
+  | 'frame.click'
+  | 'browserContext.newPage'
+  | 'page.close'
+  | 'page.bringToFront'
 
 /** Playwright's wire error, `{error: {name, message}}`'s inner object. */
 export type WireError = { name: string; message: string }
@@ -35,6 +47,11 @@ type Reply = {
   error?: { error: WireError }
   log?: string[]
 }
+
+/** What a call resolves with: the command's result, or `undefined` for a void command, whose
+ * reply carries no `result`. */
+export type Resolved<Result> =
+  Result extends Record<string, never> ? undefined : Result
 
 /** The file every location names: the agent's script is `run.js` everywhere. */
 const SCRIPT_FILE = 'run.js'
@@ -56,13 +73,9 @@ export class Connection {
   }
 
   /**
-   * Sends one browser call and resolves with its result, `undefined` for a void method such
+   * Sends one `Frame` call and resolves with its result, `undefined` for a void method such
    * as `click`, whose reply has no `result`. `timeout` is the resolved action timeout in ms,
    * `0` for none; it travels in `metadata`, never in params.
-   *
-   * The location is captured before the first `await`: QuickJS keeps no caller frames across
-   * an `await`, and every public method reaches this line synchronously, as Playwright
-   * captures its stack before its first `await` (`channelOwner.ts` `_wrapApiCall`).
    */
   async send<M extends keyof FrameCommands>(
     apiName: ApiName,
@@ -71,6 +84,59 @@ export class Connection {
     params: FrameCommands[M]['params'],
     timeout: number,
   ): Promise<FrameCommands[M]['result'] | undefined> {
+    return (await this.#send(apiName, guid, method, params, timeout)) as
+      | FrameCommands[M]['result']
+      | undefined
+  }
+
+  /** {@link Connection.send} for a `Page` command, to the page's `page@<targetId>` guid. */
+  async sendPage<M extends keyof PageCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: PageCommands[M]['params'],
+    timeout: number,
+  ): Promise<Resolved<PageCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<PageCommands[M]['result']>
+  }
+
+  /** {@link Connection.send} for a `BrowserContext` command, to the context's guid. */
+  async sendContext<M extends keyof BrowserContextCommands>(
+    apiName: ApiName,
+    guid: string,
+    method: M,
+    params: BrowserContextCommands[M]['params'],
+    timeout: number,
+  ): Promise<Resolved<BrowserContextCommands[M]['result']>> {
+    return (await this.#send(
+      apiName,
+      guid,
+      method,
+      params,
+      timeout,
+    )) as Resolved<BrowserContextCommands[M]['result']>
+  }
+
+  /**
+   * The message, the reply and the error rebuild every `send*` shares.
+   *
+   * The location is captured before the first `await`: QuickJS keeps no caller frames across
+   * an `await`, and every public method reaches this line synchronously, as Playwright
+   * captures its stack before its first `await` (`channelOwner.ts` `_wrapApiCall`).
+   */
+  async #send(
+    apiName: ApiName,
+    guid: string,
+    method: string,
+    params: unknown,
+    timeout: number,
+  ): Promise<unknown> {
     const metadata: Metadata = {
       location: captureLocation(this.#lineOffset),
       timeout,
@@ -78,7 +144,7 @@ export class Connection {
     const message = { id: this.#nextId++, guid, method, params, metadata }
     const reply: Reply = JSON.parse(await call(JSON.stringify(message)))
     if (reply.error) throw rebuildError(apiName, reply.error.error, reply.log)
-    return reply.result as FrameCommands[M]['result'] | undefined
+    return reply.result
   }
 }
 

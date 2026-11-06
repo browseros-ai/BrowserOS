@@ -13,7 +13,7 @@ import {
   formatCallLog,
   rebuildError,
 } from '../../src/connection'
-import { TimeoutError } from '../../src/errors'
+import { isTargetClosedError, TimeoutError } from '../../src/errors'
 
 type Golden = {
   name: string
@@ -75,6 +75,22 @@ describe('rebuildError', () => {
       'page.click: Target page, context or browser has been closed',
       [],
     ])
+  })
+
+  test('isTargetClosedError knows a closed target by its class, not its text', () => {
+    const { error, log } = reply('targetClosed')
+    expect(
+      isTargetClosedError(rebuildError('page.close', error.error, log)),
+    ).toBe(true)
+    const lookalike = rebuildError(
+      'page.close',
+      { name: 'Error', message: error.error.message },
+      log,
+    )
+    expect([
+      isTargetClosedError(lookalike),
+      isTargetClosedError(new Error(error.error.message)),
+    ]).toEqual([false, false])
   })
 
   test('a successful click replies with no result', () => {
