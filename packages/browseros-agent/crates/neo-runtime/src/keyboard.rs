@@ -1027,6 +1027,9 @@ const MAC_EDITING_COMMANDS: &[(&str, &[&str])] = &[
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::env;
+    use std::fs;
+    use std::path::PathBuf;
     use std::sync::Mutex;
 
     use serde_json::Value;
@@ -1427,6 +1430,66 @@ mod tests {
             json("Meta+a")[1],
             r#"{"type":"rawKeyDown","modifiers":4,"windowsVirtualKeyCode":65,"code":"KeyA","commands":["selectAll"],"key":"a","text":"","unmodifiedText":"","autoRepeat":false,"location":0,"isKeypad":false}"#
         );
+    }
+
+    /// Every case of `form-goldens.json` that presses keys (press, and fill's Delete): what
+    /// Playwright sent is what `plan_press` plans for the same keys on the capture's platform,
+    /// compared as JSON values. For a key with an unknown token Neo plans nothing, while
+    /// Playwright sent the keyDowns before that token and stopped (`Shift+Foo`'s stray Shift).
+    #[test]
+    fn plans_are_the_key_events_playwright_sent() {
+        let crate_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets it"));
+        let path = crate_dir.join("../neo-sdk/tests/goldens/form-goldens.json");
+        let text = fs::read_to_string(path).expect("the form goldens are committed");
+        let goldens: Value = serde_json::from_str(&text).expect("form-goldens.json parses");
+        let user_agent = goldens["versions"]["cdpBrowserGetVersion"]["userAgent"]
+            .as_str()
+            .expect("the browser's userAgent is recorded");
+        let platform = Platform::from_user_agent(user_agent);
+        assert_eq!(
+            platform,
+            Platform::Mac,
+            "the goldens were captured on a Mac"
+        );
+        let mut checked = 0;
+        for case in goldens["cases"].as_array().expect("cases") {
+            let Some(keys) = case["keys"].as_array() else {
+                continue;
+            };
+            let name = &case["name"];
+            let sent: Vec<&Value> = case["input"]
+                .as_array()
+                .expect("input")
+                .iter()
+                .filter(|sent| sent["method"] == "Input.dispatchKeyEvent")
+                .map(|sent| &sent["params"])
+                .collect();
+            let mut expected = Vec::new();
+            for key in keys {
+                let key = key.as_str().expect("a key");
+                match plan_press(key, platform) {
+                    Ok(events) => expected.extend(events),
+                    Err(unknown) => {
+                        let message = case["error"]["firstLine"].as_str().expect("an error");
+                        assert!(message.ends_with(&unknown.to_string()), "{name}");
+                        let mut keyboard = Keyboard::default();
+                        for token in split(key) {
+                            let Ok(down) = keyboard.down(&token, platform) else {
+                                break;
+                            };
+                            expected.push(KeyEvent::Down(down));
+                        }
+                    }
+                }
+            }
+            let expected: Vec<Value> = expected
+                .iter()
+                .map(|event| serde_json::to_value(event).expect("serializes"))
+                .collect();
+            assert_eq!(sent, expected.iter().collect::<Vec<_>>(), "{name}");
+            checked += 1;
+        }
+        assert_eq!(checked, 12, "every pressing case is checked");
     }
 
     #[test]
