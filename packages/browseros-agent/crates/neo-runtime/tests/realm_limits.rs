@@ -176,6 +176,46 @@ async fn a_thrown_error_keeps_its_name_and_the_logs_before_it() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn console_lines_past_the_line_cap_are_counted_not_kept() {
+    let code = "for (let line = 0; line < 1005; line++) console.log(`line ${line}`); return 'done'";
+    let outcome = run(code, Duration::from_secs(5)).await;
+
+    assert_eq!(outcome.status, RunStatus::Ok, "{:?}", outcome.error);
+    assert_eq!(outcome.value, Some(json!("done")));
+    let (note, kept) = outcome.logs.split_last().expect("the run logged");
+    assert_eq!(kept.len(), 1000, "the first 1000 lines are kept");
+    assert_eq!(kept.last().map(String::as_str), Some("line 999"));
+    assert_eq!(
+        note,
+        "neo-runtime dropped the last 5 console lines: a run keeps at most 1000 lines"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn console_text_past_the_byte_cap_is_counted_not_kept() {
+    // Two 400 kB lines fit in 1 MiB and a third would not. Logging stops there, so the short
+    // line after the big ones is dropped too.
+    let code = "const big = 'x'.repeat(400_000);
+for (let line = 0; line < 5; line++) console.log(big);
+console.log('short');
+return 'done'";
+    let outcome = run(code, Duration::from_secs(5)).await;
+
+    assert_eq!(outcome.status, RunStatus::Ok, "{:?}", outcome.error);
+    assert_eq!(outcome.value, Some(json!("done")));
+    let (note, kept) = outcome.logs.split_last().expect("the run logged");
+    assert_eq!(kept.len(), 2, "two big lines fit");
+    assert!(
+        kept.iter().map(String::len).sum::<usize>() <= 1024 * 1024,
+        "the kept text fits in 1 MiB"
+    );
+    assert_eq!(
+        note,
+        "neo-runtime dropped the last 4 console lines: a run keeps at most 1 MiB of console text"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn return_values_convert_to_json() {
     let cases = [
         (

@@ -41,11 +41,40 @@ pub(crate) fn install<'js>(ctx: &Ctx<'js>, getters: Getters, logs: Logs) -> rqui
     ctx.globals().set("__neo_runtime", bridge)
 }
 
-/// Lines the script wrote with `console.log`. Shared because the realm owns the JS `log`
-/// function while the run reads the lines back, also after a deadline dropped the realm
-/// mid-script.
+/// The most `console` text and lines a run keeps. Kept lines live in Rust, outside the realm's
+/// memory limit, so without a cap one script could hold any amount of the server's memory.
+const MAX_LOG_BYTES: usize = 1024 * 1024;
+const MAX_LOG_LINES: usize = 1000;
+
+/// Lines the script wrote with `console`. Shared because the realm owns the JS `log` function
+/// while the run reads the lines back, also after a deadline dropped the realm mid-script.
+///
+/// Keeps the first lines up to [`MAX_LOG_LINES`] and [`MAX_LOG_BYTES`]. The first line past
+/// either cap ends keeping: it and every later line are only counted, so the kept lines are
+/// always the start of what the script wrote, and [`Logs::take`] ends them with a note saying
+/// how many were dropped. Logging itself never fails, so the cap never throws into the script.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Logs(Arc<Mutex<Vec<String>>>);
+pub(crate) struct Logs(Arc<Mutex<LogLines>>);
+
+#[derive(Debug, Default)]
+struct LogLines {
+    kept: Vec<String>,
+    kept_bytes: usize,
+    /// Set by the first line that did not fit.
+    overflow: Option<Overflow>,
+}
+
+#[derive(Debug)]
+struct Overflow {
+    limit: LogLimit,
+    dropped: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum LogLimit {
+    Lines,
+    Bytes,
+}
 
 impl Logs {
     fn push(&self, line: String) {
@@ -55,10 +84,53 @@ impl Logs {
     }
 
     pub(crate) fn take(&self) -> Vec<String> {
-        self.0
-            .lock()
-            .map(|mut lines| mem::take(&mut *lines))
-            .unwrap_or_default()
+        let Ok(mut lines) = self.0.lock() else {
+            return Vec::new();
+        };
+        let LogLines {
+            mut kept, overflow, ..
+        } = mem::take(&mut *lines);
+        kept.extend(overflow.map(|overflow| overflow.note()));
+        kept
+    }
+}
+
+impl LogLines {
+    fn push(&mut self, line: String) {
+        if let Some(overflow) = &mut self.overflow {
+            overflow.dropped += 1;
+            return;
+        }
+        if let Some(limit) = self.limit_passed_by(&line) {
+            self.overflow = Some(Overflow { limit, dropped: 1 });
+        } else {
+            self.kept_bytes += line.len();
+            self.kept.push(line);
+        }
+    }
+
+    fn limit_passed_by(&self, line: &str) -> Option<LogLimit> {
+        if self.kept.len() >= MAX_LOG_LINES {
+            Some(LogLimit::Lines)
+        } else if self.kept_bytes + line.len() > MAX_LOG_BYTES {
+            Some(LogLimit::Bytes)
+        } else {
+            None
+        }
+    }
+}
+
+impl Overflow {
+    fn note(&self) -> String {
+        let lines = if self.dropped == 1 { "line" } else { "lines" };
+        let limit = match self.limit {
+            LogLimit::Lines => format!("{MAX_LOG_LINES} lines"),
+            LogLimit::Bytes => format!("{} MiB of console text", MAX_LOG_BYTES >> 20),
+        };
+        format!(
+            "neo-runtime dropped the last {} console {lines}: a run keeps at most {limit}",
+            self.dropped
+        )
     }
 }
 

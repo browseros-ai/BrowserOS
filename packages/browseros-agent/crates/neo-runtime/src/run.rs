@@ -84,8 +84,9 @@ impl RunError {
 
 /// The result of a run. `value` is set only for [`RunStatus::Ok`] when the script returned
 /// something other than `undefined`; `error` is set for [`RunStatus::Error`] and
-/// [`RunStatus::Timeout`]. `logs` holds every `console.log` line, including those written
-/// before a failure.
+/// [`RunStatus::Timeout`]. `logs` holds the script's `console` lines, including those written
+/// before a failure, up to 1000 lines and 1 MiB of text; past that, the run keeps no more lines
+/// and the last entry is a note from neo-runtime saying how many it dropped.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RunOutcome {
     pub status: RunStatus,
