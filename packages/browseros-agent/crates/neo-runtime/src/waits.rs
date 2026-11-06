@@ -311,8 +311,9 @@ pub(crate) async fn wait_for_url<T: WaitTab>(
     options: &WaitForUrlOptions,
     progress: &Progress,
 ) -> Result<(), CallError> {
-    prepare_tab(tab, progress).await?;
+    // Preparation can itself observe commits; keep them queued before it starts.
     let events = tab.observe().map_err(page_error)?;
+    prepare_tab(tab, progress).await?;
     wait_until(
         &mut NavigationCondition {
             events,
@@ -479,7 +480,7 @@ impl WaitTab for Arc<PageSession> {
     }
 
     fn observe(&self) -> Result<Self::Observation, PageError> {
-        self.observe_waits()
+        Ok(self.observe_waits())
     }
     fn pending_navigation(&self) -> Option<String> {
         PageSession::pending_navigation(self)
@@ -609,6 +610,7 @@ mod tests {
         descriptions: AtomicUsize,
         state: watch::Sender<NavigationState>,
         commits: broadcast::Sender<Navigation>,
+        on_prepare: Mutex<Vec<Event>>,
         on_subscribe: Mutex<Vec<Event>>,
         input: AsyncMutex<()>,
     }
@@ -631,6 +633,7 @@ mod tests {
                 descriptions: AtomicUsize::new(0),
                 state,
                 commits,
+                on_prepare: Mutex::default(),
                 on_subscribe: Mutex::default(),
                 input: AsyncMutex::new(()),
             }
@@ -681,6 +684,9 @@ mod tests {
     impl WaitTab for FakeTab {
         type Observation = Events;
         async fn prepare(&self) -> Result<(), PageError> {
+            for event in self.on_prepare.lock().expect("prepare hook").drain(..) {
+                self.emit(event);
+            }
             self.prepare.answer().await
         }
         async fn describe(&self, _: &str) -> Result<SelectorFacts, PageError> {
@@ -1075,6 +1081,22 @@ mod tests {
         tab.on_subscribe
             .lock()
             .expect("hook")
+            .extend([Event::Commit(MATCH), Event::Commit(START)]);
+        let run = Run::new(100.0);
+        assert_eq!(
+            wait_for_url(&tab, &url(LifecycleEvent::Commit), &run.progress).await,
+            Ok(())
+        );
+        assert_eq!(tab.state.borrow().url.as_deref(), Some(START));
+        assert_eq!(tab.subscribers(), (0, 0));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_url_wait_observes_intermediate_commits_during_preparation() {
+        let tab = FakeTab::new();
+        tab.on_prepare
+            .lock()
+            .expect("prepare hook")
             .extend([Event::Commit(MATCH), Event::Commit(START)]);
         let run = Run::new(100.0);
         assert_eq!(

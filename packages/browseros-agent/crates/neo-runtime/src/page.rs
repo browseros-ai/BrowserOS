@@ -154,8 +154,13 @@ pub(crate) struct PageSession {
     /// group-release tasks, so `Dispatcher::finish` can wait for them before reading final
     /// deliveries.
     tasks: TaskTracker,
-    /// The domains and the watcher, set up by this tab's first click or beforeunload call.
-    prepared: OnceCell<Watcher>,
+    /// Channels exist before domain setup, so a wait can subscribe before preparation emits
+    /// commits. Every watcher attempt publishes into the same channels.
+    state: watch::Receiver<PageState>,
+    state_updates: watch::Sender<PageState>,
+    navigations: broadcast::Sender<Navigation>,
+    /// Set after domain setup; dropping the guard stops the watcher.
+    prepared: OnceCell<DropGuard>,
     /// Cancelled when the tab closes or the session detaches; every call's `Progress` races
     /// it, so a call on a closed tab ends with Playwright's `TargetClosedError`.
     closed: CancellationToken,
@@ -166,13 +171,6 @@ pub(crate) struct PageSession {
     /// The tab's input lock, shared with every other run of the `Runtime` on this tab
     /// ([`TabInputs`]). [`Tab::input`] waits for a turn at it.
     input: Arc<Mutex<()>>,
-}
-
-/// The watcher's published state, and the guard that stops it when the page drops.
-struct Watcher {
-    state: watch::Receiver<PageState>,
-    navigations: broadcast::Sender<Navigation>,
-    _stop: DropGuard,
 }
 
 struct PageUpdates<S> {
@@ -274,10 +272,15 @@ impl PageSession {
             session.id.clone(),
             page.as_str().to_string(),
         );
+        let (state_updates, state) = watch::channel(PageState::default());
+        let (navigations, _) = broadcast::channel(4096);
         Self {
             session,
             main_frame: page.as_str().to_string(),
             tasks,
+            state,
+            state_updates,
+            navigations,
             prepared: OnceCell::new(),
             closed,
             world: Arc::new(world),
@@ -316,8 +319,6 @@ impl PageSession {
         self.prepared
             .get_or_try_init(|| async {
                 let events = self.session.cdp.events();
-                let (state, receiver) = watch::channel(PageState::default());
-                let (navigations, _) = broadcast::channel(4096);
                 let (seed_ready, ready) = oneshot::channel();
                 let cdp = self.session.cdp.clone();
                 let session = self.session.id.clone();
@@ -334,8 +335,8 @@ impl PageSession {
                     self.session.id.clone(),
                     self.main_frame.clone(),
                     PageUpdates {
-                        state,
-                        navigations: navigations.clone(),
+                        state: self.state_updates.clone(),
+                        navigations: self.navigations.clone(),
                         world: Arc::clone(&self.world),
                         initial_url,
                     },
@@ -359,11 +360,7 @@ impl PageSession {
                 if let Err(error) = focus {
                     debug!(%error, "focus emulation refused; a background tab may not paint");
                 }
-                Ok(Watcher {
-                    state: receiver,
-                    navigations,
-                    _stop: stop_guard,
-                })
+                Ok(stop_guard)
             })
             .await
             .map(|_| ())
@@ -383,7 +380,7 @@ impl PageSession {
     }
 
     fn state(&self) -> Option<watch::Receiver<PageState>> {
-        self.prepared.get().map(|watcher| watcher.state.clone())
+        self.prepared.get().map(|_| self.state.clone())
     }
 
     /// Resolves when no navigation is pending, with the URL it committed to, if any.
@@ -410,22 +407,18 @@ impl PageSession {
 
     /// Waits can recover from a full commit queue by checking the latest state. An
     /// intermediate URL may have been lost; goto keeps its existing overflow error.
-    pub(crate) fn observe_waits(&self) -> Result<NavigationObservation, PageError> {
-        let mut observation = self.observe_navigations()?;
+    pub(crate) fn observe_waits(&self) -> NavigationObservation {
+        let mut observation = self.observe_navigations();
         observation.recover_lag = true;
-        Ok(observation)
+        observation
     }
 
-    fn observe_navigations(&self) -> Result<NavigationObservation, PageError> {
-        let watcher = self
-            .prepared
-            .get()
-            .ok_or_else(|| PageError::Contract("Page has not been prepared".to_string()))?;
-        Ok(NavigationObservation {
-            navigations: watcher.navigations.subscribe(),
-            state: watcher.state.clone(),
+    fn observe_navigations(&self) -> NavigationObservation {
+        NavigationObservation {
+            navigations: self.navigations.subscribe(),
+            state: self.state.clone(),
             recover_lag: false,
-        })
+        }
     }
 
     fn mark(&self) -> PageMark {
@@ -481,7 +474,7 @@ impl NavigationTab for Arc<PageSession> {
     }
 
     fn observe(&self) -> Result<NavigationObservation, PageError> {
-        self.observe_navigations()
+        Ok(self.observe_navigations())
     }
 
     async fn navigate(
@@ -2099,6 +2092,45 @@ mod tests {
             tokio::join!(watcher, verify);
             assert_eq!(current.borrow().load_count, 1);
         }
+    }
+
+    #[tokio::test]
+    async fn tests_that_observers_created_before_preparation_receive_watcher_updates() {
+        use crate::fake_browser::{FakeBrowser, PAGE, Replies};
+        use crate::waits::WaitTab;
+
+        let browser = FakeBrowser::start(Replies::default()).await;
+        let id = PageId::new(PAGE.to_string());
+        let session = Session::attach(browser.cdp().await, id.clone(), TokioHandle::current())
+            .await
+            .expect("attach");
+        let page = Arc::new(PageSession::new(
+            session,
+            &id,
+            TaskTracker::new(),
+            Arc::new(Mutex::new(())),
+            CancellationToken::new(),
+        ));
+        let mut events = WaitTab::observe(&page).expect("wait observer before prepare");
+        let mut navigation =
+            NavigationTab::observe(&page).expect("navigation observer before prepare");
+        PageSession::prepare(&page).await.expect("prepare");
+        time::timeout(Duration::from_secs(1), async {
+            while !events.state().lifecycle.load {
+                events.next().await.expect("watcher update");
+            }
+            while !navigation.state().lifecycle.load {
+                navigation.next().await.expect("watcher update");
+            }
+        })
+        .await
+        .expect("both observers see preparation's lifecycle replay");
+        assert!(events.state().lifecycle.dom_content_loaded);
+        assert_eq!(events.state().lifecycle.load_count, 1);
+        drop(events);
+        drop(navigation);
+        assert_eq!(page.navigations.receiver_count(), 0);
+        assert_eq!(page.state_updates.receiver_count(), 1);
     }
 
     async fn assert_seed_keeps_watcher_open(
