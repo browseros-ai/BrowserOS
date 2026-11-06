@@ -16,11 +16,14 @@
 <select id="disabled-option"><option value="one">First</option><option disabled value="two">Second</option></select>
 <script>
 window.__events = []
-for (const type of ['focus', 'keydown', 'keypress', 'keyup', 'beforeinput', 'input', 'change', 'select']) {
+for (const type of ['focus', 'keydown', 'keypress', 'keyup', 'beforeinput', 'input', 'change']) {
   document.addEventListener(type, event => {
     window.__events.push({ type, target: event.target.id, key: event.key ?? null, data: event.data ?? null, inputType: event.inputType ?? null })
   }, true)
 }
+// select is queued separately from input; its relative order varies even between Playwright runs.
+window.__selectEvents = []
+document.addEventListener('select', event => window.__selectEvents.push({ type: event.type, target: event.target.id }), true)
 window.__facts = () => ({
   values: Object.fromEntries([...document.querySelectorAll('input,textarea,select')].filter(e => e.id).map(e => [e.id, e.value])),
   editable: document.querySelector('#editable').textContent,
