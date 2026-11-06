@@ -18,8 +18,8 @@ tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 
-# clap backs the `neo_run` example. futures-util and tokio-tungstenite serve the loopback CDP
-# peer in tests/realm_limits.rs; tempfile gives the end-to-end test a throwaway profile.
+# clap backs the `neo_run` example. futures-util and tokio-tungstenite serve the fake browser
+# in tests/support/fake_browser.rs; tempfile gives the end-to-end test a throwaway profile.
 [dev-dependencies]
 clap.workspace = true
 futures-util.workspace = true

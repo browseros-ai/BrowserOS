@@ -1,157 +1,53 @@
-//! The realm's limits and conversions, through `Runtime::run`, against a loopback peer that
-//! answers the few CDP calls a run makes for one fake tab. No browser needed.
+//! The realm's limits and conversions, through `Runtime::run`, against the fake browser in
+//! `support/fake_browser.rs`. No browser needed.
+
+#[path = "support/fake_browser.rs"]
+mod fake_browser;
 
 use std::time::{Duration, Instant};
 
-use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
-use futures_util::{SinkExt, StreamExt};
-use neo_runtime::{PageId, RunOutcome, RunRequest, RunStatus, Runtime};
+use fake_browser::{FakeBrowser, PAGE_URL, Replies, Reply, run_request};
+use neo_runtime::{RunOutcome, RunStatus};
 use serde_json::{Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::task::JoinHandle;
 use tokio::time;
-use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 
-const PAGE: &str = "fake-page";
-const PAGE_URL: &str = "https://example.test/start";
-
-/// A browser with one open tab, `PAGE`, at `PAGE_URL`. Its tasks end with the fixture.
-struct FakeBrowser {
-    port: u16,
-    tasks: [JoinHandle<()>; 2],
-}
-
-impl FakeBrowser {
-    async fn start() -> Self {
-        let (websocket, websocket_port) = bind().await;
-        let websocket_task = tokio::spawn(async move {
-            while let Ok((stream, _)) = websocket.accept().await {
-                tokio::spawn(serve_cdp(stream));
-            }
-        });
-        let (discovery, port) = bind().await;
-        let discovery_task = tokio::spawn(async move {
-            while let Ok((mut stream, _)) = discovery.accept().await {
-                let mut request = Vec::new();
-                let mut buffer = [0_u8; 1024];
-                while !request.windows(4).any(|part| part == b"\r\n\r\n") {
-                    match stream.read(&mut buffer).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(read) => request.extend_from_slice(&buffer[..read]),
-                    }
-                }
-                let body = json!({
-                    "webSocketDebuggerUrl": format!("ws://127.0.0.1:{websocket_port}/devtools/browser/fake"),
-                })
-                .to_string();
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                // A failed write shows up as the client's failed discovery.
-                let _ = stream.write_all(response.as_bytes()).await;
-            }
-        });
-        Self {
-            port,
-            tasks: [websocket_task, discovery_task],
-        }
-    }
-
-    async fn runtime(&self) -> Runtime {
-        let cdp = CdpClient::connect(ConnectOptions {
-            host: Some("127.0.0.1".to_string()),
-            reconnect_policy: ReconnectPolicy::KeepTrying,
-            ..ConnectOptions::new(self.port)
-        })
-        .await
-        .unwrap_or_else(|error| panic!("connect to the fake browser: {error}"));
-        Runtime::connect(cdp).await.unwrap_or_else(|error| {
-            panic!("the fake browser reports closed tabs as BrowserOS does: {error}")
-        })
-    }
-}
-
-async fn bind() -> (TcpListener, u16) {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .unwrap_or_else(|error| panic!("bind a loopback port: {error}"));
-    let port = listener
-        .local_addr()
-        .unwrap_or_else(|error| panic!("read the bound port: {error}"))
-        .port();
-    (listener, port)
-}
-
-impl Drop for FakeBrowser {
-    fn drop(&mut self) {
-        for task in &self.tasks {
-            task.abort();
-        }
-    }
-}
-
-async fn serve_cdp(stream: TcpStream) {
-    let Ok(mut socket) = tokio_tungstenite::accept_async(stream).await else {
-        return;
-    };
-    while let Some(Ok(message)) = socket.next().await {
-        let Message::Text(text) = message else {
-            continue;
-        };
-        let Ok(request) = serde_json::from_str::<Value>(text.as_str()) else {
-            continue;
-        };
-        let reply = match (
-            request["method"].as_str(),
-            request["params"]["targetId"].as_str(),
-        ) {
-            (Some("Browser.getTabInfo"), Some(PAGE)) => json!({ "result": { "tab": {} } }),
-            (Some("Browser.getTabInfo"), _) => {
-                json!({ "error": { "code": -32000, "message": "No target with given id" } })
-            }
-            (Some("Target.attachToTarget"), _) => {
-                json!({ "result": { "sessionId": "fake-session" } })
-            }
-            (Some("Page.getNavigationHistory"), _) => json!({
-                "result": { "currentIndex": 0, "entries": [{ "id": 1, "url": PAGE_URL }] },
-            }),
-            (Some("Target.detachFromTarget" | "Browser.getVersion"), _) => {
-                json!({ "result": {} })
-            }
-            (method, _) => json!({
-                "error": { "code": -32601, "message": format!("'{method:?}' wasn't found") },
-            }),
-        };
-        let mut reply = reply;
-        reply["id"] = request["id"].clone();
-        if !request["sessionId"].is_null() {
-            reply["sessionId"] = request["sessionId"].clone();
-        }
-        if socket
-            .send(Message::Text(reply.to_string().into()))
-            .await
-            .is_err()
-        {
-            return;
-        }
-    }
-}
+/// A script that catches whatever its first `page.url()` throws and returns normally.
+const CATCHES_GETTER_ERROR: &str =
+    "try { page.url() } catch (error) { return `caught ${error.name}` }";
 
 async fn run(code: &str, timeout: Duration) -> RunOutcome {
-    let browser = FakeBrowser::start().await;
+    let browser = FakeBrowser::start(Replies::default()).await;
     browser
         .runtime()
         .await
-        .run(RunRequest {
-            code: code.to_string(),
-            page: PageId::new(PAGE.to_string()),
-            timeout,
-            cancel: CancellationToken::new(),
-        })
+        .run(run_request(code, timeout, CancellationToken::new()))
         .await
+}
+
+/// A fake browser that answers the run's history read at start and never the script's
+/// `page.url()` after it.
+async fn stalled_getter() -> FakeBrowser {
+    FakeBrowser::start(Replies {
+        history: Reply {
+            answers: 1,
+            ..Reply::default()
+        },
+        ..Replies::default()
+    })
+    .await
+}
+
+/// Whether the run stopped inside the script's `page.url()`: the history read at start was
+/// answered and the script's read after it never was.
+fn stopped_inside_the_getter(browser: &FakeBrowser) -> bool {
+    let answered: Vec<bool> = browser
+        .exchanges()
+        .iter()
+        .filter(|exchange| exchange.method() == "Page.getNavigationHistory")
+        .map(|exchange| exchange.reply.is_some())
+        .collect();
+    answered == [true, false]
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -187,15 +83,14 @@ async fn a_timer_past_the_deadline_ends_as_a_timeout() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cancelling_ends_the_run_as_cancelled() {
-    let browser = FakeBrowser::start().await;
+    let browser = FakeBrowser::start(Replies::default()).await;
     let runtime = browser.runtime().await;
     let cancel = CancellationToken::new();
-    let request = RunRequest {
-        code: "await new Promise((resolve) => setTimeout(resolve, 60_000))".to_string(),
-        page: PageId::new(PAGE.to_string()),
-        timeout: Duration::from_secs(30),
-        cancel: cancel.clone(),
-    };
+    let request = run_request(
+        "await new Promise((resolve) => setTimeout(resolve, 60_000))",
+        Duration::from_secs(30),
+        cancel.clone(),
+    );
     let canceller = tokio::spawn(async move {
         time::sleep(Duration::from_millis(200)).await;
         cancel.cancel();
@@ -204,6 +99,60 @@ async fn cancelling_ends_the_run_as_cancelled() {
     canceller.await.unwrap();
 
     assert_eq!(outcome.status, RunStatus::Cancelled, "{outcome:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_script_that_catches_the_deadline_still_ends_as_a_timeout() {
+    let browser = stalled_getter().await;
+    let outcome = browser
+        .runtime()
+        .await
+        .run(run_request(
+            CATCHES_GETTER_ERROR,
+            Duration::from_millis(300),
+            CancellationToken::new(),
+        ))
+        .await;
+
+    assert!(
+        stopped_inside_the_getter(&browser),
+        "{:?}",
+        browser.exchanges()
+    );
+    assert_eq!(
+        outcome.status,
+        RunStatus::Timeout,
+        "the getter's TimeoutError is catchable, but the run still ran out of time: {outcome:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_script_that_catches_cancellation_still_ends_as_cancelled() {
+    let browser = stalled_getter().await;
+    let runtime = browser.runtime().await;
+    let cancel = CancellationToken::new();
+    let request = run_request(
+        CATCHES_GETTER_ERROR,
+        Duration::from_secs(30),
+        cancel.clone(),
+    );
+    let canceller = tokio::spawn(async move {
+        time::sleep(Duration::from_millis(300)).await;
+        cancel.cancel();
+    });
+    let outcome = runtime.run(request).await;
+    canceller.await.unwrap();
+
+    assert!(
+        stopped_inside_the_getter(&browser),
+        "{:?}",
+        browser.exchanges()
+    );
+    assert_eq!(
+        outcome.status,
+        RunStatus::Cancelled,
+        "the getter's cancellation error is catchable, but the caller still cancelled: {outcome:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

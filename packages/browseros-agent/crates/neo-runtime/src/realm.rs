@@ -78,14 +78,16 @@ pub(crate) async fn run(script: Script, getters: Getters, deadline: Deadline) ->
         stop = deadline.reached() => return RunOutcome::stopped(stop, deadline.timeout(), logs.take()),
         result = evaluated => result,
     };
+    // A stop that fired during evaluation decides the outcome, however the script ended. It
+    // reaches the script as a JS error from the interrupt handler or from a getter waiting on
+    // CDP, and a getter's `TimeoutError` or cancellation error is catchable, so a script can
+    // swallow it and return normally. Only the deadline knows the run did not finish in time.
+    if let Some(stop) = deadline.stop() {
+        return RunOutcome::stopped(stop, deadline.timeout(), logs.take());
+    }
     match result {
         Ok(value) => RunOutcome::returned(value, logs.take()),
-        // A deadline or cancellation that interrupted running JS, or a getter waiting on CDP,
-        // surfaces as a JS error; the deadline says which it really was.
-        Err(error) => match deadline.stop() {
-            Some(stop) => RunOutcome::stopped(stop, deadline.timeout(), logs.take()),
-            None => RunOutcome::failed(error, logs.take()),
-        },
+        Err(error) => RunOutcome::failed(error, logs.take()),
     }
 }
 
