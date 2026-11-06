@@ -38,7 +38,7 @@ use std::env;
 use std::fmt;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use contract::Contract;
@@ -53,14 +53,25 @@ const UPSTREAM: &str = "playwright/UPSTREAM";
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let outcome = match args.as_slice() {
-        [] => translate(crate_dir, Mode::Write),
-        ["--check"] => translate(crate_dir, Mode::Check),
-        ["--pin-playwright", commit] => pin_playwright(crate_dir, commit),
+    let outcome = crate_dir().and_then(|crate_dir| match args.as_slice() {
+        [] => translate(&crate_dir, Mode::Write),
+        ["--check"] => translate(&crate_dir, Mode::Check),
+        ["--pin-playwright", commit] => pin_playwright(&crate_dir, commit),
         _ => Err(Error::Usage),
-    };
+    });
     report(outcome)
+}
+
+/// This crate's directory, which `cargo run` and `cargo test` set when they start the binary.
+///
+/// Read at run time, never with `env!`. Every worktree shares one Cargo build dir (`build-dir`
+/// in the repository's `.cargo/config.toml`), so Cargo can reuse a binary compiled in another
+/// worktree. A path fixed at compile time would then read that worktree's spec and, in write
+/// mode, overwrite its generated files.
+fn crate_dir() -> Result<PathBuf, Error> {
+    env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .ok_or(Error::NoCrateDir)
 }
 
 /// Renders the outputs from the spec on disk, then writes or checks them.
@@ -196,6 +207,7 @@ enum Outcome {
 
 enum Error {
     Usage,
+    NoCrateDir,
     Io(io::Error),
     Spec(SpecError),
 }
@@ -206,6 +218,10 @@ impl fmt::Display for Error {
             Error::Usage => write!(
                 formatter,
                 "usage: {REGENERATE} [-- --check | -- --pin-playwright <commit>]"
+            ),
+            Error::NoCrateDir => write!(
+                formatter,
+                "CARGO_MANIFEST_DIR is not set; run the translator through Cargo: {REGENERATE}"
             ),
             Error::Io(error) => write!(formatter, "{error}"),
             Error::Spec(error) => write!(formatter, "{error}"),

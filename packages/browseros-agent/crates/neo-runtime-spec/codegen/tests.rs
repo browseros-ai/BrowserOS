@@ -2,7 +2,7 @@
 //! rejected.
 
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
 
 use crate::contract::{field_ident, title_case, variant_ident};
 use crate::dialect::{DefKind, DialectFile, Grammar, Prop, Protocol, Type};
@@ -10,18 +10,21 @@ use crate::output::{Mode, REGENERATE, Rendered};
 use crate::spec_files::{self, SpecFile};
 use crate::{Outcome, UPSTREAM, check_upstream, generate, translate, upstream_text, yaml};
 
+/// This crate's directory, read at run time for the reason on [`crate::crate_dir`].
+fn crate_dir() -> PathBuf {
+    crate::crate_dir().unwrap_or_else(|error| panic!("{error}"))
+}
+
 /// The spec files on disk.
 fn committed_spec() -> Vec<SpecFile> {
-    spec_files::read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("spec"))
-        .expect("spec/ is readable")
+    spec_files::read(&crate_dir().join("spec")).expect("spec/ is readable")
 }
 
 /// The drift gate CI runs through plain `cargo test`: the committed files are exactly what the
 /// spec on disk generates, compared as `--check` compares them.
 #[test]
 fn committed_output_matches_spec() {
-    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    match translate(crate_dir, Mode::Check) {
+    match translate(&crate_dir(), Mode::Check) {
         Ok(Outcome::Translated { drift, .. }) => assert!(
             drift.is_empty(),
             "generated files are stale: {:?}; run `{REGENERATE}`",
@@ -150,7 +153,7 @@ fn mixins_splice_at_their_position() {
 
 #[test]
 fn committed_upstream_pins_the_vendored_files() {
-    let spec_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("spec");
+    let spec_dir = crate_dir().join("spec");
     let upstream = fs::read_to_string(spec_dir.join(UPSTREAM)).expect("UPSTREAM is readable");
     if let Err(error) = check_upstream(&committed_spec(), &upstream) {
         panic!("{error}");
