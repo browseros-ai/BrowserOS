@@ -151,6 +151,34 @@ trait Condition {
     async fn changed(&mut self) -> Result<(), PlaywrightError>;
 }
 
+/// Preparation can lose its execution context to a commit. Retry through the same loop and
+/// deadline as a DOM probe, before subscribing to navigation events.
+async fn prepare_tab<T: WaitTab>(tab: &T, progress: &Progress) -> Result<(), CallError> {
+    let mut backoff = LoopAWaits::new(progress.timeout_ms());
+    let _ = backoff.next_wait();
+    wait_until(&mut PrepareCondition { tab, backoff }, progress).await
+}
+
+struct PrepareCondition<'a, T> {
+    tab: &'a T,
+    backoff: LoopAWaits,
+}
+
+impl<T: WaitTab> Condition for PrepareCondition<'_, T> {
+    async fn check(&mut self, _progress: &Progress) -> Result<bool, PlaywrightError> {
+        match self.tab.prepare().await {
+            Ok(()) => Ok(true),
+            Err(PageError::NotConnected) => Ok(false),
+            Err(error) => Err(page_error(error)),
+        }
+    }
+
+    async fn changed(&mut self) -> Result<(), PlaywrightError> {
+        time::sleep(self.backoff.next_wait()).await;
+        Ok(())
+    }
+}
+
 pub(crate) async fn wait_for_selector<T: WaitTab>(
     tab: &T,
     options: &WaitForSelectorOptions,
@@ -182,6 +210,12 @@ struct SelectorCondition<'a, T> {
 impl<T: WaitTab> SelectorCondition<'_, T> {
     async fn probe(&mut self, progress: &Progress) -> Result<bool, PageError> {
         self.tab.prepare().await?;
+        // Playwright server/page.ts:547-569: settle navigation before resolving the selector,
+        // including the first description/validity check.
+        if let Some(url) = self.tab.pending_navigation() {
+            progress.log(format!("  waiting for \"{url}\" navigation to finish..."));
+            self.tab.navigation_settled().await?;
+        }
         if !self.named {
             let facts = self.tab.describe(&self.options.selector).await?;
             name_selector(progress, &facts.locator, self.options.state);
@@ -189,11 +223,6 @@ impl<T: WaitTab> SelectorCondition<'_, T> {
                 return Err(PageError::Threw(invalid));
             }
             self.named = true;
-        }
-        // Playwright server/page.ts:547-569: navigation must settle before touching the DOM.
-        if let Some(url) = self.tab.pending_navigation() {
-            progress.log(format!("  waiting for \"{url}\" navigation to finish..."));
-            self.tab.navigation_settled().await?;
         }
         let matched = self
             .tab
@@ -254,9 +283,10 @@ pub(crate) async fn wait_for_load_state<T: WaitTab>(
     options: &WaitForLoadStateOptions,
     progress: &Progress,
 ) -> Result<(), CallError> {
-    progress.race(tab.prepare()).await?.map_err(page_error)?;
+    prepare_tab(tab, progress).await?;
     progress.check()?;
     if options.state == LifecycleEvent::Commit {
+        progress.log("  not waiting, \"commit\" event already fired");
         return Ok(());
     }
     let events = tab.observe().map_err(page_error)?;
@@ -265,10 +295,11 @@ pub(crate) async fn wait_for_load_state<T: WaitTab>(
         &mut NavigationCondition {
             events,
             matcher: None,
-            since: Some(since),
+            phase: Phase::Loading(since),
             wait_until: options.state,
             navigation: None,
             check_current: false,
+            initial_check: true,
         },
         progress,
     )
@@ -280,19 +311,17 @@ pub(crate) async fn wait_for_url<T: WaitTab>(
     options: &WaitForUrlOptions,
     progress: &Progress,
 ) -> Result<(), CallError> {
-    progress.race(tab.prepare()).await?.map_err(page_error)?;
+    prepare_tab(tab, progress).await?;
     let events = tab.observe().map_err(page_error)?;
-    if let Some(glob) = options.matcher.glob() {
-        progress.log(format!("waiting for navigation to \"{glob}\""));
-    }
     wait_until(
         &mut NavigationCondition {
             events,
             matcher: Some(&options.matcher),
-            since: None,
+            phase: Phase::Matching,
             wait_until: options.wait_until,
             navigation: None,
             check_current: true,
+            initial_check: true,
         },
         progress,
     )
@@ -302,36 +331,69 @@ pub(crate) async fn wait_for_url<T: WaitTab>(
 struct NavigationCondition<'a, O> {
     events: O,
     matcher: Option<&'a UrlMatcher>,
-    since: Option<Lifecycle>,
+    phase: Phase,
     wait_until: LifecycleEvent,
     navigation: Option<Navigation>,
     check_current: bool,
+    initial_check: bool,
+}
+
+#[derive(Clone, Copy)]
+enum Phase {
+    Matching,
+    Loading(Lifecycle),
 }
 
 impl<O: Observation> NavigationCondition<'_, O> {
     fn satisfied(&mut self, progress: &Progress) -> Result<bool, PlaywrightError> {
         let state = self.events.state();
-        if self.since.is_none()
+        let navigation = self.navigation.take();
+        if self.matcher.is_some()
+            && let Some(navigation) = &navigation
+        {
+            progress.log(format!("  navigated to \"{}\"", navigation.url));
+        }
+        if matches!(self.phase, Phase::Matching)
             && let Some(matcher) = self.matcher
         {
             // Once waiting for future commits, consume them in queue order. A watch update
             // (including lag recovery) also checks current state, covering the initial seed.
-            if let Some(navigation) = self.navigation.take() {
+            if let Some(navigation) = navigation {
                 if matcher.matches(&navigation.url)? {
-                    progress.log(format!("  navigated to \"{}\"", navigation.url));
-                    self.since = Some(navigation.lifecycle);
+                    self.phase = Phase::Loading(navigation.lifecycle);
                 }
             } else if self.check_current
                 && let Some(url) = &state.url
                 && matcher.matches(url)?
             {
-                self.since = Some(state.lifecycle);
+                self.phase = Phase::Loading(state.lifecycle);
             }
             self.check_current = false;
+            if self.initial_check && matches!(self.phase, Phase::Matching) {
+                let to_url = matcher
+                    .glob()
+                    .map_or_else(String::new, |glob| format!(" to \"{glob}\""));
+                progress.log(format!(
+                    "waiting for navigation{to_url} until \"{}\"",
+                    lifecycle_name(self.wait_until)
+                ));
+            }
         }
-        Ok(self
-            .since
-            .is_some_and(|since| lifecycle_reached(since, state.lifecycle, self.wait_until)))
+        let initial = self.initial_check;
+        self.initial_check = false;
+        let Phase::Loading(since) = self.phase else {
+            return Ok(false);
+        };
+        let ready = lifecycle_reached(since, state.lifecycle, self.wait_until);
+        if ready {
+            let name = lifecycle_name(self.wait_until);
+            if initial && lifecycle_fired(since, self.wait_until) {
+                progress.log(format!("  not waiting, \"{name}\" event already fired"));
+            } else if !lifecycle_fired(since, self.wait_until) {
+                progress.log(format!("  \"{name}\" event fired"));
+            }
+        }
+        Ok(ready)
     }
 }
 
@@ -340,6 +402,7 @@ impl<O: Observation> Condition for NavigationCondition<'_, O> {
         &mut self,
         progress: &Progress,
     ) -> impl Future<Output = Result<bool, PlaywrightError>> {
+        // Matching runs synchronously inside check, bounded by the matcher's evaluation budget.
         future::ready(self.satisfied(progress))
     }
 
@@ -347,6 +410,24 @@ impl<O: Observation> Condition for NavigationCondition<'_, O> {
         self.navigation = self.events.next().await.map_err(page_error)?;
         self.check_current = self.navigation.is_none();
         Ok(())
+    }
+}
+
+fn lifecycle_name(state: LifecycleEvent) -> &'static str {
+    match state {
+        LifecycleEvent::Commit => "commit",
+        LifecycleEvent::Domcontentloaded => "domcontentloaded",
+        LifecycleEvent::Load => "load",
+        LifecycleEvent::Networkidle => "networkidle",
+    }
+}
+
+fn lifecycle_fired(lifecycle: Lifecycle, state: LifecycleEvent) -> bool {
+    match state {
+        LifecycleEvent::Commit => true,
+        LifecycleEvent::Domcontentloaded => lifecycle.dom_content_loaded,
+        LifecycleEvent::Load => lifecycle.load,
+        LifecycleEvent::Networkidle => false,
     }
 }
 
@@ -525,6 +606,7 @@ mod tests {
         describe: Step<SelectorFacts>,
         probe: Step<Option<SelectorMatch>>,
         probes: AtomicUsize,
+        descriptions: AtomicUsize,
         state: watch::Sender<NavigationState>,
         commits: broadcast::Sender<Navigation>,
         on_subscribe: Mutex<Vec<Event>>,
@@ -546,6 +628,7 @@ mod tests {
                 }),
                 probe: Step::ready(Some(matched(true))),
                 probes: AtomicUsize::new(0),
+                descriptions: AtomicUsize::new(0),
                 state,
                 commits,
                 on_subscribe: Mutex::default(),
@@ -601,6 +684,7 @@ mod tests {
             self.prepare.answer().await
         }
         async fn describe(&self, _: &str) -> Result<SelectorFacts, PageError> {
+            self.descriptions.fetch_add(1, Ordering::Relaxed);
             self.describe.answer().await
         }
         fn observe(&self) -> Result<Events, PageError> {
@@ -1141,6 +1225,225 @@ mod tests {
                 tab.emit(Event::Load);
             });
             assert_eq!(result, Ok(()), "{kind:?}");
+            assert_eq!(tab.subscribers(), (0, 0));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_current_url_and_fired_load_resolve_without_parking_or_navigation_log() {
+        let tab = FakeTab::new();
+        tab.emit(Event::Seed(MATCH));
+        tab.emit(Event::Load);
+        let run = Run::new(100.0);
+        let start = Instant::now();
+        assert_eq!(
+            wait_for_url(&tab, &url(LifecycleEvent::Load), &run.progress).await,
+            Ok(())
+        );
+        assert_eq!(start.elapsed(), Duration::ZERO);
+        let log = run.progress.folded_log();
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert!(
+            log[0].ends_with("not waiting, \"load\" event already fired"),
+            "{log:?}"
+        );
+        assert_eq!(tab.subscribers(), (0, 0));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_navigation_logs_every_commit_and_its_target_lifecycle() {
+        let tab = FakeTab::new();
+        let run = Run::new(500.0);
+        let (result, ()) = tokio::join!(
+            async { wait_for_url(&tab, &url(LifecycleEvent::Load), &run.progress).await },
+            async {
+                time::sleep(Duration::from_millis(20)).await;
+                tab.emit(Event::Commit(START));
+                time::sleep(Duration::from_millis(20)).await;
+                tab.emit(Event::Commit(MATCH));
+                time::sleep(Duration::from_millis(20)).await;
+                tab.emit(Event::Load);
+            }
+        );
+        assert_eq!(result, Ok(()));
+        let log = run.progress.folded_log();
+        for line in [
+            format!("waiting for navigation to \"{MATCH}\" until \"load\""),
+            format!("  navigated to \"{START}\""),
+            format!("  navigated to \"{MATCH}\""),
+            "  \"load\" event fired".to_string(),
+        ] {
+            assert!(
+                log.iter().any(|entry| entry.ends_with(line.trim_start())),
+                "missing {line:?}: {log:?}"
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_load_waits_log_already_fired_and_new_events() {
+        for state in [
+            LifecycleEvent::Load,
+            LifecycleEvent::Domcontentloaded,
+            LifecycleEvent::Commit,
+        ] {
+            let tab = FakeTab::new();
+            tab.emit(Event::Load);
+            tab.emit(Event::Dom);
+            let run = Run::new(100.0);
+            assert_eq!(
+                wait_for_load_state(&tab, &load(state), &run.progress).await,
+                Ok(())
+            );
+            let name = match state {
+                LifecycleEvent::Load => "load",
+                LifecycleEvent::Domcontentloaded => "domcontentloaded",
+                _ => "commit",
+            };
+            assert!(run.progress.folded_log().iter().any(|line| {
+                line.ends_with(&format!("not waiting, \"{name}\" event already fired"))
+            }));
+        }
+        for (state, event, name) in [
+            (LifecycleEvent::Load, Event::Load, "load"),
+            (
+                LifecycleEvent::Domcontentloaded,
+                Event::Dom,
+                "domcontentloaded",
+            ),
+        ] {
+            let tab = FakeTab::new();
+            let run = Run::new(100.0);
+            let (result, ()) = tokio::join!(
+                async { wait_for_load_state(&tab, &load(state), &run.progress).await },
+                async {
+                    time::sleep(Duration::from_millis(20)).await;
+                    tab.emit(event);
+                }
+            );
+            assert_eq!(result, Ok(()));
+            assert!(
+                run.progress
+                    .folded_log()
+                    .iter()
+                    .any(|line| line.ends_with(&format!("\"{name}\" event fired")))
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_navigation_prechecks_precede_selector_description() {
+        let mut tab = FakeTab::new();
+        tab.describe = Step::ready(SelectorFacts {
+            locator: "bad".to_string(),
+            invalid: Some("invalid selector".to_string()),
+        });
+        tab.emit(Event::Pending);
+        let run = Run::new(100.0);
+        let start = Instant::now();
+        let (result, ()) = tokio::join!(
+            async {
+                wait_for_selector(&tab, &selector(SelectorState::Visible), &run.progress).await
+            },
+            async {
+                time::sleep(Duration::from_millis(20)).await;
+                assert_eq!(tab.descriptions.load(Ordering::Relaxed), 0);
+                tab.emit(Event::Settled);
+            }
+        );
+        assert_error(result, ErrorName::Error);
+        assert_eq!(start.elapsed(), Duration::from_millis(20));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_navigation_waits_retry_disconnected_preparation() {
+        for kind in [Kind::Url, Kind::Load] {
+            let mut tab = FakeTab::new();
+            tab.prepare.script([Err(PageError::NotConnected), Ok(())]);
+            tab.emit(Event::Seed(MATCH));
+            tab.emit(Event::Load);
+            let run = Run::new(100.0);
+            assert_eq!(wait(kind, &tab, &run.progress).await, Ok(()), "{kind:?}");
+            assert_eq!(tab.subscribers(), (0, 0));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_repeated_preparation_disconnects_keep_the_original_deadline() {
+        for kind in [Kind::Url, Kind::Load] {
+            let mut tab = FakeTab::new();
+            tab.prepare.script([Err(PageError::NotConnected)]);
+            let run = Run::new(100.0);
+            let start = Instant::now();
+            assert_error(
+                wait(kind, &tab, &run.progress).await,
+                ErrorName::TimeoutError,
+            );
+            assert_eq!(start.elapsed(), Duration::from_millis(100));
+            assert_eq!(tab.subscribers(), (0, 0));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_watch_updates_before_commit_broadcasts_cannot_lose_a_match() {
+        for load_before_broadcast in [false, true] {
+            let tab = FakeTab::new();
+            let run = Run::new(500.0);
+            let (result, ()) = tokio::join!(
+                async { wait_for_url(&tab, &url(LifecycleEvent::Load), &run.progress).await },
+                async {
+                    time::sleep(Duration::from_millis(20)).await;
+                    let mut navigation = None;
+                    tab.state.send_modify(|state| {
+                        state.url = Some(MATCH.to_string());
+                        state.lifecycle.load = false;
+                        state.lifecycle.dom_content_loaded = false;
+                        navigation = Some(Navigation {
+                            document: Some(MATCH.to_string()),
+                            url: MATCH.to_string(),
+                            lifecycle: state.lifecycle,
+                        });
+                    });
+                    time::sleep(Duration::from_millis(20)).await;
+                    if load_before_broadcast {
+                        tab.emit(Event::Load);
+                    }
+                    time::sleep(Duration::from_millis(20)).await;
+                    let _ = tab.commits.send(navigation.expect("commit"));
+                    if !load_before_broadcast {
+                        tab.emit(Event::Load);
+                    }
+                }
+            );
+            assert_eq!(result, Ok(()));
+            assert_eq!(tab.subscribers(), (0, 0));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_url_waits_recover_lag_from_state_and_retained_commits() {
+        for matching_state in [false, true] {
+            let tab = FakeTab::new();
+            let run = Run::new(500.0);
+            let (result, ()) = tokio::join!(
+                async { wait_for_url(&tab, &url(LifecycleEvent::Load), &run.progress).await },
+                async {
+                    time::sleep(Duration::from_millis(20)).await;
+                    for _ in 0..32 {
+                        tab.emit(Event::Commit(START));
+                    }
+                    tab.emit(Event::Commit(MATCH));
+                    tab.emit(Event::Load);
+                    if matching_state {
+                        for _ in 0..32 {
+                            tab.emit(Event::Hash(MATCH));
+                        }
+                    } else {
+                        tab.emit(Event::Commit(START));
+                    }
+                }
+            );
+            assert_eq!(result, Ok(()));
             assert_eq!(tab.subscribers(), (0, 0));
         }
     }
