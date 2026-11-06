@@ -40,6 +40,7 @@ from leak_plan import (
     FRAGMENT,
     HELD,
     KINDS,
+    LONG_SPELLINGS,
     PLACES,
     SPECIAL_TAIL,
     SPECS,
@@ -574,6 +575,10 @@ class Views:
     keyed: Mapping[str, Sequence[Mapping]]
     refs: tuple[Mapping, ...]  # getByRef entries: {line, ok | err}
     nodes: tuple[Mapping, ...] = ()  # aria nodes as host records store them
+    # An element script's own answer, {near, <spelling>...}, as an op's record keeps it:
+    # the run regroups it by region id for its reply, but the op's result names the
+    # element only by its label's anchor in `near`.
+    answers: tuple[Mapping, ...] = ()
     # region id -> its slot state in this answer: the slot hit scan and the per-region
     # verdicts both ask, and a disk page's slots cost a pass over megabytes each.
     states: dict[str, SlotState | None] = dataclasses.field(
@@ -640,13 +645,42 @@ def _json_trees(text: str) -> list[object]:
     return trees
 
 
+def _plain(node: object) -> object:
+    """`node` with every serialized value decoded to plain JSON.
+
+    A main-world script's result reaches the host's records (/v1/runs, /v1/operations,
+    /v1/trace, /v1/events, trace.db) in the form the crate serializes it: an object as
+    {id, o: [{k, v}]} and an array as {id, a: [...]}, each cut one ending in {"$more": n}.
+    Its region keys then sit in "k" values, not in keys, and only decoded does a record
+    hold the keyed read the reply holds, so a short value is judged in the record by the
+    same slot."""
+    if isinstance(node, list):
+        return [_plain(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    shape = node.keys() - {"id"}
+    if shape == {"o"} and isinstance(node["o"], list):
+        return {
+            entry["k"]: _plain(entry.get("v"))
+            for entry in node["o"]
+            if isinstance(entry, dict) and isinstance(entry.get("k"), str)
+        }
+    if shape == {"a"} and isinstance(node["a"], list):
+        return [
+            _plain(item)
+            for item in node["a"]
+            if not (isinstance(item, dict) and item.keys() == {"$more"})
+        ]
+    return {key: _plain(value) for key, value in node.items()}
+
+
 def views_of(data: bytes, *, structured: bool = True) -> Views:
     """The answer's views. A JSON string that itself holds JSON (a run's text block is
     its value serialized once more) is replaced by what it holds, so slot patterns never
     run over escaped text. Bytes that are not JSON (disk pages, logs) are read with JSON
     escapes undone."""
     text = data.decode("utf-8", "replace")
-    trees = _json_trees(text) if structured else []
+    trees = [_plain(tree) for tree in _json_trees(text)] if structured else []
     keyed: dict[str, list[Mapping]] = {}
     if not trees:
         unescaped = text.replace('\\"', '"').replace("\\n", "\n")
@@ -657,13 +691,14 @@ def views_of(data: bytes, *, structured: bool = True) -> Views:
     strings: list[str] = []
     refs: list[Mapping] = []
     nodes: list[Mapping] = []
+    answers: list[Mapping] = []
     pending = [n for tree in trees for n in _leaves(tree)]
     while pending:
         node = pending.pop()
         if isinstance(node, str):
             inner = _json_trees(node) if node[:1] in '{["' else []
             if inner:
-                pending += [n for tree in inner for n in _leaves(tree)]
+                pending += [n for tree in inner for n in _leaves(_plain(tree))]
             else:
                 strings.append(node)
         elif isinstance(node, dict):
@@ -674,7 +709,9 @@ def views_of(data: bytes, *, structured: bool = True) -> Views:
                 refs.append(node)
             if node.get("role") == "textbox" and isinstance(node.get("name"), str):
                 nodes.append(node)
-    return Views(text, tuple(strings), keyed, tuple(refs), tuple(nodes))
+            if isinstance(node.get("near"), str) and node.keys() & set(LONG_SPELLINGS):
+                answers.append(node)
+    return Views(text, tuple(strings), keyed, tuple(refs), tuple(nodes), tuple(answers))
 
 
 class Detector:
@@ -889,7 +926,8 @@ class Detector:
     def slots(self, views: Views, region: Region) -> list[str]:
         """Every slot of `region` the answer holds. An echo's slot is what sits between
         its anchor's {{ }}, wherever the text shows up; a field's is a plain keyed read
-        (inputValue, getAttribute, getByRef), its aria line, or its value attribute.
+        (inputValue, getAttribute, getByRef), its aria line, its value attribute, or
+        each spelling of an element script's answer whose label holds its anchor.
         Each pattern needs the region's anchor or id in the text, so a text without them
         is skipped before any pattern runs."""
         if region.anchor not in views.raw and region.id not in views.raw:
@@ -905,6 +943,11 @@ class Detector:
             return out
         reads = list(views.keyed.get(region.id, ()))
         reads += [r for r in views.refs if region.anchor in str(r.get("line", ""))]
+        for answer in views.answers:
+            if region.anchor in answer["near"]:
+                out += [
+                    answer[s] for s in LONG_SPELLINGS if isinstance(answer.get(s), str)
+                ]
         for read in reads:
             if isinstance(read.get("ok"), str) and "<" not in read["ok"]:
                 out.append(read["ok"])  # markup (innerHTML) is read below, by attribute
@@ -1049,6 +1092,14 @@ class Observation:
     received: bool = False
     run_id: str | None = None
     derived_from: str | None = None  # a record copying this run's agent answer
+    withheld: bool = False  # the run's whole value was WITHHELD_ANSWER
+
+
+# What claw-sdk's RunMask (dispatch/run_mask.rs) answers in place of a run's whole value:
+# when one text matches both the process's secret set and the values the run holds, or
+# when the run may have read a value the set lost. The answer then shows no region at all,
+# so a cell it answers is held by contract, not unproven for want of its region.
+WITHHELD_ANSWER = "[withheld]"
 
 
 def decide(o: Observation) -> tuple[Verdict, str]:
@@ -1064,6 +1115,7 @@ def decide(o: Observation) -> tuple[Verdict, str]:
     refusal that the contract names         -> WITHHELD
     refusal that means "not built"          -> N/A (not built)
     any other refusal                       -> INCONCLUSIVE
+    the run's whole value withheld          -> WITHHELD
     no presence proof bracketing the probe  -> INCONCLUSIVE
     not covered                             -> INCONCLUSIVE
     slot OTHER, or no slot for a short value-> INCONCLUSIVE
@@ -1092,6 +1144,8 @@ def decide(o: Observation) -> tuple[Verdict, str]:
             Verdict.INCONCLUSIVE,
             f"{spec.other_refusal}: {o.refusal.key} {o.refusal.message[:80]}",
         )
+    if o.withheld:
+        return Verdict.WITHHELD, f"the run's whole value was {WITHHELD_ANSWER}"
     if spec.lists_some and not o.covered:
         return Verdict.NOT_APPLICABLE, "not among the elements the answer lists"
     if not o.present:
@@ -1544,6 +1598,7 @@ class _Observer:
                     pixels=pixels,
                     run_id=c.run_id,
                     received=self.received.get(region.plant.id, False),
+                    withheld=reply.error is None and reply.value == WITHHELD_ANSWER,
                 )
             )
         self._stray(c, hits)

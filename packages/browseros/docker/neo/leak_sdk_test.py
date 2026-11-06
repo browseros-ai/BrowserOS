@@ -812,6 +812,53 @@ class DetectorTests(unittest.TestCase):
                     J.SlotState.RAW,
                 )
 
+    def test_a_records_serialized_script_result_has_the_replys_slots(self) -> None:
+        """Seen on the real image: an operation record keeps a main-world script's result
+        serialized, region keys in "k" values and a cut object ending in {"$more": n}."""
+        digits = self.cvc.secret.reveal()
+        (field,) = self.inst.field_regions(self.cvc)
+
+        def record(value: str) -> bytes:
+            read = {
+                "id": 3,
+                "o": [{"k": "ok", "v": value}, {"k": "near", "v": "Field"}],
+            }
+            keyed = {"id": 2, "o": [{"k": field.id, "v": read}, {"$more": 2}]}
+            result = {"id": 1, "o": [{"k": "plain", "v": keyed}]}
+            return json.dumps({"name": "page.evaluate", "result": result}).encode()
+
+        self.assertIs(
+            self.det.slot_state(J.views_of(record(digits)), field), J.SlotState.RAW
+        )
+        self.assertIs(
+            self.det.slot_state(J.views_of(record("[private]")), field),
+            J.SlotState.MASKED,
+        )
+
+    def test_an_element_scripts_record_has_slots_by_the_label_anchor(self) -> None:
+        """An element script's op result names its element only by `near`, its label:
+        alone ($eval, locator.evaluate) or paired with an id (evaluateAll, $$eval)."""
+        digits = self.cvc.secret.reveal()
+        (field,) = self.inst.field_regions(self.cvc)
+
+        def answer(value: str) -> dict:
+            near = {"k": "near", "v": f"Field {field.anchor} "}
+            return {"id": 3, "o": [near, {"k": "plain", "v": value}]}
+
+        def record(result: object) -> bytes:
+            return json.dumps({"name": "locator.evaluate", "result": result}).encode()
+
+        for value, state in (
+            (digits, J.SlotState.RAW),
+            ("[private]", J.SlotState.MASKED),
+        ):
+            alone = answer(value)
+            paired = {"id": 1, "a": [{"id": 2, "a": [field.id, answer(value)]}]}
+            for result in (alone, paired):
+                with self.subTest(value=value, paired=result is paired):
+                    views = J.views_of(record(result))
+                    self.assertIs(self.det.slot_state(views, field), state)
+
     def test_aria_slots_from_live_shapes(self) -> None:
         """Seen on the real image: a field with a placeholder shows its value on a child
         line, and a run's text block holds the snapshot as an escaped JSON string."""
@@ -968,6 +1015,17 @@ class VerdictTests(unittest.TestCase):
         self.assertIs(J.decide(held)[0], J.Verdict.WITHHELD)
         self.assertIs(J.decide(built)[0], J.Verdict.NOT_APPLICABLE)
         self.assertIs(J.decide(other)[0], J.Verdict.INCONCLUSIVE)
+
+    def test_a_wholly_withheld_value_is_held_but_a_value_beside_it_still_leaks(
+        self,
+    ) -> None:
+        (field,) = self.inst.field_regions(self.pw)
+        withheld = obs(field, channel=P.ChannelId.CONTENT, covered=False, withheld=True)
+        self.assertIs(J.decide(withheld)[0], J.Verdict.WITHHELD)
+        hit = J.Hit(self.pw.id, field.id, J.Form.PLAIN, 0, "")
+        self.assertIs(
+            J.decide(dataclasses.replace(withheld, hit=hit))[0], J.Verdict.LEAKED
+        )
 
     def test_a_refusal_says_nothing_about_regions_the_probe_cannot_reach(self) -> None:
         (field,) = self.inst.field_regions(self.pw)  # a same-site field: not main
