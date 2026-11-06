@@ -14,15 +14,15 @@ test('uncheck returns undefined and clears checked state on every receiver', {
       'utf8',
     ),
     source: `
-      const voids = [await page.uncheck('#checked') === undefined,
-        await page.mainFrame().uncheck('#checked-frame') === undefined,
+      const voids = [await page.uncheck('#checked', null) === undefined,
+        await page.mainFrame().uncheck('#checked-frame', null) === undefined,
         await page.locator('#checked-locator').uncheck() === undefined,
         await page.locator('#aria-checked').uncheck() === undefined,
         await page.locator('#unchecked').uncheck() === undefined]
       if (!voids.every(Boolean)) throw new Error('uncheck must return undefined')
       let wrong = 'resolved'
-      try { await page.locator('#plain').uncheck() } catch (error) { wrong = error.name }
-      if (wrong !== 'Error') throw new Error('wrong element must reject')
+      try { await page.locator('#plain').uncheck() } catch (error) { wrong = errorCategory(error) }
+      if (wrong !== 'error') throw new Error('wrong element must reject')
       return { voids, wrong }
     `,
     probe: 'window.__facts()',

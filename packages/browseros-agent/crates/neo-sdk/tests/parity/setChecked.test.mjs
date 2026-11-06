@@ -14,15 +14,15 @@ test('setChecked returns undefined and applies both states on every receiver', {
       'utf8',
     ),
     source: `
-      const voids = [await page.setChecked('#unchecked', true) === undefined,
-        await page.mainFrame().setChecked('#checked-frame', false) === undefined,
+      const voids = [await page.setChecked('#unchecked', true, null) === undefined,
+        await page.mainFrame().setChecked('#checked-frame', false, null) === undefined,
         await page.locator('#checked-locator').setChecked(false) === undefined,
         await page.locator('#aria').setChecked(true) === undefined,
         await page.locator('#unchecked').setChecked(false) === undefined]
       if (!voids.every(Boolean)) throw new Error('setChecked must return undefined')
       let wrong = 'resolved'
-      try { await page.locator('#plain').setChecked(true) } catch (error) { wrong = error.name }
-      if (wrong !== 'Error') throw new Error('wrong element must reject')
+      try { await page.locator('#plain').setChecked(true) } catch (error) { wrong = errorCategory(error) }
+      if (wrong !== 'error') throw new Error('wrong element must reject')
       return { voids, wrong }
     `,
     probe: 'window.__facts()',

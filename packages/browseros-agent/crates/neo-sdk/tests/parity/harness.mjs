@@ -121,12 +121,20 @@ export function startNeo(neoRun, port, targetId, scriptPath) {
   return { connected, outcome }
 }
 
+/** Shared inside each script, so both engines compare failure categories in the same way. */
+function errorCategory(error) {
+  if (error.name === 'TimeoutError') return 'timeout'
+  if (/strict mode violation/.test(error.message)) return 'strict'
+  return 'error'
+}
+
 /** Runs one method's public script on fresh pages and compares its result and browser effect. */
 export async function compareMethod(t, { html, source, probe }) {
   t.diagnostic(
     `Playwright ${playwrightVersion}; ${playwrightDir ?? 'npm playwright-core'}`,
   )
   const neoRun = buildNeoRun()
+  const scriptSource = `const errorCategory = ${errorCategory.toString()};\n${source}`
   const cleanups = []
   try {
     const origin = await serveFixture(cleanups, {
@@ -143,7 +151,7 @@ export async function compareMethod(t, { html, source, probe }) {
     const reference = await context.newPage()
     await reference.goto(`${origin}/method.html`)
     const AsyncFunction = (async () => {}).constructor
-    const value = await new AsyncFunction('page', source)(reference)
+    const value = await new AsyncFunction('page', scriptSource)(reference)
     const effect = await reference.evaluate(probe)
     await reference.close()
 
@@ -153,7 +161,7 @@ export async function compareMethod(t, { html, source, probe }) {
     const { targetInfo } = await session.send('Target.getTargetInfo')
     await session.detach()
     const script = join(scripts, 'method.js')
-    writeFileSync(script, source)
+    writeFileSync(script, scriptSource)
     const neo = startNeo(neoRun, browser.port, targetInfo.targetId, script)
     await neo.connected
     const outcome = await neo.outcome

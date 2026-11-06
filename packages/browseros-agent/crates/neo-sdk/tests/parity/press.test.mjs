@@ -17,8 +17,8 @@ test('press returns undefined and types through ordinary key events', {
     ),
     source: `
       const voids = [
-        await page.press('#text', 'End') === undefined,
-        await page.mainFrame().press('#text', 'Shift+A') === undefined,
+        await page.press('#text', 'End', null) === undefined,
+        await page.mainFrame().press('#text', 'Shift+A', null) === undefined,
         await page.locator('#text').press('x', { delay: 20 }) === undefined,
         await page.locator('#area').press('ControlOrMeta+a') === undefined,
         await page.locator('#area').press('Backspace') === undefined,
@@ -31,10 +31,14 @@ test('press returns undefined and types through ordinary key events', {
           await page.locator('#text').press(key)
           invalid.push('resolved')
         } catch (error) {
-          invalid.push({ name: error.name, unknownKey: /Unknown key/.test(error.message) })
+          invalid.push({ category: errorCategory(error), unknownKey: /Unknown key/.test(error.message) })
         }
       }
-      return { voids, invalid }
+      if (invalid.length !== 3 || !invalid.every(result => result.category === 'error')) throw new Error('invalid keys must reject')
+      let timeout = 'resolved'
+      try { await page.locator('#missing').press('Enter', {timeout:500}) } catch (error) { timeout = errorCategory(error) }
+      if (timeout !== 'timeout') throw new Error('missing press must time out')
+      return { voids, invalid, timeout }
     `,
     probe: 'window.__facts()',
   })
