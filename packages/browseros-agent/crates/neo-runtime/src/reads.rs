@@ -1,16 +1,17 @@
-//! `Frame.textContent` and `Frame.ariaSnapshot` (no selector, as `page.ariaSnapshot` sends it):
-//! Playwright's page reads, in the structure of its server. `textContent` is `frames.ts`
-//! `_waitForFunctionOnSelector` over `retryWithProgressAndBackoff`; `ariaSnapshot` is `page.ts`
+//! `Frame.textContent`, `Frame.innerText`, `Frame.getAttribute` and `Frame.ariaSnapshot` (no
+//! selector, as `page.ariaSnapshot` sends it): Playwright's page reads, in the structure of its
+//! server. The text reads use `frames.ts` `_waitForFunctionOnSelector` over
+//! `retryWithProgressAndBackoff`; `ariaSnapshot` is `page.ts`
 //! `ariaSnapshotJSONForFrame` over `retryWithProgressAndTimeouts`, rendered by `aria_yaml.rs` as
 //! `frames.ts` `ariaSnapshot` does.
 //!
 //! ```text
-//!  text_content(tab, options, progress)               log: waiting for <locator>
+//!  text_content / inner_text / get_attribute           log: waiting for <locator>
 //!   wait_for_function_on_selector  waits 0,20,50,100,100,500…  (click's LoopAWaits)
 //!   │ prepare the tab
 //!   │ first time only: describe → name the locator │ invalid selector → Error, at once
-//!   │ evaluate: glue textContent {selector, strict}  (marks the first match)
-//!   │   matched → log "  locator resolved to <preview>" → {value}
+//!   │ glue textContent / innerText / getAttribute {selector, strict, name?}: mark first match
+//!   │   matched → log "  locator resolved to <preview>" → {value} (missing attribute → {})
 //!   │   nothing matched, or NotConnected → poll again
 //!   │   Threw (strict mode violation) or Contract → Error with the page's message; Closed → closed
 //!  aria_snapshot(tab, options, progress)               no call log at all
@@ -23,8 +24,8 @@
 //! The seam is two traits of their own, [`SelectorTab`] and [`ReadTab`], so the reads never grow
 //! click's `Tab`; `Arc<PageSession>` implements both at the bottom of this file, over click's own
 //! `prepare` and `describe` and the main frame's utility world. [`wait_for_function_on_selector`]
-//! takes the page call as a closure, so any read of the first match (`inputValue`, `innerText`)
-//! can reuse the loop. The tests drive both loops against a scripted tab under paused time.
+//! takes the page call as a closure, so `inputValue` also reuses the same loop. The tests drive
+//! both loops against a scripted tab under paused time.
 //!
 //! An `ai` snapshot also records its refs in the document's injected script, so a later
 //! `aria-ref=eN` selector (any run's, since the utility world is per document) resolves the
@@ -46,11 +47,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use neo_runtime_spec::injected::{
-    AriaFrameSnapshot, AriaSnapshotMode, InjectedAriaSnapshotParams, InjectedTextContentParams,
-    TextMatch,
+    AriaFrameSnapshot, AriaSnapshotMode, AttributeMatch, InjectedAriaSnapshotParams,
+    InjectedGetAttributeParams, InjectedInnerTextParams, InjectedTextContentParams, TextMatch,
 };
 use neo_runtime_spec::serve::{
     FrameAriaSnapshotParams, FrameAriaSnapshotParamsMode, FrameAriaSnapshotResult,
+    FrameGetAttributeParams, FrameGetAttributeResult, FrameInnerTextParams, FrameInnerTextResult,
     FrameTextContentParams, FrameTextContentResult,
 };
 
@@ -99,6 +101,22 @@ pub(crate) trait ReadTab: SelectorTab {
         strict: bool,
     ) -> impl Future<Output = Result<Option<TextMatch>, PageError>> + Send;
 
+    /// The `innerText` glue: first match's rendered text, refusing non-HTML elements.
+    fn inner_text(
+        &self,
+        selector: &str,
+        strict: bool,
+    ) -> impl Future<Output = Result<Option<TextMatch>, PageError>> + Send;
+
+    /// The `getAttribute` glue: `None` while no element matches; a matched element can have
+    /// no value for the requested attribute and still ends the read.
+    fn get_attribute(
+        &self,
+        selector: &str,
+        strict: bool,
+        name: &str,
+    ) -> impl Future<Output = Result<Option<AttributeMatch>, PageError>> + Send;
+
     /// The `ariaSnapshot` glue: the tree of the first match of `params.selector`, `None` while
     /// nothing matches.
     fn aria_snapshot(
@@ -119,12 +137,11 @@ pub(crate) struct Matched<R> {
 // The policy.
 // ---------------------------------------------------------------------------------------------
 
-/// One `Frame.textContent`'s options, decoded once by the dispatcher's route.
+/// One `Frame.textContent` or `Frame.innerText` call's options, decoded once by its route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReadOptions {
     pub(crate) selector: String,
-    /// `strict: true` from `locator.textContent`; absent (non-strict) from `page.textContent`
-    /// and `frame.textContent`.
+    /// Locator reads send `strict: true`; page and frame reads default to non-strict.
     pub(crate) strict: bool,
 }
 
@@ -133,6 +150,31 @@ impl ReadOptions {
         Self {
             selector: params.selector,
             strict: params.strict.unwrap_or(false),
+        }
+    }
+
+    pub(crate) fn from_inner_text(params: FrameInnerTextParams) -> Self {
+        Self {
+            selector: params.selector,
+            strict: params.strict.unwrap_or(false),
+        }
+    }
+}
+
+/// One `Frame.getAttribute`'s options, decoded once by the dispatcher's route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AttributeOptions {
+    pub(crate) selector: String,
+    pub(crate) strict: bool,
+    pub(crate) name: String,
+}
+
+impl AttributeOptions {
+    pub(crate) fn from_params(params: FrameGetAttributeParams) -> Self {
+        Self {
+            selector: params.selector,
+            strict: params.strict.unwrap_or(false),
+            name: params.name,
         }
     }
 }
@@ -212,6 +254,36 @@ pub(crate) async fn text_content<T: ReadTab>(
     })
     .await?;
     Ok(FrameTextContentResult { value: Some(value) })
+}
+
+/// Serves `Frame.innerText`: `{value}`, the first match's rendered text.
+pub(crate) async fn inner_text<T: ReadTab>(
+    tab: &T,
+    options: &ReadOptions,
+    progress: &Progress,
+) -> Result<FrameInnerTextResult, CallError> {
+    let value = wait_for_function_on_selector(tab, &options.selector, progress, || async {
+        let matched = tab.inner_text(&options.selector, options.strict).await?;
+        Ok(matched.map(|TextMatch { value, preview }| Matched { value, preview }))
+    })
+    .await?;
+    Ok(FrameInnerTextResult { value })
+}
+
+/// Serves `Frame.getAttribute`: a missing attribute ends the read with no `value`.
+pub(crate) async fn get_attribute<T: ReadTab>(
+    tab: &T,
+    options: &AttributeOptions,
+    progress: &Progress,
+) -> Result<FrameGetAttributeResult, CallError> {
+    let value = wait_for_function_on_selector(tab, &options.selector, progress, || async {
+        let matched = tab
+            .get_attribute(&options.selector, options.strict, &options.name)
+            .await?;
+        Ok(matched.map(|AttributeMatch { value, preview }| Matched { value, preview }))
+    })
+    .await?;
+    Ok(FrameGetAttributeResult { value })
 }
 
 /// Playwright's `_waitForFunctionOnSelector`: names the selector, then polls `evaluate` with
@@ -345,7 +417,7 @@ impl SelectorTab for Arc<PageSession> {
     }
 }
 
-/// By value, with no object group: neither result holds a page object.
+/// By value, with no object group: none of these results holds a page object.
 impl ReadTab for Arc<PageSession> {
     async fn text_content(
         &self,
@@ -359,6 +431,44 @@ impl ReadTab for Arc<PageSession> {
                 &InjectedTextContentParams {
                     selector: selector.to_string(),
                     strict,
+                },
+            )
+            .await?;
+        Ok(read.matched)
+    }
+
+    async fn inner_text(
+        &self,
+        selector: &str,
+        strict: bool,
+    ) -> Result<Option<TextMatch>, PageError> {
+        let read = self
+            .world
+            .call(
+                None,
+                &InjectedInnerTextParams {
+                    selector: selector.to_string(),
+                    strict,
+                },
+            )
+            .await?;
+        Ok(read.matched)
+    }
+
+    async fn get_attribute(
+        &self,
+        selector: &str,
+        strict: bool,
+        name: &str,
+    ) -> Result<Option<AttributeMatch>, PageError> {
+        let read = self
+            .world
+            .call(
+                None,
+                &InjectedGetAttributeParams {
+                    selector: selector.to_string(),
+                    strict,
+                    name: name.to_string(),
                 },
             )
             .await?;
@@ -382,7 +492,8 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::Mutex;
 
-    use neo_runtime_spec::injected::{AriaChild, AriaNode, AriaRole};
+    use neo_runtime_spec::injected::{AriaChild, AriaNode, AriaRole, AttributeMatch};
+    use neo_runtime_spec::serve::{FrameGetAttributeResult, FrameInnerTextResult};
     use tokio::time;
     use tokio::time::Instant;
 
@@ -430,6 +541,9 @@ mod tests {
         prepare: Step<Result<(), PageError>>,
         describe: Step<Result<SelectorFacts, PageError>>,
         text: Step<Result<Option<TextMatch>, PageError>>,
+        inner: Step<Result<Option<TextMatch>, PageError>>,
+        attribute: Step<Result<Option<AttributeMatch>, PageError>>,
+        read_params: Mutex<Vec<(String, bool, Option<String>)>>,
         snapshot: Step<Result<Option<AriaFrameSnapshot>, PageError>>,
         calls: Mutex<Vec<String>>,
         snapshot_params: Mutex<Vec<InjectedAriaSnapshotParams>>,
@@ -448,6 +562,9 @@ mod tests {
                     }),
                 ),
                 text: Step::always(ROUND_TRIP, Ok(Some(apples()))),
+                inner: Step::always(ROUND_TRIP, Ok(Some(apples()))),
+                attribute: Step::always(ROUND_TRIP, Ok(Some(attribute(Some("fruit"))))),
+                read_params: Mutex::default(),
                 snapshot: Step::always(ROUND_TRIP, Ok(Some(tree()))),
                 calls: Mutex::default(),
                 snapshot_params: Mutex::default(),
@@ -488,6 +605,34 @@ mod tests {
             self.text.answer().await
         }
 
+        async fn inner_text(
+            &self,
+            selector: &str,
+            strict: bool,
+        ) -> Result<Option<TextMatch>, PageError> {
+            self.record("innerText");
+            self.read_params
+                .lock()
+                .expect("params")
+                .push((selector.to_string(), strict, None));
+            self.inner.answer().await
+        }
+
+        async fn get_attribute(
+            &self,
+            selector: &str,
+            strict: bool,
+            name: &str,
+        ) -> Result<Option<AttributeMatch>, PageError> {
+            self.record("getAttribute");
+            self.read_params.lock().expect("params").push((
+                selector.to_string(),
+                strict,
+                Some(name.to_string()),
+            ));
+            self.attribute.answer().await
+        }
+
         async fn aria_snapshot(
             &self,
             params: &InjectedAriaSnapshotParams,
@@ -506,6 +651,44 @@ mod tests {
             value: "Apples".to_string(),
             preview: "<li>Apples</li>".to_string(),
         }
+    }
+
+    fn attribute(value: Option<&str>) -> AttributeMatch {
+        AttributeMatch {
+            value: value.map(str::to_string),
+            preview: "<li data-kind=fruit>Apples</li>".to_string(),
+        }
+    }
+
+    async fn read_inner(
+        tab: &FakeReads,
+        timeout_ms: f64,
+    ) -> Result<FrameInnerTextResult, CallError> {
+        inner_text(
+            tab,
+            &ReadOptions {
+                selector: SELECTOR.to_string(),
+                strict: true,
+            },
+            &Progress::for_test(timeout_ms),
+        )
+        .await
+    }
+
+    async fn read_attribute(
+        tab: &FakeReads,
+        timeout_ms: f64,
+    ) -> Result<FrameGetAttributeResult, CallError> {
+        get_attribute(
+            tab,
+            &AttributeOptions {
+                selector: SELECTOR.to_string(),
+                strict: true,
+                name: "data-kind".to_string(),
+            },
+            &Progress::for_test(timeout_ms),
+        )
+        .await
     }
 
     fn node(role: AriaRole) -> AriaNode {
@@ -706,6 +889,214 @@ mod tests {
             })),
         );
         assert_eq!(read(&tab, 30_000.0).await, Ok(text("")));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_inner_text_reads_the_match_at_once() {
+        let tab = FakeReads::ready();
+        assert_eq!(
+            read_inner(&tab, 30_000.0).await,
+            Ok(FrameInnerTextResult {
+                value: "Apples".to_string()
+            })
+        );
+        assert_eq!(tab.calls(), ["describe", "innerText"]);
+        assert_eq!(
+            *tab.read_params.lock().expect("params"),
+            [(SELECTOR.to_string(), true, None)]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_inner_text_preserves_empty_text() {
+        let mut tab = FakeReads::ready();
+        tab.inner = Step::always(
+            ROUND_TRIP,
+            Ok(Some(TextMatch {
+                value: String::new(),
+                ..apples()
+            })),
+        );
+        assert_eq!(
+            read_inner(&tab, 30_000.0).await,
+            Ok(FrameInnerTextResult {
+                value: String::new()
+            })
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_inner_text_waits_for_a_later_element() {
+        let mut tab = FakeReads::ready();
+        tab.inner = Step::new(ROUND_TRIP, [Ok(None), Ok(Some(apples()))]);
+        assert_eq!(
+            read_inner(&tab, 30_000.0).await,
+            Ok(FrameInnerTextResult {
+                value: "Apples".to_string()
+            })
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_inner_text_times_out_without_an_element() {
+        let mut tab = FakeReads::ready();
+        tab.inner = Step::always(ROUND_TRIP, Ok(None));
+        assert_eq!(read_inner(&tab, 500.0).await, Err(timeout(500.0)));
+        assert!(tab.count("innerText") > 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_inner_text_fails_at_once_for_non_html_and_strict_violations() {
+        for message in [
+            "Error: Node is not an HTMLElement",
+            "Error: strict mode violation",
+        ] {
+            let mut tab = FakeReads::ready();
+            tab.inner = Step::always(ROUND_TRIP, Err(PageError::Threw(message.to_string())));
+            let started = Instant::now();
+            assert_eq!(
+                read_inner(&tab, 30_000.0).await,
+                Err(PlaywrightError::error(message).into())
+            );
+            assert!(started.elapsed() < Duration::from_millis(20));
+            assert_eq!(tab.count("innerText"), 1);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_inner_text_retries_a_replaced_document() {
+        let mut tab = FakeReads::ready();
+        tab.inner = Step::new(
+            ROUND_TRIP,
+            [Err(PageError::NotConnected), Ok(Some(apples()))],
+        );
+        assert_eq!(
+            read_inner(&tab, 30_000.0).await,
+            Ok(FrameInnerTextResult {
+                value: "Apples".to_string()
+            })
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_get_attribute_reads_the_match_at_once() {
+        let tab = FakeReads::ready();
+        assert_eq!(
+            read_attribute(&tab, 30_000.0).await,
+            Ok(FrameGetAttributeResult {
+                value: Some("fruit".to_string())
+            })
+        );
+        assert_eq!(tab.calls(), ["describe", "getAttribute"]);
+        assert_eq!(
+            *tab.read_params.lock().expect("params"),
+            [(SELECTOR.to_string(), true, Some("data-kind".to_string()))]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_missing_attribute_returns_at_once_without_waiting_for_its_value() {
+        let mut tab = FakeReads::ready();
+        tab.attribute = Step::new(
+            ROUND_TRIP,
+            [
+                Ok(Some(attribute(None))),
+                Ok(Some(attribute(Some("later")))),
+            ],
+        );
+        let started = Instant::now();
+        assert_eq!(
+            read_attribute(&tab, 30_000.0).await,
+            Ok(FrameGetAttributeResult { value: None })
+        );
+        assert!(started.elapsed() < Duration::from_millis(20));
+        assert_eq!(tab.count("getAttribute"), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_get_attribute_preserves_an_empty_value() {
+        let mut tab = FakeReads::ready();
+        tab.attribute = Step::always(ROUND_TRIP, Ok(Some(attribute(Some("")))));
+        assert_eq!(
+            read_attribute(&tab, 30_000.0).await,
+            Ok(FrameGetAttributeResult {
+                value: Some(String::new())
+            })
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_get_attribute_times_out_without_an_element() {
+        let mut tab = FakeReads::ready();
+        tab.attribute = Step::always(ROUND_TRIP, Ok(None));
+        assert_eq!(read_attribute(&tab, 500.0).await, Err(timeout(500.0)));
+        assert!(tab.count("getAttribute") > 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_get_attribute_waits_for_a_later_element() {
+        let mut tab = FakeReads::ready();
+        tab.attribute = Step::new(ROUND_TRIP, [Ok(None), Ok(Some(attribute(None)))]);
+        assert_eq!(
+            read_attribute(&tab, 30_000.0).await,
+            Ok(FrameGetAttributeResult { value: None })
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_get_attribute_retries_a_replaced_document() {
+        let mut tab = FakeReads::ready();
+        tab.attribute = Step::new(
+            ROUND_TRIP,
+            [
+                Err(PageError::NotConnected),
+                Ok(Some(attribute(Some("fruit")))),
+            ],
+        );
+        assert_eq!(
+            read_attribute(&tab, 30_000.0).await,
+            Ok(FrameGetAttributeResult {
+                value: Some("fruit".to_string())
+            })
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_get_attribute_fails_at_once_for_a_strict_violation() {
+        let mut tab = FakeReads::ready();
+        let message = "Error: strict mode violation";
+        tab.attribute = Step::always(ROUND_TRIP, Err(PageError::Threw(message.to_string())));
+        let started = Instant::now();
+        assert_eq!(
+            read_attribute(&tab, 30_000.0).await,
+            Err(PlaywrightError::error(message).into())
+        );
+        assert!(started.elapsed() < Duration::from_millis(20));
+        assert_eq!(tab.count("getAttribute"), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_both_text_reads_fail_on_invalid_selectors_before_reading() {
+        let mut tab = FakeReads::ready();
+        tab.describe = Step::always(
+            ROUND_TRIP,
+            Ok(SelectorFacts {
+                locator: "li >>".to_string(),
+                invalid: Some("Unexpected token".to_string()),
+            }),
+        );
+        let error = Err(PlaywrightError::error("Unexpected token").into());
+        assert_eq!(
+            read_inner(&tab, 30_000.0).await.map(|result| result.value),
+            error
+        );
+        assert_eq!(
+            read_attribute(&tab, 30_000.0)
+                .await
+                .map(|result| result.value.unwrap_or_default()),
+            error
+        );
+        assert_eq!(tab.calls(), ["describe", "describe"]);
     }
 
     #[tokio::test(start_paused = true)]
