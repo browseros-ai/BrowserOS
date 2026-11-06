@@ -109,8 +109,14 @@ const cases = [
     source: `return {
       glob: await settle(page.waitForURL('**/never.html', { timeout: 300 })),
       regexp: await settle(page.waitForURL(/never/, { timeout: 300 })),
+      // Only the primitive '' matches everything; an empty String object is the RegExp /^$/.
+      emptyStringObject: await settle(page.waitForURL(new String(''), { timeout: 300 })),
     }`,
-    expected: { glob: { error: 'timeout' }, regexp: { error: 'timeout' } },
+    expected: {
+      glob: { error: 'timeout' },
+      regexp: { error: 'timeout' },
+      emptyStringObject: { error: 'timeout' },
+    },
   },
   {
     // The 5 s timeout only bounds a regression: each of these fails before it waits.

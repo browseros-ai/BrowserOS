@@ -254,10 +254,11 @@ export class Frame {
   }
 
   /**
-   * Waits until the frame's URL matches `url`, then until `waitUntil` (default `load`) has fired
-   * for that document, and resolves `undefined`. A URL that already matches waits only for
-   * `waitUntil`; otherwise the next navigation that matches counts, a same-document one (a hash
-   * change, `history.pushState`) included. Runs under the navigation timeout.
+   * Waits until the frame's URL matches `url`, then until `waitUntil` (default `load`) fires, and
+   * resolves `undefined`: at once if the current document already fired it, else on the next one
+   * fired, as Playwright's does. A URL that already matches goes straight to `waitUntil`;
+   * otherwise the next navigation that matches counts, a same-document one (a hash change,
+   * `history.pushState`) included. Runs under the navigation timeout.
    *
    * `url` is a glob string, where `**` crosses `/` and `{a,b}` alternates (`''` matches every
    * URL), or a `RegExp`, flags included, tested as Playwright tests it. `waitUntil` is `load`,
