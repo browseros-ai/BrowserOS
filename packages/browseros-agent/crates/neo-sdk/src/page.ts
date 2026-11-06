@@ -163,7 +163,8 @@ export class Page {
   /**
    * The main frame's {@link Frame.waitForURL}: waits until the page's URL matches `url` (a glob
    * string or a `RegExp`; a predicate function throws), then until `waitUntil` (default `load`;
-   * `networkidle` throws) fired, and resolves `undefined`.
+   * `networkidle` throws) fires, at once if the current document already fired it, and resolves
+   * `undefined`.
    */
   async waitForURL(url: URLMatch, options?: WaitForURLOptions): Promise<void> {
     return await this.#mainFrame._waitForURL('page.waitForURL', url, options)

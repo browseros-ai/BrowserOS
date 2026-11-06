@@ -152,16 +152,19 @@ describe('waitForURL', () => {
     ])
   })
 
-  test("'' and undefined match every URL, as in Playwright's urlMatches", async () => {
+  test("'' and undefined match every URL, an empty String object none, as in Playwright's urlMatches", async () => {
     const { page } = run()
     await page.waitForURL('')
     await page.waitForURL(undefined as never)
-    // A String object is a string to Playwright's `isString`.
+    // A String object is a string to Playwright's `isString`, but only the primitive `''`
+    // matches everything: `new String('')` goes on to `new RegExp('^$')`.
     await page.waitForURL(new String('**/x') as never)
+    await page.waitForURL(new String('') as never)
     expect(sent.map(({ params }) => JSON.stringify(params.url))).toEqual([
       '{"glob":""}',
       '{"glob":""}',
       '{"glob":"**/x"}',
+      '{"regexSource":"^$","regexFlags":""}',
     ])
   })
 

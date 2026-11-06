@@ -37,8 +37,9 @@ export type NeoSerializedUrlMatch =
   | { glob: string }
   | { regexSource: string; regexFlags: string }
 
-/** `neo:waitForURL`: resolves once the main frame's URL matches `url` and `waitUntil` fired for
- * that document. Rust refuses `networkidle`. */
+/** `neo:waitForURL`: once the main frame's URL has matched `url`, resolves when `waitUntil` fires,
+ * at once if the current document already fired it, as Playwright's `waitForURL` does. Rust
+ * refuses `networkidle`. */
 export type NeoWaitForURLParams = {
   url: NeoSerializedUrlMatch
   waitUntil: LifecycleEvent
@@ -64,6 +65,8 @@ export type NeoFrameCommands = {
  * Playwright's `serializeURLMatch` for `waitForURL`'s `url`, run before anything is sent: a
  * string (or `String` object, as Playwright's `isString`) is a glob and a `RegExp` its `source`
  * and `flags`. `undefined` is the `''` glob: Playwright's `urlMatches` matches every URL for both.
+ * An empty `String` object is not `''` there (`match === ''`): it becomes `new RegExp('^$')`,
+ * which no URL matches, and is sent as exactly that.
  *
  * A function is Neo's limit (DECIDED 3) and throws an `Error` prefixed with `apiName`. Any other
  * value throws Playwright's own `urlMatches` error, which no API wrapper prefixes.
@@ -72,8 +75,11 @@ export function serializeUrlMatch(
   apiName: ApiName,
   url: unknown,
 ): NeoSerializedUrlMatch {
-  if (url === undefined) return { glob: '' }
-  if (isString(url)) return { glob: url }
+  if (url === undefined || url === '') return { glob: '' }
+  if (isString(url))
+    return url.length === 0
+      ? { regexSource: '^$', regexFlags: '' }
+      : { glob: url }
   if (isRegExp(url)) return { regexSource: url.source, regexFlags: url.flags }
   if (typeof url === 'function')
     throw new Error(

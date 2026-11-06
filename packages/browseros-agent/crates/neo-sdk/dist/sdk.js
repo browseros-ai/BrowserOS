@@ -296,10 +296,10 @@ function setTestIdAttribute(attributeName) {
 
 // src/neo-commands.ts
 function serializeUrlMatch(apiName, url) {
-  if (url === undefined)
+  if (url === undefined || url === "")
     return { glob: "" };
   if (isString(url))
-    return { glob: url };
+    return url.length === 0 ? { regexSource: "^$", regexFlags: "" } : { glob: url };
   if (isRegExp(url))
     return { regexSource: url.source, regexFlags: url.flags };
   if (typeof url === "function")

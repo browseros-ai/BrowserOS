@@ -1,0 +1,8 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>committed</title>
+<script>document.addEventListener('DOMContentLoaded', () => { document.title = 'domcontentloaded' })</script>
+</head><body>
+<p>Before the script</p>
+<!-- The fixture server answers /slow late, and this script blocks the parser until it arrives, so DOMContentLoaded waits for it. -->
+<script src="/slow"></script>
+<p id="after">After the script</p>
+</body></html>

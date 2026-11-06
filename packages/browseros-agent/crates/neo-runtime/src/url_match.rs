@@ -42,6 +42,9 @@ const MEMORY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_STACK_BYTES: usize = 512 * 1024;
 /// The global the compiled `RegExp` lives under in its scratch context.
 const REGEXP_GLOBAL: &str = "regexp";
+/// How much of a pattern or URL an error message quotes: a reply and its trace record carry the
+/// message, and a script may pass a 40 KB glob or wait on a 2 MiB `data:` URL.
+const QUOTED_CHARS: usize = 200;
 
 /// Playwright's `escapedChars` (`urlMatch.ts:28`).
 const ESCAPED_CHARS: [char; 14] = [
@@ -83,15 +86,23 @@ impl UrlMatcher {
             }),
             (Some(glob), None) => Ok(Self {
                 glob: Some(glob.clone()),
-                regexp: Some(Regexp::new(&resolve_glob_to_regex_pattern(glob)?, "")?),
-            }),
-            (None, Some(source)) => Ok(Self {
-                glob: None,
                 regexp: Some(Regexp::new(
-                    source,
-                    wire.regex_flags.as_deref().unwrap_or_default(),
+                    &resolve_glob_to_regex_pattern(glob)?,
+                    "",
+                    format!("glob {}", quoted(glob)),
                 )?),
             }),
+            (None, Some(source)) => {
+                let flags = wire.regex_flags.as_deref().unwrap_or_default();
+                Ok(Self {
+                    glob: None,
+                    regexp: Some(Regexp::new(
+                        source,
+                        flags,
+                        format!("RegExp /{}/{flags}", shortened(source)),
+                    )?),
+                })
+            }
             _ => Err(PlaywrightError::error(
                 "url: expected exactly one of glob or regexSource",
             )),
@@ -131,7 +142,8 @@ impl fmt::Debug for UrlMatcher {
 
 /// One `RegExp`, compiled once in a QuickJS runtime of its own, which nothing else enters.
 struct Regexp {
-    /// `/source/flags`, for errors.
+    /// What the script passed, for errors: `glob "<glob>"` or `RegExp /<source>/<flags>`,
+    /// shortened.
     display: String,
     budget: Arc<Mutex<Budget>>,
     /// Holds the runtime alive; dropping it frees the whole runtime.
@@ -148,10 +160,10 @@ struct Budget {
 }
 
 impl Regexp {
-    fn new(source: &str, flags: &str) -> Result<Self, PlaywrightError> {
-        let display = format!("/{source}/{flags}");
+    /// Compiles `new RegExp(source, flags)`; `display` names what the script passed.
+    fn new(source: &str, flags: &str, display: String) -> Result<Self, PlaywrightError> {
         let engine = |error: rquickjs::Error| {
-            PlaywrightError::error(format!("QuickJS could not compile {display}: {error}"))
+            PlaywrightError::error(format!("url: QuickJS could not compile {display}: {error}"))
         };
         let runtime = Runtime::new().map_err(engine)?;
         runtime.set_memory_limit(MEMORY_LIMIT_BYTES);
@@ -175,7 +187,10 @@ impl Regexp {
                 ctx.globals().set(REGEXP_GLOBAL, regexp)
             })();
             compiled.catch(&ctx).map_err(|error| {
-                PlaywrightError::error(format!("Invalid RegExp {display}: {}", caught(error)))
+                PlaywrightError::error(format!(
+                    "url: {display} cannot be compiled: {}",
+                    caught(error)
+                ))
             })
         })?;
         Ok(Self {
@@ -200,14 +215,16 @@ impl Regexp {
             tested.map_err(|error| {
                 if overran {
                     PlaywrightError::error(format!(
-                        "url: {} did not finish testing {url:?} within {}ms",
+                        "url: {} did not finish testing {} within {}ms",
                         self.display,
+                        quoted(url),
                         TEST_BUDGET.as_millis(),
                     ))
                 } else {
                     PlaywrightError::error(format!(
-                        "url: {} failed on {url:?}: {}",
+                        "url: {} failed on {}: {}",
                         self.display,
+                        quoted(url),
                         caught(error),
                     ))
                 }
@@ -226,6 +243,22 @@ impl Regexp {
             overran
         })
     }
+}
+
+/// `text` cut to [`QUOTED_CHARS`] characters, with `…` when it was longer.
+fn shortened(text: &str) -> String {
+    let mut chars = text.chars();
+    let head: String = chars.by_ref().take(QUOTED_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
+/// [`shortened`] in double quotes, for a glob or a URL.
+fn quoted(text: &str) -> String {
+    format!("\"{}\"", shortened(text))
 }
 
 /// The message of a JS error caught at the context boundary.
@@ -570,8 +603,49 @@ mod tests {
     fn tests_that_an_invalid_regexp_is_an_error() {
         let error = UrlMatcher::new(&regex("(", "")).unwrap_err();
         assert_eq!(error.name, ErrorName::Error, "{}", error.message);
+        assert!(
+            error.message.starts_with("url: RegExp /(/ "),
+            "{}",
+            error.message
+        );
         let error = UrlMatcher::new(&regex("a", "gg")).unwrap_err();
         assert_eq!(error.name, ErrorName::Error, "{}", error.message);
+    }
+
+    /// QuickJS caps a pattern at 255 capture groups and a glob's every `*` is one, so this valid
+    /// glob cannot compile here (V8 takes it). The error names the script's glob, not the regex
+    /// built from it, and quotes only its start.
+    #[test]
+    fn tests_that_a_glob_error_names_the_glob_and_stays_short() {
+        let glob = "x*".repeat(300);
+        let error = UrlMatcher::new(&super::tests::glob(&glob)).unwrap_err();
+        assert_eq!(error.name, ErrorName::Error, "{}", error.message);
+        assert!(
+            error
+                .message
+                .starts_with(&format!("url: glob \"{}…\" ", &glob[..200])),
+            "{}",
+            error.message
+        );
+        assert!(!error.message.contains("RegExp"), "{}", error.message);
+        assert!(error.message.len() < 400, "{}", error.message);
+        let source = "(".repeat(1000);
+        let error = UrlMatcher::new(&regex(&source, "")).unwrap_err();
+        assert!(error.message.len() < 400, "{}", error.message);
+    }
+
+    #[test]
+    fn tests_that_a_failed_test_quotes_only_the_start_of_its_url() {
+        let matcher = UrlMatcher::new(&regex("(a+)+$", "")).unwrap();
+        let url = format!("data:text/plain,{}!", "a".repeat(10_000));
+        let error = matcher.matches(&url).unwrap_err();
+        assert!(
+            error.message.contains("did not finish"),
+            "{}",
+            error.message
+        );
+        assert!(error.message.len() < 600, "{}", error.message);
+        assert!(error.message.contains("aaa…\""), "{}", error.message);
     }
 
     #[test]
