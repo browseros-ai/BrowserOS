@@ -477,7 +477,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameIsCheckedParams,
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options ?? {}),
     )
     if (result === undefined)
       throw new Error('neo-sdk: Frame.isChecked contract error: missing result')

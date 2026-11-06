@@ -11,7 +11,7 @@ Runs one script in a fresh QuickJS realm from a starting BrowserOS tab. Its cont
 - `src/realm.rs` embeds `../neo-sdk/dist/sdk.js`; change the SDK in `neo-sdk`, rebuild it, and commit the bundle.
 
 - `src/reads.rs` is `Frame.textContent`, `Frame.innerText` and `Frame.getAttribute` (Playwright's `_waitForFunctionOnSelector` over loop A's backoff) and `Frame.ariaSnapshot` without a selector (polls `body,frameset`), over their own seam traits, tested with a scripted tab under paused time; `src/aria_yaml.rs` renders the snapshot as Playwright's YAML, pinned byte for byte by `../neo-runtime-injected/tests/aria-yaml-goldens.json`.
-- `src/states.rs` serves `isVisible` once (missing/disconnected → false) and polls `isChecked` for a match through `reads.rs`; both are reads without input delivery.
+- `src/states.rs` waits for visibility's selector context, then reads once (missing/evaluation disconnect → false); `isChecked` polls for a match through `reads.rs`. Both are reads without input delivery.
 - `src/click.rs` is `Frame.click`'s policy (Playwright's two retry loops, every call-log line) over the `Tab` seam; `src/page.rs` implements the seam over CDP, and `src/world.rs` calls the injected glue. Click policy is tested against a scripted `FakeTab` under paused time (what a click calls, in which order, and what it delivers; never log wording or retry counts); the mechanism against `tests/support/fake_browser.rs` (`tests/click_lifecycle.rs`).
 - A tab has one mouse and one hit-target slot, shared by every call and run on it. Input to a tab takes a turn (`Tab::input`, `src/page.rs` `TabInputs`, per `Runtime` and tab) from the interceptor's setup until its stop has answered, mouse writes included; never wait for an element while holding one.
 

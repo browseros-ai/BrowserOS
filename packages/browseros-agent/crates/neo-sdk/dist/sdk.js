@@ -522,7 +522,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "isChecked", pickParams(FRAME_IS_CHECKED_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options));
+    }), this._page._timeoutSettings.timeout(options ?? {}));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.isChecked contract error: missing result");
     return result.value;
