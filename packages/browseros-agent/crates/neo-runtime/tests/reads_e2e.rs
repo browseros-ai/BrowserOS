@@ -423,3 +423,47 @@ async fn tests_that_a_lone_surrogate_reads_as_a_replacement_character() {
     );
     tab.close().await;
 }
+
+/// A lone surrogate inside a thrown page error or a click's element preview reaches Rust
+/// well-formed too (`neo-runtime-injected/src/well-formed.ts`), so a strict mode violation that
+/// lists the element fails at once and a click on it goes through.
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_a_lone_surrogate_in_an_error_or_a_click_preview_does_not_hang() {
+    let Some(tab) = open().await else { return };
+    tab.evaluate(
+        "document.body.innerHTML = '<ul><li>Apples</li><li id=\"b\">x</li></ul>'; \
+         window.__clicks = 0; const b = document.getElementById('b'); \
+         b.textContent = 'Pe\\ud800ars'; b.onclick = () => window.__clicks++",
+    )
+    .await;
+    let outcome = run(
+        &tab,
+        &format!(
+            "const caught = {CAUGHT};
+             const started = Date.now();
+             const strict = await page.locator('li').textContent({{ timeout: 3000 }}).catch(caught);
+             const strictMs = Date.now() - started;
+             await page.locator('#b').click({{ timeout: 3000 }});
+             return {{ strict, strictMs, text: await page.locator('#b').textContent() }};"
+        ),
+    )
+    .await;
+    let result = value(&outcome);
+    assert_eq!(result["strict"]["name"], "Error", "{result}");
+    let message = result["strict"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("strict mode violation") && message.contains("Pe\u{fffd}ars"),
+        "{message}"
+    );
+    assert!(
+        result["strictMs"].as_f64().is_some_and(|ms| ms < 2000.0),
+        "at once, not at the timeout: {result}"
+    );
+    assert_eq!(result["text"], "Pe\u{fffd}ars");
+    assert_eq!(
+        tab.evaluate("window.__clicks").await,
+        1,
+        "the click reached #b"
+    );
+    tab.close().await;
+}

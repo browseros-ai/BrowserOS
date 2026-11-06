@@ -8936,13 +8936,8 @@ function query(injected, selector, strict, { markTargets = "none" } = {}) {
     throw injected.strictModeViolationError(parsed, elements);
   return elements;
 }
-function wellFormed(value) {
-  if (typeof value === "string")
-    return value.toWellFormed();
-  return JSON.parse(JSON.stringify(value, (_key, item) => typeof item === "string" ? item.toWellFormed() : item));
-}
 var glue = {
-  title: () => ({ value: wellFormed(document.title) }),
+  title: () => ({ value: document.title }),
   textContent: (injected, { selector, strict }) => {
     const [element] = query(injected, selector, strict, {
       markTargets: "first"
@@ -8951,8 +8946,8 @@ var glue = {
       return {};
     return {
       matched: {
-        value: wellFormed(element.textContent),
-        preview: wellFormed(injected.previewNode(element))
+        value: element.textContent,
+        preview: injected.previewNode(element)
       }
     };
   },
@@ -8962,7 +8957,7 @@ var glue = {
       return {};
     const { json, iframeRefs, iframeDepths } = injected.ariaSnapshotJSON(element, { mode, depth, boxes });
     const iframes = iframeRefs.filter((ref) => (ref in iframeDepths)).map((ref) => ({ ref, depth: iframeDepths[ref] }));
-    return { snapshot: { nodes: wellFormed(json), iframes } };
+    return { snapshot: { nodes: json, iframes } };
   },
   frameOwner: (injected, { selector, strict }) => {
     const elements = query(injected, selector, strict);
@@ -9009,6 +9004,44 @@ var glue = {
   })
 };
 
+// src/well-formed.ts
+function wellFormedCall(run) {
+  let result;
+  try {
+    result = run();
+  } catch (error) {
+    throw wellFormedError(error);
+  }
+  if (result instanceof Promise) {
+    return result.then(wellFormedResult, (error) => {
+      throw wellFormedError(error);
+    });
+  }
+  return wellFormedResult(result);
+}
+function wellFormedResult(value) {
+  if (typeof value === "string")
+    return value.toWellFormed();
+  if (Array.isArray(value))
+    return value.map(wellFormedResult);
+  if (!isPlainData(value))
+    return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, wellFormedResult(item)]));
+}
+function isPlainData(value) {
+  return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype && !Object.values(value).some((item) => typeof item === "function");
+}
+function wellFormedError(error) {
+  if (typeof error === "string")
+    return error.toWellFormed();
+  if (error instanceof Error) {
+    error.message = error.message.toWellFormed();
+    if (typeof error.stack === "string")
+      error.stack = error.stack.toWellFormed();
+  }
+  return error;
+}
+
 // src/world-key.ts
 var WORLD_KEY = "__neo_injected__";
 
@@ -9036,7 +9069,7 @@ function install(key, specSha256, initializer) {
   const table = glue;
   const object = Object.fromEntries(Object.entries(table).map(([name, fn]) => [
     name,
-    (params, ...handles) => fn(injected, params, ...handles)
+    (params, ...handles) => wellFormedCall(() => fn(injected, params, ...handles))
   ]));
   store[key] = object;
   return object;

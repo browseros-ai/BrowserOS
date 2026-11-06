@@ -32,9 +32,9 @@
 //! serves the main frame only: an iframe's node renders as the page gave it, without the iframe's
 //! document, which is what Playwright prints when it cannot read that document.
 //!
-//! Neo-only: a lone surrogate in what a read returns (a truncated emoji) reads as U+FFFD, which
-//! the glue substitutes; Rust strings are UTF-8, and a CDP reply escaping one would be dropped.
-//! Playwright returns it unchanged.
+//! Neo-only: a lone surrogate (a truncated emoji) in any page call's answer or thrown message
+//! reads as U+FFFD (`neo-runtime-injected/src/well-formed.ts`); Rust strings are UTF-8, and a CDP
+//! reply escaping one would be dropped. Playwright returns it unchanged.
 //!
 //! A tree nested deeper than about 60 aria levels never arrives: browseros-cdp parses every CDP
 //! reply with `serde_json`'s 128-level limit and drops one it cannot parse, so the snapshot ends at

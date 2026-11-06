@@ -64,24 +64,8 @@ function query(
   return elements
 }
 
-/**
- * `value` with every lone surrogate replaced by U+FFFD, strings inside objects and arrays
- * included. Neo-only, for the reads that return page text: Rust holds strings as UTF-8, and
- * browseros-cdp drops a CDP reply whose JSON escapes a lone surrogate, so one truncated emoji in
- * the page would otherwise leave the read waiting until its timeout. Playwright returns the lone
- * surrogate unchanged.
- */
-function wellFormed<T>(value: T): T {
-  if (typeof value === 'string') return value.toWellFormed() as T
-  return JSON.parse(
-    JSON.stringify(value, (_key, item) =>
-      typeof item === 'string' ? item.toWellFormed() : item,
-    ),
-  )
-}
-
 export const glue = {
-  title: () => ({ value: wellFormed(document.title) }),
+  title: () => ({ value: document.title }),
 
   textContent: (injected, { selector, strict }) => {
     const [element] = query(injected, selector, strict, {
@@ -90,8 +74,8 @@ export const glue = {
     if (!element) return {}
     return {
       matched: {
-        value: wellFormed(element.textContent),
-        preview: wellFormed(injected.previewNode(element)),
+        value: element.textContent,
+        preview: injected.previewNode(element),
       },
     }
   },
@@ -106,7 +90,7 @@ export const glue = {
     const iframes = iframeRefs
       .filter((ref) => ref in iframeDepths)
       .map((ref) => ({ ref, depth: iframeDepths[ref] }))
-    return { snapshot: { nodes: wellFormed(json), iframes } }
+    return { snapshot: { nodes: json, iframes } }
   },
 
   frameOwner: (injected, { selector, strict }) => {
