@@ -420,11 +420,18 @@ function convertSelectOptionValues(values) {
     if (values[i] === null)
       throw new Error(`options[${i}]: expected object, got null`);
   }
-  if (isString(values[0]))
-    return {
-      options: values.map((valueOrLabel) => ({ valueOrLabel }))
-    };
-  return { options: values };
+  const options = isString(values[0]) ? values.map((valueOrLabel) => ({ valueOrLabel })) : values;
+  for (const [index, option] of options.entries()) {
+    if (typeof option !== "object" || option === null)
+      throw new Error(`options[${index}]: expected object`);
+    for (const field of ["valueOrLabel", "value", "label"]) {
+      if (option[field] !== undefined && typeof option[field] !== "string")
+        throw new Error(`options[${index}].${field}: expected string`);
+    }
+    if (option.index !== undefined && !Number.isInteger(option.index))
+      throw new Error(`options[${index}].index: expected integer`);
+  }
+  return { options };
 }
 
 // src/frame.ts
@@ -457,7 +464,7 @@ class Frame {
       selector,
       value,
       ...options
-    }), this._page._timeoutSettings.timeout(options));
+    }), this._page._timeoutSettings.timeout(options ?? {}));
   }
   async press(selector, key, options = {}) {
     return await this._press("frame.press", selector, key, options);
@@ -467,7 +474,7 @@ class Frame {
       selector,
       key,
       ...options
-    }), this._page._timeoutSettings.timeout(options));
+    }), this._page._timeoutSettings.timeout(options ?? {}));
   }
   async inputValue(selector, options = {}) {
     return await this._inputValue("frame.inputValue", selector, options);
@@ -476,7 +483,7 @@ class Frame {
     const result = await this._connection.send(apiName, this._guid, "inputValue", pickParams(FRAME_INPUT_VALUE_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options));
+    }), this._page._timeoutSettings.timeout(options ?? {}));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.inputValue contract error: missing result");
     return result.value;
@@ -488,7 +495,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "check", pickParams(FRAME_CHECK_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options));
+    }), this._page._timeoutSettings.timeout(options ?? {}));
   }
   async uncheck(selector, options = {}) {
     return await this._uncheck("frame.uncheck", selector, options);
@@ -497,7 +504,7 @@ class Frame {
     await this._connection.send(apiName, this._guid, "uncheck", pickParams(FRAME_UNCHECK_KEYS, {
       selector,
       ...options
-    }), this._page._timeoutSettings.timeout(options));
+    }), this._page._timeoutSettings.timeout(options ?? {}));
   }
   async selectOption(selector, values, options = {}) {
     return await this._selectOption("frame.selectOption", selector, values, options);
@@ -507,7 +514,7 @@ class Frame {
       selector,
       ...convertSelectOptionValues(values),
       ...options
-    }), this._page._timeoutSettings.timeout(options));
+    }), this._page._timeoutSettings.timeout(options ?? {}));
     if (result === undefined)
       throw new Error("neo-sdk: Frame.selectOption contract error: missing result");
     return result.values;

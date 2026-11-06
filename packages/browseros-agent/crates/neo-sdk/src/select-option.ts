@@ -23,9 +23,18 @@ export function convertSelectOptionValues(
     if (values[i] === null)
       throw new Error(`options[${i}]: expected object, got null`)
   }
-  if (isString(values[0]))
-    return {
-      options: (values as string[]).map((valueOrLabel) => ({ valueOrLabel })),
+  const options: SelectOption[] = isString(values[0])
+    ? (values as string[]).map((valueOrLabel) => ({ valueOrLabel }))
+    : (values as SelectOption[])
+  for (const [index, option] of options.entries()) {
+    if (typeof option !== 'object' || option === null)
+      throw new Error(`options[${index}]: expected object`)
+    for (const field of ['valueOrLabel', 'value', 'label'] as const) {
+      if (option[field] !== undefined && typeof option[field] !== 'string')
+        throw new Error(`options[${index}].${field}: expected string`)
     }
-  return { options: values as SelectOption[] }
+    if (option.index !== undefined && !Number.isInteger(option.index))
+      throw new Error(`options[${index}].index: expected integer`)
+  }
+  return { options }
 }

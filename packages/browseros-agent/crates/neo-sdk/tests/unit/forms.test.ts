@@ -89,6 +89,73 @@ test('tests that missing inputValue and selectOption results are contract errors
   )
 })
 
+test('tests that invalid select fields reject before sending anything', async () => {
+  const connection = new Connection(0)
+  let calls = 0
+  connection.send = async () => {
+    calls++
+    return { values: ['unexpected'] } as never
+  }
+  const page = new Page(
+    'page@T',
+    'frame@T',
+    '',
+    new BrowserContext(),
+    connection,
+  )
+  for (const value of [
+    { index: NaN },
+    { index: Infinity },
+    { index: -Infinity },
+    { index: null },
+    { index: 1.5 },
+    { index: 'one' },
+    { label: null },
+    { label: 1 },
+    { value: null },
+    { value: false },
+    { valueOrLabel: null },
+    { valueOrLabel: 1 },
+  ]) {
+    await expect(
+      page.locator('select').selectOption(value as never),
+    ).rejects.toThrow()
+  }
+  expect(calls).toBe(0)
+})
+
+test('tests that Page and Frame forms accept null options with the default timeout', async () => {
+  const connection = new Connection(0)
+  const timeouts: number[] = []
+  connection.send = async (...args) => {
+    timeouts.push(args[4])
+    if (args[2] === 'inputValue') return { value: 'text' }
+    if (args[2] === 'selectOption') return { values: ['one'] }
+    return undefined
+  }
+  const page = new Page(
+    'page@T',
+    'frame@T',
+    '',
+    new BrowserContext(),
+    connection,
+  )
+  page.setDefaultTimeout(123)
+  for (const target of [page, page.mainFrame()]) {
+    await target.fill('input', 'text', null as never)
+    await target.press('input', 'Enter', null as never)
+    expect(await target.inputValue('input', null as never)).toBe('text')
+    await target.check('input', null as never)
+    await target.uncheck('input', null as never)
+    await target.setChecked('input', true, null as never)
+    await target.setChecked('input', false, null as never)
+    expect(await target.selectOption('select', 'one', null as never)).toEqual([
+      'one',
+    ])
+  }
+  expect(timeouts).toEqual(Array(16).fill(123))
+})
+
 test('tests that forms send the outer API name, strictness and timeout and unwrap results', async () => {
   const connection = new Connection(0)
   const calls: Parameters<Connection['send']>[] = []

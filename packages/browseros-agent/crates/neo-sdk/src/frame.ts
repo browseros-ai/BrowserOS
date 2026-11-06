@@ -132,7 +132,7 @@ export class Frame {
         value,
         ...options,
       }) as FrameFillParams,
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options ?? {}),
     )
   }
 
@@ -160,7 +160,7 @@ export class Frame {
         key,
         ...options,
       }) as FramePressParams,
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options ?? {}),
     )
   }
 
@@ -185,7 +185,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameInputValueParams,
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options ?? {}),
     )
     if (result === undefined)
       throw new Error(
@@ -212,7 +212,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameCheckParams,
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options ?? {}),
     )
   }
 
@@ -234,7 +234,7 @@ export class Frame {
         selector,
         ...options,
       }) as FrameUncheckParams,
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options ?? {}),
     )
   }
 
@@ -267,7 +267,7 @@ export class Frame {
         ...convertSelectOptionValues(values),
         ...options,
       }) as FrameSelectOptionParams,
-      this._page._timeoutSettings.timeout(options),
+      this._page._timeoutSettings.timeout(options ?? {}),
     )
     if (result === undefined)
       throw new Error(
