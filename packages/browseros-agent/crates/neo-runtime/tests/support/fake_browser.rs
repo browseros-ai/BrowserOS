@@ -202,6 +202,10 @@ struct Interceptor {
 }
 
 impl FakeBrowser {
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "the fake owns its replies and copies them into every connection it serves"
+    )]
     pub async fn start(replies: Replies) -> Self {
         let exchanges = Arc::new(Mutex::new(Vec::new()));
         let page = Arc::new(Mutex::new(Page::default()));
@@ -360,6 +364,10 @@ impl Calls {
 
 /// Serves one CDP connection. Answers go out through one writer task, so an answer held back
 /// for a while never delays the ones after it.
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "each connection's task owns its copy of the fake's replies"
+)]
 async fn serve_cdp(
     stream: TcpStream,
     replies: Replies,
@@ -426,29 +434,9 @@ async fn serve_cdp(
             let _ = outgoing.send(detached.to_string());
             (Value::Null, None)
         } else {
-            answer(&command, replies, &mut calls, &page)
+            answer(&command, &replies, &mut calls, &page)
         };
-        if command["method"] == "Page.setLifecycleEventsEnabled" {
-            for name in ["init", "DOMContentLoaded", "load"] {
-                let _ = outgoing.send(
-                    json!({"sessionId":session,"method":"Page.lifecycleEvent",
-                    "params":{"frameId":PAGE,"loaderId":"initial","name":name}})
-                    .to_string(),
-                );
-            }
-        }
-        commit_during_call(&command, replies, &mut calls, &outgoing);
-        if command["method"] == "Page.navigate"
-            && let Some(script) = replies.navigation
-        {
-            tasks.spawn(emit_navigation(
-                outgoing.clone(),
-                session,
-                command["params"]["url"].clone(),
-                script,
-                Arc::clone(&page),
-            ));
-        }
+        navigation_events(&command, &replies, &mut calls, &outgoing, &page, &mut tasks);
         let Some(delay) = when else {
             continue;
         };
@@ -475,9 +463,46 @@ async fn serve_cdp(
     }
 }
 
+/// The navigation fakes' events for `command`: the lifecycle replay `setLifecycleEventsEnabled`
+/// triggers, a commit injected during a scripted call, and a scripted navigation's events.
+fn navigation_events(
+    command: &Value,
+    replies: &Replies,
+    calls: &mut Calls,
+    outgoing: &UnboundedSender<String>,
+    page: &Arc<Mutex<Page>>,
+    tasks: &mut JoinSet<()>,
+) {
+    let session = command["sessionId"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    if command["method"] == "Page.setLifecycleEventsEnabled" {
+        for name in ["init", "DOMContentLoaded", "load"] {
+            let _ = outgoing.send(
+                json!({"sessionId":session,"method":"Page.lifecycleEvent",
+                "params":{"frameId":PAGE,"loaderId":"initial","name":name}})
+                .to_string(),
+            );
+        }
+    }
+    commit_during_call(command, replies, calls, outgoing);
+    if command["method"] == "Page.navigate"
+        && let Some(script) = replies.navigation
+    {
+        tasks.spawn(emit_navigation(
+            outgoing.clone(),
+            session,
+            command["params"]["url"].clone(),
+            script,
+            Arc::clone(page),
+        ));
+    }
+}
+
 fn commit_during_call(
     command: &Value,
-    replies: Replies,
+    replies: &Replies,
     calls: &mut Calls,
     outgoing: &UnboundedSender<String>,
 ) {
@@ -584,7 +609,7 @@ fn bring_to_front(command: &Value, calls: &Calls, page: &Mutex<Page>) -> Value {
 /// The fake's answer to `command`, and when to send it.
 fn answer(
     command: &Value,
-    replies: Replies,
+    replies: &Replies,
     calls: &mut Calls,
     page: &Mutex<Page>,
 ) -> (Value, Option<Duration>) {
@@ -689,7 +714,7 @@ fn answer(
     }
 }
 
-fn glue_delay(params: &Value, calls: &mut Calls, replies: Replies) -> Option<Duration> {
+fn glue_delay(params: &Value, calls: &mut Calls, replies: &Replies) -> Option<Duration> {
     let (counter, reply) = match params["arguments"][0]["value"].as_str() {
         Some("setupHitTargetInterceptor") => (&mut calls.arm, replies.arm),
         Some("title") => (&mut calls.title, replies.title),
@@ -703,7 +728,7 @@ fn glue_delay(params: &Value, calls: &mut Calls, replies: Replies) -> Option<Dur
 /// A new target's initial history can lag its tab-strip record.
 fn navigation_history(
     command: &Value,
-    replies: Replies,
+    replies: &Replies,
     calls: &mut Calls,
     page: &Mutex<Page>,
 ) -> (Value, Option<Duration>) {
@@ -734,7 +759,7 @@ fn navigation_history(
 /// Tab-strip commands share one browser state across all sessions and connections.
 fn tab_command(
     command: &Value,
-    replies: Replies,
+    replies: &Replies,
     page: &Mutex<Page>,
 ) -> Option<(Value, Option<Duration>)> {
     let now = Some(Duration::ZERO);
