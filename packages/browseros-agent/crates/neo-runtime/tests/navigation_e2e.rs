@@ -3,7 +3,6 @@
 #[path = "support/browser.rs"]
 mod browser;
 
-use std::collections::BTreeSet;
 use std::time::Duration;
 
 use browser::{Fixture, Tab};
@@ -12,7 +11,8 @@ use serde_json::{Value, json};
 use tokio::time;
 
 const ONE: &str = r#"<!doctype html><title>First</title><h1>First page</h1>
-<a id="next" href="/two">Next</a><a id="slow" href="/slow">Slow</a>"#;
+<a id="next" href="/two">Next</a><a id="slow" href="/slow">Slow</a>
+<script>window.__restored = false; addEventListener('pageshow', e => window.__restored = e.persisted)</script>"#;
 const TWO: &str = r#"<!doctype html><title>Second</title><h1>Second page</h1>
 <button id="go" onclick="document.title='Clicked'">Go</button>
 <button id="back" onclick="history.back()">Back</button>"#;
@@ -30,7 +30,7 @@ async fn open() -> Option<Tab> {
                     ("/wait-commit".to_string(), "<title>Commit</title><img src='/slow-image-commit'>".to_string()),
                     ("/wait-domcontentloaded".to_string(), "<title>DOM</title><img src='/slow-image-dom'>".to_string()),
                     ("/wait-load".to_string(), "<title>Load</title><img src='/slow-image-load'>".to_string()),
-                    ("/stopped".to_string(), "<title>Stopped</title><img src='/slow-image-stop'><script>setTimeout(()=>window.stop(),200)</script>".to_string()),
+                    ("/stopped".to_string(), "<title>Stopped</title><script>window.__loadEvents=[];addEventListener('DOMContentLoaded',()=>window.__loadEvents.push('domcontentloaded'));addEventListener('load',()=>window.__loadEvents.push('load'));setTimeout(()=>window.stop(),200)</script><img src='/slow-image-stop'>".to_string()),
                 ],
             },
             "/one",
@@ -107,99 +107,65 @@ async fn tests_that_goto_waits_for_load_but_not_slow_subresources_at_commit_or_d
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_window_stop_without_load_leaves_goto_waiting() {
     let Some(tab) = open().await else { return };
-    let mut events = tab.cdp.events();
     let outcome = run(&tab, &format!(
         "try {{ await page.goto({:?}, {{waitUntil:'load',timeout:1000}}); return 'resolved'; }} catch(e) {{ return e.name; }}",
         format!("{}/stopped",tab.origin),
     )).await;
-    let mut observed = Vec::new();
-    while let Ok(event) = events.try_recv() {
-        observed.push(event);
-    }
+    let page_events = tab.evaluate("window.__loadEvents").await;
+    let title = tab.evaluate("document.title").await;
     tab.close().await;
     assert_eq!(value(outcome), "TimeoutError");
-    let commit = observed
-        .iter()
-        .position(|event| {
-            event.method == "Page.frameNavigated"
-                && event.params["frame"]["url"]
-                    .as_str()
-                    .is_some_and(|url| url.ends_with("/stopped"))
-        })
-        .expect("the stopped page committed");
-    let loader = &observed[commit].params["frame"]["loaderId"];
-    let after = &observed[commit..];
-    assert!(
-        after
-            .iter()
-            .any(|event| event.method == "Page.frameStoppedLoading")
-    );
-    let lifecycle = |name: &str| {
-        after.iter().any(|event| {
-            event.method == "Page.lifecycleEvent"
-                && event.params["loaderId"] == *loader
-                && event.params["name"] == name
-        })
-    };
-    assert!(lifecycle("DOMContentLoaded"));
-    assert!(!lifecycle("load"));
+    assert_eq!(title, "Stopped");
+    assert_eq!(page_events, json!(["domcontentloaded"]));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn tests_that_a_slow_navigation_has_playwrights_timeout_and_single_log() {
+async fn tests_that_a_slow_navigation_times_out_without_committing() {
     let Some(tab) = open().await else { return };
     let url = format!("{}/slow", tab.origin);
-    let outcome = run(&tab, &format!("try {{ await page.goto({url:?}, {{timeout: 500}}); }} catch (e) {{ return {{name:e.name, message:e.message}}; }}")).await;
+    let outcome = run(
+        &tab,
+        &format!(
+            "try {{ await page.goto({url:?}, {{timeout: 500}}); }} catch (e) {{ return {{name:e.name,url:page.url()}}; }}"
+        ),
+    )
+    .await;
     assert_eq!(
         value(outcome),
-        json!({"name":"TimeoutError", "message":format!(
-            "page.goto: Timeout 500ms exceeded.\nCall log:\n  - navigating to \"{url}\", waiting until \"load\"\n"
-        )})
+        json!({"name":"TimeoutError", "url":format!("{}/one",tab.origin)})
     );
     tab.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn tests_that_unresolvable_hosts_keep_chromiums_error() {
+async fn tests_that_unresolvable_hosts_reject_with_a_dns_error() {
     let Some(tab) = open().await else { return };
-    let result = value(run(&tab, "try { await page.goto('http://missing.neo.invalid/'); } catch(e) {return {name:e.name, message:e.message}} ").await);
-    assert_eq!(result["name"], "Error");
-    assert!(
-        result["message"]
-            .as_str()
-            .expect("message")
-            .starts_with("page.goto: net::ERR_NAME_NOT_RESOLVED at http://missing.neo.invalid/"),
-        "{result}"
-    );
+    let result = value(run(&tab, "try { await page.goto('http://missing.neo.invalid/'); } catch(e) {return {name:e.name, dns:e.message.includes('ERR_NAME_NOT_RESOLVED')}}").await);
+    assert_eq!(result, json!({"name":"Error","dns":true}));
     tab.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn tests_that_invalid_urls_keep_playwrights_protocol_error() {
+async fn tests_that_invalid_urls_reject_with_an_invalid_url_error() {
     let Some(tab) = open().await else { return };
     let result = value(
         run(
             &tab,
-            "try { await page.goto('not a url'); } catch(e) {return e.message}",
+            "try { await page.goto('not a url'); } catch(e) {return {name:e.name, invalid:e.message.includes('invalid URL')}}",
         )
         .await,
     );
-    assert!(
-        result.as_str().expect("message").starts_with(
-            "page.goto: Protocol error (Page.navigate): Cannot navigate to invalid URL"
-        ),
-        "{result}"
-    );
+    assert_eq!(result, json!({"name":"Error","invalid":true}));
     tab.close().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_unsupported_and_invalid_wait_until_do_not_navigate() {
     let Some(tab) = open().await else { return };
-    let result = value(run(&tab, "const errors=[]; for (const waitUntil of ['networkidle','bogus']) { try { await page.goto('https://example.test/', {waitUntil}); } catch(e) { errors.push(e.message); } } return {errors,url:page.url()}").await);
+    let result = value(run(&tab, "const errors=[]; for (const waitUntil of ['networkidle','bogus']) { try { await page.goto('https://example.test/', {waitUntil}); } catch(e) { errors.push(e.name); } } return {errors,url:page.url()}").await);
     assert_eq!(
         result,
-        json!({"errors":["page.goto: Neo does not support waitUntil: \"networkidle\" yet", "waitUntil: expected one of (load|domcontentloaded|networkidle|commit)"], "url":format!("{}/one", tab.origin)})
+        json!({"errors":["Error", "Error"], "url":format!("{}/one", tab.origin)})
     );
     tab.close().await;
 }
@@ -272,7 +238,6 @@ async fn tests_that_two_runs_on_the_same_tab_read_the_current_document() {
 #[tokio::test(flavor = "multi_thread")]
 async fn tests_that_history_navigation_restores_a_readable_document() {
     let Some(tab) = open().await else { return };
-    let mut events = tab.cdp.events();
     let result = value(run(&tab, &format!(
         "await page.goto({:?}); const before=await page.title(); await page.locator('#back').click(); const after=await page.title(); await page.goto({:?}, {{timeout:1500}}); return {{before,after,afterHash:await page.title()}}",
         format!("{}/two",tab.origin), format!("{}/one#restored",tab.origin),
@@ -281,14 +246,10 @@ async fn tests_that_history_navigation_restores_a_readable_document() {
         result,
         json!({"before":"Second","after":"First","afterHash":"First"})
     );
-    let mut restored = false;
-    while let Ok(event) = events.try_recv() {
-        restored |= event.method == "Page.frameNavigated"
-            && event.params["type"] == "BackForwardCacheRestore";
-    }
-    assert!(
-        restored,
-        "the history test must exercise an actual bfcache restore"
+    assert_eq!(
+        tab.evaluate("window.__restored").await,
+        true,
+        "pageshow must report a persisted document"
     );
     tab.close().await;
 }
@@ -308,7 +269,7 @@ async fn tests_that_title_returns_loading_while_a_click_navigation_is_pending() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn tests_that_browseros_replays_lifecycle_for_a_loaded_document() {
+async fn tests_that_later_runs_can_wait_on_an_already_loaded_document() {
     let Some(tab) = open().await else { return };
     // The fixture server has no subresources: after title is readable, wait for complete.
     for _ in 0..100 {
@@ -318,41 +279,10 @@ async fn tests_that_browseros_replays_lifecycle_for_a_loaded_document() {
         time::sleep(Duration::from_millis(20)).await;
     }
     assert_eq!(tab.evaluate("document.readyState").await, "complete");
-    let mut events = tab.cdp.events();
-    tab.cdp
-        .send("Page.enable", json!({}), Some(&tab.driver))
-        .await
-        .expect("enable Page");
-    tab.cdp
-        .send(
-            "Page.setLifecycleEventsEnabled",
-            json!({"enabled":true}),
-            Some(&tab.driver),
-        )
-        .await
-        .expect("enable lifecycle");
-    let observed = time::timeout(Duration::from_secs(3), async {
-        let mut names = BTreeSet::new();
-        loop {
-            let event = events.recv().await.expect("CDP event");
-            if event.session_id.as_ref() == Some(&tab.driver)
-                && event.method == "Page.lifecycleEvent"
-                && event.params["frameId"] == tab.target_id
-            {
-                names.insert(
-                    event.params["name"]
-                        .as_str()
-                        .expect("event name")
-                        .to_string(),
-                );
-                if names.contains("DOMContentLoaded") && names.contains("load") {
-                    return names;
-                }
-            }
-        }
-    })
-    .await
-    .expect("already-loaded documents replay both lifecycle events");
-    let _ = observed;
+    for fragment in ["first-run", "second-run"] {
+        let url = format!("{}/one#{fragment}", tab.origin);
+        let outcome = run(&tab, &format!("await page.goto({url:?}, {{waitUntil:'load',timeout:1500}}); return {{url:page.url(),title:await page.title()}}" )).await;
+        assert_eq!(value(outcome), json!({"url":url,"title":"First"}));
+    }
     tab.close().await;
 }

@@ -135,6 +135,7 @@ pub struct FakeBrowser {
 /// The page's own state, shared by every connection, as one tab is.
 #[derive(Default)]
 struct Page {
+    url: Option<String>,
     /// The injected script's single hit-target interceptor slot, as Playwright keeps it: a setup
     /// replaces it, and a stop clears it only while it still holds the stopped interceptor.
     /// Releasing an object group leaves it alone.
@@ -283,6 +284,8 @@ struct Calls {
     title: usize,
     world: usize,
     committed: bool,
+    /// Which document the current utility world belongs to, for stale-read behavior tests.
+    world_document: bool,
     /// Whether `install.js` ran, so a later `attach.js` finds the glue.
     installed: bool,
     /// Sessions whose tab closed under them (`Replies::closes_at_page_enable`).
@@ -377,6 +380,7 @@ async fn serve_cdp(
                 session,
                 command["params"]["url"].clone(),
                 script,
+                Arc::clone(&page),
             ));
         }
         let Some(delay) = when else {
@@ -435,8 +439,10 @@ async fn emit_navigation(
     session: String,
     url: Value,
     script: NavigationScript,
+    page: Arc<Mutex<Page>>,
 ) {
     time::sleep(script.commit_after).await;
+    lock(&page).url = url.as_str().map(str::to_string);
     let (method, params) = if script.same_document {
         (
             "Page.navigatedWithinDocument",
@@ -494,7 +500,7 @@ fn answer(
             calls.history += 1;
             (
                 json!({
-                    "result": { "currentIndex": 0, "entries": [{ "id": 1, "url": PAGE_URL }] },
+                    "result": { "currentIndex": 0, "entries": [{ "id": 1, "url": lock(page).url.as_deref().unwrap_or(PAGE_URL) }] },
                 }),
                 replies.history.when(call),
             )
@@ -520,6 +526,7 @@ fn answer(
         "Page.createIsolatedWorld" => {
             let call = calls.world;
             calls.world += 1;
+            calls.world_document = calls.committed;
             (
                 json!({ "result": { "executionContextId": 7 } }),
                 replies.world.when(call),
@@ -597,7 +604,7 @@ fn call_function_on(params: &Value, calls: &mut Calls, page: &Mutex<Page>) -> Va
     let name = params["arguments"][0]["value"].as_str().unwrap_or_default();
     let glue_params = &params["arguments"][1]["value"];
     let value = match name {
-        "title" => json!({"value":if calls.committed { "After commit" } else { "Fake page" }}),
+        "title" => json!({"value":if calls.world_document { "After commit" } else { "Fake page" }}),
         "describeSelector" => json!({ "locator": glue_params["selector"] }),
         "checkElementStates" | "scrollIntoView" => json!({}),
         "viewportSize" => json!({ "width": 800, "height": 600 }),
