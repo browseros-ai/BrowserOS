@@ -18,7 +18,7 @@ struct FirstWriteFails {
 }
 
 impl TabScript for FirstWriteFails {
-    fn probe(&self, request: &Value) -> ProbeAnswer {
+    fn probe(&self, _frame: &str, request: &Value) -> ProbeAnswer {
         if request["op"] != "setContent" {
             return ProbeAnswer::empty_sweep();
         }

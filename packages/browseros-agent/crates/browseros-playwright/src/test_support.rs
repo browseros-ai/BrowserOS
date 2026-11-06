@@ -12,7 +12,7 @@ pub(crate) mod fixture_server;
 use std::env;
 use std::error::Error;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -327,8 +327,34 @@ impl ProbeAnswer {
 
 /// How a test's [`ScriptedTab`] answers the probe.
 pub(crate) trait TabScript: Send + Sync + 'static {
-    /// The answer to `request`, one probe request as the crate encoded it (`{"op": ...}`).
-    fn probe(&self, request: &Value) -> ProbeAnswer;
+    /// The answer to `request`, one probe request as the crate encoded it (`{"op": ...}`), in
+    /// the world of `frame`: [`SCRIPTED_MAIN`], or [`SCRIPTED_CHILD`] or [`SCRIPTED_OOPIF`]
+    /// when the tab has it.
+    fn probe(&self, frame: &str, request: &Value) -> ProbeAnswer;
+
+    /// Whether the main frame holds [`SCRIPTED_CHILD`], a frame of its site in its process.
+    fn child(&self) -> bool {
+        false
+    }
+
+    /// Whether the main frame holds [`SCRIPTED_OOPIF`], a frame of its site in a process of its
+    /// own, which the browser lists as a target of its own.
+    fn oopif(&self) -> bool {
+        false
+    }
+
+    /// How long the tab takes to answer `method`, any command but a probe request: a renderer
+    /// slow to scan a new world's document, say.
+    fn delay(&self, _method: &str) -> Duration {
+        Duration::ZERO
+    }
+
+    /// Whether the tab answers this `method` only after the CDP client gave up on it: the call
+    /// then fails as the client fails it, `CdpError::Timeout` once [`client_timeout`] passed,
+    /// and the late answer reaches no one. Asked once for every command.
+    fn outlasts_client(&self, _method: &str) -> bool {
+        false
+    }
 
     /// Whether the tab's main frame has left for a document no world can be made in yet: an
     /// install then fails as for a frame that is gone.
@@ -337,22 +363,69 @@ pub(crate) trait TabScript: Send + Sync + 'static {
     }
 }
 
+/// The CDP client's own request timeout, browseros-cdp's default: a command unanswered by then
+/// fails `CdpError::Timeout`.
+pub(crate) fn client_timeout() -> Duration {
+    ConnectOptions::default().request_timeout
+}
+
 /// The scripted tab's target id, which is also its main frame's id.
-const SCRIPTED_TARGET: &str = "scripted-target";
+pub(crate) const SCRIPTED_MAIN: &str = "scripted-target";
+
+/// The scripted tab's child frame, on `https://a.test/child`.
+pub(crate) const SCRIPTED_CHILD: &str = "scripted-child";
+
+/// The scripted tab's out-of-process frame, on `https://pay.a.test/`: its target id, which is
+/// also its frame's id.
+pub(crate) const SCRIPTED_OOPIF: &str = "scripted-oopif";
 
 /// Numbers the scripted tabs' sessions: core serializes captures by session id across the
 /// process, so no two tabs may share one.
 static SCRIPTED_SESSIONS: AtomicU64 = AtomicU64::new(0);
 
-/// A scripted browser with one tab, tab 7 on `https://a.test/` with no child frame. It answers
-/// what admitting the tab, installing its main frame's sealed world and listing its frames and
-/// targets send, as for a page with no closed shadow root, and hands every probe request, a
-/// sweep included, to its [`TabScript`].
+/// A scripted browser with one tab, tab 7 on `https://a.test/`, and a same-site child frame in
+/// its process, or one in a process of its own, when the script asks for one. It answers what
+/// admitting the tab, attaching its out-of-process frame, installing a frame's sealed world and
+/// listing its frames and targets send, as for a page with no closed shadow root, and hands
+/// every probe request, a sweep included, to its [`TabScript`].
 pub(crate) struct ScriptedTab<S> {
     script: S,
     session: String,
+    /// `Browser.createTab` opened tab 9, which `Browser.getTabs` lists from then on.
+    created: AtomicBool,
+    /// Commands the script slowed ([`TabScript::delay`]) and that have not been answered or
+    /// dropped yet.
+    slowed: AtomicUsize,
+    /// Every command sent, by method, in order.
+    sent: Mutex<Vec<String>>,
     events: broadcast::Sender<CdpEvent>,
     targeted: TargetedEvents,
+}
+
+/// The tab `Browser.createTab` opens on a [`ScriptedTab`]: tab 9, in the background.
+pub(crate) const SCRIPTED_NEW: &str = "scripted-new";
+
+/// [`SCRIPTED_NEW`]'s tab, as the browser describes it.
+fn created_tab() -> Value {
+    json!({ "tabId": 9, "targetId": SCRIPTED_NEW, "windowId": 1, "url": "about:blank",
+        "title": "", "isActive": false, "isLoading": false, "loadProgress": 1.0,
+        "isPinned": false, "isHidden": false })
+}
+
+/// One slowed command in flight: counted while it waits, uncounted when answered or dropped.
+struct Slowed<'a>(&'a AtomicUsize);
+
+impl<'a> Slowed<'a> {
+    fn new(count: &'a AtomicUsize) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        Self(count)
+    }
+}
+
+impl Drop for Slowed<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl<S: TabScript> ScriptedTab<S> {
@@ -363,6 +436,9 @@ impl<S: TabScript> ScriptedTab<S> {
                 "scripted-session-{}",
                 SCRIPTED_SESSIONS.fetch_add(1, Ordering::Relaxed)
             ),
+            created: AtomicBool::new(false),
+            slowed: AtomicUsize::new(0),
+            sent: Mutex::default(),
             events: broadcast::channel(16).0,
             targeted: TargetedEvents::default(),
         })
@@ -372,26 +448,139 @@ impl<S: TabScript> ScriptedTab<S> {
         &self.script
     }
 
-    async fn answer(&self, method: &str, params: &Value) -> Result<Value, CdpError> {
+    /// How many commands the script slowed are still waiting for their answer.
+    pub(crate) fn slowed_in_flight(&self) -> usize {
+        self.slowed.load(Ordering::SeqCst)
+    }
+
+    /// How many `method` commands were sent so far.
+    pub(crate) fn sent(&self, method: &str) -> usize {
+        self.sent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|sent| *sent == method)
+            .count()
+    }
+
+    /// Sends the browser event `method` with `params`, as Chromium sends it on the root session.
+    pub(crate) fn emit(&self, method: &str, params: Value) {
+        let event = CdpEvent {
+            method: method.to_owned(),
+            params,
+            session_id: None,
+        };
+        if let Some(event) = self.targeted.deliver(event) {
+            let _ = self.events.send(event);
+        }
+    }
+
+    /// The session core attaches to `target`: one per target, as Chromium hands them out.
+    fn session_of(&self, target: &str) -> String {
+        format!("{}-{target}", self.session)
+    }
+
+    async fn answer(
+        &self,
+        method: &str,
+        params: &Value,
+        session: Option<&SessionId>,
+    ) -> Result<Value, CdpError> {
+        self.sent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(method.to_owned());
+        if self.script.outlasts_client(method) {
+            let _slowed = Slowed::new(&self.slowed);
+            time::sleep(client_timeout()).await;
+            return Err(CdpError::Timeout {
+                method: method.to_owned(),
+            });
+        }
+        let delay = self.script.delay(method);
+        if !delay.is_zero() {
+            let _slowed = Slowed::new(&self.slowed);
+            time::sleep(delay).await;
+        }
+        let on_oopif = session.is_some_and(|session| {
+            self.script.oopif() && session.as_str() == self.session_of(SCRIPTED_OOPIF)
+        });
+        // Each frame's world: its context id, and its global's object id, which names it.
+        let child = |frame: &Value| frame.as_str() == Some(SCRIPTED_CHILD);
+        let oopif = |frame: &Value| frame.as_str() == Some(SCRIPTED_OOPIF);
+        let main_tab = json!({ "tabId": 7, "targetId": SCRIPTED_MAIN, "windowId": 1,
+            "url": "https://a.test/", "title": "A", "isActive": true, "isLoading": false,
+            "loadProgress": 1.0, "isPinned": false, "isHidden": false });
         Ok(match method {
-            "Browser.getTabs" => json!({ "tabs": [{ "tabId": 7, "targetId": SCRIPTED_TARGET,
-                "windowId": 1, "url": "https://a.test/", "title": "A", "isActive": true,
-                "isLoading": false, "loadProgress": 1.0, "isPinned": false,
-                "isHidden": false }] }),
-            "Target.attachToTarget" => json!({ "sessionId": self.session }),
-            "Target.getTargets" => json!({ "targetInfos": [
-                { "targetId": SCRIPTED_TARGET, "type": "page", "url": "https://a.test/" },
-            ] }),
-            "Page.getFrameTree" => json!({ "frameTree": { "frame": { "id": SCRIPTED_TARGET,
-                "loaderId": "L", "url": "https://a.test/", "domainAndRegistry": "a.test" } } }),
+            "Browser.getTabs" if self.created.load(Ordering::SeqCst) => {
+                json!({ "tabs": [main_tab, created_tab()] })
+            }
+            "Browser.getTabs" => json!({ "tabs": [main_tab] }),
+            "Browser.createTab" => {
+                self.created.store(true, Ordering::SeqCst);
+                json!({ "tab": created_tab() })
+            }
+            "Browser.getTabInfo" if params["tabId"] == 9 => json!({ "tab": created_tab() }),
+            "Browser.getTabInfo" => json!({ "tab": main_tab }),
+            "Target.attachToTarget" => {
+                let target = params["targetId"].as_str().unwrap_or_default();
+                json!({ "sessionId": self.session_of(target) })
+            }
+            "Target.getTargets" => {
+                let main = json!({ "targetId": SCRIPTED_MAIN, "type": "page",
+                    "url": "https://a.test/" });
+                let oopif = json!({ "targetId": SCRIPTED_OOPIF, "type": "iframe",
+                    "url": "https://pay.a.test/", "parentId": SCRIPTED_MAIN });
+                let listed: Vec<Value> = if self.script.oopif() {
+                    vec![main, oopif]
+                } else {
+                    vec![main]
+                };
+                json!({ "targetInfos": listed })
+            }
+            "Page.getFrameTree" if on_oopif => {
+                json!({ "frameTree": { "frame": { "id": SCRIPTED_OOPIF, "loaderId": "LO",
+                    "url": "https://pay.a.test/", "domainAndRegistry": "a.test" } } })
+            }
+            "Page.getFrameTree" => {
+                let children: Vec<Value> = self
+                    .script
+                    .child()
+                    .then(|| {
+                        json!({ "frame": { "id": SCRIPTED_CHILD, "parentId": SCRIPTED_MAIN,
+                            "loaderId": "LC", "url": "https://a.test/child",
+                            "domainAndRegistry": "a.test" } })
+                    })
+                    .into_iter()
+                    .collect();
+                json!({ "frameTree": { "frame": { "id": SCRIPTED_MAIN, "loaderId": "L",
+                    "url": "https://a.test/", "domainAndRegistry": "a.test" },
+                    "childFrames": children } })
+            }
+            "Page.createIsolatedWorld" if child(&params["frameId"]) => {
+                json!({ "executionContextId": 8 })
+            }
+            "Page.createIsolatedWorld" if oopif(&params["frameId"]) => {
+                json!({ "executionContextId": 9 })
+            }
             "Page.createIsolatedWorld" if self.script.left() => {
                 return Err(protocol_error("No frame for given id found"));
             }
             "Page.createIsolatedWorld" => json!({ "executionContextId": 7 }),
+            "Runtime.evaluate" if params["contextId"] == 8 => {
+                json!({ "result": { "type": "object", "objectId": "g-child" } })
+            }
+            "Runtime.evaluate" if params["contextId"] == 9 => {
+                json!({ "result": { "type": "object", "objectId": "g-oopif" } })
+            }
             "Runtime.evaluate" => json!({ "result": { "type": "object", "objectId": "g" } }),
             // The hidden-root scan finds no shadow root.
             "DOM.describeNode" => json!({ "node": { "backendNodeId": 1,
                 "nodeName": "#document", "childNodeCount": 0, "children": [] } }),
+            // The document's node in its main world, where a page script runs.
+            "DOM.resolveNode" => {
+                json!({ "object": { "type": "object", "subtype": "node", "objectId": "main-doc" } })
+            }
             "Runtime.callFunctionOn" => return self.call(params).await,
             _ => json!({}),
         })
@@ -403,7 +592,12 @@ impl<S: TabScript> ScriptedTab<S> {
     async fn call(&self, params: &Value) -> Result<Value, CdpError> {
         let first = &params["arguments"][0]["value"];
         if first.get("op").is_some() {
-            let ProbeAnswer { after, reply } = self.script.probe(first);
+            let frame = match params["objectId"].as_str() {
+                Some("g-child") => SCRIPTED_CHILD,
+                Some("g-oopif") => SCRIPTED_OOPIF,
+                _ => SCRIPTED_MAIN,
+            };
+            let ProbeAnswer { after, reply } = self.script.probe(frame, first);
             time::sleep(after).await;
             return reply
                 .map(|reply| json!({ "result": { "type": "object", "value": reply } }))
@@ -444,22 +638,59 @@ impl<S: TabScript> CdpConnection for ScriptedTab<S> {
         &'a self,
         method: &'a str,
         params: Value,
-        _session: Option<&'a SessionId>,
+        session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
-        Box::pin(async move { self.answer(method, &params).await })
+        Box::pin(async move { self.answer(method, &params, session).await })
     }
 
     fn send_raw_json<'a>(
         &'a self,
         method: &'a str,
         params_json: &'a str,
-        _session: Option<&'a SessionId>,
+        session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<String, CdpError>> {
         Box::pin(async move {
             let params = serde_json::from_str(params_json)?;
-            let reply = self.answer(method, &params).await?;
+            let reply = self.answer(method, &params, session).await?;
             Ok(serde_json::to_string(&reply)?)
         })
+    }
+
+    // Core sends a creation's reads at the connection's epoch, which never changes here.
+    fn send_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        if expected_epoch != 1 {
+            return Box::pin(async move {
+                Err(CdpError::ConnectionEpochChanged {
+                    expected: expected_epoch,
+                    actual: 1,
+                })
+            });
+        }
+        self.send(method, params, session)
+    }
+
+    fn send_raw_json_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params_json: &'a str,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        if expected_epoch != 1 {
+            return Box::pin(async move {
+                Err(CdpError::ConnectionEpochChanged {
+                    expected: expected_epoch,
+                    actual: 1,
+                })
+            });
+        }
+        self.send_raw_json(method, params_json, session)
     }
 
     fn events(&self) -> broadcast::Receiver<CdpEvent> {

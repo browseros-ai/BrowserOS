@@ -1144,7 +1144,7 @@ mod tests {
     }
 
     impl TabScript for ReadOnce {
-        fn probe(&self, request: &Value) -> ProbeAnswer {
+        fn probe(&self, _frame: &str, request: &Value) -> ProbeAnswer {
             if self.after == AfterRead::Leaves && self.read_once() {
                 return ProbeAnswer::error("Cannot find context with specified id");
             }

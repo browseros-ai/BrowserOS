@@ -60,7 +60,15 @@ export type Runtime = {
    * A second `__neo.run` in the realm: the providers give a seeded run the same objects.
    */
   settle(code: string): Promise<Settled>
-  /** Evaluates an expression where the script's parameters (`page`, `context`) are in scope. */
+  /**
+   * Resolves once the run's parameters arrived: a bootstrap that awaits each parameter's build
+   * (sdk-skeleton's S3, FR/RC C5) calls the agent's function only after a turn of the realm.
+   */
+  ready: Promise<void>
+  /**
+   * Evaluates an expression where the script's parameters (`page`, `context`) are in scope,
+   * once `ready` resolved.
+   */
   evaluate(code: string): unknown
   /** The ops named `name`, in order. */
   sent(name: string): Call[]
@@ -119,10 +127,21 @@ export function loadPrelude(
     init: string,
   ) => Promise<string>
   const init = JSON.stringify(options.seed ?? { page: null })
-  let args: unknown[] = []
-  void start(async (...provided) => {
-    args = provided
+  // The parameters arrive when the bootstrap calls the agent's function; see `ready`.
+  let started: (provided: unknown[]) => void = () => {}
+  const provided = new Promise<unknown[]>((resolve) => {
+    started = resolve
+  })
+  void start(async (...args) => {
+    started(args)
   }, init)
+  let evaluator: ((code: string) => unknown) | null = null
+  const ready = provided.then((args) => {
+    evaluator = runInContext(
+      strict(`(function (${parameters}) { return (code) => eval(code) })`),
+      realm,
+    )(...args) as (code: string) => unknown
+  })
   const compile = (body: string) =>
     runInContext(
       strict(`(async function (${parameters}) {\n${body}\n})`),
@@ -131,13 +150,10 @@ export function loadPrelude(
         filename: 'run',
       },
     ) as (...provided: unknown[]) => Promise<unknown>
-  const evaluator = runInContext(
-    strict(`(function (${parameters}) { return (code) => eval(code) })`),
-    realm,
-  )(...args) as (code: string) => unknown
   return {
     calls,
-    run: (code) => compile(code)(...args),
+    ready,
+    run: async (code) => compile(code)(...(await provided)),
     settle: async (code) => {
       const { ok, thrown } = JSON.parse(await start(compile(code), init)) as {
         ok?: unknown
@@ -153,7 +169,13 @@ export function loadPrelude(
         return { operation: failures.get(thrown.operationId) ?? null }
       return { error: { name: thrown.name, message: thrown.message } }
     },
-    evaluate: (code) => evaluator(code),
+    evaluate: (code) => {
+      if (evaluator === null)
+        throw new Error(
+          "the run's parameters have not arrived; await runtime.ready",
+        )
+      return evaluator(code)
+    },
     sent: (name) => calls.filter((call) => call.name === name),
   }
 }

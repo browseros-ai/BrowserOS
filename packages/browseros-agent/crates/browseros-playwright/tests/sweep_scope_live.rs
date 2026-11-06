@@ -62,6 +62,12 @@ const B1_FIELD: &str = "parent.parent.frames[1].document.querySelector('input')"
 /// `hang.html` spins its main thread forever from 1.5 s after its load event.
 const HANG_STARTS: Duration = Duration::from_millis(2_000);
 
+/// How long an op with no Playwright timeout tries a late frame (`UNTIMED_RETRY` in the crate).
+const UNTIMED_RETRY: Duration = Duration::from_secs(5);
+
+/// The short Playwright timeout the hung-frame test gives an op that has one.
+const SHORT_TIMEOUT: Duration = Duration::from_millis(1_500);
+
 /// The nested fixture with the unresponsive cross-site frame D (`top.html?hang` adds it).
 fn nest_and_hang() -> HashMap<String, Page> {
     let mut pages = nest_pages();
@@ -118,10 +124,21 @@ async fn wait_for_function(
     page: &TestPage,
     function: &str,
 ) -> Result<Value, PlaywrightError> {
+    wait_for_function_within(run, page, function, 5_000).await
+}
+
+/// [`wait_for_function`] with Playwright's timeout of `timeout_ms`.
+async fn wait_for_function_within(
+    run: &LiveRun,
+    page: &TestPage,
+    function: &str,
+    timeout_ms: u64,
+) -> Result<Value, PlaywrightError> {
     let waited = run
         .invoke(
             "page.waitForFunction",
-            json!({ "call": { "timeoutMs": 5_000 }, "page": brand(page), "script": script(function) }),
+            json!({ "call": { "timeoutMs": timeout_ms }, "page": brand(page),
+                    "script": script(function) }),
         )
         .await?;
     Ok(waited.get("value").cloned().unwrap_or(Value::Null))
@@ -151,10 +168,21 @@ async fn element_evaluate(
     target: &Value,
     function: &str,
 ) -> Result<Value, PlaywrightError> {
+    element_evaluate_within(run, api, target, function, 10_000).await
+}
+
+/// [`element_evaluate`] with Playwright's timeout of `timeout_ms`.
+async fn element_evaluate_within(
+    run: &LiveRun,
+    api: &str,
+    target: &Value,
+    function: &str,
+    timeout_ms: u64,
+) -> Result<Value, PlaywrightError> {
     let no_wait = api.ends_with("$eval");
     run.invoke(
         "locator.evaluate",
-        json!({ "call": { "api": api, "timeoutMs": 10_000 }, "target": target,
+        json!({ "call": { "api": api, "timeoutMs": timeout_ms }, "target": target,
                 "strict": if no_wait { "firstMatch" } else { "strict" }, "noWait": no_wait,
                 "script": script(function) }),
     )
@@ -682,7 +710,9 @@ async fn tests_that_an_oopif_script_reads_its_same_origin_sibling_masked() -> Te
 
 /// A same-site frame that cannot be swept: another origin of the page's site, asking for an
 /// origin-keyed agent cluster, so Chromium gives it a process of its own (measured), which
-/// then spins. The page's own frame still answers.
+/// then spins. The page's own frame still answers. Each op tries the frame again on fresh
+/// budgets until its own bound and then refuses: `page.evaluate`, which has no timeout, for
+/// the untimed window; the other two inside their 1.5 s.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_hung_same_site_frame_refuses_the_script_with_nothing_sent() -> TestResult {
@@ -715,18 +745,23 @@ async fn tests_that_a_hung_same_site_frame_refuses_the_script_with_nothing_sent(
             for api in ["page.evaluate", "page.waitForFunction", "locator.evaluate"] {
                 run.clear_calls();
                 let started = Instant::now();
-                let refused = match api {
-                    "page.evaluate" => page_evaluate(&run, &page, script).await,
-                    "page.waitForFunction" => wait_for_function(&run, &page, script).await,
-                    _ => {
-                        element_evaluate(
+                let (refused, bound) = match api {
+                    "page.evaluate" => (page_evaluate(&run, &page, script).await, UNTIMED_RETRY),
+                    "page.waitForFunction" => (
+                        wait_for_function_within(&run, &page, script, 1_500).await,
+                        SHORT_TIMEOUT,
+                    ),
+                    _ => (
+                        element_evaluate_within(
                             &run,
                             api,
                             &field,
                             "(el) => { window.ran = true; return el.value; }",
+                            1_500,
                         )
-                        .await
-                    }
+                        .await,
+                        SHORT_TIMEOUT,
+                    ),
                 };
                 let took = started.elapsed();
                 let error = refused
@@ -743,8 +778,9 @@ async fn tests_that_a_hung_same_site_frame_refuses_the_script_with_nothing_sent(
                     "{api}: the message says why: {error}"
                 );
                 assert!(
-                    took >= Duration::from_secs(1) && took < Duration::from_millis(2_500),
-                    "{api}: refused within the frame's 1 s budget, took {took:?}"
+                    took >= Duration::from_secs(1) && took < bound + Duration::from_millis(1_000),
+                    "{api}: refused after a late try and inside its bound of {bound:?}, took \
+                     {took:?}"
                 );
                 not_sent(&run, api);
             }

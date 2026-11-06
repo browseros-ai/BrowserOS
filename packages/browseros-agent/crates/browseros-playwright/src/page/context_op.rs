@@ -1,8 +1,13 @@
 //! The browser-context ops and their registration metadata.
 
-use browseros_core::pages::NewPageOptions;
+use std::future::Future;
+
+use browseros_cdp::{CdpError, CdpEvent};
+use browseros_core::pages::{NewPageOptions, PageInfo};
+use browseros_core::{CoreError, TargetId};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
@@ -97,6 +102,7 @@ pub(crate) async fn invoke(
                 )
                 .await
                 .map_err(core)?;
+            ready(pw, scope, &opened).await;
             to_output(
                 scope,
                 &PageEntry {
@@ -107,3 +113,89 @@ pub(crate) async fn invoke(
         }
     }
 }
+
+/// Readies the tab `newPage` just opened, as upstream's `newPage` does before it returns:
+/// core attaches the tab's session (admission), and the tab's renderer answers
+/// `Page.setLifecycleEventsEnabled`, the first command a navigation sends. Upstream's
+/// `BrowserContext.newPage` awaits `FrameSession._initialize` (crPage.ts), which sends that
+/// command among its first, with no timeout. Neo left both to the tab's first op, so they ran
+/// inside that op's own timeout; core's attach even runs outside `OpScope::within`, so a slow
+/// one ate that timeout whole. A new background tab's renderer runs at background priority
+/// (measured on macOS: PRI 4, where a foreground tab's runs at 47) and on a loaded machine it
+/// answered those first commands up to 75 s late, so a first `goto` timed out before it
+/// navigated. Done here, the wait is `newPage`'s own.
+///
+/// The CDP client's own request timeout (60 s a command) is no answer either: that renderer
+/// answers later (4 of those attaches hit it), so a step the client gave up on is sent again
+/// ([`again_on_timeout`]). `Page.setLifecycleEventsEnabled` is safe to send again. Admission is
+/// core's attach, which starts over from `Target.attachToTarget`, and that is not: each one
+/// makes a session. But an attach that timed out leaves whatever session it made attached, as
+/// core's attach detaches nothing when a step fails and records the session only once its
+/// enables are answered, so the tab's next admission attaches anew in any case, the first op's
+/// when this wait gives up. A second attach here makes no session that would not have been
+/// made; detaching the stale one is core's to do.
+///
+/// Like any op without a Playwright timeout, it ends with the run: the host drops the op at the
+/// run's deadline or on a stop, which drops these calls (their reply slots and core's locks go
+/// with them), as it drops every other op. It ends as well once the tab closes or its renderer
+/// crashes, which no answer may follow. Nothing here fails `newPage`, which returns the tab it
+/// opened, as it did before: after any other failure the tab's first op admits it and enables
+/// lifecycle events again, inside its own timeout, and reports what it meets there, a closed or
+/// crashed tab included.
+async fn ready(pw: &Playwright, scope: &OpScope<'_>, opened: &PageInfo) {
+    // Taken before anything is sent, so a close or crash while the tab answers is not missed.
+    let mut events = pw.browser().cdp_events();
+    let answered = async {
+        let admitted = again_on_timeout(|| scope.view().page_session(opened.page_id.clone()));
+        let Some(admitted) = admitted.await else {
+            return;
+        };
+        let session = pw.browser().protocol_session(admitted.session_id);
+        let enable =
+            || session.send_value("Page.setLifecycleEventsEnabled", json!({ "enabled": true }));
+        let _answered = again_on_timeout(enable).await;
+    };
+    let ended = async {
+        loop {
+            match events.recv().await {
+                Ok(event) if ends(&event, &opened.target_id) => return,
+                Ok(_) | Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => return,
+            }
+        }
+    };
+    tokio::select! {
+        () = answered => {}
+        () = ended => {}
+    }
+}
+
+/// `send`'s answer, sent again each time the CDP client gave up waiting for it
+/// (`CdpError::Timeout`, which comes only after the client's request timeout, so this sends at
+/// most once a timeout); `None` once it fails otherwise.
+async fn again_on_timeout<T, F, Fut>(mut send: F) -> Option<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, CoreError>>,
+{
+    loop {
+        match send().await {
+            Ok(answer) => return Some(answer),
+            Err(CoreError::Cdp(CdpError::Timeout { .. })) => {}
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Whether `event` says tab `target` closed or its renderer crashed: its target destroyed or
+/// crashed (the run's target watcher turns target discovery on), or the session core attached
+/// to it detached.
+fn ends(event: &CdpEvent, target: &TargetId) -> bool {
+    matches!(
+        event.method.as_str(),
+        "Target.targetDestroyed" | "Target.targetCrashed" | "Target.detachedFromTarget"
+    ) && event.params.get("targetId").and_then(Value::as_str) == Some(target.as_str())
+}
+
+#[cfg(test)]
+mod tests;

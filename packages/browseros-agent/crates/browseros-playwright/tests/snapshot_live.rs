@@ -1,12 +1,14 @@
 //! Aria snapshots through `Playwright::invoke` against a real browser: the required
 //! nested-frame tests F1, F2, F4, F5, F6 and F7 of design D22 on the 4-level fixture, a
-//! locator-level snapshot inside a frame, and typed secrets echoed in page text coming back
-//! masked.
+//! locator-level snapshot inside a frame, typed secrets echoed in page text coming back
+//! masked, and a child frame that answers too late: partial when it is of another site,
+//! withholding the snapshot when it is of the page's own.
 //!
 //! The live tests need BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
 //! `cargo test -p browseros-playwright --test snapshot_live -- --ignored`. They serve the
 //! fixtures on `127.0.0.1`, `localhost` and `[::1]`; F6 serves its unresponsive frame on
-//! `hang.localtest.me`, a public name for 127.0.0.1, so that name must resolve.
+//! `hang.localtest.me`, a public name for 127.0.0.1, so that name must resolve. The cross-site
+//! late child is on `late.localhost`, which Chromium resolves to loopback itself.
 
 #[path = "support/fixture_server.rs"]
 mod fixture_server;
@@ -863,5 +865,206 @@ async fn tests_that_typed_secrets_echoed_in_page_text_come_back_masked() -> Test
             "the host was told of {value} on its page"
         );
     }
+    live.close(&page).await
+}
+
+/// The child frame of the late-child tests: text of its own, and a main thread that spins once
+/// the top asks (`postMessage('spin')`), so a test reads it once first and its world is installed
+/// before it stops answering. The spin lasts 10 s, five times the snapshot's budget for the frame,
+/// and then ends, so the renderer does not stay pinned for the rest of the suite. It cannot say
+/// when it started: a message to a frame in another process leaves only once the current task,
+/// the spin, is done.
+const LATE_CHILD: &str = r"<!doctype html><title>late</title><h1>Late child text</h1><script>
+addEventListener('message', (event) => {
+  if (event.data !== 'spin') return;
+  const until = performance.now() + 10000;
+  while (performance.now() < until) {}
+});
+</script>";
+
+/// The cross-site late child's host, of a site no other test uses. A renderer left spinning stays
+/// alive after its tab closes, and a later frame of its site can land in it: F6, whose stalled
+/// frame is on `hang.localtest.me`, never loaded its page in 2 of 2 runs right after this test's
+/// child had spun there, and passed alone (measured; the renderer's reuse is inferred). Chromium
+/// resolves `*.localhost` to loopback itself, and `late.localhost` is a site of its own, apart
+/// from `localhost`.
+const LATE_CHILD_HOST: &str = "late.localhost";
+
+/// The top of the late-child tests: a one-time-code field whose value the page echoes, and the
+/// child frame at `src`, a JavaScript expression.
+fn late_top(src: &str) -> String {
+    format!(
+        r#"<!doctype html><title>top</title><body>
+<input id="code" aria-label="Code" autocomplete="one-time-code">
+<p id="echo">Confirm your code</p>
+<script>
+const code = document.getElementById('code');
+code.addEventListener('input', () => {{ document.getElementById('echo').textContent = 'Confirm your code ' + code.value; }});
+const frame = document.createElement('iframe');
+frame.title = 'late';
+frame.src = {src};
+document.body.append(frame);
+</script></body>"#
+    )
+}
+
+/// Types the code the top echoes, reads the page until the child printed its text (so its world
+/// is installed), then makes the child spin.
+async fn type_and_stall_child(live: &LiveBrowser, page: &TestPage) -> TestResult {
+    live.main_world(
+        page,
+        "const c = document.getElementById('code'); c.value = '482913'; c.dispatchEvent(new Event('input'))",
+    )
+    .await?;
+    let mut read = false;
+    for _ in 0..100 {
+        let snapshot = live
+            .invoke("page.ariaSnapshot", page_snapshot(page, "ai"))
+            .await??;
+        if strings(&snapshot)
+            .iter()
+            .any(|text| text == "Late child text")
+        {
+            read = true;
+            break;
+        }
+        time::sleep(Duration::from_millis(50)).await;
+    }
+    if !read {
+        return Err("the child frame never printed its text".into());
+    }
+    live.main_world(page, "frames[0].postMessage('spin', '*')")
+        .await?;
+    // The message reaches the child's process and starts the spin.
+    time::sleep(Duration::from_millis(500)).await;
+    Ok(())
+}
+
+/// A child of another site that answers past the snapshot's 2 s budget for a frame is reported
+/// partial, and none of its text comes back. Its site is not the page's, so the page's own site
+/// sweep completes without it, and the rest of the snapshot is masked with the sweeps that did
+/// complete: the code the top echoes comes back masked.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
+async fn tests_that_a_late_cross_site_child_is_partial_and_the_rest_comes_back_masked() -> TestResult
+{
+    let _alone = ALONE.acquire().await?;
+    let live = LiveBrowser::connect().await?;
+    let top = late_top(&format!(
+        "`http://{LATE_CHILD_HOST}:${{location.port}}/late/child.html`"
+    ));
+    let server = FixtureServer::start(HashMap::from([
+        ("/late/top.html".to_owned(), Page::html(&top)),
+        (
+            "/late/child.html".to_owned(),
+            Page::html(LATE_CHILD).with_header("cache-control", "no-store"),
+        ),
+    ]))
+    .await?;
+    let page = live
+        .open(&server.url("127.0.0.1", "/late/top.html"))
+        .await?;
+    type_and_stall_child(&live, &page).await?;
+
+    let started = Instant::now();
+    let snapshot = live
+        .invoke("page.ariaSnapshot", page_snapshot(&page, "ai"))
+        .await??;
+    let took = started.elapsed();
+    let partial = snapshot["partial"]
+        .as_array()
+        .ok_or("partial is a list")?
+        .clone();
+    assert_eq!(partial.len(), 1, "only the late child: {partial:?}");
+    assert_eq!(
+        (&partial[0]["frame"], &partial[0]["reason"]),
+        (
+            &json!(server.url(LATE_CHILD_HOST, "/late/child.html")),
+            &json!("timeout after 2000 ms")
+        ),
+    );
+    let text = strings(&snapshot);
+    assert!(
+        !text.iter().any(|text| text.contains("Late child text")),
+        "the late child carries no text: {text:?}"
+    );
+    assert!(
+        !text.iter().any(|text| text.contains("482913")),
+        "the code never comes back: {text:?}"
+    );
+    assert!(
+        text.iter()
+            .any(|text| text == "Confirm your code [private]"),
+        "the rest is masked with the sweeps that completed: {text:?}"
+    );
+    assert!(
+        took < Duration::from_millis(3_000),
+        "the child's 2 s budget bounds the snapshot, took {took:?}"
+    );
+    live.close(&page).await
+}
+
+/// A child of the page's own site that stops answering is one of the frames the page's own site
+/// sweep must cover, and that sweep fails closed: the snapshot is withheld, as for any read of
+/// the site, once the op's timeout leaves no room for another try. Nothing is reported partial,
+/// and no page text comes back.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
+async fn tests_that_a_late_same_site_child_withholds_the_snapshot() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let live = LiveBrowser::connect().await?;
+    // Another origin of the page's site, asking for an origin-keyed agent cluster, gets a process
+    // of its own (measured in sweep_scope_live), so its spin stalls it alone.
+    let child = FixtureServer::start(HashMap::from([(
+        "/late/child.html".to_owned(),
+        Page::html(LATE_CHILD)
+            .with_header("origin-agent-cluster", "?1")
+            .with_header("cache-control", "no-store"),
+    )]))
+    .await?;
+    let top = late_top(&format!("'{}'", child.url("127.0.0.1", "/late/child.html")));
+    let server = FixtureServer::start(HashMap::from([(
+        "/late/top.html".to_owned(),
+        Page::html(&top),
+    )]))
+    .await?;
+    let page = live
+        .open(&server.url("127.0.0.1", "/late/top.html"))
+        .await?;
+    type_and_stall_child(&live, &page).await?;
+
+    let started = Instant::now();
+    let withheld = live
+        .invoke(
+            "page.ariaSnapshot",
+            json!({ "call": { "api": "page.ariaSnapshot", "timeoutMs": 2_500 },
+                    "page": page.brand(), "mode": "ai" }),
+        )
+        .await?
+        .err()
+        .ok_or("a late frame of the page's own site withholds the snapshot")?;
+    let took = started.elapsed();
+    assert_eq!(
+        withheld.error_code(),
+        Some(ErrorCode::Unsupported),
+        "{withheld}"
+    );
+    assert!(
+        withheld.message().starts_with(
+            "page.ariaSnapshot: a frame of the page's site did not answer Neo's privacy sweep \
+             within 1000ms, so page text that may hold its values is withheld"
+        ),
+        "{withheld}"
+    );
+    for text in ["482913", "Late child text", "Confirm your code"] {
+        assert!(
+            !withheld.message().contains(text),
+            "no page text comes back: {withheld}"
+        );
+    }
+    assert!(
+        took >= Duration::from_secs(1) && took < Duration::from_millis(3_000),
+        "withheld inside the op's 2.5 s, took {took:?}"
+    );
     live.close(&page).await
 }

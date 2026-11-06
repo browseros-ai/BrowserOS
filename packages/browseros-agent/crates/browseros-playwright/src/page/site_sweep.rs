@@ -62,10 +62,10 @@ impl SiteSweep {
 
     /// The values the read is masked with: `own`, the sweep its reply came with, and every
     /// other frame's. All of them go to the host, also when a frame was not swept, so its own
-    /// mask at every exit knows them from now on. A frame of the site that missed its budget
-    /// fails the op closed as `neo / unsupported`, as a main-world script is refused: the
-    /// page text may hold that frame's value, and Neo cannot tell. The read's own frame gone
-    /// under the sweep fails the op too.
+    /// mask at every exit knows them from now on. A frame of the site that missed its budget on
+    /// every try the op's window had room for fails the op closed as `neo / unsupported`, as a
+    /// main-world script is refused: the page text may hold that frame's value, and Neo cannot
+    /// tell. The read's own frame gone under the sweep fails the op too.
     pub(crate) fn values(
         self,
         pw: &Playwright,

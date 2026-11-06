@@ -301,7 +301,7 @@ impl<'env> OpScope<'env> {
 
     /// When the op's timeout passes. `None` without a timeout, and for one too far away to
     /// name, which a script can ask for and must not crash the op.
-    fn deadline(&self) -> Option<Instant> {
+    pub(crate) fn deadline(&self) -> Option<Instant> {
         self.timeout
             .and_then(|timeout| self.started.checked_add(timeout))
     }

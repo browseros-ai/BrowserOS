@@ -15,8 +15,9 @@ const goldens: { playwright: string; cases: Golden[] } = JSON.parse(
   ),
 )
 
-it("tests that every recorded expression builds Playwright's selector and toString()", () => {
+it("tests that every recorded expression builds Playwright's selector and toString()", async () => {
   const runtime = loadPrelude({ seed: SEED })
+  await runtime.ready
   expect(goldens.cases.length).toBeGreaterThanOrEqual(60)
   const built = goldens.cases.map((golden) => {
     const locator = runtime.evaluate(golden.code) as {
@@ -38,8 +39,9 @@ it("tests that every recorded expression builds Playwright's selector and toStri
   )
 })
 
-it('tests that builders are values: building a locator sends nothing', () => {
+it('tests that builders are values: building a locator sends nothing', async () => {
   const runtime = loadPrelude({ seed: SEED })
+  await runtime.ready
   for (const golden of goldens.cases) runtime.evaluate(golden.code)
   expect(runtime.calls).toEqual([])
 })

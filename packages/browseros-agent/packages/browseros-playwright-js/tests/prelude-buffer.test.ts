@@ -2,11 +2,12 @@
 // is this test runtime's own Buffer: on every input below Bun's and Node 26's agree byte for
 // byte and message for message (measured once with the same corpus under both). Each check
 // runs the script's `Buffer` parameter in a fresh prelude realm and compares what comes out.
-import { expect, it } from 'bun:test'
+import { beforeAll, expect, it } from 'bun:test'
 import { loadPrelude, SEED } from './support/prelude-runtime'
 
 const NodeBuffer = globalThis.Buffer
 const runtime = loadPrelude({ seed: SEED })
+beforeAll(() => runtime.ready)
 const inRealm = (code: string): unknown =>
   JSON.parse(String(runtime.evaluate(`JSON.stringify(${code})`)))
 const literal = (value: unknown) => JSON.stringify(value)

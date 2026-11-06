@@ -158,21 +158,29 @@
     returned: 1
 - case: evaluate-errors
   path: /returned/deepest
-  kind: decided
+  kind: finding
+  route: J4 prelude
   reason: "held design synthesis, graft 5 and spike S-depth: Rust carries a result as deep as
     upstream's CDP limit (99 nested objects, 297 JSON levels) and refuses one deeper with
-    upstream's message. The agent's realm is QuickJS with claw-sdk's 512 KiB stack, though, and
-    claw-sdk's bootstrap revives an op's result recursively, one call per JSON level, where
-    Playwright's client is Node; the format nests three levels per object. In Runner N's debug
-    build, with claw-sdk's limits, 10 nested objects come back and 20 overflow (measured); a
-    release build's frames are smaller, so its limit is higher (unmeasured). The value is
-    refused, never cut, and an iterative revive in the bootstrap would carry it."
+    upstream's message. The agent's realm is QuickJS with claw-sdk's 512 KiB stack, though,
+    where Playwright's client is Node; the format nests three levels per object. Until
+    d2d42f39d claw-sdk's bootstrap revived an op's result recursively and overflowed first,
+    inside the op, which threw 'page.evaluate: Maximum call stack size exceeded' (measured on
+    d2d42f39d's parent: the stack is bootstrap.js's revive). Since d2d42f39d the revive walks
+    with a stack of its own, and the value reaches the prelude, whose vendored
+    parseEvaluationResultValue (utilityScriptSerializers) recurses once per level and overflows
+    outside the op, so the script gets an unprefixed RangeError (measured on d2d42f39d and on
+    m6b-harden: the stack is prelude.js's parseEvaluationResultValue). In Runner N's debug
+    build, with claw-sdk's limits, 51 nested objects come back and 52 overflow, the same edge in
+    every try (measured at load 14 to 15). A release build's frames are smaller, so its limit is
+    higher (unmeasured). The value is refused, never cut; an iterative parse in the prelude, as
+    the bootstrap's revive now is, would carry it."
   p:
     returned: 99
   n:
     threw:
-      message: "page.evaluate: Maximum call stack size exceeded"
-      name: Error
+      message: Maximum call stack size exceeded
+      name: RangeError
 - case: evaluate-values
   path: /returned/url/1
   kind: decided

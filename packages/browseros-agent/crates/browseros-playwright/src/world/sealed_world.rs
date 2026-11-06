@@ -295,9 +295,10 @@ impl SealedWorld {
     /// first moment, a value the page sets with its own events included. A scan that fails
     /// fails the install: a world whose closed roots the seal cannot see is not sealed. So does
     /// one that is not done within the frame's budget from the install's start (`FRAME_BUDGET`):
-    /// it fails `Late`, which refuses the op, as a sweep past the budget refuses it. A first read
-    /// installs its world outside any sweep, so this deadline is the read's; inside a sweep,
-    /// the sweep's own deadline started first and ends it sooner.
+    /// it fails `Late`, and `OpPage::world` installs again while the op's window has room, as a
+    /// sweep past the budget sweeps again. A first read installs its world outside any sweep, so
+    /// this deadline is the read's; inside a sweep, the sweep's own deadline started first and
+    /// ends it sooner.
     ///
     /// N alone is not enough to take the handle. It is a per-renderer counter: measured on
     /// BrowserOS, when the document moves to another renderer between the create and the
