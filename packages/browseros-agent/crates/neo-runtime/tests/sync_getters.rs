@@ -71,8 +71,8 @@ async fn page_url_and_is_closed_match_playwright_through_a_tab_lifetime() {
         outcome.value,
         Some(json!({
             "paths": ["/a", "/a#done", "/pushed", "/slow"],
-            "closed": true,
-            "lastPath": "/slow",
+            "keptOldUrlWhileLoading": true,
+            "afterClose": "/slow",
         })),
         "Playwright keeps `/pushed` while `/slow` is in flight and the last URL after close"
     );

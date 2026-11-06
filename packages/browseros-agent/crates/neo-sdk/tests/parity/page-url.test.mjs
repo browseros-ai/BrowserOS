@@ -30,8 +30,8 @@ const STEP_MS = 300
 const SLOW_RESPONSE_MS = 2500
 const expected = {
   paths: ['/a', '/a#done', '/pushed', '/slow'],
-  closed: true,
-  lastPath: '/slow',
+  keptOldUrlWhileLoading: true,
+  afterClose: '/slow',
 }
 
 test('watch-url.js returns the same value through Neo and through Playwright', {
