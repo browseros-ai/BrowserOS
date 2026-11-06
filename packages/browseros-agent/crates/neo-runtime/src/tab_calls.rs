@@ -31,7 +31,7 @@ pub(crate) async fn context(
                     .race(tabs.url(&entry))
                     .await??
                     .ok_or_else(PlaywrightError::target_closed)?;
-                if url == "about:blank" {
+                if !url.is_empty() {
                     break;
                 }
                 // BrowserOS can briefly report an empty history URL while creating the

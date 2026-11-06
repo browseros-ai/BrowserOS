@@ -223,6 +223,34 @@ async fn tests_that_new_pages_wait_for_the_initial_blank_document() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn tests_that_new_page_accepts_a_committed_navigation() {
+    let browser = FakeBrowser::start(Replies {
+        new_page_url: Some("https://example.test/redirected"),
+        ..Replies::default()
+    })
+    .await;
+    let outcome = browser
+        .runtime()
+        .await
+        .run(fake_browser::run_request(
+            "const created = await context.newPage(); return created.url();",
+            Duration::from_millis(500),
+            CancellationToken::new(),
+        ))
+        .await;
+    assert_eq!(
+        outcome.status,
+        RunStatus::Ok,
+        "newPage waited for a URL it can no longer reach: {outcome:?}"
+    );
+    assert_eq!(
+        outcome.value,
+        Some(json!("https://example.test/redirected"))
+    );
+    detached(&browser, 2).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn tests_that_dropping_a_multi_page_run_detaches_every_session() {
     let browser = FakeBrowser::start(Replies::default()).await;
     let runtime = browser.runtime().await;
