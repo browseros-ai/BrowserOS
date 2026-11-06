@@ -727,7 +727,7 @@ fn find_repeated_subsequences<T: PartialEq>(s: &[T]) -> Vec<(&[T], usize)> {
 }
 
 /// JS's `\s` and `String.prototype.trim` set: Rust's `White_Space` without U+0085, plus U+FEFF.
-fn is_js_whitespace(c: char) -> bool {
+pub(crate) fn is_js_whitespace(c: char) -> bool {
     (c.is_whitespace() && c != '\u{85}') || c == '\u{feff}'
 }
 

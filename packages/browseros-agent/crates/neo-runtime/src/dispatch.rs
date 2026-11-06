@@ -44,7 +44,7 @@ use crate::bridge;
 use crate::click::{self, ClickOptions};
 use crate::page::PageSession;
 use crate::progress::{
-    CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
+    self, CallEntry, CallError, CallStart, PlaywrightError, Progress, RunScope, Trace,
 };
 use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, PageId, RunEnd};
 
@@ -329,11 +329,142 @@ async fn serve(
     let _sent = reply.send(encode_reply(&id, answer, Some(&log)));
 }
 
-/// Whether a selector enters a frame. `internal:control=enter-frame` and
-/// `internal:control=any-frame` appear unescaped even inside nested `has=` and `and=` parts.
+/// Playwright's selector engines whose body is a nested selector, as a JSON string
+/// (`kNestedSelectorNames` in `isomorphic/selectorParser.ts`).
+const NESTED_SELECTORS: [&str; 10] = [
+    "internal:has",
+    "internal:has-not",
+    "internal:and",
+    "internal:or",
+    "internal:chain",
+    "left-of",
+    "right-of",
+    "above",
+    "below",
+    "near",
+];
+
+/// Whether a selector enters a frame: it has an `internal:control=enter-frame` or
+/// `internal:control=any-frame` part, at the top or inside a nested selector such as
+/// `internal:has="iframe >> internal:control=enter-frame >> b"`. Parts are found as
+/// Playwright's `parseSelector` finds them, so text that only mentions the marker
+/// (`getByText('internal:control=enter-frame')` is `internal:text="internal:control=enter-frame"i`)
+/// is never mistaken for one. A nested body that is not Playwright's JSON enters no frame here;
+/// the page's parser then reports it with Playwright's own message.
+///
+/// The recursion is as deep as the nesting, which stays shallow: each level must escape every
+/// quote and backslash of the level inside it, so depth grows with the log of the length.
 fn enters_frame(selector: &str) -> bool {
-    selector.contains("internal:control=enter-frame")
-        || selector.contains("internal:control=any-frame")
+    selector_parts(selector)
+        .into_iter()
+        .any(|(name, body)| match name {
+            "internal:control" => matches!(body, "enter-frame" | "any-frame"),
+            name if NESTED_SELECTORS.contains(&name) => {
+                nested_selector(name, body).is_some_and(|nested| enters_frame(&nested))
+            }
+            _ => false,
+        })
+}
+
+/// Playwright's `parseSelectorString`, reduced to each part's engine name and body: split on
+/// `>>` outside quotes, then read `name=body` when the name is an engine name. Every other part
+/// (CSS, `//xpath`, a quoted text shorthand) gets an empty name. A backslash escapes the next
+/// character, and a quote opens nothing inside an unquoted `text=` body
+/// (`shouldIgnoreTextSelectorQuote`: the part so far matches `/^\s*text\s*=(.*)$/` with some
+/// text, which JS's `.` keeps free of line breaks).
+///
+/// One pass, linear in the selector: Playwright re-matches the part so far at every quote, which
+/// on a long selector full of quotes would hold the realm's thread for hours. Here each part's
+/// `text=` body start is looked up once, and the latest line break is tracked as the scan goes.
+fn selector_parts(selector: &str) -> Vec<(&str, &str)> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    if selector.contains(">>") {
+        let mut quote = None;
+        let mut text_body: Option<Option<usize>> = None;
+        let mut last_break = None;
+        let mut chars = selector.char_indices().peekable();
+        while let Some((index, c)) = chars.next() {
+            if is_line_break(c) {
+                last_break = Some(index);
+            }
+            if c == '\\' {
+                if let Some((skipped, escaped)) = chars.next()
+                    && is_line_break(escaped)
+                {
+                    last_break = Some(skipped);
+                }
+            } else if Some(c) == quote {
+                quote = None;
+            } else if quote.is_none() && matches!(c, '"' | '\'' | '`') {
+                let body = *text_body.get_or_insert_with(|| text_body_start(selector, start));
+                let in_text = body.is_some_and(|body| {
+                    index > body && last_break.is_none_or(|line_break| line_break < body)
+                });
+                if !in_text {
+                    quote = Some(c);
+                }
+            } else if quote.is_none() && c == '>' && chars.peek().is_some_and(|(_, c)| *c == '>') {
+                parts.push(selector_part(&selector[start..index]));
+                chars.next();
+                start = index + 2;
+                text_body = None;
+            }
+        }
+    }
+    parts.push(selector_part(&selector[start..]));
+    parts
+}
+
+/// Where a `text=` part's body starts, for the part beginning at `start`: just past the `=` of
+/// `\s*text\s*=`, or `None` for any other part.
+fn text_body_start(selector: &str, start: usize) -> Option<usize> {
+    let body = selector[start..]
+        .trim_start_matches(progress::is_js_whitespace)
+        .strip_prefix("text")?
+        .trim_start_matches(progress::is_js_whitespace)
+        .strip_prefix('=')?;
+    Some(selector.len() - body.len())
+}
+
+/// A JS line terminator, which a regex `.` does not match.
+fn is_line_break(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
+}
+
+/// One part's `(name, body)`: the name before the first `=` when it is a valid engine name
+/// (`[a-zA-Z_0-9-+:*]+`, a leading `*` being the capture mark), else an empty name.
+fn selector_part(part: &str) -> (&str, &str) {
+    let part = part.trim_matches(progress::is_js_whitespace);
+    let Some((name, body)) = part.split_once('=') else {
+        return ("", part);
+    };
+    let name = name.trim_matches(progress::is_js_whitespace);
+    let engine = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | ':' | '*'));
+    if engine {
+        (name.strip_prefix('*').unwrap_or(name), body)
+    } else {
+        ("", part)
+    }
+}
+
+/// The selector nested in engine `name`'s part: Playwright's `JSON.parse('[' + body + ']')`, a
+/// string, followed by a number for the engines that take a distance. `None` where Playwright
+/// throws `Malformed selector`.
+fn nested_selector(name: &str, body: &str) -> Option<String> {
+    let parsed: Vec<Value> = serde_json::from_str(&format!("[{body}]")).ok()?;
+    match parsed.as_slice() {
+        [Value::String(selector)] => Some(selector.clone()),
+        [Value::String(selector), Value::Number(_)]
+            if matches!(name, "left-of" | "right-of" | "above" | "below" | "near") =>
+        {
+            Some(selector.clone())
+        }
+        _ => None,
+    }
 }
 
 /// `metadata.location` as a record keeps it: the line and column, without the file, which is
@@ -428,7 +559,10 @@ mod tests {
         for selector in [
             "iframe >> internal:control=enter-frame >> button",
             "li >> internal:has=\"iframe >> internal:control=enter-frame >> b\"",
+            "li >> internal:and=\"internal:has=\\\"iframe >> internal:control=enter-frame >> b\\\"\"",
+            "button >> near=\"iframe >> internal:control=enter-frame >> b\",50",
             "internal:control=any-frame >> button",
+            " *internal:control=enter-frame ",
         ] {
             let error = error_of(route_frame("click", json!({ "selector": selector })));
             assert_eq!(
@@ -437,7 +571,37 @@ mod tests {
                 "{selector}"
             );
         }
-        assert!(!enters_frame("text=\"enter-frame\""));
+    }
+
+    /// Text that only names the marker is text: these are what `getByText`, `getByRole`'s
+    /// `name`, a `has=` filter on text, and a quoted `text=` selector build from it.
+    #[test]
+    fn text_that_mentions_a_frame_control_enters_no_frame() {
+        for selector in [
+            "internal:text=\"internal:control=enter-frame\"i",
+            "internal:role=button[name=\"x >> internal:control=enter-frame\"i]",
+            "li >> internal:has=\"internal:text=\\\"internal:control=any-frame\\\"i\"",
+            "text=\"a >> internal:control=enter-frame\"",
+            "text=it's >> internal:text=\"x >> internal:control=enter-frame\"i",
+        ] {
+            let routed = route_frame("click", json!({ "selector": selector }));
+            assert!(
+                matches!(routed.route, Ok(Route::FrameClick(_))),
+                "{selector} is a click, not a frame"
+            );
+        }
+        assert!(
+            enters_frame("text=it's >> internal:control=enter-frame >> b"),
+            "a quote inside an unquoted text= body opens nothing"
+        );
+        assert!(
+            !enters_frame("text=it\n's >> internal:control=enter-frame >> b"),
+            "after a line break it does, as JS's `.` stops there"
+        );
+        assert!(
+            !enters_frame("div >> internal:has=\"iframe >> internal:control=enter-frame >> b\",5"),
+            "a malformed nested part is left to the page's parser, which names it"
+        );
     }
 
     #[test]
