@@ -36,22 +36,28 @@ type Handles = { HitTargetInterceptor: HitTargetInterceptionResult }
 
 /**
  * Parses one frame chunk, queries the document, and applies Playwright's checks in Playwright's
- * order (`frameSelectors.ts` `_callOnSelectorInternal`): mark the matches when an action asks,
+ * order (`frameSelectors.ts` `_callOnSelectorInternal`): mark the matches the call asks for,
  * reject a deprecated selector, then strict mode. A strict violation throws Playwright's
  * stackless error, so CDP's `exception.description` reads `Error: strict mode violation: …`, as
  * Playwright reports it.
+ *
+ * `markTargets` is Playwright's: `all` for an action (`resolve`), `first` for a read of the first
+ * match (`textContent`, which resets the marks when nothing matches), `none` otherwise.
  */
 function query(
   injected: InjectedScript,
   selector: string,
   strict: boolean,
-  { markTargets = false } = {},
+  { markTargets = 'none' }: { markTargets?: 'all' | 'first' | 'none' } = {},
 ): Element[] {
   const parsed = injected.parseSelector(selector)
   const elements = injected.querySelectorAll(parsed, document)
-  // Before the checks, as in Playwright: the page's own listeners see every match marked even
+  // Before the checks, as in Playwright: the page's own listeners see the matches marked even
   // when strict mode then fails the call.
-  if (markTargets) injected.markTargetElements(new Set(elements))
+  if (markTargets === 'all') injected.markTargetElements(new Set(elements))
+  else if (markTargets === 'first' && elements.length)
+    injected.markTargetElements(new Set([elements[0]]))
+  else if (markTargets === 'first') injected.markTargetElements(new Set())
   injected.checkDeprecatedSelectorUsage(parsed, elements)
   if (strict && elements.length > 1)
     throw injected.strictModeViolationError(parsed, elements)
@@ -62,7 +68,9 @@ export const glue = {
   title: () => ({ value: document.title }),
 
   textContent: (injected, { selector, strict }) => {
-    const [element] = query(injected, selector, strict)
+    const [element] = query(injected, selector, strict, {
+      markTargets: 'first',
+    })
     if (!element) return {}
     return {
       matched: {
@@ -108,7 +116,7 @@ export const glue = {
 
   /** The page callback of `frames.ts` `_retryWithProgressIfNotConnected`, minus its log text. */
   resolve: (injected, { selector, strict }) => {
-    const elements = query(injected, selector, strict, { markTargets: true })
+    const elements = query(injected, selector, strict, { markTargets: 'all' })
     const [element] = elements
     return {
       element,

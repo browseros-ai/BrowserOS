@@ -8922,11 +8922,15 @@ function deepEquals(a, b) {
 }
 
 // src/glue.ts
-function query(injected, selector, strict, { markTargets = false } = {}) {
+function query(injected, selector, strict, { markTargets = "none" } = {}) {
   const parsed = injected.parseSelector(selector);
   const elements = injected.querySelectorAll(parsed, document);
-  if (markTargets)
+  if (markTargets === "all")
     injected.markTargetElements(new Set(elements));
+  else if (markTargets === "first" && elements.length)
+    injected.markTargetElements(new Set([elements[0]]));
+  else if (markTargets === "first")
+    injected.markTargetElements(new Set);
   injected.checkDeprecatedSelectorUsage(parsed, elements);
   if (strict && elements.length > 1)
     throw injected.strictModeViolationError(parsed, elements);
@@ -8935,7 +8939,9 @@ function query(injected, selector, strict, { markTargets = false } = {}) {
 var glue = {
   title: () => ({ value: document.title }),
   textContent: (injected, { selector, strict }) => {
-    const [element] = query(injected, selector, strict);
+    const [element] = query(injected, selector, strict, {
+      markTargets: "first"
+    });
     if (!element)
       return {};
     return {
@@ -8971,7 +8977,7 @@ var glue = {
     }
   },
   resolve: (injected, { selector, strict }) => {
-    const elements = query(injected, selector, strict, { markTargets: true });
+    const elements = query(injected, selector, strict, { markTargets: "all" });
     const [element] = elements;
     return {
       element,
