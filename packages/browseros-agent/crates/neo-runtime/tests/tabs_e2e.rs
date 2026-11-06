@@ -449,3 +449,131 @@ async fn create_in_context(tab: &Tab, context: &Value) -> Value {
         .await
         .unwrap_or_else(|error| panic!("create tab in live context: {error}"))
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_pages_order_survives_window_activation_and_appends_new_pages() {
+    let Some(binary) = browser::e2e_browser() else {
+        return;
+    };
+    let tab = Tab::open(binary, Fixture::default(), "/start").await;
+    let window = tab
+        .cdp
+        .send(
+            "Browser.createWindow",
+            json!({"url":format!("{}/second",tab.origin)}),
+            None,
+        )
+        .await
+        .unwrap();
+    let all = tab
+        .cdp
+        .send("Browser.getTabs", json!({}), None)
+        .await
+        .unwrap();
+    let other = all["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|page| page["windowId"] == window["window"]["windowId"])
+        .unwrap()["targetId"]
+        .as_str()
+        .unwrap();
+    let outcome = run(
+        &tab,
+        &tab.target_id,
+        &format!(
+            r"
+      const order = () => pages().map(p=>p.guid);
+      const before = order();
+      await call('page@{me}','bringToFront'); const afterRun = order();
+      await call('page@{other}','bringToFront'); const afterOther = order();
+      await call('page@{me}','bringToFront');
+      const created=(await call('context@default','newPage')).page.guid;
+      return {{before,afterRun,afterOther,created,after:order()}};
+    ",
+            me = tab.target_id
+        ),
+    )
+    .await;
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    let value = outcome.value.unwrap();
+    assert_eq!(value["before"][0], format!("page@{}", tab.target_id));
+    assert_eq!(
+        value["before"], value["afterRun"],
+        "activation changed order"
+    );
+    assert_eq!(
+        value["before"], value["afterOther"],
+        "window activation changed order"
+    );
+    assert_eq!(
+        value["after"].as_array().unwrap().last(),
+        Some(&value["created"]),
+        "new pages must be last: {value}"
+    );
+    tab.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tests_that_new_page_recreates_an_inactive_window_after_the_last_tab_closes() {
+    let Some(binary) = browser::e2e_browser() else {
+        return;
+    };
+    let tab = Tab::open(binary, Fixture::default(), "/start").await;
+    let all = tab
+        .cdp
+        .send("Browser.getTabs", json!({}), None)
+        .await
+        .unwrap();
+    for page in all["tabs"].as_array().unwrap() {
+        let id = page["targetId"].as_str().unwrap();
+        if id != tab.target_id {
+            tab.cdp
+                .send("Target.closeTarget", json!({"targetId":id}), None)
+                .await
+                .unwrap();
+            wait_gone(&tab, id).await;
+        }
+    }
+    let outcome = run(
+        &tab,
+        &tab.target_id,
+        &format!(
+            r"
+      await call('page@{}','close');
+      const created=(await call('context@default','newPage')).page.guid;
+      return {{created,pages:pages().map(p=>p.guid)}};
+    ",
+            tab.target_id
+        ),
+    )
+    .await;
+    assert_eq!(outcome.status, RunStatus::Ok, "{outcome:?}");
+    let windows = tab
+        .cdp
+        .send("Browser.getWindows", json!({}), None)
+        .await
+        .unwrap();
+    writeln!(
+        io::stderr(),
+        "TAB_LAST_WINDOW_PROBE windows={windows} outcome={:?}",
+        outcome.value
+    )
+    .unwrap();
+    assert!(
+        windows["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|window| window["isActive"] == false),
+        "new window stole focus: {windows}"
+    );
+    assert!(
+        outcome
+            .pages
+            .iter()
+            .any(|page| page.created && !page.closed),
+        "{outcome:?}"
+    );
+    tab.close().await;
+}

@@ -4,8 +4,8 @@
 // with each page's click reaching its own tab, and follow a tab opened and closed mid-run.
 //
 // One difference is asserted, not hidden: the order of the tabs open before the script. Neo
-// lists them in tab-strip order (Browser.getTabs). Playwright lists them in the order CDP
-// attached them when it connected, which changes from run to run, so only their set is compared.
+// lists its run page first, then tabs in first-seen order. Playwright lists them in the order
+// CDP attached them when it connected, so the two engines compare the initial set.
 //
 // Runs under Node, not Bun, on the shared harness (harness.mjs).
 
@@ -82,7 +82,11 @@ test(`context.pages() reads the same through Neo and Playwright ${playwrightVers
       [...theirPaths].sort(),
       'the tabs listed, Neo vs Playwright',
     )
-    assert.deepEqual(ourPaths, viaNeo.strip, 'Neo lists tabs in tab order')
+    assert.deepEqual(
+      ourPaths,
+      ['/run.html', ...viaNeo.strip.filter((path) => path !== '/run.html')],
+      'Neo keeps the run page first, then the initial listing order',
+    )
     assert.deepEqual(
       [viaPlaywright.clicks, viaNeo.clicks],
       [

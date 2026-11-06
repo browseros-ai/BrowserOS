@@ -52,7 +52,7 @@ use crate::run::{CallLocation, CallRecord, CallResult, DroppedCalls, RunEnd};
 use crate::tab_calls;
 use crate::tabs::{PageEntry, Tabs};
 
-/// How long `finish` waits, after the realm is gone, for the run's calls to end so their
+/// How long `finish` waits, after creation transactions settle, for the run's calls to end so their
 /// records read final results and deliveries. A task still running past it keeps running and
 /// its record reads `Unfinished`. The wait adds to the run's wall time only when a call is
 /// still in flight at the end.
@@ -288,13 +288,15 @@ impl Dispatcher {
     }
 
     /// Ends the run's calls after the realm is gone: records why the run ended (the first
-    /// reason wins), cancels every call, waits up to [`RECORDS_WAIT`] for the run's tasks, and
+    /// reason wins), settles creation writes, then waits up to [`RECORDS_WAIT`] for other tasks and
     /// returns the records and the dropped-calls summary.
     pub(crate) async fn finish(&self, reason: RunEnd) -> (Vec<CallRecord>, Option<DroppedCalls>) {
         let run = &self.0.run;
         run.end(reason);
+        self.0.tabs.finish_creations().await;
         run.tasks.close();
         let _waited = time::timeout(RECORDS_WAIT, run.tasks.wait()).await;
+        self.0.tabs.refresh_closing().await;
         self.0.trace.take(reason)
     }
 }

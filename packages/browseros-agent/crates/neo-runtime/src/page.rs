@@ -1,5 +1,5 @@
-//! The run's tab as the server side of a browser call sees it (Playwright's `server/page.ts`
-//! with `chromium/crPage.ts` and `crInput.ts`, cut to what click needs): the run's CDP session,
+//! One handed-out tab as the server side of a browser call sees it (Playwright's `server/page.ts`
+//! with `chromium/crPage.ts` and `crInput.ts`, cut to what click needs): this tab's CDP session,
 //! the domains a browser call needs, one watcher task that answers dialogs and tracks
 //! navigations, the tab's input turns ([`TabInputs`]), the mouse writer, and the `click::Tab`
 //! implementation over all of it and the utility world (`world.rs`).
@@ -7,7 +7,7 @@
 //! This file is mechanism; `click.rs` is policy. Nothing here writes a call-log line or decides
 //! a retry, and nothing in `click.rs` names a CDP type.
 //!
-//! Lifetime: [`PageSession`] owns the run's [`Session`], whose `Drop` detaches, so the session
+//! Lifetime: [`PageSession`] owns this tab's [`Session`], whose `Drop` detaches, so the session
 //! detaches when the last `Arc<PageSession>` drops. Every task that writes on the session holds
 //! one: the dispatcher's call tasks, the interceptor setups, the mouse writers, the interceptor
 //! stops and the object-group releases, all spawned on the run's `TaskTracker`. So no release
@@ -19,8 +19,8 @@
 //! go. A turn at the tab's input ([`InputPermit`]) is held the same way: by every task that
 //! still operates a click's input, so it frees only once the last of them is done.
 //!
-//! Domains, enabled by [`PageSession::prepare`] on the run's first browser call only, so a
-//! getter-only run keeps its single live CDP call per getter:
+//! [`PageSession::prepare`] enables domains on this tab's first click or beforeunload call.
+//! Getter-only runs keep their single live CDP call per getter:
 //! - `Page.enable`: `javascriptDialogOpening` (an `alert()` in an `onclick` freezes the renderer,
 //!   and the click's mouse acknowledgement never returns until it is answered), the navigation
 //!   events behind the pre-check and the post-click barrier, and `Page.enable` itself as that
@@ -73,7 +73,7 @@ use crate::world::{self, ObjectGroup, World};
 /// a hung browser from piling up detach tasks.
 const DETACH_TIMEOUT: Duration = Duration::from_secs(1);
 
-/// The run's CDP session on its tab, which owns the attach: dropping it detaches. The
+/// One run's CDP session on one tab, which owns the attach: dropping it detaches. The
 /// `Runtime`'s connection outlives every run, so a session nobody detaches stays attached
 /// until the browser exits. Tying the detach to the value covers every way a run ends after
 /// the browser answered the attach: the script's end, a failed or stopped setup, an answer
@@ -139,8 +139,7 @@ impl Drop for Session {
     }
 }
 
-/// The run's attached tab. One per run, shared (`Arc`) by the dispatcher and every task that
-/// writes on its session.
+/// A handed-out tab's session, attached lazily once per run and shared by its call and writer tasks.
 pub(crate) struct PageSession {
     session: Session,
     /// The main frame's id, which is the target id.
@@ -149,7 +148,7 @@ pub(crate) struct PageSession {
     /// group-release tasks, so `Dispatcher::finish` can wait for them before reading final
     /// deliveries.
     tasks: TaskTracker,
-    /// The domains and the watcher, set up by the run's first browser call.
+    /// The domains and the watcher, set up by this tab's first click or beforeunload call.
     prepared: OnceCell<Watcher>,
     /// Cancelled when the tab closes or the session detaches; every call's `Progress` races
     /// it, so a call on a closed tab ends with Playwright's `TargetClosedError`.
@@ -246,8 +245,8 @@ impl PageSession {
         self.closed.clone()
     }
 
-    /// Enables the domains above and starts the watcher, once per run; concurrent first calls
-    /// wait for the same setup. Subscribes `cdp.events()` before `Page.enable`, so no event the
+    /// Starts the domains and watcher once per page session. Concurrent calls wait for the
+    /// same setup. Subscribes `cdp.events()` before `Page.enable`, so no event the
     /// enable triggers (a dialog already open is reported then) is missed. Never
     /// `events_targeted`, which is exclusive per method across the whole shared client.
     ///

@@ -75,6 +75,10 @@ pub struct Replies {
     pub new_page_empty_history: usize,
     /// The new target may already have navigated before its first history read.
     pub new_page_url: Option<&'static str>,
+    /// The tab exists immediately, but its creation acknowledgement arrives later.
+    pub create_tab_delay: Option<Duration>,
+    /// Closing removes the tab immediately, before acknowledging the request.
+    pub close_tab_delay: Option<Duration>,
     /// Beforeunload completes after the Page.close acknowledgement, provided its watcher
     /// is still attached to answer the delayed dialog.
     pub before_unload_delay: Option<Duration>,
@@ -119,6 +123,8 @@ pub struct FakeBrowser {
 pub struct Page {
     pub tabs: Vec<Value>,
     next_tab: usize,
+    active_window: i64,
+    next_window: i64,
     detached: HashSet<String>,
     /// The injected script's single hit-target interceptor slot, as Playwright keeps it: a setup
     /// replaces it, and a stop clears it only while it still holds the stopped interceptor.
@@ -139,11 +145,25 @@ impl Default for Page {
                 "liveBrowserContextId": "profile", "isActive": true,
             })],
             next_tab: 0,
+            active_window: 1,
+            next_window: 2,
             detached: HashSet::new(),
             interceptor: None,
             next_interceptor: 0,
             clicks: 0,
         }
+    }
+}
+
+impl Page {
+    fn add_tab(&mut self, window: i64, url: &str) -> Value {
+        self.next_tab += 1;
+        let tab = json!({
+            "targetId":format!("new-page-{}",self.next_tab), "url":url, "windowId":window,
+            "liveBrowserContextId":"profile", "isActive":false,
+        });
+        self.tabs.push(tab.clone());
+        tab
     }
 }
 
@@ -575,7 +595,16 @@ fn tab_command(
     let now = Some(Duration::ZERO);
     Some(match command["method"].as_str().unwrap_or_default() {
         "Browser.activateTab" => {
-            for tab in &mut lock(page).tabs {
+            let mut page = lock(page);
+            if let Some(window) = page
+                .tabs
+                .iter()
+                .find(|tab| tab["targetId"] == command["params"]["targetId"])
+                .and_then(|tab| tab["windowId"].as_i64())
+            {
+                page.active_window = window;
+            }
+            for tab in &mut page.tabs {
                 tab["isActive"] = json!(tab["targetId"] == command["params"]["targetId"]);
             }
             (json!({"result":{}}), now)
@@ -594,23 +623,53 @@ fn tab_command(
                 now,
             )
         }
-        "Browser.getTabs" => (json!({ "result": { "tabs": lock(page).tabs } }), now),
+        "Browser.getTabs" => {
+            let page = lock(page);
+            let mut tabs = page.tabs.clone();
+            // BrowserOS enumerates whole windows, most recently activated first.
+            tabs.sort_by_key(|tab| {
+                let window = tab["windowId"].as_i64().unwrap_or_default();
+                (window != page.active_window, window)
+            });
+            (json!({ "result": { "tabs": tabs } }), now)
+        }
         "Browser.createTab" => {
             let mut page = lock(page);
-            page.next_tab += 1;
-            let id = format!("new-page-{}", page.next_tab);
-            let tab = json!({
-                "targetId": id, "url": replies.new_page_url.unwrap_or("about:blank"), "windowId": 1,
-                "liveBrowserContextId": "profile", "isActive": false,
-            });
-            page.tabs.push(tab.clone());
-            (json!({ "result": { "tab": tab } }), now)
+            let window = command["params"]["windowId"]
+                .as_i64()
+                .or_else(|| page.tabs.first().and_then(|tab| tab["windowId"].as_i64()));
+            match window {
+                Some(window) => {
+                    let tab = page.add_tab(window, replies.new_page_url.unwrap_or("about:blank"));
+                    (
+                        json!({ "result": { "tab": tab } }),
+                        replies.create_tab_delay.or(now),
+                    )
+                }
+                None => (
+                    json!({"error":{"code":-32000,"message":"No browser window available"}}),
+                    now,
+                ),
+            }
+        }
+        "Browser.createWindow" => {
+            let mut page = lock(page);
+            let window = page.next_window;
+            page.next_window += 1;
+            page.add_tab(window, "about:blank");
+            (
+                json!({"result":{"window":{"windowId":window,"isActive":false}}}),
+                replies.create_tab_delay.or(now),
+            )
         }
         "Target.closeTarget" => {
             lock(page)
                 .tabs
                 .retain(|tab| tab["targetId"] != command["params"]["targetId"]);
-            (json!({ "result": { "success": true } }), now)
+            (
+                json!({ "result": { "success": true } }),
+                replies.close_tab_delay.or(now),
+            )
         }
         _ => return None,
     })

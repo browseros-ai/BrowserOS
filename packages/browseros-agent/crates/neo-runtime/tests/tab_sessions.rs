@@ -183,8 +183,8 @@ async fn tests_that_pages_are_scoped_lazy_and_outcomes_keep_first_seen_order_and
     assert_eq!(
         outcome.value,
         Some(json!({
-            "pages":["page@fake-page","page@other-window","page@new-page-1","page@new-page-2"],
-            "still":["page@fake-page","page@other-window","page@new-page-2"],
+            "pages":["page@fake-page","page@new-page-1","page@new-page-2","page@other-window"],
+            "still":["page@fake-page","page@new-page-2","page@other-window"],
             "closed":{"id":1}, "again":{"id":1}, "isClosed":true, "url":null,
         }))
     );
