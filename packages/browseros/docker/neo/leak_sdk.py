@@ -27,7 +27,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import dataclasses
-import hashlib
 import io
 import json
 import re
@@ -64,11 +63,14 @@ from leak_plan import (
     AFTER_RELEASE_READS,
     COPY_BASELINE_CODE,
     COPY_PROBES,
+    DENY_DIR,
+    DIGEST_CONTROL,
     ECHO_READS,
     FIELD_READS,
     GESTURE_ACTS,
     KEY_READS,
     NAV_FRAMES,
+    NEO_FILES,
     PAGE_ECHO_PROBES,
     PIXEL_READS,
     PLACES,
@@ -91,8 +93,8 @@ from leak_plan import (
     Region,
     assert_clean,
     buffer_code,
+    deny_uploads,
     make_instance,
-    neo_file_code,
     plan_runs,
     registrable,
     script_places,
@@ -120,14 +122,8 @@ FX_F_SUBJECT = "every sealed-world read is masked with its frame's whole site"
 TYPED_QUIET_S = 1.0
 # Values that reach the page as typing: held by claw-sdk until quiet, then registered.
 TYPED_ORIGINS = frozenset({Origin.OWNER, Origin.AGENT})
-# Neo's own secret files, by the environment variable naming each in the image: the host's
-# bearer token (leak_wire.Docker.run mounts it) and the CAPTCHA providers' keys
-# (Dockerfile; present only when the image was built with them).
-NEO_SECRET_FILES = (
-    ("host token", "CLAW_HOST_TOKEN_FILE"),
-    ("capsolver key", "BROWSEROS_CAPSOLVER_API_KEY_FILE"),
-    ("2captcha key", "BROWSEROS_2CAPTCHA_API_KEY_FILE"),
-)
+# What read_back answers about a page's input; the oracle's reply also carries its id.
+READ_FACTS = ("files", "read", "errors", "matched", "empty")
 
 # ------------------------------------------------------------------------------------------
 # The scenarios, in the order they run. Each opens its own page instances and closes them.
@@ -160,7 +156,8 @@ def echoes(s: Session) -> None:
 
 def fields(s: Session) -> None:
     """Every read of a field in every location; the show-password flip after Neo's seal
-    watched it; and the CAPTCHA built-in, which needs a provider this image lacks."""
+    watched it; and the CAPTCHA built-in, on the harness's fake provider key: the page
+    has no CAPTCHA, and its answer is searched like any other."""
     page = s.open(Layout.FIELDS)
     for channel in FIELD_READS:
         s.read(page, channel, exposures=FIELD)
@@ -276,15 +273,20 @@ def content(s: Session) -> None:
 
 def upload(s: Session) -> None:
     """setInputFiles. The owner serves any path and leaves sandboxing to the caller, so
-    the agent can hand the page a file from Neo's disk that Neo never saw: the page's
-    echo of it reads back raw by design (BD-UPLOAD), and Neo's own records are judged as
-    usual. A {name, mimeType, buffer} payload is the agent's own value, a declared way in
-    like keyboard.type: the control. Then, as information for the owner, whether the
-    agent can read Neo's own secret files that way. Held today (UPLOAD-HELD)."""
+    the agent can hand the page a file from Neo's disk that Neo never saw, one in Neo's
+    downloads dir too (agents re-upload downloads): the page's echo of each reads back
+    raw by design (BD-UPLOAD), and Neo's own records are judged as usual. Refusing either,
+    or answering sent while the page never receives it, is a functional regression
+    (unproven). A {name, mimeType, buffer} payload is the
+    agent's own value, a declared way in like keyboard.type: the control. Then the deny
+    list (decision 33b): each of Neo's own secret files, by its path and by the shapes
+    that hide a path, must be refused with DENY_CODE before the page reads a byte. Held
+    today (UPLOAD-HELD)."""
     page = s.open(Layout.UPLOAD)
-    if any([s.upload(page, plant) for plant in page.instance.plants]):
+    ordinary = [p for p in page.instance.plants if p.origin is not Origin.NEO]
+    if any([s.upload(page, plant) for plant in ordinary]):
         s.read(page, ChannelId.TEXT_CONTENT, exposures=ECHO)
-    s.neo_files(page)
+    s.deny_list(page)
     s.close(page)
 
 
@@ -501,6 +503,10 @@ class Session:
         self.docker = Docker(f"leak-{time.strftime('%H%M%S')}-{secrets.token_hex(2)}")
         self.token = "leak-" + secrets.token_hex(24)
         self.token_file = out / "host-token"
+        # A CAPTCHA provider key, so the deny list has a key file to refuse; no provider
+        # ever sees it (leak_wire.CAPTCHA_API_URL). The judge redacts both shapes.
+        self.captcha_key = "leak-key-" + secrets.token_hex(20)
+        self.captcha_key_file = out / "captcha-key"
         self.guard = PhaseGuard()
         self.instances: dict[str, Instance] = {}
         self.pages: list[Page] = []
@@ -557,9 +563,13 @@ class Session:
     def start(self) -> None:
         """Run the container, start leak_inside, open the events stream, and preflight.
         CLAW_LOG stays unset, so the logs are judged as shipped."""
-        self.token_file.write_text(self.token)
-        self.token_file.chmod(0o644)
-        self.docker.run(self.image, self.token_file)
+        for path, text in (
+            (self.token_file, self.token),
+            (self.captcha_key_file, self.captcha_key),
+        ):
+            path.write_text(text)
+            path.chmod(0o644)
+        self.docker.run(self.image, self.token_file, self.captcha_key_file)
         self.docker.wait_healthy()
         self.docker.exec("mkdir", "-p", "/tmp/leakfx")
         self.docker.cp_in(HERE / "leak_inside.py", "/tmp/leakfx/leak_inside.py")
@@ -683,6 +693,7 @@ class Session:
             with contextlib.suppress(Exception):
                 self.docker.remove()
             self.token_file.unlink(missing_ok=True)
+            self.captcha_key_file.unlink(missing_ok=True)
         self._write_manifest()
 
     def _collect(self, name: str, collect: Callable[[], object]) -> None:
@@ -952,72 +963,95 @@ class Session:
         return False
 
     def upload(self, page: Page, plant: Plant) -> bool:
-        """The agent uploads `plant` into its file input: a FILE plant by the path of the
-        file the oracle writes first, an AGENT plant as a {name, mimeType, buffer} payload
-        its run carries (the declared way in). Returns whether Neo ran it and the page
-        then showed the content, in its input and its echo."""
+        """The agent uploads `plant` into its file input: a FILE or DOWNLOAD plant by the
+        path of the file the oracle writes first (its planned run), an AGENT plant as a
+        {name, mimeType, buffer} payload its run carries (the declared way in). Returns
+        whether Neo ran it and the page then showed the content, in its input and echo."""
         assert self.oracle is not None
         (field,) = page.instance.field_regions(plant)
-        if plant.origin is Origin.FILE:
+        inject: Plant | None = None
+        if plant.origin is Origin.AGENT:
+            channel, code, inject = (
+                ChannelId.UPLOAD_BUFFER,
+                buffer_code(page.instance, field),
+                plant,
+            )
+        else:
             text = plant.secret.reveal()
             self.oracle.call("plant_file", path=upload_path(field), text=text)
-            (capture,) = self.read(page, ChannelId.UPLOAD)
-        else:
-            before = self.proof(page)
-            capture = self._run(
-                page.instance,
-                ChannelId.UPLOAD_BUFFER,
-                Phase.ANY,
-                buffer_code(page.instance, field),
-                page=page,
-                inject=plant,
+            channel = ChannelId.UPLOAD
+            plans = plan_runs(SPECS[channel], page.instance)
+            (code,) = [run.code for run in plans if run.regions == (field,)]
+        before = self.proof(page)
+        capture = self._run(
+            page.instance, channel, Phase.ANY, code, page=page, inject=inject
+        )
+        after = self.proof(page)
+        self.record(
+            dataclasses.replace(
+                capture, proofs=(before.id, after.id), regions=(field.id,)
             )
-            after = self.proof(page)
-            self.record(
-                dataclasses.replace(
-                    capture, proofs=(before.id, after.id), regions=(field.id,)
-                )
-            )
-            self.guard.note_touched(page.instance)
+        )
+        self.guard.note_touched(page.instance)
         if not self._sent(capture):
             return False
         shown = self.wait_live(page, page.instance.regions_of(plant))
         self.step("uploaded", page, plant=plant.id, shown=shown)
         return shown
 
-    def neo_files(self, page: Page) -> None:
-        """Information for the owner, not a verdict: can the agent read Neo's own secret
-        files through setInputFiles? Each goes into the page's plain file input and the
-        agent reads its echo. The harness compares that echo's digest with the file's,
-        taken in the container, and records only the answer."""
+    def deny_list(self, page: Page) -> None:
+        """setInputFiles' deny list (decision 33b), one probe per input of the page
+        (leak_plan.deny_uploads), each recorded as a step for decide_neo_upload.
+
+        First the read-back's control: the oracle sets a file of its own into the
+        control input and must find that the page read it, or no answer that went
+        through could be judged by what the page read (a failed control is a harness
+        failure). Then each probe: the oracle checks its target and makes its links,
+        the agent uploads the named path, and the oracle compares what the page read
+        with the target, inside the container. A probe whose target is missing or
+        whose link the filesystem refused is recorded without a run."""
         assert self.oracle is not None
-        for label, variable in NEO_SECRET_FILES:
-            path = self.docker.exec("printenv", variable, check=False).decode().strip()
-            digest = self.oracle.call("digest", path=path)["sha256"] if path else None
-            if digest is None:
-                self.step("neo_file", page, file=label, present=False)
+        control = self.oracle.call(
+            "digest_control",
+            instance=page.instance.name,
+            input=DIGEST_CONTROL,
+            path=f"{DENY_DIR}/control.bin",
+        )
+        checked = {k: control[k] for k in READ_FACTS}
+        self.step("neo_upload_control", page, **checked)
+        if not checked["matched"]:
+            self.step("failed", error=f"read-back control missed its file: {checked}")
+        for upload in deny_uploads(page.instance):
+            ready = self.oracle.call(
+                "prepare_upload",
+                target=NEO_FILES[upload.probe.target],
+                links=[list(link) for link in upload.links],
+            )
+            facts = {
+                "region": upload.region.id,
+                "probe": str(upload.probe),
+                "named": upload.named,
+                "paths": list(upload.paths),
+                "present": ready["present"],
+                "made": ready.get("made", False),
+                "why": ready.get("why"),
+            }
+            if not (facts["present"] and facts["made"]):
+                self.step("neo_upload", page, **facts)
                 continue
             capture = self._run(
-                page.instance, ChannelId.HARNESS, Phase.ANY, neo_file_code(path)
+                page.instance, ChannelId.UPLOAD_NEO, Phase.ANY, upload.code(), page=page
             )
-            reply = parse_run_reply((self.out / capture.blob).read_bytes())
-            text = reply.value if isinstance(reply.value, str) else ""
-            echoed = re.fullmatch(r"FILE \{\{(.*)\}\}", text, re.DOTALL)
-            readable = bool(echoed) and (
-                hashlib.sha256(echoed[1].encode()).hexdigest() == digest
+            self.record(dataclasses.replace(capture, regions=(upload.region.id,)))
+            self.guard.note_touched(page.instance)
+            read = self.oracle.call(
+                "read_back",
+                instance=page.instance.name,
+                region=upload.region.id,
+                path=upload.named,
             )
-            if reply.error is not None:
-                answer = f"{reply.error['owner']}/{reply.error['code']}"
-            else:
-                answer = "sent" if readable else "the echo is not the file"
-            self.step(
-                "neo_file",
-                page,
-                file=label,
-                present=True,
-                readable=readable,
-                answer=answer,
-            )
+            checked = {k: read[k] for k in READ_FACTS}
+            self.step("neo_upload", page, capture=capture.id, read=checked, **facts)
 
     def write(self, page: Page) -> bool:
         """The agent writes the page's top document with setContent (content_html).

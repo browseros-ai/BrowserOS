@@ -44,6 +44,15 @@ MCP_READ_TIMEOUT_S = 120
 RUN_TIMEOUT_MAX_MS = 110_000
 KEY_DELAY_S = 0.015
 VIEW_REFRESH_S = 0.3
+# Neo's own secret files that the harness supplies, at the paths the deny-list probes
+# upload (leak_plan.NEO_FILES; leak_wire_test pins the two together). The fake CAPTCHA
+# key sits in a directory of its own, so the deny list's CAPTCHA key dir holds nothing
+# else, and outside /home/neo, which the entrypoint chowns at start (a read-only mount
+# there stops the container). Its provider URL is a loopback port nothing serves, so a
+# solve can never carry the key, or a page's pixels, out of the container.
+HOST_TOKEN_PATH = "/run/neo-host-token"
+CAPTCHA_KEY_PATH = "/run/neo-captcha/capsolver-api-key"
+CAPTCHA_API_URL = "http://127.0.0.1:9"
 
 
 def _now_ms() -> int:
@@ -79,16 +88,19 @@ class Docker:
             raise RuntimeError(f"docker {args[0]} exited {done.returncode}: {error}")
         return done.stdout
 
-    def run(self, image: str, token_file: Path) -> None:
+    def run(self, image: str, token_file: Path, captcha_key_file: Path) -> None:
         hosts = [f"--add-host={host}:127.0.0.1" for host in FIXTURE_HOSTS]
         # CLAW_LOG stays unset: the default level is the one the log channel is judged
         # at, and debug or trace dump run code and CDP frames by design.
         self._cli(
             *("run", "-d", "--name", self.name, "--shm-size=1g", "--hostname", "neo"),
             *("-p", "127.0.0.1::9010", "-p", "127.0.0.1::9300"),
-            *("-v", f"{token_file.resolve()}:/run/neo-host-token:ro"),
-            *("-e", "CLAW_HOST_TOKEN_FILE=/run/neo-host-token"),
+            *("-v", f"{token_file.resolve()}:{HOST_TOKEN_PATH}:ro"),
+            *("-e", f"CLAW_HOST_TOKEN_FILE={HOST_TOKEN_PATH}"),
             *("-e", "CLAW_HOST_TCP=0.0.0.0:9300"),
+            *("-v", f"{captcha_key_file.resolve()}:{CAPTCHA_KEY_PATH}:ro"),
+            *("-e", f"BROWSEROS_CAPSOLVER_API_KEY_FILE={CAPTCHA_KEY_PATH}"),
+            *("-e", f"BROWSEROS_CAPSOLVER_API_URL={CAPTCHA_API_URL}"),
             *hosts,
             image,
         )

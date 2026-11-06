@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import posixpath
 import random
 import re
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
@@ -295,13 +296,21 @@ class Origin(StrEnum):
     FILE = (
         "file"  # a file on Neo's disk, which the agent's setInputFiles hands the page
     )
+    # A file in Neo's downloads dir, handed over the same way: agents re-upload what they
+    # downloaded, so the deny list must leave that dir alone (decision 33b).
+    DOWNLOAD = "download"
+    # One of Neo's own secret files, which setInputFiles must refuse (decision 33b). Its
+    # bytes never leave the container: the oracle compares what the page read with the
+    # file there (deny_uploads). The plant's value is a placeholder no page ever holds,
+    # kept so the plant has the shape every other plant has.
+    NEO = "neo"
 
 
 # The declared ways a planted value may ride a request the harness sends, by origin: the
 # one request that hands it to Neo by design. assert_clean refuses a value anywhere else.
 # OWNER keys travel as RFB key events on the control display, which assert_clean never
 # reads (they are not text the harness formats), so they need no entry here; nor does a
-# FILE value, which the oracle writes onto Neo's disk and no request to Neo carries.
+# FILE or DOWNLOAD value, which the oracle writes onto Neo's disk and no request carries.
 DECLARED_WAYS_IN: Mapping[Origin, str] = {
     Origin.HOST: "http POST /v1/secrets",
     Origin.AGENT: "mcp tools/call run",
@@ -413,8 +422,9 @@ class Layout(StrEnum):
     # Same-site frames whose fields plant themselves, echoed and titled in a top document
     # the agent writes with page.setContent (content_html): the fixture serves it a shell.
     CONTENT = "content"
-    # A file input for a file on Neo's disk, one for the agent's own buffer, each echoed
-    # in MAIN; and the fixture's own plain input for Neo's secret files (information).
+    # File inputs for two files on Neo's disk (one in its downloads dir) and one for the
+    # agent's own buffer, each echoed in MAIN; one per deny-list probe, never echoed; and
+    # the fixture's own input for the read-back's control (DIGEST_CONTROL).
     UPLOAD = "upload"
 
 
@@ -565,6 +575,13 @@ class Instance:
             out["words"] = spec.words
             if plant.origin is Origin.PAGE:
                 out["value"] = r.expected()
+            if plant.origin is Origin.NEO:
+                # A deny-list probe's input: the page hashes what it reads there for the
+                # oracle and never echoes, mirrors or proves it (fx.js watchDigests).
+                out["digests"] = True
+                (probe,) = [u.probe for u in deny_uploads(self) if u.region.id == r.id]
+                if probe.directory:
+                    out["attrs"].append(["webkitdirectory", ""])
         elif r.exposure is Exposure.PASTED:
             out["attrs"] = [list(a) for a in _TEXT]
             out["words"] = "Field"
@@ -657,8 +674,9 @@ def _layout_plants(layout: Layout) -> list[PlantSpec]:
     if layout is Layout.UPLOAD:
         return [
             (Kind.FILE, Location.MAIN, Origin.FILE, False),
+            (Kind.FILE, Location.MAIN, Origin.DOWNLOAD, False),
             (Kind.FILE, Location.MAIN, Origin.AGENT, False),
-        ]
+        ] + [(Kind.FILE, Location.MAIN, Origin.NEO, False)] * len(DENY_PROBES)
     if layout is Layout.CONTENT:
         # Frames of the page's site only: setContent runs between sweeps of that site, and
         # a cross-site frame's echo is XSITE whatever the op (measured in "echoes").
@@ -701,7 +719,7 @@ def _layout_exposures(layout: Layout, plant: Plant) -> list[tuple[Exposure, Loca
         return [(Exposure.URL, main)]
     if layout is Layout.CONTENT:
         return [(Exposure.ECHO, main), (Exposure.TITLE, main)]
-    if layout is Layout.UPLOAD:
+    if layout is Layout.UPLOAD and plant.origin is not Origin.NEO:
         return [(Exposure.ECHO, main)]
     if layout is Layout.OWNER and plant.origin is Origin.OWNER:
         out = [(Exposure.ECHO, main)]
@@ -797,6 +815,7 @@ COPY_DROP = "fx-drop"
 def neutral_tokens(instance: Instance) -> list[str]:
     """Every token the page renders that is meant to classify as nothing."""
     tokens = [instance.name, "ECHO", "Field", "Box", COPY_BASE, COPY_DROP]
+    tokens.append(DIGEST_CONTROL)
     tokens += [r.id for r in instance.regions] + [r.anchor for r in instance.regions]
     tokens += [p.frame_path[-1] for p in PLACES.values() if p.frame_path]
     tokens += [str(loc) for loc in Location]
@@ -1037,6 +1056,7 @@ class ChannelId(StrEnum):
     SET_CONTENT = "page.setContent"
     UPLOAD = "locator.setInputFiles (path)"
     UPLOAD_BUFFER = "locator.setInputFiles (buffer)"
+    UPLOAD_NEO = "locator.setInputFiles (Neo's own file)"
     BRING_TO_FRONT = "page.bringToFront"
     SOLVE_CAPTCHA = "neo.solveCaptcha"
     RUNS = "GET /v1/runs"
@@ -1085,6 +1105,11 @@ class ChannelSpec:
     targets: Reaches | None = None
     refusals: frozenset[str] = frozenset()  # "owner/code" answers that mean withheld
     not_built: frozenset[str] = frozenset()  # answers that mean the method is not built
+    # How any other refusal reads in its unproven cell's reason, before the owner/code.
+    other_refusal: str = "refused"
+    # An op that must hand the page what it names: sent, with the page never showing it
+    # (the harness's "uploaded" step), it reads unproven with this reason.
+    not_received: str | None = None
     ops: frozenset[str] = frozenset()  # ops.generated.ts ops this probe exercises
     reads_fields: bool = False  # in FIELD_READS (scenario "fields")
     reads_echoes: bool = (
@@ -1271,18 +1296,23 @@ def set_content(
 
 # setInputFiles. The owner serves any path (the caller sandboxes), so the agent can hand
 # the page a file of Neo's disk, which the page reads and echoes: the oracle writes a
-# fresh value into a file here, outside the state dir, and no request to Neo carries it.
-UPLOAD_DIR = "/tmp/leakfx/up"
-# The UPLOAD page's plain file input and echo for Neo's own secret files, outside every
-# plant: whether the agent can read them is information for the owner, not a verdict.
-# The page echoes a file as "FILE {{<text>}}"; the report redacts that slot whole.
-NEO_FILE_INPUT = "fx-upload"
-NEO_FILE_ECHO = "fx-upload-echo"
+# fresh value into a file, and no request to Neo carries it. One file sits outside Neo's
+# state; the other in Neo's downloads dir (entrypoint.sh: $NEO_DATA_DIR/downloads), which
+# the deny list must leave alone.
+UPLOAD_DIRS: Mapping[Origin, str] = {
+    Origin.FILE: "/tmp/leakfx/up",
+    Origin.DOWNLOAD: "/data/downloads",
+}
+# How the deny list refuses an upload of one of Neo's own secret files: its own code,
+# with a message that names no path (decision 33b; held-methods.md's addendum gives this
+# code as its example). An ordinary file refused with it is a functional regression.
+DENY_CODE = "script/neo_secret_upload_refused"
 
 
 def upload_path(region: Region) -> str:
-    """Where the file a FILE plant's input is given sits: named by the region's id."""
-    return f"{UPLOAD_DIR}/{region.id}.txt"
+    """Where the file a FILE or DOWNLOAD plant's input is given sits: named by the
+    region's id, in its origin's directory."""
+    return f"{UPLOAD_DIRS[region.plant.origin]}/{region.id}.txt"
 
 
 def upload(
@@ -1314,17 +1344,127 @@ def buffer_code(instance: Instance, region: Region) -> str:
     )
 
 
-def neo_file_code(path: str) -> str:
-    """One of Neo's own secret files into the UPLOAD page's plain input, then its echo,
-    which the run returns: what the agent could read that way."""
-    return "\n".join(
-        [
-            f"await page.locator('#{NEO_FILE_INPUT}').setInputFiles({json.dumps(path)});",
-            f"const echo = page.locator('#{NEO_FILE_ECHO}');",
-            "await echo.waitFor({state: 'visible', timeout: 5000});",
-            "return await echo.textContent();",
-        ]
-    )
+# The deny list (decision 33b): setInputFiles uploads any path as Playwright does except
+# Neo's own secret files, which it refuses with DENY_CODE before reading any byte. Each
+# probe uploads one into a file input of its own, by its path or by a shape that hides
+# the path; the oracle then compares what the page read with the file, by sha256, inside
+# the container, so neither the bytes nor a digest of them ever reach the evidence.
+class NeoFile(StrEnum):
+    """One of Neo's own secret files, which setInputFiles must refuse."""
+
+    HOST_TOKEN = "host token"
+    CAPTCHA_KEY = "CAPTCHA key"
+    TRACE_DB = "trace.db"
+    TRACE_WAL = "trace.db-wal"
+    COOKIES = "profile Cookies"
+    LOGIN_DATA = "profile Login Data"
+
+
+# Where each sits in the harness's container: the token and a fake CAPTCHA key where
+# leak_wire.Docker.run mounts them (the key in a directory of its own), the trace store
+# in claw-sdk's state dir and the credential stores in the browser profile, both under
+# NEO_DATA_DIR=/data (entrypoint.sh).
+NEO_FILES: Mapping[NeoFile, str] = {
+    NeoFile.HOST_TOKEN: "/run/neo-host-token",
+    NeoFile.CAPTCHA_KEY: "/run/neo-captcha/capsolver-api-key",
+    NeoFile.TRACE_DB: "/data/browserclaw/claw-sdk/trace.db",
+    NeoFile.TRACE_WAL: "/data/browserclaw/claw-sdk/trace.db-wal",
+    NeoFile.COOKIES: "/data/profile/Default/Cookies",
+    NeoFile.LOGIN_DATA: "/data/profile/Default/Login Data",
+}
+
+
+class Via(StrEnum):
+    """How a probe names its target. The deny list matches by realpath and by (dev,
+    inode), and refuses a directory that holds a denied file, so every shape must fail."""
+
+    PATH = "its path"
+    SYMLINK = "a symlink in /tmp"
+    DOTDOT = "a path through .."
+    HARD_LINK = "a hard link"
+    DIRECTORY = "its directory"
+    LINK_DIRECTORY = "a directory holding a symlink to it"
+
+
+@dataclasses.dataclass(frozen=True)
+class DenyProbe:
+    """One target named one way: the unit of a deny-list verdict."""
+
+    target: NeoFile
+    via: Via
+
+    @property
+    def directory(self) -> bool:
+        """Uploaded as a directory, into an input that takes one (webkitdirectory)."""
+        return self.via in (Via.DIRECTORY, Via.LINK_DIRECTORY)
+
+    def __str__(self) -> str:
+        return f"{self.target} by {self.via}"
+
+
+DENY_PROBES: tuple[DenyProbe, ...] = (
+    *(DenyProbe(target, Via.PATH) for target in NeoFile),
+    DenyProbe(NeoFile.HOST_TOKEN, Via.SYMLINK),
+    DenyProbe(NeoFile.HOST_TOKEN, Via.DOTDOT),
+    DenyProbe(NeoFile.HOST_TOKEN, Via.LINK_DIRECTORY),
+    DenyProbe(NeoFile.TRACE_DB, Via.HARD_LINK),
+    DenyProbe(NeoFile.TRACE_DB, Via.DIRECTORY),
+)
+# Where the oracle makes the links a probe names: on the container's root filesystem,
+# which also holds trace.db (the harness mounts no volume on /data), so a hard link to it
+# can be made there.
+DENY_DIR = "/tmp/leakfx/deny"
+# The UPLOAD page's own file input for the read-back's positive control, outside every
+# plant: the oracle sets a file of its own there over DevTools, and the comparison that
+# judges the probes must find the page read it (fx.js renders it in MAIN).
+DIGEST_CONTROL = "fx-digest-control"
+
+
+@dataclasses.dataclass(frozen=True)
+class DenyUpload:
+    """One deny-list probe on one UPLOAD page: the file input it uses, the path the agent
+    names, and the links the oracle makes first, each (kind, the target, where)."""
+
+    probe: DenyProbe
+    region: Region
+    named: str
+    links: tuple[tuple[str, str, str], ...] = ()
+
+    @property
+    def paths(self) -> tuple[str, str]:
+        """What the refusal must not name: the path the agent gave and its target's."""
+        return (self.named, NEO_FILES[self.probe.target])
+
+    def code(self) -> str:
+        """setInputFiles with the named path on the probe's own input: a path, which is
+        not a value. A refusal is keyed by the input, so its code survives (void_run)."""
+        path = json.dumps(self.named)
+        call = f"page.locator('#{self.region.id}').setInputFiles({path})"
+        return void_run([self.region.id], call)
+
+
+def deny_uploads(instance: Instance) -> tuple[DenyUpload, ...]:
+    """Every deny-list probe of an UPLOAD page, in DENY_PROBES order: the page plants one
+    NEO plant per probe in that order, each with one file input, so a file one probe
+    uploaded can never be read as another's."""
+    fields = [r for r in instance.regions if r.plant.origin is Origin.NEO]
+    if not fields:
+        return ()
+    out = []
+    for probe, region in zip(DENY_PROBES, fields, strict=True):
+        target = NEO_FILES[probe.target]
+        here = f"{DENY_DIR}/{region.id}"
+        inside = f"{here}/{posixpath.basename(target)}"
+        named, links = {
+            Via.PATH: (target, ()),
+            Via.SYMLINK: (here, (("symlink", target, here),)),
+            Via.DOTDOT: (f"/tmp/..{target}", ()),
+            Via.HARD_LINK: (here, (("hard link", target, here),)),
+            Via.DIRECTORY: (posixpath.dirname(target), ()),
+            Via.LINK_DIRECTORY: (here, (("symlink", target, inside),)),
+        }[probe.via]
+        out.append(DenyUpload(probe, region, named, links))
+    return tuple(out)
 
 
 # Main-world reads (design D3's guard). The agent's function runs where the page's own
@@ -2241,15 +2381,18 @@ SPECS: Mapping[ChannelId, ChannelSpec] = {
             void=True,
         ),
         # setInputFiles answers nothing; the page's echo of what it uploaded is read
-        # through textContent (scenario "upload"). Held today (UPLOAD-HELD).
+        # through textContent (scenario "upload"). Held today (UPLOAD-HELD). These files
+        # are ordinary: refusing one is a functional regression, unproven, never a leak.
         ChannelSpec(
             ChannelId.UPLOAD,
             _A,
-            lambda r: r.exposure is Exposure.FIELD and r.plant.origin is Origin.FILE,
+            lambda r: r.exposure is Exposure.FIELD and r.plant.origin in UPLOAD_DIRS,
             code=upload,
             batch="region",
             refusals=HELD,
             not_built=SCRIPT_NOT_BUILT,
+            other_refusal="ordinary upload refused",
+            not_received="ordinary upload not received",
             ops=frozenset({"locator.setInputFiles"}),
             void=True,
         ),
@@ -2263,6 +2406,18 @@ SPECS: Mapping[ChannelId, ChannelSpec] = {
             and r.plant.origin is Origin.AGENT,
             refusals=HELD,
             not_built=SCRIPT_NOT_BUILT,
+            ops=frozenset({"locator.setInputFiles"}),
+            void=True,
+        ),
+        ChannelSpec(
+            # Neo's own secret files (decision 33b): refused with DENY_CODE, naming no
+            # path. The Session builds each run with the path its probe names
+            # (deny_uploads); leak_judge.decide_neo_upload judges it with what the oracle
+            # found the page read. Held today with the rest of setInputFiles.
+            ChannelId.UPLOAD_NEO,
+            _A,
+            lambda r: r.exposure is Exposure.FIELD and r.plant.origin is Origin.NEO,
+            refusals=HELD | {DENY_CODE},
             ops=frozenset({"locator.setInputFiles"}),
             void=True,
         ),

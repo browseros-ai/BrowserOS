@@ -14,7 +14,9 @@ from __future__ import annotations
 import dataclasses
 import html
 import json
+import posixpath
 import re
+import shutil
 import struct
 import tempfile
 import unittest
@@ -507,21 +509,22 @@ class ScriptPlanTests(unittest.TestCase):
 
 
 class UploadPlanTests(unittest.TestCase):
-    """setInputFiles' probes: a file on Neo's disk by path, the agent's own buffer, and
-    (as information) Neo's own secret files."""
+    """setInputFiles' ordinary probes: files on Neo's disk by path (one in the downloads
+    dir) and the agent's own buffer."""
 
     def setUp(self) -> None:
         self.inst = P.make_instance(P.Layout.UPLOAD, seed="up", index=1)
         self.disk = self.inst.plant(origin=P.Origin.FILE)
+        self.download = self.inst.plant(origin=P.Origin.DOWNLOAD)
         self.buffer = self.inst.plant(origin=P.Origin.AGENT)
 
-    def test_an_upload_page_plants_a_file_on_neos_disk_and_an_agent_buffer(
+    def test_an_upload_page_plants_files_on_neos_disk_and_an_agent_buffer(
         self,
     ) -> None:
         """Each goes into a file input no rule classifies and is echoed in the top
-        document. Neither is in the page's slice: one sits in a file, the other in the
+        document. None is in the page's slice: two sit in files, the other in the
         agent's run."""
-        for plant in (self.disk, self.buffer):
+        for plant in (self.disk, self.download, self.buffer):
             self.assertIs(plant.kind, P.Kind.FILE)
             (field,) = self.inst.field_regions(plant)
             self.assertEqual(dict(P.KINDS[plant.kind].attrs), {"type": "file"})
@@ -537,16 +540,22 @@ class UploadPlanTests(unittest.TestCase):
             kinds = {p.kind for p in P.make_instance(layout, seed="up", index=2).plants}
             self.assertNotIn(P.Kind.FILE, kinds)
 
-    def test_the_path_upload_names_a_path_outside_the_state_dir_and_no_value(
-        self,
-    ) -> None:
-        (run,) = P.plan_runs(P.SPECS[P.ChannelId.UPLOAD], self.inst)
-        (field,) = self.inst.field_regions(self.disk)
-        self.assertEqual(run.regions, (field,))
-        path = P.upload_path(field)
-        self.assertIn(f"setInputFiles({json.dumps(path)})", run.code)
-        self.assertFalse(path.startswith("/data/browserclaw"))
-        P.assert_clean(run.code, [self.inst])
+    def test_each_path_upload_names_an_ordinary_file_and_no_value(self) -> None:
+        """One run per file, each naming the path the oracle writes it at: one outside
+        Neo's state, one in Neo's downloads dir (agents re-upload what they downloaded),
+        neither under a directory the deny list covers (decision 33b)."""
+        runs = P.plan_runs(P.SPECS[P.ChannelId.UPLOAD], self.inst)
+        (disk,) = self.inst.field_regions(self.disk)
+        (download,) = self.inst.field_regions(self.download)
+        self.assertEqual([run.regions for run in runs], [(disk,), (download,)])
+        paths = [P.upload_path(field) for field in (disk, download)]
+        self.assertTrue(paths[0].startswith("/tmp/"))
+        self.assertEqual(paths[1], f"/data/downloads/{download.id}.txt")
+        for run, path in zip(runs, paths, strict=True):
+            self.assertIn(f"setInputFiles({json.dumps(path)})", run.code)
+            for denied in ("/data/browserclaw", "/data/profile", "/run/"):
+                self.assertFalse(path.startswith(denied), path)
+            P.assert_clean(run.code, [self.inst])
 
     def test_the_buffer_upload_is_the_one_run_that_carries_its_own_value(self) -> None:
         """A {name, mimeType, buffer} payload is the agent's value in its own code: a
@@ -560,11 +569,96 @@ class UploadPlanTests(unittest.TestCase):
             P.assert_clean(code, [self.inst])
         self.assertIsNone(P.SPECS[P.ChannelId.UPLOAD_BUFFER].code)
 
-    def test_neos_own_files_are_asked_by_path_only(self) -> None:
-        code = P.neo_file_code("/run/neo-host-token")
-        self.assertIn('setInputFiles("/run/neo-host-token")', code)
-        self.assertIn(P.NEO_FILE_INPUT, code)
-        self.assertIn(P.NEO_FILE_ECHO, code)
+
+class DenyPlanTests(unittest.TestCase):
+    """setInputFiles' deny list (decision 33b): each of Neo's own secret files by its
+    path, and the shapes that hide a path, each probe on a file input of its own."""
+
+    def setUp(self) -> None:
+        self.inst = P.make_instance(P.Layout.UPLOAD, seed="deny", index=1)
+        self.uploads = P.deny_uploads(self.inst)
+
+    def test_every_secret_by_its_path_and_every_bypass_by_its_shape(self) -> None:
+        """Every target by its own path; the token through a symlink in /tmp, a ".."
+        path and a directory holding a symlink to it; trace.db through a hard link and
+        its directory. Each probe has a file input of its own that the page never echoes,
+        so one probe's upload can never be read as another's; none is in the downloads
+        dir, which the deny list must leave alone."""
+        by_path = {p.target for p in P.DENY_PROBES if p.via is P.Via.PATH}
+        self.assertEqual(by_path, set(P.NeoFile))
+        self.assertEqual(
+            {(p.target, p.via) for p in P.DENY_PROBES if p.via is not P.Via.PATH},
+            {
+                (P.NeoFile.HOST_TOKEN, P.Via.SYMLINK),
+                (P.NeoFile.HOST_TOKEN, P.Via.DOTDOT),
+                (P.NeoFile.HOST_TOKEN, P.Via.LINK_DIRECTORY),
+                (P.NeoFile.TRACE_DB, P.Via.HARD_LINK),
+                (P.NeoFile.TRACE_DB, P.Via.DIRECTORY),
+            },
+        )
+        self.assertEqual([u.probe for u in self.uploads], list(P.DENY_PROBES))
+        regions = [u.region for u in self.uploads]
+        self.assertEqual(len({r.id for r in regions}), len(P.DENY_PROBES))
+        for region in regions:
+            self.assertIs(region.plant.origin, P.Origin.NEO)
+            self.assertIs(region.plant.kind, P.Kind.FILE)
+            self.assertEqual(self.inst.regions_of(region.plant), (region,))
+            self.assertEqual(P.registrable(region.plant, typed=True), 0)
+        downloads = P.UPLOAD_DIRS[P.Origin.DOWNLOAD] + "/"
+        self.assertFalse(any(p.startswith(downloads) for p in P.NEO_FILES.values()))
+
+    def test_each_probe_names_its_target_by_its_shape(self) -> None:
+        """The path the agent names, the links the oracle makes first, and the paths
+        the refusal must not name: the named one and its target's."""
+        for upload in self.uploads:
+            target = P.NEO_FILES[upload.probe.target]
+            here = f"{P.DENY_DIR}/{upload.region.id}"
+            want = {
+                P.Via.PATH: (target, ()),
+                P.Via.SYMLINK: (here, (("symlink", target, here),)),
+                P.Via.DOTDOT: (f"/tmp/..{target}", ()),
+                P.Via.HARD_LINK: (here, (("hard link", target, here),)),
+                P.Via.DIRECTORY: (posixpath.dirname(target), ()),
+                P.Via.LINK_DIRECTORY: (
+                    here,
+                    (("symlink", target, f"{here}/{posixpath.basename(target)}"),),
+                ),
+            }[upload.probe.via]
+            with self.subTest(probe=str(upload.probe)):
+                self.assertEqual((upload.named, upload.links), want)
+                self.assertEqual(upload.paths, (upload.named, target))
+                if upload.probe.via is P.Via.DOTDOT:
+                    self.assertEqual(posixpath.normpath(upload.named), target)
+
+    def test_the_page_keeps_what_a_probe_uploads_to_itself(self) -> None:
+        """The slice marks each probe's input: the fixture hashes what it reads there
+        for the oracle and never echoes, mirrors or proves it (fx.js watchDigests). A
+        directory probe's input takes a directory (webkitdirectory), as Playwright
+        requires; an ordinary upload's input is the plain one."""
+        main = {r["id"]: r for r in self.inst.slice(P.Location.MAIN)["regions"]}
+        for upload in self.uploads:
+            region = main[upload.region.id]
+            directory = upload.probe.via in (P.Via.DIRECTORY, P.Via.LINK_DIRECTORY)
+            with self.subTest(probe=str(upload.probe)):
+                self.assertIs(region.get("digests"), True)
+                self.assertEqual(["webkitdirectory", ""] in region["attrs"], directory)
+                self.assertNotIn("value", region)
+        for origin in P.UPLOAD_DIRS:
+            (field,) = self.inst.field_regions(self.inst.plant(origin=origin))
+            self.assertNotIn("digests", main[field.id])
+        self.assertIn(P.DIGEST_CONTROL, P.neutral_tokens(self.inst))
+
+    def test_a_probe_names_its_input_and_a_path_and_keys_its_refusal(self) -> None:
+        """A path is not a value: the run names the input's id and the path, and keys a
+        refusal by the input, so its code and message survive (void_run)."""
+        for upload in self.uploads:
+            code = upload.code()
+            with self.subTest(probe=str(upload.probe)):
+                call = f"page.locator('#{upload.region.id}').setInputFiles("
+                self.assertIn(call + json.dumps(upload.named) + ")", code)
+                self.assertIn("return {sent: true};", code)
+                self.assertIn(f'return {{"{upload.region.id}": refused}};', code)
+                P.assert_clean(code, [self.inst])
 
 
 class ContentPlanTests(unittest.TestCase):
@@ -978,7 +1072,8 @@ class EvidenceBase(unittest.TestCase):
     def judged(self) -> list[J.Cell]:
         return list(J.judge(self.evidence()).cells)
 
-    def reply(self, value: object, run: str, error: dict | None = None) -> bytes:
+    @staticmethod
+    def reply(value: object, run: str, error: dict | None = None) -> bytes:
         """A run's raw MCP reply: its value, or the error it threw."""
         meta: dict = {"id": run, "status": "ok", "effects": "none", "unknown": []}
         result: dict = {
@@ -2318,19 +2413,17 @@ class FrontTests(EvidenceBase):
         )
 
 
-TOKEN = "leak-" + "0123456789abcdef" * 3
-
-
 class UploadTests(EvidenceBase):
     """setInputFiles through judge(): the agent reads back a file Neo never saw (by
     design), its own buffer (the control), Neo's records of each, and what the report
-    may say about Neo's own secret files."""
+    may say about Neo's own secrets."""
 
     layout = P.Layout.UPLOAD
 
     def setUp(self) -> None:
         super().setUp()
         self.disk = self.inst.plant(origin=P.Origin.FILE)
+        self.download = self.inst.plant(origin=P.Origin.DOWNLOAD)
         self.buffer = self.inst.plant(origin=P.Origin.AGENT)
 
     def echo(self, plant: P.Plant) -> P.Region:
@@ -2379,22 +2472,74 @@ class UploadTests(EvidenceBase):
 
     def test_a_file_from_neos_disk_read_back_raw_is_by_design(self) -> None:
         """No rule can tell a file's content is sensitive, and the owner serves any
-        path: the agent's read of the page's echo is BD-UPLOAD, and the record of that
-        run inherits it. The agent's own buffer read back is the control."""
+        path: the agent's read of the page's echo is BD-UPLOAD, a downloaded file's as
+        much as any other, and the record of that run inherits it. The agent's own
+        buffer read back is the control."""
         self.upload("up1", P.ChannelId.UPLOAD, self.disk)
-        self.read_back([self.disk, self.buffer])
+        self.upload("up2", P.ChannelId.UPLOAD, self.download)
+        for plant in (self.disk, self.download):
+            self.step(1, "uploaded", plant=plant.id, shown=True)
+        self.read_back([self.disk, self.download, self.buffer])
         echo = self.echo(self.disk)
         self.record_of("h1", "read1", f"ECHO {echo.anchor} {{{{{echo.expected()}}}}}")
         read = self.cells(P.ChannelId.TEXT_CONTENT)
         self.assertEqual(read[echo.id], (J.Verdict.LEAKED, "BD-UPLOAD"))
+        self.assertEqual(
+            read[self.echo(self.download).id], (J.Verdict.LEAKED, "BD-UPLOAD")
+        )
         self.assertEqual(read[self.echo(self.buffer).id], (J.Verdict.LEAKED, "CONTROL"))
         self.assertEqual(
             self.cells(P.ChannelId.RUN)[echo.id], (J.Verdict.LEAKED, "BD-UPLOAD")
         )
-        (field,) = self.inst.field_regions(self.disk)
+        for plant in (self.disk, self.download):
+            (field,) = self.inst.field_regions(plant)
+            self.assertEqual(
+                self.cells(P.ChannelId.UPLOAD)[field.id],
+                (J.Verdict.NOT_APPLICABLE, None),
+            )
+
+    def test_an_ordinary_upload_the_page_never_received_is_unproven(self) -> None:
+        """Sent is not enough: the page must show the file it was given (the harness's
+        "uploaded" step). One that answers sent and never arrives, dropped without a
+        word, is as much a functional regression as a refusal: unproven (+8). The
+        downloads file here has no step at all, so nothing ever saw it arrive."""
+        self.upload("up1", P.ChannelId.UPLOAD, self.disk)
+        self.upload("up2", P.ChannelId.UPLOAD, self.download)
+        self.step(1, "uploaded", plant=self.disk.id, shown=False)
+        judgement = J.judge(self.evidence())
+        cells = {
+            c.region.id: (c.verdict, c.why)
+            for c in judgement.cells
+            if c.channel is P.ChannelId.UPLOAD
+        }
+        for plant in (self.disk, self.download):
+            (field,) = self.inst.field_regions(plant)
+            self.assertEqual(
+                cells[field.id],
+                (J.Verdict.INCONCLUSIVE, "ordinary upload not received"),
+            )
+        self.assertEqual(judgement.exit_code, J.EXIT_INCONCLUSIVE)
+
+    def test_an_ordinary_upload_refused_is_unproven_and_no_leak(self) -> None:
+        """Both ordinary files must upload: the deny list covers Neo's own secrets only,
+        and agents re-upload what they downloaded (decision 33b). Refusing either is a
+        functional regression, not a leak: unproven (+8), never held, never a leak."""
+        owner, code = P.DENY_CODE.split("/")
+        refused = {"err": "refused", "owner": owner, "code": code}
+        for n, plant in enumerate((self.disk, self.download)):
+            (field,) = self.inst.field_regions(plant)
+            self.upload(f"up{n}", P.ChannelId.UPLOAD, plant, value={field.id: refused})
+        judgement = J.judge(self.evidence())
+        cells = [c for c in judgement.cells if c.channel is P.ChannelId.UPLOAD]
         self.assertEqual(
-            self.cells(P.ChannelId.UPLOAD)[field.id], (J.Verdict.NOT_APPLICABLE, None)
+            {c.region.plant.origin for c in cells}, {P.Origin.FILE, P.Origin.DOWNLOAD}
         )
+        for cell in cells:
+            self.assertIs(cell.verdict, J.Verdict.INCONCLUSIVE)
+            self.assertTrue(
+                cell.why.startswith(f"ordinary upload refused: {P.DENY_CODE}"), cell.why
+            )
+        self.assertEqual(judgement.exit_code, J.EXIT_INCONCLUSIVE)
 
     def test_neo_keeping_the_uploaded_file_in_its_record_is_a_new_leak(self) -> None:
         """The upload op answers nothing; if Neo's record of that op holds the file's
@@ -2464,39 +2609,454 @@ class UploadTests(EvidenceBase):
                 with self.subTest(channel=channel):
                     self.assertIn("return {sent: true};", run.code)
 
-    def test_the_headline_says_whether_the_agent_read_neos_own_files(self) -> None:
-        self.step(1, "neo_file", file="host token", present=True, readable=True)
-        self.step(2, "neo_file", file="capsolver key", present=False)
-        self.step(
-            3,
-            "neo_file",
-            file="2captcha key",
-            present=True,
-            readable=False,
-            answer="script/method_unavailable",
-        )
-        headline = J.judge(self.evidence()).headline
-        self.assertEqual(
-            headline["Neo's own files through setInputFiles (information)"],
-            "host token: readable; capsolver key: not in this image; "
-            "2captcha key: not readable (script/method_unavailable)",
-        )
-
-    def test_the_report_never_prints_neos_own_files(self) -> None:
+    def test_the_report_never_prints_neos_own_secrets(self) -> None:
         """A leak's context is a window of its answer, so a Neo secret beside a leaking
-        value could ride into the report: the host token and every echo of Neo's own
-        files are redacted wherever they sit."""
+        value could ride into the report: the host token and the fake CAPTCHA key the
+        Session mints are redacted wherever they sit."""
+        with tempfile.TemporaryDirectory() as root:
+            session = S.Session("img", Path(root), seed="s", keep=False)
+        secrets = (session.token, session.captcha_key)
         self.upload("up1", P.ChannelId.UPLOAD, self.disk)
-        key = f"k3y{TOKEN[5:20]}"
-        kept = f"uploaded {self.disk.secret.reveal()} FILE {{{{{TOKEN}}}}}"
-        self.record_of("h1", "up1", f"{kept} FILE {{{{{key}}}}} {TOKEN}")
+        kept = f"uploaded {self.disk.secret.reveal()} {secrets[0]} {secrets[1]}"
+        self.record_of("h1", "up1", kept)
         evidence = self.evidence()
         judgement = J.judge(evidence)
         report = J.render_markdown(judgement, evidence)
-        self.assertIn("FILE {{⟨Neo's own file⟩", report, "the context reached them")
+        self.assertIn("⟨host token⟩ ⟨CAPTCHA key⟩", report, "the context reached them")
         for output in (report, J.render_json(judgement, evidence)):
-            self.assertNotIn(TOKEN, output)
-            self.assertNotIn(TOKEN[5:20], output)
+            for secret in secrets:
+                self.assertNotIn(secret, output)
+                self.assertNotIn(secret[-16:], output)
+
+
+class NeoSecretTests(EvidenceBase):
+    """Neo's own secrets that the harness mints, the host token and the fake CAPTCHA
+    key, are hunted in every answer the judge reads. A hit is a new leak with its exact
+    request, whatever the channel; the report and verdicts never print either."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        with tempfile.TemporaryDirectory() as root:
+            session = S.Session("img", Path(root), seed="s", keep=False)
+        self.token, self.key = session.token, session.captcha_key
+
+    def disk(self, rel: str, data: bytes) -> None:
+        path = self.root / "disk/live" / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+    def test_a_secret_in_any_answer_is_a_new_leak(self) -> None:
+        """An MCP reply (a cold read of an exit the design masks with L2 only, where a
+        plant would be a known residual), a host record, the events stream, a display's
+        bytes, the trace store's WAL, claw-sdk's logs and docker's: each hit is a new
+        leak in its own row, with nothing to explain it away."""
+        token, key = self.token, self.key
+        facts = P.ChannelId.FACTS
+        self.capture("c1", facts, self.reply({"title": token}, "c1"), run_id="c1")
+        self.capture("c2", facts, self.reply({"title": token}, "c2"), run_id="c2")
+        record = json.dumps({"id": "c1", "result": f"key {key}"}).encode()
+        self.capture("h1", P.ChannelId.RUN, record, run_id="c1", phase=P.Phase.ANY)
+        self.stream("s1", P.ChannelId.EVENTS, f"data: {token}\n\n".encode())
+        self.stream(
+            "s2",
+            P.ChannelId.DISPLAY_VIEW,
+            b"RFB 003.008\n\x03" + key.encode(),
+            role="control",
+            instance=self.inst.name,
+            target="/v1/display?mode=control",
+        )
+        self.disk("claw-sdk/trace.db-wal", b"\x37\x7f\x06\x82" + token.encode())
+        self.disk("logs/claw-sdk.log.2026-11-05", f"solver {key}\n".encode())
+        (self.root / "docker.log").write_text(f"[neo] {token}\n")
+        evidence = self.evidence()
+        judgement = J.judge(evidence)
+        found = {
+            (c.channel, c.region.plant.id): (c.verdict, c.residual)
+            for c in judgement.cells
+            if c.region.plant.origin is P.Origin.NEO
+        }
+        self.assertEqual(
+            set(found),
+            {
+                (facts, "neo.host-token"),
+                (P.ChannelId.RUN, "neo.captcha-key"),
+                (P.ChannelId.EVENTS, "neo.host-token"),
+                (P.ChannelId.CLIPBOARD_CONTROL, "neo.captcha-key"),
+                (P.ChannelId.TRACE_STORE, "neo.host-token"),
+                (P.ChannelId.CLAW_LOGS, "neo.captcha-key"),
+                (P.ChannelId.DOCKER_LOGS, "neo.host-token"),
+            },
+        )
+        self.assertEqual(set(found.values()), {(J.Verdict.LEAKED, None)})
+        self.assertEqual(judgement.exit_code & J.EXIT_NEW_LEAK, J.EXIT_NEW_LEAK)
+        report = J.render_markdown(judgement, evidence)
+        self.assertIn(f"**{facts}** · file ⟨neo.host-token", report)
+        self.assertIn("request: `mcp tools/call run /mcp`", report)
+        self.assertIn("evidence: `docker.log`", report)
+        self.assertIn("also in 1 more answer: c2", report)
+        self.assertIn("⟨host token⟩", report, "the context reached it")
+        for output in (report, J.render_json(judgement, evidence)):
+            for secret in (token, key):
+                self.assertNotIn(secret, output)
+
+    def test_the_harness_requests_are_never_hunted(self) -> None:
+        """The token rides in the harness's own requests by design (the bearer header,
+        and any body a test gives it): only Neo's answers are searched."""
+        body = json.dumps({"authorization": f"Bearer {self.token}"})
+        self.capture("c1", P.ChannelId.HARNESS, self.reply(1, "c1"), request=body)
+        neo = [c for c in self.judged() if c.region.plant.origin is P.Origin.NEO]
+        self.assertEqual(neo, [])
+
+
+DENY_HEADLINE = "setInputFiles of Neo's own files (decision 33b)"
+
+
+class DenyTests(EvidenceBase):
+    """setInputFiles of Neo's own secret files through judge() (decision 33b): refused
+    with DENY_CODE is held; the page reading the file, or a refusal naming its path, is a
+    new leak; any other answer is unproven with its reason."""
+
+    layout = P.Layout.UPLOAD
+    NOTHING = {"files": 0, "read": 0, "errors": [], "matched": False, "empty": False}
+
+    def upload_of(self, target: P.NeoFile, via: P.Via) -> P.DenyUpload:
+        return next(
+            u
+            for u in P.deny_uploads(self.inst)
+            if (u.probe.target, u.probe.via) == (target, via)
+        )
+
+    @staticmethod
+    def refusal(key: str, message: str = "refused") -> dict:
+        """A refusal as void_run catches it and keys it by the input."""
+        owner, code = key.split("/")
+        return {"err": message, "owner": owner, "code": code}
+
+    def facts(self, upload: P.DenyUpload, **detail: object) -> dict:
+        return {
+            "region": upload.region.id,
+            "probe": str(upload.probe),
+            "named": upload.named,
+            "paths": list(upload.paths),
+            "present": True,
+            "made": True,
+            **detail,
+        }
+
+    def probe(
+        self,
+        upload: P.DenyUpload,
+        ident: str,
+        *,
+        refused: dict | None = None,
+        read: dict | None = None,
+    ) -> None:
+        """One probe as the Session records it: the agent's run (sent, or its refusal
+        keyed by the input) and the step beside it with what the oracle found the page
+        read, compared inside the container."""
+        value = {upload.region.id: refused} if refused else {"sent": True}
+        self.capture(
+            ident,
+            P.ChannelId.UPLOAD_NEO,
+            self.reply(value, ident),
+            run_id=ident,
+            regions=(upload.region.id,),
+            phase=P.Phase.ANY,
+        )
+        checked = {**self.NOTHING, **(read or {})}
+        self.step(1, "neo_upload", **self.facts(upload, capture=ident, read=checked))
+
+    def verdicts(self) -> dict[str, tuple]:
+        return {
+            c.region.id: (c.verdict, c.residual, c.why)
+            for c in self.judged()
+            if c.channel is P.ChannelId.UPLOAD_NEO
+        }
+
+    def test_refused_with_the_deny_code_is_held_and_sets_no_bit(self) -> None:
+        """The contract: Neo refuses before reading, with DENY_CODE, naming no path, and
+        the page holds nothing. Held by contract: no residual, no exit bit."""
+        for n, upload in enumerate(P.deny_uploads(self.inst)):
+            self.probe(upload, f"d{n}", refused=self.refusal(P.DENY_CODE))
+        judgement = J.judge(self.evidence())
+        cells = [c for c in judgement.cells if c.channel is P.ChannelId.UPLOAD_NEO]
+        self.assertEqual(len(cells), len(P.DENY_PROBES))
+        self.assertEqual(
+            {(c.verdict, c.residual, c.why) for c in cells},
+            {(J.Verdict.WITHHELD, None, P.DENY_CODE)},
+        )
+        self.assertEqual(judgement.exit_code, 0)
+
+    def test_held_while_set_input_files_is_held(self) -> None:
+        """Today's image holds setInputFiles whole (script/method_unavailable): held,
+        UPLOAD-HELD, until the owner's call lands."""
+        upload = self.upload_of(P.NeoFile.HOST_TOKEN, P.Via.SYMLINK)
+        self.probe(upload, "d1", refused=self.refusal("script/method_unavailable"))
+        judgement = J.judge(self.evidence())
+        self.assertEqual(
+            self.verdicts()[upload.region.id],
+            (J.Verdict.WITHHELD, "UPLOAD-HELD", "script/method_unavailable"),
+        )
+        self.assertEqual(judgement.exit_code, J.EXIT_KNOWN)
+
+    def test_the_page_reading_the_file_is_a_new_leak_whatever_neo_answered(
+        self,
+    ) -> None:
+        """Neo's answer is not the proof: the oracle found that a file the page read
+        hashes the same as the target. Sent, or refused with the right code, that is a
+        new leak."""
+        hard = self.upload_of(P.NeoFile.TRACE_DB, P.Via.HARD_LINK)
+        wal = self.upload_of(P.NeoFile.TRACE_WAL, P.Via.PATH)
+        bytes_read = {"files": 1, "read": 1, "matched": True}
+        self.probe(hard, "d1", read=bytes_read)
+        self.probe(wal, "d2", refused=self.refusal(P.DENY_CODE), read=bytes_read)
+        judgement = J.judge(self.evidence())
+        verdicts = self.verdicts()
+        for upload in (hard, wal):
+            self.assertEqual(
+                verdicts[upload.region.id],
+                (J.Verdict.LEAKED, None, f"{upload.probe}: the page read its bytes"),
+            )
+        self.assertEqual(judgement.exit_code & J.EXIT_NEW_LEAK, J.EXIT_NEW_LEAK)
+
+    def test_a_refusal_that_names_the_path_leaks_the_path(self) -> None:
+        """The refusal must name no path: not where a symlink leads (the token's path),
+        nor the path the agent gave. Either is a leak of the path, right code or not."""
+        token = P.NEO_FILES[P.NeoFile.HOST_TOKEN]
+        link = self.upload_of(P.NeoFile.HOST_TOKEN, P.Via.SYMLINK)
+        trace = self.upload_of(P.NeoFile.TRACE_DB, P.Via.DIRECTORY)
+        self.probe(
+            link, "d1", refused=self.refusal(P.DENY_CODE, f"{token} is Neo's secret")
+        )
+        self.probe(
+            trace, "d2", refused=self.refusal(P.DENY_CODE, f"refused {trace.named}")
+        )
+        judgement = J.judge(self.evidence())
+        verdicts = self.verdicts()
+        for upload in (link, trace):
+            self.assertEqual(
+                verdicts[upload.region.id],
+                (
+                    J.Verdict.LEAKED,
+                    None,
+                    f"{upload.probe}: the refusal names its path ({P.DENY_CODE})",
+                ),
+            )
+        self.assertEqual(judgement.exit_code & J.EXIT_NEW_LEAK, J.EXIT_NEW_LEAK)
+
+    def test_any_other_answer_is_unproven_with_its_reason(self) -> None:
+        """A wrong code, or an upload that went through with nothing to show for it, is
+        no proof either way: unproven (+8), each with its reason."""
+        cases = [
+            (
+                P.NeoFile.HOST_TOKEN,
+                P.Via.PATH,
+                {"refused": self.refusal("neo/unsupported", "no such op")},
+                f"refused with neo/unsupported, not {P.DENY_CODE}: no such op",
+            ),
+            (
+                P.NeoFile.CAPTCHA_KEY,
+                P.Via.PATH,
+                {"read": {}},
+                "sent, but the page's input holds no file",
+            ),
+            (
+                P.NeoFile.COOKIES,
+                P.Via.PATH,
+                {"read": {"files": 1, "errors": ["NotReadableError"]}},
+                "sent, but the page could not read it (NotReadableError)",
+            ),
+            (
+                P.NeoFile.TRACE_WAL,
+                P.Via.PATH,
+                {"read": {"files": 1, "read": 1, "empty": True}},
+                "sent, but it is empty: nothing to read back",
+            ),
+            (
+                P.NeoFile.TRACE_DB,
+                P.Via.DIRECTORY,
+                {"read": {"files": 3, "read": 3}},
+                "sent; the page read 3 of 3 files, none of them its bytes "
+                "(it may have changed since)",
+            ),
+        ]
+        for n, (target, via, kw, _) in enumerate(cases):
+            self.probe(self.upload_of(target, via), f"d{n}", **kw)
+        judgement = J.judge(self.evidence())
+        verdicts = self.verdicts()
+        for target, via, _, why in cases:
+            upload = self.upload_of(target, via)
+            with self.subTest(probe=str(upload.probe)):
+                self.assertEqual(
+                    verdicts[upload.region.id],
+                    (J.Verdict.INCONCLUSIVE, None, f"{upload.probe}: {why}"),
+                )
+        self.assertEqual(judgement.exit_code, J.EXIT_INCONCLUSIVE)
+
+    def test_a_sent_upload_nobody_checked_is_unproven(self) -> None:
+        """A sent upload proves nothing until the oracle has looked at the page: a run
+        with no step beside it (the harness failed between them) stays unproven."""
+        upload = self.upload_of(P.NeoFile.LOGIN_DATA, P.Via.PATH)
+        rid = upload.region.id
+        self.capture(
+            "d1",
+            P.ChannelId.UPLOAD_NEO,
+            self.reply({"sent": True}, "d1"),
+            run_id="d1",
+            regions=(rid,),
+            phase=P.Phase.ANY,
+        )
+        self.assertEqual(
+            self.verdicts()[rid],
+            (
+                J.Verdict.INCONCLUSIVE,
+                None,
+                f"{rid}: sent, but nothing checked what the page read",
+            ),
+        )
+
+    def test_a_probe_the_harness_could_not_set_up_never_ran(self) -> None:
+        """A target missing from the container leaves its deny entry unproven; a hard
+        link the filesystem will not make leaves nothing to probe: not applicable."""
+        key = self.upload_of(P.NeoFile.CAPTCHA_KEY, P.Via.PATH)
+        hard = self.upload_of(P.NeoFile.TRACE_DB, P.Via.HARD_LINK)
+        self.step(1, "neo_upload", **self.facts(key, present=False, made=False))
+        why = "Invalid cross-device link"
+        self.step(2, "neo_upload", **self.facts(hard, made=False, why=why))
+        judgement = J.judge(self.evidence())
+        verdicts = self.verdicts()
+        self.assertEqual(
+            verdicts[key.region.id],
+            (
+                J.Verdict.INCONCLUSIVE,
+                None,
+                f"{key.probe}: its target is not in this container",
+            ),
+        )
+        self.assertEqual(
+            verdicts[hard.region.id],
+            (
+                J.Verdict.NOT_APPLICABLE,
+                None,
+                f"{hard.probe}: the harness could not make it ({why})",
+            ),
+        )
+        self.assertEqual(judgement.exit_code, J.EXIT_INCONCLUSIVE)
+
+    def test_the_headline_sums_up_the_deny_list(self) -> None:
+        """One line for the owner: how many probes, held by which refusal, and every
+        probe that leaked or stayed unproven, by name; and the read-back's control."""
+        uploads = P.deny_uploads(self.inst)
+        self.probe(uploads[0], "d0", refused=self.refusal(P.DENY_CODE))
+        self.probe(uploads[1], "d1", refused=self.refusal(P.DENY_CODE))
+        self.probe(uploads[2], "d2", refused=self.refusal("script/method_unavailable"))
+        self.probe(uploads[3], "d3", read={"files": 1, "read": 1, "matched": True})
+        self.probe(uploads[4], "d4", read={})
+        self.step(9, "neo_upload_control", files=1, read=1, matched=True)
+        headline = J.judge(self.evidence()).headline
+        old = "Neo's own files through setInputFiles (information)"
+        self.assertNotIn(old, headline, "the information-only line is gone")
+        self.assertEqual(
+            headline[DENY_HEADLINE],
+            f"5 probes: 2 held ({P.DENY_CODE}), 1 held (script/method_unavailable), "
+            f"1 LEAK ({uploads[3].probe}: the page read its bytes), "
+            f"1 unproven ({uploads[4].probe}: sent, but the page's input holds no "
+            "file); read-back control ok",
+        )
+
+
+class DenySessionTests(unittest.TestCase):
+    """leak_sdk.Session.deny_list over a fake oracle and agent: what it records for each
+    probe is what decide_neo_upload reads, so the run and the judge cannot drift."""
+
+    NOTHING = {"files": 0, "read": 0, "errors": [], "matched": False, "empty": False}
+
+    def deny_list(self, *, control: bool = True) -> tuple[J.Judgement, dict]:
+        """Every probe answered sent; the CAPTCHA key missing from the container, the
+        hard link refused by the filesystem, and only the token's own path read back."""
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        session = S.Session("img", root, seed="s", keep=False)
+        instance = P.make_instance(P.Layout.UPLOAD, seed="s", index=1)
+        session.instances[instance.name] = instance
+        session._write_manifest()
+        uploads = {(u.probe.target, u.probe.via): u for u in P.deny_uploads(instance)}
+        token = uploads[(P.NeoFile.HOST_TOKEN, P.Via.PATH)]
+        missing = P.NEO_FILES[P.NeoFile.CAPTCHA_KEY]
+        nothing = self.NOTHING
+
+        class Oracle:
+            def call(self, op: str, **params: object) -> dict:
+                ok = {"id": 1, "ok": True}
+                if op == "digest_control":
+                    return {**ok, **nothing, "files": 1, "read": 1, "matched": control}
+                if op == "prepare_upload":
+                    if params["target"] == missing:
+                        return {**ok, "present": False}
+                    if any(link[0] == "hard link" for link in params["links"]):
+                        why = "Invalid cross-device link"
+                        return {**ok, "present": True, "made": False, "why": why}
+                    return {**ok, "present": True, "made": True}
+                assert op == "read_back", op
+                read = params["region"] == token.region.id
+                return {**ok, **nothing, "files": 1, "read": 1, "matched": read}
+
+        class Agent:
+            def run(self, code: str, meta: dict, timeout_ms: int) -> tuple[str, bytes]:
+                return code, EvidenceBase.reply({"sent": True}, meta["requestId"])
+
+        session.oracle, session.agent = Oracle(), Agent()
+        session.deny_list(S.Page(instance, 1))
+        return J.judge(J.Evidence.load(root)), uploads
+
+    def test_each_probe_records_what_the_judge_reads(self) -> None:
+        """A target missing here and a link the filesystem refused are judged from
+        their steps, with no run; a run that went through is judged by what the oracle
+        found the page read: the token's bytes leak, anything else stays unproven."""
+        judgement, uploads = self.deny_list()
+        verdicts = {
+            c.region.id: (c.verdict, c.why)
+            for c in judgement.cells
+            if c.channel is P.ChannelId.UPLOAD_NEO
+        }
+        self.assertEqual(len(verdicts), len(P.DENY_PROBES))
+        token = uploads[(P.NeoFile.HOST_TOKEN, P.Via.PATH)]
+        key = uploads[(P.NeoFile.CAPTCHA_KEY, P.Via.PATH)]
+        hard = uploads[(P.NeoFile.TRACE_DB, P.Via.HARD_LINK)]
+        special = {
+            token.region.id: (
+                J.Verdict.LEAKED,
+                f"{token.probe}: the page read its bytes",
+            ),
+            key.region.id: (
+                J.Verdict.INCONCLUSIVE,
+                f"{key.probe}: its target is not in this container",
+            ),
+            hard.region.id: (
+                J.Verdict.NOT_APPLICABLE,
+                f"{hard.probe}: the harness could not make it "
+                "(Invalid cross-device link)",
+            ),
+        }
+        for upload in uploads.values():
+            want = special.get(upload.region.id) or (
+                J.Verdict.INCONCLUSIVE,
+                f"{upload.probe}: sent; the page read 1 of 1 files, none of them its "
+                "bytes (it may have changed since)",
+            )
+            with self.subTest(probe=str(upload.probe)):
+                self.assertEqual(verdicts[upload.region.id], want)
+        headline = judgement.headline[DENY_HEADLINE]
+        self.assertTrue(headline.endswith("; read-back control ok"), headline)
+        self.assertEqual(judgement.failures, ())
+
+    def test_a_failed_read_back_control_is_a_harness_failure(self) -> None:
+        """If the page's digest misses a file the oracle set itself, no "sent" answer
+        can be judged by what the page read: the table is not to be trusted (+16)."""
+        judgement, _ = self.deny_list(control=False)
+        self.assertEqual(judgement.exit_code & J.EXIT_HARNESS, J.EXIT_HARNESS)
+        headline = judgement.headline[DENY_HEADLINE]
+        self.assertTrue(headline.endswith("; read-back control FAILED"), headline)
 
 
 class FinishTests(unittest.TestCase):
@@ -2543,6 +3103,7 @@ class FinishTests(unittest.TestCase):
             session.host = type("Host", (), {"call": staticmethod(broken)})()
             session.events = Events(out / "streams/events.bin")
             session.token_file.write_text("token")
+            session.captcha_key_file.write_text("key")
             session.finish()
             evidence = J.Evidence.load(out)
             failures = "\n".join(evidence.failures)
@@ -2553,6 +3114,7 @@ class FinishTests(unittest.TestCase):
             self.assertEqual(exit_code & J.EXIT_HARNESS, J.EXIT_HARNESS)
             self.assertEqual(removed, ["container"])
             self.assertFalse(session.token_file.exists())
+            self.assertFalse(session.captcha_key_file.exists())
 
 
 class ResidualTests(unittest.TestCase):

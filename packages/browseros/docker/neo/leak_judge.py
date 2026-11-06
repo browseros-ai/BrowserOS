@@ -35,8 +35,10 @@ from leak_plan import (
     ANCHOR_LENGTH,
     COPY_BASE,
     COPY_DROP,
+    DENY_CODE,
     ECHO_LIKE,
     FRAGMENT,
+    HELD,
     KINDS,
     PLACES,
     SPECIAL_TAIL,
@@ -433,12 +435,33 @@ _TYPING_ARGS = {
     "locator.fill": "value",
 }
 _TYPED_LITERAL = re.compile(r'keyboard\.type\(("(?:[^"\\]|\\.)*")\)')
-# Neo's own secrets, which the report never prints whole or in part though no plant holds
-# them: the text of a file the upload scenario's information probe echoed ("FILE {{…}}",
-# leak_plan.NEO_FILE_ECHO), to its closing braces or the end of its string, and the host
-# token the harness mints (leak_sdk.Session.token).
-_NEO_FILE_TEXT = re.compile(r'(?<=FILE \{\{)(?:(?!\}\})[^\n"\\])+')
-_HOST_TOKEN = re.compile(r"leak-[0-9a-f]{48}")
+
+
+@dataclasses.dataclass(frozen=True)
+class NeoSecret:
+    """One of Neo's own secrets that the harness mints (leak_sdk.Session) and no plant
+    holds, known by its shape. Every answer the judge reads is hunted for it
+    (_Observer.take): a hit is a new leak whose cell is about `subject`. The redactor
+    prints `shown` in its place, so the report never holds it."""
+
+    pattern: re.Pattern
+    shown: str
+    subject: Region
+
+
+def _neo_secret(name: str, pattern: str, shown: str) -> NeoSecret:
+    # A NEO plant of no page. The detector never indexes it, so its placeholder value
+    # is never searched; its cells take phase ANY, which no phase-bound residual fits.
+    plant = Plant(f"neo.{name}", Kind.FILE, Location.MAIN, Origin.NEO, Secret(shown))
+    region = Region(f"neo-{name}", f"neo-{name}", plant, Exposure.FIELD, Location.MAIN)
+    return NeoSecret(re.compile(pattern), shown, region)
+
+
+# No byte of Neo's other secret files reaches the evidence (leak_plan.deny_uploads).
+NEO_SECRETS = (
+    _neo_secret("host-token", r"leak-[0-9a-f]{48}", "⟨host token⟩"),
+    _neo_secret("captcha-key", r"leak-key-[0-9a-f]{40}", "⟨CAPTCHA key⟩"),
+)
 _SPECIAL_FORMS = {
     Form.JSON: json.dumps(SPECIAL_TAIL)[1:-1],
     Form.HTML: html.escape(SPECIAL_TAIL),
@@ -739,9 +762,8 @@ class Detector:
             for start, end, pid in self._raw_hits(text)
         ]
         spans += [
-            (*m.span(), "⟨Neo's own file⟩") for m in _NEO_FILE_TEXT.finditer(text)
+            (*m.span(), s.shown) for s in NEO_SECRETS for m in s.pattern.finditer(text)
         ]
-        spans += [(*m.span(), "⟨host token⟩") for m in _HOST_TOKEN.finditer(text)]
         marks = [(at, region) for at, region in self._marks(text) if region.short]
         where = [at for at, _ in marks]
         for m in _SLOT_VALUE.finditer(text) if marks else ():
@@ -984,6 +1006,25 @@ class Clip:
 
 
 @dataclasses.dataclass(frozen=True)
+class NeoRead:
+    """What a deny-list probe proved beside its answer (decide_neo_upload), from the step
+    the harness recorded: whether it could run, whether the refusal named a path of it,
+    and what the oracle found the page read, compared by sha256 inside the container."""
+
+    probe: str  # "host token by a symlink in /tmp"
+    present: bool = True  # its target is a file in this container
+    made: bool = True  # the links that name it were made
+    why: str = ""  # why not, when they were not
+    names_path: bool = False  # the refusal's message names the path or its target's
+    checked: bool = False  # the oracle looked at the page's input after the run
+    files: int = 0  # files the page's input held
+    read: int = 0  # of them, the ones the page read whole
+    errors: tuple[str, ...] = ()  # why the page could not read the others
+    matched: bool = False  # one it read hashes the same as a file the probe names
+    empty: bool = False  # every file the probe names is empty: nothing to read back
+
+
+@dataclasses.dataclass(frozen=True)
 class Observation:
     """One region as one channel answered it: the input to the verdict rule."""
 
@@ -999,6 +1040,9 @@ class Observation:
     refusal: Refusal | None = None
     pixels: Pixels | None = None
     clip: Clip | None = None  # a copy probe's: judged by decide_copy
+    neo: NeoRead | None = None  # a deny-list probe's: judged by decide_neo_upload
+    # The page showed what the op handed it (the harness's "uploaded" step, by plant).
+    received: bool = False
     run_id: str | None = None
     derived_from: str | None = None  # a record copying this run's agent answer
 
@@ -1009,7 +1053,9 @@ def decide(o: Observation) -> tuple[Verdict, str]:
     found (hit, or slot RAW)                -> LEAKED   values are fresh and never sent
                                                          by the harness: found = leaked
     an op that answers nothing by contract  -> WITHHELD, N/A (not built) or INCONCLUSIVE
-                                                         as it was refused; else N/A (ran)
+                                                         as it was refused; else N/A (ran),
+                                                         or INCONCLUSIVE when what it had to
+                                                         hand the page never showed there
     unreachable by contract and not covered -> N/A (not built, if refused so)
     refusal that the contract names         -> WITHHELD
     refusal that means "not built"          -> N/A (not built)
@@ -1026,6 +1072,8 @@ def decide(o: Observation) -> tuple[Verdict, str]:
         return Verdict.LEAKED, "raw in its slot"
     refused = o.refusal is not None and o.refusal.key not in spec.answer_errors
     if spec.void and not refused:
+        if spec.not_received and o.reachable and not o.received:
+            return Verdict.INCONCLUSIVE, spec.not_received
         return Verdict.NOT_APPLICABLE, "ran; the op answers nothing by contract"
     if not o.reachable and not o.covered:  # before the refusal: it is not about them
         if refused and o.refusal.key in spec.not_built:
@@ -1038,7 +1086,7 @@ def decide(o: Observation) -> tuple[Verdict, str]:
             return Verdict.NOT_APPLICABLE, f"not built ({o.refusal.key})"
         return (
             Verdict.INCONCLUSIVE,
-            f"refused: {o.refusal.key} {o.refusal.message[:80]}",
+            f"{spec.other_refusal}: {o.refusal.key} {o.refusal.message[:80]}",
         )
     if spec.lists_some and not o.covered:
         return Verdict.NOT_APPLICABLE, "not among the elements the answer lists"
@@ -1133,6 +1181,68 @@ def decide_copy(o: Observation) -> tuple[Verdict, str]:
     return Verdict.MASKED, "sent; the clipboard kept the baseline"
 
 
+def decide_neo_upload(o: Observation) -> tuple[Verdict, str]:
+    """A setInputFiles of one of Neo's own secret files (decision 33b). Neo must refuse
+    it with DENY_CODE before reading a byte, and name no path. What the page read is
+    the proof, whatever Neo answered:
+
+        the page read a file that hashes as its target   -> LEAKED
+        its target is not in this container              -> INCONCLUSIVE (no run)
+        the harness could not make the links             -> N/A (no run)
+        refused, the message names a path of it          -> LEAKED (the path)
+        refused with DENY_CODE, or while it is held      -> WITHHELD
+        refused any other way                            -> INCONCLUSIVE
+        sent: no file, an unread or empty one, others    -> INCONCLUSIVE
+    """
+    n = o.neo
+    assert n is not None
+    if n.matched:
+        return Verdict.LEAKED, f"{n.probe}: the page read its bytes"
+    if not n.present:
+        return Verdict.INCONCLUSIVE, f"{n.probe}: its target is not in this container"
+    if not n.made:
+        return (
+            Verdict.NOT_APPLICABLE,
+            f"{n.probe}: the harness could not make it ({n.why})",
+        )
+    if o.refusal is not None:
+        key = o.refusal.key
+        if n.names_path:
+            return Verdict.LEAKED, f"{n.probe}: the refusal names its path ({key})"
+        if key in SPECS[o.channel].refusals:
+            return Verdict.WITHHELD, key
+        return (
+            Verdict.INCONCLUSIVE,
+            f"{n.probe}: refused with {key}, not {DENY_CODE}: {o.refusal.message[:80]}",
+        )
+    if not n.checked:
+        return (
+            Verdict.INCONCLUSIVE,
+            f"{n.probe}: sent, but nothing checked what the page read",
+        )
+    if not n.files:
+        return (
+            Verdict.INCONCLUSIVE,
+            f"{n.probe}: sent, but the page's input holds no file",
+        )
+    if n.empty:
+        return (
+            Verdict.INCONCLUSIVE,
+            f"{n.probe}: sent, but it is empty: nothing to read back",
+        )
+    if not n.read:
+        errors = ", ".join(n.errors) or "no reason given"
+        return (
+            Verdict.INCONCLUSIVE,
+            f"{n.probe}: sent, but the page could not read it ({errors})",
+        )
+    return (
+        Verdict.INCONCLUSIVE,
+        f"{n.probe}: sent; the page read {n.read} of {n.files} files, none of them its "
+        "bytes (it may have changed since)",
+    )
+
+
 # ------------------------------------------------------------------------------------------
 # Observation: every (answer x region) worth a verdict
 # ------------------------------------------------------------------------------------------
@@ -1190,6 +1300,20 @@ class _Observer:
         # channel -> [answers, bytes] searched: a channel with no cell was still read
         self.searched: dict[ChannelId, list[int]] = {}
         self.op_start = self._op_starts()
+        self.hunted: set[str] = set()  # answers already hunted for Neo's own secrets
+        # plant id -> the page showed the file an ordinary upload handed it
+        self.received = {
+            str(s.detail.get("plant")): bool(s.detail.get("shown"))
+            for s in evidence.steps
+            if s.action == "uploaded"
+        }
+        # A deny-list probe's step, by the run it records (neo_upload); one with no run
+        # (a target missing here, a link not made) is judged from its step alone.
+        probes = [s for s in evidence.steps if s.action == "neo_upload"]
+        self.neo_runs = {
+            str(s.detail["capture"]): s for s in probes if s.detail.get("capture")
+        }
+        self.neo_unrun = [s for s in probes if not s.detail.get("capture")]
         self.out: list[Observation] = []
 
     def _private_since(self) -> dict[str, int]:
@@ -1263,10 +1387,39 @@ class _Observer:
         message = self.detector.redact(str(error.get("message", "")))
         return Refusal(str(error.get("owner")), str(error.get("code")), message)
 
-    def count(self, channel: ChannelId, data: bytes) -> None:
+    def take(
+        self, channel: ChannelId, source: str, data: bytes, run_id: str | None
+    ) -> None:
+        """Every answer the judge reads passes here first: tallied for the Searched
+        table, and hunted once for Neo's own secrets (NEO_SECRETS). A hit is a new leak
+        in this channel, its answer the evidence and its request the exact one. Only
+        Neo's answers come here; the harness's own requests (whose headers carry the
+        token by design) never do."""
         tally = self.searched.setdefault(channel, [0, 0])
         tally[0] += 1
         tally[1] += len(data)
+        if source in self.hunted:
+            return  # a view display's bytes are read for its pixels and its clipboard
+        self.hunted.add(source)
+        text = data.decode("utf-8", "replace")
+        for secret in NEO_SECRETS:
+            found = secret.pattern.search(text)
+            if found is None:
+                continue
+            region = secret.subject
+            context = self.detector.context(text, *found.span())
+            hit = Hit(region.plant.id, region.id, Form.PLAIN, found.start(), context)
+            self.emit(
+                Observation(
+                    channel,
+                    region,
+                    Phase.ANY,
+                    source,
+                    hit=hit,
+                    present=None,
+                    run_id=run_id,
+                )
+            )
 
     def pixel_regions(self, instance: Instance) -> list[Region]:
         """One proven field per kind: a frame shows the whole tab, so a pixel verdict is
@@ -1294,7 +1447,7 @@ class _Observer:
     def agent(self, c: Capture) -> None:
         spec = SPECS[c.channel]
         data = self.ev.blob(c.blob)
-        self.count(c.channel, data)
+        self.take(c.channel, c.id, data, c.run_id)
         reply = parse_run_reply(data)
         views = views_of(data)
         run_refusal = self._refusal(reply.error)
@@ -1343,12 +1496,14 @@ class _Observer:
                     refusal=run_refusal or self._refusal(refused),
                     pixels=pixels,
                     run_id=c.run_id,
+                    received=self.received.get(region.plant.id, False),
                 )
             )
-        for (
-            region_id,
-            hit,
-        ) in hits.items():  # a value where nobody asked is still a leak
+        self._stray(c, hits)
+
+    def _stray(self, c: Capture, hits: Mapping[str, Hit]) -> None:
+        """A value where nobody asked is still a leak."""
+        for region_id, hit in hits.items():
             self.emit(
                 Observation(
                     c.channel,
@@ -1361,13 +1516,88 @@ class _Observer:
                 )
             )
 
+    def neo_upload(self, c: Capture) -> None:
+        """A deny-list probe's run, judged by decide_neo_upload with its step's facts.
+        The refusal's message is held against the probe's paths raw, before any
+        redaction; the answer is searched for plants like any other."""
+        data = self.ev.blob(c.blob)
+        self.take(c.channel, c.id, data, c.run_id)
+        reply = parse_run_reply(data)
+        views = views_of(data)
+        (region_id,) = c.regions
+        keyed = (read for read in views.keyed.get(region_id, ()) if "err" in read)
+        error = reply.error or next(keyed, None)
+        refusal, names_path = None, False
+        if error:
+            # A run's own error says "message"; one void_run keyed by the input, "err".
+            message = str(error.get("message") or error.get("err") or "")
+            step = self.neo_runs.get(c.id)
+            paths = step.detail.get("paths", ()) if step else ()
+            names_path = any(path and str(path) in message for path in paths)
+            owner, code = str(error.get("owner")), str(error.get("code"))
+            refusal = Refusal(owner, code, self.detector.redact(message))
+        self._neo(
+            c.instance,
+            region_id,
+            c.id,
+            self.neo_runs.get(c.id),
+            c.run_id,
+            refusal=refusal,
+            names_path=names_path,
+        )
+        self._stray(c, self.hits_by_region(views))
+
+    def _neo(
+        self,
+        instance: str | None,
+        region_id: str,
+        source: str,
+        step: Step | None,
+        run_id: str | None = None,
+        *,
+        refusal: Refusal | None = None,
+        names_path: bool = False,
+    ) -> None:
+        """One deny-list probe's observation, from its step: a run whose step is missing
+        was never checked, so its facts default to unproven."""
+        region = self.ev.instances[instance or ""].region(region_id)
+        d = step.detail if step else {}
+        read = d.get("read")
+        checked = isinstance(read, Mapping)
+        read = read if checked else {}
+        facts = NeoRead(
+            probe=str(d.get("probe", region_id)),
+            present=bool(d.get("present", True)),
+            made=bool(d.get("made", True)),
+            why=str(d.get("why") or ""),
+            names_path=names_path,
+            checked=checked,
+            files=int(read.get("files", 0)),
+            read=int(read.get("read", 0)),
+            errors=tuple(str(e) for e in read.get("errors", ())),
+            matched=bool(read.get("matched")),
+            empty=bool(read.get("empty")),
+        )
+        self.emit(
+            Observation(
+                ChannelId.UPLOAD_NEO,
+                region,
+                Phase.ANY,
+                source,
+                reachable=True,
+                refusal=refusal,
+                neo=facts,
+                run_id=run_id,
+            )
+        )
+
     def copy_probe(self, c: Capture) -> None:
         """A copy or cut chord in one field, its run's answer searched like any other.
         The chord's own answer is keyed by the field's id; the clipboard's is the paste
         box's digest in the proof after the run, held against the baseline token in the
         proof before it (the page made the token; it is no plant)."""
         data = self.ev.blob(c.blob)
-        self.count(c.channel, data)
+        self.take(c.channel, c.id, data, c.run_id)
         views = views_of(data)
         hits = self.hits_by_region(views)
         reply = parse_run_reply(data)
@@ -1455,7 +1685,7 @@ class _Observer:
         run's slice is judged where it shows a region that run's agent capture proved
         present (records inherit presence from their own run), and a value no run's
         slice holds (an event no run owns) is still a leak, with no run."""
-        self.count(channel, data)
+        self.take(channel, source, data, run_id)
         disk = SPECS[channel].family is Family.DISK
         whole = views_of(data, structured=not disk)
         found = self.hits_by_region(whole)
@@ -1614,7 +1844,7 @@ class _Observer:
             else ChannelId.CLIPBOARD_VIEW
         )
         data = self.ev.blob(s.blob)
-        self.count(channel, data)
+        self.take(channel, s.id, data, None)
         copies = [
             st
             for st in self.ev.steps
@@ -1707,8 +1937,12 @@ class _Observer:
         for c in agent:
             if SPECS[c.channel].family is Family.AGENT_KEYS:
                 self.copy_probe(c)
+            elif c.channel is ChannelId.UPLOAD_NEO:
+                self.neo_upload(c)
             elif c.channel is not ChannelId.REPLAY:
                 self.agent(c)
+        for step in self.neo_unrun:
+            self._neo(step.instance, str(step.detail["region"]), "harness", step)
         for c in agent:
             if c.channel is ChannelId.REPLAY:
                 self.record(ChannelId.REPLAY, c.id, self.ev.blob(c.blob), c.run_id)
@@ -2010,18 +2244,21 @@ RESIDUALS: tuple[Residual, ...] = (
         "decision: the caller sandboxes)",
         lambda cell: (
             _kind_is(Kind.FILE)(cell)
-            and cell.region.plant.origin is Origin.FILE
+            and cell.region.plant.origin in (Origin.FILE, Origin.DOWNLOAD)
             and SPECS[cell.channel].family in AGENT_FAMILIES
         ),
     ),
     Residual(
+        # Held whole, not refused by the deny list: DENY_CODE is the contract working.
         "UPLOAD-HELD",
         Status.IN_FLIGHT,
         "setInputFiles is held (script/method_unavailable) until the owner's call to "
         "serve any path lands",
         lambda cell: (
             cell.verdict is Verdict.WITHHELD
-            and cell.channel in (ChannelId.UPLOAD, ChannelId.UPLOAD_BUFFER)
+            and cell.channel
+            in (ChannelId.UPLOAD, ChannelId.UPLOAD_BUFFER, ChannelId.UPLOAD_NEO)
+            and cell.why in HELD
         ),
     ),
     Residual(
@@ -2291,6 +2528,8 @@ def judge(evidence: Evidence) -> Judgement:
             verdict, why = decide_pixels(o)
         elif o.clip is not None:
             verdict, why = decide_copy(o)
+        elif o.neo is not None:
+            verdict, why = decide_neo_upload(o)
         else:
             verdict, why = decide(o)
         cells.append(
@@ -2320,8 +2559,8 @@ def judge(evidence: Evidence) -> Judgement:
         headline["requestId replay returns the stored reply"] = (
             f"{same} of {len(replays)}"
         )
-    headline["Neo's own files through setInputFiles (information)"] = _neo_files(
-        evidence.steps
+    headline["setInputFiles of Neo's own files (decision 33b)"] = _neo_uploads(
+        labelled, evidence.steps
     )
     headline.update(_fronts(evidence.steps))
     present = frozenset(
@@ -2334,22 +2573,32 @@ def judge(evidence: Evidence) -> Judgement:
     return Judgement(tuple(labelled), evidence.failures, headline, searched, present)
 
 
-def _neo_files(steps: Sequence[Step]) -> str:
-    """Whether the agent could read Neo's own secret files through setInputFiles, as the
-    run recorded it: information for the owner, never a verdict."""
-    said = []
-    for step in steps:
-        if step.action != "neo_file":
-            continue
-        d = step.detail
-        if not d.get("present"):
-            said.append(f"{d['file']}: not in this image")
-        elif d.get("readable"):
-            said.append(f"{d['file']}: readable")
-        else:
-            why = f" ({d['answer']})" if d.get("answer") else ""
-            said.append(f"{d['file']}: not readable{why}")
-    return "; ".join(said) or "not measured"
+def _neo_uploads(cells: Sequence[Cell], steps: Sequence[Step]) -> str:
+    """The deny-list probes in one line: held by which refusal, every probe that leaked
+    or stayed unproven by its reason, and whether the read-back's control passed."""
+    probes = [
+        c
+        for c in cells
+        if c.channel is ChannelId.UPLOAD_NEO and c.region.plant.origin is Origin.NEO
+    ]
+    if not probes:
+        return "not measured"
+    held = collections.Counter(c.why for c in probes if c.verdict is Verdict.WITHHELD)
+    contract_first = sorted(held.items(), key=lambda kv: (kv[0] != DENY_CODE, kv[0]))
+    parts = [f"{n} held ({key})" for key, n in contract_first]
+    for verdict, word in (
+        (Verdict.LEAKED, "LEAK"),
+        (Verdict.INCONCLUSIVE, "unproven"),
+        (Verdict.NOT_APPLICABLE, "not run"),
+    ):
+        whys = [c.why for c in probes if c.verdict is verdict]
+        if whys:
+            parts.append(f"{len(whys)} {word} ({'; '.join(whys)})")
+    controls = [s.detail for s in steps if s.action == "neo_upload_control"]
+    control = (
+        "not run" if not controls else "ok" if controls[-1].get("matched") else "FAILED"
+    )
+    return f"{len(probes)} probes: {', '.join(parts)}; read-back control {control}"
 
 
 def _fronts(steps: Sequence[Step]) -> dict[str, str]:
@@ -2591,14 +2840,18 @@ def _leak_blocks(
     """One block per leaking (channel, plant, phase) of an agent answer, with its exact
     request, a redacted context and a repro; record and disk copies of the same plant
     are listed under it. A plant only records or disk hold gets a block of its own, and
-    when that record is a run's, the block also names the agent run that made it."""
+    when that record is a run's, the block also names the agent run that made it. Neo's
+    own secrets copy no read: each channel that answered one gets a block of its own,
+    with its first answer's request, and lists the rest of that channel's answers."""
     captures = {c.id: c for c in evidence.captures}
     streams = {s.id: s for s in evidence.streams}
+    hunted = {secret.subject.id for secret in NEO_SECRETS}
     agent = [
         c
         for c in cells
         if SPECS[c.channel].family in AGENT_FAMILIES
         and c.channel is not ChannelId.REPLAY
+        and c.region.id not in hunted
     ]
     runs = {
         c.run_id: c
@@ -2608,8 +2861,11 @@ def _leak_blocks(
         and c.channel is not ChannelId.REPLAY
     }
     copies: dict[str, list[Cell]] = {}
+    secrets: dict[tuple, list[Cell]] = {}
     for cell in cells:
-        if cell not in agent:
+        if cell.region.id in hunted:
+            secrets.setdefault((cell.channel, cell.region.id), []).append(cell)
+        elif cell not in agent:
             copies.setdefault(cell.region.plant.id, []).append(cell)
     leads: dict[tuple, Cell] = {}
     for cell in sorted(agent, key=lambda c: (str(c.channel), c.region.id)):
@@ -2617,6 +2873,7 @@ def _leak_blocks(
     for plant_id, rest in copies.items():
         if not any(key[1] == plant_id for key in leads):
             leads[(rest[0].channel, plant_id, rest[0].phase)] = rest[0]
+    leads.update({key: group[0] for key, group in secrets.items()})
     out: list[str] = []
     for n, cell in enumerate(leads.values(), 1):
         plant = cell.region.plant
@@ -2639,6 +2896,13 @@ def _leak_blocks(
         if same and cell in agent:
             where = sorted({f"{c.channel} ({c.source})" for c in same})
             out.append(f"   - also in {len(where)} records: {'; '.join(where[:8])}")
+        more = sorted(
+            {c.source for c in secrets.get((cell.channel, cell.region.id), ())}
+            - {cell.source}
+        )
+        if more:
+            noun = "answer" if len(more) == 1 else "answers"
+            out.append(f"   - also in {len(more)} more {noun}: {'; '.join(more[:8])}")
     return out
 
 

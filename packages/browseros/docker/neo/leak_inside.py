@@ -16,7 +16,9 @@ leak_sdk.py copies this file and leak_fixture/ to /tmp/leakfx and starts one pro
   main: JSON lines on stdin/stdout, one request at a time, each answered by its id
     put      an instance's slices: the only way values travel, and never in a URL
     plant_file  a value written into a file on Neo's disk, for setInputFiles to upload
-    digest   sha256 of one of Neo's own files: compared, never sent
+    prepare_upload  a deny-list probe's target checked and its links made: paths only
+    read_back   whether a page's input read a file: sha256s compared here, never sent
+    digest_control  read_back's positive control, on a file the oracle sets itself
     state    each of the instance's tabs' __fx.state(): digests per region, never values,
              and the ids of the focused elements (where keyboard input lands)
     act      __fx.act(name), with a user gesture when asked
@@ -328,15 +330,77 @@ class Oracle:
         target.chmod(0o644)
         return {}
 
-    def digest(self, path: str) -> dict:
-        """sha256 of a file's bytes, or None when it is missing or empty: whether the
-        agent read one of Neo's own secret files is decided by digest, so the file never
-        crosses this pipe."""
-        try:
-            data = Path(path).read_bytes()
-        except OSError:
-            return {"sha256": None}
-        return {"sha256": hashlib.sha256(data).hexdigest() if data else None}
+    def prepare_upload(self, target: str, links: list) -> dict:
+        """Ready one deny-list probe (leak_plan.deny_uploads): whether its target is a
+        file in this container, and the links that name it, made as root, each (kind,
+        the target, where) with kind "symlink" or "hard link". A hard link needs the
+        target's own filesystem, so it can fail; the probe then names nothing. Paths only
+        cross this pipe."""
+        if not Path(target).is_file():
+            return {"present": False}
+        for kind, source, at in links:
+            Path(at).parent.mkdir(parents=True, exist_ok=True)
+            make = os.link if kind == "hard link" else os.symlink
+            try:
+                make(source, at)
+            except OSError as error:
+                why = error.strerror or repr(error)
+                return {"present": True, "made": False, "why": why}
+        return {"present": True, "made": True}
+
+    def read_back(self, instance: str, region: str, path: str) -> dict:
+        """Whether the page's file input `region` read what `path` holds (a file, or every
+        file under a directory, through any symlink): the sha256 fx.js took of each file
+        it read against each file's own, compared here. Counts and booleans cross this
+        pipe; no byte of the files and no digest of them."""
+        (main, *_) = self._tabs(instance)
+        expression = (
+            f"window.__fx.booted.then(() => window.__fx.digests({json.dumps(region)}))"
+        )
+        got = self._evaluate(main["targetId"], expression) or []
+        root = Path(path)
+        files = (
+            [root]
+            if root.is_file()
+            else sorted(p for p in root.rglob("*") if p.is_file())
+        )
+        wanted = {
+            hashlib.sha256(data).hexdigest() for f in files if (data := f.read_bytes())
+        }
+        read = [entry["sha256"] for entry in got if "sha256" in entry]
+        return {
+            "files": len(got),
+            "read": len(read),
+            "errors": sorted(
+                {str(entry["error"]) for entry in got if "error" in entry}
+            ),
+            "matched": bool(wanted.intersection(read)),
+            "empty": not wanted,
+        }
+
+    def digest_control(self, instance: str, input: str, path: str) -> dict:
+        """read_back's positive control: a fresh file of random bytes, set into the page's
+        control input over DevTools (as setInputFiles sets a probe's), then compared as
+        read_back compares. It proves the page's digest and this comparison agree on a
+        real file in this browser, before any probe's verdict leans on them."""
+        control = Path(path)
+        control.parent.mkdir(parents=True, exist_ok=True)
+        control.write_bytes(os.urandom(1500))
+        control.chmod(0o644)
+        (main, *_) = self._tabs(instance)
+        self._evaluate(main["targetId"], "0")  # attaches a session when none is yet
+        session = self.sessions[main["targetId"]]
+        element = self.cdp.call(
+            "Runtime.evaluate",
+            {"expression": f"document.getElementById({json.dumps(input)})"},
+            session=session,
+        )
+        self.cdp.call(
+            "DOM.setFileInputFiles",
+            {"files": [str(control)], "objectId": element["result"]["objectId"]},
+            session=session,
+        )
+        return self.read_back(instance, input, str(control))
 
     def _tabs(self, instance: str) -> list[dict]:
         """The instance's tabs, main first: its main document and any popup it opened."""

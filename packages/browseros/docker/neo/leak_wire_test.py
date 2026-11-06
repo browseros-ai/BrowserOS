@@ -1,5 +1,5 @@
-"""Offline checks of leak_wire's parsers: any split of a stream parses the same, and a run
-reply always parses, garbage included."""
+"""Offline checks of leak_wire: any split of a stream parses the same, a run reply always
+parses, garbage included, and the container starts as the plan expects it."""
 
 import json
 import socket
@@ -7,12 +7,14 @@ import struct
 import tempfile
 import threading
 import unittest
+import urllib.parse
 from pathlib import Path
 
-from leak_plan import PLACES
+from leak_plan import NEO_FILES, PLACES, NeoFile
 from leak_wire import (
     FIXTURE_HOSTS,
     Display,
+    Docker,
     MjpegParser,
     MjpegPart,
     RfbMessage,
@@ -287,6 +289,37 @@ class DisplayRefusalTest(unittest.TestCase):
 class FixtureHostsTest(unittest.TestCase):
     def test_the_container_resolves_every_fixture_host(self):
         self.assertEqual(set(FIXTURE_HOSTS), {place.host for place in PLACES.values()})
+
+
+class DockerRunTest(unittest.TestCase):
+    def test_neos_secret_files_sit_where_the_deny_list_probes_name_them(self):
+        """The host token and the fake CAPTCHA key are mounted read-only at the paths
+        the deny-list probes upload (leak_plan.NEO_FILES), each named by its variable as
+        Neo reads it, and the key's provider is a loopback port nothing serves, so the
+        fake key never leaves the container."""
+        sent = []
+
+        class Recording(Docker):
+            def _cli(self, *args, stdin=None, check=True):
+                sent.append(args)
+                return b""
+
+        Recording("leak-test").run("img", Path("/h/token"), Path("/h/key"))
+        (argv,) = sent
+        pairs = list(zip(argv, argv[1:]))
+        mounts = {value for flag, value in pairs if flag == "-v"}
+        env = dict(value.split("=", 1) for flag, value in pairs if flag == "-e")
+        token, key = NEO_FILES[NeoFile.HOST_TOKEN], NEO_FILES[NeoFile.CAPTCHA_KEY]
+        self.assertEqual(mounts, {f"/h/token:{token}:ro", f"/h/key:{key}:ro"})
+        for mount in mounts:
+            self.assertFalse(
+                mount.split(":")[1].startswith("/home/neo/"),
+                "the entrypoint chowns /home/neo: a read-only mount there stops Neo",
+            )
+        self.assertEqual(env["CLAW_HOST_TOKEN_FILE"], token)
+        self.assertEqual(env["BROWSEROS_CAPSOLVER_API_KEY_FILE"], key)
+        provider = urllib.parse.urlsplit(env["BROWSEROS_CAPSOLVER_API_URL"])
+        self.assertEqual(provider.hostname, "127.0.0.1")
 
 
 if __name__ == "__main__":

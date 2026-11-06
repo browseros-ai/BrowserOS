@@ -34,6 +34,7 @@ const FX = {
   replies: new Map(), // top only: nonce -> callback for stateReply / focused
   rebased: 0, // copy layout: how many baseline tokens this page has made
   uploads: new Map(), // file input region id -> the text the page read from its file
+  digests: new Map(), // deny-list or control input id -> promise of [{size, sha256} | {error}]
 };
 
 // The copy layout's two plain fields in MAIN (leak_plan.COPY_BASE, COPY_DROP): the baseline
@@ -102,6 +103,7 @@ function report(id, value) {
 }
 
 function mirror(input, region) {
+  if (region.digests) return watchDigests(input, region.id);
   if (input.type === "file") {
     // An upload: the page reads the chosen file and holds its text as the field's value.
     input.addEventListener("change", () => {
@@ -212,7 +214,7 @@ function render() {
   for (const region of regionsWhere((r) => r.exposure === "field" || r.exposure === "pasted")) {
     if (FX.fields.get(region.id).value === "") report(region.id, "");
   }
-  if (slice.layout === "upload" && slice.location === "main") renderNeoFileInput();
+  if (slice.layout === "upload" && slice.location === "main") renderDigestControl();
   if (slice.layout === "pixels" || slice.layout === "owner") ACTS.repaint();
   if (slice.layout === "owner" && slice.location === "main") {
     // The owner opens the popup with a key on this button: on Neo's display only the
@@ -228,19 +230,85 @@ function render() {
   refreshEchoes();
 }
 
-// The upload layout's plain file input for Neo's own secret files, outside every plant
-// (leak_plan.NEO_FILE_INPUT): its echo "FILE {{text}}" is what the agent reads back, as
-// information for the owner. The report redacts that slot whole.
-function renderNeoFileInput() {
-  const input = el("input", { type: "file", id: "fx-upload" });
-  const echo = el("p", { id: "fx-upload-echo" });
+// A deny-list input (leak_plan.deny_uploads) and the read-back's control input
+// (leak_plan.DIGEST_CONTROL): the page reads every file it is given, whole, and keeps a
+// sha256 of each for the oracle's read_back, which compares it with the file inside the
+// container. Nothing read here reaches FX.values, an echo or a proof, so neither the bytes
+// of Neo's own files nor a digest of them can leave the container.
+function watchDigests(input, id) {
   input.addEventListener("change", () => {
-    const file = input.files[0];
-    if (file) file.text().then((text) => (echo.textContent = `FILE {{${text}}}`));
+    FX.digests.set(id, Promise.all([...input.files].map(digestOf)));
   });
-  const label = el("label", {}, "Field upload ");
-  label.append(input);
-  document.body.append(label, echo);
+}
+
+function digestOf(file) {
+  return file.arrayBuffer().then(
+    (bytes) => ({ size: bytes.byteLength, sha256: sha256(bytes) }),
+    (error) => ({ error: (error && error.name) || String(error) }),
+  );
+}
+
+function renderDigestControl() {
+  const input = el("input", { type: "file", id: "fx-digest-control" });
+  watchDigests(input, input.id);
+  document.body.append(input);
+}
+
+// SHA-256 (FIPS 180-4) of an ArrayBuffer, as hex. crypto.subtle needs a secure context,
+// which http://a.test is not.
+// prettier-ignore
+const SHA256_K = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+function ror(x, n) {
+  return (x >>> n) | (x << (32 - n));
+}
+
+function sha256(buffer) {
+  const bytes = new Uint8Array(buffer);
+  // The message, a 1 bit, zeros, then its length in bits as 64 bits: whole 64-byte blocks.
+  const padded = new Uint8Array(((bytes.length + 72) >> 6) << 6);
+  padded.set(bytes);
+  padded[bytes.length] = 0x80;
+  const view = new DataView(padded.buffer);
+  view.setUint32(padded.length - 8, Math.floor(bytes.length / 0x20000000));
+  view.setUint32(padded.length - 4, (bytes.length << 3) >>> 0);
+  // prettier-ignore
+  const h = new Uint32Array([
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+  ]);
+  const w = new Uint32Array(64);
+  for (let at = 0; at < padded.length; at += 64) {
+    for (let i = 0; i < 16; i++) w[i] = view.getUint32(at + i * 4);
+    for (let i = 16; i < 64; i++) {
+      const s0 = ror(w[i - 15], 7) ^ ror(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+      const s1 = ror(w[i - 2], 17) ^ ror(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+      w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+    let [a, b, c, d, e, f, g, k] = h;
+    for (let i = 0; i < 64; i++) {
+      const t1 = k + (ror(e, 6) ^ ror(e, 11) ^ ror(e, 25)) + ((e & f) ^ (~e & g)) + SHA256_K[i] + w[i];
+      const t2 = (ror(a, 2) ^ ror(a, 13) ^ ror(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
+      [k, g, f, e, d, c, b, a] = [g, f, e, (d + t1) | 0, c, b, a, (t1 + t2) | 0];
+    }
+    h[0] += a;
+    h[1] += b;
+    h[2] += c;
+    h[3] += d;
+    h[4] += e;
+    h[5] += f;
+    h[6] += g;
+    h[7] += k;
+  }
+  return Array.from(h, (x) => x.toString(16).padStart(8, "0")).join("");
 }
 
 function addFrame(frame) {
@@ -502,4 +570,6 @@ window.__fx = {
   act,
   focus,
   values: () => FX.values,
+  // What a deny-list or control input read, once every file is read; null before a change.
+  digests: (id) => FX.digests.get(id) ?? null,
 };
