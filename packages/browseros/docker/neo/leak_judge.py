@@ -1102,6 +1102,10 @@ class Observation:
 # so a cell it answers is held by contract, not unproven for want of its region.
 WITHHELD_ANSWER = "[withheld]"
 
+# How a cell refused under a code its channel reads as "the method is not built yet" says so
+# ("not built (neo/internal_error)"): its row shows nb, and the opener headline names it.
+NOT_BUILT_WHY = "not built"
+
 
 def decide(o: Observation) -> tuple[Verdict, str]:
     """The one verdict rule, with a reason for the report.
@@ -1134,13 +1138,13 @@ def decide(o: Observation) -> tuple[Verdict, str]:
         return Verdict.NOT_APPLICABLE, "ran; the op answers nothing by contract"
     if not o.reachable and not o.covered:  # before the refusal: it is not about them
         if refused and o.refusal.key in spec.not_built:
-            return Verdict.NOT_APPLICABLE, f"not built ({o.refusal.key})"
+            return Verdict.NOT_APPLICABLE, f"{NOT_BUILT_WHY} ({o.refusal.key})"
         return Verdict.NOT_APPLICABLE, "unreachable by contract"
     if refused:
         if o.refusal.key in spec.refusals:
             return Verdict.WITHHELD, o.refusal.key
         if o.refusal.key in spec.not_built:
-            return Verdict.NOT_APPLICABLE, f"not built ({o.refusal.key})"
+            return Verdict.NOT_APPLICABLE, f"{NOT_BUILT_WHY} ({o.refusal.key})"
         return (
             Verdict.INCONCLUSIVE,
             f"{spec.other_refusal}: {o.refusal.key} {o.refusal.message[:80]}",
@@ -2732,30 +2736,34 @@ def _opener_links(
     Refused, it is closed only when nothing was sent and none of the probe page's values
     turns up raw in any exit: the reply and its error, every /v1 record and event,
     trace.db. A refused run returns nothing, so even a by-design residual found raw
-    reopens it. Served, it is what its reads came back as, new leaks apart from the known
+    reopens it. A refusal whose code reads "not built" is not counted as closed, but its
+    line says the same about delivery and exits, so a refusal under the wrong code shows
+    as one. Served, it is what its reads came back as, new leaks apart from the known
     residuals (the PLAIN control and the R1 and R3 gaps leave raw by design)."""
     out = {}
     for channel in OPENER_PROBES:
         key = f"{channel} across the opener link (finding 6)"
         agent = [c for c in cells if c.channel is channel]
         judged = [c for c in agent if c.verdict is not Verdict.NOT_APPLICABLE]
-        if not judged:
-            out[key] = "not measured"
-            continue
+        unbuilt = [c for c in agent if c.why.startswith(NOT_BUILT_WHY)]
         plants = {c.region.plant.id for c in agent}
         raw = [
             c
             for c in cells
             if c.verdict is Verdict.LEAKED and c.region.plant.id in plants
         ]
-        refused = {c.why for c in judged if c.verdict is Verdict.WITHHELD}
-        if all(c.verdict is Verdict.WITHHELD for c in judged):
+        if not judged and not unbuilt:
+            out[key] = "not measured"
+            continue
+        if not judged or all(c.verdict is Verdict.WITHHELD for c in judged):
+            state, stopped = ("refused", judged) if judged else (NOT_BUILT_WHY, unbuilt)
+            codes = {c.why.removeprefix(NOT_BUILT_WHY).strip(" ()") for c in stopped}
             sent = sorted(
-                {d for c in judged for d in evaluations.get(c.run_id or "", ())}
+                {d for c in stopped for d in evaluations.get(c.run_id or "", ())}
             )
             delivery = f"page.evaluate {', '.join(sent)}" if sent else "no op"
             found = f"LEAK: {len(raw)} cells raw" if raw else "nothing raw in any exit"
-            out[key] = f"refused ({', '.join(sorted(refused))}; {delivery}), {found}"
+            out[key] = f"{state} ({', '.join(sorted(codes))}; {delivery}), {found}"
             continue
         new = [c for c in raw if c.residual is None]
         known = collections.Counter(c.residual for c in raw if c.residual)
@@ -2838,7 +2846,7 @@ _GLYPH = {0: "LEAK", 1: "??", 4: "held", 5: "ok", 6: "held", 7: "raw", 8: "·"}
 
 def glyph(cell: Cell) -> str:
     rank = cell_rank(cell)
-    if cell.verdict is Verdict.NOT_APPLICABLE and cell.why.startswith("not built"):
+    if cell.verdict is Verdict.NOT_APPLICABLE and cell.why.startswith(NOT_BUILT_WHY):
         return "nb"
     if rank in (2, 3):
         return (cell.residual or "").lower().replace("bd-", "")

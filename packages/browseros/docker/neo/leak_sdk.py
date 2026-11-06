@@ -267,7 +267,7 @@ def content(s: Session) -> None:
     whose fields plant themselves and stay, and the fixture's script, which echoes their
     values into the top document and its title. setContent runs between the guard's
     sweeps of the page's site, which register what they find, so every read of what it
-    wrote must come back masked. Held today (script/method_unavailable). A script that
+    wrote must come back masked. Served since e523d9dbf (sdk-playwright). A script that
     copies values and removes their source before the second sweep is deliberate
     exfiltration, out of scope and not probed."""
     page = s.open(Layout.CONTENT, prove=False)  # a shell until the agent writes it
@@ -289,8 +289,8 @@ def upload(s: Session) -> None:
     list (decision 33b): each of Neo's own secret files, by its path and by the shapes
     that hide a path, must be refused with DENY_CODE before the page reads a byte. A
     directory holding a symlink to the token is sent instead, and must land without it:
-    a background tab cancels it, so it runs again, last, from the front tab. Held today
-    (UPLOAD-HELD)."""
+    a background tab cancels it, so it runs again, last, from the front tab. Served
+    since 8bd247742."""
     page = s.open(Layout.UPLOAD)
     ordinary = [p for p in page.instance.plants if p.origin is not Origin.NEO]
     if any([s.upload(page, plant) for plant in ordinary]):

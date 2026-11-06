@@ -2318,8 +2318,9 @@ SPECS: Mapping[ChannelId, ChannelSpec] = {
             refusals=PIXEL_REFUSALS,
             ops=frozenset({"page.pdf"}),
         ),
-        # The main-world family: a cold page per planned run (scenario "script"). Held
-        # today (script/method_unavailable, EVAL-HELD); served, masked by the guard.
+        # The main-world family: a cold page per planned run (scenario "script"), masked
+        # by the guard. Served since 24e461d56; a refusal as script/method_unavailable is
+        # held (EVAL-HELD).
         ChannelSpec(
             ChannelId.EVALUATE,
             _S,
@@ -2456,8 +2457,8 @@ SPECS: Mapping[ChannelId, ChannelSpec] = {
             void=True,
         ),
         # setInputFiles answers nothing; the page's echo of what it uploaded is read
-        # through textContent (scenario "upload"). Held today (UPLOAD-HELD). These files
-        # are ordinary: refusing one is a functional regression, unproven, never a leak.
+        # through textContent (scenario "upload"). These files are ordinary: refusing
+        # one is a functional regression, unproven, never a leak.
         ChannelSpec(
             ChannelId.UPLOAD,
             _A,
@@ -2488,7 +2489,7 @@ SPECS: Mapping[ChannelId, ChannelSpec] = {
             # Neo's own secret files (decision 33b): refused with DENY_CODE, naming no
             # path. The Session builds each run with the path its probe names
             # (deny_uploads); leak_judge.decide_neo_upload judges it with what the oracle
-            # found the page read. Held today with the rest of setInputFiles.
+            # found the page read.
             ChannelId.UPLOAD_NEO,
             _A,
             lambda r: r.exposure is Exposure.FIELD and r.plant.origin is Origin.NEO,

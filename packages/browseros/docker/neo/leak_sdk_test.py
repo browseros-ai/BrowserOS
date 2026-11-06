@@ -3387,6 +3387,19 @@ class OpenerLinkTests(unittest.TestCase):
             "refused (neo/unsupported; page.evaluate not_sent), nothing raw in any exit",
         )
 
+    def test_a_reach_refusal_under_a_not_built_code_is_named_and_not_closed(
+        self,
+    ) -> None:
+        refusal = J.Refusal("neo", "internal_error")
+        o = obs(self.field, channel=P.ChannelId.OPENER_EVALUATE, refusal=refusal)
+        unbuilt = cell(o, run="run1")
+        self.assertIs(unbuilt.verdict, J.Verdict.NOT_APPLICABLE)
+        self.assertEqual(
+            self.line([unbuilt], "not_sent"),
+            "not built (neo/internal_error; page.evaluate not_sent), "
+            "nothing raw in any exit",
+        )
+
     def test_a_refusal_after_its_script_was_sent_is_unproven(self) -> None:
         (sent,) = J._sent_refusals([self.refused()], {"run1": ["done"]})
         self.assertIs(sent.verdict, J.Verdict.INCONCLUSIVE)
