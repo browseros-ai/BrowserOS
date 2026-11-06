@@ -69,6 +69,13 @@ impl Reply {
 pub struct Replies {
     /// `Target.attachToTarget`. The n-th attach the fake receives gets session `session-<n>`.
     pub attach: Reply,
+    /// An optional schedule for attaches to tabs other than the initial run tab.
+    pub new_page_attach: Option<Reply>,
+    /// Empty committed history URLs before a newly created page reaches about:blank.
+    pub new_page_empty_history: usize,
+    /// Beforeunload completes after the Page.close acknowledgement, provided its watcher
+    /// is still attached to answer the delayed dialog.
+    pub before_unload_delay: Option<Duration>,
     /// `Page.getNavigationHistory`, which backs `page.url()`.
     pub history: Reply,
     /// `Input.dispatchMouseEvent`, counted per event: `answers: 2` acknowledges a click's move
@@ -102,13 +109,15 @@ impl Exchange {
 pub struct FakeBrowser {
     port: u16,
     exchanges: Arc<Mutex<Vec<Exchange>>>,
-    page: Arc<Mutex<Page>>,
+    pub page: Arc<Mutex<Page>>,
     tasks: [JoinHandle<()>; 2],
 }
 
 /// The page's own state, shared by every connection, as one tab is.
-#[derive(Default)]
-struct Page {
+pub struct Page {
+    pub tabs: Vec<Value>,
+    next_tab: usize,
+    detached: HashSet<String>,
     /// The injected script's single hit-target interceptor slot, as Playwright keeps it: a setup
     /// replaces it, and a stop clears it only while it still holds the stopped interceptor.
     /// Releasing an object group leaves it alone.
@@ -118,6 +127,22 @@ struct Page {
     /// `click`. A release counts when the fake acknowledges it, as Chromium acknowledges a
     /// mouse event only after the page has dispatched it.
     clicks: usize,
+}
+
+impl Default for Page {
+    fn default() -> Self {
+        Self {
+            tabs: vec![json!({
+                "targetId": PAGE, "url": PAGE_URL, "windowId": 1,
+                "liveBrowserContextId": "profile", "isActive": true,
+            })],
+            next_tab: 0,
+            detached: HashSet::new(),
+            interceptor: None,
+            next_interceptor: 0,
+            clicks: 0,
+        }
+    }
 }
 
 struct Interceptor {
@@ -251,7 +276,9 @@ pub const GLUE: &str = "glue";
 #[derive(Default)]
 struct Calls {
     attach: usize,
+    sessions: HashMap<String, String>,
     history: usize,
+    new_page_history: usize,
     mouse: usize,
     arm: usize,
     /// Whether `install.js` ran, so a later `attach.js` finds the glue.
@@ -313,6 +340,17 @@ async fn serve_cdp(
             .as_str()
             .unwrap_or_default()
             .to_string();
+        if command["method"] == "Page.close"
+            && let Some(delay) = replies.before_unload_delay
+        {
+            tasks.spawn(finish_before_unload(
+                delay,
+                Arc::clone(&page),
+                outgoing.clone(),
+                calls.sessions.get(&session).cloned(),
+                session.clone(),
+            ));
+        }
         let (mut reply, when) = if calls.closed.contains(&session) {
             (
                 json!({ "error": { "code": -32001, "message": "Session with given id not found." } }),
@@ -356,6 +394,46 @@ async fn serve_cdp(
     }
 }
 
+/// Delayed beforeunload requires the run's watcher to still own its session.
+async fn finish_before_unload(
+    delay: Duration,
+    page: Arc<Mutex<Page>>,
+    outgoing: UnboundedSender<String>,
+    target: Option<String>,
+    session: String,
+) {
+    time::sleep(delay).await;
+    {
+        let mut page = lock(&page);
+        if page.detached.contains(&session) {
+            return;
+        }
+        page.tabs
+            .retain(|tab| tab["targetId"].as_str() != target.as_deref());
+    }
+    let _sent = outgoing.send(
+        json!({
+            "method":"Target.detachedFromTarget", "params":{"sessionId":session},
+        })
+        .to_string(),
+    );
+}
+
+fn bring_to_front(command: &Value, calls: &Calls, page: &Mutex<Page>) -> Value {
+    let target = command["sessionId"]
+        .as_str()
+        .and_then(|id| calls.sessions.get(id));
+    let open = lock(page)
+        .tabs
+        .iter()
+        .any(|tab| tab["targetId"].as_str() == target.map(String::as_str));
+    if open {
+        json!({"result":{}})
+    } else {
+        json!({"error":{"code":-32001,"message":"Session with given id not found."}})
+    }
+}
+
 /// The fake's answer to `command`, and when to send it.
 fn answer(
     command: &Value,
@@ -364,36 +442,41 @@ fn answer(
     page: &Mutex<Page>,
 ) -> (Value, Option<Duration>) {
     let now = Some(Duration::ZERO);
+    if let Some(answer) = tab_command(command, page) {
+        return answer;
+    }
     match command["method"].as_str().unwrap_or_default() {
-        "Browser.getTabInfo" if command["params"]["targetId"] == PAGE => {
-            (json!({ "result": { "tab": {} } }), now)
-        }
-        // BrowserOS's answer for a tab that does not exist, which `Runtime::connect` checks.
-        "Browser.getTabInfo" => (
-            json!({ "error": { "code": -32000, "message": "No target with given id" } }),
-            now,
-        ),
+        "Page.bringToFront" => (bring_to_front(command, calls, page), now),
         "Target.attachToTarget" => {
             let call = calls.attach;
             calls.attach += 1;
             let session = format!("session-{}", call + 1);
+            let target = command["params"]["targetId"].as_str().unwrap_or_default();
+            calls.sessions.insert(session.clone(), target.to_string());
             (
                 json!({ "result": { "sessionId": session } }),
-                replies.attach.when(call),
+                if target == PAGE {
+                    replies.attach.when(call)
+                } else {
+                    replies
+                        .new_page_attach
+                        .unwrap_or(replies.attach)
+                        .when(call.saturating_sub(1))
+                },
             )
         }
-        "Page.getNavigationHistory" => {
-            let call = calls.history;
-            calls.history += 1;
-            (
-                json!({
-                    "result": { "currentIndex": 0, "entries": [{ "id": 1, "url": PAGE_URL }] },
-                }),
-                replies.history.when(call),
-            )
+        "Page.getNavigationHistory" => navigation_history(command, replies, calls, page),
+        "Target.detachFromTarget" => {
+            lock(page).detached.insert(
+                command["params"]["sessionId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            );
+            (json!({"result":{}}), now)
         }
-        "Target.detachFromTarget"
-        | "Browser.getVersion"
+        "Browser.getVersion"
+        | "Page.close"
         | "Page.enable"
         | "Emulation.setFocusEmulationEnabled"
         | "Runtime.releaseObjectGroup"
@@ -443,6 +526,83 @@ fn answer(
             now,
         ),
     }
+}
+
+/// A new target's initial history can lag its tab-strip record.
+fn navigation_history(
+    command: &Value,
+    replies: Replies,
+    calls: &mut Calls,
+    page: &Mutex<Page>,
+) -> (Value, Option<Duration>) {
+    let call = calls.history;
+    calls.history += 1;
+    let target = command["sessionId"]
+        .as_str()
+        .and_then(|id| calls.sessions.get(id));
+    let mut url = lock(page)
+        .tabs
+        .iter()
+        .find(|tab| tab["targetId"].as_str() == target.map(String::as_str))
+        .map_or_else(|| json!(PAGE_URL), |tab| tab["url"].clone());
+    if target.is_some_and(|target| target.starts_with("new-page-")) {
+        if calls.new_page_history < replies.new_page_empty_history {
+            url = json!("");
+        }
+        calls.new_page_history += 1;
+    }
+    (
+        json!({
+            "result": { "currentIndex": 0, "entries": [{ "id": 1, "url": url }] },
+        }),
+        replies.history.when(call),
+    )
+}
+
+/// Tab-strip commands share one browser state across all sessions and connections.
+fn tab_command(command: &Value, page: &Mutex<Page>) -> Option<(Value, Option<Duration>)> {
+    let now = Some(Duration::ZERO);
+    Some(match command["method"].as_str().unwrap_or_default() {
+        "Browser.activateTab" => {
+            for tab in &mut lock(page).tabs {
+                tab["isActive"] = json!(tab["targetId"] == command["params"]["targetId"]);
+            }
+            (json!({"result":{}}), now)
+        }
+        "Browser.getTabInfo" => {
+            let page = lock(page);
+            let tab = page
+                .tabs
+                .iter()
+                .find(|tab| tab["targetId"] == command["params"]["targetId"]);
+            (
+                tab.map_or_else(
+                    || json!({ "error": { "code": -32000, "message": "No target with given id" } }),
+                    |tab| json!({ "result": { "tab": tab } }),
+                ),
+                now,
+            )
+        }
+        "Browser.getTabs" => (json!({ "result": { "tabs": lock(page).tabs } }), now),
+        "Browser.createTab" => {
+            let mut page = lock(page);
+            page.next_tab += 1;
+            let id = format!("new-page-{}", page.next_tab);
+            let tab = json!({
+                "targetId": id, "url": "about:blank", "windowId": 1,
+                "liveBrowserContextId": "profile", "isActive": false,
+            });
+            page.tabs.push(tab.clone());
+            (json!({ "result": { "tab": tab } }), now)
+        }
+        "Target.closeTarget" => {
+            lock(page)
+                .tabs
+                .retain(|tab| tab["targetId"] != command["params"]["targetId"]);
+            (json!({ "result": { "success": true } }), now)
+        }
+        _ => return None,
+    })
 }
 
 /// `Runtime.callFunctionOn`: neo-runtime-injected's bundle entries by execution context, and

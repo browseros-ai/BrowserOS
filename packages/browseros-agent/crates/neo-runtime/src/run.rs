@@ -106,6 +106,9 @@ pub struct RunOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<RunError>,
     pub calls: Vec<CallRecord>,
+    /// Pages handed to the script, in first-seen order, with the run page first. IDs can be
+    /// passed to a later `RunRequest`; tabs themselves outlive runs.
+    pub pages: Vec<RunPage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub calls_dropped: Option<DroppedCalls>,
 }
@@ -118,6 +121,7 @@ impl RunOutcome {
             logs,
             error: None,
             calls: Vec::new(),
+            pages: Vec::new(),
             calls_dropped: None,
         }
     }
@@ -129,6 +133,7 @@ impl RunOutcome {
             logs,
             error: Some(error),
             calls: Vec::new(),
+            pages: Vec::new(),
             calls_dropped: None,
         }
     }
@@ -144,6 +149,7 @@ impl RunOutcome {
             logs,
             error,
             calls: Vec::new(),
+            pages: Vec::new(),
             calls_dropped: None,
         }
     }
@@ -161,6 +167,19 @@ impl RunOutcome {
             ..self
         }
     }
+
+    pub(crate) fn with_pages(self, pages: Vec<RunPage>) -> Self {
+        Self { pages, ..self }
+    }
+}
+
+/// A page identity the run handed to its script, and the lifecycle changes this run made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunPage {
+    pub id: String,
+    pub created: bool,
+    pub closed: bool,
 }
 
 /// One browser call (`__neo_runtime.call`), as the dispatcher saw it. Derived when the run ends

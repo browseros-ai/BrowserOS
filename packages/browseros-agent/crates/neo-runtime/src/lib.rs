@@ -39,10 +39,12 @@ mod progress;
 mod realm;
 mod run;
 mod runtime;
+mod tab_calls;
+mod tabs;
 mod world;
 
 pub use run::{
     CallLocation, CallRecord, CallResult, Delivery, DroppedCalls, PageId, RunEnd, RunError,
-    RunOutcome, RunRequest, RunStatus,
+    RunOutcome, RunPage, RunRequest, RunStatus,
 };
 pub use runtime::{Runtime, RuntimeError};

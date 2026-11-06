@@ -23,7 +23,6 @@ use std::future::Future;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
-use browseros_cdp::{CdpClient, CdpError, SessionId};
 use rquickjs::function::{Async, Func};
 use rquickjs::{Ctx, Exception, Object};
 use serde::Deserialize;
@@ -33,8 +32,9 @@ use tokio::task;
 
 use crate::deadline::{Deadline, Stop};
 use crate::dispatch::Dispatcher;
-use crate::getters;
+use crate::progress::PlaywrightError;
 use crate::run::{PageId, RunError};
+use crate::tabs::Tabs;
 
 /// The guid the realm gives a run's page, in the `<type>@<id>` form Playwright's protocol uses.
 pub(crate) fn page_guid(page: &PageId) -> String {
@@ -173,19 +173,9 @@ impl Overflow {
 
 /// Everything `__neo_runtime.get` needs to answer for one run.
 pub(crate) struct Getters {
-    cdp: CdpClient,
-    page: PageId,
-    page_guid: String,
-    session: SessionId,
+    tabs: Tabs,
     deadline: Deadline,
     tokio: Handle,
-}
-
-/// The run's objects a script can name. A run sees exactly one page, so a guid for any other
-/// target, such as another tab of the same browser, names nothing.
-#[derive(Debug, Clone, Copy)]
-enum ObjectRef {
-    Page,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -193,6 +183,8 @@ enum ObjectRef {
 enum GetterField {
     Url,
     IsClosed,
+    Pages,
+    Initializer,
 }
 
 #[derive(Deserialize)]
@@ -206,23 +198,14 @@ struct GetRequest {
 #[derive(Debug)]
 enum GetError {
     BadRequest(String),
-    Cdp(CdpError),
+    Page(PlaywrightError),
     Stopped(Stop),
 }
 
 impl Getters {
-    pub(crate) fn new(
-        cdp: CdpClient,
-        page: PageId,
-        session: SessionId,
-        deadline: Deadline,
-        tokio: Handle,
-    ) -> Self {
+    pub(crate) fn new(tabs: Tabs, deadline: Deadline, tokio: Handle) -> Self {
         Self {
-            page_guid: page_guid(&page),
-            cdp,
-            page,
-            session,
+            tabs,
             deadline,
             tokio,
         }
@@ -238,21 +221,30 @@ impl Getters {
     fn answer(&self, request: &str) -> Result<Value, GetError> {
         let request: GetRequest = serde_json::from_str(request)
             .map_err(|error| GetError::BadRequest(format!("bad getter request: {error}")))?;
-        let object = self
-            .resolve(&request.guid)
-            .ok_or_else(|| GetError::BadRequest(format!("unknown guid {:?}", request.guid)))?;
-        match (object, request.field) {
-            (ObjectRef::Page, GetterField::Url) => self
-                .wait(getters::url(&self.cdp, &self.session, &self.page))
-                .map(|url| json!(url)),
-            (ObjectRef::Page, GetterField::IsClosed) => self
-                .wait(getters::is_closed(&self.cdp, &self.page))
-                .map(|closed| json!(closed)),
+        if request.guid == "context@default" && matches!(request.field, GetterField::Pages) {
+            return self.wait(async {
+                serde_json::to_value(self.tabs.pages().await?)
+                    .map_err(|error| PlaywrightError::error(error.to_string()))
+            });
         }
-    }
-
-    fn resolve(&self, guid: &str) -> Option<ObjectRef> {
-        (guid == self.page_guid).then_some(ObjectRef::Page)
+        let page = self
+            .tabs
+            .resolve(&request.guid)
+            .filter(|_| request.guid.starts_with("page@"))
+            .ok_or_else(|| GetError::BadRequest(format!("unknown guid {:?}", request.guid)))?;
+        match request.field {
+            GetterField::Url => self.wait(self.tabs.url(&page)).map(|url| json!(url)),
+            GetterField::IsClosed => self
+                .wait(self.tabs.is_closed(&page))
+                .map(|closed| json!(closed)),
+            GetterField::Initializer => self.wait(async {
+                serde_json::to_value(self.tabs.initializer(&page).await?)
+                    .map_err(|error| PlaywrightError::error(error.to_string()))
+            }),
+            GetterField::Pages => Err(GetError::BadRequest(
+                "pages is a context getter".to_string(),
+            )),
+        }
     }
 
     /// Waits on the current thread for one CDP reply, so a JS getter can return a plain
@@ -262,12 +254,15 @@ impl Getters {
     /// delivers the reply, keep going. That needs tokio's multi-threaded runtime, which
     /// `Runtime::run` checks before a realm exists. The wait ends early at the run's deadline
     /// or on cancellation.
-    fn wait<T>(&self, read: impl Future<Output = Result<T, CdpError>>) -> Result<T, GetError> {
+    fn wait<T>(
+        &self,
+        read: impl Future<Output = Result<T, PlaywrightError>>,
+    ) -> Result<T, GetError> {
         task::block_in_place(|| {
             self.tokio.block_on(async {
                 tokio::select! {
                     stop = self.deadline.reached() => Err(GetError::Stopped(stop)),
-                    result = read => result.map_err(GetError::Cdp),
+                    result = read => result.map_err(GetError::Page),
                 }
             })
         })
@@ -276,7 +271,7 @@ impl Getters {
     fn throw(&self, ctx: &Ctx<'_>, error: GetError) -> rquickjs::Error {
         let error = match error {
             GetError::BadRequest(message) => RunError::new("Error", message),
-            GetError::Cdp(error) => RunError::new("Error", error.to_string()),
+            GetError::Page(error) => RunError::new(error.name.as_str(), error.message),
             GetError::Stopped(Stop::Timeout) => RunError::timeout(self.deadline.timeout()),
             GetError::Stopped(Stop::Cancelled) => {
                 RunError::new("Error", "Run cancelled".to_string())
