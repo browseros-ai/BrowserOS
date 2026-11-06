@@ -1,5 +1,5 @@
-//! Which frames of a page a main-world script can reach, so the evaluate guard sweeps all of
-//! them (decisions.md, "Main-world sweep scope").
+//! Which frames a main-world script can reach, so the evaluate guard sweeps all of them
+//! (decisions.md, "Main-world sweep scope").
 //!
 //! A script reads the DOM of every frame of its own origin through `frames[…]`, `parent` and
 //! `top`, however many cross-site frames sit between them. Chromium keeps every document of one
@@ -9,9 +9,26 @@
 //! sessions. So the guard sweeps every frame of the page whose site is the script frame's, on
 //! every session.
 //!
+//! A script also reaches the other tabs of its browsing context group: its opener through
+//! `window.opener`, a popup through the window `window.open` returned, any of them by name,
+//! and their frames through tabs of any site in between. The browser's `openerId` links draw
+//! that group, so every tab they connect to the page, both ways and transitively, is swept as
+//! the page is. Measured on BrowserOS 155 with raw CDP:
+//! - a popup and its opener read each other's fields, and a popup reads a sibling's;
+//! - a popup disowned by either side (`w.opener = null`, `window.opener = null`) is still read
+//!   by its opener, and finds the opener by name;
+//! - a `noopener` popup reaches no other tab and no tab reaches it, by handle or by name;
+//! - when the middle tab of a chain closes, the last one's `openerId` moves to the first, which
+//!   still reaches it.
+//!
+//! A `noopener` popup is swept all the same: the browser reports it exactly as it reports a
+//! disowned one (`canAccessOpener` false, `openerFrameId` set), so leaving it out would leave
+//! out a popup its opener still reads. A tab no link connects is never asked anything.
+//!
 //! ```text
 //!  Target.getTargets (the browser; no renderer is asked)
-//!     └─ the page's target, and each iframe target whose parentId chain leads to it
+//!     ├─ the page's target, and each iframe target whose parentId chain leads to it
+//!     └─ each tab openerId links connect to the page, with its targets
 //!          └─ Site::may_hold(target url)? ── no: never asked anything, hung or not
 //!                                         └─ yes: its session's frames are all swept
 //! ```
@@ -27,7 +44,7 @@
 //! frames of shadow trees (measured: an OOPIF in a closed shadow root counts 0 in both worlds,
 //! yet the browser lists it under the page).
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use browseros_core::{BrowserSession, CoreError, FrameId};
 use serde::Deserialize;
@@ -102,13 +119,32 @@ fn scheme_and_host(url: &str) -> Option<(String, String)> {
     (!host.is_empty()).then(|| (parsed.scheme().to_owned(), host))
 }
 
-/// One target of the page: the page's own (whose id is its main frame's), or an OOPIF (whose id
-/// is its root frame's).
-#[derive(Debug)]
+/// One target of a tab: the tab's own (whose id is its main frame's), or an OOPIF (whose id is
+/// its root frame's).
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct PageTarget {
     pub(crate) frame: FrameId,
     /// Its root document's URL, as the browser reports it.
     pub(crate) url: String,
+}
+
+/// Every target a script on one page can reach: the page's own, and those of each tab its
+/// opener links connect it to.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Reach {
+    /// The page's targets: its own, and each iframe target whose `parentId` chain leads to it.
+    pub(crate) own: Vec<PageTarget>,
+    /// The other tabs of its opener-connected group, nearest link first.
+    pub(crate) linked: Vec<LinkedTab>,
+}
+
+/// A tab an opener link connects to the script's page, directly or through other tabs.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LinkedTab {
+    /// The tab's page target, whose id is its main frame's.
+    pub(crate) main: FrameId,
+    /// Its targets, as [`Reach::own`] lists the page's.
+    pub(crate) targets: Vec<PageTarget>,
 }
 
 #[derive(Deserialize)]
@@ -126,6 +162,11 @@ struct TargetInfo {
     /// holds it. `None` for a page.
     #[serde(default)]
     parent_id: Option<String>,
+    /// The tab that opened a page: its page target, also when an iframe of it called
+    /// `window.open` (measured). Set for `noopener` popups too, and moved to the opener's own
+    /// opener when the opener closes (measured).
+    #[serde(default)]
+    opener_id: Option<String>,
 }
 
 /// Every page and iframe target of the browser. One browser-side call, so no renderer, hung or
@@ -154,46 +195,217 @@ pub(crate) async fn is_listed(
         .any(|listed| listed.target_id == target.as_str()))
 }
 
-/// The targets of the page whose main frame is `main`: its own, then each iframe target whose
-/// `parentId` chain leads to it.
-pub(crate) async fn page_targets(
-    browser: &BrowserSession,
-    main: &FrameId,
-) -> Result<Vec<PageTarget>, CoreError> {
-    let listed = browser_targets(browser).await?;
-    let mut ours = HashSet::from([main.as_str().to_owned()]);
-    let (mut found, mut rest): (Vec<_>, Vec<_>) = listed
-        .target_infos
-        .into_iter()
-        .partition(|target| target.target_id == main.as_str());
-    // Each round takes the targets embedded in one found so far, so it ends within as many
-    // rounds as there are targets.
-    loop {
-        let (embedded, others): (Vec<_>, Vec<_>) = rest.into_iter().partition(|target| {
-            target
-                .parent_id
-                .as_ref()
-                .is_some_and(|parent| ours.contains(parent))
-        });
-        rest = others;
-        if embedded.is_empty() {
-            break;
+/// Every target a script on the page whose main frame is `main` can reach, from one read of
+/// the browser's target list.
+pub(crate) async fn reach(browser: &BrowserSession, main: &FrameId) -> Result<Reach, CoreError> {
+    Ok(reach_in(browser_targets(browser).await?.target_infos, main))
+}
+
+/// [`reach`] over the browser's `listed` targets: one pass finds each target's tab, so a page
+/// with no opener link reaches its own targets and asks nothing more.
+fn reach_in(listed: Vec<TargetInfo>, main: &FrameId) -> Reach {
+    let (group, tab_of_each) = {
+        let parents: HashMap<&str, &str> = listed
+            .iter()
+            .filter_map(|target| Some((target.target_id.as_str(), target.parent_id.as_deref()?)))
+            .collect();
+        // A popup reaches its opener through `window.opener` or by name, and the opener reaches
+        // it through the window `window.open` returned, so a link counts both ways.
+        let mut links: HashMap<&str, Vec<&str>> = HashMap::new();
+        for target in &listed {
+            if let (None, Some(opener)) = (&target.parent_id, &target.opener_id) {
+                let opener = tab_of(&parents, opener);
+                links
+                    .entry(target.target_id.as_str())
+                    .or_default()
+                    .push(opener);
+                links
+                    .entry(opener)
+                    .or_default()
+                    .push(target.target_id.as_str());
+            }
         }
-        ours.extend(embedded.iter().map(|target| target.target_id.clone()));
-        found.extend(embedded);
+        let mut group = vec![main.as_str()];
+        let mut seen = HashMap::from([(main.as_str(), 0)]);
+        let mut next = 0;
+        while let Some(tab) = group.get(next).copied() {
+            for &linked in links.get(tab).into_iter().flatten() {
+                if !seen.contains_key(linked) {
+                    seen.insert(linked, group.len());
+                    group.push(linked);
+                }
+            }
+            next += 1;
+        }
+        let tab_of_each: Vec<Option<usize>> = listed
+            .iter()
+            .map(|target| seen.get(tab_of(&parents, &target.target_id)).copied())
+            .collect();
+        let group: Vec<FrameId> = group
+            .into_iter()
+            .map(|tab| FrameId(tab.to_owned()))
+            .collect();
+        (group, tab_of_each)
+    };
+    let mut tabs: Vec<Vec<PageTarget>> = group.iter().map(|_| Vec::new()).collect();
+    for (target, tab) in listed.into_iter().zip(tab_of_each) {
+        if let Some(targets) = tab.and_then(|tab| tabs.get_mut(tab)) {
+            targets.push(PageTarget {
+                frame: FrameId(target.target_id),
+                url: target.url,
+            });
+        }
     }
-    Ok(found
-        .into_iter()
-        .map(|target| PageTarget {
-            frame: FrameId(target.target_id),
-            url: target.url,
-        })
-        .collect())
+    let mut tabs = group.into_iter().zip(tabs);
+    let own = tabs.next().map(|(_, own)| own).unwrap_or_default();
+    Reach {
+        own,
+        // A tab the browser lists no target of (a closed opener its popups still name) links
+        // them, but holds nothing to sweep.
+        linked: tabs
+            .filter(|(_, targets)| !targets.is_empty())
+            .map(|(main, targets)| LinkedTab { main, targets })
+            .collect(),
+    }
+}
+
+/// The tab `target` is in: the root of its `parentId` chain. The walk takes at most as many
+/// steps as there are parents, so a cycle cannot hold it.
+fn tab_of<'a>(parents: &HashMap<&'a str, &'a str>, mut target: &'a str) -> &'a str {
+    for _ in 0..=parents.len() {
+        match parents.get(target) {
+            Some(parent) => target = parent,
+            None => break,
+        }
+    }
+    target
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Site;
+    use browseros_core::FrameId;
+
+    use super::{LinkedTab, PageTarget, Reach, Site, TargetInfo};
+
+    /// A target `id` at `https://<id>.test/`, embedded in `parent` or opened by `opener`.
+    fn target(id: &str, parent: Option<&str>, opener: Option<&str>) -> TargetInfo {
+        TargetInfo {
+            target_id: id.to_owned(),
+            url: format!("https://{id}.test/"),
+            parent_id: parent.map(str::to_owned),
+            opener_id: opener.map(str::to_owned),
+        }
+    }
+
+    fn targets(ids: &[&str]) -> Vec<PageTarget> {
+        ids.iter()
+            .map(|id| PageTarget {
+                frame: FrameId((*id).to_owned()),
+                url: format!("https://{id}.test/"),
+            })
+            .collect()
+    }
+
+    fn tab(main: &str, ids: &[&str]) -> LinkedTab {
+        LinkedTab {
+            main: FrameId(main.to_owned()),
+            targets: targets(ids),
+        }
+    }
+
+    /// Two groups: a opened b, which opened c; d opened e. a and b each embed an OOPIF, and
+    /// a's holds another.
+    fn browser() -> Vec<TargetInfo> {
+        vec![
+            target("a", None, None),
+            target("a-frame", Some("a"), None),
+            target("a-inner", Some("a-frame"), None),
+            target("b", None, Some("a")),
+            target("b-frame", Some("b"), None),
+            target("c", None, Some("b")),
+            target("d", None, None),
+            target("e", None, Some("d")),
+        ]
+    }
+
+    #[test]
+    fn tests_that_a_page_reaches_its_own_targets_and_its_opener_group_both_ways() {
+        let page = |id: &str| FrameId(id.to_owned());
+        assert_eq!(
+            super::reach_in(browser(), &page("a")),
+            Reach {
+                own: targets(&["a", "a-frame", "a-inner"]),
+                linked: vec![tab("b", &["b", "b-frame"]), tab("c", &["c"])],
+            },
+            "an opener reaches its popup, and the popup's popup"
+        );
+        assert_eq!(
+            super::reach_in(browser(), &page("c")),
+            Reach {
+                own: targets(&["c"]),
+                linked: vec![
+                    tab("b", &["b", "b-frame"]),
+                    tab("a", &["a", "a-frame", "a-inner"])
+                ],
+            },
+            "a popup reaches its opener, and the opener's opener"
+        );
+        assert_eq!(
+            super::reach_in(browser(), &page("e")).linked,
+            vec![tab("d", &["d"])],
+            "another group is out of reach"
+        );
+    }
+
+    #[test]
+    fn tests_that_a_page_with_no_opener_link_reaches_only_its_own_targets() {
+        let alone = vec![
+            target("a", None, None),
+            target("a-frame", Some("a"), None),
+            target("d", None, None),
+            target("e", None, Some("d")),
+        ];
+        assert_eq!(
+            super::reach_in(alone, &FrameId("a".to_owned())),
+            Reach {
+                own: targets(&["a", "a-frame"]),
+                linked: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn tests_that_popups_of_one_opener_reach_each_other_even_when_it_closed() {
+        let with_opener = vec![
+            target("a", None, None),
+            target("b", None, Some("a")),
+            target("c", None, Some("a")),
+        ];
+        assert_eq!(
+            super::reach_in(with_opener, &FrameId("b".to_owned())).linked,
+            vec![tab("a", &["a"]), tab("c", &["c"])],
+            "a popup reaches its sibling through their opener"
+        );
+        let closed = vec![target("b", None, Some("a")), target("c", None, Some("a"))];
+        assert_eq!(
+            super::reach_in(closed, &FrameId("b".to_owned())).linked,
+            vec![tab("c", &["c"])],
+            "an opener no longer listed still links its popups"
+        );
+    }
+
+    #[test]
+    fn tests_that_an_opener_named_by_its_frame_is_its_tab() {
+        let listed = vec![
+            target("a", None, None),
+            target("a-frame", Some("a"), None),
+            target("b", None, Some("a-frame")),
+        ];
+        assert_eq!(
+            super::reach_in(listed, &FrameId("b".to_owned())).linked,
+            vec![tab("a", &["a", "a-frame"])]
+        );
+    }
 
     #[test]
     fn tests_that_a_site_is_the_scheme_and_registrable_domain_without_the_port() {

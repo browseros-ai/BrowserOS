@@ -7,10 +7,11 @@
 //!  open_document   require(MainWorld) ── admit ── the frame, within the op's timeout ── sweep
 //!                  of the frame's site, to the op's deadline at the latest
 //!  write           DocumentWatch on the frame's session (subscribe, Page and lifecycle on) ──
-//!                  send_effect ── probe `setContent` with a user gesture: document.open, write,
-//!                  close; the probe unboots ── the old seq retires, the new document's world
-//!                  installs ── Page.documentOpened ── waitUntil, each step within the op's
-//!                  timeout, a retry's sweep to its deadline ──▶ Pending, holding how it ended
+//!                  send_effect_reaching(the group's other tabs) ── probe `setContent` with a
+//!                  user gesture: document.open, write, close; the probe unboots ── the old seq
+//!                  retires, the new document's world installs ── Page.documentOpened ──
+//!                  waitUntil, each step within the op's timeout, a retry's sweep to its
+//!                  deadline ──▶ Pending, holding how it ended
 //!  Pending::sweep  the same sweep, now of the new document's frames too
 //!  close           `{}`, or the failure with every swept value masked in its text
 //! ```
@@ -58,6 +59,7 @@ impl<'op> EvaluateGuard<'op, DocumentWrite> {
             frame,
             follow: None,
             swept: FieldValues::default(),
+            group: Vec::new(),
             sent: false,
         };
         core.sweep(scope, DocumentWrite::NOT_SENT, || true).await?;
@@ -159,10 +161,11 @@ impl GuardCore<'_> {
     /// inline scripts with it, so it is never sent again: the op fails with the message
     /// upstream's setContent gives when that navigation destroys its evaluation's context.
     ///
-    /// Each attempt is marked sent before it goes out, so a failure after it leaves only after
-    /// the guard's sweep, and the guard reports on drop. One that reached no document ran
-    /// nothing, so it is unmarked: a sweep for the next attempt that fails leaves at once,
-    /// saying the content was not set.
+    /// Each attempt is marked sent before it goes out, after the host's rules ran on the op's
+    /// tab and on the group's other tabs the sweep before it found, whose scripts the written
+    /// HTML can reach, so a failure after it leaves only after the guard's sweep, and the guard
+    /// reports on drop. One that reached no document ran nothing, so it is unmarked: a sweep
+    /// for the next attempt that fails leaves at once, saying the content was not set.
     async fn replace_document(
         &mut self,
         scope: &OpScope<'_>,
@@ -181,7 +184,8 @@ impl GuardCore<'_> {
         .await?;
         let mut retried = false;
         loop {
-            let sent = scope.send_effect()?;
+            let reach = bounded(scope, self.reach(scope)).await?;
+            let sent = scope.send_effect_reaching(&reach)?;
             self.sent = true;
             let written = bounded(scope, async {
                 Ok(write_document(&world, html, &sent).await)

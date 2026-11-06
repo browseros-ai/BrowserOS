@@ -5,13 +5,17 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_core::{BrowserSession, FrameId, PageId, ProtocolSession, TargetId};
+use browseros_core::{
+    BrowserSession, CoreError, FrameId, PageId, ProtocolSession, TabId, TargetId,
+};
 use futures_util::FutureExt;
 use futures_util::future::Either;
+use serde::Deserialize;
+use serde_json::json;
 use tokio::time::{self, Instant};
 
 use crate::op_scope::{AdmittedPage, OpScope};
-use crate::page::{FRAME_BUDGET, PageState};
+use crate::page::{FRAME_BUDGET, PageState, document_watch};
 use crate::probe::ProbeFailure;
 use crate::target::PageRef;
 use crate::world::{Endpoint, FrameWorlds, Installer, Place, SealedWorld, SessionKind};
@@ -21,6 +25,8 @@ use crate::{Playwright, PlaywrightError};
 /// in [`OpPage::admit`]; every call after it goes to a raw `ProtocolSession` for the same
 /// session id (decisions.md). On a bound view an admitted session checks the page's scope
 /// around every message, about 7 CDP messages per call, which a 6-message click cannot afford.
+/// The sweeps also build one, unadmitted, for each tab opener links connect to the op's page
+/// ([`OpPage::linked`]), and only read through it.
 pub(crate) struct OpPage<'op> {
     pw: &'op Playwright,
     admitted: &'op AdmittedPage,
@@ -128,6 +134,85 @@ impl<'op> OpPage<'op> {
     ) -> Result<Self, PlaywrightError> {
         let page = handle.checked(pw.browser(), scope).await?;
         Self::admit(pw, scope, &page).await
+    }
+
+    /// The tab whose page target is `main`, which a script on this op's page reaches through
+    /// opener links: core's page id for it and the session core holds on it, attached on first
+    /// use. `None` when core lists no tab on that target.
+    ///
+    /// It is not admitted through the run's view. The op never acts on the tab; only the sweeps
+    /// read it, because a script on the op's page reaches it whatever the view allows
+    /// (decisions.md, "Main-world sweep scope").
+    pub(crate) async fn linked_tab(
+        &self,
+        main: &FrameId,
+    ) -> Result<Option<AdmittedPage>, CoreError> {
+        let pages = &self.pw.browser().pages;
+        let on_main = |target: &TargetId| target.as_str() == main.as_str();
+        let mut id = None;
+        for known in pages.known_page_ids().await {
+            if pages
+                .get_info(known.clone())
+                .await
+                .is_some_and(|info| on_main(&info.target_id))
+            {
+                id = Some(known);
+                break;
+            }
+        }
+        if id.is_none() {
+            // A popup core has not listed yet.
+            id = pages
+                .list()
+                .await?
+                .into_iter()
+                .find(|info| on_main(&info.target_id))
+                .map(|info| info.page_id);
+        }
+        let Some(id) = id else {
+            return Ok(None);
+        };
+        let session = pages.get_session(id.clone()).await?;
+        Ok(on_main(&session.target_id).then_some(AdmittedPage { id, session }))
+    }
+
+    /// The browser's tab on each of `mains`, a tab's page target, in order, for the host's rules
+    /// on the tabs a script on this op's page reaches (`OpEnv::recheck_reach`). Core's tab
+    /// registry names the tabs it knows, with no CDP call; for any other, the browser's own
+    /// tab list (`Browser.getTabs`) is read once, unfiltered. Core leaves the internal pages
+    /// out of its registry (`EXCLUDED_URL_PREFIXES`), but a page's script reaches an
+    /// extension's page it opened as it reaches any popup, so a tab is never dropped for being
+    /// one. `None` when the browser lists no tab on one of `mains` even then, as for a tab that
+    /// closed since the sweep read the targets: the host cannot be asked about it.
+    pub(crate) async fn tabs_on(&self, mains: &[FrameId]) -> Result<Option<Vec<TabId>>, CoreError> {
+        let pages = &self.pw.browser().pages;
+        let mut known = Vec::new();
+        for id in pages.known_page_ids().await {
+            known.extend(pages.get_info(id).await.map(|info| ListedTab {
+                target: info.target_id,
+                tab: info.tab_id,
+            }));
+        }
+        if mains.iter().any(|main| tab_on(&known, main).is_none()) {
+            known = browser_tabs(self.pw.browser()).await?;
+        }
+        Ok(mains.iter().map(|main| tab_on(&known, main)).collect())
+    }
+
+    /// `tab`, which [`OpPage::linked_tab`] found, as a page the sweeps read. Its sealed worlds
+    /// are the tab's own, so an op that acts on the tab later finds them installed. Only the
+    /// sweeps build one, and nothing acts through it. It keeps the op's deadline, so an install
+    /// in the tab retries within the op's own window (`OpPage::late_retry`).
+    pub(crate) async fn linked<'tab>(&self, tab: &'tab AdmittedPage) -> OpPage<'tab>
+    where
+        'op: 'tab,
+    {
+        OpPage {
+            pw: self.pw,
+            admitted: tab,
+            state: self.pw.pages().page(self.pw.browser(), tab).await,
+            deadline: self.deadline,
+        }
     }
 
     /// The crate instance the op runs in.
@@ -248,4 +333,37 @@ impl<'op> OpPage<'op> {
             }
         }
     }
+}
+
+/// The tab whose page target is `main` among `tabs`.
+fn tab_on(tabs: &[ListedTab], main: &FrameId) -> Option<TabId> {
+    tabs.iter()
+        .find(|listed| listed.target.as_str() == main.as_str())
+        .map(|listed| listed.tab)
+}
+
+/// One tab by its page target, as core's tab registry or the browser's own tab list
+/// (`Browser.getTabs`, which [`browser_tabs`] reads) names it.
+#[derive(Deserialize)]
+struct ListedTab {
+    #[serde(rename = "targetId")]
+    target: TargetId,
+    #[serde(rename = "tabId")]
+    tab: TabId,
+}
+
+/// `Browser.getTabs`' reply.
+#[derive(Deserialize)]
+struct ListedTabs {
+    tabs: Vec<ListedTab>,
+}
+
+/// Every tab the browser lists, internal pages included: one browser-side call, which no
+/// renderer answers.
+async fn browser_tabs(browser: &BrowserSession) -> Result<Vec<ListedTab>, CoreError> {
+    let listed: ListedTabs = browser
+        .cdp("Browser.getTabs", json!({}), None)
+        .await
+        .and_then(document_watch::decode)?;
+    Ok(listed.tabs)
 }

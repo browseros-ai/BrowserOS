@@ -8,8 +8,13 @@
 //! The nested fixture holds the leak R10c measured: a3 has the top page's site but sits under two
 //! cross-site OOPIFs on a session of its own, so a script on top reads it through `frames[…]`.
 //! Two more hide such a frame where no count in the page sees it: under a same-process frame, and
-//! under a cross-site frame in a closed shadow root. The last test prints what a sweep costs; run
-//! it with `--nocapture`.
+//! under a cross-site frame in a closed shadow root. A script also reaches the tabs its opener
+//! links connect it to: a popup reads its opener's password through `window.opener`, and the
+//! opener reads the popup's through the window `window.open` returned, so each is swept for the
+//! other, a hung frame of the site in either fails the other's script and reads closed, and the
+//! host's rules run on the other tab before every main-world send (`OpEnv::recheck_reach`),
+//! while a tab of the same site with no link stays unswept and a page with no link sends what
+//! it sent before. The last test prints what a sweep costs; run it with `--nocapture`.
 //!
 //! Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005), for example
 //! `PORT_BASE=9631 spikes/eval/browser.sh <profile> &`, then
@@ -32,15 +37,15 @@ mod live_run;
 )]
 mod locator;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
-use std::mem;
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{io, mem};
 
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::{CdpConnection, FrameId, SessionId};
-use browseros_playwright::{ErrorCode, PlaywrightError};
+use browseros_playwright::{ErrorCode, PlaywrightError, Refusal};
 use browseros_trace::ErrorOwner;
 use fixture_server::{FixtureServer, Page, nest_pages};
 use futures_util::future::BoxFuture;
@@ -737,10 +742,7 @@ async fn tests_that_an_oopif_script_reads_its_same_origin_sibling_masked() -> Te
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_hung_same_site_frame_refuses_the_script_with_nothing_sent() -> TestResult {
     let _alone = ALONE.acquire().await?;
-    let hang = Page::html(include_str!("data/nest/hang.html"))
-        .with_header("origin-agent-cluster", "?1")
-        .with_header("cache-control", "no-store");
-    let hanging = FixtureServer::start(HashMap::from([("/hang.html".to_owned(), hang)])).await?;
+    let hanging = hang_server().await?;
     let parent = format!(
         "<!doctype html><title>Parent</title><input id=\"p\" type=\"password\">\
          <iframe title=\"hang\" src=\"{}\"></iframe>",
@@ -938,6 +940,652 @@ async fn tests_that_a_hung_cross_site_frame_does_not_slow_page_evaluate() -> Tes
     .await
 }
 
+/// The password typed in the opener's tab.
+const OPENER_SECRET: &str = "opener-secret-61";
+/// The password typed in the popup's tab.
+const POPUP_SECRET: &str = "popup-secret-62";
+
+/// From a popup, the opener's field; from the opener, the popup's, through the window
+/// `window.open` returned, which the opener keeps in `popup`.
+const OPENER_FIELD: &str = "opener.document.querySelector('#p').value";
+const POPUP_FIELD: &str = "popup.document.querySelector('#p').value";
+
+/// How the opener's own code opens its popup, keeping the window `window.open` returned in
+/// `popup`: a popup of its site, one of its site whose frame of the site spins, and a `noopener`
+/// one, for which `window.open` returns `null` and which no script of either tab can reach.
+const OPEN_POPUP: &str = "window.popup = window.open('/popup.html')";
+const OPEN_HUNG_POPUP: &str = "window.popup = window.open('/hung-popup.html')";
+const OPEN_NOOPENER_POPUP: &str = "window.popup = window.open('/popup.html', '_blank', 'noopener')";
+
+/// Serves `hang.html` with an origin-keyed agent cluster, so on another port of 127.0.0.1 it is
+/// a frame of 127.0.0.1's site in a process of its own (measured), which then spins.
+async fn hang_server() -> io::Result<FixtureServer> {
+    let hang = Page::html(include_str!("data/nest/hang.html"))
+        .with_header("origin-agent-cluster", "?1")
+        .with_header("cache-control", "no-store");
+    FixtureServer::start(HashMap::from([("/hang.html".to_owned(), hang)])).await
+}
+
+/// Tabs of one site, each with a password field: an opener and its popup, and three that frame
+/// `hang`: a third tab, an opener and a popup whose frame of the site spins. A same-site popup
+/// shares its opener's renderer, so only such a frame hangs one tab of the group and not the
+/// other.
+fn popup_pages(hang: &str) -> HashMap<String, Page> {
+    let field = |title: &str, more: &str| {
+        Page::html(&format!(
+            "<!doctype html><title>{title}</title><input id=\"p\" type=\"password\">{more}"
+        ))
+    };
+    let framed = format!("<iframe title=\"hang\" src=\"{hang}\"></iframe>");
+    HashMap::from([
+        ("/opener.html".to_owned(), field("Opener", "")),
+        ("/popup.html".to_owned(), field("Popup", "")),
+        ("/third.html".to_owned(), field("Third", &framed)),
+        ("/hung-opener.html".to_owned(), field("Opener", &framed)),
+        ("/hung-popup.html".to_owned(), field("Popup", &framed)),
+    ])
+}
+
+/// Opens a popup from `opener` with `open`, as the opener's own code would, and returns the
+/// popup's tab.
+async fn open_popup(run: &LiveRun, opener: &TestPage, open: &str) -> TestResult<TestPage> {
+    let since = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+    let wait = json!({ "call": { "api": "page.waitForEvent", "timeoutMs": 5_000 },
+                       "page": brand(opener), "event": "popup", "since": since });
+    let (popup, opened) = tokio::join!(run.invoke("events.wait", wait), async {
+        time::sleep(Duration::from_millis(50)).await;
+        run.eval(opener, &format!("({open}, 1)")).await
+    });
+    opened?;
+    let popup = popup?;
+    live_run::test_page(
+        popup
+            .pointer("/popup/page")
+            .ok_or("a popup event names its page")?,
+    )
+}
+
+/// Opens `opener_url` in a tab and types its password, opens a popup with `open` and types the
+/// popup's, runs `body` on both tabs, and closes both whatever happened.
+async fn with_popup<F, Fut>(
+    run: LiveRun,
+    opener_url: &str,
+    open: &str,
+    body: F,
+) -> (LiveRun, TestResult)
+where
+    F: FnOnce(LiveRun, TestPage, TestPage) -> Fut,
+    Fut: Future<Output = (LiveRun, TestResult)>,
+{
+    let opener = match run.new_page().await {
+        Ok(opener) => opener,
+        Err(error) => return (run, Err(error)),
+    };
+    let popup = async {
+        run.invoke(
+            "page.goto",
+            json!({ "call": { "timeoutMs": 30_000 }, "page": brand(&opener), "url": opener_url }),
+        )
+        .await?;
+        run.type_text(&opener, "#p", OPENER_SECRET).await?;
+        let popup = open_popup(&run, &opener, open).await?;
+        run.type_text(&popup, "#p", POPUP_SECRET).await?;
+        TestResult::Ok(popup)
+    }
+    .await;
+    let (run, result) = match popup {
+        Ok(popup) => {
+            let (run, result) = Box::pin(body(run, opener.clone(), popup.clone())).await;
+            run.close_page(&popup).await;
+            (run, result)
+        }
+        Err(error) => (run, Err(error)),
+    };
+    run.close_page(&opener).await;
+    (run, result)
+}
+
+/// `[Recheck, RecheckReach(reach), MarkSent]`: one main-world send whose host's rules ran on
+/// the op's tab, then on the other tabs of its group.
+fn sent_reaching(reach: &TestPage) -> [EnvCall; 3] {
+    [
+        EnvCall::Recheck,
+        EnvCall::RecheckReach(vec![reach.tab]),
+        EnvCall::MarkSent,
+    ]
+}
+
+/// The calls since the last clear, without the call log's notes.
+fn effects(run: &LiveRun) -> Vec<EnvCall> {
+    run.calls()
+        .into_iter()
+        .filter(|call| !matches!(call, EnvCall::Note(_)))
+        .collect()
+}
+
+/// A popup's script reaches its opener through `window.opener`, so the popup's `page.evaluate`
+/// sweeps the opener's frames of its site too (MW measured the leak with raw CDP).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_popup_reads_its_openers_password_masked() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let server = FixtureServer::start(popup_pages("about:blank")).await?;
+    let url = server.url("127.0.0.1", "/opener.html");
+    let (_run, result) = with_popup(
+        LiveRun::connect().await?,
+        &url,
+        OPEN_POPUP,
+        |run, _opener, popup| async move {
+            let result = async {
+                let read = page_evaluate(
+                    &run,
+                    &popup,
+                    &format!("() => [document.title, {OPENER_FIELD}]"),
+                )
+                .await?;
+                assert_eq!(
+                    plain(read),
+                    json!(["Popup", "[private]"]),
+                    "the popup's script reads the opener's password, and the opener is swept"
+                );
+                reported(&run, OPENER_SECRET);
+                Ok(())
+            }
+            .await;
+            (run, result)
+        },
+    )
+    .await;
+    result
+}
+
+/// The opener's script reaches its popup through the window `window.open` returned, so the
+/// opener's `page.evaluate` sweeps the popup's frames of its site too.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_an_opener_reads_its_popups_password_masked() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let server = FixtureServer::start(popup_pages("about:blank")).await?;
+    let url = server.url("127.0.0.1", "/opener.html");
+    let (_run, result) = with_popup(
+        LiveRun::connect().await?,
+        &url,
+        OPEN_POPUP,
+        |run, opener, _popup| async move {
+            let result = async {
+                let read = page_evaluate(
+                    &run,
+                    &opener,
+                    &format!("() => [document.title, {POPUP_FIELD}]"),
+                )
+                .await?;
+                assert_eq!(
+                    plain(read),
+                    json!(["Opener", "[private]"]),
+                    "the opener's script reads the popup's password, and the popup is swept"
+                );
+                reported(&run, POPUP_SECRET);
+                Ok(())
+            }
+            .await;
+            (run, result)
+        },
+    )
+    .await;
+    result
+}
+
+/// A script can act on every tab of its group (navigate the opener, click in the popup), and
+/// the host's rules are per tab, so every main-world send runs them on the group's other tabs
+/// after the op's own and before it is marked: each script, each `waitForFunction` poll and
+/// `setContent`'s write.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_every_main_world_send_rechecks_the_other_tabs_of_its_group() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let server = FixtureServer::start(popup_pages("about:blank")).await?;
+    let url = server.url("127.0.0.1", "/opener.html");
+    let (_run, result) = with_popup(
+        LiveRun::connect().await?,
+        &url,
+        OPEN_POPUP,
+        |run, opener, popup| async move {
+            let result = async {
+                run.clear_calls();
+                page_evaluate(&run, &popup, "() => 1").await?;
+                assert_eq!(effects(&run), sent_reaching(&opener), "the popup's script");
+                run.clear_calls();
+                page_evaluate(&run, &opener, "() => 1").await?;
+                assert_eq!(effects(&run), sent_reaching(&popup), "the opener's script");
+                run.eval(&popup, "window.polls = 0").await?;
+                run.clear_calls();
+                wait_for_function(&run, &popup, "() => ++window.polls >= 3").await?;
+                let polls = effects(&run);
+                assert!(
+                    polls.len() == 9 && polls.chunks(3).all(|poll| poll == sent_reaching(&opener)),
+                    "each of the three polls: {polls:?}"
+                );
+                run.clear_calls();
+                set_content_within(&run, &popup, "<title>Written</title>", 10_000).await?;
+                assert_eq!(effects(&run), sent_reaching(&opener), "setContent's write");
+                Ok(())
+            }
+            .await;
+            (run, result)
+        },
+    )
+    .await;
+    result
+}
+
+/// The owner holding another tab of the group refuses the script there, before anything is
+/// marked sent: the refusal reaches the agent as the host made it, and the script never runs.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_refusal_on_another_tab_of_the_group_leaves_nothing_sent() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let server = FixtureServer::start(popup_pages("about:blank")).await?;
+    let url = server.url("127.0.0.1", "/opener.html");
+    let refusal = Refusal {
+        owner: ErrorOwner::Host,
+        code: "owner_has_control".to_owned(),
+        message: "The owner is using a tab this page's scripts reach.".to_owned(),
+        host_code: None,
+    };
+    let (_run, result) = with_popup(
+        LiveRun::connect().await?,
+        &url,
+        OPEN_POPUP,
+        |run, opener, popup| async move {
+            let result = async {
+                run.refuse_reach(Some(refusal));
+                run.clear_calls();
+                let refused = page_evaluate(
+                    &run,
+                    &popup,
+                    "() => { window.ran = true; opener.location.href = 'about:blank'; return 1; }",
+                )
+                .await;
+                run.refuse_reach(None);
+                let error = refused
+                    .err()
+                    .ok_or("the refusal on the opener's tab fails the op")?;
+                assert_eq!(
+                    (error.owner(), error.code(), error.message()),
+                    (
+                        ErrorOwner::Host,
+                        "owner_has_control",
+                        "The owner is using a tab this page's scripts reach."
+                    ),
+                    "the host's refusal reaches the agent unchanged"
+                );
+                assert_eq!(
+                    effects(&run),
+                    [EnvCall::Recheck, EnvCall::RecheckReach(vec![opener.tab])],
+                    "nothing was marked sent"
+                );
+                assert_eq!(
+                    run.eval(&popup, "window.ran === true").await?,
+                    json!(false),
+                    "the script did not run"
+                );
+                assert_eq!(
+                    run.eval(&opener, "document.title").await?,
+                    json!("Opener"),
+                    "the opener was not navigated"
+                );
+                Ok(())
+            }
+            .await;
+            (run, result)
+        },
+    )
+    .await;
+    result
+}
+
+/// A host that keeps `OpEnv::recheck_reach`'s default has not said whether its rules allow a
+/// script to act on other tabs, so a script on a page with an opener link is refused with
+/// nothing sent, while one on a page with no link runs as before.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_host_that_checks_no_other_tab_refuses_a_script_on_a_linked_page() -> TestResult
+{
+    let _alone = ALONE.acquire().await?;
+    let server = FixtureServer::start(popup_pages("about:blank")).await?;
+    let opener_url = server.url("127.0.0.1", "/opener.html");
+    let alone_url = server.url("127.0.0.1", "/popup.html");
+    let evaluate = |page: &TestPage, function: &str| json!({ "page": brand(page), "script": script(function) });
+    let (run, result) = with_popup(
+        LiveRun::connect().await?,
+        &opener_url,
+        OPEN_POPUP,
+        |run, _opener, popup| async move {
+            let result = async {
+                run.clear_calls();
+                let refused = run
+                    .invoke_on_default_host(
+                        "page.evaluate",
+                        evaluate(&popup, "() => { window.ran = true; return 1; }"),
+                    )
+                    .await;
+                let error = refused.err().ok_or("a linked page's script is refused")?;
+                assert_eq!(
+                    (error.owner(), error.code()),
+                    (ErrorOwner::Neo, "unsupported"),
+                    "{error}"
+                );
+                assert!(
+                    error.message().contains("window.opener"),
+                    "the refusal names the link: {error}"
+                );
+                assert_eq!(run.calls(), [EnvCall::Recheck], "nothing was marked sent");
+                assert_eq!(
+                    run.eval(&popup, "window.ran === true").await?,
+                    json!(false),
+                    "the script did not run"
+                );
+                Ok(())
+            }
+            .await;
+            (run, result)
+        },
+    )
+    .await;
+    result?;
+    on_page(run, &alone_url, |run, page| async move {
+        let result = async {
+            run.clear_calls();
+            let ran = run
+                .invoke_on_default_host("page.evaluate", evaluate(&page, "() => 7"))
+                .await?;
+            assert_eq!(ran, json!(7), "a page with no link runs its script");
+            assert_eq!(effects(&run), [EnvCall::Recheck, EnvCall::MarkSent]);
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+/// A tab of the same site that no opener link connects to the popup is out of its script's
+/// reach, so it is never swept: its spinning frame of the site costs the popup's evaluate
+/// nothing, while the opener is still swept.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_tab_with_no_opener_link_is_not_swept() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let hanging = hang_server().await?;
+    let server = FixtureServer::start(popup_pages(&hanging.url("127.0.0.1", "/hang.html"))).await?;
+    let opener_url = server.url("127.0.0.1", "/opener.html");
+    let third_url = server.url("127.0.0.1", "/third.html");
+    on_page(LiveRun::connect().await?, &third_url, |run, third| async move {
+        with_popup(run, &opener_url, OPEN_POPUP, |run, _opener, popup| async move {
+            let result = async {
+                time::sleep(HANG_STARTS).await;
+                assert_eq!(
+                    run.eval(&third, "document.title").await?,
+                    json!("Third"),
+                    "the third tab's own frame still answers"
+                );
+                let mut took = Vec::new();
+                for _call in 0..10 {
+                    let started = Instant::now();
+                    let read = page_evaluate(&run, &popup, &format!("() => [document.title, {OPENER_FIELD}]")).await?;
+                    took.push(started.elapsed());
+                    assert_eq!(plain(read), json!(["Popup", "[private]"]), "the opener is still swept");
+                }
+                took.sort();
+                let slowest = took.last().copied().unwrap_or_default();
+                report(&format!(
+                    "popup's page.evaluate beside an unlinked tab's hung same-site frame: median {:?}, slowest {slowest:?}",
+                    took.get(took.len() / 2)
+                ));
+                assert!(
+                    slowest < Duration::from_millis(250),
+                    "no call waits on the unlinked tab's hung frame (its budget is 1 s): {took:?}"
+                );
+                Ok(())
+            }
+            .await;
+            (run, result)
+        })
+        .await
+    })
+    .await
+}
+
+/// A frame of the popup's site in its opener that cannot be swept refuses the popup's script
+/// with nothing sent, as one in the popup's own tab does.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_hung_frame_in_the_opener_refuses_the_popups_script() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let hanging = hang_server().await?;
+    let server = FixtureServer::start(popup_pages(&hanging.url("127.0.0.1", "/hang.html"))).await?;
+    let url = server.url("127.0.0.1", "/hung-opener.html");
+    let (_run, result) = with_popup(
+        LiveRun::connect().await?,
+        &url,
+        OPEN_POPUP,
+        |run, opener, popup| async move {
+            let result = async {
+                time::sleep(HANG_STARTS).await;
+                assert_eq!(
+                    run.eval(&opener, "document.title").await?,
+                    json!("Opener"),
+                    "the opener's own frame still answers"
+                );
+                run.clear_calls();
+                let started = Instant::now();
+                let refused = page_evaluate(
+                    &run,
+                    &popup,
+                    &format!("() => {{ window.ran = true; return {OPENER_FIELD}; }}"),
+                )
+                .await;
+                let took = started.elapsed();
+                let error = refused.err().ok_or(
+                    "an unswept frame of the site in the opener refuses the popup's script",
+                )?;
+                report(&format!(
+                    "popup's page.evaluate refused after {took:?}: {error}"
+                ));
+                assert_eq!(
+                    (error.error_code(), error.owner()),
+                    (Some(ErrorCode::Unsupported), ErrorOwner::Neo),
+                    "{error}"
+                );
+                assert!(error.message().contains("did not answer"), "{error}");
+                assert!(
+                    took >= Duration::from_secs(1)
+                        && took < UNTIMED_RETRY + Duration::from_millis(1_000),
+                    "refused after a late try, within the window an untimed op tries a late \
+                     frame for ({UNTIMED_RETRY:?}), took {took:?}"
+                );
+                not_sent(&run, "page.evaluate");
+                assert_eq!(
+                    run.eval(&popup, "window.ran === true").await?,
+                    json!(false),
+                    "the script did not run"
+                );
+                Ok(())
+            }
+            .await;
+            (run, result)
+        },
+    )
+    .await;
+    result
+}
+
+/// A frame of the opener's site in its popup that cannot be swept refuses the opener's script
+/// with nothing sent, and fails the opener's read closed: the page's own script could have
+/// copied that frame's password into the opener's title.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_hung_same_site_popup_refuses_the_script_and_fails_a_read_closed() -> TestResult
+{
+    let _alone = ALONE.acquire().await?;
+    let hanging = hang_server().await?;
+    let server = FixtureServer::start(popup_pages(&hanging.url("127.0.0.1", "/hang.html"))).await?;
+    let url = server.url("127.0.0.1", "/opener.html");
+    let (_run, result) = with_popup(
+        LiveRun::connect().await?,
+        &url,
+        OPEN_HUNG_POPUP,
+        |run, opener, popup| async move {
+            let result = async {
+                time::sleep(HANG_STARTS).await;
+                assert_eq!(
+                    run.eval(&popup, "document.title").await?,
+                    json!("Popup"),
+                    "the popup's own frame still answers"
+                );
+                run.clear_calls();
+                let refused = page_evaluate(
+                    &run,
+                    &opener,
+                    "() => { window.ran = true; return document.title; }",
+                )
+                .await;
+                let error = refused
+                    .err()
+                    .ok_or("the popup's unswept frame refuses the script")?;
+                assert_eq!(
+                    (error.error_code(), error.owner()),
+                    (Some(ErrorCode::Unsupported), ErrorOwner::Neo),
+                    "{error}"
+                );
+                assert!(error.message().contains("did not answer"), "{error}");
+                not_sent(&run, "page.evaluate");
+                assert_eq!(
+                    run.eval(&opener, "window.ran === true").await?,
+                    json!(false),
+                    "the script did not run"
+                );
+                let read = run
+                    .invoke("page.title", json!({ "page": brand(&opener) }))
+                    .await;
+                let error = read
+                    .err()
+                    .ok_or("the popup's unswept frame fails the read closed")?;
+                assert_eq!(
+                    (error.error_code(), error.owner()),
+                    (Some(ErrorCode::Unsupported), ErrorOwner::Neo),
+                    "{error}"
+                );
+                assert!(error.message().contains("withheld"), "{error}");
+                Ok(())
+            }
+            .await;
+            (run, result)
+        },
+    )
+    .await;
+    result
+}
+
+/// A `noopener` popup stays in its opener's group (decisions.md): the browser reports it as it
+/// reports a popup disowned later, which its opener still reaches. So the opener's script sweeps
+/// it and its host's rules run on it, though the window `window.open` returned is `null`.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_noopener_popup_stays_in_the_group() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let server = FixtureServer::start(popup_pages("about:blank")).await?;
+    let url = server.url("127.0.0.1", "/opener.html");
+    let (_run, result) = with_popup(
+        LiveRun::connect().await?,
+        &url,
+        OPEN_NOOPENER_POPUP,
+        |run, opener, popup| async move {
+            let result = async {
+                run.clear_calls();
+                let read = page_evaluate(
+                    &run,
+                    &opener,
+                    "() => [document.title, window.popup === null]",
+                )
+                .await?;
+                assert_eq!(
+                    plain(read),
+                    json!(["Opener", true]),
+                    "noopener left no handle"
+                );
+                assert_eq!(effects(&run), sent_reaching(&popup));
+                reported(&run, POPUP_SECRET);
+                Ok(())
+            }
+            .await;
+            (run, result)
+        },
+    )
+    .await;
+    result
+}
+
+/// What a warm `page.evaluate` sends on a tab no opener link connects to any other, measured on
+/// milestone 2 (e2233341f), where the sweep knew no group, in sorted order: the sweep before and
+/// after (the browser's target list, the frame tree, the closed-root scan, the sweep), naming the
+/// main-world document, and the script. Object groups are released from spawned tasks, which
+/// run at the test's next await: the list holds the release of the warm-up's op group and of
+/// both sweeps' scan holds, and not this op's own group.
+const UNLINKED_EVALUATE: &[&str] = &[
+    "DOM.describeNode",
+    "DOM.describeNode",
+    "DOM.describeNode",
+    "DOM.resolveNode",
+    "Page.getFrameTree",
+    "Page.getFrameTree",
+    "Runtime.callFunctionOn",
+    "Runtime.callFunctionOn",
+    "Runtime.callFunctionOn",
+    "Runtime.callFunctionOn",
+    "Runtime.callFunctionOn",
+    "Runtime.callFunctionOn",
+    "Runtime.callFunctionOn",
+    "Runtime.callFunctionOn",
+    "Runtime.releaseObjectGroup",
+    "Runtime.releaseObjectGroup",
+    "Runtime.releaseObjectGroup",
+    "Target.getTargets",
+    "Target.getTargets",
+];
+
+/// A page with no opener link pays nothing for the group: the group comes from the target list
+/// the sweep read already, so its `page.evaluate` sends the same CDP commands as on milestone 2,
+/// and its host hears no `recheck_reach`.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_page_with_no_opener_link_sends_what_it_sent_before() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let server = FixtureServer::start(popup_pages("about:blank")).await?;
+    let url = server.url("127.0.0.1", "/opener.html");
+    on_page(LiveRun::connect().await?, &url, |run, page| async move {
+        let result = async {
+            for _warm in 0..2 {
+                page_evaluate(&run, &page, "() => document.title").await?;
+            }
+            run.clear_calls();
+            run.record_methods();
+            page_evaluate(&run, &page, "() => document.title").await?;
+            let mut methods = run.recorded_methods();
+            methods.sort();
+            report(&format!(
+                "page.evaluate on an unlinked tab sends {methods:?}"
+            ));
+            assert_eq!(methods, UNLINKED_EVALUATE, "the commands milestone 2 sent");
+            assert_eq!(effects(&run), [EnvCall::Recheck, EnvCall::MarkSent]);
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
 /// A page on 127.0.0.1 that builds twelve frames on `localhost` and twelve on `[::1]` (24 OOPIF
 /// targets of two other sites, each with a field).
 const MANY: &str = r#"<!doctype html><title>Many</title><input id="p"><script>
@@ -953,6 +1601,7 @@ for (let index = 0; index < 24; index++) {
 fn cost_pages() -> HashMap<String, Page> {
     let leaf = "<!doctype html><title>Leaf</title><input aria-label=\"leaf\"><button>Leaf</button>";
     let mut pages = nest_and_hang();
+    pages.extend(popup_pages("about:blank"));
     pages.insert("/many.html".to_owned(), Page::html(MANY));
     pages.insert("/leaf.html".to_owned(), Page::html(leaf));
     pages.insert(
@@ -962,9 +1611,12 @@ fn cost_pages() -> HashMap<String, Page> {
     pages
 }
 
-/// What `calls` timed runs of one op took.
+/// What `calls` timed runs of one op took. The middle half of the runs took from
+/// `lower_quartile` to `upper_quartile`.
 struct Cost {
     median: Duration,
+    lower_quartile: Duration,
+    upper_quartile: Duration,
     slowest: Duration,
 }
 
@@ -984,14 +1636,57 @@ where
         took.push(started.elapsed());
     }
     took.sort();
+    let at = |index: usize| took.get(index).copied().unwrap_or_default();
     Ok(Cost {
-        median: took.get(took.len() / 2).copied().unwrap_or_default(),
+        median: at(took.len() / 2),
+        lower_quartile: at(took.len() / 4),
+        upper_quartile: at(took.len() * 3 / 4),
         slowest: took.last().copied().unwrap_or_default(),
     })
 }
 
+/// Prints what `page.evaluate`, which sweeps twice, and `page.title`, which sweeps once, cost on
+/// `page`, 40 runs each, and how many CDP commands one `page.evaluate` sends.
+async fn report_costs(run: &LiveRun, page: &TestPage, name: &str) -> TestResult {
+    let evaluate = cost(40, || page_evaluate(run, page, "() => document.title")).await?;
+    let title = cost(40, || {
+        run.invoke("page.title", json!({ "page": brand(page) }))
+    })
+    .await?;
+    for (
+        op,
+        Cost {
+            median,
+            lower_quartile,
+            upper_quartile,
+            slowest,
+        },
+    ) in [("page.evaluate", evaluate), ("page.title", title)]
+    {
+        report(&format!(
+            "{op}, {name}: median {median:?} (middle half {lower_quartile:?} to \
+             {upper_quartile:?}), slowest {slowest:?}"
+        ));
+    }
+    run.record_methods();
+    page_evaluate(run, page, "() => document.title").await?;
+    let mut commands = BTreeMap::<String, usize>::new();
+    for method in run.recorded_methods() {
+        *commands.entry(method).or_default() += 1;
+    }
+    report(&format!(
+        "page.evaluate, {name}: {} CDP commands, {commands:?}",
+        commands.values().sum::<usize>()
+    ));
+    Ok(())
+}
+
 /// Prints what `page.evaluate` costs on one frame, on the nested fixture with and without its
-/// hung cross-site frame, and beside 24 cross-site frames.
+/// hung cross-site frame, and beside 24 cross-site frames; then what `page.evaluate` and
+/// `page.title` cost on a page alone, and on the same page with a password typed in it and one
+/// popup: a cross-site popup, which is in the group but no sweep covers; a same-site one, which
+/// every sweep of the page covers too, its own field empty; and that popup with its password
+/// typed, so each sweep also masks with one more value.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn measures_the_cost_of_the_sweep() -> TestResult {
@@ -1016,8 +1711,9 @@ async fn measures_the_cost_of_the_sweep() -> TestResult {
                 if hangs {
                     time::sleep(HANG_STARTS).await;
                 }
-                let Cost { median, slowest } =
-                    cost(40, || page_evaluate(&run, &page, "() => document.title")).await?;
+                let Cost {
+                    median, slowest, ..
+                } = cost(40, || page_evaluate(&run, &page, "() => document.title")).await?;
                 report(&format!(
                     "page.evaluate, {name}: median {median:?}, slowest {slowest:?}"
                 ));
@@ -1028,5 +1724,54 @@ async fn measures_the_cost_of_the_sweep() -> TestResult {
         })
         .await?;
     }
-    Ok(())
+    let opener = server.url("127.0.0.1", "/opener.html");
+    on_page(LiveRun::connect().await?, &opener, |run, page| async move {
+        let result = report_costs(&run, &page, "a page alone").await;
+        (run, result)
+    })
+    .await?;
+    let cross_site = format!(
+        "window.popup = window.open({:?})",
+        server.url("localhost", "/popup.html")
+    );
+    let (_run, result) = with_popup(
+        LiveRun::connect().await?,
+        &opener,
+        &cross_site,
+        |run, opener, _popup| async move {
+            let result = report_costs(&run, &opener, "the page with one cross-site popup").await;
+            (run, result)
+        },
+    )
+    .await;
+    result?;
+    let (_run, result) = with_popup(
+        LiveRun::connect().await?,
+        &opener,
+        OPEN_POPUP,
+        |run, opener, popup| async move {
+            let result = async {
+                let field = "document.querySelector('#p').value";
+                let typed = run.eval(&popup, field).await?;
+                run.eval(&popup, &format!("({field} = '', 1)")).await?;
+                report_costs(
+                    &run,
+                    &opener,
+                    "the page with one same-site popup, its field empty",
+                )
+                .await?;
+                run.eval(&popup, &format!("({field} = {typed}, 1)")).await?;
+                report_costs(
+                    &run,
+                    &opener,
+                    "the page with one same-site popup, its field typed",
+                )
+                .await
+            }
+            .await;
+            (run, result)
+        },
+    )
+    .await;
+    result
 }

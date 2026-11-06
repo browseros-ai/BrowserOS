@@ -1,13 +1,14 @@
 //! What every sealed-world read is masked with: the raw values of every sensitive field in the
-//! read frame's site, across every CDP session of the page. The page text an action or a
+//! read frame's site, across every CDP session of the page and of each tab its opener links
+//! connect it to. The page text an action or a
 //! matcher reports goes through the same mask ([`swept_now`], [`refused`]): a strict
 //! violation's previews, the element a click names as in its way, a select's values, and a
 //! matcher's `Received` and its `locator resolved to` lines.
 //!
 //! A read runs in one frame's sealed world, and the probe's reply carries that frame's own
 //! sweep. But the page's own script reads every frame of its site through `frames[…]`, `parent`
-//! and `top`, whatever sessions hold them, and can copy a password typed in one into its own
-//! heading, title or attributes. So a read's page text is masked with the union of the sweeps
+//! and `top`, whatever sessions hold them, and those of its opener and popups, and can copy a
+//! password typed in one into its own heading, title or attributes. So a read's page text is masked with the union of the sweeps
 //! of every frame of its site: the frames the evaluate guard sweeps before a main-world script
 //! (decisions.md, "Main-world sweep scope"), found and swept by the same code
 //! (`evaluate_guard::sweep_site`), with its rules for a frame that misses its budget.
@@ -90,7 +91,9 @@ impl SiteSweep {
         page: &PageId,
         own: FieldValues,
     ) -> Result<Result<SiteValues, ProbeFailure>, PlaywrightError> {
-        let Found { values, unswept } = self.0;
+        let Found {
+            values, unswept, ..
+        } = self.0;
         let values = own.union(values);
         if !values.is_empty() {
             pw.hooks().values_swept(page.clone(), &values);

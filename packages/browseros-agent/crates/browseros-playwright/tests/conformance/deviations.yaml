@@ -626,3 +626,20 @@
     in the document, which set the title; Neo sent nothing, so the document is untouched."
   p: ran
   n: Child
+- case: popup-evaluate
+  path: /returned/openerReadsPopup/returned/2
+  kind: decided
+  reason: "M3, decisions.md (Main-world sweep scope; noopener; Held methods round): a page's
+    script reaches every tab its opener links connect it to, so every main-world sweep covers
+    that group's same-site frames too, and the opener's script reads its popup's password, which
+    the popup's own page set, masked. Upstream returns the raw value."
+  p: popup-secret-77
+  n: "[private]"
+- case: popup-evaluate
+  path: /returned/popupReadsOpener/returned/2
+  kind: decided
+  reason: "M3, the same rule the other way: the popup's script reads its opener's password
+    through window.opener, and the opener's frames are swept with the popup's, so the value comes
+    back masked. Upstream returns the raw value."
+  p: hunter22
+  n: "[private]"

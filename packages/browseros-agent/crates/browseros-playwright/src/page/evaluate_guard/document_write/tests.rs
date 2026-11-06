@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
+use browseros_core::TabId;
 use serde_json::{Value, json};
 
 use crate::op_scope::OpScope;
@@ -10,7 +11,7 @@ use crate::page::evaluate_guard::{DOCUMENT_REPLACED, EvaluateGuard};
 use crate::target::CallHeader;
 use crate::test_env::EnvCall;
 use crate::test_support::{
-    ProbeAnswer, SCRIPTED_CHILD, ScriptedRun, ScriptedTab, TabScript, TestResult,
+    ProbeAnswer, SCRIPTED_CHILD, ScriptedLink, ScriptedRun, ScriptedTab, TabScript, TestResult,
 };
 use crate::{ErrorCode, Op};
 
@@ -339,6 +340,64 @@ async fn tests_that_a_retry_sweep_the_timeout_cuts_reports_what_it_found() -> Te
         run.hooks.swept().iter().any(|value| value == RETRY_VALUE),
         "the main frame's value reached the host: {:?}",
         run.hooks.swept()
+    );
+    Ok(())
+}
+
+/// The popup [`PopupBeforeRetry`]'s page opens while its first write is in flight: a page of
+/// another site, which no sweep of the page's site reads, but whose window the written HTML's
+/// scripts can act on.
+const POPUP: ScriptedLink = ScriptedLink {
+    target: "popup-of-the-new-document",
+    url: "https://b.test/",
+    tab: Some(12),
+};
+
+/// A tab whose first write finds its world gone, as when the document changed under it, and
+/// whose page opened [`POPUP`] by then: the browser lists the popup from the first write on.
+#[derive(Default)]
+struct PopupBeforeRetry {
+    writes: AtomicUsize,
+}
+
+impl TabScript for PopupBeforeRetry {
+    fn probe(&self, _frame: &str, request: &Value) -> ProbeAnswer {
+        if request["op"] != "setContent" {
+            return ProbeAnswer::empty_sweep();
+        }
+        if self.writes.fetch_add(1, Ordering::SeqCst) == 0 {
+            ProbeAnswer::error("Cannot find context with specified id")
+        } else {
+            ProbeAnswer::reply(json!({ "kind": "replaced" }))
+        }
+    }
+
+    fn linked(&self) -> Option<ScriptedLink> {
+        (self.writes.load(Ordering::SeqCst) > 0).then_some(POPUP)
+    }
+}
+
+/// The document a write is tried again in may have opened a window the sweep before the first
+/// write never saw. The retry's sweep finds it, so the host's rules run on its tab before the
+/// write goes out again: the first write asked about no other tab, and the one tried again
+/// asks about the popup.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_write_tried_again_checks_the_tabs_its_new_document_opened() -> TestResult {
+    let tab = ScriptedTab::new(PopupBeforeRetry::default());
+    let run = ScriptedRun::over(&tab).await?;
+    let op = Op::from_name("page.setContent").ok_or("page.setContent is an op")?;
+    let scope = OpScope::new(&run.env, op, CallHeader::default());
+    let mut guard = EvaluateGuard::open_document(&run.playwright, &scope, &run.page, None).await?;
+    guard.core.replace_document(&scope, "<p>hi</p>").await?;
+    assert_eq!(
+        run.env.calls(),
+        [
+            EnvCall::Recheck,
+            EnvCall::MarkSent,
+            EnvCall::Recheck,
+            EnvCall::RecheckReach(vec![TabId(12)]),
+            EnvCall::MarkSent,
+        ],
     );
     Ok(())
 }

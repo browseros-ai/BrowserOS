@@ -10,14 +10,17 @@
 //!                         admitted, and a script the prelude refused is raised; then every
 //!                         element the script receives (its subject, its handle arguments) is
 //!                         bound in its document and handed to the seal's watch, within the
-//!                         op's timeout; then the first sweep: every frame of the page in the
-//!                         script frame's site, on every session (sweep_scope), each within
-//!                         FRAME_BUDGET; one that misses it is swept again on a fresh budget
-//!                         while the op's window has room (LateRetry), no try running past the
-//!                         op's deadline, and late on the last try refuses with nothing sent.
-//!                         No timeout runs around a sweep, so none drops what it found
+//!                         op's timeout; then the first sweep: every frame in the script frame's
+//!                         site, of the page and of each tab its opener links connect it to, on
+//!                         every session (sweep_scope), each within FRAME_BUDGET; one that misses
+//!                         it is swept again on a fresh budget while the op's window has room
+//!                         (LateRetry), no try running past the op's deadline, and late on the
+//!                         last try refuses with nothing sent. No timeout runs around a sweep,
+//!                         so none drops what it found
 //!  EvaluateGuard::run     name the main-world document and resolve every bound element in the
-//!                         main world, then OpScope::send_effect ──▶ Sent, then
+//!                         main world, then OpScope::send_effect_reaching(the group's other
+//!                         tabs, from the last sweep): the host's rules on the op's tab, then on
+//!                         those, ──▶ Sent, then
 //!                         Runtime.callFunctionOn(assets/main-world.js, userGesture)
 //!                         ──▶ Pending, which holds what the send produced
 //!  Pending::sweep         the same sweep ──▶ (EvaluateGuard, Outcome); one late on its last
@@ -38,6 +41,14 @@
 //! `waitForFunction` that sweeps only before its first poll and after its last, and so returns
 //! raw a field that appeared and left mid-wait, cannot be written against it.
 //!
+//! A script can also act on the tabs of its group (click in a popup, navigate its opener),
+//! while the host's rules (the owner's takeover lock, a CAPTCHA solve's hold) are per tab. So
+//! every send runs them on the group's other tabs too, as the sweep before it found them
+//! (`OpEnv::recheck_reach`), after the op's own tab and before the op is marked sent. A page
+//! with no opener link has none, and its host hears `recheck`, `mark_sent` as before. A tab
+//! that joins the group between that sweep and the send (a popup the page opens then) is not
+//! checked for that send; the sweep after it finds the tab, for the next.
+//!
 //! The host learns every swept value before the next send, not only when the op ends: an alert
 //! or a download the script raises carries page text through the event stream while the op is
 //! still pending, and the host masks those events with the values it was told. A value that
@@ -45,15 +56,16 @@
 //! send, is not known yet: that is the residual.
 //!
 //! A main-world script reads the page's own, unsealed getters, so whatever it returns may hold a
-//! password the page shows. The sweeps hand Rust the raw value of every sensitive field the
-//! script could reach: those of every frame of its site, which it touches through `frames[…]`
-//! across any number of cross-site frames between them. What the script produced is an
-//! [`Answer`] whose only way out of the op is [`EvaluateGuard::finish`]. Results are always
-//! masked; there is no refuse mode (build-design graft 3). A frame of the site that cannot be
-//! swept fails the op closed: before the script nothing is sent, and after it the result is
+//! password the page shows. The sweeps hand Rust the raw value of every sensitive field the script
+//! could reach: those of every frame of its site, which it touches through `frames[…]` across any
+//! number of cross-site frames between them, in its own tab and in each tab its opener links
+//! connect it to, through `window.opener` and the windows `window.open` returns. What the script
+//! produced is an [`Answer`] whose only way out of the op is [`EvaluateGuard::finish`]. Results are
+//! always masked; there is no refuse mode (build-design graft 3). A frame of the site that cannot
+//! be swept fails the op closed: before the script nothing is sent, and after it the result is
 //! withheld. A frame that comes back gone is not skipped on that alone: unless the browser no
-//! longer lists its target, the target is read again and every frame it lists now is swept,
-//! and a frame gone a second time fails the op too.
+//! longer lists its target, the target is read again and every frame it lists now is swept, and a
+//! frame gone a second time fails the op too.
 //!
 //! The script runs on the main-world document node, never on an execution context id: context
 //! ids are per-renderer counters, and after a cross-process navigation a cached one can name a
@@ -76,7 +88,7 @@ use std::{mem, slice};
 
 use browseros_cdp::CdpError;
 use browseros_core::sensitive_fields::FieldValues;
-use browseros_core::{CoreError, FrameId, ProtocolSession};
+use browseros_core::{CoreError, FrameId, ProtocolSession, TabId};
 use futures_util::future;
 use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
@@ -89,13 +101,13 @@ use crate::page::document_watch::{FrameFields, decode};
 use crate::page::frame_tree::frame_tree;
 use crate::page::op_page::TryCut;
 use crate::page::page_value::{self, MaskedValue, PageValue, TOO_DEEP, Unreadable};
-use crate::page::sweep_scope::{self, Site};
+use crate::page::sweep_scope::{self, LinkedTab, Site};
 use crate::page::world_call::{self, unexpected, with_world};
 use crate::probe::{self, NAVIGATED_OR_CLOSED, ProbeFailure, ProbeReply, ProbeRequest, Ran};
 use crate::resolve::{self, HandleSite};
 use crate::target::{ElementTarget, PageRef};
 use crate::world::{BackendNodeId, Endpoint, FrameSeq, Place, Scan, SealedWorld, SeqLookup};
-use crate::{ErrorCode, Playwright, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError, op_env};
 
 mod document_write;
 
@@ -361,6 +373,10 @@ struct GuardCore<'op> {
     follow: Option<FrameId>,
     /// Every value a sweep found so far.
     swept: FieldValues,
+    /// The other tabs of the page's opener-linked group, by page target, as the latest sweep
+    /// found them, which the host's rules cover before the next send ([`GuardCore::reach`]).
+    /// Empty for a page with no opener link, whose sends ask the host nothing more.
+    group: Vec<FrameId>,
     /// Something was sent to the main world.
     sent: bool,
 }
@@ -464,6 +480,7 @@ impl<'op> EvaluateGuard<'op> {
             frame: binding.frame,
             follow: binding.follow,
             swept: FieldValues::default(),
+            group: Vec::new(),
             sent: false,
         };
         // Nothing of a document is held yet, so the frame may be followed.
@@ -482,10 +499,11 @@ impl<'op> EvaluateGuard<'op> {
     }
 
     /// Sends the script once: one poll for `waitForFunction`. It names the main-world document
-    /// first (three CDP calls on a new document), and only then re-runs the host's policies and
-    /// marks the op sent, with no await before the script goes out (STYLE P6). Minted before the
-    /// document, a takeover during those calls would go unseen, and a cancel there would leave
-    /// the op marked sent although no script ran.
+    /// first (three CDP calls on a new document), and only then re-runs the host's policies, on
+    /// the op's tab and on the group's other tabs the last sweep found, and marks the op sent,
+    /// with no await before the script goes out (STYLE P6). Minted before the document, a
+    /// takeover during those calls would go unseen, and a cancel there would leave the op
+    /// marked sent although no script ran.
     pub(crate) async fn run(
         mut self,
         scope: &OpScope<'_>,
@@ -518,7 +536,8 @@ impl<'op> EvaluateGuard<'op> {
                 outcome: Outcome::NotRun,
             });
         };
-        let sent = scope.send_effect()?;
+        let reach = core.reach(scope).await?;
+        let sent = scope.send_effect_reaching(&reach)?;
         core.sent = true;
         let call = MainCall {
             session: &session,
@@ -591,10 +610,12 @@ impl<'op, G: Guarded> Pending<'op, G> {
 }
 
 impl GuardCore<'_> {
-    /// Sweeps every frame of the page in the script frame's site and adds what it finds, also
-    /// when a frame could not be swept, so the host still learns those values. That is wider
-    /// than the page's session: a script reaches a same-origin frame on another session through
-    /// `frames[…]` as easily as one on its own.
+    /// Sweeps every frame in the script frame's site, of the page and of its opener-linked tabs,
+    /// and adds what it finds, also when a frame could not be swept, so the host still learns
+    /// those values. That is wider than the page's session: a script reaches a same-origin
+    /// frame on another session through `frames[…]`, and one in its opener or its popup
+    /// through `window.opener` or the window `window.open` returned, as easily as one on its
+    /// own.
     ///
     /// The host hears the union at once, before the next send can go out: a dialog or a
     /// download the script raises while it runs carries page text to the host's event stream,
@@ -629,7 +650,8 @@ impl GuardCore<'_> {
         swept.map_err(|unswept| unswept.into_error(scope, consequence))
     }
 
-    /// One sweep of the script frame's site, its values added and reported.
+    /// One sweep of the script frame's site, its values added and reported, and the group's
+    /// other tabs kept for the next send.
     async fn sweep_once(&mut self) -> Result<(), Unswept> {
         // Boxed, as every other caller of `sweep_site` boxes it: its state is large, and a
         // `waitForFunction` holds it at every poll. Its first try ends at the op's deadline, and
@@ -644,7 +666,25 @@ impl GuardCore<'_> {
         .await;
         self.swept = mem::take(&mut self.swept).union(found.values);
         self.report();
+        self.group = found.group;
         found.unswept.map_or(Ok(()), Err)
+    }
+
+    /// The group the latest sweep found, as the tab ids the host's rules take, for the send
+    /// right after (`OpScope::send_effect_reaching`). Looked up only for a page with opener
+    /// links, and only before a send, so the sweep after a script's last send asks nothing
+    /// more. A tab of the group the browser lists no tab for cannot be named to the host, so
+    /// the send is refused with nothing sent, with the refusal a host that checks no other tab
+    /// gives (`op_env::unchecked_reach`).
+    async fn reach(&self, scope: &OpScope<'_>) -> Result<Vec<TabId>, PlaywrightError> {
+        if self.group.is_empty() {
+            return Ok(Vec::new());
+        }
+        match self.page.tabs_on(&self.group).await {
+            Ok(Some(tabs)) => Ok(tabs),
+            Ok(None) => Err(op_env::unchecked_reach(self.group.len()).into()),
+            Err(error) => Err(scope.core_error(&error)),
+        }
     }
 
     /// Tells the host every value swept so far (`PlaywrightHooks::values_swept`).
@@ -813,6 +853,10 @@ impl Unswept {
 pub(crate) struct Found {
     pub(crate) values: FieldValues,
     pub(crate) unswept: Option<Unswept>,
+    /// The other tabs of the page's opener-linked group, by page target, from the target list
+    /// the sweep read: every one of them, whatever its site, because a script can act on any
+    /// (navigate an opener, click in a popup) even where it cannot read. Reads ignore it.
+    pub(crate) group: Vec<FrameId>,
 }
 
 impl Found {
@@ -830,16 +874,18 @@ impl Found {
     }
 }
 
-/// Every frame of the page in the site of the script's frame at `script`, swept again while a
-/// frame missed its budget and the op's window has room for another try as long as the last
-/// (`OpPage::late_retry`). Each try is a whole sweep on fresh budgets, its frames and targets
-/// read anew, so a frame that left meanwhile is not waited for. A try after the first is cut at
-/// the window's end (`LateRetry::cut`): a try can outlast the one before it, and run past the
-/// op's deadline, where the op's own timeout would replace Neo's refusal, or, outside
-/// `OpScope::within`, the op would end late. Every try's values are kept, a cut one's too, and a
-/// late try's go to the host before the next starts, as every sweep's do: a dialog or a download
-/// the script raised can carry page text while the sweep after it is still trying. A frame still
-/// late when the window closes leaves the sweep `Unswept::Late`, as one late try did before.
+/// Every frame in the site of the script's frame at `script`, of the page and of every tab its
+/// opener links connect it to, and that group's other tabs, swept again while a frame missed its
+/// budget and the op's window has room for another try as long as the last
+/// (`OpPage::late_retry`). Each try is a whole sweep on fresh budgets, its frames, targets and
+/// links read anew, so a frame that left meanwhile is not waited for, and the group is the last
+/// try's. A try after the first is cut at the window's end (`LateRetry::cut`): a try can outlast
+/// the one before it, and run past the op's deadline, where the op's own timeout would replace
+/// Neo's refusal, or, outside `OpScope::within`, the op would end late. Every try's values are
+/// kept, a cut one's too, a linked tab's among them, and a late try's go to the host before the
+/// next starts, as every sweep's do: a dialog or a download the script raised can carry page
+/// text while the sweep after it is still trying. A frame still late when the window closes
+/// leaves the sweep `Unswept::Late`, as one late try did before.
 pub(crate) async fn sweep_site(page: &OpPage<'_>, script: &Endpoint, place: &Place) -> Found {
     sweep_site_from(page, script, place, TryCut::default()).await
 }
@@ -862,6 +908,7 @@ async fn sweep_site_from(
         let started = Instant::now();
         let tried = sweep_site_once(page, script, place, cut).await;
         found.add(tried.values);
+        found.group = tried.group;
         match tried.unswept {
             Some(Unswept::Late) if first_try && first.passed() => {
                 found.unswept = Some(Unswept::Expired);
@@ -884,15 +931,19 @@ async fn sweep_site_from(
     }
 }
 
-/// One try of [`sweep_site`], every budget in it ending at `cut` at the latest.
+/// One try of [`sweep_site`], every budget in it ending at `cut` at the latest, a linked tab's
+/// too.
 ///
-/// The script's frame is swept while its session's frames and the browser's list of the page's
-/// targets are read; then the session's other frames and every other target that may be of
-/// the site are swept, all at once. The targets come from the browser, so one of another site,
-/// hung or not, is never asked anything (`sweep_scope`). The list is read on every sweep: no
-/// renderer-side count finds every out-of-process frame (decisions.md, "Main-world sweep
-/// scope"). Its read has no frame budget, being the browser's, but `cut` ends it too: a try cut
-/// before the browser listed the targets is late.
+/// The script's frame is swept while its session's frames and the browser's list of targets
+/// are read; then the session's other frames, every other target of the page that may be of
+/// the site, and each linked tab's such targets are swept, all at once. The targets come from
+/// the browser, so one of another site, or of a tab no link connects, is never asked anything,
+/// hung or not (`sweep_scope`). The list is read on every sweep: no renderer-side count finds
+/// every out-of-process frame, and links change as tabs open and close (decisions.md,
+/// "Main-world sweep scope"). A page with no opener link reaches its own targets only, from
+/// the same reply, so it sends nothing more than before the group was swept. The list's read
+/// has no frame budget, being the browser's, but `cut` ends it too: a try cut before the
+/// browser listed the targets is late.
 async fn sweep_site_once(
     page: &OpPage<'_>,
     script: &Endpoint,
@@ -901,10 +952,10 @@ async fn sweep_site_once(
 ) -> Found {
     // The script's session is read once for all of its frames, so they share one deadline.
     let deadline = cut.budget();
-    let (own, tree, targets) = future::join3(
+    let (own, tree, reach) = future::join3(
         sweep_frame(page, script.clone(), place.clone(), deadline),
         read_within_budget(deadline, frame_tree(&script.session)),
-        cut.before(sweep_scope::page_targets(
+        cut.before(sweep_scope::reach(
             page.browser(),
             &page.main_endpoint().frame,
         )),
@@ -927,8 +978,8 @@ async fn sweep_site_once(
             return found;
         }
     };
-    let targets = match targets {
-        Some(Ok(targets)) => targets,
+    let reach = match reach {
+        Some(Ok(reach)) => reach,
         Some(Err(error)) => {
             found.fail(Unswept::Failed(ProbeFailure::Cdp(error)));
             return found;
@@ -938,6 +989,7 @@ async fn sweep_site_once(
             return found;
         }
     };
+    found.group = reach.linked.iter().map(|tab| tab.main.clone()).collect();
     let site = Site::of(&tree.frame.url, tree.frame.domain_and_registry.as_deref());
     // A session's root frame is its target: the page's main frame, or the OOPIF.
     let own_target = FrameId(tree.frame.id.clone());
@@ -945,14 +997,19 @@ async fn sweep_site_once(
         session: script.session.clone(),
         frames: tree.into_frames().collect(),
     };
-    let in_targets = targets
+    let in_targets = reach
+        .own
         .into_iter()
         .filter(|target| target.frame != own_target && site.may_hold(&target.url))
         .map(|target| async move {
             let deadline = cut.budget();
             sweep_target(page, &target.frame, None, None, deadline).await
         });
-    let (own, targets) = future::join(
+    let in_tabs = reach
+        .linked
+        .into_iter()
+        .map(|tab| sweep_linked(page, tab, &site, cut));
+    let (own, targets, tabs) = future::join3(
         sweep_target(
             page,
             &own_target,
@@ -961,11 +1018,63 @@ async fn sweep_site_once(
             deadline,
         ),
         future::join_all(in_targets),
+        future::join_all(in_tabs),
     )
     .await;
     found.merge(own);
-    for target in targets {
-        found.merge(target);
+    for swept in targets.into_iter().chain(tabs) {
+        found.merge(swept);
+    }
+    found
+}
+
+/// Every target of `tab` that may be of `site`, in a tab opener links connect to the page. A
+/// tab with none is never asked anything. Otherwise the tab is found in core, its page state is
+/// set up, and its targets are swept as the page's are, all by the tab's one deadline from when
+/// finding it starts, a frame budget that ends at the try's `cut` at the latest, so the group's
+/// sweeps are the try's and never outlast it. A tab core cannot reach is skipped only once the
+/// browser no longer lists it.
+async fn sweep_linked(page: &OpPage<'_>, tab: LinkedTab, site: &Site, cut: TryCut) -> Found {
+    let mut found = Found::default();
+    let targets: Vec<_> = tab
+        .targets
+        .into_iter()
+        .filter(|target| site.may_hold(&target.url))
+        .collect();
+    if targets.is_empty() {
+        return found;
+    }
+    let deadline = cut.budget();
+    let missing = match read_within_budget(deadline, page.linked_tab(&tab.main)).await {
+        Ok(Some(Some(reached))) => {
+            // A tab's first page state waits on browser-side reads (`PageRegistry::page`), and
+            // no timeout of the op's runs around a guard's sweep, so the tab's deadline ends
+            // that wait as late too. A cut setup leaves no state behind, and the try's other
+            // sweeps keep what they found.
+            let Ok(linked) = time::timeout_at(deadline, page.linked(&reached)).await else {
+                found.fail(Unswept::Late);
+                return found;
+            };
+            let sweeps = targets
+                .iter()
+                .map(|target| sweep_target(&linked, &target.frame, None, None, deadline));
+            for swept in future::join_all(sweeps).await {
+                found.merge(swept);
+            }
+            return found;
+        }
+        Err(Unswept::Late) => {
+            found.fail(Unswept::Late);
+            return found;
+        }
+        Ok(Some(None) | None) => Unswept::Lost,
+        Err(unswept) => unswept,
+    };
+    let listed = read_within_budget(deadline, sweep_scope::is_listed(page.browser(), &tab.main));
+    match listed.await {
+        Ok(Some(false)) => {}
+        Ok(Some(true) | None) => found.fail(missing),
+        Err(unswept) => found.fail(unswept),
     }
     found
 }

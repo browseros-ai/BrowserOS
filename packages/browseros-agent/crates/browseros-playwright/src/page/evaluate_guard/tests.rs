@@ -1,12 +1,12 @@
 use std::error::Error;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::sensitive_fields::FieldValues;
 use browseros_core::{
-    BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, CoreError, SessionId,
+    BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, CoreError, SessionId, TabId,
 };
 use browseros_trace::ErrorOwner;
 use futures_util::future::{self, BoxFuture};
@@ -27,11 +27,11 @@ use crate::probe::{PROBE_PROTOCOL, ProbeFailure};
 use crate::target::{CallHeader, PageRef};
 use crate::test_env::{self, TestEnv};
 use crate::test_support::{
-    ProbeAnswer, RecordingHooks, SCRIPTED_CHILD, SCRIPTED_DOCUMENT, SCRIPTED_OOPIF, ScriptedRun,
-    ScriptedTab, TabScript,
+    ProbeAnswer, RecordingHooks, SCRIPTED_CHILD, SCRIPTED_DOCUMENT, SCRIPTED_OOPIF, ScriptedLink,
+    ScriptedRun, ScriptedTab, TabScript,
 };
 use crate::world::Place;
-use crate::{ErrorCode, Op, Playwright, PlaywrightError, resolve};
+use crate::{ErrorCode, Op, OpEnv, Playwright, PlaywrightError, Refusal, RunState, resolve};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -1356,6 +1356,311 @@ async fn tests_that_a_sweep_the_op_timeout_cuts_reports_what_it_found() -> TestR
             ),
         ],
         "(op, code, upstream's timeout, the answered value reached the host, anything sent)"
+    );
+    Ok(())
+}
+
+/// A tab whose page opened `link`, a popup of another site: the group's other tab, which no
+/// sweep of the page's site reads but the host's rules must check. Its main world answers the
+/// script with `1`, counted.
+struct LinkedPopup {
+    link: ScriptedLink,
+    ran: AtomicUsize,
+}
+
+impl LinkedPopup {
+    fn new(link: ScriptedLink) -> Self {
+        Self {
+            link,
+            ran: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl TabScript for LinkedPopup {
+    fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+        ProbeAnswer::empty_sweep()
+    }
+
+    fn linked(&self) -> Option<ScriptedLink> {
+        Some(self.link)
+    }
+
+    fn main_world(&self, object: &str, _function: &str) -> Option<Result<Value, &'static str>> {
+        (object == SCRIPTED_DOCUMENT).then(|| {
+            self.ran.fetch_add(1, Ordering::SeqCst);
+            Ok(json!({ "result": { "type": "string", "value": "1" } }))
+        })
+    }
+}
+
+/// `page.evaluate(() => 1)` as the prelude sends it, on `page`, for the host `env`: the op's
+/// own outcome inside.
+async fn evaluate_on(
+    pw: &Playwright,
+    env: &dyn OpEnv,
+    page: &PageRef,
+) -> Result<Result<Value, PlaywrightError>, Box<dyn Error>> {
+    let op = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
+    let input = json!({ "page": serde_json::to_value(page)?,
+                        "script": { "run": { "expression": "() => 1", "isFunction": true,
+                                             "arg": r#"{"v":"undefined"}"# } } });
+    Ok(pw.invoke(env, op, input).await)
+}
+
+/// An extension's page the script's page opened is a popup like any other to that page's
+/// script, though core's tab registry leaves internal pages out: the host's rules run on its
+/// tab, by the id the browser's own tab list gives it, before the script goes out.
+#[tokio::test]
+async fn tests_that_a_linked_page_core_leaves_out_is_checked_by_its_tab() -> TestResult {
+    let tab = ScriptedTab::new(LinkedPopup::new(ScriptedLink {
+        target: "extension-popup",
+        url: "chrome-extension://abcdefghijklmnop/popup.html",
+        tab: Some(11),
+    }));
+    let run = ScriptedRun::over(&tab).await?;
+    let value = evaluate_on(&run.playwright, &run.env, &run.page).await??;
+    assert_eq!(value, json!(1), "the script ran");
+    assert_eq!(
+        run.env.calls(),
+        [
+            test_env::EnvCall::Recheck,
+            test_env::EnvCall::RecheckReach(vec![TabId(11)]),
+            test_env::EnvCall::MarkSent
+        ],
+        "the host's rules ran on the popup's tab, then the op was marked sent"
+    );
+    Ok(())
+}
+
+/// A host that implements only what `OpEnv` requires, over a [`TestEnv`], so its
+/// `recheck_reach` is the trait's default.
+struct DefaultReach(TestEnv);
+
+impl OpEnv for DefaultReach {
+    fn view(&self) -> &BrowserView {
+        self.0.view()
+    }
+
+    fn run_state(&self) -> &Arc<RunState> {
+        self.0.run_state()
+    }
+
+    fn recheck(&self) -> Result<(), Refusal> {
+        self.0.recheck()
+    }
+
+    fn mark_sent(&self) {
+        self.0.mark_sent();
+    }
+
+    fn mark_sensitive_target(&self) {
+        self.0.mark_sensitive_target();
+    }
+
+    fn note(&self, line: String) {
+        self.0.note(line);
+    }
+}
+
+/// A tab of the group the browser lists no tab for, as one that closed since the sweep read
+/// the targets, is a tab the host's rules cannot be asked about. So the script is refused with
+/// nothing sent, as a host that checks no other tab refuses it.
+#[tokio::test]
+async fn tests_that_a_linked_target_with_no_tab_refuses_the_script_as_an_unchecked_tab_does()
+-> TestResult {
+    let link = |tab| ScriptedLink {
+        target: "closing-popup",
+        url: "https://b.test/",
+        tab,
+    };
+    let tab = ScriptedTab::new(LinkedPopup::new(link(None)));
+    let run = ScriptedRun::over(&tab).await?;
+    let refused = evaluate_on(&run.playwright, &run.env, &run.page)
+        .await?
+        .err()
+        .ok_or("a tab the host cannot be asked about refuses the script")?;
+    assert_eq!(
+        tab.script().ran.load(Ordering::SeqCst),
+        0,
+        "the script never reached the page"
+    );
+    assert!(
+        !run.env.calls().contains(&test_env::EnvCall::MarkSent),
+        "nothing was marked sent: {:?}",
+        run.env.calls()
+    );
+    let named = ScriptedTab::new(LinkedPopup::new(link(Some(12))));
+    let ScriptedRun {
+        playwright,
+        env,
+        page,
+        ..
+    } = ScriptedRun::over(&named).await?;
+    let unchecked = evaluate_on(&playwright, &DefaultReach(env), &page)
+        .await?
+        .err()
+        .ok_or("a host that checks no other tab refuses the script")?;
+    assert_eq!(
+        (refused.owner(), refused.error_code(), refused.message()),
+        (
+            unchecked.owner(),
+            unchecked.error_code(),
+            unchecked.message()
+        ),
+        "the refusal a host that checks no other tab gives"
+    );
+    Ok(())
+}
+
+/// A popup of the scripted tab's own site, so every sweep of the page's site covers it too.
+const SAME_SITE_POPUP: ScriptedLink = ScriptedLink {
+    target: "same-site-popup",
+    url: "https://a.test/popup",
+    tab: Some(13),
+};
+
+/// A tab whose page has opened [`SAME_SITE_POPUP`] once the test arms it, and whose browser then
+/// answers `Browser.getVersion` only after the CDP client gave up on it. A tab's first page state
+/// waits on that read when an earlier one failed, as every one does here (the scripted reply
+/// names no user agent), so the popup's first sweep stalls in its page setup, before any frame
+/// of it is asked anything. The main frame's sweeps find `swept-alone` before the popup opened
+/// and `swept-beside-the-popup` after, and its main world answers a script with `1`.
+#[derive(Default)]
+struct PopupSetupStalls {
+    armed: AtomicBool,
+}
+
+impl TabScript for PopupSetupStalls {
+    fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+        let value = if self.armed.load(Ordering::SeqCst) {
+            "swept-beside-the-popup"
+        } else {
+            "swept-alone"
+        };
+        ProbeAnswer::reply(json!({ "kind": "sweep", "values": [value] }))
+    }
+
+    fn linked(&self) -> Option<ScriptedLink> {
+        self.armed.load(Ordering::SeqCst).then_some(SAME_SITE_POPUP)
+    }
+
+    fn outlasts_client(&self, method: &str) -> bool {
+        method == "Browser.getVersion" && self.armed.load(Ordering::SeqCst)
+    }
+
+    fn main_world(&self, object: &str, _function: &str) -> Option<Result<Value, &'static str>> {
+        (object == SCRIPTED_DOCUMENT)
+            .then(|| Ok(json!({ "result": { "type": "string", "value": "1" } })))
+    }
+}
+
+/// A run on a [`PopupSetupStalls`] tab whose page state is set up, while the browser still
+/// answers, by one `page.evaluate`; then the popup opens and the browser stops answering.
+async fn beside_a_stalling_popup() -> Result<ScriptedRun, Box<dyn Error>> {
+    let tab = ScriptedTab::new(PopupSetupStalls::default());
+    let run = ScriptedRun::over(&tab).await?;
+    evaluate_on(&run.playwright, &run.env, &run.page).await??;
+    tab.script().armed.store(true, Ordering::SeqCst);
+    Ok(run)
+}
+
+/// A linked tab's page setup belongs to its sweep's try, and ends with it. The browser-side
+/// reads a popup's first page state waits on can stall, and no timeout of the op's runs around
+/// a guard's sweep. So an op with a timeout times out as upstream's would, at its own deadline
+/// and with nothing sent, and the value the page's main frame answered with in that try still
+/// reaches the host. An op without one tries again on fresh budgets for its untimed window, and
+/// then fails closed, rather than wait out the CDP client's own 60 s (M3R review F1).
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_linked_tabs_page_setup_ends_with_its_try() -> TestResult {
+    let wait = json!({ "script": { "run": { "expression": "() => 1", "isFunction": true,
+                                            "arg": r#"{"v":"undefined"}"# } } });
+    let mut ended = Vec::new();
+    for (name, mut input) in [
+        ("page.waitForFunction", wait),
+        ("page.setContent", json!({ "html": "<p>hi</p>" })),
+    ] {
+        let run = beside_a_stalling_popup().await?;
+        let before = run.env.calls().len();
+        if let Some(fields) = input.as_object_mut() {
+            fields.insert("page".to_owned(), serde_json::to_value(&run.page)?);
+            fields.insert("call".to_owned(), json!({ "timeoutMs": 500 }));
+        }
+        let op = Op::from_name(name).ok_or("an op")?;
+        let started = Instant::now();
+        let error = run
+            .playwright
+            .invoke(&run.env, op, input)
+            .await
+            .err()
+            .ok_or(format!(
+                "{name}: the popup's setup stalled past the timeout"
+            ))?;
+        let took = started.elapsed();
+        let policed = run.env.calls().into_iter().skip(before).any(|call| {
+            matches!(
+                call,
+                test_env::EnvCall::Recheck
+                    | test_env::EnvCall::RecheckReach(_)
+                    | test_env::EnvCall::MarkSent
+            )
+        });
+        ended.push((
+            name,
+            took <= Duration::from_millis(500),
+            error.error_code(),
+            error
+                .message()
+                .starts_with(&format!("{name}: Timeout 500ms exceeded.")),
+            run.hooks
+                .swept()
+                .iter()
+                .any(|value| value == "swept-beside-the-popup"),
+            policed,
+        ));
+    }
+    assert_eq!(
+        ended,
+        [
+            (
+                "page.waitForFunction",
+                true,
+                Some(ErrorCode::WaitTimeout),
+                true,
+                true,
+                false
+            ),
+            (
+                "page.setContent",
+                true,
+                Some(ErrorCode::WaitTimeout),
+                true,
+                true,
+                false
+            ),
+        ],
+        "(op, ended by its deadline, code, upstream's timeout, the main frame's value reached \
+         the host, the host's rules ran for a send)"
+    );
+
+    let run = beside_a_stalling_popup().await?;
+    let started = Instant::now();
+    let refused = evaluate_on(&run.playwright, &run.env, &run.page)
+        .await?
+        .err()
+        .ok_or("a popup whose setup stalls on every try refuses the script")?;
+    let took = started.elapsed();
+    assert_eq!(
+        (refused.error_code(), refused.message()),
+        (
+            Some(ErrorCode::Unsupported),
+            "page.evaluate: a frame of the script's site did not answer Neo's privacy sweep \
+             within 1000ms, so the script was not run; try again once the frame responds"
+        ),
+    );
+    assert!(
+        took + FRAME_BUDGET > UNTIMED_RETRY && took <= UNTIMED_RETRY + Duration::from_millis(1),
+        "tried for the untimed window and no longer: {took:?}"
     );
     Ok(())
 }

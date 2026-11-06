@@ -31,6 +31,8 @@ pub(crate) type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum EnvCall {
     Recheck,
+    /// `OpEnv::recheck_reach`, with the other tabs of the op page's opener-linked group.
+    RecheckReach(Vec<TabId>),
     MarkSent,
     MarkSensitiveTarget,
     Note(String),
@@ -69,15 +71,20 @@ struct Tap {
     policy: Policy,
     /// The `Input.*` commands sent while a test records them, as `{ method, params }`.
     inputs: Mutex<Option<Vec<Value>>>,
+    /// Every command's method sent while a test records them.
+    methods: Mutex<Option<Vec<String>>>,
     /// The params of every `DOM.setFileInputFiles` the crate sent, for the paths that reach
     /// Chromium.
     file_inputs: Mutex<Vec<Value>>,
 }
 
 impl Tap {
-    /// Keeps `method` and its params when it is an input command and a test is recording, and
-    /// every `DOM.setFileInputFiles`.
+    /// Keeps `method` while a test records methods, its params too when it is an input command
+    /// and a test records input, and every `DOM.setFileInputFiles`.
     fn record(&self, method: &str, params: impl FnOnce() -> Value) {
+        if let Some(methods) = lock(&self.methods).as_mut() {
+            methods.push(method.to_owned());
+        }
         if method == "DOM.setFileInputFiles" {
             lock(&self.file_inputs).push(params());
             return;
@@ -195,6 +202,9 @@ struct LiveEnv {
     policy: Policy,
     /// What `recheck` refuses with, as a takeover would, until a test allows it again.
     refusal: Mutex<Option<Refusal>>,
+    /// What `recheck_reach` refuses with, as a takeover of another tab of the page's group
+    /// would, until a test allows it again.
+    reach_refusal: Mutex<Option<Refusal>>,
 }
 
 impl LiveEnv {
@@ -225,6 +235,12 @@ impl OpEnv for LiveEnv {
         lock(&self.refusal).clone().map_or(Ok(()), Err)
     }
 
+    /// Allows the group's other tabs, unless a test refuses them.
+    fn recheck_reach(&self, tabs: &[TabId]) -> Result<(), Refusal> {
+        self.record(EnvCall::RecheckReach(tabs.to_vec()));
+        lock(&self.reach_refusal).clone().map_or(Ok(()), Err)
+    }
+
     fn mark_sent(&self) {
         self.record(EnvCall::MarkSent);
     }
@@ -236,6 +252,43 @@ impl OpEnv for LiveEnv {
     fn note(&self, line: String) {
         self.record(EnvCall::Note(line));
     }
+}
+
+/// A host that implements only what `OpEnv` requires, through the live env, and keeps every
+/// default the trait gives: what a host gets that never implemented the rest, such as
+/// `recheck_reach`'s refusal.
+struct DefaultHost<'env>(&'env LiveEnv);
+
+impl OpEnv for DefaultHost<'_> {
+    fn view(&self) -> &BrowserView {
+        self.0.view()
+    }
+
+    fn run_state(&self) -> &Arc<RunState> {
+        self.0.run_state()
+    }
+
+    fn recheck(&self) -> Result<(), Refusal> {
+        self.0.recheck()
+    }
+
+    fn mark_sent(&self) {
+        self.0.mark_sent();
+    }
+
+    fn mark_sensitive_target(&self) {
+        self.0.mark_sensitive_target();
+    }
+
+    fn note(&self, line: String) {
+        self.0.note(line);
+    }
+}
+
+/// The op `name` names.
+fn op(name: &str) -> Result<Op, PlaywrightError> {
+    Op::from_name(name)
+        .ok_or_else(|| PlaywrightError::new(ErrorCode::Internal, format!("{name} is not an op")))
 }
 
 /// The host's privacy layer: every capture is allowed until a test refuses them, and every value
@@ -319,6 +372,7 @@ impl LiveRun {
             watch: Mutex::default(),
             policy: Arc::clone(&policy),
             inputs: Mutex::default(),
+            methods: Mutex::default(),
             file_inputs: Mutex::default(),
         });
         let browser = BrowserSession::new(
@@ -341,6 +395,7 @@ impl LiveRun {
             heard,
             policy,
             refusal: Mutex::default(),
+            reach_refusal: Mutex::default(),
         };
         Ok(Self {
             browser,
@@ -377,12 +432,30 @@ impl LiveRun {
         lock(&self.tap.file_inputs).clone()
     }
 
+    /// Starts recording the method of every command the crate sends, forgetting earlier ones.
+    pub(crate) fn record_methods(&self) {
+        *lock(&self.tap.methods) = Some(Vec::new());
+    }
+
+    /// The methods sent since [`LiveRun::record_methods`], in order; recording stops.
+    pub(crate) fn recorded_methods(&self) -> Vec<String> {
+        lock(&self.tap.methods).take().unwrap_or_default()
+    }
+
     /// Runs op `name` with `input`, as claw-sdk's handler does.
     pub(crate) async fn invoke(&self, name: &str, input: Value) -> Result<Value, PlaywrightError> {
-        let op = Op::from_name(name).ok_or_else(|| {
-            PlaywrightError::new(ErrorCode::Internal, format!("{name} is not an op"))
-        })?;
-        self.playwright.invoke(&self.env, op, input).await
+        self.playwright.invoke(&self.env, op(name)?, input).await
+    }
+
+    /// Runs op `name` with `input` for a host that keeps every `OpEnv` default ([`DefaultHost`]).
+    pub(crate) async fn invoke_on_default_host(
+        &self,
+        name: &str,
+        input: Value,
+    ) -> Result<Value, PlaywrightError> {
+        self.playwright
+            .invoke(&DefaultHost(&self.env), op(name)?, input)
+            .await
     }
 
     /// Ends this run and starts the next on the same `Playwright`, as claw-sdk does between
@@ -451,6 +524,26 @@ impl LiveRun {
         Ok(())
     }
 
+    /// Types `text` into the first element matching `selector`, as the owner's keyboard would:
+    /// the page focuses it, then the browser inserts the text.
+    pub(crate) async fn type_text(
+        &self,
+        page: &TestPage,
+        selector: &str,
+        text: &str,
+    ) -> TestResult {
+        self.eval(
+            page,
+            &format!("document.querySelector({selector:?}).focus()"),
+        )
+        .await?;
+        self.session(page)
+            .await?
+            .send_value("Input.insertText", json!({ "text": text }))
+            .await?;
+        Ok(())
+    }
+
     /// The values the evaluate guard reported so far, long enough to register.
     pub(crate) fn swept(&self) -> Vec<String> {
         self.hooks
@@ -487,6 +580,12 @@ impl LiveRun {
             .refusal
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = refusal;
+    }
+
+    /// Every `recheck_reach` from now on is refused with `refusal`, as the owner taking over
+    /// another tab of the page's group would; `None` allows them again.
+    pub(crate) fn refuse_reach(&self, refusal: Option<Refusal>) {
+        *lock(&self.env.reach_refusal) = refusal;
     }
 
     /// A background tab on `url`, opened the way the owner or another session opens one, so
