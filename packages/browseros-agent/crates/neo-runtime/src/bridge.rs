@@ -30,6 +30,12 @@ pub(crate) fn page_guid(page: &PageId) -> String {
     format!("page@{}", page.as_str())
 }
 
+/// The guid the realm gives a run's main frame. Chromium gives a page's main frame its target's
+/// id (measured in `tests/sync_getters.rs`), so the frame is `frame@<targetId>`.
+pub(crate) fn frame_guid(page: &PageId) -> String {
+    format!("frame@{}", page.as_str())
+}
+
 /// Installs `__neo_runtime` as a global of the realm `ctx`.
 pub(crate) fn install<'js>(ctx: &Ctx<'js>, getters: Getters, logs: Logs) -> rquickjs::Result<()> {
     let bridge = Object::new(ctx.clone())?;

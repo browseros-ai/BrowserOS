@@ -23,6 +23,8 @@
       "!crates/neo-runtime-injected/dist",
       "!crates/neo-runtime-injected/vendor",
       "!crates/neo-sdk/tests/scripts",
+      "!crates/neo-sdk/tests/goldens",
+      "!crates/neo-sdk/vendor",
       "!apps/server/src/lib/db/migrations"
     ]
   },

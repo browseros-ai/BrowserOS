@@ -112,6 +112,7 @@ impl Runtime {
         let script = Script {
             code,
             page_guid: bridge::page_guid(&page),
+            frame_guid: bridge::frame_guid(&page),
             url,
         };
         let getters = Getters::new(

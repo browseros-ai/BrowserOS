@@ -15,10 +15,10 @@ use rquickjs::{
 };
 use serde_json::Value;
 
-use crate::bridge;
 use crate::bridge::{Getters, Logs};
 use crate::deadline::Deadline;
 use crate::run::{RunError, RunOutcome};
+use crate::{bridge, world};
 
 const MEMORY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 // Well under a tokio worker's 2 MiB native stack, so deep JS recursion throws a RangeError
@@ -64,6 +64,8 @@ const HOST_GLOBALS: &str = r"(sleep) => {
 pub(crate) struct Script {
     pub(crate) code: String,
     pub(crate) page_guid: String,
+    /// The page's main frame, built once by neo-sdk so `page.mainFrame()` is one object.
+    pub(crate) frame_guid: String,
     /// The page's URL when the run started, which seeds `Page`'s memory of its last URL.
     pub(crate) url: String,
 }
@@ -142,8 +144,10 @@ fn start<'js>(
     let create_run: Function<'js> = sdk.get("createRun")?;
     let init = Object::new(ctx.clone())?;
     init.set("page", script.page_guid)?;
+    init.set("mainFrame", script.frame_guid)?;
     init.set("context", "context@default")?;
     init.set("url", script.url)?;
+    init.set("testIdAttribute", world::TEST_ID_ATTRIBUTE)?;
     let objects: Object<'js> = create_run.call((init,))?;
     let page: rquickjs::Value<'js> = objects.get("page")?;
     let context: rquickjs::Value<'js> = objects.get("context")?;

@@ -54,6 +54,8 @@
     "packages/cdp-protocol/src/generated/**",
     "crates/neo-runtime-spec/ts/**",
     "crates/neo-runtime-injected/vendor/**",
+    "crates/neo-sdk/vendor/**",
+    "crates/neo-sdk/tests/goldens/**",
     ".agents/skills/**",
     ".claude/skills/**",
     "packages/agent-cursor/playground/**"

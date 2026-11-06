@@ -5,5 +5,5 @@
     "lib": ["ES2023"],
     "types": ["bun"]
   },
-  "include": ["src/**/*", "build.ts"]
+  "include": ["src/**/*", "vendor/**/*", "build.ts", "tests/unit/**/*"]
 }

@@ -7,6 +7,7 @@
   "scripts": {
     "build": "bun build.ts",
     "typecheck": "tsc --noEmit",
+    "test": "bun test tests/unit",
     "test:parity": "node --test 'tests/parity/*.test.mjs'"
   },
   "devDependencies": {

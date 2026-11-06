@@ -1,13 +1,24 @@
 import { BrowserContext } from './browser-context'
+import { setTestIdAttribute } from './locator'
 import { Page } from './page'
 
-/** The objects neo-runtime asks for at run start, named by their guids. */
+/**
+ * What neo-runtime hands `createRun` at run start (`realm.rs` `start`). Every value comes from
+ * a Rust constant or the run's tab, so the SDK derives nothing on its own.
+ */
 export interface RunInit {
+  /** `page@<targetId>`. */
   page: string
-  /** Unused until `BrowserContext` has a getter to answer. */
+  /** `frame@<targetId>`: the page's main frame. Chromium gives a page's main frame its
+   * target's id. */
+  mainFrame: string
+  /** Unused until `BrowserContext` serves a browser call. */
   context: string
   /** The page's URL when the run started. */
   url: string
+  /** `world::TEST_ID_ATTRIBUTE`: the attribute `getByTestId` names, the one the page's
+   * injected script matches. */
+  testIdAttribute: string
 }
 
 /** Builds the `page` and `context` a run's script receives. */
@@ -15,5 +26,8 @@ export function createRun(init: RunInit): {
   page: Page
   context: BrowserContext
 } {
-  return { page: new Page(init.page, init.url), context: new BrowserContext() }
+  setTestIdAttribute(init.testIdAttribute)
+  const context = new BrowserContext()
+  const page = new Page(init.page, init.mainFrame, init.url, context)
+  return { page, context }
 }

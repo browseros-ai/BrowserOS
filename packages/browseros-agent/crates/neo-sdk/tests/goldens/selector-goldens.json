@@ -1,0 +1,378 @@
+[
+  {
+    "chain": "page.getByRole('button')",
+    "selector": "internal:role=button"
+  },
+  {
+    "chain": "page.getByRole('button', { name: 'Submit' })",
+    "selector": "internal:role=button[name=\"Submit\"i]"
+  },
+  {
+    "chain": "page.getByRole('button', { name: 'Submit', exact: true })",
+    "selector": "internal:role=button[name=\"Submit\"s]"
+  },
+  {
+    "chain": "page.getByRole('button', { name: 'Submit', exact: false })",
+    "selector": "internal:role=button[name=\"Submit\"i]"
+  },
+  {
+    "chain": "page.getByRole('button', { name: /submit/i })",
+    "selector": "internal:role=button[name=/submit/i]"
+  },
+  {
+    "chain": "page.getByRole('button', { name: /submit/, exact: true })",
+    "selector": "internal:role=button[name=/submit/]"
+  },
+  {
+    "chain": "page.getByRole('button', { name: '' })",
+    "selector": "internal:role=button[name=\"\"i]"
+  },
+  {
+    "chain": "page.getByRole('heading', { level: 2 })",
+    "selector": "internal:role=heading[level=2]"
+  },
+  {
+    "chain": "page.getByRole('heading', { name: 'Title', level: 1 })",
+    "selector": "internal:role=heading[level=1][name=\"Title\"i]"
+  },
+  {
+    "chain": "page.getByRole('checkbox', { checked: true })",
+    "selector": "internal:role=checkbox[checked=true]"
+  },
+  {
+    "chain": "page.getByRole('checkbox', { checked: false })",
+    "selector": "internal:role=checkbox[checked=false]"
+  },
+  {
+    "chain": "page.getByRole('checkbox', { checked: 'mixed' })",
+    "selector": "internal:role=checkbox[checked=mixed]"
+  },
+  {
+    "chain": "page.getByRole('button', { disabled: true })",
+    "selector": "internal:role=button[disabled=true]"
+  },
+  {
+    "chain": "page.getByRole('button', { expanded: false })",
+    "selector": "internal:role=button[expanded=false]"
+  },
+  {
+    "chain": "page.getByRole('button', { pressed: true })",
+    "selector": "internal:role=button[pressed=true]"
+  },
+  {
+    "chain": "page.getByRole('button', { pressed: 'mixed' })",
+    "selector": "internal:role=button[pressed=mixed]"
+  },
+  {
+    "chain": "page.getByRole('option', { selected: true })",
+    "selector": "internal:role=option[selected=true]"
+  },
+  {
+    "chain": "page.getByRole('button', { includeHidden: true })",
+    "selector": "internal:role=button[include-hidden=true]"
+  },
+  {
+    "chain": "page.getByRole('button', { description: 'Saves the form' })",
+    "selector": "internal:role=button[description=\"Saves the form\"i]"
+  },
+  {
+    "chain": "page.getByRole('button', { pressed: false, name: 'Go', level: 3, includeHidden: false, expanded: true, selected: false, disabled: true, checked: true, exact: true })",
+    "selector": "internal:role=button[checked=true][disabled=true][selected=false][expanded=true][include-hidden=false][level=3][name=\"Go\"s][pressed=false]"
+  },
+  {
+    "chain": "page.getByRole('button', { name: 'Say \"hi\"' })",
+    "selector": "internal:role=button[name=\"Say \\\"hi\\\"\"i]"
+  },
+  {
+    "chain": "page.getByRole('link', { name: \"It's here\" })",
+    "selector": "internal:role=link[name=\"It's here\"i]"
+  },
+  {
+    "chain": "page.getByRole('button', { name: 'C:\\\\temp\\\\new' })",
+    "selector": "internal:role=button[name=\"C:\\\\temp\\\\new\"i]"
+  },
+  {
+    "chain": "page.getByRole('button', { name: 'tab\\there\\nnewline' })",
+    "selector": "internal:role=button[name=\"tab\there\nnewline\"i]"
+  },
+  {
+    "chain": "page.getByRole('button', { name: 'Café ✓ 日本語 🎉' })",
+    "selector": "internal:role=button[name=\"Café ✓ 日本語 🎉\"i]"
+  },
+  {
+    "chain": "page.getByRole('button', { name: /say \"hi\"/gi })",
+    "selector": "internal:role=button[name=/say \\\"hi\\\"/gi]"
+  },
+  {
+    "chain": "page.getByRole('button', { name: /it's/ })",
+    "selector": "internal:role=button[name=/it\\'s/]"
+  },
+  {
+    "chain": "page.getByRole('button', { name: /a\\\"b/ })",
+    "selector": "internal:role=button[name=/a\\\"b/]"
+  },
+  {
+    "chain": "page.getByRole('button', { name: /a\\\\\"b/ })",
+    "selector": "internal:role=button[name=/a\\\\\\\"b/]"
+  },
+  {
+    "chain": "page.getByRole('button', { name: /café \"x\"/u })",
+    "selector": "internal:role=button[name=/café \"x\"/u]"
+  },
+  {
+    "chain": "page.getByRole('button', { name: /a >> b/ })",
+    "selector": "internal:role=button[name=/a \\>\\> b/]"
+  },
+  {
+    "chain": "page.getByText('Welcome')",
+    "selector": "internal:text=\"Welcome\"i"
+  },
+  {
+    "chain": "page.getByText('Welcome', { exact: true })",
+    "selector": "internal:text=\"Welcome\"s"
+  },
+  {
+    "chain": "page.getByText(/welcome/i)",
+    "selector": "internal:text=/welcome/i"
+  },
+  {
+    "chain": "page.getByText(/^Hello$/m, { exact: true })",
+    "selector": "internal:text=/^Hello$/m"
+  },
+  {
+    "chain": "page.getByText('line1\\nline2 \"q\" \\\\ end')",
+    "selector": "internal:text=\"line1\\nline2 \\\"q\\\" \\\\ end\"i"
+  },
+  {
+    "chain": "page.getByText(/\\d+ items? \"left\"/s)",
+    "selector": "internal:text=/\\d+ items? \\\"left\\\"/s"
+  },
+  {
+    "chain": "page.getByText(/a >> b/)",
+    "selector": "internal:text=/a \\>\\> b/"
+  },
+  {
+    "chain": "page.getByText(/x/v)",
+    "selector": "internal:text=/x/v"
+  },
+  {
+    "chain": "page.getByText('emoji 🎉 ünïcödé')",
+    "selector": "internal:text=\"emoji 🎉 ünïcödé\"i"
+  },
+  {
+    "chain": "page.getByLabel('Email')",
+    "selector": "internal:label=\"Email\"i"
+  },
+  {
+    "chain": "page.getByLabel('Email', { exact: true })",
+    "selector": "internal:label=\"Email\"s"
+  },
+  {
+    "chain": "page.getByLabel(/e-?mail/i)",
+    "selector": "internal:label=/e-?mail/i"
+  },
+  {
+    "chain": "page.getByPlaceholder('Search')",
+    "selector": "internal:attr=[placeholder=\"Search\"i]"
+  },
+  {
+    "chain": "page.getByPlaceholder('Search', { exact: true })",
+    "selector": "internal:attr=[placeholder=\"Search\"s]"
+  },
+  {
+    "chain": "page.getByPlaceholder(/^search/)",
+    "selector": "internal:attr=[placeholder=/^search/]"
+  },
+  {
+    "chain": "page.getByAltText('Logo')",
+    "selector": "internal:attr=[alt=\"Logo\"i]"
+  },
+  {
+    "chain": "page.getByAltText(/logo/i, { exact: true })",
+    "selector": "internal:attr=[alt=/logo/i]"
+  },
+  {
+    "chain": "page.getByTitle('Close')",
+    "selector": "internal:attr=[title=\"Close\"i]"
+  },
+  {
+    "chain": "page.getByTitle('a \"b\" \\\\ c', { exact: true })",
+    "selector": "internal:attr=[title=\"a \\\"b\\\" \\\\ c\"s]"
+  },
+  {
+    "chain": "page.getByTitle(/clo\"se/)",
+    "selector": "internal:attr=[title=/clo\\\"se/]"
+  },
+  {
+    "chain": "page.getByTestId('submit-btn')",
+    "selector": "internal:testid=[data-testid=\"submit-btn\"s]"
+  },
+  {
+    "chain": "page.getByTestId('say \"x\"')",
+    "selector": "internal:testid=[data-testid=\"say \\\"x\\\"\"s]"
+  },
+  {
+    "chain": "page.getByTestId(/submit-\\d+/)",
+    "selector": "internal:testid=[data-testid=/submit-\\d+/]"
+  },
+  {
+    "chain": "page.locator('button.primary')",
+    "selector": "button.primary"
+  },
+  {
+    "chain": "page.locator('text=Submit')",
+    "selector": "text=Submit"
+  },
+  {
+    "chain": "page.locator('text=\"Submit\"')",
+    "selector": "text=\"Submit\""
+  },
+  {
+    "chain": "page.locator('xpath=//button[@id=\"go\"]')",
+    "selector": "xpath=//button[@id=\"go\"]"
+  },
+  {
+    "chain": "page.locator('div >> span')",
+    "selector": "div >> span"
+  },
+  {
+    "chain": "page.locator('#form').locator('input[name=\"email\"]')",
+    "selector": "#form >> input[name=\"email\"]"
+  },
+  {
+    "chain": "page.locator('div', { hasText: 'Hello' })",
+    "selector": "div >> internal:has-text=\"Hello\"i"
+  },
+  {
+    "chain": "page.locator('div', { hasText: /hello \"w\"/i })",
+    "selector": "div >> internal:has-text=/hello \\\"w\\\"/i"
+  },
+  {
+    "chain": "page.locator('div', { hasNotText: 'Bye' })",
+    "selector": "div >> internal:has-not-text=\"Bye\"i"
+  },
+  {
+    "chain": "page.locator('div', { hasText: '' })",
+    "selector": "div"
+  },
+  {
+    "chain": "page.locator('li', { has: page.getByRole('button', { name: 'Delete' }) })",
+    "selector": "li >> internal:has=\"internal:role=button[name=\\\"Delete\\\"i]\""
+  },
+  {
+    "chain": "page.locator('li', { hasNot: page.locator('.done') })",
+    "selector": "li >> internal:has-not=\".done\""
+  },
+  {
+    "chain": "page.locator('button', { visible: true })",
+    "selector": "button >> visible=true"
+  },
+  {
+    "chain": "page.locator('button', { visible: false })",
+    "selector": "button >> visible=false"
+  },
+  {
+    "chain": "page.locator('div', { visible: true, hasNot: page.locator('em'), has: page.locator('span'), hasNotText: 'b', hasText: 'a' })",
+    "selector": "div >> internal:has-text=\"a\"i >> internal:has-not-text=\"b\"i >> internal:has=\"span\" >> internal:has-not=\"em\" >> visible=true"
+  },
+  {
+    "chain": "page.locator('#a').locator('span', { hasText: 'x' })",
+    "selector": "#a >> span >> internal:has-text=\"x\"i"
+  },
+  {
+    "chain": "page.locator('form').getByLabel('Password')",
+    "selector": "form >> internal:label=\"Password\"i"
+  },
+  {
+    "chain": "page.getByRole('listitem').filter({ hasText: 'Apple' }).getByRole('button', { name: 'Buy' })",
+    "selector": "internal:role=listitem >> internal:has-text=\"Apple\"i >> internal:role=button[name=\"Buy\"i]"
+  },
+  {
+    "chain": "page.getByTestId('list').locator(page.getByRole('listitem'))",
+    "selector": "internal:testid=[data-testid=\"list\"s] >> internal:chain=\"internal:role=listitem\""
+  },
+  {
+    "chain": "page.getByTestId('list').locator(page.getByRole('listitem', { name: 'x\"y' }), { hasText: 'z' })",
+    "selector": "internal:testid=[data-testid=\"list\"s] >> internal:chain=\"internal:role=listitem[name=\\\"x\\\\\\\"y\\\"i]\" >> internal:has-text=\"z\"i"
+  },
+  {
+    "chain": "page.getByRole('listitem').filter({ hasText: 'Apple' })",
+    "selector": "internal:role=listitem >> internal:has-text=\"Apple\"i"
+  },
+  {
+    "chain": "page.getByRole('listitem').filter({ hasText: /apple/i })",
+    "selector": "internal:role=listitem >> internal:has-text=/apple/i"
+  },
+  {
+    "chain": "page.getByRole('listitem').filter({ hasNotText: 'Out of stock' })",
+    "selector": "internal:role=listitem >> internal:has-not-text=\"Out of stock\"i"
+  },
+  {
+    "chain": "page.getByRole('listitem').filter({ hasNotText: /sold out/i })",
+    "selector": "internal:role=listitem >> internal:has-not-text=/sold out/i"
+  },
+  {
+    "chain": "page.getByRole('listitem').filter({ has: page.getByRole('button', { name: 'Add' }) })",
+    "selector": "internal:role=listitem >> internal:has=\"internal:role=button[name=\\\"Add\\\"i]\""
+  },
+  {
+    "chain": "page.getByRole('listitem').filter({ hasNot: page.getByText('Sold') })",
+    "selector": "internal:role=listitem >> internal:has-not=\"internal:text=\\\"Sold\\\"i\""
+  },
+  {
+    "chain": "page.getByRole('listitem').filter({ visible: true })",
+    "selector": "internal:role=listitem >> visible=true"
+  },
+  {
+    "chain": "page.getByRole('listitem').filter()",
+    "selector": "internal:role=listitem"
+  },
+  {
+    "chain": "page.getByRole('listitem').filter({ hasText: 'A' }).filter({ hasNotText: 'B' })",
+    "selector": "internal:role=listitem >> internal:has-text=\"A\"i >> internal:has-not-text=\"B\"i"
+  },
+  {
+    "chain": "page.locator('li').filter({ has: page.locator('span').filter({ hasText: 'x\"y' }) })",
+    "selector": "li >> internal:has=\"span >> internal:has-text=\\\"x\\\\\\\"y\\\"i\""
+  },
+  {
+    "chain": "page.getByRole('button').visible()",
+    "selector": "internal:role=button >> visible=true"
+  },
+  {
+    "chain": "page.getByRole('button').first()",
+    "selector": "internal:role=button >> nth=0"
+  },
+  {
+    "chain": "page.getByRole('button').last()",
+    "selector": "internal:role=button >> nth=-1"
+  },
+  {
+    "chain": "page.getByRole('button').nth(2)",
+    "selector": "internal:role=button >> nth=2"
+  },
+  {
+    "chain": "page.getByRole('button').nth(-1)",
+    "selector": "internal:role=button >> nth=-1"
+  },
+  {
+    "chain": "page.locator('li').nth(0).getByText('x')",
+    "selector": "li >> nth=0 >> internal:text=\"x\"i"
+  },
+  {
+    "chain": "page.getByRole('button').and(page.getByTitle('Subscribe'))",
+    "selector": "internal:role=button >> internal:and=\"internal:attr=[title=\\\"Subscribe\\\"i]\""
+  },
+  {
+    "chain": "page.getByRole('button', { name: 'New' }).or(page.getByText('Confirm'))",
+    "selector": "internal:role=button[name=\"New\"i] >> internal:or=\"internal:text=\\\"Confirm\\\"i\""
+  },
+  {
+    "chain": "page.locator('a').or(page.locator('b')).first()",
+    "selector": "a >> internal:or=\"b\" >> nth=0"
+  },
+  {
+    "chain": "page.getByRole('button').and(page.locator('.x').or(page.locator('.y')))",
+    "selector": "internal:role=button >> internal:and=\".x >> internal:or=\\\".y\\\"\""
+  }
+]
