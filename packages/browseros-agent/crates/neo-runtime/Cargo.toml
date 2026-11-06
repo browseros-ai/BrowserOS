@@ -20,6 +20,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+url.workspace = true
 
 # clap backs the `neo_run` example. tokio-tungstenite serves the fake browser in
 # tests/support/fake_browser.rs; tempfile gives the end-to-end tests a throwaway profile.
