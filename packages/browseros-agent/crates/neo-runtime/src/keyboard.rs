@@ -27,14 +27,6 @@
 //!   its own process's platform. Neo's server runs on the browser's machine, so they agree.
 //! - `Escape` never tries to cancel a drag first: Neo has no drag manager.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the press and fill policies drive the keyboard in the next pieces"
-    )
-)]
-
 use std::collections::HashMap;
 use std::future::Future;
 use std::mem;

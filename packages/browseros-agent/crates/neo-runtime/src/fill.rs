@@ -7,8 +7,11 @@ use std::sync::Arc;
 use neo_runtime_spec::injected::ElementState;
 use neo_runtime_spec::serve::{FrameFillParams, FrameInputValueParams, FrameSelectOptionParams};
 
-use crate::click::{self, ActionResult, ElementAction, LoopAWaits, NotReady, PageError, Stop, Tab};
+use crate::click::{
+    self, ActionResult, ElementAction, LoopAWaits, NotReady, PageError, PressReport, Stop, Tab,
+};
 use crate::forms::{FillOutcome, FormTab, SelectOption, SelectOutcome};
+use crate::keyboard::{self, KeyboardTab};
 use crate::progress::{CallError, DeliveryCell, PlaywrightError, Progress};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,7 +77,7 @@ impl InputValueOptions {
     }
 }
 
-pub(crate) async fn fill<T: FormTab>(
+pub(crate) async fn fill<T: FormTab + KeyboardTab>(
     tab: &T,
     options: &FillOptions,
     progress: &Progress,
@@ -155,7 +158,7 @@ struct FillAction<'a> {
     delivery: &'a Arc<DeliveryCell>,
 }
 
-impl<T: FormTab> ElementAction<T> for FillAction<'_> {
+impl<T: FormTab + KeyboardTab> ElementAction<T> for FillAction<'_> {
     type Output = ();
 
     async fn act(
@@ -190,11 +193,40 @@ impl<T: FormTab> ElementAction<T> for FillAction<'_> {
                 FillOutcome::Done => return Ok(ActionResult::Done(())),
                 FillOutcome::NotConnected => return Ok(ActionResult::NotConnected),
                 FillOutcome::Missing(state) => log_missing(progress, state),
-                FillOutcome::NeedsInput(_ticket) => {
-                    // Temporary hand-off until P2's KeyboardTab lands; never emulate its writer.
-                    return Err(
-                        PlaywrightError::error("Neo fill awaits the keyboard writer").into(),
-                    );
+                FillOutcome::NeedsInput(ticket) => {
+                    // The page focused and selected the target under this same turn. Move its
+                    // original ticket into the detached writer, which retains delivery truth
+                    // and the turn even when this call stops awaiting its answer.
+                    let report = if options.value.is_empty() {
+                        let platform = progress
+                            .race(tab.platform())
+                            .await?
+                            .map_err(mutation_error)?;
+                        let events = keyboard::plan_press("Delete", platform)
+                            .map_err(|error| PlaywrightError::error(error.to_string()))?;
+                        progress.check()?;
+                        progress
+                            .race(tab.write_keys(events, None, ticket, input))
+                            .await?
+                    } else {
+                        progress.check()?;
+                        progress
+                            .race(tab.insert_text(&options.value, ticket, input))
+                            .await?
+                    };
+                    match report {
+                        PressReport::Acked(acked) => acked.delivered(),
+                        PressReport::NothingWritten | PressReport::Failed { closed: true, .. } => {
+                            return Err(PlaywrightError::target_closed().into());
+                        }
+                        PressReport::Failed {
+                            closed: false,
+                            message,
+                        } => {
+                            return Err(PlaywrightError::error(message).into());
+                        }
+                    }
+                    return Ok(ActionResult::Done(()));
                 }
             }
         }
@@ -321,10 +353,10 @@ mod tests {
     use tokio_util::task::TaskTracker;
 
     use super::*;
-    use crate::click::tests::{FakeTab, Step};
+    use crate::click::tests::{FakeTab, Step, Writes};
     use crate::deadline::Deadline;
     use crate::forms::InputValueMatch;
-    use crate::progress::{CallEntry, CallStart, ErrorName, RunScope};
+    use crate::progress::{CallEntry, CallStart, ErrorName, RunScope, Trace};
     use crate::run::{Delivery, RunEnd};
 
     const TRIP: Duration = Duration::from_millis(1);
@@ -335,6 +367,135 @@ mod tests {
             strict: true,
             value: "one".into(),
             force: false,
+        }
+    }
+
+    fn needs_input(tab: &mut FakeTab) {
+        tab.forms.fill = Step::always(
+            TRIP,
+            Ok(fill_reply(FormFillOutcome::Status(
+                FormFillOutcomeStatus::Needsinput,
+            ))),
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_fill_hands_text_to_the_keyboard_writer_and_delivers_once() {
+        let mut tab = FakeTab::ready();
+        needs_input(&mut tab);
+        let progress = Progress::for_test(1000.0);
+        assert_eq!(fill(&tab, &fill_options(), &progress).await, Ok(()));
+        assert_eq!(
+            progress.delivery().expect("input").delivery(),
+            Delivery::Done
+        );
+        assert_eq!(tab.count("insertText one"), 1, "one text insertion");
+        assert_eq!(tab.count("platform"), 0, "insertText needs no key layout");
+        assert_eq!(tab.count("input"), tab.count("input released"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_empty_fill_plans_delete_and_holds_the_turn_through_keyup() {
+        let mut tab = FakeTab::ready();
+        needs_input(&mut tab);
+        let mut options = fill_options();
+        options.value.clear();
+        let progress = Progress::for_test(1000.0);
+        assert_eq!(fill(&tab, &options, &progress).await, Ok(()));
+        assert_eq!(
+            progress.delivery().expect("input").delivery(),
+            Delivery::Done
+        );
+        assert!(tab.calls().iter().any(|call| call.contains("Delete")));
+        assert!(tab.count("platform") > 0);
+        let calls = tab.calls();
+        let keyup = calls
+            .iter()
+            .position(|call| call == "keyUp Delete")
+            .expect("Delete released");
+        let released = calls
+            .iter()
+            .position(|call| call == "input released")
+            .expect("turn released");
+        assert!(keyup < released, "the turn spans key release");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_failed_or_refused_text_write_ends_without_repeating_input() {
+        for (writes, delivery, category) in [
+            (
+                Writes::Nothing,
+                Delivery::NotSent,
+                ErrorName::TargetClosedError,
+            ),
+            (Writes::Fail, Delivery::Unknown, ErrorName::Error),
+        ] {
+            let mut tab = FakeTab::ready();
+            needs_input(&mut tab);
+            tab.press = Step::always(TRIP, writes);
+            let progress = Progress::for_test(1000.0);
+            is_error(&fill(&tab, &fill_options(), &progress).await, category);
+            assert_eq!(progress.delivery().expect("input").delivery(), delivery);
+            assert_eq!(
+                tab.count("insertText one"),
+                1,
+                "a failed write is never repeated"
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_cancelled_insert_text_finishes_and_the_record_reads_the_writers_truth() {
+        for (writes, delivery) in [
+            (Writes::Ack, Delivery::Done),
+            (Writes::Nothing, Delivery::NotSent),
+            (Writes::Fail, Delivery::Unknown),
+        ] {
+            let mut tab = FakeTab::ready();
+            needs_input(&mut tab);
+            tab.press = Step::always(Duration::from_secs(2), writes);
+            let run = RunScope::new(
+                Deadline::new(Duration::from_secs(30), CancellationToken::new()),
+                TaskTracker::new(),
+            );
+            let entry = Arc::new(CallEntry::new(CallStart {
+                call_id: 1,
+                guid: "frame@test".into(),
+                method: "fill".into(),
+                title: None,
+                params: serde_json::Value::Null,
+                location: None,
+                input: true,
+            }));
+            let trace = Trace::default();
+            trace.push(Arc::clone(&entry));
+            let progress = Progress::new(Arc::clone(&entry), 100.0, run, CancellationToken::new());
+            let result = fill(&tab, &fill_options(), &progress).await;
+            is_error(&result, ErrorName::TimeoutError);
+            let Err(CallError::Playwright(error)) = result else {
+                panic!("call timeout")
+            };
+            entry.finish(error.to_result());
+            trace.finished(&entry);
+            assert_eq!(
+                progress.delivery().expect("input").delivery(),
+                Delivery::Unknown
+            );
+            assert_eq!(
+                tab.count("insertText one"),
+                1,
+                "the insertion command was started"
+            );
+            assert_eq!(tab.count("input released"), 0, "writer still owns the turn");
+            time::sleep(Duration::from_secs(3)).await;
+            let (records, dropped) = trace.take(RunEnd::Settled);
+            assert!(dropped.is_none());
+            assert_eq!(records[0].delivery, Some(delivery));
+            assert_eq!(
+                tab.count("input released"),
+                1,
+                "the writer released its turn"
+            );
         }
     }
 

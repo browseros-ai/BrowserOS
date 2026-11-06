@@ -51,6 +51,7 @@ use crate::check::{self, CheckOptions};
 use crate::click::{self, ClickOptions};
 use crate::fill::{self, FillOptions, InputValueOptions, SelectOptions};
 use crate::forms::FormTab;
+use crate::keyboard::KeyboardTab;
 use crate::page::PageSession;
 use crate::press::{self, PressOptions};
 use crate::progress::{
@@ -416,7 +417,7 @@ async fn serve(
 }
 
 /// The typed handler dispatch, also used by the skeleton's tests with click's existing fake.
-async fn serve_route<T: FormTab>(
+async fn serve_route<T: FormTab + KeyboardTab>(
     tab: &T,
     route: Route,
     progress: &Progress,
