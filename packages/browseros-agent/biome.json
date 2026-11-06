@@ -19,6 +19,8 @@
       "!tools/captcha-testbed/fixtures/pages",
       "!crates/browseros-core/tests/data/captured",
       "!crates/browseros-core/src/assets/agent-cursor.js",
+      "!crates/neo-sdk/dist",
+      "!crates/neo-sdk/tests/scripts",
       "!apps/server/src/lib/db/migrations"
     ]
   },

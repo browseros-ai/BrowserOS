@@ -122,6 +122,8 @@ out
 .nuxt
 dist
 packages/*/dist
+# neo-runtime embeds this bundle at compile time, so cargo needs it without a Bun build.
+!/crates/neo-sdk/dist/
 
 # Gatsby files
 .cache/

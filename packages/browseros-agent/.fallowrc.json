@@ -18,7 +18,9 @@
     "packages/agent-cursor/src/index.ts",
     "packages/agent-cursor/scripts/classic-entry.ts",
     "crates/neo-runtime-spec/tests/ts/glue.ts",
-    "crates/neo-runtime-spec/tests/ts/negative.ts"
+    "crates/neo-runtime-spec/tests/ts/negative.ts",
+    "crates/neo-sdk/src/index.ts",
+    "crates/neo-sdk/build.ts"
   ],
   "ignoreDependencies": [
     "tailwind-scrollbar-hide",

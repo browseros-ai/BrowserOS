@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "lib": ["ES2023"],
+    "types": ["bun"]
+  },
+  "include": ["src/**/*", "build.ts"]
+}
