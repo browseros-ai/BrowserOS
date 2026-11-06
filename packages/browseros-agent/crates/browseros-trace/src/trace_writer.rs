@@ -15,13 +15,19 @@
 //! and keeps it with the open run until the run's end, which is never dropped, so the map
 //! cannot grow without bound in a live process.
 //!
-//! Redaction needs one fact that only the end of an operation knows: whether its target was
-//! sensitive. So the start row stores the input with both `secret` and `sensitive` paths
-//! redacted. The raw input stays in this task's memory while the operation is open, and the end
-//! rewrites the row with the precise redaction. A crash leaves the conservative copy. An
-//! operation's notes wait in the same place and reach disk in its end's update, masked and
-//! bounded: whoever reads the end (its `operation.ended` event included) reads every note, and
-//! none arrive after it.
+//! An operation's input reaches disk only with its end, and a run's host data only with the
+//! run's end. Two facts are known only then:
+//! - whether the operation's target was sensitive, which decides how its input is redacted;
+//! - the values the end's own set masks, such as one only the operation's own sweep found.
+//!
+//! A start row written earlier would put such a value on disk raw, in the row, in the WAL page
+//! a later rewrite leaves behind, and in the `operation.started` event, which reads the row. So
+//! the raw input and host data stay in this task's memory while the record is open, with the
+//! start's own set, and the end stores them masked with both sets at once. An operation whose
+//! end never reaches the writer (a crash, a dropped event) keeps no input, and a run that never
+//! ends keeps no host data. An operation's notes wait in the same place and reach disk in its
+//! end's update, masked and bounded: whoever reads the end (its `operation.ended` event
+//! included) reads every note, and none arrive after it.
 //!
 //! Masking: each record is masked with the process `SecretSet` and with the sets the record
 //! itself carries (`also_mask`: what claw-sdk still holds unregistered as it sends the record,
@@ -460,6 +466,11 @@ struct OpenRun {
     /// Where the code holds a value the process set or the start's own set knew as the run
     /// began. The end masks these together with its own matches, then cuts.
     code_spans: Vec<Range<usize>>,
+    /// The host's data as given, held in memory only, like the code. The end stores it masked
+    /// with the process set, the start's own set and the end's.
+    host_data: Option<Value>,
+    /// The start's own set, which the end masks the host data with too.
+    also_mask: Option<Arc<SecretSet>>,
     sensitive: bool,
     gaps: u64,
     operations: HashMap<u32, OpenOperation>,
@@ -470,11 +481,24 @@ struct OpenRun {
 }
 
 impl OpenRun {
-    fn new(task: Option<TaskId>, code: Option<String>, code_spans: Vec<Range<usize>>) -> Self {
+    /// A run the writer has seen no start of: no code and no host data to store.
+    fn unseen(task: Option<TaskId>) -> Self {
+        Self::new(task, None, Vec::new(), None, None)
+    }
+
+    fn new(
+        task: Option<TaskId>,
+        code: Option<String>,
+        code_spans: Vec<Range<usize>>,
+        host_data: Option<Value>,
+        also_mask: Option<Arc<SecretSet>>,
+    ) -> Self {
         Self {
             task,
             code,
             code_spans,
+            host_data,
+            also_mask,
             sensitive: false,
             gaps: 0,
             operations: HashMap::new(),
@@ -680,13 +704,10 @@ impl Writer {
     ) -> Result<(), TraceError> {
         let change = match event {
             Event::RunStarted(event) => {
-                let redactor = self.redactor.also_masking(&event.also_mask);
                 let mut code_spans = Vec::new();
-                redactor.spans(&event.code, &mut code_spans);
-                let host_data = event
-                    .host_data
-                    .as_ref()
-                    .map(|data| redactor.host_data(data).value);
+                self.redactor
+                    .also_masking(&event.also_mask)
+                    .spans(&event.code, &mut code_spans);
                 trace_store::insert_run(
                     tx,
                     RunStartRow {
@@ -694,13 +715,18 @@ impl Writer {
                         task: event.task_id.as_ref(),
                         at: event.at,
                         request_id: event.request_id.as_ref(),
-                        host_data: host_data.as_ref(),
                     },
                 )
                 .await?;
                 self.runs.insert(
                     event.id,
-                    OpenRun::new(event.task_id.clone(), Some(event.code), code_spans),
+                    OpenRun::new(
+                        event.task_id.clone(),
+                        Some(event.code),
+                        code_spans,
+                        event.host_data,
+                        event.also_mask,
+                    ),
                 );
                 Some(TraceRecordEvent::RunStarted {
                     run: event.id,
@@ -740,16 +766,10 @@ impl Writer {
                     task: None,
                     at: event.at,
                     request_id: None,
-                    host_data: None,
                 },
             )
             .await?;
         }
-        let conservative = self.redactor.also_masking(&event.also_mask).args(
-            &event.args,
-            &event.policy,
-            TargetSensitivity::Sensitive,
-        );
         trace_store::insert_operation(
             tx,
             OperationStartRow {
@@ -760,15 +780,13 @@ impl Writer {
                 effect: event.effect,
                 tab: event.tab,
                 at: event.at,
-                args: &conservative.value,
-                args_truncated: conservative.truncation == Truncation::Cut,
             },
         )
         .await?;
         let run = self
             .runs
             .entry(event.id.run)
-            .or_insert_with(|| OpenRun::new(None, None, Vec::new()));
+            .or_insert_with(|| OpenRun::unseen(None));
         if let Some(tab) = event.tab {
             run.tabs.admitted(tab, event.id.seq);
         }
@@ -916,6 +934,15 @@ impl Writer {
                 .map(|code| redactor.code_with(code, run.code_spans.clone())),
             _ => None,
         };
+        // Masked with the start's own set and the end's at once: the end's may know a value the
+        // host put there that only the run's own sweeps found.
+        let host_data = open.as_ref().and_then(|run| {
+            let data = run.host_data.as_ref()?;
+            let redactor = self
+                .redactor
+                .also_masking(event.also_mask.iter().chain(run.also_mask.as_ref()));
+            Some(redactor.host_data(data).value)
+        });
         let code = match (open.as_ref(), bounded.as_ref()) {
             (Some(run), _) if run.sensitive => RunCode::Withheld("sensitive_input"),
             (_, Some(code)) => RunCode::Stored {
@@ -938,6 +965,7 @@ impl Writer {
                     .as_ref()
                     .is_some_and(|result| result.truncation == Truncation::Cut),
                 code,
+                host_data: host_data.as_ref(),
                 replay: event.replay.as_ref(),
                 replay_until: event
                     .replay

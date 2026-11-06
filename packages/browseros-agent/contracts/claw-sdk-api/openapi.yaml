@@ -1066,7 +1066,10 @@ components:
           format: int64
         hostData:
           type: object
-          description: The host data the run was started with (`_meta["com.browseros.neo/run"].hostData`), if any; masked.
+          description: >-
+            The host data the run was started with (`_meta["com.browseros.neo/run"].hostData`), if
+            any; masked. Present once the run has ended: Neo masks it with what the run's end
+            knows, so a running run, or one cut short by a restart, has none.
         code:
           type: string
           description: >-
@@ -1146,6 +1149,8 @@ components:
           description: >-
             Safe arguments: masked, secret fields `[redacted]`, bounded. Page and locator
             handles appear as their branded JSON, e.g. `{"$neo":"locator","page":3,"selector":"…"}`.
+            Present once the operation has ended: Neo masks them with what the operation's end
+            knows, so an operation still running, or one whose end Neo never recorded, has none.
         argsTruncated:
           type: boolean
         result:

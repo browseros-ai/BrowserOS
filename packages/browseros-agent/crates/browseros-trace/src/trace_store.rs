@@ -661,13 +661,13 @@ pub(crate) async fn forget_private(
     Ok(())
 }
 
-/// A run's start row, as the writer stores it.
+/// A run's start row, as the writer stores it. Its host data is not here: the run's end stores
+/// it, masked with what the end's own set knows ([`RunEndRow::host_data`]).
 pub(crate) struct RunStartRow<'a> {
     pub(crate) id: RunId,
     pub(crate) task: Option<&'a TaskId>,
     pub(crate) at: EpochMillis,
     pub(crate) request_id: Option<&'a RequestId>,
-    pub(crate) host_data: Option<&'a Value>,
 }
 
 pub(crate) async fn insert_run(
@@ -675,14 +675,13 @@ pub(crate) async fn insert_run(
     run: RunStartRow<'_>,
 ) -> Result<(), TraceError> {
     sqlx::query(
-        "INSERT INTO runs (id, task_id, started_at, status, request_id, host_data) \
-         VALUES (?, ?, ?, 'running', ?, ?) ON CONFLICT(id) DO NOTHING",
+        "INSERT INTO runs (id, task_id, started_at, status, request_id) \
+         VALUES (?, ?, ?, 'running', ?) ON CONFLICT(id) DO NOTHING",
     )
     .bind(run.id.to_string())
     .bind(run.task.map(TaskId::as_str))
     .bind(run.at.millis())
     .bind(run.request_id.map(RequestId::as_str))
-    .bind(run.host_data.map(Value::to_string))
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -705,6 +704,9 @@ pub(crate) struct RunEndRow<'a> {
     pub(crate) result: Option<&'a Value>,
     pub(crate) result_truncated: bool,
     pub(crate) code: RunCode<'a>,
+    /// The run's host data, masked and bounded; `None` keeps what the row has (nothing, for a
+    /// run whose start the writer never saw).
+    pub(crate) host_data: Option<&'a Value>,
     pub(crate) replay: Option<&'a Value>,
     pub(crate) replay_until: Option<EpochMillis>,
     pub(crate) gaps: u64,
@@ -764,7 +766,8 @@ pub(crate) async fn end_run(
     sqlx::query(
         "UPDATE runs SET ended_at = ?, status = ?, effects = ?, error = ?, result = ?, \
          result_truncated = ?, trace_gaps = ?, replay = ?, replay_until = ?, \
-         code = ?, code_truncated = ?, code_withheld = ?, complete = ? \
+         code = ?, code_truncated = ?, code_withheld = ?, complete = ?, \
+         host_data = COALESCE(?, host_data) \
          WHERE id = ?",
     )
     .bind(run.at.millis())
@@ -780,6 +783,7 @@ pub(crate) async fn end_run(
     .bind(i64::from(code_truncated))
     .bind(code_withheld)
     .bind(i64::from(run.complete))
+    .bind(run.host_data.map(Value::to_string))
     .bind(&id)
     .execute(&mut **tx)
     .await?;
@@ -827,8 +831,9 @@ pub(crate) async fn complete_run(
     Ok(updated.rows_affected() > 0)
 }
 
-/// An operation's start row, as the writer stores it (args already conservatively redacted).
-/// An operation with a target tab also lists its run under that tab.
+/// An operation's start row, as the writer stores it. It has no input: the operation's end
+/// stores that, masked with what the end's own set knows. An operation with a target tab also
+/// lists its run under that tab.
 pub(crate) struct OperationStartRow<'a> {
     pub(crate) id: OperationId,
     pub(crate) parent: Option<OperationId>,
@@ -837,8 +842,6 @@ pub(crate) struct OperationStartRow<'a> {
     pub(crate) effect: Effect,
     pub(crate) tab: Option<TabId>,
     pub(crate) at: EpochMillis,
-    pub(crate) args: &'a Value,
-    pub(crate) args_truncated: bool,
 }
 
 pub(crate) async fn insert_operation(
@@ -847,7 +850,7 @@ pub(crate) async fn insert_operation(
 ) -> Result<(), TraceError> {
     let inserted = sqlx::query(
         "INSERT INTO operations (run_id, seq, parent_id, name, kind, attempt, effect, \
-         target_tab_id, started_at, args, args_truncated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         target_tab_id, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(run_id, seq) DO NOTHING",
     )
     .bind(op.id.run.to_string())
@@ -859,8 +862,6 @@ pub(crate) async fn insert_operation(
     .bind(op.effect.as_str())
     .bind(op.tab.map(|tab| tab.0))
     .bind(op.at.millis())
-    .bind(op.args.to_string())
-    .bind(i64::from(op.args_truncated))
     .execute(&mut **tx)
     .await?;
     if inserted.rows_affected() > 0 {

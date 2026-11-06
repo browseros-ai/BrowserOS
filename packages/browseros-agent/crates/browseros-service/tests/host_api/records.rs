@@ -2,7 +2,8 @@
 //! one operation, and the trace tail.
 
 use crate::support::{
-    EventStream, Op, Start, TestResult, at, end_run, harness, op_ended, op_started, start_run,
+    BoxError, EventStream, Harness, Op, Start, TestResult, at, end_run, harness, op_ended,
+    op_started, start_run,
 };
 use axum::http::StatusCode;
 use browseros_core::TabId;
@@ -341,9 +342,7 @@ async fn a_value_only_a_records_also_mask_knows_reads_masked_in_every_channel() 
     let mut live = EventStream::open(&h, "/v1/events", None).await?;
     // What claw-sdk still holds unregistered (sdk-traces decision 32): the record's own set.
     let held_value = "held-7Qx-swordfish";
-    let held = SecretSet::new(SecretSetConfig::default());
-    let _registration = held.register(SecretValue::new(held_value.to_string()), None);
-    let held = Some(Arc::new(held));
+    let held = Some(held_set(held_value));
     let run = RunId::new();
     h.sink.run_started(RunStarted {
         id: run,
@@ -438,18 +437,115 @@ async fn a_value_only_a_records_also_mask_knows_reads_masked_in_every_channel() 
         assert!(masked(&channel), "{channel} does not show the mask");
     }
 
+    assert!(
+        !store_holds(&h, held_value)?,
+        "trace.db keeps the held value"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_value_only_an_ends_set_knows_never_reaches_the_start_events_or_the_file() -> TestResult {
+    let h = harness().await?;
+    let mut live = EventStream::open(&h, "/v1/events", None).await?;
+    // A value only the operation's own sweep found: the end's set knows it, the start's does not.
+    let found = "swept-9Qp-cardnumber";
+    let run = RunId::new();
+    h.sink.run_started(RunStarted {
+        id: run,
+        code: "return 1".to_string(),
+        request_id: None,
+        task_id: Some(TaskId::parse("checkout")?),
+        host_data: Some(json!({"for": found})),
+        also_mask: None,
+        at: at(0),
+    });
+    let fill = OperationId::new(run, 1);
+    h.sink.op_started(OperationStarted {
+        id: fill,
+        parent: None,
+        name: "locator.fill".to_string(),
+        kind: OperationKind::Builtin,
+        effect: Effect::Write,
+        tab: Some(TabId(3)),
+        args: json!({"value": found}),
+        policy: Arc::default(),
+        also_mask: None,
+        at: at(1),
+    });
+    h.flushed().await?;
+    let started = live.take(2).await?;
+    let open = h.get(&format!("/v1/runs/{run}")).await?;
+    assert_eq!(open.status, StatusCode::OK);
+    for body in started.iter().map(|event| &event.data).chain([&open.body]) {
+        let text = body.to_string();
+        assert!(
+            !text.contains(found),
+            "an open record shows the value: {text}"
+        );
+    }
+
+    let held = Some(held_set(found));
+    h.sink.op_ended(OperationEnded {
+        id: fill,
+        outcome: Outcome::Ok,
+        delivery: Delivery::Done,
+        sent_at: None,
+        result: None,
+        error: None,
+        page_after: None,
+        target: TargetSensitivity::Ordinary,
+        also_mask: held.clone(),
+        at: at(2),
+    });
+    h.sink.run_ended(RunEnded {
+        id: run,
+        status: RunStatus::Ok,
+        error: None,
+        result: None,
+        replay: None,
+        also_mask: held,
+        at: at(3),
+    });
+    h.flushed().await?;
+    let ended = live.take(2).await?;
+    let detail = h.get(&format!("/v1/runs/{run}")).await?;
+    assert_eq!(detail.body["hostData"], json!({"for": "[private]"}));
+    assert_eq!(
+        detail.body["operations"][0]["args"],
+        json!({"value": "[private]"})
+    );
+    for body in ended.iter().map(|event| &event.data) {
+        let text = body.to_string();
+        assert!(
+            !text.contains(found),
+            "an end event shows the value: {text}"
+        );
+    }
+    assert!(!store_holds(&h, found)?, "trace.db keeps the value");
+    Ok(())
+}
+
+/// A set of its own, as claw-sdk passes the values it still holds: the writer masks a record with
+/// it, and the process set never learns them.
+fn held_set(value: &str) -> Arc<SecretSet> {
+    let held = SecretSet::new(SecretSetConfig::default());
+    let _registration = held.register(SecretValue::new(value.to_string()), None);
+    Arc::new(held)
+}
+
+/// Whether the store file or its WAL holds `needle`. Both are read whole, and only the WAL may
+/// be absent (after a checkpoint): a read that fails fails the test, or the scan would pass
+/// without looking.
+fn store_holds(h: &Harness, needle: &str) -> Result<bool, BoxError> {
     let wal = match fs::read(h.dir.path().join("trace.db-wal")) {
         Ok(wal) => wal,
         Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(error.into()),
     };
-    for file in [fs::read(h.dir.path().join("trace.db"))?, wal] {
-        assert!(
-            !file
-                .windows(held_value.len())
-                .any(|window| window == held_value.as_bytes()),
-            "trace.db keeps the held value"
-        );
-    }
-    Ok(())
+    let files = [fs::read(h.dir.path().join("trace.db"))?, wal];
+    Ok(files.iter().any(|file| {
+        file.windows(needle.len())
+            .any(|window| window == needle.as_bytes())
+    }))
 }

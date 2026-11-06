@@ -7,10 +7,11 @@
 
 use browseros_core::TabId;
 use browseros_trace::{
-    Effect, EpochMillis, IdError, Loss, OperationId, OperationKind, OperationStarted, Privacy,
-    PrivacyRecord, PrivateReason, Recovery, RedactionLimits, RedactionPolicy, Redactor, RequestId,
-    RunEffects, RunEnded, RunId, RunStarted, RunStatus, Salvage, SecretSet, SecretSetConfig,
-    TaskId, TraceError, TraceSink, TraceStore, WriterConfig,
+    Delivery, Effect, EpochMillis, IdError, Loss, OperationEnded, OperationId, OperationKind,
+    OperationStarted, Outcome, Privacy, PrivacyRecord, PrivateReason, Recovery, RedactionLimits,
+    RedactionPolicy, Redactor, RequestId, RunEffects, RunEnded, RunId, RunStarted, RunStatus,
+    Salvage, SecretSet, SecretSetConfig, TargetSensitivity, TaskId, TraceError, TraceSink,
+    TraceStore, WriterConfig,
 };
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
@@ -121,6 +122,8 @@ async fn old_trace(dir: &Path) -> TestResult<Old> {
     });
     let running = start(&sink, Some("call-2"), None, 2_000)?;
     let untracked = start(&sink, None, None, 3_000)?;
+    // Forty ended operations of a run still running: their inputs, stored with their ends, fill
+    // the pages after the schema.
     for seq in 1..=40 {
         sink.op_started(OperationStarted {
             id: OperationId::new(untracked, seq),
@@ -131,6 +134,18 @@ async fn old_trace(dir: &Path) -> TestResult<Old> {
             tab: Some(TabId(4)),
             args: json!({"note": "x".repeat(300)}),
             policy: Arc::new(RedactionPolicy::default()),
+            also_mask: None,
+            at: at(3_000 + i64::from(seq)),
+        });
+        sink.op_ended(OperationEnded {
+            id: OperationId::new(untracked, seq),
+            outcome: Outcome::Ok,
+            delivery: Delivery::Done,
+            sent_at: None,
+            result: None,
+            error: None,
+            page_after: None,
+            target: TargetSensitivity::Ordinary,
             also_mask: None,
             at: at(3_000 + i64::from(seq)),
         });

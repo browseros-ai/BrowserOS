@@ -35,7 +35,7 @@ pub struct Operation {
     pub tab_id: Option<i64>,
     #[serde(rename = "page", skip_serializing_if = "Option::is_none")]
     pub page: Option<Box<models::PageRef>>,
-    /// Safe arguments: masked, secret fields `[redacted]`, bounded. Page and locator handles appear as their branded JSON, e.g. `{\"$neo\":\"locator\",\"page\":3,\"selector\":\"…\"}`.
+    /// Safe arguments: masked, secret fields `[redacted]`, bounded. Page and locator handles appear as their branded JSON, e.g. `{\"$neo\":\"locator\",\"page\":3,\"selector\":\"…\"}`. Present once the operation has ended: Neo masks them with what the operation's end knows, so an operation still running, or one whose end Neo never recorded, has none.
     #[serde(
         rename = "args",
         default,

@@ -646,11 +646,10 @@ async fn sensitive_targets_redact_their_input_and_withhold_the_code() {
     }
     flushed(&h).await;
     let open = h.store.run(run).await.ok().flatten();
-    let conservative = open.map(|run| run.operations[0].args.clone());
     assert_eq!(
-        conservative.flatten().map(|args| args["value"].clone()),
-        Some(json!("[redacted]")),
-        "while open, both kinds of path are redacted"
+        open.map(|run| run.operations[0].args.clone()),
+        Some(None),
+        "while open, the input is not on disk: its end stores it"
     );
 
     op_ended(
@@ -761,6 +760,8 @@ async fn host_data_of_4_kib_is_stored_whole_and_a_larger_one_is_cut()
             also_mask: None,
             at: at(0),
         });
+        // Host data reaches disk with the run's end.
+        end_run(&h.sink, run, RunStatus::Ok, None);
         run
     });
     flushed(&h).await;
@@ -1919,11 +1920,7 @@ async fn a_records_also_mask_masks_every_text_it_stores_and_registers_nothing()
         .operation(read)
         .await?
         .ok_or("operation not found")?;
-    assert_eq!(
-        admitted.args,
-        Some(json!({"expected": "Welcome [private]"})),
-        "the start row, before the end rewrites it"
-    );
+    assert_eq!(admitted.args, None, "the start row stores no input");
 
     h.sink
         .op_notes(read, vec![format!("read {HELD} from the title")]);
@@ -2240,4 +2237,72 @@ fn ended(id: OperationId) -> OperationEnded {
         also_mask: None,
         at: at(i64::from(id.seq) * 10 + 5),
     }
+}
+
+/// What a run's open operation and the run itself have on disk while they are open: neither its
+/// input nor its host data, until its end masks them with what the end's own set knows.
+#[tokio::test]
+async fn a_start_keeps_its_input_and_host_data_off_disk_until_its_end_masks_them()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let h = harness(WriterConfig::default()).await;
+    // A value only the end's own set knows: the op's own sweep found it, so the start's set
+    // (and the process set) did not have it yet.
+    let found = "swept-9Qp-cardnumber";
+    let run = RunId::new();
+    h.sink.run_started(RunStarted {
+        id: run,
+        code: "x".to_string(),
+        request_id: None,
+        task_id: None,
+        host_data: Some(json!({"note": format!("for {found}")})),
+        also_mask: None,
+        at: at(0),
+    });
+    let fill = OperationId::new(run, 1);
+    h.sink.op_started(OperationStarted {
+        args: json!({"value": format!("copied {found}")}),
+        ..started(simple(fill, "locator.fill", Effect::Write))
+    });
+    flushed(&h).await;
+
+    let open = h.store.run(run).await?.ok_or("run not found")?;
+    assert_eq!(open.host_data, None, "an open run stores no host data");
+    let admitted = h
+        .store
+        .operation(fill)
+        .await?
+        .ok_or("operation not found")?;
+    assert_eq!(admitted.args, None, "an open operation stores no input");
+    for file in store_files(&h)? {
+        assert!(
+            !holds(&file, found),
+            "the open records keep the value on disk"
+        );
+    }
+
+    let held = also_mask(&[found]);
+    h.sink.op_ended(OperationEnded {
+        also_mask: Some(Arc::clone(&held)),
+        ..ended(fill)
+    });
+    h.sink.run_ended(RunEnded {
+        id: run,
+        status: RunStatus::Ok,
+        error: None,
+        result: None,
+        replay: None,
+        also_mask: Some(held),
+        at: at(1_000),
+    });
+    flushed(&h).await;
+    let done = h.store.run(run).await?.ok_or("run not found")?;
+    assert_eq!(done.host_data, Some(json!({"note": "for [private]"})));
+    assert_eq!(
+        done.operations[0].args,
+        Some(json!({"value": "copied [private]"}))
+    );
+    for file in store_files(&h)? {
+        assert!(!holds(&file, found), "the file keeps the value");
+    }
+    Ok(())
 }
