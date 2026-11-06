@@ -1,5 +1,6 @@
 //! What browseros-playwright tells Neo's privacy layer, and asks it, outside any one op's result.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use browseros_core::PageId;
@@ -9,6 +10,7 @@ use browseros_trace::{ErrorOwner, Privacy, PrivacyRecord};
 
 use super::TypedValues;
 use crate::browser::TabRegistry;
+use crate::config::SecretFiles;
 use crate::dispatch::{ErrorCode, OperationError, Output, Policy, PolicyCheck, ResultHold};
 use crate::host::FlagRecovery;
 
@@ -16,10 +18,11 @@ use crate::host::FlagRecovery;
 /// L2). A value the crate saw in a password, card or one-time-code field joins the process's
 /// secret set, which the door masks out of everything a script, a host or the trace sees, and a
 /// private tab's pixels are never captured. A value typed or read there joins once its field is
-/// done ([`TypedValues`]), so none of its prefixes does.
+/// done ([`TypedValues`]), so none of its prefixes does. No upload hands a page one of Neo's own
+/// secret files ([`SecretFiles`]).
 ///
-/// The crate calls `field_entered` from its journal task and the other two from inside an op,
-/// so nothing here awaits or holds a lock for longer than a lookup.
+/// The crate calls `field_entered` from its journal task and the others from inside an op, so
+/// nothing here awaits or holds a lock for longer than a lookup.
 pub(crate) struct PrivacyHooks {
     privacy: Arc<Privacy>,
     /// Page id to tab id, without asking core: the door touched every op's page before the op
@@ -30,15 +33,20 @@ pub(crate) struct PrivacyHooks {
     /// Pending while Neo makes up for private flags a replaced trace store lost: no tab's pixels
     /// are captured meanwhile.
     recovery: Arc<FlagRecovery>,
+    /// Where Neo keeps its own secrets on disk, as `AppConfig::load` located them. The crate holds
+    /// these hooks from `PlaywrightFacade::start` on, so a list found later would never reach it.
+    secret_files: SecretFiles,
 }
 
 impl PrivacyHooks {
-    /// The hooks over the process's one `Privacy`, which holds the secret set the door masks with.
+    /// The hooks over the process's one `Privacy`, which holds the secret set the door masks with,
+    /// and over Neo's secret files, which no upload hands a page.
     #[must_use]
     pub(crate) fn new(
         privacy: Arc<Privacy>,
         tabs: Arc<TabRegistry>,
         recovery: Arc<FlagRecovery>,
+        secret_files: SecretFiles,
     ) -> Self {
         let typed = TypedValues::start(Arc::clone(privacy.secrets()), tabs.subscribe_closed());
         Self {
@@ -46,6 +54,7 @@ impl PrivacyHooks {
             tabs,
             typed,
             recovery,
+            secret_files,
         }
     }
 
@@ -94,6 +103,16 @@ impl PlaywrightHooks for PrivacyHooks {
             None => Ok(()),
             Some(record) => Err(page_private(&private_tab(record))),
         }
+    }
+
+    /// The crate's deny list, asked once per `setInputFiles` op before any path is stat'ed: each
+    /// of Neo's secret files by its absolute path, or `None` while one has no known place, and
+    /// then the crate refuses every upload from a path as `neo / unsupported` (payloads, which
+    /// read no file, still upload). The crate resolves each entry again in every round of
+    /// checks, so a file that appears later in an entry directory, as the trace store's `-wal`
+    /// does, is denied too.
+    fn secret_paths(&self) -> Option<Vec<PathBuf>> {
+        self.secret_files.paths()
     }
 }
 

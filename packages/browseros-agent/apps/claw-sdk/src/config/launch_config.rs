@@ -19,6 +19,10 @@ pub(crate) struct LaunchConfig {
     pub(crate) cdp_port: u16,
     /// `directories.resources`, resolved against the launch file's directory.
     pub(crate) resources_dir: PathBuf,
+    /// `directories.execution`, resolved against the launch file's directory as `resources` is:
+    /// Chromium's `<user-data-dir>/.browseros`, where it writes this file. `None` when missing or
+    /// empty, and then Neo cannot place the browser profile.
+    pub(crate) execution_dir: Option<PathBuf>,
     /// `instance.browseros_version`: the native browser's own version, which gates core's
     /// native capabilities. `None` when missing, blank or not a string, because an unknown
     /// version only hides gated features and must never fail the start.
@@ -47,6 +51,13 @@ impl LaunchConfig {
             Some(resources) => config_dir.join(resources),
             None => config_dir.join("resources"),
         };
+        // An empty one would join to the config dir itself, and so name the config dir's parent
+        // as the profile: not Chromium's file, and no profile Neo can vouch for.
+        let execution_dir = file
+            .directories
+            .execution
+            .filter(|execution| !execution.as_os_str().is_empty())
+            .map(|execution| config_dir.join(execution));
         let browseros_version = file
             .instance
             .as_ref()
@@ -62,8 +73,16 @@ impl LaunchConfig {
                 .map_or(Defaults::SERVER_PORT, NonZeroU16::get),
             cdp_port: file.ports.cdp.map_or(Defaults::CDP_PORT, NonZeroU16::get),
             resources_dir,
+            execution_dir,
             browseros_version,
         })
+    }
+
+    /// The browser's user-data directory, the execution dir's parent, where every profile keeps
+    /// its cookies, saved logins and `Local State`.
+    #[must_use]
+    pub(crate) fn profile_dir(&self) -> Option<&Path> {
+        self.execution_dir.as_deref()?.parent()
     }
 }
 
@@ -90,6 +109,7 @@ struct Ports {
 #[derive(Default, Deserialize)]
 struct Directories {
     resources: Option<PathBuf>,
+    execution: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -123,6 +143,7 @@ mod tests {
                 server_port: 9201,
                 cdp_port: 9101,
                 resources_dir: Path::new("/opt/neo/resources").to_path_buf(),
+                execution_dir: Some(Path::new("/srv/exec").to_path_buf()),
                 browseros_version: Some("0.51.1.3".to_owned()),
             },
             "Chromium adds launch keys freely, so unknown ones must not fail the start"
@@ -161,6 +182,48 @@ mod tests {
             Path::new("/srv/resources"),
             "join keeps an absolute path, so only relative ones move under the config dir"
         );
+        Ok(())
+    }
+
+    /// Chromium writes the launch file into `directories.execution`, which is its
+    /// `<user-data-dir>/.browseros`, so the execution dir's parent is the profile Neo keeps out
+    /// of uploads.
+    #[test]
+    fn reads_the_execution_dir_against_the_files_directory() -> Result<(), Box<dyn Error>> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("server_config.json");
+        fs::write(
+            &path,
+            r#"{ "directories": { "execution": "udd/.browseros" } }"#,
+        )?;
+        let relative = LaunchConfig::read(&path)?;
+        assert_eq!(
+            relative.execution_dir,
+            Some(dir.path().join("udd/.browseros")),
+            "relative to the file, as resources are"
+        );
+        assert_eq!(
+            relative.profile_dir(),
+            Some(dir.path().join("udd").as_path()),
+            "the user-data dir holds the execution dir"
+        );
+
+        let text = r#"{ "directories": { "execution": "/data/profile/.browseros" } }"#;
+        let absolute = LaunchConfig::parse(text, Path::new("/opt/neo"))?;
+        assert_eq!(
+            absolute.profile_dir(),
+            Some(Path::new("/data/profile")),
+            "an absolute execution dir is kept: the image's profile"
+        );
+
+        for text in ["{}", r#"{ "directories": { "execution": "" } }"#] {
+            let config = LaunchConfig::parse(text, Path::new("/opt/neo"))?;
+            assert_eq!(
+                (config.execution_dir.as_deref(), config.profile_dir()),
+                (None, None),
+                "{text}: no execution dir, so no profile Neo can place"
+            );
+        }
         Ok(())
     }
 

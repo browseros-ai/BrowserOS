@@ -4,8 +4,9 @@
  *
  * claw-sdk evaluates this IIFE in each run's fresh QuickJS realm, after its bootstrap and
  * before the agent's function, so every object here lives for one run. It defines no global:
- * it gives the agent's function four parameters through `__neo.provide`, the names
- * Playwright examples use: `page` (the run's own tab), `context`, `browser` and `expect`.
+ * it gives the agent's function five parameters through `__neo.provide`, the names
+ * Playwright examples use: `page` (the run's own tab), `context`, `browser`, `expect`, and
+ * Node's `Buffer` (buffer.ts), which upstream's payload examples build files with.
  * Every call they make reaches Rust as one op through bridge.ts, and every selector is built
  * by the vendored Playwright helpers imported in vendored.ts, in this one module graph.
  * QuickJS has no URL, Intl or structuredClone; tests/prelude-globals.test.ts fails if the
@@ -14,6 +15,7 @@
 
 import { onReply, provide, registerBrand } from './bridge'
 import { Browser } from './browser'
+import { Buffer } from './buffer'
 import { BrowserContext } from './context'
 import { ElementHandle, elementBrand } from './element-handle'
 import { ConsoleMessage, Download } from './event-values'
@@ -51,6 +53,11 @@ registerBrand('element', (json) => {
   const brand = elementBrand(json)
   return brand ? new ElementHandle(context._pageFor(brand.page), brand) : json
 })
+// Screenshots and PDFs resolve to a Buffer, as upstream's do, so `toString('base64')` is
+// base64 and the bytes can be a `setInputFiles` payload's buffer.
+registerBrand('bytes', (json) =>
+  Buffer.from(String(Reflect.get(json, 'base64') ?? ''), 'base64'),
+)
 onReply((reply) => context._applyReply(reply))
 
 // The agent function's parameters, after the bootstrap's own. claw-sdk's placeholder page
@@ -59,3 +66,4 @@ provide('page', (init) => context._runPage(init))
 provide('context', () => context)
 provide('browser', () => browser)
 provide('expect', () => expect)
+provide('Buffer', () => Buffer)

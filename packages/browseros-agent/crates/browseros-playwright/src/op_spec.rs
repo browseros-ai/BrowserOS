@@ -59,7 +59,10 @@ pub enum Capability {
     /// displays share. No op declares it yet, and so it has no gateway.
     Screen,
     /// Hands files from Neo's own disk, which also holds Neo's secrets, to a page whose script
-    /// can then read them. Gateway: the file action, `file_action::set_input_files`.
+    /// can then read them: any path Neo's process can read, relative ones against its working
+    /// directory, except the secret files the host names (`PlaywrightHooks::secret_paths`) and
+    /// any path into `/dev` or `/proc`.
+    /// Gateway: `input_files::set_input_files`, for every form of the op, payloads included.
     HostFiles,
 }
 

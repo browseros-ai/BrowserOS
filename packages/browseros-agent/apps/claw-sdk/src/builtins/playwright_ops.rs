@@ -72,7 +72,11 @@ const PLAYWRIGHT_API: &str = "Playwright's API (as of 1.64.1) on `page`, `contex
     `toHaveURL`), with `.not`, value matchers (`toBe`, `toEqual`, ...), `expect.poll` and \
     `toPass`; soft assertions, `toBeOK` and screenshot, snapshot and `toMatchAriaSnapshot` \
     comparisons are not available. `goto` and `reload` open only `http`, `https`, `data` and \
-    `about` URLs.";
+    `about` URLs. `setInputFiles` uploads any file Neo's process can read, as Playwright does \
+    (a relative path resolves against Neo's working directory), except Neo's own secret files, \
+    which fail `neo_secret_upload_refused` with nothing sent: the caller sandboxes the \
+    filesystem. `{ name, mimeType, buffer }` payloads need no file and total under 10 MiB a \
+    call. A directory upload needs its tab in front.";
 
 /// The schemes a navigation may load (decision 27): the web, and documents the script makes
 /// itself. Every other scheme shows the agent what it must not see, or runs script where no sweep
@@ -556,6 +560,7 @@ fn error_code(code: PlaywrightCode) -> ErrorCode {
         PlaywrightCode::InvalidInput => ErrorCode::INVALID_INPUT,
         PlaywrightCode::Unsupported => ErrorCode::UNSUPPORTED,
         PlaywrightCode::SensitiveCopyRefused => ErrorCode::SENSITIVE_COPY_REFUSED,
+        PlaywrightCode::SecretUploadRefused => ErrorCode::SECRET_UPLOAD_REFUSED,
         PlaywrightCode::TargetClosed => ErrorCode::TARGET_CLOSED,
         PlaywrightCode::BrowserDisconnected => ErrorCode::BROWSER_DISCONNECTED,
         PlaywrightCode::Internal => ErrorCode::INTERNAL_ERROR,

@@ -78,7 +78,9 @@ const EVERY_OP = `
   await l.click(); await l.dblclick(); await l.hover(); await l.check(); await l.uncheck()
   await l.dragTo(page.locator('#b')); await l.fill('x'); await l.press('a'); await l.pressSequentially('ab')
   await l.selectOption('a'); await l.selectText(); await l.focus(); await l.blur()
-  await l.setInputFiles('/tmp/a.txt'); await l.dispatchEvent('click'); await l.scrollIntoViewIfNeeded()
+  // Rust stats paths before any page work, so the offline decode needs one that exists: '.'.
+  await l.setInputFiles('.'); await l.setInputFiles({ name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('a') })
+  await l.dispatchEvent('click'); await l.scrollIntoViewIfNeeded()
   await l.textContent(); await l.innerText(); await l.innerHTML(); await l.getAttribute('id'); await l.inputValue()
   await l.isEnabled(); await l.isDisabled(); await l.isEditable(); await l.isChecked(); await l.isVisible(); await l.isHidden()
   await l.count(); await l.allTextContents(); await l.allInnerTexts(); await l.boundingBox(); await l.waitFor()

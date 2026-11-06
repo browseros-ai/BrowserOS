@@ -15,7 +15,7 @@ Chromium starts the binary with its launch JSON and reads the exit code.
 | The agent port is taken | Exits 2, and Chromium relaunches Neo on the next port. Nothing else exits 2. |
 | Any other failure | Exits 1, bad arguments included. |
 
-From the launch JSON it reads `ports.server` (default 9200), `ports.cdp` (default 49337), `directories.resources`, and `instance.browseros_version`. It ignores every other key. claw-sdk has no config file of its own, so it logs and ignores `BROWSERCLAW_CONFIG_FILE`.
+From the launch JSON it reads `ports.server` (default 9200), `ports.cdp` (default 49337), `directories.resources`, `directories.execution` (Chromium's `<user-data-dir>/.browseros`, which places the browser profile among Neo's secret files), and `instance.browseros_version`. It ignores every other key. claw-sdk has no config file of its own, so it logs and ignores `BROWSERCLAW_CONFIG_FILE`.
 
 `src/config/env_config.rs` reads the environment once, at start. A blank value counts as unset. A malformed address or screen size fails the start with exit 1.
 
@@ -43,9 +43,11 @@ State lives under `$BROWSERCLAW_DIR`:
 - `logs/claw-sdk.log.<date>` is the daily log. The same lines go to stderr. `logs/claw-sdk-panics.log` gets each panic, written synchronously.
 - `host.sock` is the host socket, unless `CLAW_HOST_SOCKET` moves it.
 
+`setInputFiles` uploads any file Neo's process can read, as Playwright does, except Neo's own secret files and any path into `/dev` or `/proc`, which fail `script / neo_secret_upload_refused` with nothing sent and no path in the message. The caller sandboxes the rest of the filesystem. `src/config/secret_files.rs` locates the secret files once, at start: the `CLAW_HOST_TOKEN_FILE` file, the CAPTCHA key files and `$HOME/.config/browseros/captcha`, the trace store's `$BROWSERCLAW_DIR/claw-sdk`, and the browser's user-data dir, the parent of `directories.execution`. A relative one is made absolute against Neo's working directory. A directory denies everything in it, so a file that appears there later, such as the trace's `-wal`, is denied too. Without `directories.execution`, no file on Neo's disk uploads, though `{ name, mimeType, buffer }` payloads still do. The startup log names each entry, and warns about one Neo cannot resolve, which makes every upload from a path fail. A call's payloads total under 10 MiB, and a directory upload needs its tab in front.
+
 ## The `run` contract
 
-The model sends `run { code, timeout? }`. `code` is the body of an async function whose parameters are the SDK: Playwright's `page`, `context`, `browser` and `expect` (browseros-playwright's prelude), `neo`, `console`, the timers, and the error classes. `timeout` is in milliseconds, from 1 to 900000, and defaults to 300000. Unknown fields are refused. Each run gets a fresh QuickJS realm. `src/mcp/run_description.rs` builds the text the model reads about all of this.
+The model sends `run { code, timeout? }`. `code` is the body of an async function whose parameters are the SDK: Playwright's `page`, `context`, `browser` and `expect`, and Node's `Buffer` (browseros-playwright's prelude), `neo`, `console`, the timers, and the error classes. `timeout` is in milliseconds, from 1 to 900000, and defaults to 300000. Unknown fields are refused. Each run gets a fresh QuickJS realm. `src/mcp/run_description.rs` builds the text the model reads about all of this.
 
 The host sends its ids in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData? }`. Neo refuses unknown keys as `host / invalid_meta`. `taskId` makes the task's last tab the run's `page`. Without it, `page` opens a background tab on the first call that needs one. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads.
 
@@ -66,7 +68,7 @@ A `requestId` never runs twice. A repeat while its run is going joins it and get
 | `run` | One `run` call from admission to reply: replay, joins, the orphan grace, and the deadline. |
 | `runtime` | The per-run QuickJS realm, the JS bootstrap and the `neo` prelude in `runtime/js/` plus browseros-playwright's prelude, and the strings-only bridge to the dispatcher. The only module that names rquickjs. |
 | `dispatch` | The door: `Dispatcher`, the `Method` trait, the `Registry`, the policy rules, and the error model. |
-| `builtins` | The methods Neo serves: every browseros-playwright op but those it holds, and a `goto` to any URL but `http`, `https`, `data` and `about`, or a `reload` of a page on one (a local file would show Neo's own secrets), on the process's one `Playwright` (`playwright_ops.rs`, with the privacy hooks it reports to, and `event_release.rs`, which puts every event an event pull returns through the rules on its own tab) and `neo.solveCaptcha`; and the idle-tab janitor. `op_marks.rs` reads each op's declared capabilities: Neo holds an op the crate does not guard at its gateways, and one that declares a capability the door does not police yet (script in the page's main world, files from Neo's own disk, Neo's screen), so a held op answers `method_unavailable` with nothing sent. |
+| `builtins` | The methods Neo serves: every browseros-playwright op but those it holds, and a `goto` to any URL but `http`, `https`, `data` and `about`, or a `reload` of a page on one (a local file would show Neo's own secrets), on the process's one `Playwright` (`playwright_ops.rs`, with the privacy hooks it reports to, which also name Neo's secret files to the crate's upload deny list, and `event_release.rs`, which puts every event an event pull returns through the rules on its own tab) and `neo.solveCaptcha`; and the idle-tab janitor. `op_marks.rs` reads each op's declared capabilities: Neo holds an op the crate does not guard at its gateways, and one that declares a capability the door does not police yet (script in the page's main world, Neo's screen), so a held op answers `method_unavailable` with nothing sent. |
 | `browser` | The CDP link to Chromium, its reconnects, and what Neo knows about each tab. |
 | `host` | The host API's lifecycle and the takeover lock the door checks. |
 | `test_rig` | The unit tests' rig: a fake browser, a real trace store, and test methods. |
@@ -95,16 +97,17 @@ CARGO_BUILD_BUILD_DIR="$(git rev-parse --show-toplevel)/packages/browseros-agent
   apps/claw-sdk/check.sh
 ```
 
-Unit and integration tests run against `FakeCdp`. Three integration tests drive a real headless BrowserOS instead. Stock Chrome does not work, because core uses BrowserOS-only CDP methods. The tests pass without doing anything unless `CLAW_SDK_E2E_BROWSER` names the browser binary:
+Unit and integration tests run against `FakeCdp`. Four integration tests drive a real headless BrowserOS instead. Stock Chrome does not work, because core uses BrowserOS-only CDP methods. The tests pass without doing anything unless `CLAW_SDK_E2E_BROWSER` names the browser binary:
 
 ```sh
 CLAW_SDK_E2E_BROWSER=/Applications/BrowserOS.app/Contents/MacOS/BrowserOS \
   cargo test -p claw-sdk --locked --test e2e_browseros --test acceptance_browseros \
-    --test playwright_browseros
+    --test playwright_browseros --test uploads_browseros
 ```
 
 - `tests/e2e_browseros.rs` launches the built binary the way Chromium does, runs scripts over MCP, and reads them back over the host socket.
 - `tests/playwright_browseros.rs` runs one Playwright script over MCP, the way a model trained on Playwright writes it. The script loads a page with a same-origin iframe into the run's own `page`, reads its `ariaSnapshot({ mode: 'ai' })`, reads elements by a printed ref through `getByRef` and `aria-ref=`, and reads through locators and inside the frame.
+- `tests/uploads_browseros.rs` uploads through `setInputFiles` over MCP. Neo's own secret files (the host token, a CAPTCHA key, `trace.db`, the profile's `Local State`, and a symlink to the token) are each refused with no path named, while a file of the agent's own, a payload and `[]` reach the page.
 - `tests/acceptance_browseros.rs` runs one task end to end. The agent drives a tab, and the host reads its trace, locks the tab, sees the agent's next write refused, releases the lock, and finds the tab's picture after that write.
 
 `packages/browseros/docker/neo/smoke_sdk.py` checks a running claw-sdk Neo container from the host. It checks health and readiness, that `/mcp` lists the one `run` tool without issuing a session id, and that one run loads a page and reads its title. Run it as `python3 smoke_sdk.py --mcp-port <port>`. The port defaults to 9010.

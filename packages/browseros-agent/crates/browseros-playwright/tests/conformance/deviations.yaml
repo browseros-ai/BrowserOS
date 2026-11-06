@@ -37,17 +37,6 @@
     - "#second"
     - "#stuck"
 - case: captures
-  path: /returned/base64Start
-  kind: finding
-  route: sdk-skeleton bootstrap (bytes brand), J4 prelude
-  reason: Playwright returns a Node Buffer, so toString('base64') is base64. The skeleton's
-    {"$neo":"bytes"} brand revives to a plain Uint8Array (bootstrap.js, which Runner N runs),
-    whose toString() joins the byte values, so a script that forwards a screenshot as
-    base64 sends the wrong text. A Uint8Array whose toString takes Buffer's encodings ('base64',
-    'hex', 'utf8') would close it.
-  p: iVBORw0KGgoA
-  n: 137,80,78,71
-- case: captures
   path: /returned/unknownType/threw/message
   kind: finding
   route: R10 screenshot, J4 prelude
@@ -313,6 +302,104 @@
       message: "page.waitForEvent: the popup (http://127.0.0.1:<port>/child.html?name=Window) opened
         as a separate window, which Neo cannot drive; Neo drives popups that open as tabs"
       name: Error
+- case: set-input-files
+  path: /returned/atNeoLimit
+  kind: decided
+  reason: "files.ts NEO_UPLOAD_LIMIT: Neo refuses payloads totalling 10 MiB, under upstream's 50
+    MiB, with upstream's advice to pass a path. claw-sdk runs a script in a 64 MiB QuickJS heap,
+    and while its bootstrap encodes the op the heap holds the bytes, their base64, JSON's quoted
+    copy and the JSON: five times the bytes. Measured through js_runner under claw-sdk's limits,
+    12682 KiB is the most that reaches the op whole from a script holding nothing else; past it
+    the encode runs out of memory and the script learns nothing it can act on. 10 MiB leaves a
+    script 11.5 MiB for everything else. A byte under it, both runners land every byte
+    (/returned/underNeoLimit)."
+  p:
+    returned: null
+  n:
+    threw:
+      message: Cannot set buffer larger than 10Mb in Neo, please write it to a file and pass its
+        path instead.
+      name: Error
+- case: set-input-files
+  path: /returned/detachedHandle/outcome
+  kind: decided
+  reason: "Neo's rule for every op on an element handle (resolve/handle_site.rs): a node that left
+    its document is detached, so the op fails as upstream's do for a detached node. Upstream's
+    setInputFiles checks no connection: retarget passes a removed input, and Chromium sets files
+    on it."
+  p:
+    returned: null
+  n:
+    threw:
+      message: "elementHandle.setInputFiles: Element is not attached to the DOM"
+      name: Error
+- case: set-input-files
+  path: /returned/directory/events
+  kind: finding
+  route: owner (BrowserOS chromium, or bringToFront first once M4 serves it)
+  reason: "Both run upstream's mechanism: set the directory with DOM.setFileInputFiles, wait for
+    `input`. Chromium reads a chosen directory only for the tab in front; for a background tab
+    it fires `cancel` and sets nothing (measured on BrowserOS neo on macOS, and with real
+    Playwright in Neo's Linux image, spikes-docker evidence s3-pw). Runner P's newPage tab is in
+    front; every tab Neo opens for an agent is a background tab, so its wait runs out, as real
+    Playwright's does on a background tab. In front, Neo sets it too (text_actions_live)."
+  p:
+    - bubbles: true
+      composed: true
+      target: dir
+      trusted: true
+      type: input
+    - bubbles: true
+      composed: false
+      target: dir
+      trusted: true
+      type: change
+  n:
+    - bubbles: true
+      composed: false
+      target: dir
+      trusted: true
+      type: cancel
+- case: set-input-files
+  path: /returned/directory/files
+  kind: finding
+  route: owner (BrowserOS chromium, or bringToFront first once M4 serves it)
+  reason: "The same cause as /returned/directory/events: Chromium read no directory for Runner N's
+    background tab."
+  p:
+    - name: a.txt
+      relativePath: dir/a.txt
+      size: 2
+      text: |
+        a
+      type: text/plain
+    - name: b.txt
+      relativePath: dir/sub/b.txt
+      size: 2
+      text: |
+        b
+      type: text/plain
+  n: []
+- case: set-input-files
+  path: /returned/directory/outcome
+  kind: finding
+  route: owner (BrowserOS chromium, or bringToFront first once M4 serves it)
+  reason: "The same cause as /returned/directory/events: the `input` upstream waits for never
+    comes in a background tab, so the op times out after Chromium's `cancel`."
+  p:
+    returned: null
+  n:
+    threw:
+      message: "page.setInputFiles: Timeout <n>ms exceeded."
+      name: TimeoutError
+- case: set-input-files
+  path: /returned/frameGone/outcome/threw/message
+  kind: decided
+  reason: "Neo's rule for every op on an element handle (resolve/handle_site.rs): once a handle's
+    document is gone, its seq is retired and the handle is detached for good. Upstream's client
+    first asks the server for the handle's frame, which says the frame was detached."
+  p: "elementHandle.setInputFiles: Frame was detached"
+  n: "elementHandle.setInputFiles: Element is not attached to the DOM"
 - case: snapshot-ai
   path: /returned/unknownRef/threw/message
   kind: finding

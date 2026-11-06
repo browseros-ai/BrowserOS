@@ -27,7 +27,7 @@ mod js_runner;
 )]
 mod live_run;
 
-use std::path::{Path, PathBuf};
+use std::path::{self, Path};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{env, fs};
@@ -46,12 +46,12 @@ const HARNESS: &str = include_str!("conformance/harness.js");
 ///
 /// `harness.js` compiles a case with the `AsyncFunction` constructor, whose code sees globals
 /// only, while claw-sdk hands an agent's code the bootstrap's `console` and timers, and the
-/// prelude's `expect`, as its function's parameters. They become globals here for the case, as
-/// Node's and Playwright Test's `expect` are for Runner P.
+/// prelude's `expect` and `Buffer`, as its function's parameters. They become globals here for
+/// the case, as Node's own and Playwright Test's `expect` are for Runner P.
 const RUN_CASE: &str = r"
 const skip = __conformance.needs(source)
 if (skip !== null) return { skipped: skip }
-Object.assign(globalThis, { console, setTimeout, clearTimeout, expect })
+Object.assign(globalThis, { console, setTimeout, clearTimeout, expect, Buffer })
 const pageEval = async (target, expression) => {
   if (target?._id == null) throw new Error('harness.pageEval: the page is not open yet')
   const reply = JSON.parse(await __neo_test_eval(target._id, target._tab, String(expression)))
@@ -75,15 +75,17 @@ async fn tests_that_every_conformance_case_runs_through_the_prelude() -> TestRes
         env::var(name).map_err(|error| format!("set {name} to {what} ({error}), or use run.sh"))
     };
     let port: u16 = setting("CONFORMANCE_PORT", "server.mjs's port")?.parse()?;
-    let out = PathBuf::from(setting("CONFORMANCE_OUT", "the outcomes' directory")?);
+    let out = path::absolute(setting("CONFORMANCE_OUT", "the outcomes' directory")?)?;
     let only: Vec<String> = env::var("CONFORMANCE_CASES")
         .map(|names| names.split_whitespace().map(str::to_owned).collect())
         .unwrap_or_default();
     fs::create_dir_all(&out)?;
     let tier = env::var("CONFORMANCE_CASES_DIR").unwrap_or_else(|_| "cases".to_owned());
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/conformance")
-        .join(tier);
+    let conformance = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/conformance");
+    let dir = conformance.join(tier);
+    // Runner P works in the conformance directory too, so a case's relative paths
+    // (`files/one.txt`) name the same files for both, as a script's name files in Neo's.
+    env::set_current_dir(&conformance)?;
     for (name, source) in cases(&dir, &only)? {
         let outcome = run_case(port, &source).await;
         let kind = outcome

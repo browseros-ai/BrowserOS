@@ -1,0 +1,9 @@
+<!doctype html><html><head><meta charset="utf-8">
+<!-- Upstream's "should work with CSP" serves its page under default-src "none". server.mjs sets
+     no headers, so the page declares the policy itself; no script of its own may run. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'">
+<title>Files under CSP</title></head>
+<body>
+<input type="file" id="path" aria-label="Path">
+<input type="file" id="payload" aria-label="Payload">
+</body></html>

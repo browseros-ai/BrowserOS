@@ -43,6 +43,11 @@ pub const RUN_META: &str = "com.browseros.neo/run";
 pub const PATIENCE: Duration = Duration::from_secs(60);
 /// The bearer token the host presents on the host socket; browseros-service wants 32 bytes.
 pub const HOST_TOKEN: &str = "e2e-host-token-0123456789-abcdefghij";
+/// In the rig's root: the token's file, the CAPTCHA placeholder key's file, and the browser's
+/// user-data dir. All three are among Neo's secret files, which no upload hands a page.
+const TOKEN_FILE: &str = "host-token";
+const CAPTCHA_KEY_FILE: &str = "capsolver-key";
+const PROFILE_DIR: &str = "profile";
 
 /// The BrowserOS binary `CLAW_SDK_E2E_BROWSER` names, or `None` after saying the test skipped.
 #[must_use]
@@ -122,12 +127,10 @@ impl Rig {
 
         // The flags hosted Neo's image uses minus the display: no bundled server, updater or
         // extensions, which would race claw-sdk for the browser.
+        let profile = dir.path().join(PROFILE_DIR);
         let browser = Command::new(browser)
             .arg("--headless=new")
-            .arg(format!(
-                "--user-data-dir={}",
-                dir.path().join("profile").display()
-            ))
+            .arg(format!("--user-data-dir={}", profile.display()))
             .arg(format!("--remote-debugging-port={cdp_port}"))
             .args([
                 "--disable-browseros-server",
@@ -143,14 +146,15 @@ impl Rig {
             .kill_on_drop(true)
             .spawn()?;
 
+        // `execution` is Chromium's `<user-data-dir>/.browseros`, as every real launch writes it:
+        // Neo places the browser profile from it, and uploads no file from its disk without it.
         let launch = dir.path().join("server_config.json");
-        fs::write(
-            &launch,
-            format!(
-                r#"{{"ports":{{"server":{server_port},"cdp":{cdp_port}}},"directories":{{"resources":"r"}}}}"#
-            ),
-        )?;
-        let token_file = dir.path().join("host-token");
+        let launch_json = json!({
+            "ports": { "server": server_port, "cdp": cdp_port },
+            "directories": { "resources": "r", "execution": profile.join(".browseros") },
+        });
+        fs::write(&launch, launch_json.to_string())?;
+        let token_file = dir.path().join(TOKEN_FILE);
         fs::write(&token_file, format!("{HOST_TOKEN}\n"))?;
         let mut neo = Command::new(BIN);
         neo.arg("--config")
@@ -164,7 +168,7 @@ impl Rig {
             // The headless browser has no Xvnc, and 5900 may be a developer's Screen Sharing.
             .env("CLAW_XVNC_ADDR", CLOSED_XVNC.addr.to_string());
         if let CaptchaKey::Placeholder = captcha {
-            let key_file = dir.path().join("capsolver-key");
+            let key_file = dir.path().join(CAPTCHA_KEY_FILE);
             fs::write(&key_file, "placeholder")?;
             neo.env("BROWSEROS_CAPSOLVER_API_KEY_FILE", &key_file)
                 .env("BROWSEROS_CAPSOLVER_API_URL", "http://127.0.0.1:9");
@@ -242,6 +246,25 @@ impl Rig {
             .ok_or_else(|| format!("no status line: {head}"))?;
         let body = response.get(split + 4..).unwrap_or_default().to_vec();
         Ok(HostResponse { status, head, body })
+    }
+
+    /// The host token's file, which Neo reads at start (`CLAW_HOST_TOKEN_FILE`).
+    #[must_use]
+    pub fn token_path(&self) -> PathBuf {
+        self.dir.path().join(TOKEN_FILE)
+    }
+
+    /// The CAPTCHA placeholder key's file, written when the rig starts with
+    /// [`CaptchaKey::Placeholder`].
+    #[must_use]
+    pub fn captcha_key_path(&self) -> PathBuf {
+        self.dir.path().join(CAPTCHA_KEY_FILE)
+    }
+
+    /// The browser's user-data dir, where Chromium keeps the profile's cookies and `Local State`.
+    #[must_use]
+    pub fn profile_dir(&self) -> PathBuf {
+        self.dir.path().join(PROFILE_DIR)
     }
 
     /// Where claw-sdk keeps its trace, readable once it stopped.

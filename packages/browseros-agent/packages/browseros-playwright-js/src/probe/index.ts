@@ -23,6 +23,7 @@ import { RefMap } from './aria-ref'
 import { documentText, replaceDocument } from './document'
 import { edit } from './edit'
 import { expect } from './expect'
+import { armInput, inputArrived } from './files'
 import { underMask } from './page-mask'
 import {
   type BootOptions,
@@ -83,6 +84,8 @@ const HANDLERS: Handlers = {
   focused,
   matchUrl,
   document: documentText,
+  armInput,
+  inputArrived,
 }
 
 const UNINSTALLED: Uninstalled = { kind: 'uninstalled' }

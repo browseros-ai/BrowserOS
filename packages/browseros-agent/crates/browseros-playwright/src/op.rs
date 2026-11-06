@@ -181,8 +181,9 @@ mod tests {
     /// world, and whether its gateway polices all of it before its first effect (`gated`). A
     /// host holds and polices ops by these declarations, so a new op without a row, or a
     /// declaration changed without its row, fails here until the audit is redone on purpose.
-    /// `page.setContent` writes its HTML from the sealed world, past the evaluate guard, and
-    /// `locator.setInputFiles` has no deny list for Neo's own secrets yet: both are ungated.
+    /// `page.setContent` writes its HTML from the sealed world, past the evaluate guard, and is
+    /// ungated. `locator.setInputFiles` is gated: its gateway refuses Neo's own secret files and
+    /// any path into `/dev` or `/proc` before it sends a path (`input_files/secrets.rs`).
     ///
     /// The ops with an empty row send selectors, values or trusted input, or read in the sealed
     /// world. `page.goto` reaches no main world: the host refuses `javascript:`, the one scheme
@@ -207,7 +208,7 @@ mod tests {
             ("locator.selectText", &[], true),
             ("locator.focus", &[], true),
             ("locator.blur", &[], true),
-            ("locator.setInputFiles", &[HostFiles], false),
+            ("locator.setInputFiles", &[HostFiles], true),
             ("locator.dispatchEvent", &[], true),
             ("locator.scrollIntoViewIfNeeded", &[], true),
             ("locator.textContent", &[], true),

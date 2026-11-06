@@ -26,7 +26,7 @@ use crate::browser::{BrowserLink, TabRegistry};
 use crate::builtins::{
     self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, PrivacyHooks, TabJanitor,
 };
-use crate::config::{AppConfig, Defaults, HostedMode};
+use crate::config::{AppConfig, Defaults, HostedMode, SecretFiles};
 use crate::dispatch::{Dispatcher, RegistryBuilder};
 use crate::host::{FlagRecovery, HostApi, HostInputs, TakeoverLock};
 use crate::http::agent_router;
@@ -141,7 +141,7 @@ impl App {
             .map_err(|error| bind_error(address, error))?;
         log_startup(&config, address);
 
-        let OpenedTrace { store, recovery } = open_trace(&config.env.state_dir).await?;
+        let OpenedTrace { store, recovery } = open_trace(&config.env.trace_dir()).await?;
         // One secret set for the process: every exit a script or the trace sees is masked
         // with it, and sdk-traces' privacy and protected fills register into it.
         let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
@@ -178,8 +178,15 @@ impl App {
         let tabs = Arc::new(TabRegistry::new());
         let native = NativeCapabilities::from_browseros_version(config.browseros_version());
         let browser = link(native, Arc::clone(&tabs));
-        // browseros-playwright's privacy callbacks feed the same secret set the door masks with.
-        let hooks = Arc::new(PrivacyHooks::new(privacy, Arc::clone(&tabs), recovery));
+        // browseros-playwright's privacy callbacks feed the same secret set the door masks with,
+        // and name Neo's own secret files to its upload deny list. The crate holds them from
+        // `PlaywrightFacade::start` on, so the list is config's, located before the start.
+        let hooks = Arc::new(PrivacyHooks::new(
+            privacy,
+            Arc::clone(&tabs),
+            recovery,
+            config.secret_files,
+        ));
         let playwright = PlaywrightFacade::start(Arc::clone(&browser), Arc::clone(&hooks) as _);
 
         // One solver for the process: its paid-task budget and page reservations are its own.
@@ -339,9 +346,10 @@ struct OpenedTrace {
     recovery: Arc<FlagRecovery>,
 }
 
-/// Opens the trace store, or, when the file does not open (a schema this build does not know,
-/// a corrupt file), moves it aside and opens a fresh one: Neo must not crash-loop on its own
-/// records. The old file is kept beside the new one for a human to look at.
+/// Opens the trace store in `trace_dir` (`EnvConfig::trace_dir`, which Neo's secret files deny to
+/// uploads too), or, when the file does not open (a schema this build does not know, a corrupt
+/// file), moves it aside and opens a fresh one: Neo must not crash-loop on its own records. The
+/// old file is kept beside the new one for a human to look at.
 ///
 /// A fresh store lost two things that keep Neo safe, and browseros-trace cannot read either from
 /// a file it refused to open. The private flags: every tab open at the browser link's first
@@ -349,8 +357,8 @@ struct OpenedTrace {
 /// moves keeps that owed at every start until it is done. The request ids: a host that retries a
 /// `requestId` from before the replacement runs it again, which nothing here can prevent, so it
 /// is logged as an error for the operator.
-async fn open_trace(state_dir: &Path) -> Result<OpenedTrace, StartError> {
-    let path = state_dir.join("claw-sdk").join("trace.db");
+async fn open_trace(trace_dir: &Path) -> Result<OpenedTrace, StartError> {
+    let path = trace_dir.join("trace.db");
     match TraceStore::open(&path).await {
         Ok(store) => Ok(OpenedTrace {
             store,
@@ -439,5 +447,28 @@ fn log_startup(config: &AppConfig, address: SocketAddr) {
         warn!(
             "neo.solveCaptcha is off: no readable CAPTCHA provider key ({CAPSOLVER_KEY_FILE_ENV}, {TWOCAPTCHA_KEY_FILE_ENV}); a call fails host / captcha_unavailable"
         );
+    }
+    // setInputFiles' deny list, located before logging started. An entry the crate cannot
+    // resolve makes it refuse every upload from a path, and these lines are the operator's only
+    // word on why.
+    match &config.secret_files {
+        SecretFiles::Named(files) => {
+            info!(?files, "setInputFiles never uploads Neo's own secret files");
+            for file in files {
+                if let Some(error) = file.unresolvable() {
+                    warn!(
+                        kind = ?file.kind,
+                        path = %file.path.display(),
+                        %error,
+                        "Neo cannot resolve one of its secret files, so setInputFiles refuses every upload from a path until it can"
+                    );
+                }
+            }
+        }
+        SecretFiles::Unlocated { missing, why } => warn!(
+            ?missing,
+            why,
+            "Neo cannot place one of its secret files, so setInputFiles uploads no file from Neo's disk; payloads still upload"
+        ),
     }
 }

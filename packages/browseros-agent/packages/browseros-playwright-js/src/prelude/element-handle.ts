@@ -15,6 +15,7 @@ import { invoke } from './bridge'
 import { EventEmitter } from './emitter'
 import { clientError, unsupportedError } from './errors'
 import { type EvaluateOptions, fromPageValue, pageCall } from './evaluation'
+import { inputFiles, withClientErrors } from './files'
 import {
   type ClickOptions,
   refusedScreenshotOption,
@@ -26,7 +27,6 @@ import {
   DBLCLICK_KEYS,
   FILL_KEYS,
   HOVER_KEYS,
-  inputFilePaths,
   KEY_KEYS,
   markHandle,
   POINTER_KEYS,
@@ -307,9 +307,12 @@ export class ElementHandle extends EventEmitter {
     options: TimeoutOption = {},
   ): Promise<void> {
     const api = 'elementHandle.setInputFiles'
-    await this.#op('locator.setInputFiles', api, this.#timeout(options), {
-      files: inputFilePaths(api, files),
-    })
+    const input = inputFiles(api, files)
+    await withClientErrors(api, () =>
+      this.#op('locator.setInputFiles', api, this.#timeout(options), {
+        files: input,
+      }),
+    )
   }
 
   async focus(): Promise<void> {

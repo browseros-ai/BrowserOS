@@ -3,7 +3,7 @@ use std::{env, io};
 
 use browseros_captcha::config::CaptchaConfig;
 
-use super::{EnvConfig, LaunchConfig};
+use super::{EnvConfig, LaunchConfig, SecretFiles};
 
 /// Everything a process starts with, parsed once at the boundary (`main`) and trusted after.
 #[derive(Clone, Debug)]
@@ -15,6 +15,10 @@ pub struct AppConfig {
     /// neighbors). The key files are read here, once, so the solver never touches the
     /// environment or the disk on a run. Its `Debug` redacts the keys.
     pub(crate) captcha: CaptchaConfig,
+    /// Where Neo's own secrets are on disk, which `setInputFiles` never uploads. Located here,
+    /// once: browseros-playwright's hooks are fixed when the app builds its `Playwright`, so the
+    /// list must exist before then.
+    pub(crate) secret_files: SecretFiles,
 }
 
 /// A config Neo cannot start with. `main` prints it on one line and exits 1, never 2, which
@@ -51,9 +55,13 @@ impl AppConfig {
     /// Reads Chromium's launch file at `path` and the process environment.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let lookup = |name: &str| env::var(name).ok();
+        let cwd = env::current_dir();
+        let launch = LaunchConfig::read(path)?;
+        let env = EnvConfig::from_lookup(&lookup)?;
         Ok(Self {
-            launch: LaunchConfig::read(path)?,
-            env: EnvConfig::from_lookup(&lookup)?,
+            secret_files: SecretFiles::locate(&env, &launch, &cwd),
+            launch,
+            env,
             // A key file that cannot be read leaves its provider off, as the crate decides;
             // app.rs logs the outcome once logging is up.
             captcha: CaptchaConfig::from_lookup(lookup),
@@ -78,7 +86,7 @@ mod tests {
     use browseros_captcha::config::CaptchaConfig;
 
     use super::AppConfig;
-    use crate::config::{EnvConfig, HostApiConfig, HostedMode, LaunchConfig};
+    use crate::config::{EnvConfig, HostApiConfig, HostedMode, LaunchConfig, SecretFiles};
     use crate::test_support::CLOSED_XVNC;
 
     fn config(launch_version: Option<&str>, env_version: Option<&str>) -> AppConfig {
@@ -87,10 +95,13 @@ mod tests {
                 server_port: 9200,
                 cdp_port: 49337,
                 resources_dir: PathBuf::from("resources"),
+                execution_dir: None,
                 browseros_version: launch_version.map(str::to_owned),
             },
             env: EnvConfig {
                 state_dir: PathBuf::from("/state"),
+                home: None,
+                captcha_key_files: Vec::new(),
                 log_filter: "info".to_owned(),
                 hosted_mode: HostedMode::On,
                 native_version: env_version.map(str::to_owned),
@@ -103,6 +114,7 @@ mod tests {
                 xvnc: CLOSED_XVNC,
             },
             captcha: CaptchaConfig::default(),
+            secret_files: SecretFiles::Named(Vec::new()),
         }
     }
 

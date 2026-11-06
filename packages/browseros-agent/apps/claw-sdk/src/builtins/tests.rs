@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs;
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -32,14 +33,14 @@ use super::op_marks::Hold;
 use super::playwright_ops::{self, OpCtxEnv, leaf_error};
 use super::{BuiltinDeps, CaptchaClaims, PlaywrightFacade, PrivacyHooks, TabJanitor};
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
-use crate::config::Defaults;
+use crate::config::{Defaults, SecretFiles};
 use crate::dispatch::{
     Call, Dispatcher, ErrorCode, LeafError, Lifetime, Listing, Method, MethodSpec, OpCtx,
     OpFailure, OpReply, OperationError, PageTarget, PendingReply, Policy, PolicyCheck,
     RegistryBuilder, RegistryError, RunCtx, RunGuard, RunStart, StopReason, Visibility,
 };
 use crate::host::{FlagRecovery, TakeoverLock};
-use crate::test_support::FakeCdp;
+use crate::test_support::{FakeCdp, test_config};
 
 /// The built-ins' door on the fake browser, with the app's own rules in the app's order
 /// (`door_rules`): the takeover lock over browseros-takeover's real `Locks`, then tab privacy,
@@ -71,7 +72,20 @@ impl Harness {
         Self::with_solver(None).await
     }
 
+    /// A Neo that names no secret files, since no test that uploads uses it.
     async fn with_solver(solver: Option<Arc<CaptchaSolver>>) -> Result<Self, Box<dyn Error>> {
+        Self::build(solver, SecretFiles::Named(Vec::new())).await
+    }
+
+    /// A Neo whose config located `secret_files`, which its hooks name to the crate's deny list.
+    async fn naming(secret_files: SecretFiles) -> Result<Self, Box<dyn Error>> {
+        Self::build(None, secret_files).await
+    }
+
+    async fn build(
+        solver: Option<Arc<CaptchaSolver>>,
+        secret_files: SecretFiles,
+    ) -> Result<Self, Box<dyn Error>> {
         let fake = FakeCdp::new();
         let tabs = Arc::new(TabRegistry::new());
         let connect = Arc::clone(&fake);
@@ -105,6 +119,7 @@ impl Harness {
             Arc::clone(&privacy),
             Arc::clone(&tabs),
             FlagRecovery::none(),
+            secret_files,
         ));
         let playwright = PlaywrightFacade::start(Arc::clone(&link), Arc::clone(&hooks) as _);
         let mut registry = RegistryBuilder::default();
@@ -268,6 +283,15 @@ fn placeholder_solver() -> Result<Arc<CaptchaSolver>, Box<dyn Error>> {
     Ok(Arc::new(
         CaptchaSolver::new(config).ok_or("a readable key file makes a solver")?,
     ))
+}
+
+/// Neo's secret files when its host token, its state and its browser profile all sit under
+/// `root`, located as `AppConfig::load` locates them: the token `root/host-token`, the trace
+/// store's directory `root/claw-sdk` and the profile `root/profile`.
+fn secret_files_under(root: &Path) -> SecretFiles {
+    let mut config = test_config(root);
+    config.env.host_api.token_file = Some(root.join("host-token"));
+    SecretFiles::locate(&config.env, &config.launch, &Ok(PathBuf::from("/")))
 }
 
 /// `neo.solveCaptcha` on `page`, as a script calls it.
@@ -998,6 +1022,7 @@ async fn no_tab_is_captured_until_neo_made_up_for_lost_private_flags() -> Result
         Arc::clone(&harness.privacy),
         Arc::clone(&harness.tabs),
         Arc::clone(&recovery),
+        SecretFiles::Named(Vec::new()),
     );
     assert_eq!(
         hooks
@@ -1011,6 +1036,35 @@ async fn no_tab_is_captured_until_neo_made_up_for_lost_private_flags() -> Result
     assert!(
         hooks.capture_allowed(owners.id.clone()).is_ok(),
         "once the open tabs are private, a tab that is not may be captured"
+    );
+    Ok(())
+}
+
+/// The crate asks the hooks for its deny list on every upload: they answer with Neo's own secret
+/// files as config located them, each by its absolute path, or with nothing while one has no
+/// known place, and then the crate uploads no file from Neo's disk.
+#[tokio::test]
+async fn the_hooks_name_neos_secret_files_to_the_crate() -> Result<(), Box<dyn Error>> {
+    let root = tempfile::tempdir()?;
+    let harness = Harness::naming(secret_files_under(root.path())).await?;
+    assert_eq!(
+        harness.hooks.secret_paths(),
+        Some(vec![
+            root.path().join("host-token"),
+            root.path().join("claw-sdk"),
+            root.path().join("profile"),
+        ]),
+        "the host token, the trace store's directory and the browser profile"
+    );
+
+    let mut config = test_config(root.path());
+    config.launch.execution_dir = None;
+    let unplaced = SecretFiles::locate(&config.env, &config.launch, &Ok(PathBuf::from("/")));
+    let harness = Harness::naming(unplaced).await?;
+    assert_eq!(
+        harness.hooks.secret_paths(),
+        None,
+        "with the profile's place unknown, the crate refuses every upload from a path"
     );
     Ok(())
 }
@@ -1511,7 +1565,19 @@ async fn the_ops_that_run_script_in_the_pages_main_world_are_held() -> Result<()
     }
     // The browser hears only the listings Neo makes in the background, never a page opened,
     // attached to or run in.
-    let sent: Vec<String> = harness
+    assert_eq!(
+        sent_since(&harness, before),
+        Vec::<String>::new(),
+        "refused before the door resolves a page: nothing reached the browser"
+    );
+    Ok(())
+}
+
+/// The browser calls Neo makes since `before` other than its own background ones (tab listings,
+/// target discovery, the download policy, the crate's one read of the platform): what an op
+/// sent the browser.
+fn sent_since(harness: &Harness, before: usize) -> Vec<String> {
+    harness
         .fake
         .calls()
         .into_iter()
@@ -1523,35 +1589,44 @@ async fn the_ops_that_run_script_in_the_pages_main_world_are_held() -> Result<()
                 "Target.getTargets",
                 "Target.setDiscoverTargets",
                 "Browser.setDownloadBehavior",
-                // The crate reads the platform once at its start, for the keyboard's chords.
                 "Browser.getVersion",
             ]
             .contains(&method.as_str())
         })
-        .collect();
-    assert_eq!(
-        sent,
-        Vec::<String>::new(),
-        "refused before the door resolves a page: nothing reached the browser"
-    );
-    Ok(())
+        .collect()
 }
 
-#[tokio::test]
-async fn a_file_upload_is_held_since_its_paths_are_on_neos_own_disk() -> Result<(), Box<dyn Error>>
-{
-    let harness = Harness::new().await?;
-    let owners = harness.owner_tab("https://bank.example/").await?;
-    let (run, _guard) = harness.run()?;
-    // A page's own script reads a file it is handed, and writes it where the agent reads.
-    let input = json!({
-        "call": { "api": "locator.setInputFiles", "timeoutMs": 30000 },
-        "target": locator(&handle(&owners)),
+/// `locator.setInputFiles` of `path` into a file input on `page`, as the prelude sends it.
+fn upload(page: &PageRef, path: &Path) -> Value {
+    json!({
+        "call": { "api": "locator.setInputFiles", "timeoutMs": 500 },
+        "target": locator(&handle(page)),
         "strict": "strict",
-        "files": ["/home/neo/.config/browseros/captcha/capsolver-api-key"],
-    });
+        "files": { "paths": [path] },
+    })
+}
+
+/// An upload of one of Neo's own secret files is refused before the crate touches the page, and
+/// names no path; any other file goes on to the page. The fake browser has no sealed world to
+/// find the input in, so that upload stops there, before anything is sent:
+/// `tests/uploads_browseros.rs` hands a real page the file.
+#[tokio::test]
+async fn a_file_upload_refuses_neos_own_secrets_and_uploads_the_rest() -> Result<(), Box<dyn Error>>
+{
+    let root = tempfile::tempdir()?;
+    let token = root.path().join("host-token");
+    fs::write(&token, "the token a host presents")?;
+    let harness = Harness::naming(secret_files_under(root.path())).await?;
+    // The agent's own file, in a directory of its own.
+    let own = tempfile::tempdir()?;
+    let report = own.path().join("report.csv");
+    fs::write(&report, "id,total\n")?;
+    let page = harness.owner_tab("https://forms.example/").await?;
+    let (run, _guard) = harness.run()?;
+
+    let before = harness.fake.calls().len();
     let (operation, reply) = harness
-        .submit_op(&run, "locator.setInputFiles", input)
+        .submit_op(&run, "locator.setInputFiles", upload(&page, &token))
         .await;
     let refused = failure(reply)?;
     assert_eq!(
@@ -1562,27 +1637,89 @@ async fn a_file_upload_is_held_since_its_paths_are_on_neos_own_disk() -> Result<
         ),
         (
             ErrorOwner::Script,
-            ErrorCode::METHOD_UNAVAILABLE,
+            ErrorCode::SECRET_UPLOAD_REFUSED,
             Delivery::NotSent
         ),
         "{}",
         refused.error
     );
+    let message = refused.error.message();
     assert!(
-        refused.error.message().contains("Neo's own disk"),
-        "the message says why: {}",
-        refused.error
+        !message.contains(&token.display().to_string()) && !message.contains("host-token"),
+        "the refusal names no path: {message}"
     );
     assert_eq!(
         harness.row(operation).await?.error.map(|error| error.code),
-        Some("method_unavailable".to_owned()),
-        "the trace records the attempt"
+        Some("neo_secret_upload_refused".to_owned()),
+        "the trace records the refusal"
+    );
+    assert_eq!(
+        sent_since(&harness, before),
+        Vec::<String>::new(),
+        "refused before the crate touched the page"
+    );
+
+    let before = harness.fake.calls().len();
+    let passed = failure(
+        harness
+            .submit(&run, "locator.setInputFiles", upload(&page, &report))
+            .await,
+    )?;
+    assert_ne!(
+        passed.error.code(),
+        ErrorCode::SECRET_UPLOAD_REFUSED,
+        "an ordinary file passes the deny list: {}",
+        passed.error
+    );
+    assert!(
+        !sent_since(&harness, before).is_empty(),
+        "and the crate goes on to the page to find its input: {}",
+        passed.error
     );
     assert_eq!(
         harness.fake.count("DOM.setFileInputFiles"),
         0,
-        "no file reached the page"
+        "the secret never reached the browser"
     );
+    Ok(())
+}
+
+/// SQLite deletes the trace store's WAL when the last connection closes and writes it again on
+/// the next write, so the WAL is often absent when Neo locates its secret files. The trace
+/// store's directory is the entry, and the crate resolves it again on each upload.
+#[tokio::test]
+async fn a_trace_wal_absent_at_start_is_refused_once_it_appears() -> Result<(), Box<dyn Error>> {
+    let root = tempfile::tempdir()?;
+    let trace_dir = root.path().join("claw-sdk");
+    fs::create_dir(&trace_dir)?;
+    fs::write(trace_dir.join("trace.db"), "")?;
+    let harness = Harness::naming(secret_files_under(root.path())).await?;
+    let wal = trace_dir.join("trace.db-wal");
+    assert!(!wal.exists(), "no WAL when Neo located its secret files");
+    fs::write(&wal, "frames a later write left")?;
+    let page = harness.owner_tab("https://forms.example/").await?;
+    let (run, _guard) = harness.run()?;
+
+    let refused = failure(
+        harness
+            .submit(&run, "locator.setInputFiles", upload(&page, &wal))
+            .await,
+    )?;
+    assert_eq!(
+        (
+            refused.error.owner(),
+            refused.error.code(),
+            refused.delivery
+        ),
+        (
+            ErrorOwner::Script,
+            ErrorCode::SECRET_UPLOAD_REFUSED,
+            Delivery::NotSent
+        ),
+        "{}",
+        refused.error
+    );
+    assert_eq!(harness.fake.count("DOM.setFileInputFiles"), 0);
     Ok(())
 }
 

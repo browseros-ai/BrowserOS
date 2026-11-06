@@ -35,8 +35,9 @@ Playwright checkout is a plain `diff -r`. `sync.sh` writes `SHA256SUMS`, and the
 - `tests/`. Upstream's own page tests at the same tag, the input of conformance tier 2: the
   `tests/page/*.spec.ts` files that `crates/browseros-playwright/tests/conformance/tier2/convert.mjs`
   lifts into case files, `tests/page/pageTest.ts` and `tests/config/utils.ts` for the helpers
-  those specs import, and the static `tests/assets/` pages the lifted tests load from upstream's
-  test server (the conformance fixture server serves them under `/upstream/`). They are pinned
+  those specs import, and the static `tests/assets/` files the lifted tests load from upstream's
+  test server (the conformance fixture server serves them under `/upstream/`) or upload with
+  upstream's `asset` fixture. A path with a space is single-quoted in `sync.sh`. They are pinned
   here so the conversion reruns offline and byte for byte. Nothing under `tests/` is built
   into the crate or shipped; it is Apache-2.0 under the same `LICENSE` and `NOTICE`.
 - `sync.sh`, `VERSION`, `SHA256SUMS` and this README are ours.
@@ -71,8 +72,8 @@ load both files plain.
 - Type-only imports such as `./selectorEngine` and `@protocol/structs`. The bundler erases
   them, so their files are not needed.
 - Upstream's other tests and assets, its test fixtures and its test server. Tier 2 maps the
-  server's `PREFIX`, `CROSS_PROCESS_PREFIX` and `EMPTY_PAGE` onto the fixture server, and skips
-  every test that needs more of it.
+  server's `PREFIX`, `CROSS_PROCESS_PREFIX` and `EMPTY_PAGE` onto the fixture server and the
+  `asset` fixture onto these files, and skips every test that needs more of either.
 - The Playwright client, server and protocol (apart from the two keyboard tables and the value
   serializers), the test runner,
   reporters, the trace viewer, codegen and the recorder, Playwright MCP, browser downloads, and

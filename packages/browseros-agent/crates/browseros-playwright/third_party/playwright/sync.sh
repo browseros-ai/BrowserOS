@@ -26,7 +26,8 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 #
 # The tests/ files are upstream's own page tests, the input of conformance tier 2
 # (tests/conformance/tier2/convert.mjs): the specs it lifts, the two helper modules their
-# helpers come from, and the static assets those tests load from upstream's test server.
+# helpers come from, and the static assets those tests load from upstream's test server or
+# pass to setInputFiles through upstream's `asset` fixture.
 # Nothing under tests/ is built into the crate. The converter skips a test whose asset is
 # missing here and names the asset, so a newly needed one is added to this list.
 FILES=(
@@ -62,6 +63,8 @@ FILES=(
   tests/assets/deep-shadow.html
   tests/assets/dom.html
   tests/assets/empty.html
+  'tests/assets/file to upload.txt'
+  tests/assets/file-to-upload.txt
   tests/assets/frames/frame.html
   tests/assets/frames/frameset.html
   tests/assets/frames/nested-frames.html
@@ -74,6 +77,7 @@ FILES=(
   tests/assets/input/button.html
   tests/assets/input/checkbox.html
   tests/assets/input/fileupload.html
+  tests/assets/input/folderupload.html
   tests/assets/input/keyboard.html
   tests/assets/input/mouse-helper.js
   tests/assets/input/rotatedButton.html
@@ -111,6 +115,7 @@ FILES=(
   tests/page/page-click.spec.ts
   tests/page/page-fill.spec.ts
   tests/page/page-keyboard.spec.ts
+  tests/page/page-set-input-files.spec.ts
   tests/page/page-wait-for-selector-1.spec.ts
   tests/page/page-wait-for-selector-2.spec.ts
   tests/page/pageTest.ts

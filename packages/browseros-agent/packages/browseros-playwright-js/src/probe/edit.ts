@@ -9,6 +9,7 @@
  *                  `error:optionsnotfound` / `error:optionnotenabled`, which Rust retries
  *   selectText     upstream's injected.selectText
  *   focus, blur, dispatchEvent
+ *   setFiles       upstream's injected.setInputFiles, for setInputFiles payloads (files.ts)
  *
  * The seal masks a sensitive textarea's value, so upstream's `selectionEnd = value.length`
  * would select only the mask's four characters, and a fill would then type over part of the
@@ -19,6 +20,7 @@
  * The event reaches the page's listeners the same way (it is not trusted either way), and its
  * init is JSON, so no page object crosses into this world.
  */
+import { setFiles } from './files'
 import type { Edit, EditRequest, ReplyTo, Value } from './protocol'
 import type { World } from './world'
 
@@ -50,6 +52,8 @@ function apply(world: World, edit: Edit, element: Element): Edited {
     case 'dispatchEvent':
       injected.dispatchEvent(element, edit.type, edit.init)
       return valueReply(null)
+    case 'setFiles':
+      return valueReply(setFiles(world, element, edit.payloads))
   }
 }
 

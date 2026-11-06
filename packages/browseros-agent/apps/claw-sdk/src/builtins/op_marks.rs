@@ -42,6 +42,11 @@ enum Policing {
 /// How claw-sdk's door polices `capability`. Exhaustive, with no `_` arm, on purpose: a capability
 /// the crate adds breaks this build until someone decides how the door polices it, so no op that
 /// declares it is ever served by default.
+#[expect(
+    clippy::match_same_arms,
+    reason = "one arm per capability, each naming the guard that polices it, so each flips to \
+              Ready in its own reviewed change"
+)]
 const fn policing(capability: Capability) -> Policing {
     match capability {
         // `Output::Pixels`: tab privacy refuses a capture of a private tab, and holds sdk-traces'
@@ -60,12 +65,11 @@ const fn policing(capability: Capability) -> Policing {
                         `page.goto('data:text/html,' + encodeURIComponent(html))`, whose scripts \
                         run in an origin of their own",
         }),
-        // Not until the door names Neo's own secret files (its host token, CAPTCHA keys, trace
-        // store and browser profile) for the crate's upload to refuse.
-        Capability::HostFiles => Policing::NotYet(Hold {
-            why: "hands the page files from Neo's own disk, where Neo keeps its secrets",
-            meanwhile: "no op gives a page a file, so tell the user the upload needs them",
-        }),
+        // The crate's upload refuses, before it reads a file, every path into Neo's own secret
+        // files (the host token, the CAPTCHA keys, the trace store and the browser profile),
+        // which `PrivacyHooks::secret_paths` names from config, and every path into `/dev` or
+        // `/proc`. With no list, it uploads no file from Neo's disk.
+        Capability::HostFiles => Policing::Ready,
         // Not until the takeover lock refuses a move of the front while the owner holds the
         // screen.
         Capability::Screen => Policing::NotYet(Hold {
@@ -86,8 +90,8 @@ const UNGATED: Hold = Hold {
 /// How every held op answers, and which Playwright APIs are held with it. Named by receiver, not
 /// by op, so it stays true whichever ops are held.
 const HELD_TAIL: &str = "A held op fails `method_unavailable` with nothing sent, and so does \
-    every API that sends it: the `frame` forms send the `page` ops, and `$eval`, `$$eval`, \
-    `setInputFiles` and element handles send `locator` ones.";
+    every API that sends it: the `frame` forms send the `page` ops, and `$eval`, `$$eval` and \
+    element handles send `locator` ones.";
 
 /// The ops one hold keeps, in the order the crate lists them, so the clause names them together.
 struct HeldGroup {
@@ -271,9 +275,9 @@ mod tests {
             Row {
                 op: "locator.setInputFiles",
                 declared: vec![HostFiles],
-                gated: false,
-                policed: vec![],
-                placement: Held,
+                gated: true,
+                policed: vec![HostFiles],
+                placement: Served,
             },
             Row {
                 op: "page.setContent",
@@ -385,19 +389,18 @@ mod tests {
     }
 
     /// While the door does not police a capability, every op that declares it is held, guarded
-    /// by the crate or not, alone or beside a capability the door does police. On this door only
-    /// captures are policed.
+    /// by the crate or not, alone or beside a capability the door does police. On this door
+    /// captures and host files are policed.
     #[test]
     fn a_capability_the_door_does_not_police_yet_holds_every_op_declaring_it()
     -> Result<(), Box<dyn Error>> {
         use Capability::{Capture, HostFiles, MainWorld, Screen};
-        let unpoliced: [&'static [Capability]; 6] = [
+        let unpoliced: [&'static [Capability]; 5] = [
             &[MainWorld],
-            &[HostFiles],
             &[Screen],
             &[Capture, MainWorld],
-            &[Capture, HostFiles],
-            &[Capture, Screen],
+            &[HostFiles, MainWorld],
+            &[HostFiles, Screen],
         ];
         for capabilities in unpoliced {
             let marks = OpMarks::of(&new_op(capabilities, true)?, LINE);
@@ -409,7 +412,13 @@ mod tests {
         }
         // What the door polices is served once the crate guards it, and so is an op that declares
         // nothing, which the crate counts as guarded whatever its mark says.
-        for (capabilities, policed) in [(&[Capture][..], true), (&[], true), (&[], false)] {
+        for (capabilities, policed) in [
+            (&[Capture][..], true),
+            (&[HostFiles], true),
+            (&[Capture, HostFiles], true),
+            (&[], true),
+            (&[], false),
+        ] {
             let marks = OpMarks::of(&new_op(capabilities, policed)?, LINE);
             assert_eq!(marks.hold, None, "{capabilities:?}, policed: {policed}");
             assert_eq!(marks.spec.listing, Listing::Grouped(LINE));

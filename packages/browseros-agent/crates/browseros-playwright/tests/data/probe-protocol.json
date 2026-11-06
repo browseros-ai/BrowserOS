@@ -1,5 +1,5 @@
 {
-  "protocol": 11,
+  "protocol": 12,
   "callFunction": "function (request, root, mask) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, mask) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -76,6 +76,14 @@
     ],
     "setContent": [
       "replaced"
+    ],
+    "armInput": [
+      "value",
+      "detached"
+    ],
+    "inputArrived": [
+      "value",
+      "detached"
     ]
   },
   "byHandle": [
@@ -341,6 +349,28 @@
       }
     },
     {
+      "op": "edit",
+      "pin": 3,
+      "edit": {
+        "kind": "setFiles",
+        "payloads": [
+          {
+            "name": "note.txt",
+            "mimeType": "text/plain",
+            "buffer": "aGVsbG8="
+          }
+        ]
+      }
+    },
+    {
+      "op": "edit",
+      "pin": 3,
+      "edit": {
+        "kind": "setFiles",
+        "payloads": []
+      }
+    },
+    {
       "op": "read",
       "target": {
         "chunk": {
@@ -448,7 +478,41 @@
       "frameVisible": true,
       "read": {
         "kind": "fileInput",
-        "multiple": false
+        "multiple": false,
+        "directory": false
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "css",
+              "body": [
+                {
+                  "simples": [
+                    {
+                      "selector": {
+                        "css": "#upload",
+                        "functions": []
+                      },
+                      "combinator": ""
+                    }
+                  ]
+                }
+              ],
+              "source": "#upload"
+            }
+          ]
+        }
+      },
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "fileInput",
+        "multiple": true,
+        "directory": true
       }
     },
     {
@@ -837,6 +901,14 @@
       "part": "content"
     },
     {
+      "op": "armInput",
+      "pin": 4
+    },
+    {
+      "op": "inputArrived",
+      "pin": 4
+    },
+    {
       "op": "setContent",
       "html": "<!doctype html><title>Set</title><p>new</p>"
     }
@@ -844,19 +916,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 11,
+      "protocol": 12,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 11,
+      "protocol": 12,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 11,
+      "protocol": 12,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1001,6 +1073,16 @@
       "value": "error:optionsnotfound"
     },
     {
+      "kind": "value",
+      "value": {
+        "threw": "DOMException"
+      }
+    },
+    {
+      "kind": "value",
+      "value": true
+    },
+    {
       "kind": "read",
       "value": "Welcome",
       "sensitive": null,
@@ -1062,7 +1144,9 @@
     {
       "kind": "read",
       "value": {
-        "pin": 7
+        "pin": 7,
+        "target": 8,
+        "takesPaths": true
       },
       "sensitive": null,
       "sweep": []

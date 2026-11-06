@@ -18,6 +18,7 @@ import {
   fromPageValue,
   pageCall,
 } from './evaluation'
+import { inputFiles, withClientErrors } from './files'
 import { FrameLocator, Locator, testIdAttributeName } from './locator'
 import type { OpName } from './ops.generated'
 import {
@@ -26,7 +27,6 @@ import {
   DRAG_KEYS,
   FILL_KEYS,
   HOVER_KEYS,
-  inputFilePaths,
   KEY_KEYS,
   markHandle,
   POINTER_KEYS,
@@ -787,13 +787,17 @@ export class Frame extends EventEmitter {
     files: unknown,
     options: TimeoutOption & StrictOption = {},
   ): Promise<void> {
-    await this._selectorOp(
-      'locator.setInputFiles',
-      api,
-      selector,
-      options.strict,
-      this._timeout(options),
-      { files: inputFilePaths(api, files) },
+    // Upstream's client converts the files before it sends the selector anywhere.
+    const input = inputFiles(api, files)
+    await withClientErrors(api, () =>
+      this._selectorOp(
+        'locator.setInputFiles',
+        api,
+        selector,
+        options.strict,
+        this._timeout(options),
+        { files: input },
+      ),
     )
   }
 

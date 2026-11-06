@@ -8491,6 +8491,42 @@ ${value.stack}`;
     return { kind: "replaced" };
   }
 
+  // packages/browseros-playwright-js/src/probe/files.ts
+  var armed = new WeakMap;
+  function setFiles(world, element, payloads) {
+    try {
+      world.injected.setInputFiles(element, payloads);
+      return null;
+    } catch (error) {
+      return { threw: described(error) };
+    }
+  }
+  function described(error) {
+    if (typeof DOMException === "function" && error instanceof DOMException)
+      return "DOMException";
+    if (error instanceof Error)
+      return String(error.stack ?? error).split(`
+`)[0] ?? error.name;
+    return String(error);
+  }
+  function armInput(world, request) {
+    const element = world.pins.held(request.pin);
+    if (!element)
+      return { kind: "detached" };
+    const state = { arrived: false };
+    armed.set(element, state);
+    element.addEventListener("input", () => {
+      state.arrived = true;
+    }, { once: true });
+    return { kind: "value", value: null };
+  }
+  function inputArrived(world, request) {
+    const element = world.pins.held(request.pin);
+    if (!element)
+      return { kind: "detached" };
+    return { kind: "value", value: armed.get(element)?.arrived === true };
+  }
+
   // packages/browseros-playwright-js/src/probe/edit.ts
   function apply(world, edit, element) {
     const { injected } = world;
@@ -8520,6 +8556,8 @@ ${value.stack}`;
       case "dispatchEvent":
         injected.dispatchEvent(element, edit.type, edit.init);
         return valueReply(null);
+      case "setFiles":
+        return valueReply(setFiles(world, element, edit.payloads));
     }
   }
   function valueReply(value) {
@@ -8637,7 +8675,7 @@ ${value.stack}`;
   }
 
   // packages/browseros-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 11;
+  var PROTOCOL = 12;
 
   // packages/browseros-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -8687,20 +8725,27 @@ ${value.stack}`;
           from: element
         });
       case "fileInput":
-        return (world, element) => fileInput(world, element, read.multiple);
+        return (world, element) => fileInput(world, element, read);
     }
   }
-  function fileInput(world, element, multiple) {
+  function fileInput(world, element, read) {
     const { injected } = world;
     const control = injected.retarget(element, "follow-label");
     if (control?.tagName !== "INPUT")
       throw injected.createStacklessError("Node is not an HTMLInputElement");
     const input = control;
-    if (multiple && !input.multiple && !input.webkitdirectory)
+    if (read.multiple && !input.multiple && !input.webkitdirectory)
       throw injected.createStacklessError("Non-multiple file input can only accept single file");
-    if (input.webkitdirectory)
+    if (read.directory && !input.webkitdirectory)
+      throw injected.createStacklessError("File input does not support directories, pass individual files instead");
+    if (!read.directory && input.webkitdirectory)
       throw injected.createStacklessError("[webkitdirectory] input requires passing a path to a directory");
-    const value = { pin: world.pins.add(input) };
+    const pin = world.pins.add(input);
+    const value = {
+      pin,
+      target: element === input ? pin : world.pins.add(element),
+      takesPaths: input.type === "file"
+    };
     return { value, from: input };
   }
   function checkable(world, element) {
@@ -9038,7 +9083,7 @@ ${value.stack}`;
 
   // packages/browseros-playwright-js/src/probe/index.ts
   var HANDLERS = {
-    describe: described,
+    describe: described2,
     resolve,
     act,
     verdict,
@@ -9053,11 +9098,13 @@ ${value.stack}`;
     sweep,
     focused,
     matchUrl,
-    document: documentText
+    document: documentText,
+    armInput,
+    inputArrived
   };
   var UNINSTALLED = { kind: "uninstalled" };
   var NEEDS_MASK = { kind: "needsMask" };
-  function described(world) {
+  function described2(world) {
     return {
       kind: "described",
       protocol: PROTOCOL,
@@ -9088,7 +9135,7 @@ ${value.stack}`;
       boot(options) {
         const { frameSeq, epoch } = parseBootOptions(options);
         if (world?.epoch === epoch)
-          return described(world);
+          return described2(world);
         const seal = sealIn(globalThis);
         if (!seal)
           throw new ProbeError("internal", "refusing to boot: this world has no seal (__clawSeal)");
@@ -9101,7 +9148,7 @@ ${value.stack}`;
         world = { epoch, seq: frameSeq, injected, seal, pins, refs };
         const retired = lastSeq;
         lastSeq = frameSeq;
-        return retired === undefined ? described(world) : { ...described(world), retired };
+        return retired === undefined ? described2(world) : { ...described2(world), retired };
       },
       call(request, root, mask) {
         const booted = world;

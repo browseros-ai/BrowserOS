@@ -119,6 +119,17 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
       pin: 3,
       edit: { kind: 'dispatchEvent', type: 'click', init: { bubbles: true } },
     },
+    {
+      op: 'edit',
+      pin: 3,
+      edit: {
+        kind: 'setFiles',
+        payloads: [
+          { name: 'note.txt', mimeType: 'text/plain', buffer: 'aGVsbG8=' },
+        ],
+      },
+    },
+    { op: 'edit', pin: 3, edit: { kind: 'setFiles', payloads: [] } },
   ],
   read: [
     {
@@ -161,7 +172,14 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
       target: 'root',
       strictness: 'strict',
       frameVisible: true,
-      read: { kind: 'fileInput', multiple: false },
+      read: { kind: 'fileInput', multiple: false, directory: false },
+    },
+    {
+      op: 'read',
+      target: chunk('#upload'),
+      strictness: 'strict',
+      frameVisible: true,
+      read: { kind: 'fileInput', multiple: true, directory: true },
     },
     {
       op: 'read',
@@ -275,6 +293,8 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
     { op: 'document', part: 'title' },
     { op: 'document', part: 'content' },
   ],
+  armInput: [{ op: 'armInput', pin: 4 }],
+  inputArrived: [{ op: 'inputArrived', pin: 4 }],
   // Last: it unboots the world, so the protocol test's later requests would find none.
   setContent: [
     { op: 'setContent', html: '<!doctype html><title>Set</title><p>new</p>' },
@@ -380,6 +400,8 @@ const REPLY_EXAMPLES: {
     { kind: 'value', value: ['r', 'g'] },
     { kind: 'value', value: 'needsinput' },
     { kind: 'value', value: 'error:optionsnotfound' },
+    { kind: 'value', value: { threw: 'DOMException' } },
+    { kind: 'value', value: true },
   ],
   read: [
     { kind: 'read', value: 'Welcome', sensitive: null, sweep: ['hunter2'] },
@@ -399,7 +421,12 @@ const REPLY_EXAMPLES: {
       sensitive: null,
       sweep: [],
     },
-    { kind: 'read', value: { pin: 7 }, sensitive: null, sweep: [] },
+    {
+      kind: 'read',
+      value: { pin: 7, target: 8, takesPaths: true },
+      sensitive: null,
+      sweep: [],
+    },
     {
       kind: 'read',
       value: { pin: 6, preview: '<li>One</li>', visible: true, count: 2 },

@@ -81,30 +81,45 @@ function readerFor(request: ReadRequest, root: Node | undefined): Reader {
         from: element,
       })
     case 'fileInput':
-      return (world, element) => fileInput(world, element, read.multiple)
+      return (world, element) => fileInput(world, element, read)
   }
 }
 
 /**
- * Upstream's `_setInputFiles` checks, with its messages: the element or the control its label
- * names must be an `<input>` that takes this many files, and Neo sets files, not directories.
- * Whether it is `type=file` is core's check, where the files are set.
+ * Upstream's `_setInputFiles` checks (server/dom.ts at v1.64.1), in its order and with its
+ * messages: the element, or the control its label names, must be an `<input>`; several files
+ * need `multiple` or `webkitdirectory`; a directory needs `webkitdirectory`, and nothing else
+ * may go to such an input. `type=file` is not checked here, as upstream does not: Chromium
+ * refuses paths for any other input, and upstream's injected script leaves one alone.
  */
-function fileInput(world: World, element: Element, multiple: boolean): Reading {
+function fileInput(
+  world: World,
+  element: Element,
+  read: { multiple: boolean; directory: boolean },
+): Reading {
   const { injected } = world
   const control = injected.retarget(element, 'follow-label')
   if (control?.tagName !== 'INPUT')
     throw injected.createStacklessError('Node is not an HTMLInputElement')
   const input = control as HTMLInputElement
-  if (multiple && !input.multiple && !input.webkitdirectory)
+  if (read.multiple && !input.multiple && !input.webkitdirectory)
     throw injected.createStacklessError(
       'Non-multiple file input can only accept single file',
     )
-  if (input.webkitdirectory)
+  if (read.directory && !input.webkitdirectory)
+    throw injected.createStacklessError(
+      'File input does not support directories, pass individual files instead',
+    )
+  if (!read.directory && input.webkitdirectory)
     throw injected.createStacklessError(
       '[webkitdirectory] input requires passing a path to a directory',
     )
-  const value: FileInput = { pin: world.pins.add(input) }
+  const pin = world.pins.add(input)
+  const value: FileInput = {
+    pin,
+    target: element === input ? pin : world.pins.add(element),
+    takesPaths: input.type === 'file',
+  }
   return { value, from: input }
 }
 

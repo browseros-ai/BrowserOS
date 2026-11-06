@@ -5,6 +5,7 @@
 //! connection passes through a [`Tap`], so a test can step in at one CDP command of an op.
 
 use std::error::Error;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 use std::{env, future};
@@ -68,11 +69,19 @@ struct Tap {
     policy: Policy,
     /// The `Input.*` commands sent while a test records them, as `{ method, params }`.
     inputs: Mutex<Option<Vec<Value>>>,
+    /// The params of every `DOM.setFileInputFiles` the crate sent, for the paths that reach
+    /// Chromium.
+    file_inputs: Mutex<Vec<Value>>,
 }
 
 impl Tap {
-    /// Keeps `method` and its params when it is an input command and a test is recording.
+    /// Keeps `method` and its params when it is an input command and a test is recording, and
+    /// every `DOM.setFileInputFiles`.
     fn record(&self, method: &str, params: impl FnOnce() -> Value) {
+        if method == "DOM.setFileInputFiles" {
+            lock(&self.file_inputs).push(params());
+            return;
+        }
         if !method.starts_with("Input.") {
             return;
         }
@@ -230,13 +239,16 @@ impl OpEnv for LiveEnv {
 }
 
 /// The host's privacy layer: every capture is allowed until a test refuses them, and every value
-/// the evaluate guard swept or the journal reported is kept, as the host would register it.
+/// the evaluate guard swept or the journal reported is kept, as the host would register it. It
+/// names no secret files until a test names some, so every path a test uploads is served, as
+/// real Playwright serves it.
 #[derive(Default)]
 struct LiveHooks {
     capture: Mutex<Option<Refusal>>,
     swept: Mutex<Vec<String>>,
     heard: Arc<Mutex<Vec<Heard>>>,
     journaled: Mutex<Vec<String>>,
+    secrets: Mutex<Vec<PathBuf>>,
 }
 
 impl PlaywrightHooks for LiveHooks {
@@ -260,6 +272,10 @@ impl PlaywrightHooks for LiveHooks {
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
             .map_or(Ok(()), Err)
+    }
+
+    fn secret_paths(&self) -> Option<Vec<PathBuf>> {
+        Some(lock(&self.secrets).clone())
     }
 }
 
@@ -303,6 +319,7 @@ impl LiveRun {
             watch: Mutex::default(),
             policy: Arc::clone(&policy),
             inputs: Mutex::default(),
+            file_inputs: Mutex::default(),
         });
         let browser = BrowserSession::new(
             Arc::clone(&tap) as Arc<dyn CdpConnection>,
@@ -353,6 +370,11 @@ impl LiveRun {
     /// recording goes on.
     pub(crate) fn recorded_input(&self) -> Vec<Value> {
         lock(&self.tap.inputs).clone().unwrap_or_default()
+    }
+
+    /// The params of every `DOM.setFileInputFiles` sent so far, in order.
+    pub(crate) fn file_inputs_sent(&self) -> Vec<Value> {
+        lock(&self.tap.file_inputs).clone()
     }
 
     /// Runs op `name` with `input`, as claw-sdk's handler does.
@@ -441,6 +463,11 @@ impl LiveRun {
     /// The values the seal's journal reported so far, as entered into sensitive fields.
     pub(crate) fn journaled(&self) -> Vec<String> {
         lock(&self.hooks.journaled).clone()
+    }
+
+    /// Names `secrets` as Neo's secret files from the next `setInputFiles` on.
+    pub(crate) fn name_secrets(&self, secrets: Vec<PathBuf>) {
+        *lock(&self.hooks.secrets) = secrets;
     }
 
     /// Every capture from now on is refused with `refusal`.

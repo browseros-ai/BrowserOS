@@ -1732,9 +1732,48 @@
           "display": "getByRole('button')"
         },
         "strict": "strict",
-        "files": [
-          "/tmp/a.txt"
-        ]
+        "files": {
+          "paths": [
+            "."
+          ]
+        }
+      },
+      {
+        "call": {
+          "api": "locator.setInputFiles",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "id": 7,
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "files": {
+          "payloads": [
+            {
+              "name": "a.txt",
+              "mimeType": "text/plain",
+              "buffer": "YQ=="
+            }
+          ]
+        }
       }
     ],
     "locator.textContent": [

@@ -164,6 +164,12 @@ pub(crate) enum ProbeRequest {
     /// `document.open`, `write` and `close` with `html`; the probe then unboots itself, so
     /// the new document is booted under a new seq.
     SetContent { html: String },
+    /// A directory upload's `input` wait, armed on the pinned element, connected or not, before
+    /// Rust sends `DOM.setFileInputFiles`. Answers `value` null, or `detached` for an evicted
+    /// pin.
+    ArmInput { pin: Pin },
+    /// Whether that `input` has come: `value` true or false.
+    InputArrived { pin: Pin },
 }
 
 /// Which text of the document a `document` request reads.
@@ -276,6 +282,37 @@ pub(crate) enum Edit {
         r#type: String,
         init: Map<String, Value>,
     },
+    /// Upstream's injected `setInputFiles` with `payloads`: `null`, or `{ threw }` with what it
+    /// threw as CDP describes it.
+    SetFiles {
+        payloads: Vec<FilePayload>,
+    },
+}
+
+/// One in-memory file as upstream's injected `setInputFiles` takes it, and as the prelude's
+/// files.ts sends it: `mime_type` already defaulted from the name, and `buffer` the base64 text
+/// upstream's server makes of the script's bytes (`buffer.toString('base64')`), which the page
+/// decodes with `atob`. Rust passes it through untouched. A file's bytes may be large or
+/// private, so they never print.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct FilePayload {
+    name: String,
+    mime_type: String,
+    buffer: String,
+}
+
+impl fmt::Debug for FilePayload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FilePayload")
+            .field("name", &self.name)
+            .field("mime_type", &self.mime_type)
+            .field(
+                "buffer",
+                &format_args!("[{} base64 characters]", self.buffer.len()),
+            )
+            .finish()
+    }
 }
 
 /// The text a fill puts into a field, which may be a password. It travels to the page in the
@@ -330,9 +367,12 @@ pub(crate) enum Read {
     /// or of the control its label names.
     Checkable,
     /// The `<input>` that `setInputFiles` sets, the element or the control its label names,
-    /// pinned (`{ pin }`) after upstream's checks for `multiple` files.
+    /// after upstream's checks for `multiple` files or a `directory`: `{ pin, target,
+    /// takesPaths }`, the input and the element named pinned, and whether the input is
+    /// `type=file`.
     FileInput {
         multiple: bool,
+        directory: bool,
     },
 }
 
@@ -478,6 +518,8 @@ mod tests {
             "pinned",
             "document",
             "setContent",
+            "armInput",
+            "inputArrived",
         ] {
             assert!(
                 ops.iter().any(|seen| seen == op),

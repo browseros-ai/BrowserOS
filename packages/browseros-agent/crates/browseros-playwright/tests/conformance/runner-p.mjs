@@ -7,6 +7,11 @@
  * `setContent`: playwright-core 1.64.1's `setContent` never sees `load` on a fresh BrowserOS
  * tab (decisions.md). Every tab the case opened, popups included, is closed after it.
  *
+ * It connects as a client co-located with the browser (`isLocal: true`), as Neo is, so
+ * `setInputFiles` with paths takes upstream's native path (`DOM.setFileInputFiles`, trusted
+ * events) rather than reading the files into payloads. Both runners work in this directory,
+ * so a case's relative paths (`files/one.txt`) name the same files for each.
+ *
  *   PLAYWRIGHT_NODE_MODULES=<node_modules with playwright-core and @playwright/test 1.64.1> \
  *   BROWSEROS_CDP_PORT=9521 CONFORMANCE_PORT=<server.mjs port> \
  *   node runner-p.mjs <out dir> [case name ...]
@@ -129,8 +134,12 @@ const names = readdirSync(casesDir)
   .map((file) => basename(file, '.js'))
   .filter((name) => only.length === 0 || only.includes(name))
   .sort()
-mkdirSync(outDir, { recursive: true })
-const browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`)
+const outPath = resolve(outDir)
+mkdirSync(outPath, { recursive: true })
+process.chdir(here)
+const browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`, {
+  isLocal: true,
+})
 try {
   const [context] = browser.contexts()
   for (const name of names) {
@@ -143,7 +152,7 @@ try {
       outcome = { broke: `the case returned what JSON cannot hold: ${error}` }
       text = JSON.stringify(outcome, null, 2)
     }
-    writeFileSync(resolve(outDir, `${name}.json`), `${text}\n`)
+    writeFileSync(resolve(outPath, `${name}.json`), `${text}\n`)
     console.log(`runner-p: ${name}: ${Object.keys(outcome)[0]}`)
   }
 } finally {

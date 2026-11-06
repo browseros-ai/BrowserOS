@@ -59,6 +59,10 @@ listed_enum! {
         Unsupported,
         /// Copy or cut in a password, card or one-time-code field.
         SensitiveCopyRefused,
+        /// `setInputFiles` named one of Neo's own secret files (its host token, CAPTCHA keys,
+        /// trace store, the browser profile's credentials), or a directory that holds or sits
+        /// in one. The message never says which.
+        SecretUploadRefused,
         /// The page or frame closed, or left the run's view, under the op.
         TargetClosed,
         /// The CDP connection dropped, changed epoch or stopped answering.
@@ -122,6 +126,7 @@ impl ErrorCode {
             Self::InvalidInput => row("invalid_input", Script, No, Definite),
             Self::Unsupported => row("unsupported", Neo, No, Definite),
             Self::SensitiveCopyRefused => row("sensitive_copy_refused", Script, No, Definite),
+            Self::SecretUploadRefused => row("neo_secret_upload_refused", Script, No, Definite),
             Self::TargetClosed => row("target_closed", Neo, No, Ambiguous),
             Self::BrowserDisconnected => row("browser_disconnected", Neo, No, Ambiguous),
             Self::Internal => row("internal", Neo, No, Definite),
@@ -334,7 +339,7 @@ mod tests {
 
     /// The error table as the sdk-playwright design states it, plus `wait_timeout`, written
     /// out apart from the code so a wrong row there fails here.
-    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 14] = [
+    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 15] = [
         (
             "strict_mode_violation",
             ErrorOwner::Script,
@@ -397,6 +402,12 @@ mod tests {
         ),
         (
             "sensitive_copy_refused",
+            ErrorOwner::Script,
+            TimedOut::No,
+            Answer::Definite,
+        ),
+        (
+            "neo_secret_upload_refused",
             ErrorOwner::Script,
             TimedOut::No,
             Answer::Definite,

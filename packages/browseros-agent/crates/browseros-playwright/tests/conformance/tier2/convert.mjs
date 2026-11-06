@@ -14,7 +14,7 @@
  * vendored version, the parser upstream's own runner loads these specs with.
  *
  * A test is lifted when it uses only `page` (and `context`), upstream's static test-server
- * assets, constant fixtures such as `browserName`, helpers from its spec or from
+ * assets and asset files, constant fixtures such as `browserName`, helpers from its spec or from
  * tests/config/utils.ts, and members Neo has. What the lift rewrites, each in place:
  *
  *   x.setContent(html, o)   x.goto(<data URL of html>, o): Runner P cannot setContent on
@@ -27,6 +27,9 @@
  *                           assertion is kept and its outcome recorded (tier2.pass where its
  *                           promise is used, so a rejection still reaches the test)
  *   server.PREFIX ...       upstream's assets, served by server.mjs under /upstream/
+ *   asset(name)             the vendored file, by a path relative to the conformance directory
+ *                           both runners work in (upstream's is absolute), so a path a script
+ *                           passes names the same file on both
  *   TypeScript              types removed in place, so a case reads like its spec
  *   window.builtins         window: Playwright installs builtins only under its own test mode
  *                           (utilityScript.ts isUnderTest), and nothing here emulates a clock
@@ -58,7 +61,7 @@ const SPECS = [
   /^selectors-(role|text|css|get-by)\.spec\.ts$/,
   /^locator-.+\.spec\.ts$/,
   /^page-click.*\.spec\.ts$/,
-  /^page-(fill|check|keyboard)\.spec\.ts$/,
+  /^page-(fill|check|keyboard|set-input-files)\.spec\.ts$/,
   /^page-wait-for-selector.*\.spec\.ts$/,
   /^page-aria-snapshot-ai\.spec\.ts$/,
 ]
@@ -88,8 +91,13 @@ const FIXTURE_VALUES = {
   isWebView2: false,
   mode: 'default',
 }
-/** Fixtures the case provides itself: harness.js's `page` and `context`, and `server`. */
-const PROVIDED = new Set(['page', 'context', 'server'])
+/** Fixtures a case defines itself, by the line that defines each, beside harness.js's own. */
+const CASE_FIXTURES = {
+  asset:
+    "const asset = (name) => '../../third_party/playwright/tests/assets/' + name",
+  server: 'const server = tier2.server',
+}
+const PROVIDED = new Set(['page', 'context', ...Object.keys(CASE_FIXTURES)])
 const SERVER_MEMBERS = new Set(['PREFIX', 'CROSS_PROCESS_PREFIX', 'EMPTY_PAGE'])
 
 /** Members whose function argument (at this index) runs in the page, not in the runner. */
@@ -242,8 +250,8 @@ const UNSUPPORTED_MATCHERS = new Set([
   'toMatchAriaSnapshot',
   'toMatchSnapshot',
 ])
+/** Node's globals a script in Neo's run does not have; `Buffer` it has (prelude/buffer.ts). */
 const NODE_ONLY = new Set([
-  'Buffer',
   '__dirname',
   '__filename',
   'exports',
@@ -975,7 +983,8 @@ class Lift {
     this.notes = [...test.scope.notes]
     this.needs = new Map()
     this.constants = new Set()
-    this.server = false
+    /** The CASE_FIXTURES the test uses. */
+    this.fixtures = new Set()
     /** Inlined declarations by `${path}:${start}`: { source, node }. */
     this.helpers = new Map()
   }
@@ -1134,6 +1143,8 @@ function scan(lift, root, { test = false } = {}) {
     const chain = expectChain(path)
     if (chain !== null) return assertion(path, chain)
     const callee = node.callee
+    if (callee.type === 'Identifier' && fixtureOf(path, callee) === 'asset')
+      return assetFile(node.arguments[0])
     if (!callee.property || callee.computed) return
     const name = callee.property.name
     const pageArg = PAGE_FUNCTION_ARG.get(name)
@@ -1217,7 +1228,7 @@ function scan(lift, root, { test = false } = {}) {
     ) {
       if (!SERVER_MEMBERS.has(name))
         return lift.refuse('server', `server.${name}`)
-      lift.server = true
+      lift.fixtures.add('server')
       asset(path, name)
       return
     }
@@ -1255,6 +1266,13 @@ function scan(lift, root, { test = false } = {}) {
     const vendored = `tests/assets${file}`
     if (vendored !== 'tests/assets/' && !assets.has(vendored))
       lift.refuse('asset', `${file} (add it to sync.sh)`)
+  }
+
+  /** The file `asset('x.txt')` names must be vendored. */
+  function assetFile(arg) {
+    if (arg?.type !== 'StringLiteral') return
+    if (!assets.has(`tests/assets/${arg.value}`))
+      lift.refuse('asset', `${arg.value} (add it to sync.sh)`)
   }
 
   /** The fixture an identifier names, when it is the test function's own parameter. */
@@ -1303,7 +1321,7 @@ function scan(lift, root, { test = false } = {}) {
     const { start, end } = binding.identifier
     if (fixtures === undefined || start < fixtures.start || end > fixtures.end)
       return lift.refuse('fixture', `uses its test info (${name})`)
-    if (name === 'server') lift.server = true
+    if (name in CASE_FIXTURES) lift.fixtures.add(name)
     if (PROVIDED.has(name)) return
     if (name in FIXTURE_VALUES) lift.constants.add(name)
     else lift.refuse('fixture', `uses the ${name} fixture`)
@@ -1488,7 +1506,7 @@ function render(test, lift) {
   for (const note of lift.notes) lines.push(`// Note: ${note}`)
   if (lift.needs.size > 0) lines.push(`// @needs ${needsLine(lift.needs)}`)
   lines.push('const tier2 = tier2Runtime(fixtures)')
-  if (lift.server) lines.push('const server = tier2.server')
+  for (const name of [...lift.fixtures].sort()) lines.push(CASE_FIXTURES[name])
   for (const name of [...lift.constants].sort())
     lines.push(
       `const ${name} = ${FIXTURE_VALUES[name] === undefined ? 'undefined' : JSON.stringify(FIXTURE_VALUES[name])}`,

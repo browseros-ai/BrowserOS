@@ -1,0 +1,19 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Files in a shadow root</title></head>
+<body>
+<!-- Upstream's "input event.composed should be true and cross shadow dom boundary" page: a file
+     input in an open shadow root, with its listeners on the input and on the body, recording
+     `type:composed` as upstream's do. -->
+<script>
+  const div = document.createElement('div');
+  const shadowRoot = div.attachShadow({ mode: 'open' });
+  shadowRoot.innerHTML = '<input type=file>';
+  document.body.appendChild(div);
+  const input = shadowRoot.querySelector('input');
+  window.firedEvents = [];
+  window.firedBodyEvents = [];
+  for (const type of ['input', 'change']) {
+    input.addEventListener(type, (e) => window.firedEvents.push(e.type + ':' + e.composed), false);
+    document.body.addEventListener(type, (e) => window.firedBodyEvents.push(e.type + ':' + e.composed), false);
+  }
+</script>
+</body></html>

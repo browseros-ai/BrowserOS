@@ -55,6 +55,8 @@ fn pages() -> HashMap<String, Page> {
         ("form", include_str!("data/actions/form.html")),
         ("next", include_str!("data/actions/next.html")),
         ("labels", include_str!("data/actions/labels.html")),
+        // The file inputs tier 1's set-input-files case drives, shared so both read alike.
+        ("files", include_str!("conformance/pages/files.html")),
     ] {
         pages.insert(format!("/actions/{name}.html"), Page::html(body));
     }
@@ -1204,18 +1206,27 @@ impl Drop for TempFiles {
     }
 }
 
-/// `setInputFiles(files)` on `target`.
+/// `setInputFiles(paths)` on `target`, as the prelude sends it, with a 5 s timeout.
 async fn set_files(
     run: &LiveRun,
     target: &Value,
     files: &[&str],
 ) -> Result<Value, PlaywrightError> {
+    set_files_within(run, target, files, 5000).await
+}
+
+async fn set_files_within(
+    run: &LiveRun,
+    target: &Value,
+    files: &[&str],
+    timeout_ms: u64,
+) -> Result<Value, PlaywrightError> {
     act(
         run,
         "locator.setInputFiles",
         target,
-        json!({ "files": files }),
-        5000,
+        json!({ "files": { "paths": files } }),
+        timeout_ms,
     )
     .await
 }
@@ -1226,10 +1237,643 @@ async fn file_names(run: &LiveRun, page: &TestPage, id: &str) -> TestResult<Valu
     run.eval(page, &script).await
 }
 
+/// files.html's record of the files `#id` holds: name, type, size, text and relative path.
+async fn files_of(run: &LiveRun, page: &TestPage, id: &str) -> TestResult<Value> {
+    let mut files = run.eval(page, &format!("window.__files('{id}')")).await?;
+    for file in files.as_array_mut().into_iter().flatten() {
+        file.as_object_mut().map(|file| file.remove("lastModified"));
+    }
+    Ok(files)
+}
+
+/// The input, change and cancel events files.html saw since the last call, in order.
+async fn events_of(run: &LiveRun, page: &TestPage) -> TestResult<Value> {
+    run.eval(page, "window.__takeEvents()").await
+}
+
+/// One event as files.html records it.
+fn event(kind: &str, target: &str, trusted: bool) -> Value {
+    json!({ "type": kind, "target": target, "trusted": trusted, "composed": kind == "input",
+            "bubbles": true })
+}
+
+/// A file as files.html records it, for a file with no relative path.
+fn file(name: &str, kind: &str, text: &str) -> Value {
+    json!({ "name": name, "type": kind, "size": text.len(), "text": text, "relativePath": "" })
+}
+
+fn sent_anything(run: &LiveRun) -> bool {
+    run.calls()
+        .iter()
+        .any(|call| matches!(call, EnvCall::Recheck | EnvCall::MarkSent))
+}
+
+/// A relative path is the client's: it resolves against Neo's working directory, the test's
+/// (the crate's) here, and only the absolute path reaches Chromium. On a fresh tab, because
+/// `DOM.setFileInputFiles` with a relative path crashes the target (spike S3).
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_set_input_files_sets_host_files_through_core_and_refuses_as_upstream()
+async fn tests_that_a_relative_path_resolves_against_the_working_directory_and_never_reaches_cdp()
 -> TestResult {
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = FixtureServer::start(pages()).await?;
+    let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/files.html")).await?;
+    let relative = "tests/conformance/files/one.txt";
+    script_on(
+        &run,
+        &page,
+        &format!("await page.setInputFiles('#single', '{relative}'); return null"),
+    )
+    .await?;
+    assert_eq!(
+        files_of(&run, &page, "single").await?,
+        json!([file("one.txt", "text/plain", "one\n")]),
+        "the page reads the file the relative path names"
+    );
+    let cwd = env::current_dir()?;
+    let absolute = cwd.join(relative).to_string_lossy().into_owned();
+    let sent: Vec<Value> = run
+        .file_inputs_sent()
+        .iter()
+        .map(|params| params["files"].clone())
+        .collect();
+    assert_eq!(
+        sent,
+        [json!([absolute])],
+        "Chromium got the absolute path only"
+    );
+    assert_eq!(
+        events_of(&run, &page).await?,
+        json!([
+            event("input", "single", true),
+            event("change", "single", true)
+        ]),
+        "Chromium set the files natively: trusted events"
+    );
+    run.close_page(&page).await;
+    Ok(())
+}
+
+/// Upstream's client stats each path before any channel call, so a missing one fails with
+/// Node's message, unprefixed, and nothing is admitted or sent.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_missing_path_fails_as_nodes_stat_unprefixed_and_sends_nothing() -> TestResult
+{
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = FixtureServer::start(pages()).await?;
+    let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/files.html")).await?;
+    run.clear_calls();
+    let thrown = script_on(
+        &run,
+        &page,
+        "try { await page.setInputFiles('#multi', ['tests/conformance/files/one.txt', \
+         'tests/conformance/files/missing.txt']) } catch (e) { return [e.name, e.message] }",
+    )
+    .await?;
+    assert_eq!(
+        thrown,
+        json!([
+            "Error",
+            "ENOENT: no such file or directory, stat 'tests/conformance/files/missing.txt'"
+        ]),
+        "the path as the script wrote it, with no `page.setInputFiles:` prefix"
+    );
+    assert!(
+        !sent_anything(&run),
+        "nothing was rechecked or sent: {:?}",
+        run.calls()
+    );
+    assert!(
+        run.file_inputs_sent().is_empty(),
+        "no path reached Chromium"
+    );
+    assert_eq!(files_of(&run, &page, "multi").await?, json!([]));
+    run.close_page(&page).await;
+    Ok(())
+}
+
+/// Payloads are built in the page by upstream's injected script: the File has the payload's
+/// name, the type its name gives when it names none, and its bytes, and the page sees an
+/// untrusted, composed `input` and then `change`. `[]` takes the same path, so it clears an
+/// input and fires both events even when the input was already empty.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_payloads_and_no_files_set_the_input_through_upstreams_script() -> TestResult {
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = FixtureServer::start(pages()).await?;
+    let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/files.html")).await?;
+    script_on(
+        &run,
+        &page,
+        "await page.locator('#multi').setInputFiles([
+           { name: 'note.txt', mimeType: 'text/x-note', buffer: Buffer.from('hello') },
+           { name: 'pic.png', buffer: Buffer.from([0x50, 0x4e, 0x47]) },
+         ]); return null",
+    )
+    .await?;
+    assert_eq!(
+        files_of(&run, &page, "multi").await?,
+        json!([
+            file("note.txt", "text/x-note", "hello"),
+            file("pic.png", "image/png", "PNG")
+        ]),
+        "each File is the payload's, its type from its name when it gave none"
+    );
+    assert_eq!(
+        events_of(&run, &page).await?,
+        json!([
+            event("input", "multi", false),
+            event("change", "multi", false)
+        ]),
+    );
+    let recent = run
+        .eval(
+            &page,
+            "Math.abs(document.getElementById('multi').files[0].lastModified - Date.now()) < 60000",
+        )
+        .await?;
+    assert_eq!(
+        recent,
+        json!(true),
+        "a payload's File is stamped when it is built"
+    );
+
+    script_on(&run, &page, "await page.setInputFiles('#multi', []); await page.setInputFiles('#empty', []); return null").await?;
+    assert_eq!(
+        files_of(&run, &page, "multi").await?,
+        json!([]),
+        "[] clears"
+    );
+    assert_eq!(
+        events_of(&run, &page).await?,
+        json!([
+            event("input", "multi", false),
+            event("change", "multi", false),
+            event("input", "empty", false),
+            event("change", "empty", false),
+        ]),
+        "[] fires both events, on an input that held nothing too"
+    );
+    assert!(
+        run.file_inputs_sent().is_empty(),
+        "no payload went through Chromium's paths"
+    );
+    run.close_page(&page).await;
+    Ok(())
+}
+
+/// Chromium sets paths only on a `type=file` input. Upstream asks it and gets a protocol
+/// error, which its locator loop retries until the timeout and a handle reports at once; Neo
+/// checks first and sends nothing. A payload into such an input is left alone by upstream's
+/// injected script, without an error.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_non_file_input_refuses_paths_unsent_and_takes_payloads_silently() -> TestResult
+{
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = FixtureServer::start(pages()).await?;
+    let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/files.html")).await?;
+    run.clear_calls();
+    let refused = script_on(
+        &run,
+        &page,
+        "const handle = await page.$('#text');
+         const outcome = async (work) => { try { await work; return null } catch (e) { return [e.name, e.message.split('\\n')[0]] } };
+         return [
+           await outcome(handle.setInputFiles('tests/conformance/files/one.txt')),
+           await outcome(page.setInputFiles('#text', 'tests/conformance/files/one.txt', { timeout: 500 })),
+         ]",
+    )
+    .await?;
+    assert_eq!(
+        refused,
+        json!([
+            [
+                "Error",
+                "elementHandle.setInputFiles: Protocol error (DOM.setFileInputFiles): Node is not a \
+                 file input element"
+            ],
+            [
+                "TimeoutError",
+                "page.setInputFiles: Timeout 500ms exceeded."
+            ],
+        ]),
+        "a handle fails at once, a locator retries as upstream's does"
+    );
+    assert!(
+        !sent_anything(&run),
+        "neither sent anything: {:?}",
+        run.calls()
+    );
+    assert!(
+        run.file_inputs_sent().is_empty(),
+        "no path reached Chromium"
+    );
+
+    script_on(
+        &run,
+        &page,
+        "await page.setInputFiles('#text', { name: 'x.txt', mimeType: 'text/plain', buffer: \
+         Buffer.from('x') }); await page.setInputFiles('#text', []); return null",
+    )
+    .await?;
+    assert_eq!(
+        (
+            run.eval(&page, "document.getElementById('text').value")
+                .await?,
+            events_of(&run, &page).await?
+        ),
+        (json!(""), json!([])),
+        "payloads and [] leave a text input alone, with no error"
+    );
+    run.close_page(&page).await;
+    Ok(())
+}
+
+/// A directory goes only to a `webkitdirectory` input, and nothing else does, with upstream's
+/// messages. Into one, upstream sets the directory and waits for the page's `input`. Chromium
+/// reads a chosen directory only for the tab in front: for a background tab, which every tab Neo
+/// opens for the agent is, it fires `cancel` and sets nothing, so the wait runs out, as real
+/// Playwright's does on a background tab. In front the files land with their relative paths
+/// (measured on BrowserOS neo on macOS, and in Neo's Linux image, spikes-docker S3).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_directory_goes_only_to_a_directory_input_and_lands_there() -> TestResult {
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = FixtureServer::start(pages()).await?;
+    let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/files.html")).await?;
+    let refused = script_on(
+        &run,
+        &page,
+        "const outcome = async (work) => { try { await work; return null } catch (e) { return e.message.split('\\n')[0] } };
+         return [
+           await outcome(page.setInputFiles('#single', 'tests/conformance/files/dir')),
+           await outcome(page.setInputFiles('#dir', 'tests/conformance/files/one.txt')),
+           await outcome(page.setInputFiles('#dir', [])),
+         ]",
+    )
+    .await?;
+    assert_eq!(
+        refused,
+        json!([
+            "page.setInputFiles: Error: File input does not support directories, pass individual \
+             files instead",
+            "page.setInputFiles: Error: [webkitdirectory] input requires passing a path to a \
+             directory",
+            "page.setInputFiles: Error: [webkitdirectory] input requires passing a path to a \
+             directory",
+        ]),
+    );
+    let background = script_on(
+        &run,
+        &page,
+        "try { await page.setInputFiles('#dir', 'tests/conformance/files/dir', { timeout: 1500 }) } \
+         catch (e) { return [e.name, e.message.split('\\n')[0]] }",
+    )
+    .await?;
+    assert_eq!(
+        background,
+        json!([
+            "TimeoutError",
+            "page.setInputFiles: Timeout 1500ms exceeded."
+        ]),
+        "a background tab never sees the `input` upstream waits for"
+    );
+    assert_eq!(
+        (
+            events_of(&run, &page).await?,
+            files_of(&run, &page, "dir").await?
+        ),
+        (json!([event("cancel", "dir", true)]), json!([])),
+        "Chromium cancelled the directory in the background tab"
+    );
+    run.browser()
+        .cdp(
+            "Browser.activateTab",
+            json!({ "tabId": brand(&page)["tab"] }),
+            None,
+        )
+        .await?;
+    script_on(
+        &run,
+        &page,
+        "await page.setInputFiles('#dir', 'tests/conformance/files/dir'); return null",
+    )
+    .await?;
+    let landed = files_of(&run, &page, "dir").await?;
+    let paths: Vec<&str> = landed
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|file| file["relativePath"].as_str())
+        .collect();
+    assert_eq!(paths, ["dir/a.txt", "dir/sub/b.txt"], "{landed}");
+    assert_eq!(
+        events_of(&run, &page).await?,
+        json!([event("input", "dir", true), event("change", "dir", true)]),
+    );
+    let directory = json!([env::current_dir()?.join("tests/conformance/files/dir")]);
+    assert_eq!(
+        run.file_inputs_sent()
+            .iter()
+            .map(|params| params["files"].clone())
+            .collect::<Vec<_>>(),
+        [directory.clone(), directory],
+        "each attempt sent the directory, absolute"
+    );
+    run.close_page(&page).await;
+    Ok(())
+}
+
+/// Upstream's server `access`es each path again right before it sets the files, and its
+/// locator loop retries the error, so a file that went away while the locator waited holds the
+/// op back without sending anything, and the op goes on once the file is back.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_file_gone_before_the_set_is_retried_and_never_sent_missing() -> TestResult {
+    let run = LiveRun::connect().await?;
+    let server = FixtureServer::start(pages()).await?;
+    let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/files.html")).await?;
+    let temp = TempFiles::new()?;
+    let late = temp.file("late.txt", "late")?;
+    let target = at(&page, "#late");
+    let paths = [late.as_str()];
+    let waiting = set_files_within(&run, &target, &paths, 5000);
+    let meanwhile = async {
+        time::sleep(Duration::from_millis(300)).await;
+        fs::remove_file(&late)?;
+        run.eval(
+            &page,
+            "document.body.insertAdjacentHTML('beforeend', '<input type=file id=late>')",
+        )
+        .await?;
+        time::sleep(Duration::from_millis(600)).await;
+        let held_back = run.file_inputs_sent().is_empty();
+        fs::write(&late, "late")?;
+        TestResult::Ok(held_back)
+    };
+    let (set, held_back) = tokio::join!(waiting, meanwhile);
+    set?;
+    assert!(
+        held_back?,
+        "nothing reached Chromium while the file was missing"
+    );
+    assert_eq!(
+        files_of(&run, &page, "late").await?,
+        json!([file("late.txt", "text/plain", "late")]),
+        "the file was set once it was back"
+    );
+    assert_eq!(run.file_inputs_sent().len(), 1, "and only then");
+    run.close_page(&page).await;
+    Ok(())
+}
+
+/// Neo's own secret files never reach the page: by their path, through a symlink, or in a
+/// directory that holds one, a script gets `script / neo_secret_upload_refused` with only the
+/// method before the message (files.ts leaves it alone) and no path in it, and nothing is
+/// admitted or sent. An ordinary file beside the secret lands as before.
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_neo_secret_files_are_refused_unsent_while_a_file_beside_them_lands()
+-> TestResult {
+    use std::os::unix::fs as unix_fs;
+
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = FixtureServer::start(pages()).await?;
+    let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/files.html")).await?;
+    let temp = TempFiles::new()?;
+    let secret = temp.file("neo-host-token", "the host token")?;
+    let notes = temp.file("notes.txt", "notes beside it")?;
+    let link = temp.dir.join("token-link");
+    unix_fs::symlink(&secret, &link)?;
+    run.name_secrets(vec![PathBuf::from(&secret)]);
+    run.clear_calls();
+    let (link, dir) = (link.to_string_lossy(), temp.dir.to_string_lossy());
+    let refused = script_on(
+        &run,
+        &page,
+        &format!(
+            "const outcome = async (work) => {{ try {{ await work; return null }} catch (e) {{ \
+               return [e.name, e.message, e.code, e.owner] }} }};
+             return [
+               await outcome(page.setInputFiles('#single', '{secret}')),
+               await outcome(page.locator('#single').setInputFiles('{link}')),
+               await outcome(page.setInputFiles('#dir', '{dir}')),
+             ]"
+        ),
+    )
+    .await?;
+    let refusal = |api: &str| {
+        json!([
+            "Error",
+            format!("{api}: Neo does not upload its own secret files"),
+            "neo_secret_upload_refused",
+            "script"
+        ])
+    };
+    assert_eq!(
+        refused,
+        json!([
+            refusal("page.setInputFiles"),
+            refusal("locator.setInputFiles"),
+            refusal("page.setInputFiles")
+        ]),
+        "by its path, through a symlink, in a directory"
+    );
+    assert!(
+        !refused.to_string().contains(dir.as_ref()),
+        "no path in what the script got"
+    );
+    assert!(
+        !sent_anything(&run),
+        "nothing was rechecked or sent: {:?}",
+        run.calls()
+    );
+    assert!(
+        run.file_inputs_sent().is_empty(),
+        "no path reached Chromium"
+    );
+    script_on(
+        &run,
+        &page,
+        &format!("await page.setInputFiles('#single', '{notes}'); return null"),
+    )
+    .await?;
+    assert_eq!(
+        files_of(&run, &page, "single").await?,
+        json!([file("notes.txt", "text/plain", "notes beside it")]),
+        "the ordinary file beside the secret lands"
+    );
+    run.close_page(&page).await;
+    Ok(())
+}
+
+/// The secrets are checked again right before the send: a path that named an ordinary file
+/// when the client stat'ed it, and a symlink to a secret by the time the input appeared, is
+/// refused there, with nothing sent.
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_path_swapped_for_a_secret_while_the_locator_waits_is_refused_unsent()
+-> TestResult {
+    use std::os::unix::fs as unix_fs;
+
+    let run = LiveRun::connect().await?;
+    let server = FixtureServer::start(pages()).await?;
+    let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/files.html")).await?;
+    let temp = TempFiles::new()?;
+    let secret = temp.file("neo-host-token", "the host token")?;
+    let upload = temp.file("upload.txt", "an ordinary file")?;
+    run.name_secrets(vec![PathBuf::from(&secret)]);
+    run.clear_calls();
+    let target = at(&page, "#swap");
+    let paths = [upload.as_str()];
+    let waiting = set_files_within(&run, &target, &paths, 5000);
+    let meanwhile = async {
+        time::sleep(Duration::from_millis(300)).await;
+        fs::remove_file(&upload)?;
+        unix_fs::symlink(&secret, &upload)?;
+        run.eval(
+            &page,
+            "document.body.insertAdjacentHTML('beforeend', '<input type=file id=swap>')",
+        )
+        .await?;
+        TestResult::Ok(())
+    };
+    let (set, swapped) = tokio::join!(waiting, meanwhile);
+    swapped?;
+    let refused = set.err().ok_or("the swapped path is refused")?;
+    assert_eq!(
+        (refused.owner(), refused.error_code()),
+        (ErrorOwner::Script, Some(ErrorCode::SecretUploadRefused)),
+        "{refused}"
+    );
+    assert!(
+        refused
+            .message()
+            .starts_with("locator.setInputFiles: Neo does not upload its own secret files"),
+        "{refused}"
+    );
+    assert!(
+        !refused
+            .message()
+            .contains(temp.dir.to_string_lossy().as_ref()),
+        "{refused}"
+    );
+    assert!(
+        run.file_inputs_sent().is_empty(),
+        "no path reached Chromium"
+    );
+    assert!(
+        !sent_anything(&run),
+        "nothing was rechecked or sent: {:?}",
+        run.calls()
+    );
+    run.close_page(&page).await;
+    Ok(())
+}
+
+/// A path whose resolution enters `/dev` or `/proc` names the browser's own files once the
+/// browser opens it (`/dev/fd/N` is its descriptor N there), so the live host, which names no
+/// secrets, refuses it as one: by its own name, through a symlink, as a directory, as a
+/// descriptor Neo's process does not hold and so cannot stat, and when an ordinary file
+/// becomes a symlink to `/dev/null`, or to that descriptor, while the locator waits. Nothing
+/// is sent.
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_path_through_dev_is_refused_unsent_with_no_secrets_named() -> TestResult {
+    use std::os::unix::fs as unix_fs;
+
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = FixtureServer::start(pages()).await?;
+    let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/files.html")).await?;
+    let temp = TempFiles::new()?;
+    let link = temp.dir.join("stderr-link");
+    unix_fs::symlink("/dev/fd/2", &link)?;
+    run.clear_calls();
+    let link = link.to_string_lossy();
+    let refused = script_on(
+        &run,
+        &page,
+        &format!(
+            "const outcome = async (work) => {{ try {{ await work; return null }} catch (e) {{ \
+               return [e.message, e.code, e.owner] }} }};
+             return [
+               await outcome(page.setInputFiles('#single', '/dev/null')),
+               await outcome(page.locator('#single').setInputFiles('{link}')),
+               await outcome(page.setInputFiles('#dir', '/dev')),
+               await outcome(page.setInputFiles('#single', '/dev/fd/2147483647')),
+             ]"
+        ),
+    )
+    .await?;
+    let refusal = |api: &str| {
+        json!([
+            format!("{api}: Neo does not upload its own secret files"),
+            "neo_secret_upload_refused",
+            "script"
+        ])
+    };
+    assert_eq!(
+        refused,
+        json!([
+            refusal("page.setInputFiles"),
+            refusal("locator.setInputFiles"),
+            refusal("page.setInputFiles"),
+            refusal("page.setInputFiles")
+        ]),
+        "by its name, through a symlink, as a directory, as a descriptor Neo cannot stat"
+    );
+    assert!(
+        !sent_anything(&run),
+        "nothing was rechecked or sent: {:?}",
+        run.calls()
+    );
+    for (device, id) in [("/dev/null", "swap"), ("/dev/fd/2147483647", "swap-fd")] {
+        let upload = temp.file(&format!("{id}.txt"), "an ordinary file")?;
+        let target = at(&page, &format!("#{id}"));
+        let paths = [upload.as_str()];
+        let waiting = set_files_within(&run, &target, &paths, 5000);
+        let meanwhile = async {
+            time::sleep(Duration::from_millis(300)).await;
+            fs::remove_file(&upload)?;
+            unix_fs::symlink(device, &upload)?;
+            let input = format!(
+                "document.body.insertAdjacentHTML('beforeend', '<input type=file id={id}>')"
+            );
+            run.eval(&page, &input).await?;
+            TestResult::Ok(())
+        };
+        let (set, swapped) = tokio::join!(waiting, meanwhile);
+        swapped?;
+        let swapped = set
+            .err()
+            .ok_or(format!("the path swapped for {device} is refused"))?;
+        assert_eq!(
+            (swapped.owner(), swapped.error_code()),
+            (ErrorOwner::Script, Some(ErrorCode::SecretUploadRefused)),
+            "{device}: {swapped}"
+        );
+    }
+    assert!(
+        run.file_inputs_sent().is_empty(),
+        "no path reached Chromium"
+    );
+    assert!(
+        !sent_anything(&run),
+        "nothing was rechecked or sent: {:?}",
+        run.calls()
+    );
+    run.close_page(&page).await;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_set_input_files_sets_host_files_and_refuses_as_upstream() -> TestResult {
     let run = LiveRun::connect().await?;
     let server = FixtureServer::start(pages()).await?;
     let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/form.html")).await?;
@@ -1270,7 +1914,16 @@ async fn tests_that_set_input_files_sets_host_files_through_core_and_refuses_as_
             .any(|entry| entry == "change uploads notes.txt,photo.png"),
         "{log:?}"
     );
-    set_files(&run, &at(&page, "#uploads"), &[]).await?;
+    // `[]` is payloads on the wire, as the prelude sends it.
+    let cleared = json!({ "files": { "payloads": [] } });
+    act(
+        &run,
+        "locator.setInputFiles",
+        &at(&page, "#uploads"),
+        cleared,
+        5000,
+    )
+    .await?;
     assert_eq!(
         file_names(&run, &page, "uploads").await?,
         json!([]),
@@ -1278,50 +1931,40 @@ async fn tests_that_set_input_files_sets_host_files_through_core_and_refuses_as_
     );
 
     let missing = temp.dir.join("missing.txt").to_string_lossy().into_owned();
-    for (selector, files, code, message) in [
+    for (selector, files, message) in [
         (
             "#upload",
             vec![notes.as_str(), photo.as_str()],
-            ErrorCode::InvalidInput,
             "locator.setInputFiles: Error: Non-multiple file input can only accept single file"
                 .to_owned(),
         ),
         (
             "#button",
             vec![notes.as_str()],
-            ErrorCode::InvalidInput,
             "locator.setInputFiles: Error: Node is not an HTMLInputElement".to_owned(),
         ),
         (
-            "#field",
-            vec![notes.as_str()],
-            ErrorCode::InvalidInput,
-            "locator.setInputFiles: Node is not a file input element".to_owned(),
+            "#upload",
+            vec![missing.as_str()],
+            format!("ENOENT: no such file or directory, stat '{missing}'"),
         ),
     ] {
+        run.clear_calls();
         let error = set_files(&run, &at(&page, selector), &files)
             .await
             .err()
             .ok_or(format!("{selector} refuses {files:?}"))?;
         assert_eq!(
             (error.error_code(), error.message().lines().next()),
-            (Some(code), Some(message.as_str())),
+            (Some(ErrorCode::InvalidInput), Some(message.as_str())),
             "{selector}: {error}"
         );
+        assert!(
+            !sent_anything(&run),
+            "{selector}: nothing sent: {:?}",
+            run.calls()
+        );
     }
-    let absent = set_files(&run, &at(&page, "#upload"), &[&missing])
-        .await
-        .err()
-        .ok_or("a path that is not there is refused")?;
-    assert_eq!(
-        absent.error_code(),
-        Some(ErrorCode::InvalidInput),
-        "{absent}"
-    );
-    assert!(
-        absent.message().contains("Cannot upload") && absent.message().contains("missing.txt"),
-        "core names the path it could not read: {absent}"
-    );
     assert_eq!(
         file_names(&run, &page, "upload").await?,
         json!(["photo.png"]),

@@ -279,6 +279,16 @@ export type ScreenshotOptions = {
 /** `page.pdf`'s options with upstream's names, sizes and margins already in CSS units. */
 export type PdfOptions = Record<string, unknown>
 
+/**
+ * One in-memory file as upstream's injected script takes it: `mimeType` already defaulted from
+ * the name, and `buffer` the base64 text upstream's server makes of the script's bytes.
+ */
+export type FilePayload = { name: string; mimeType: string; buffer: string }
+/**
+ * `setInputFiles`' files (files.ts): paths exactly as the script wrote them, which Rust stats
+ * and resolves on Neo's disk, or payloads, `[]` among them.
+ */
+export type FilesInput = { paths: string[] } | { payloads: FilePayload[] }
 export type TargetArgs = { target: Target; strict: Strictness }
 export type EveryMatchArgs = { target: Target }
 export type PageArgs = { page: PageHandle }
@@ -317,8 +327,7 @@ export type OpInputs = {
   'locator.selectText': TargetArgs & { force?: boolean }
   'locator.focus': TargetArgs
   'locator.blur': TargetArgs
-  /** Host paths; Playwright's in-memory file payloads are not supported. */
-  'locator.setInputFiles': TargetArgs & { files: string[] }
+  'locator.setInputFiles': TargetArgs & { files: FilesInput }
   'locator.dispatchEvent': TargetArgs & { type: string; eventInit: unknown }
   'locator.scrollIntoViewIfNeeded': TargetArgs
   /**
@@ -520,7 +529,7 @@ export type OpOutputs = {
   'locator.evaluateAll': SerializedValue
   /** The predicate's truthy value, masked, and upstream's preview of it (`toString()`). */
   'page.waitForFunction': { value: SerializedValue; preview: string }
-  /** The bootstrap's revived `{"$neo":"bytes"}` value, handed to the script as it is. */
+  /** The `{"$neo":"bytes"}` brand, revived as the prelude's Buffer (index.ts). */
   'page.screenshot': unknown
   'page.pdf': unknown
   'context.pages': { pages: PageEntry[] }

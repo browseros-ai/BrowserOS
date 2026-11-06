@@ -459,21 +459,38 @@ fn tests_that_every_value_read_in_the_vendored_engine_is_reviewed() -> TestResul
 /// the sealed world is reviewed as upstream's code, so a local edit must not slip in.
 #[test]
 fn tests_that_the_vendored_files_are_the_bytes_sync_sh_recorded() -> TestResult {
-    let vendored = crate_root().join(VENDORED);
+    vendored_as_synced(VENDORED)
+}
+
+/// The same for the `mime` tables the prelude types payloads with, which must stay the bytes
+/// of the npm release Playwright bundles.
+#[test]
+fn tests_that_the_vendored_mime_files_are_the_bytes_sync_sh_recorded() -> TestResult {
+    vendored_as_synced("third_party/mime")
+}
+
+/// The manifest check of one vendored tree (`dir`, from the crate's root) with its own
+/// `sync.sh` and `SHA256SUMS`.
+fn vendored_as_synced(dir: &str) -> TestResult {
+    let vendored = crate_root().join(dir);
     let mut manifest = BTreeMap::new();
     for line in fs::read_to_string(vendored.join("SHA256SUMS"))?.lines() {
         let Some((hash, path)) = line.split_once("  ") else {
-            panic!("SHA256SUMS has a line that is not `<hash>  <path>`: {line}");
+            return Err(format!(
+                "{dir}/SHA256SUMS has a line that is not `<hash>  <path>`: {line}"
+            )
+            .into());
         };
         manifest.insert(path.to_owned(), hash.to_owned());
     }
     let script = fs::read_to_string(vendored.join("sync.sh"))?;
     let Some((_, list)) = script.split_once("FILES=(") else {
-        panic!("sync.sh has no FILES list");
+        return Err(format!("{dir}/sync.sh has no FILES list").into());
     };
+    // A path with a space (upstream's `file to upload.txt`) is single-quoted in the bash array.
     let mut synced: Vec<&str> = list
         .lines()
-        .map(str::trim)
+        .map(|line| line.trim().trim_matches('\''))
         .take_while(|line| *line != ")")
         .filter(|line| !line.is_empty())
         .collect();

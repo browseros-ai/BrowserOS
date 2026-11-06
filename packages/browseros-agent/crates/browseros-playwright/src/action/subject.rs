@@ -97,6 +97,20 @@ impl<'a> Subject<'a> {
         }
     }
 
+    /// A failure upstream's locator loop goes round again on, where a handle action, which
+    /// upstream runs once, fails with it: every error but one thrown by the page's script
+    /// (frames.ts `isNonRetriableError`), such as a CDP error or a file that went away. The
+    /// error is only built for a handle.
+    pub(crate) fn retry_unless_handle(
+        &self,
+        error: impl FnOnce() -> PlaywrightError,
+    ) -> Result<(), PlaywrightError> {
+        match &self.of {
+            Of::Locator { .. } => Ok(()),
+            Of::Handle(_) => Err(error()),
+        }
+    }
+
     /// `request` in `located`'s world, from its root node when there is one, and once more with
     /// the site's values when its reply would hold page text the engine cut (`Resolved::call`).
     pub(crate) async fn call(

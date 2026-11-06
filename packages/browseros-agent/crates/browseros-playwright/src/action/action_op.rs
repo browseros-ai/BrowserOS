@@ -5,9 +5,9 @@ use serde_json::{Map, Value};
 
 use crate::action::actionability::PointerKind;
 use crate::action::element_action::ElementRunner;
-use crate::action::file_action::set_input_files;
 use crate::action::focus_lease::lease;
 use crate::action::form_action::{FormEdit, FormRunner};
+use crate::action::input_files::set_input_files;
 use crate::action::key_action::{KeyRunner, Keys};
 use crate::action::pointer::{DragPhases, Perform, PointerAction, Runner, WaitAfter};
 use crate::input::{ClickOptions, MouseButton, Typed, millis};
@@ -110,9 +110,10 @@ impl ActionOp {
             Self::SetInputFiles => OpSpec::write(
                 "locator.setInputFiles",
                 TARGET,
-                "set a file input's files from host paths",
+                "set a file input's files from host paths, a host directory or in-memory payloads",
             )
-            .using(&[Capability::HostFiles]),
+            .using(&[Capability::HostFiles])
+            .policed(),
             Self::DispatchEvent => OpSpec::write(
                 "locator.dispatchEvent",
                 TARGET,

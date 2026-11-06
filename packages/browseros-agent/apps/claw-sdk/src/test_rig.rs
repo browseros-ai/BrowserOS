@@ -31,6 +31,7 @@ use zeroize::Zeroizing;
 use crate::app::App;
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 use crate::builtins::{PrivacyHooks, TypedValues};
+use crate::config::SecretFiles;
 use crate::dispatch::{
     Dispatcher, ErrorCode, LeafError, Lifetime, Method, MethodSpec, OpCtx, OperationError,
     PageChange, PageTarget, RegistryBuilder, RegistryError, RunCtx, RunGuard, RunStart,
@@ -123,10 +124,12 @@ impl TestRig {
         let redactor = Redactor::new(Arc::clone(&secrets), RedactionLimits::default());
         let sink = spawn_writer(&store, redactor, writer, None);
         let privacy = Privacy::new(Arc::clone(&secrets), Arc::new(sink.clone()), HashMap::new());
+        // No test on this rig uploads a file, so it names no secret files.
         let hooks = Arc::new(PrivacyHooks::new(
             privacy,
             Arc::clone(&tabs),
             FlagRecovery::none(),
+            SecretFiles::Named(Vec::new()),
         ));
         let typed = hooks.typed();
         let gate = Arc::new(Barrier::new(2));

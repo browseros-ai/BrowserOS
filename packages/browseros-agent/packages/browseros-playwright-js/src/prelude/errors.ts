@@ -112,15 +112,37 @@ export function shapeBridgeError(
   )
 }
 
+const REFUSED_ARGUMENTS: ErrorFields = {
+  code: 'invalid_input',
+  owner: 'script',
+  delivery: 'not_sent',
+  retryable: false,
+  timeout: false,
+}
+
 /** A call the prelude refuses for its arguments: `script / invalid_input`, nothing sent. */
 export function clientError(api: string, message: string): Error {
-  return withFields(new PlaywrightError(`${api}: ${message}`), {
-    code: 'invalid_input',
-    owner: 'script',
-    delivery: 'not_sent',
-    retryable: false,
-    timeout: false,
-  })
+  return withFields(
+    new PlaywrightError(`${api}: ${message}`),
+    REFUSED_ARGUMENTS,
+  )
+}
+
+/**
+ * The same refusal where upstream's client throws before any channel call, which gives its
+ * error no method prefix (`File paths cannot be mixed with buffers`). `TypeError` is for what
+ * V8 throws there on a missing argument (`Cannot read properties of undefined (reading …)`).
+ */
+export function unprefixedClientError(
+  message: string,
+  kind: 'Error' | 'TypeError' = 'Error',
+): Error {
+  return withFields(
+    kind === 'TypeError'
+      ? new TypeError(message)
+      : new PlaywrightError(message),
+    REFUSED_ARGUMENTS,
+  )
 }
 
 /**

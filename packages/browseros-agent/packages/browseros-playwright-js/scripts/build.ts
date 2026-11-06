@@ -239,11 +239,13 @@ export async function buildOutputs(): Promise<Output[]> {
  * Playwright ${tag} (${commit}), packages/isomorphic helpers and packages/protocol value
  * serializers, for Neo's QuickJS prelude.
  * Playwright: Copyright (c) Microsoft Corporation. Licensed under the Apache License, Version 2.0.
- * Built from crates/browseros-playwright/third_party/playwright, with
- * packages/browseros-playwright-js/src/prelude, by packages/browseros-playwright-js/scripts/build.ts.
+ * mime: Copyright (c) 2023 Robert Kieffer. Licensed under the MIT License.
+ * Built from crates/browseros-playwright/third_party/playwright and
+ * crates/browseros-playwright/third_party/mime, with packages/browseros-playwright-js/src/prelude,
+ * by packages/browseros-playwright-js/scripts/build.ts.
  * Changed by Neo: isomorphic/utilityScriptSerializers.ts and protocol/src/serializers.ts import
  * Neo's stand-ins for URL, Buffer, atob and btoa, which QuickJS lacks; every other upstream
- * module is built unmodified.
+ * module, and mime, is built unmodified.
  * Do not edit. Notices: crates/browseros-playwright/THIRD_PARTY_NOTICES.md.
  */
 ${prelude}`

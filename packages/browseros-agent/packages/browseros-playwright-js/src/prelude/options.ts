@@ -7,7 +7,7 @@
  * argument is refused here with what to call instead, before the bootstrap's codec would refuse
  * it as an unbranded object.
  */
-import { clientError, unsupportedError } from './errors'
+import { clientError } from './errors'
 import type { ElementBrand } from './wire'
 
 /** The defined values of `keys` in `source`. */
@@ -74,16 +74,6 @@ export function markHandle(object: object): void {
 /** One of the objects the prelude hands to scripts. */
 export function isHandle(value: unknown): boolean {
   return typeof value === 'object' && value !== null && handles.has(value)
-}
-
-/** `locator.setInputFiles` values as host paths. */
-export function inputFilePaths(api: string, files: unknown): string[] {
-  const list: unknown[] = Array.isArray(files) ? files : [files]
-  if (list.every((file) => typeof file === 'string')) return list as string[]
-  throw unsupportedError(
-    api,
-    'Neo sets files from paths on the host; pass file paths, not { name, mimeType, buffer } payloads',
-  )
 }
 
 type SelectOptionValue = {

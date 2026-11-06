@@ -25,7 +25,7 @@ mod js_runner;
 mod live_run;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use browseros_playwright::{ErrorCode, PlaywrightError};
 use fixture_server::{FixtureServer, Page};
@@ -143,6 +143,99 @@ async fn tests_that_context_pages_lists_the_tabs_the_run_init_names() -> TestRes
             { "url": "https://mail.example/", "brand": { "$neo": "page", "id": 9, "tab": 1009 }, "run": false },
         ]),
         "every tab the init lists, with no op sent"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_buffer_text_of_megabytes_fits_in_claw_sdks_heap() -> TestResult {
+    // Each size is past where the codec ran out of claw-sdk's 64 MiB while it gathered text as
+    // an array of numbers: base64, hex and UTF-8 encoding from 2 MiB, UTF-8 decoding from 3 MiB.
+    let script = "const bytes = Buffer.alloc(3 * 1024 * 1024)\n\
+                  return {\n\
+                    base64: bytes.toString('base64').length,\n\
+                    hex: bytes.toString('hex').length,\n\
+                    utf8: bytes.toString('utf8').length,\n\
+                    fromUtf8: Buffer.from('\u{e9}\u{1d11e}x'.repeat(512 * 1024)).length,\n\
+                  }";
+    let host: Arc<dyn OpHost> = Arc::new(NoOps);
+    let init = json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 } });
+    let lengths = run_script(&host, &init, script).await?;
+    assert_eq!(
+        lengths,
+        json!({ "base64": 4_194_304, "hex": 6_291_456, "utf8": 3_145_728, "fromUtf8": 3_670_016 }),
+        "each text of 3 MiB of bytes, under js_runner's 64 MiB heap"
+    );
+    Ok(())
+}
+
+/// A host that takes `locator.setInputFiles` and keeps each payload it was sent.
+#[derive(Default)]
+struct Uploads(Mutex<Vec<Value>>);
+
+impl OpHost for Uploads {
+    fn invoke<'a>(
+        &'a self,
+        name: &'a str,
+        input: Value,
+    ) -> BoxFuture<'a, Result<Value, PlaywrightError>> {
+        Box::pin(async move {
+            if name != "locator.setInputFiles" {
+                return NoOps.invoke(name, input).await;
+            }
+            let payloads = input.pointer("/files/payloads").cloned();
+            let mut sent = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+            sent.push(payloads.unwrap_or(Value::Null));
+            Ok(Value::Null)
+        })
+    }
+
+    fn gesture(&self, page: TestPage, expression: String) -> BoxFuture<'_, Result<Value, String>> {
+        NoOps.gesture(page, expression)
+    }
+}
+
+#[tokio::test]
+async fn tests_that_a_payload_under_neos_limit_reaches_the_op_whole_in_claw_sdks_heap() -> TestResult
+{
+    // 10 MiB less a byte of 'neo', beside 8 MiB the script holds, under js_runner's 64 MiB heap;
+    // then 10 MiB, which Neo refuses before it sends anything.
+    let script = "const held = Buffer.alloc(8 * 1024 * 1024, 'x')\n\
+                  await page.setInputFiles('#f', { name: 'big.bin', buffer: Buffer.alloc(10 * 1024 * 1024 - 1, 'neo') })\n\
+                  try {\n\
+                    await page.setInputFiles('#f', { name: 'big.bin', buffer: Buffer.alloc(10 * 1024 * 1024) })\n\
+                    return 'sent'\n\
+                  } catch (error) {\n\
+                    return [error.name, error.message, held.length]\n\
+                  }";
+    let uploads = Arc::new(Uploads::default());
+    let host: Arc<dyn OpHost> = Arc::<Uploads>::clone(&uploads);
+    let init = json!({ "page": { "$neo": "page", "id": 7, "tab": 1007 } });
+    let refused = run_script(&host, &init, script).await?;
+    assert_eq!(
+        refused,
+        json!([
+            "Error",
+            "Cannot set buffer larger than 10Mb in Neo, please write it to a file and pass its \
+             path instead.",
+            8_388_608
+        ]),
+        "10 MiB is refused with upstream's advice"
+    );
+    let sent = uploads
+        .0
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    // 'neo' is 'bmVv' in base64, so the 3 495 253 copies of it are that many of 'bmVv'.
+    let whole = json!([[{
+        "name": "big.bin",
+        "mimeType": "application/octet-stream",
+        "buffer": "bmVv".repeat(3_495_253),
+    }]]);
+    assert!(
+        Value::Array(sent) == whole,
+        "the payload under the limit reached the op whole, and the one at it never left"
     );
     Ok(())
 }

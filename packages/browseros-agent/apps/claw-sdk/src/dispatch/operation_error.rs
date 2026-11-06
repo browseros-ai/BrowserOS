@@ -196,6 +196,10 @@ impl ErrorCode {
     pub(crate) const UNSUPPORTED: Self = Self("unsupported");
     /// Copy or cut in a password, card or one-time-code field.
     pub(crate) const SENSITIVE_COPY_REFUSED: Self = Self("sensitive_copy_refused");
+    /// `setInputFiles` named one of Neo's own secret files (its host token, a CAPTCHA key, its
+    /// trace store, the browser profile), or a directory that holds or sits in one. The message
+    /// never names the path.
+    pub(crate) const SECRET_UPLOAD_REFUSED: Self = Self("neo_secret_upload_refused");
     /// The page or frame closed, or left the run's view, while a Playwright op worked on it.
     pub(crate) const TARGET_CLOSED: Self = Self("target_closed");
 

@@ -86,8 +86,12 @@ export async function invoke<Op extends OpName>(
   }
 }
 
+/**
+ * The reviver for `brand` in op results. `bytes` replaces the bootstrap's own reviver, whose
+ * plain Uint8Array the prelude's Buffer subclasses.
+ */
 export function registerBrand(
-  brand: 'page' | 'element',
+  brand: 'page' | 'element' | 'bytes',
   fromJson: (json: object) => unknown,
 ): void {
   host().brands.register(brand, fromJson)

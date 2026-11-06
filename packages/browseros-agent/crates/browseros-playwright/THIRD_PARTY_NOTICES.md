@@ -16,6 +16,11 @@ vendored files with their headers kept. Playwright is licensed under the Apache 
 Version 2.0. Its `NOTICE` and `LICENSE` follow verbatim, with upstream's CRLF line endings
 written as LF.
 
+`assets/prelude.js` also embeds the `mime` package's `Mime` class and type tables, vendored
+unmodified under `third_party/mime/` from its npm release (see its `README.md` and `VERSION`),
+which gives an in-memory `setInputFiles` payload its type as Playwright does. `mime` is
+licensed under the MIT License, which follows verbatim at the end.
+
 ## Playwright NOTICE
 
 ```text
@@ -242,3 +247,29 @@ available under the Apache 2.0 license (https://github.com/puppeteer/puppeteer/b
   `packages/playwright-core/src/server/macEditingCommands.ts`, and their Rust ports, carry the
   header "Copyright 2017 Google Inc. All rights reserved. Modifications copyright (c) Microsoft
   Corporation." and are licensed under the Apache License, Version 2.0, the license above.
+
+## mime LICENSE
+
+```text
+MIT License
+
+Copyright (c) 2023 Robert Kieffer
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

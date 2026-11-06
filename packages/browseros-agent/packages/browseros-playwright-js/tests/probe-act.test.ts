@@ -148,7 +148,7 @@ it("tests that fill, selectOptions and a file input refuse other elements with u
       target: { pin: button },
       strictness: 'strict',
       frameVisible: true,
-      read: { kind: 'fileInput', multiple: false },
+      read: { kind: 'fileInput', multiple: false, directory: false },
     }),
   ).toEqual(refusal('Node is not an HTMLInputElement'))
 })

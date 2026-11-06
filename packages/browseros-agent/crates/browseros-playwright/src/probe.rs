@@ -31,7 +31,7 @@ pub(crate) use probe_reply::{
     ErrorClass, Hit, PROBE_PROTOCOL, PageText, Point, ProbeReply, Rect, SnapshotIframe,
 };
 pub(crate) use probe_request::{
-    ArmPlan, DocumentPart, Edit, ElementState, ExpectParams, FillValue, HitAction, ParsedSelector,
-    ProbeRequest, ProbeTarget, QueryState, Read, ReadAll, Retarget, ScrollPlan, SelectOption,
-    SnapshotMode, UrlPattern, Want,
+    ArmPlan, DocumentPart, Edit, ElementState, ExpectParams, FilePayload, FillValue, HitAction,
+    ParsedSelector, ProbeRequest, ProbeTarget, QueryState, Read, ReadAll, Retarget, ScrollPlan,
+    SelectOption, SnapshotMode, UrlPattern, Want,
 };

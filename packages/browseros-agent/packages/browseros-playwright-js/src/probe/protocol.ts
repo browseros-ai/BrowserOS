@@ -20,7 +20,7 @@ import type { ParsedSelector } from '../../../../crates/browseros-playwright/thi
  * as `Mask`). `boot` reports it, and an install whose number differs from Rust's
  * PROBE_PROTOCOL fails as `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 11
+export const PROTOCOL = 12
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
@@ -99,7 +99,8 @@ export type SelectOption =
   | { index: number }
 /**
  * An edit of a pinned element; each answers `value` or `detached`. A `fill` answers
- * `Filled`, a `selectOptions` answers `Selected`, the others answer null.
+ * `Filled`, a `selectOptions` answers `Selected`, a `setFiles` answers `FilesSet`, the others
+ * answer null.
  */
 export type Edit =
   | { kind: 'fill'; value: string }
@@ -108,6 +109,19 @@ export type Edit =
   | { kind: 'focus'; resetSelection: boolean }
   | { kind: 'blur' }
   | { kind: 'dispatchEvent'; type: string; init: Record<string, unknown> }
+  | { kind: 'setFiles'; payloads: FilePayload[] }
+/**
+ * One in-memory file as upstream's injected `setInputFiles` takes it. `buffer` is the base64
+ * text upstream's server makes of the script's bytes (`buffer.toString('base64')`), which the
+ * page decodes with `atob`; `mimeType` is already defaulted from the name.
+ */
+export type FilePayload = { name: string; mimeType: string; buffer: string }
+/**
+ * A `setFiles` value: null once upstream's injected `setInputFiles` returned (it set the files,
+ * or left a non-file input alone, as upstream ignores why), or what it threw as CDP describes an
+ * exception, which upstream's error carries (`DOMException` for a `buffer` that is not base64).
+ */
+export type FilesSet = null | { threw: string }
 /**
  * A fill's `value`: `done` when the input took the value itself (date, color, range and the
  * other input types without typing), `needsinput` when it is focused and selected for Rust's
@@ -146,7 +160,7 @@ export type Read =
   | { kind: 'frameOrigin' }
   | { kind: 'located' }
   | { kind: 'checkable' }
-  | { kind: 'fileInput'; multiple: boolean }
+  | { kind: 'fileInput'; multiple: boolean; directory: boolean }
 /**
  * A `frameOrigin` read's value: where the iframe's document starts in this frame's viewport,
  * and how much the iframe's own and its ancestors' transforms scale it there (rendered size
@@ -163,11 +177,13 @@ export type FrameOrigin =
  */
 export type Checkable = { checked: boolean; radio: boolean }
 /**
- * A `fileInput` read's value: the `<input type=file>` the element is or its label names,
- * pinned, after upstream's `_setInputFiles` checks for `multiple` files. Rust sets the files
- * on its node through core's file transfers.
+ * A `fileInput` read's value, after upstream's `_setInputFiles` checks for `multiple` files or a
+ * `directory`: the `<input>` the element is or its label names, pinned for the files (`pin`);
+ * the element itself (`target`, `pin` again when it is the input), on which upstream's directory
+ * upload waits for `input`; and whether Chromium's `DOM.setFileInputFiles` takes paths for the
+ * input (`type=file`), which Rust checks before it sends any.
  */
-export type FileInput = { pin: Pin }
+export type FileInput = { pin: Pin; target: Pin; takesPaths: boolean }
 /** A `located` read's value. `count` is how many matched, for upstream's call-log line. */
 export type Located = {
   pin: Pin
@@ -272,6 +288,15 @@ export type DocumentRequest = { op: 'document'; part: DocumentPart }
  * a new seq, as for any other new document.
  */
 export type SetContentRequest = { op: 'setContent'; html: string }
+/**
+ * A directory upload's wait, first half: a once-listener for `input` on the pinned element, in
+ * this world, armed before Rust sends `DOM.setFileInputFiles` so the event cannot come first.
+ * The pin may have left its document, as upstream's listener holds its element regardless.
+ * Answers `value` null, or `detached` once the pin is evicted.
+ */
+export type ArmInputRequest = { op: 'armInput'; pin: Pin }
+/** Second half: whether that `input` has come, as `value` true or false. Rust polls it. */
+export type InputArrivedRequest = { op: 'inputArrived'; pin: Pin }
 
 export type ProbeRequest =
   | DescribeRequest
@@ -292,6 +317,8 @@ export type ProbeRequest =
   | PinnedRequest
   | DocumentRequest
   | SetContentRequest
+  | ArmInputRequest
+  | InputArrivedRequest
 export type Op = ProbeRequest['op']
 /** Each request by its op, as a map so a handler table keyed by op type-checks per op. */
 export type RequestMap = { [R in ProbeRequest as R['op']]: R }
@@ -496,6 +523,8 @@ export const REPLY_KINDS = {
   matchUrl: ['urlMatch'],
   document: ['documentText'],
   setContent: ['replaced'],
+  armInput: ['value', 'detached'],
+  inputArrived: ['value', 'detached'],
 } as const satisfies Record<ValueOp, readonly ReplyKind[]>
 
 /** Everything a request may answer by value. */

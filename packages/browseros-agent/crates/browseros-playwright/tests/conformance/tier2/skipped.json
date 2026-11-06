@@ -534,12 +534,6 @@
     "reason": "expect(...).toMatchAriaSnapshot is not supported in Neo"
   },
   {
-    "test": "tests/page/page-aria-snapshot-ai.spec.ts:543",
-    "title": "should truncate data url in link",
-    "kind": "node",
-    "reason": "uses Buffer"
-  },
-  {
     "test": "tests/page/page-aria-snapshot-ai.spec.ts:551",
     "title": "should gracefully fallback when child frame cant be captured",
     "kind": "asset",
@@ -880,6 +874,96 @@
     "title": "should type after context menu was opened",
     "kind": "upstream-skip",
     "reason": "it.skip(browserName === 'chromium' && isWindows) depends on what the converter cannot know: context menu support is best-effort for Linux and MacOS"
+  },
+  {
+    "test": "tests/page/page-set-input-files.spec.ts:24",
+    "title": "should upload the file",
+    "kind": "node",
+    "reason": "imports path"
+  },
+  {
+    "test": "tests/page/page-set-input-files.spec.ts:38",
+    "title": "should upload a folder",
+    "kind": "node",
+    "reason": "imports path"
+  },
+  {
+    "test": "tests/page/page-set-input-files.spec.ts:71",
+    "title": "should upload a folder and throw for multiple directories",
+    "kind": "node",
+    "reason": "imports path"
+  },
+  {
+    "test": "tests/page/page-set-input-files.spec.ts:90",
+    "title": "should throw if a directory and files are passed",
+    "kind": "node",
+    "reason": "imports path"
+  },
+  {
+    "test": "tests/page/page-set-input-files.spec.ts:107",
+    "title": "should throw when uploading a folder in a normal file upload input",
+    "kind": "node",
+    "reason": "imports path"
+  },
+  {
+    "test": "tests/page/page-set-input-files.spec.ts:130",
+    "title": "should upload a file after popup",
+    "kind": "node",
+    "reason": "imports path"
+  },
+  {
+    "test": "tests/page/page-set-input-files.spec.ts:146",
+    "title": "should upload large file",
+    "kind": "fixture",
+    "reason": "uses its test info (testInfo)"
+  },
+  {
+    "test": "tests/page/page-set-input-files.spec.ts:202",
+    "title": "should upload large file with relative path",
+    "kind": "fixture",
+    "reason": "uses its test info (testInfo)"
+  },
+  {
+    "test": "tests/page/page-set-input-files.spec.ts:252",
+    "title": "should upload the file with spaces in name",
+    "kind": "node",
+    "reason": "imports path"
+  },
+  {
+    "test": "tests/page/page-set-input-files.spec.ts:286",
+    "title": "should work with CSP",
+    "kind": "server",
+    "reason": "server.setCSP"
+  },
+  {
+    "test": "tests/page/page-set-input-files.spec.ts:295",
+    "title": "should detect mime type",
+    "kind": "server",
+    "reason": "server.setRoute"
+  },
+  {
+    "test": "tests/page/page-set-input-files.spec.ts:330",
+    "title": "should not trim big uploaded files",
+    "kind": "server",
+    "reason": "server.setRoute"
+  },
+  {
+    "test": "tests/page/page-set-input-files.spec.ts:354",
+    "title": "should emit input and change events",
+    "kind": "unsupported",
+    "reason": "page.exposeFunction is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-set-input-files.spec.ts:404",
+    "title": "input should trigger events when files changed second time",
+    "kind": "unsupported",
+    "reason": "locator.evaluateHandle is not supported in Neo"
+  },
+  {
+    "test": "tests/page/page-set-input-files.spec.ts:427",
+    "title": "should preserve lastModified timestamp",
+    "kind": "node",
+    "reason": "imports fs"
   },
   {
     "test": "tests/page/page-wait-for-selector-1.spec.ts:52",
