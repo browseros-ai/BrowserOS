@@ -4,14 +4,23 @@
 //! a skip.
 //!
 //! The browser always launches `--headless=new --disable-browseros-server`: without the second
-//! flag, a browseros-claw-server sidecar outlives it. Dropping a [`Browser`] ends it and every
-//! helper process it started.
+//! flag, a browseros-claw-server sidecar outlives it. [`Tab::close`] closes it as Playwright
+//! does and fails the test if any of its processes outlives it; a `Tab` dropped without it, as
+//! when a test panics first, SIGKILLs the browser's process group.
+//!
+//! One test binary runs one browser at a time ([`ONE_BROWSER`]): tests compare timing-bound
+//! behaviour (retry counts, whether the first page call answers inside a 500 ms timeout) against
+//! goldens Playwright recorded on a single idle browser, so each test runs as close to that as
+//! the machine allows. The assertions do not depend on it: all 13 `click_e2e` tests passed 3
+//! rounds as 13 browsers at once, at a load average of 54.
 //!
 //! Test crates include this file with `#[path]`. Cargo builds only top-level `tests/*.rs` files
 //! as test crates, so it is never one on its own.
 
+use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
+use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -23,6 +32,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use tokio::sync::{Mutex, MutexGuard};
 use tokio::task::JoinHandle;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -48,6 +58,11 @@ pub struct Fixture {
     pub pages: Vec<(String, String)>,
 }
 
+/// Held by every [`Tab`] for its whole life, so the tests of one binary take turns. A tokio
+/// mutex, because each `#[tokio::test]` runs on its own runtime and tokio's locks belong to none;
+/// it has no poisoning, so a failed test lets the next one run.
+static ONE_BROWSER: Mutex<()> = Mutex::const_new(());
+
 /// A tab of a fresh headless BrowserOS neo. The test drives it over its own `driver` session,
 /// separate from the one a run attaches, as an outside actor would.
 pub struct Tab {
@@ -56,11 +71,14 @@ pub struct Tab {
     pub origin: String,
     pub target_id: String,
     pub driver: SessionId,
+    /// Declared last, so it is released after the browser has gone.
+    _turn: MutexGuard<'static, ()>,
 }
 
 impl Tab {
     /// Opens `<origin><path>` and returns once it has committed.
     pub async fn open(binary: OsString, fixture: Fixture, path: &str) -> Self {
+        let turn = ONE_BROWSER.lock().await;
         let origin = serve_fixture(fixture).await;
         let browser = Browser::launch(binary);
         let cdp = CdpClient::connect(ConnectOptions {
@@ -100,11 +118,21 @@ impl Tab {
             origin,
             target_id,
             driver,
+            _turn: turn,
         }
     }
 
     /// Starts `code` as a Neo run against this tab; it reads the tab while the test drives it.
     pub async fn start_run(&self, code: String) -> JoinHandle<RunOutcome> {
+        self.start_run_within(code, Duration::from_secs(30)).await
+    }
+
+    /// [`Tab::start_run`] with the run's own deadline.
+    pub async fn start_run_within(
+        &self,
+        code: String,
+        timeout: Duration,
+    ) -> JoinHandle<RunOutcome> {
         let runtime = Runtime::connect(self.cdp.clone())
             .await
             .unwrap_or_else(|error| panic!("Runtime::connect: {error}"));
@@ -114,7 +142,7 @@ impl Tab {
                 .run(RunRequest {
                     code,
                     page,
-                    timeout: Duration::from_secs(30),
+                    timeout,
                     cancel: CancellationToken::new(),
                 })
                 .await
@@ -149,10 +177,13 @@ impl Tab {
         wait_for_url(&self.cdp, &self.driver, &url).await;
     }
 
+    /// Closes the browser ([`Browser::close`]), failing the test if any of its processes
+    /// outlived it. The turn, still in `self`, is released when this returns.
     pub async fn close(self) {
-        let Self { browser, cdp, .. } = self;
-        cdp.disconnect().await;
-        drop(browser);
+        let Self {
+            mut browser, cdp, ..
+        } = self;
+        browser.close(cdp).await;
     }
 }
 
@@ -230,12 +261,29 @@ async fn serve_fixture(fixture: Fixture) -> String {
     format!("http://{address}")
 }
 
-/// A headless BrowserOS neo on a throwaway profile. Dropping it ends the browser and every
-/// helper process it started.
+/// How long [`Browser::close`] waits for the browser to exit after `Browser.close` before it
+/// SIGKILLs the browser's process group: Playwright's `closeOrKill` timeout
+/// (`DEFAULT_PLAYWRIGHT_TIMEOUT`).
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long a helper may outlive a browser that closed gracefully before [`Browser::close`]
+/// reports it as a survivor and SIGKILLs it. `crates/neo-sdk/tests/parity/harness.mjs` uses the
+/// same value.
+const HELPER_GRACE: Duration = Duration::from_secs(5);
+
+/// How often [`Browser::close`] samples the processes left.
+const POLL: Duration = Duration::from_millis(20);
+
+/// A headless BrowserOS neo on a throwaway profile, leading a process group of its own. Every
+/// helper it starts (GPU, utility, renderers) joins that group (`ps -o pid,pgid` on
+/// 155.0.8318.26), so one signal to the group reaches them all. [`Browser::close`] ends it; one
+/// dropped without it, as when a test panics first, sends its whole group SIGKILL.
 struct Browser {
     child: Child,
     port: u16,
     profile: TempDir,
+    /// Set by [`Browser::close`], after which `Drop` has nothing left to end.
+    closed: bool,
 }
 
 impl Browser {
@@ -251,6 +299,9 @@ impl Browser {
             .arg(format!("--user-data-dir={}", profile.path().display()))
             .arg("--no-first-run")
             .arg("about:blank")
+            // Its own group, so one SIGKILL reaches every helper: Playwright spawns browsers
+            // `detached` for the same reason.
+            .process_group(0)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -274,7 +325,165 @@ impl Browser {
             child,
             port,
             profile,
+            closed: false,
         }
+    }
+
+    /// Closes the browser as Playwright does (`packages/utils/processLauncher.ts`
+    /// `gracefullyClose` and `killProcess`, `server/browserType.ts` `closeOrKill`, at
+    /// 26137face): `Browser.close` over CDP, then wait for the process to exit, and SIGKILL the
+    /// whole group if it has not within [`CLOSE_TIMEOUT`]. Then it waits out the helpers and
+    /// SIGKILLs the group again; a process still running after that fails the test.
+    ///
+    /// Every shutdown prints its timings on stderr as `browser shutdown {…}`, in the parity
+    /// harness's format: the browser's exit after `Browser.close` (`forced` when it needed
+    /// SIGKILL), each helper's exit after the browser's, and the `survivors` still running after
+    /// [`HELPER_GRACE`]. A survivor is reported, not failed: it is Chromium's shutdown, which
+    /// Neo has no part in. Measured on 155.0.8318.26, 16 cores: no helper outlived any of 600
+    /// graceful closes at load averages up to 32; under 24 CPU burners (load 14 to 71), one
+    /// `utility` outlived one of 66, while the browser itself took 10 s to exit. After the
+    /// abrupt exit SIGTERM gives, renderers outlived the browser by 15 s in 41 of 180 shutdowns.
+    async fn close(&mut self, cdp: CdpClient) {
+        self.closed = true;
+        let mut helpers = self.processes();
+        let stopping = Instant::now();
+        // The browser may drop the socket before it answers.
+        let _ = time::timeout(CLOSE_TIMEOUT, cdp.send("Browser.close", json!({}), None)).await;
+        cdp.disconnect().await;
+        while stopping.elapsed() < CLOSE_TIMEOUT && matches!(self.child.try_wait(), Ok(None)) {
+            time::sleep(POLL).await;
+        }
+        let forced = matches!(self.child.try_wait(), Ok(None));
+        if forced {
+            self.kill_group();
+        }
+        let _ = self.child.wait();
+        let browser_exit = stopping.elapsed();
+
+        let browser_gone = Instant::now();
+        let mut exits = Vec::new();
+        let mut alive = self.alive();
+        loop {
+            helpers.retain(|(pid, kind)| {
+                let running = alive.contains(pid);
+                if !running {
+                    exits.push(json!({
+                        "pid": pid,
+                        "type": kind,
+                        "exitMs": millis(browser_gone.elapsed()),
+                    }));
+                }
+                running
+            });
+            if alive.is_empty() || browser_gone.elapsed() >= HELPER_GRACE {
+                break;
+            }
+            time::sleep(POLL).await;
+            alive = self.alive();
+        }
+        let survivors: Vec<(&String, String)> = alive
+            .iter()
+            .map(|pid| {
+                let kind = helpers
+                    .iter()
+                    .find(|(known, _)| known == pid)
+                    .map_or_else(|| process_type(pid), |(_, kind)| kind.clone());
+                (pid, kind)
+            })
+            .collect();
+        let left = self.kill_all();
+        let shutdown = json!({
+            "browserExitMs": millis(browser_exit),
+            "forced": forced,
+            "helpers": exits,
+            "survivors": survivors
+                .iter()
+                .map(|(pid, kind)| json!({ "pid": pid, "type": kind }))
+                .collect::<Vec<_>>(),
+        });
+        let _ = writeln!(io::stderr(), "browser shutdown {shutdown}");
+        assert!(
+            left.is_empty(),
+            "browser processes outlived the test even after SIGKILL: {left:?}"
+        );
+    }
+
+    /// Every process in the browser's group or started from its profile, the browser excepted,
+    /// as (pid, type), from one `ps` listing.
+    fn processes(&self) -> Vec<(String, String)> {
+        let leader = self.child.id().to_string();
+        let profile = self.profile.path().to_string_lossy().into_owned();
+        let listing = Command::new("ps")
+            .args(["-Ao", "pid=,pgid=,command="])
+            .stderr(Stdio::null())
+            .output()
+            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+            .unwrap_or_default();
+        listing
+            .lines()
+            .filter_map(|line| {
+                let (pid, rest) = line.trim_start().split_once(' ')?;
+                let (group, command) = rest.trim_start().split_once(' ')?;
+                let ours = pid != leader && (group == leader || command.contains(&profile));
+                ours.then(|| (pid.to_string(), command_type(command)))
+            })
+            .collect()
+    }
+
+    /// The pids still running in the browser's group or from its profile, the browser excepted.
+    fn alive(&self) -> BTreeSet<String> {
+        let leader = self.child.id().to_string();
+        let mut alive: BTreeSet<String> = pgrep(&["-g".as_ref(), leader.as_ref()])
+            .into_iter()
+            .collect();
+        alive.extend(pgrep(&["-f".as_ref(), self.profile.path().as_os_str()]));
+        alive.remove(&leader);
+        alive
+    }
+
+    /// SIGKILL to the browser's whole group, as Playwright's `killProcess` sends it.
+    fn kill_group(&self) {
+        let _ = Command::new("kill")
+            .args(["-KILL", "--", &format!("-{}", self.child.id())])
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    /// SIGKILLs the group and anything else started from the profile, then returns what is
+    /// still running a second later.
+    fn kill_all(&self) -> BTreeSet<String> {
+        self.kill_group();
+        for pid in self.alive() {
+            let _ = Command::new("kill")
+                .args(["-KILL", &pid])
+                .stderr(Stdio::null())
+                .status();
+        }
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut left = self.alive();
+        while !left.is_empty() && Instant::now() < deadline {
+            thread::sleep(POLL);
+            left = self.alive();
+        }
+        left
+    }
+}
+
+/// A browser [`Browser::close`] never ran for, as when a test panicked first: SIGKILL its group,
+/// Playwright's fallback, so nothing outlives the test. A `Drop` cannot fail the test, so what
+/// it could not end goes to stderr.
+impl Drop for Browser {
+    fn drop(&mut self) {
+        if self.closed {
+            return;
+        }
+        self.kill_group();
+        let _ = self.child.wait();
+        let left = self.kill_all();
+        let _ = writeln!(
+            io::stderr(),
+            "browser killed without Browser.close; still running: {left:?}"
+        );
     }
 }
 
@@ -292,33 +501,32 @@ fn pgrep(args: &[&OsStr]) -> Vec<String> {
         .unwrap_or_default()
 }
 
-impl Drop for Browser {
-    fn drop(&mut self) {
-        let browser_pid = self.child.id().to_string();
-        let mut lingering = pgrep(&["-P".as_ref(), browser_pid.as_ref()]);
-        // SIGTERM first, so the browser shuts its helpers down itself.
-        let _ = Command::new("kill").arg(&browser_pid).status();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline && matches!(self.child.try_wait(), Ok(None)) {
-            thread::sleep(Duration::from_millis(50));
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        // Helpers notice their parent is gone on their own, usually within a second.
-        lingering.extend(pgrep(&["-f".as_ref(), self.profile.path().as_os_str()]));
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !lingering.is_empty() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(100));
-            lingering.retain(|pid| {
-                Command::new("kill")
-                    .args(["-0", pid])
-                    .stderr(Stdio::null())
-                    .status()
-                    .is_ok_and(|status| status.success())
-            });
-        }
-        for pid in &lingering {
-            let _ = Command::new("kill").args(["-9", pid]).status();
-        }
+/// A Chromium process's `--type=` (renderer, gpu-process, utility…), else its executable.
+fn command_type(command: &str) -> String {
+    match command.split_once("--type=") {
+        Some((_, rest)) => rest.split(' ').next().unwrap_or_default().to_string(),
+        None => command
+            .split(" --")
+            .next()
+            .and_then(|path| path.rsplit('/').next())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("already gone")
+            .to_string(),
     }
+}
+
+/// [`command_type`] for a pid outside the listing [`Browser::processes`] took.
+fn process_type(pid: &str) -> String {
+    let command = Command::new("ps")
+        .args(["-o", "command=", "-p", pid])
+        .stderr(Stdio::null())
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .unwrap_or_default();
+    command_type(&command)
+}
+
+/// Whole milliseconds, for the shutdown line.
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }

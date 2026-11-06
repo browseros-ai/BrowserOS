@@ -9,7 +9,7 @@ The Playwright-shaped objects (`Page`, `Frame`, `Locator`, `BrowserContext`) an 
 
 Checks: `bun run typecheck` and `bun run test`, then `scripts/neo-check.sh` from `packages/browseros-agent`.
 
-The parity test runs `tests/scripts/watch-url.js` through real Playwright and through Neo on the same tab and compares the results. It runs under Node (Playwright's `connectOverCDP` hangs under Bun) and skips without a browser:
+The parity tests (`tests/parity/`) run the same scripts through real Playwright and through Neo on one browser and compare what each script and each page saw: `page-url.test.mjs` runs `tests/scripts/watch-url.js` on one tab; `click.test.mjs` runs every click golden, and neo-runtime's dialog, blocked-press, trial and closed-tab cases on the pages in `tests/pages/`, on fresh tabs, and also holds Playwright to the recorded goldens. `harness.mjs` holds what they share, and imports playwright-core itself so colours are off first. They run under Node (Playwright's `connectOverCDP` hangs under Bun), one file at a time, and skip without a browser:
 
 ```sh
 NEO_E2E_BROWSER="/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo" bun run test:parity

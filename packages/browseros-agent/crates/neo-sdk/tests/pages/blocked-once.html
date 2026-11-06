@@ -1,0 +1,17 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>blocked once</title>
+<style>#overlay { position: fixed; inset: 0; z-index: 10 }</style>
+<script>
+// The overlay covers the button only once the click's own mousemove arrives, after the
+// hit-target interceptor's preliminary check passed. These capture listeners were registered
+// before the interceptor's, so they run first; the removal waits a task, so the interceptor
+// still finds the overlay at the pointerdown it blocks.
+window.__clicks = 0;
+addEventListener('mousemove', () => {
+  if (window.__covered) return;
+  window.__covered = true;
+  document.getElementById('overlay').hidden = false;
+}, true);
+addEventListener('pointerdown', () => setTimeout(() => document.getElementById('overlay')?.remove()), true);
+</script></head><body>
+<button type="button" onclick="__clicks++">Submit</button><div id="overlay" hidden></div>
+</body></html>
